@@ -385,6 +385,10 @@ const GO_NON_NIL_DEFAULT_KINDS = [
     SyntaxKind.NumericLiteral, SyntaxKind.TrueKeyword, SyntaxKind.FalseKeyword,
 ];
 
+// the String methods the printer answers natively on a proven Go string (strings.* / len)
+const GO_STRING_METHOD_NAMES = [ 'split', 'replace', 'replaceAll', 'startsWith', 'endsWith', 'toUpperCase', 'toLowerCase',
+    'indexOf', 'length', 'trim', 'padStart', 'padEnd', 'toString' ];
+
 // the operators that write their left operand: an assignment through any of them may
 // store a nil pointer where the deref proof expected the defaulted call's result
 const GO_WRITE_OPERATOR_KINDS = [
@@ -408,6 +412,9 @@ const GO_FIELD_CONTAINER_TYPES_NATIVE: { [name: string]: string } = Object.fromE
 // into it derefs a typed pointer, so the field only ever holds plain values and a native index reads exactly what
 // GetValue answered. Other map fields mix writers and keep the helper read.
 const GO_PLAIN_VALUED_MAP_FIELDS = [ 'Options' ];
+
+// BaseExchange option dicts: `map[string]any` fields built non-nil by exchange_options.go
+const GO_OPTION_DICT_FIELDS = [ 'Options', 'Has', 'Features', 'Fees', 'Limits' ];
 
 // operator kinds the arithmetic helpers are emitted for
 const GO_ARITHMETIC_KINDS = [
@@ -835,6 +842,15 @@ export class GoTranspiler extends BaseTranspiler {
     // `remove`; owner-side methods (`ownerSideMethods`, TS method-name patterns) keep the field.
     // Absent config = no rewrite. JSON-serializable: the config crosses the worker boundary.
     goOwnedField: { field: string; declaredIn: string; snapshot: string; remove: string; ownerSide: RegExp[] } | undefined;
+    // RFM-G4 G09: Go field names the PredictionExchange struct declares `map[string]any` (the ccxt build derives
+    // them from its struct field table); a `this.<f>` of one of them is a typed map, not the BaseExchange `any`
+    predictionMapFields: Set<string> = new Set<string>();
+    // ===== RF-go-6-F (config) =====
+    // per tuple producer the Go type of each slot (`HandleOptionIntegerAndParams` -> [ '*int64' ]); a ccxt runtime fact
+    goTupleSlotTypes: { [producer: string]: string[] } = {};
+    // producer -> index of its default-value argument: an integer-literal default selects the value form,
+    // which returns a Go pair instead of the `[]any` holder
+    goTupleValueDefaultArg: { [producer: string]: number } = {};
     // array literals the current print opens as a Go slice (set by the call-argument rule)
     goSliceLiteralTypes: Map<any, string> = new Map<any, string>();
     // installed by the ccxt build: GetArg alias -> Go types, and the audited consumer table
@@ -895,6 +911,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.unifiedBoolParams = config['unifiedBoolParams'] ?? {};
         this.uncalledStringParams = config['uncalledStringParams'] ?? {};
         this.stringPointerTupleCalls = config['stringPointerTupleCalls'] ?? [];
+        this.predictionMapFields = new Set<string>(config['predictionMapFields'] ?? []);  // RFM-G4 G09
         this.siblingStringPassthroughPattern = (typeof config['siblingStringPassthroughPattern'] === 'string') ? new RegExp(config['siblingStringPassthroughPattern']) : undefined;
         // consumer tables for the stdlib import placement (goStdlibImportIsPlaceable): the source paths
         // whose writer declares its own imports, and the comment markers of the spans a writer cuts out
@@ -908,6 +925,8 @@ export class GoTranspiler extends BaseTranspiler {
             ownerSide: (owned['ownerSideMethods'] ?? []).map((p: string) => new RegExp(p)),
         };
         this.generatedListCallees = new Set<string>(config['generatedListCallees'] ?? []); // RF-go-6-C
+        this.goTupleSlotTypes = config['goTupleSlotTypes'] ?? {};
+        this.goTupleValueDefaultArg = config['goTupleValueDefaultArg'] ?? {};
     }
 
     initConfig() {
@@ -2592,6 +2611,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         const goType = this.goDeclaredTypeOfIdentifier(left);
+        if ((goType === 'string') && this.goLiteralDefaultStringWrite(left, right)) {
+            return `${this.printNode(left, 0)} = *${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim()}`;
+        }
         if ((goType === undefined) || (this.goPointerWriteConversion(right, goType) !== 'wrap')) {
             return undefined;
         }
@@ -2832,6 +2854,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     goSafeDictLocalUnboxUncached(declaration): string | undefined {
+        return this.goSafeDictLocalUnboxStandard(declaration) ?? (this.goL3DictLocalBacksHoist(declaration) ? GO_SAFE_DICT_LOCAL_TYPE : undefined);
+    }
+
+    goSafeDictLocalUnboxStandard(declaration): string | undefined {
         if (this.goSafeDictLocalArgs(declaration.initializer) === undefined) {
             return undefined;
         }
@@ -2855,6 +2881,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const args: any = this.goSafeDictLocalArgs(declaration.initializer);
         const container = this.printNode(args.container, identation);
         const key = this.printNode(args.key, 0);
+        if (this.goSafeDictLocalUnboxStandard(declaration) === undefined) {
+            // FM-A9F L3: the literal default stays, the local is a map that is written into later
+            return `this.SafeDictMap(${container}, ${key}, map[string]any{})`;
+        }
         return `SafeMapTyped(${container}, ${key})`;
     }
 
@@ -2914,6 +2944,400 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return (initializer?.kind === SyntaxKind.CallExpression) && (typeof name === 'string')
             && ((GO_MARKET_MAP_BASE_CALLS.indexOf(name) >= 0) || (GO_MARKET_PRODUCER_METHODS.indexOf(name) >= 0));
     }
+
+    // ===== RF-go-6-A =====
+    // Two type-keyed rules for Go map locals (moved out of ccxt build/hx11-m43-safedict-local.ts and
+    // build/hx10w10-GP26.ts, which rewrote the printed text):
+    //  (1) a local whose TS type is Dict, initialised from `this.safeDict(c, k[, <never-nil default>])` /
+    //      `safeDict2`, is a Go `map[string]any` read with the typed twin `SafeDictMap` / `SafeDict2Map`
+    //      (same member, absent or non-map answers a nil map). A never-nil default ({} or another such
+    //      call) admits every use that compiled against the `any` box; a call with no default may answer
+    //      nil, so it types the local only when its uses are nil tests, a Safe* receiver, or sit inside an
+    //      `x !== undefined` block.
+    //  (2) an element read `m[k]` on a receiver whose Go type is `map[string]any` (a declared local or a
+    //      GetArgMap-bound Dict parameter), with a Go string key, is the native index when no write into
+    //      the map can store a pointer (the one thing GetValue's deref would change).
+    rf6aSafeDictMapLocalCache = new Map<any, string | undefined>();
+
+    // `this.safeDict (c, k[, d])` / `this.safeDict2 (c, k1, k2[, d])`: the call node, its family and default
+    rf6aSafeDictCall(initializer): { call: any, family: 'SafeDict' | 'SafeDict2', keys: number, fallback: any } | undefined {
+        let node: any = initializer;
+        while ((node?.kind === SyntaxKind.ParenthesizedExpression) || (node?.kind === SyntaxKind.AsExpression) || (node?.kind === SyntaxKind.NonNullExpression)) {
+            node = node.expression;
+        }
+        if ((node?.kind !== SyntaxKind.CallExpression) || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return undefined;
+        }
+        const name = node.expression.name?.text;
+        if ((name !== 'safeDict') && (name !== 'safeDict2')) {
+            return undefined;
+        }
+        const keys = (name === 'safeDict2') ? 2 : 1;
+        if ((node.arguments.length !== keys + 1) && (node.arguments.length !== keys + 2)) {
+            return undefined;
+        }
+        return { call: node, family: (keys === 2) ? 'SafeDict2' : 'SafeDict', keys, fallback: node.arguments[keys + 1] };
+    }
+
+    rf6aContainsThis(node): boolean {
+        return this.hasNodeWhere(node, (n: any) => n.kind === SyntaxKind.ThisKeyword) || (node.kind === SyntaxKind.ThisKeyword);
+    }
+
+    // a ws/cache object: a class instance, or an order book / cache / client / future type
+    rf6aIsStructTyped(node): boolean {
+        let type: any;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return true;
+        }
+        const parts: any[] = (type?.isUnionType?.()) ? type.getTypes() : [ type ];
+        return parts.some((t: any) => (t?.getSymbol?.() !== undefined)
+            && (((t.getSymbol().flags & SymbolFlags.Class) !== 0) || /OrderBook|ArrayCache|Client|Future/.test(this.getChecker().typeToString(t))));
+    }
+
+    // the container of a typed safeDict read holds decoded data: this.options / balance (/ fees with a default)
+    // are Dict fields, any other `this` member is not; a ws container must not be a cache or client object
+    rf6aPlainContainer(container, ws: boolean, noDefault: boolean): boolean {
+        if (this.rf6aContainsThis(container)) {
+            const fields = noDefault ? [ 'options', 'balance' ] : [ 'options', 'balance', 'fees' ];
+            if ((container.kind !== SyntaxKind.PropertyAccessExpression) || (container.expression?.kind !== SyntaxKind.ThisKeyword)
+                || !fields.includes(container.name?.text)) {
+                return false;
+            }
+        }
+        if (!ws || (this.rf6aContainsThis(container) && (container.kind === SyntaxKind.PropertyAccessExpression))) {
+            return true; // a REST receiver, or an admitted Dict field of `this`
+        }
+        if ((container.kind === SyntaxKind.PropertyAccessExpression) && (container.name?.text === 'hashmap') && (container.expression?.kind === SyntaxKind.Identifier)) {
+            return true; // the ArrayCache hashmap is a map of maps
+        }
+        return !this.rf6aIsStructTyped(container) && !this.hasNodeWhere(container, (n: any) => this.rf6aIsStructTyped(n));
+    }
+
+    // the call answers the decoded map or a never-nil literal: `{}` or another such call
+    rf6aNeverNilDict(call, ws: boolean): boolean {
+        const found = this.rf6aSafeDictCall(call);
+        if ((found === undefined) || (found.fallback === undefined)) {
+            return false;
+        }
+        const fallback = this.goUnwrapParenthesizedNode(found.fallback);
+        const literal = ((fallback.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0)) || this.rf6aNeverNilDict(fallback, ws);
+        return literal && this.rf6aPlainContainer(found.call.arguments[0], ws, false);
+    }
+
+    rf6aSourceKind(node): 'rest' | 'ws' | 'skip' {
+        const fileName = String(node?.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if (!fileName.includes('ts/src/') || /ts\/src\/(?:prediction|base|test)\//.test(fileName) || fileName.includes('/examples/')) {
+            return 'skip';
+        }
+        return fileName.includes('ts/src/pro/') ? 'ws' : 'rest';
+    }
+
+    rf6aTopFunction(node): any {
+        let top: any;
+        for (let cur = node?.parent; cur !== undefined; cur = cur.parent) {
+            if ((cur.kind === SyntaxKind.MethodDeclaration) || (cur.kind === SyntaxKind.FunctionDeclaration) || (cur.kind === SyntaxKind.Constructor)) {
+                top = cur;
+            }
+        }
+        return top;
+    }
+
+    // `x !== undefined` / `x != null` conjunct of an if condition: the then-branch sees a non-nil x
+    rf6aGuardsNonNil(condition, name: string): boolean {
+        const inner = this.goUnwrapParenthesizedNode(condition);
+        if (inner?.kind !== SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        const op = inner.operatorToken?.kind;
+        if (op === SyntaxKind.AmpersandAmpersandToken) {
+            return this.rf6aGuardsNonNil(inner.left, name) || this.rf6aGuardsNonNil(inner.right, name);
+        }
+        if ((op !== SyntaxKind.ExclamationEqualsToken) && (op !== SyntaxKind.ExclamationEqualsEqualsToken)) {
+            return false;
+        }
+        const isNil = (n: any) => (n?.kind === SyntaxKind.NullKeyword) || ((n?.kind === SyntaxKind.Identifier) && (n.text === 'undefined'));
+        const isName = (n: any) => (n?.kind === SyntaxKind.Identifier) && (n.text === name);
+        return (isName(inner.left) && isNil(inner.right)) || (isNil(inner.left) && isName(inner.right));
+    }
+
+    rf6aInsideNonNilBlock(use, name: string): boolean {
+        for (let child: any = use, cur: any = use.parent; cur !== undefined; child = cur, cur = cur.parent) {
+            if ((cur.kind === SyntaxKind.IfStatement) && (cur.thenStatement === child) && this.rf6aGuardsNonNil(cur.expression, name)) {
+                return true;
+            }
+            if ((cur.kind === SyntaxKind.ConditionalExpression) && (cur.whenTrue === child) && this.rf6aGuardsNonNil(cur.condition, name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // one reference of a typed dict local: false when it needs the `any` box. The use is read through its
+    // wrappers (`(x as Dict)`, `x!`), which print as x itself.
+    rf6aUseKeepsMap(ref, rebinds: Set<any>, noDefault: boolean, ws: boolean, name: string): boolean {
+        let node: any = ref;
+        while ((node.parent !== undefined) && (((node.parent.kind === SyntaxKind.ParenthesizedExpression) || (node.parent.kind === SyntaxKind.AsExpression)
+            || (node.parent.kind === SyntaxKind.NonNullExpression)) && (node.parent.expression === node))) {
+            node = node.parent;
+        }
+        const parent: any = node.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        const isNil = (n: any) => (n?.kind === SyntaxKind.NullKeyword) || ((n?.kind === SyntaxKind.Identifier) && (n.text === 'undefined'));
+        let nilTest = false;
+        switch (parent.kind) {
+        case SyntaxKind.BinaryExpression: {
+            const op = parent.operatorToken.kind;
+            if ((op >= SyntaxKind.FirstAssignment) && (op <= SyntaxKind.LastAssignment) && (parent.left === node)) {
+                return rebinds.has(parent); // a rebinding, unless it is again a never-nil safeDict read
+            }
+            if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken)
+                || (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+                const other = (parent.left === node) ? parent.right : parent.left;
+                if (!isNil(other)) {
+                    return false;
+                }
+                nilTest = true;
+            } else if (op === SyntaxKind.InKeyword) {
+                return !noDefault || this.rf6aInsideNonNilBlock(node, name);
+            }
+            break;
+        }
+        case SyntaxKind.ArrayLiteralExpression:
+            if ((parent.parent?.kind === SyntaxKind.BinaryExpression) && (parent.parent.left === parent)) {
+                return false; // destructuring write
+            }
+            break;
+        case SyntaxKind.PropertyAccessExpression:
+            if ((parent.expression === node) && (parent.name?.text !== 'length')) {
+                return false; // a member of the box (`.length` prints GetArrayLength(x): 0 for a map and for the nil box)
+            }
+            break;
+        case SyntaxKind.PrefixUnaryExpression:
+        case SyntaxKind.PostfixUnaryExpression:
+            if ((parent.operator === SyntaxKind.PlusPlusToken) || (parent.operator === SyntaxKind.MinusMinusToken)) {
+                return false;
+            }
+            break;
+        case SyntaxKind.TypeOfExpression:
+        case SyntaxKind.SpreadElement:
+            return false;
+        case SyntaxKind.CaseClause:
+        case SyntaxKind.SwitchStatement:
+            return false;
+        case SyntaxKind.CallExpression: {
+            if (parent.expression === node) {
+                return false;
+            }
+            const callee: any = parent.expression;
+            const arrayIsArray = (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.Identifier)
+                && (callee.expression.text === 'Array') && (callee.name?.text === 'isArray');
+            if (arrayIsArray) {
+                return false; // the box folds Array.isArray; a map would print IsArray
+            }
+            break;
+        }
+        }
+        if (!noDefault) {
+            return true;
+        }
+        // a call with no default may answer a nil map: only nil tests and plain reads may see it
+        if (this.rf6aInsideNonNilBlock(node, name)) {
+            return true;
+        }
+        if (nilTest) {
+            return true; // `x == nil` answers the same for a nil map and for the nil box
+        }
+        if ((parent.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === node)) {
+            const callee: any = parent.expression;
+            return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+                && /^safe[A-Z]/.test(callee.name?.text ?? '');
+        }
+        return ws && (parent.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === node) && !this.isGoElementAccessAssignmentTarget(parent);
+    }
+
+    rf6aSafeDictMapLocal(declaration): string | undefined {
+        return this.goCachedLocalUnbox(this.rf6aSafeDictMapLocalCache, declaration, () => this.rf6aSafeDictMapLocalUncached(declaration));
+    }
+
+    rf6aSafeDictMapLocalUncached(declaration): string | undefined {
+        const kind = this.rf6aSourceKind(declaration);
+        const found = this.rf6aSafeDictCall(declaration.initializer);
+        if ((kind === 'skip') || (found === undefined) || (this.goSafeDictLocalUnbox(declaration) !== undefined)) {
+            return undefined;
+        }
+        const ws = kind === 'ws';
+        const noDefault = found.fallback === undefined;
+        if (!(noDefault || this.rf6aNeverNilDict(found.call, ws)) || !this.rf6aPlainContainer(found.call.arguments[0], ws, noDefault)) {
+            return undefined;
+        }
+        const scope: any = this.rf6aTopFunction(declaration);
+        const name = declaration.name.text as string;
+        if ((scope === undefined) || this.goTypeNameIsShadowed(scope, GO_SAFE_DICT_LOCAL_TYPE)) {
+            return undefined;
+        }
+        // one declaration of the name in the whole Go function
+        const bindings = this.goDescendantsOf(scope).filter((n: any) => ((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter)
+            || (n.kind === SyntaxKind.BindingElement)) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name));
+        if (bindings.length !== 1) {
+            return undefined;
+        }
+        const rebinds = new Set<any>();
+        const refs = this.goDescendantsOf(scope).filter((n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
+            && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+            && !((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n)));
+        for (const ref of refs) {
+            const write: any = ref.parent;
+            if ((write?.kind === SyntaxKind.BinaryExpression) && (write.left === ref) && (write.operatorToken.kind === SyntaxKind.EqualsToken)) {
+                const again = noDefault ? undefined : this.rf6aSafeDictCall(write.right);
+                if ((again !== undefined) && (again.family === found.family) && this.rf6aNeverNilDict(again.call, ws)
+                    && !this.hasNodeWhere(again.call, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+                        && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n)))) {
+                    rebinds.add(write); // every write is again a never-nil safeDict: one map type
+                }
+            }
+        }
+        for (const ref of refs) {
+            if (!this.rf6aUseKeepsMap(ref, rebinds, noDefault, ws, name)) {
+                return undefined;
+            }
+        }
+        this.rf6aRebindWrites.set(declaration, rebinds);
+        return GO_SAFE_DICT_LOCAL_TYPE;
+    }
+
+    rf6aRebindWrites = new Map<any, Set<any>>();
+
+    // the typed twin of the declaration's initializer: `this.SafeDictMap(c, k[, d])`
+    rf6aSafeDictMapValue(declaration, identation: number): string | undefined {
+        if (this.rf6aSafeDictMapLocal(declaration) !== GO_SAFE_DICT_LOCAL_TYPE) {
+            return undefined;
+        }
+        const found: any = this.rf6aSafeDictCall(declaration.initializer);
+        return `this.${found.family}Map(${this.printArgsForCallExpression(found.call, identation)})`;
+    }
+
+    // `x = this.safeDict (c, k, <never-nil default>)` on a typed dict local keeps the same map type
+    rf6aSafeDictRebind(node, identation: number): string | undefined {
+        if ((node.operatorToken?.kind !== SyntaxKind.EqualsToken) || (node.left?.kind !== SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        const declaration = this.goDeclarationOfIdentifier(node.left);
+        if ((declaration === undefined) || (this.rf6aSafeDictMapLocal(declaration) !== GO_SAFE_DICT_LOCAL_TYPE)
+            || !(this.rf6aRebindWrites.get(declaration)?.has(node))) {
+            return undefined;
+        }
+        const found: any = this.rf6aSafeDictCall(node.right);
+        return `${this.printNode(node.left, 0)} = this.${found.family}Map(${this.printArgsForCallExpression(found.call, identation)})`;
+    }
+
+    // the Go string a key prints as: a literal, a `string` local, or a GetArgString-bound parameter
+    rf6aKeyIsString(key, printed: string): boolean {
+        if (this.goKeyIsString(key, printed)) {
+            return true;
+        }
+        if (key?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        let decl: any;
+        try {
+            decl = this.checkerOrUndefined()?.getSymbolAtLocation(key)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return false;
+        }
+        return (decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === 'string');
+    }
+
+    // a value the runtime helpers store as-is: never a Go pointer
+    rf6aIsPointerFreeValue(value): boolean {
+        const inner = this.goUnwrapParenthesizedNode(value);
+        switch (inner?.kind) {
+        case SyntaxKind.NullKeyword:
+        case SyntaxKind.TrueKeyword:
+        case SyntaxKind.FalseKeyword:
+        case SyntaxKind.NumericLiteral:
+        case SyntaxKind.StringLiteral:
+        case SyntaxKind.NoSubstitutionTemplateLiteral:
+        case SyntaxKind.ObjectLiteralExpression:
+        case SyntaxKind.ArrayLiteralExpression:
+            return true;
+        case SyntaxKind.PrefixUnaryExpression:
+            return (inner.operator === SyntaxKind.MinusToken) && (inner.operand?.kind === SyntaxKind.NumericLiteral);
+        case SyntaxKind.Identifier:
+            return inner.text === 'undefined';
+        }
+        return false;
+    }
+
+    // no write into the map named `name` in its function can store a pointer: the map is never rebound,
+    // never deleted from, and every element write stores a pointer-free value
+    rf6aMapWritesArePointerFree(scope, name: string): boolean {
+        return !this.hasNodeWhere(scope, (n: any) => {
+            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))) {
+                return false;
+            }
+            let node: any = n;
+            const parent: any = n.parent;
+            if (parent === undefined) {
+                return false;
+            }
+            if ((parent.kind === SyntaxKind.BinaryExpression) && (parent.left === node) && (parent.operatorToken.kind >= SyntaxKind.FirstAssignment)
+                && (parent.operatorToken.kind <= SyntaxKind.LastAssignment)) {
+                return true; // rebinding
+            }
+            if ((parent.kind === SyntaxKind.ArrayLiteralExpression) && (parent.parent?.kind === SyntaxKind.BinaryExpression) && (parent.parent.left === parent)) {
+                return true;
+            }
+            if ((parent.kind === SyntaxKind.ForOfStatement) || (parent.kind === SyntaxKind.ForInStatement)) {
+                return parent.initializer === node;
+            }
+            if ((parent.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === node)) {
+                const above: any = parent.parent;
+                if (above?.kind === SyntaxKind.DeleteExpression) {
+                    return true;
+                }
+                if ((above?.kind === SyntaxKind.BinaryExpression) && (above.left === parent) && (above.operatorToken.kind >= SyntaxKind.FirstAssignment)
+                    && (above.operatorToken.kind <= SyntaxKind.LastAssignment)) {
+                    return (above.operatorToken.kind !== SyntaxKind.EqualsToken) || !this.rf6aIsPointerFreeValue(above.right);
+                }
+            }
+            return false;
+        });
+    }
+
+    // `m[k]` where GetValue(m, k) would deref a stored pointer: false unless m's Go type is map[string]any, the key
+    // is a Go string, the element is not natively compared, and no write into m stores a pointer
+    rf6aNativeMapRead(access, baseExpr, keyNode, keyStr: string): boolean {
+        if ((baseExpr?.kind !== SyntaxKind.Identifier) || this.isGoElementAccessAssignmentTarget(access)
+            || !this.rf6aKeyIsString(keyNode, keyStr)) {
+            return false;
+        }
+        let decl: any;
+        try {
+            decl = this.checkerOrUndefined()?.getSymbolAtLocation(baseExpr)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return false;
+        }
+        const isMap = (decl?.kind === SyntaxKind.Parameter) ? (this.goGetArgParameterType(decl) === 'map[string]any')
+            : ((decl?.kind === SyntaxKind.VariableDeclaration) && (this.goResolvedLocalGoType(baseExpr) === 'map[string]any'));
+        const scope: any = (decl === undefined) ? undefined : this.rf6aTopFunction(decl);
+        if (!isMap || (scope === undefined) || !this.rf6aMapWritesArePointerFree(scope, baseExpr.text)) {
+            return false;
+        }
+        // a compared element keeps the helper: a `*bool`/`*string` element would make the native `==` false
+        let operand: any = access;
+        while (operand.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            operand = operand.parent;
+        }
+        const cmp: any = operand.parent;
+        return !((cmp?.kind === SyntaxKind.BinaryExpression) && ((cmp.left === operand) || (cmp.right === operand))
+            && [ SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken ].includes(cmp.operatorToken.kind));
+    }
+    // ===== end RF-go-6-A =====
 
     // the TypeScript return type proves the boxed value is the market dictionary: the checker reports
     // the `MarketInterface` interface for `this.Market(...)` / `this.SafeMarket(...)` (the `Market`
@@ -4437,7 +4861,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return 'any';
         }
         const scope = this.goEnclosingFunction(declaration);
-        if (this.goAnnotatedStringLocal(declaration, goType, scope, sourceName)) {
+        if (this.goAnnotatedStringLocal(declaration, goType, scope, sourceName) || this.goLiteralDefaultStringLocal(declaration, goType, scope, sourceName)) {
             return 'string';
         }
         // outside any nested resolution the verdict depends only on (declaration, goType)
@@ -4471,6 +4895,148 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         return !this.goTypeNameIsShadowed(scope, 'string') && this.goLocalIsSafeToType(scope, declaration, name, 'string')
             && !this.goAnnotatedStringLocalHasNilShapedRead(scope, declaration, name);
+    }
+
+    // `const x = this.safeString (o, k, 'lit')`: the call returns a fresh non-nil pointer, so a local
+    // that is never rebound and is only read as a string consumer, a literal comparison or a concat
+    // operand, and written only with a literal or such a call, is a plain Go `string`.
+    goLiteralDefaultStringLocal(declaration, goType: string, scope, name: string): boolean {
+        if ((goType !== '*string') || (scope === undefined) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+            return false;
+        }
+        if (this.goLiteralDefaultStringLocalCache.has(declaration)) {
+            return this.goLiteralDefaultStringLocalCache.get(declaration);
+        }
+        const verdict = !this.goTypeNameIsShadowed(scope, 'string')
+            && this.goLiteralDefaultStringCall(declaration.initializer, undefined)
+            && this.goLiteralDefaultStringLocalUsesAreSafe(scope, declaration, name);
+        this.goLiteralDefaultStringLocalCache.set(declaration, verdict);
+        return verdict;
+    }
+    goLiteralDefaultStringLocalCache = new WeakMap<object, boolean>();
+
+    // `this.safeString (o, k, 'lit')` (or the Lower/Upper twin): exactly three arguments, the last a
+    // string literal (or, for a rewrite of `name`, the local itself)
+    goLiteralDefaultStringCall(node, name: string | undefined): boolean {
+        let call: any = node;
+        while ((call?.kind === SyntaxKind.ParenthesizedExpression) || (call?.kind === SyntaxKind.AsExpression)
+            || (call?.kind === SyntaxKind.NonNullExpression)) {
+            call = call.expression;
+        }
+        if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 3)
+            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+            || ['safeString', 'safeStringLower', 'safeStringUpper'].indexOf(call.expression.name?.text) < 0) {
+            return false;
+        }
+        const last: any = call.arguments[2];
+        return (last?.kind === SyntaxKind.StringLiteral) || (last?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)
+            || ((name !== undefined) && (last?.kind === SyntaxKind.Identifier) && (last.text === name));
+    }
+
+    goLiteralDefaultStringLocalUsesAreSafe(scope, declaration, name: string): boolean {
+        let safe = true;
+        const visit = (n: any) => {
+            if (!safe) {
+                return;
+            }
+            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+                n.forEachChild(visit);
+                return;
+            }
+            const parent: any = n.parent;
+            if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n))
+                || ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.name === n))) {
+                return; // a member name, not the local
+            }
+            // a second binding of the name makes the scan ambiguous
+            if (((parent?.kind === SyntaxKind.VariableDeclaration) || (parent?.kind === SyntaxKind.Parameter)
+                || (parent?.kind === SyntaxKind.BindingElement)) && (parent.name === n)) {
+                safe = false;
+                return;
+            }
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (GO_WRITE_OPERATOR_KINDS.indexOf(parent.operatorToken?.kind) >= 0)) {
+                const right: any = parent.right;
+                safe = (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+                    && ((right?.kind === SyntaxKind.StringLiteral) || this.goLiteralDefaultStringCall(right, name));
+                return;
+            }
+            safe = this.goLiteralDefaultStringLocalReadIsSafe(n);
+        };
+        scope.forEachChild(visit);
+        return safe;
+    }
+
+    // a read the printer answers with the same Go value whether the local is `*string` or `string`
+    goLiteralDefaultStringLocalReadIsSafe(node): boolean {
+        let current: any = node;
+        let parent: any = current.parent;
+        while ((parent?.kind === SyntaxKind.ParenthesizedExpression) || (parent?.kind === SyntaxKind.AsExpression)
+            || (parent?.kind === SyntaxKind.NonNullExpression)) {
+            current = parent;
+            parent = parent.parent;
+        }
+        // the default slot of the local's own `x = this.safeString (o, k, x)` write
+        if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments?.[2] === current)
+            && this.goLiteralDefaultStringCall(parent, node.text)) {
+            const write: any = parent.parent;
+            return (write?.kind === SyntaxKind.BinaryExpression) && (write.right === parent)
+                && (write.operatorToken?.kind === SyntaxKind.EqualsToken) && (write.left?.text === node.text);
+        }
+        switch (parent?.kind) {
+        case SyntaxKind.BinaryExpression: {
+            const operator = parent.operatorToken?.kind;
+            if (operator === SyntaxKind.PlusToken) {
+                return true;
+            }
+            if (operator === SyntaxKind.InKeyword) {
+                return parent.left === current;
+            }
+            if ((operator === SyntaxKind.EqualsEqualsToken) || (operator === SyntaxKind.ExclamationEqualsToken)
+                || (operator === SyntaxKind.EqualsEqualsEqualsToken) || (operator === SyntaxKind.ExclamationEqualsEqualsToken)) {
+                const other: any = (parent.left === current) ? parent.right : parent.left;
+                return (other?.kind === SyntaxKind.StringLiteral) || (other?.kind === SyntaxKind.NoSubstitutionTemplateLiteral);
+            }
+            return false;
+        }
+        case SyntaxKind.PropertyAccessExpression:
+            return (parent.expression === current) && (GO_STRING_METHOD_NAMES.indexOf(parent.name?.text) >= 0);
+        case SyntaxKind.ElementAccessExpression:
+            return parent.argumentExpression === current;
+        case SyntaxKind.CallExpression:
+            return this.goLiteralDefaultStringCallArgument(parent, current);
+        }
+        return false;
+    }
+
+    // an argument the callee takes as a Go `string` (its printed parameter), or a runtime accessor that
+    // derefs its `any` arguments: the string passes where the pointer did
+    goLiteralDefaultStringCallArgument(call, argument): boolean {
+        const index = call.arguments?.indexOf(argument) ?? -1;
+        if (index < 0) {
+            return false;
+        }
+        const name = this.goAstCalleeName(call);
+        if ((name !== undefined) && GO_NIL_INIT_ANY_ARG_CALLEES.has(name) && !(name.startsWith('this.Safe') && (index === call.arguments.length - 1) && (call.arguments.length > 2))) {
+            return true;
+        }
+        // read from the declaration only: printing the callee's parameters from inside this scan would
+        // resolve this very local while its type is still open
+        try {
+            const declaration: any = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+            const parameter: any = declaration?.parameters?.[index];
+            return (parameter?.kind === SyntaxKind.Parameter) && (parameter.type?.kind === SyntaxKind.StringKeyword)
+                && (parameter.initializer === undefined) && (parameter.questionToken === undefined) && (parameter.dotDotDotToken === undefined);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // `x = this.safeString (o, k, x)` on a local the rule above typed `string`: the call's deref
+    goLiteralDefaultStringWrite(left, right): boolean {
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration?.resolve();
+        return (decl?.kind === SyntaxKind.VariableDeclaration) && this.goLiteralDefaultStringLocalCache.get(decl) === true
+            && this.goLiteralDefaultStringCall(right, left.text);
     }
 
     // a read a Go string cannot serve natively: a nil comparison (boxes into IsEqual) or a copy
@@ -4557,6 +5123,11 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
 
         }
 
+        const mapRange = this.goMapRangeLocalDeclaration(node, declaration, identation);
+        if (mapRange !== undefined) {
+            return mapRange;
+        }
+
         const isNew = declaration.initializer && (declaration.initializer.kind === SyntaxKind.NewExpression);
 
         const containerType = this.goContainerLocalType(declaration);
@@ -4589,19 +5160,25 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 return this.getIden(identation) + this.printNode(declaration.name) + " := " + parsedValue;
             }
             const varName = this.printNode(declaration.name);
-            const declaredType = (containerType !== undefined) ? containerType : this.getGoLocalType(declaration, parsedValue);
+            // RF-go-6-A: the Dict local seeded from safeDict is declared here only; every other printer rule still sees the `any` box
+            const rf6aMapValue = (containerType === undefined) ? this.rf6aSafeDictMapValue(declaration, identation) : undefined;
+            const declaredType = (containerType !== undefined) ? containerType : ((rf6aMapValue !== undefined) ? GO_SAFE_DICT_LOCAL_TYPE : this.getGoLocalType(declaration, parsedValue));
             // a typed dict/list local is declared with the typed reader rather than the `any`
             // accessor, so the declaration compiles against the map/slice type
             const unboxValue = this.goOrderBookUnboxValue(declaration, parsedValue)  // RF-go-6-D
                 ?? this.goMarketUnboxValue(declaration, parsedValue)
                 ?? ((declaredType === GO_SAFE_DICT_LOCAL_TYPE)
-                    ? this.goSafeDictUnboxValue(declaration, identation)
+                    ? (this.goSafeDictUnboxValue(declaration, identation) ?? rf6aMapValue)
                     : ((declaredType === GO_SAFE_LIST_LOCAL_TYPE) ? this.goSafeListUnboxValue(declaration, identation) : undefined));
             let declaredValue = (unboxValue !== undefined) ? unboxValue : parsedValue.trimStart();
             // an annotated `string` local takes the defaulted SafeString call's deref
             if ((declaredType === 'string') && (unboxValue === undefined)
                 && (this.goTypeOfInitializer(declaration.initializer, parsedValue) === '*string')) {
                 declaredValue = '*' + declaredValue;
+            }
+            const cacheKeys = this.goG09CacheKeysRange(declaration, declaredType, varName, identation);  // RFM-G4 G09
+            if (cacheKeys !== undefined) {
+                return cacheKeys;
             }
             // an initializer printed at the declaration's own level (parenthesized expression,
             // helper call) carries that indentation; gofmt puts one space after `=`
@@ -5062,6 +5639,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
         const op = node.operatorToken.kind;
 
+        const rf6aRebind = this.rf6aSafeDictRebind(node, identation);
+        if (rf6aRebind !== undefined) {
+            return rf6aRebind;
+        }
+
         // ---------------------------------------------------------------
         // Array destructuring assignment:  [a, b] = foo()
         // Transforms into:
@@ -5155,7 +5737,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 : rhs;
             const native = (keyStrs.length === 1)
                 ? (this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right)
-                    ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation))
+                    ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
+                    ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation))
                 : undefined;
             return (native !== undefined) ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
@@ -5165,6 +5748,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if (typeOfExpression) {
                 return typeOfExpression;
             }
+        }
+
+        const cacheDup = this.goG09CacheDuplicateNilTest(node);  // RFM-G4 G09
+        if (cacheDup !== undefined) {
+            return cacheDup;
         }
 
         if (op === SyntaxKind.InKeyword) {
@@ -7577,6 +8165,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // B-02: a parameter the call-site proof typed prints its native Go type
             return this.goNativeParameterType(decl);
         }
+        if (decl.kind === SyntaxKind.BindingElement) {
+            return this.goRf6fTupleSlotPointerType(decl); // RF-go-6-F
+        }
         if (decl.kind !== SyntaxKind.VariableDeclaration || decl.name?.kind !== SyntaxKind.Identifier) {
             return undefined;
         }
@@ -7681,6 +8272,318 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             && GO_PLAIN_VALUED_MAP_FIELDS.includes(this.transformPropertyAccessExpressionName(node.name.text, node.name));
     }
 
+    // ---- RFM-G4 G09 (hx10w3 G09 folded): PredictionExchange caches are typed maps ----------------------------
+    // go/v4/exchange_prediction.go declares Outcomes / Outcomes_by_id / Events / Events_by_slug `map[string]any`
+    // (the struct field table in build/goTranspiler.ts, handed over as `predictionMapFields`), so a `this.<f>` the
+    // checker resolves to the PredictionExchange property of one of those names is a typed map, never the `any`
+    // box a BaseExchange field is. The rules below read that type; none looks at printed text.
+    goG09CacheField(node): boolean {
+        if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression?.kind !== SyntaxKind.ThisKeyword)
+            || (typeof node.name?.text !== 'string')) {
+            return false;
+        }
+        if (!this.predictionMapFields.has(this.transformPropertyAccessExpressionName(node.name.text, node.name))) {
+            return false;
+        }
+        let declaration: any;
+        try {
+            declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return false;
+        }
+        return (declaration?.kind === SyntaxKind.PropertyDeclaration) && (declaration.parent?.kind === SyntaxKind.ClassDeclaration)
+            && ((declaration.parent.name?.escapedText ?? declaration.parent.name?.text) === 'PredictionExchange');
+    }
+
+    // `this.f === undefined|null` / `!==`: the field's nil test is the map header (a nil map is the absent cache)
+    goG09CacheNilCompare(left, right, leftText: string, rightText: string, isEq: boolean, lFam, rFam): string | undefined {
+        const field = ((rFam === 'nil') && this.goG09CacheField(left) && !leftText.includes('\n')) ? leftText
+            : (((lFam === 'nil') && this.goG09CacheField(right) && !rightText.includes('\n')) ? rightText : undefined);
+        if (field === undefined) {
+            return undefined;
+        }
+        const text = `${field} ${isEq ? '==' : '!='} nil`;
+        // `==`/`!=` bind tighter than `&&`/`||`: an operand of one needs no parentheses of its own
+        const parent: any = (left?.parent ?? right?.parent)?.parent;   // the `==` node's own parent
+        const bare = (parent?.kind === SyntaxKind.BinaryExpression)
+            && ((parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken) || (parent.operatorToken.kind === SyntaxKind.BarBarToken));
+        return bare ? text : `(${text})`;
+    }
+
+    // a key the map index takes as is: a Go string (literal / `string` local / string-returning call), or an element
+    // of a `[]string` local read at a counter its own `for (let i = 0; i < xs.length; i++)` bounds to that slice
+    goG09CacheKeyText(keyNode, keyStr: string): string | undefined {
+        if (this.goKeyIsString(keyNode, keyStr)) {
+            return keyStr;
+        }
+        if ((keyNode?.kind !== SyntaxKind.ElementAccessExpression) || (keyNode.expression?.kind !== SyntaxKind.Identifier)
+            || (keyNode.argumentExpression?.kind !== SyntaxKind.Identifier)
+            || (this.goDeclaredTypeOfIdentifier(keyNode.expression) !== '[]string')
+            || !this.goG09IndexBoundedBy(keyNode.argumentExpression, keyNode.expression, keyNode)) {
+            return undefined;
+        }
+        return `${this.printNode(keyNode.expression, 0)}[${this.printNode(keyNode.argumentExpression, 0)}]`;
+    }
+
+    // `index` is the counter of the enclosing `for (let i = 0; i < list.length; i++)` that contains `use`; nothing in the
+    // loop rebinds it or the list, and the list is only ever read (its length cannot shrink below the bound)
+    goG09IndexBoundedBy(index, list, use): boolean {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return false;
+        }
+        const indexSymbol = checker.getSymbolAtLocation(index);
+        const listSymbol = checker.getSymbolAtLocation(list);
+        const indexDecl: any = indexSymbol?.valueDeclaration?.resolve();
+        const loop: any = indexDecl?.parent?.parent;
+        if ((indexDecl?.kind !== SyntaxKind.VariableDeclaration) || (indexDecl.initializer?.kind !== SyntaxKind.NumericLiteral)
+            || (indexDecl.initializer.text !== '0') || (loop?.kind !== SyntaxKind.ForStatement) || (loop.initializer !== indexDecl.parent)) {
+            return false;
+        }
+        const condition: any = this.goUnwrapParenthesizedNode(loop.condition);
+        const bound: any = condition?.right;
+        if ((condition?.kind !== SyntaxKind.BinaryExpression) || (condition.operatorToken?.kind !== SyntaxKind.LessThanToken)
+            || (condition.left?.kind !== SyntaxKind.Identifier) || (checker.getSymbolAtLocation(condition.left) !== indexSymbol)
+            || (bound?.kind !== SyntaxKind.PropertyAccessExpression) || (bound.name?.text !== 'length')
+            || (bound.expression?.kind !== SyntaxKind.Identifier) || (checker.getSymbolAtLocation(bound.expression) !== listSymbol)) {
+            return false;
+        }
+        const step: any = loop.incrementor;
+        if (!(((step?.kind === SyntaxKind.PostfixUnaryExpression) || (step?.kind === SyntaxKind.PrefixUnaryExpression))
+            && (step.operator === SyntaxKind.PlusPlusToken) && (step.operand?.kind === SyntaxKind.Identifier)
+            && (checker.getSymbolAtLocation(step.operand) === indexSymbol))) {
+            return false;
+        }
+        for (let at: any = use; at !== undefined; at = at.parent) {   // the read sits in the loop body
+            if (at === loop.statement) {
+                break;
+            }
+            if ((at === loop) || isFunctionLike(at) || (at.parent === undefined)) {
+                return false;
+            }
+        }
+        let ok = true;
+        const visit = (n: any): void => {
+            if (!ok) {
+                return;
+            }
+            if (n.kind === SyntaxKind.Identifier) {
+                const sym = checker.getSymbolAtLocation(n);
+                const parent: any = n.parent;
+                if ((sym === indexSymbol) && (n !== step.operand) && (n !== condition.left) && (n !== indexDecl.name)) {
+                    const writes = ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)
+                        && (parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (parent.operatorToken.kind <= SyntaxKind.LastAssignment))
+                        || (((parent?.kind === SyntaxKind.PostfixUnaryExpression) || (parent?.kind === SyntaxKind.PrefixUnaryExpression))
+                            && ((parent.operator === SyntaxKind.PlusPlusToken) || (parent.operator === SyntaxKind.MinusMinusToken)))
+                        || ((parent?.kind === SyntaxKind.ArrayLiteralExpression) || (parent?.kind === SyntaxKind.ForOfStatement) || (parent?.kind === SyntaxKind.ForInStatement));
+                    ok = !writes;
+                }
+                if ((sym === listSymbol) && (n !== bound.expression)) {
+                    const access = (parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)
+                        && !this.isGoElementAccessAssignmentTarget(parent);
+                    const length = (parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'length');
+                    ok = access || length;
+                }
+            }
+            n.forEachChild(visit);
+        };
+        visit(loop.statement);
+        return ok && !this.goLocalIsRebound(this.goEnclosingFunction(loop), listSymbol?.valueDeclaration?.resolve()?.name ?? list);
+    }
+
+    // `const ks = Object.keys (this.f)` over a cache: ObjectKeys builds a nil slice for a nil map and an exact-capacity
+    // slice otherwise, which is the nil-guarded range below (the loop variable name must be free in the function)
+    goG09CacheKeysRange(declaration, declaredType: string, varName: string, identation): string | undefined {
+        const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+        const callee: any = init?.expression;
+        if ((declaredType !== '[]string') || (init?.kind !== SyntaxKind.CallExpression) || (init.arguments?.length !== 1)
+            || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.name?.text !== 'keys')
+            || (callee.expression?.kind !== SyntaxKind.Identifier) || (callee.expression.text !== 'Object')
+            || !this.goG09CacheField(init.arguments[0])) {
+            return undefined;
+        }
+        const scope = this.goEnclosingFunction(declaration);
+        let taken = (scope === undefined);
+        const visit = (n: any): void => {
+            if (!taken && (n.kind === SyntaxKind.Identifier) && (n.text === 'objectKey')) {
+                taken = true;
+            }
+            if (!taken) {
+                n.forEachChild(visit);
+            }
+        };
+        if (scope !== undefined) {
+            scope.forEachChild(visit);
+        }
+        const field = this.printNode(init.arguments[0], 0);
+        if (taken || field.includes('\n')) {
+            return undefined;
+        }
+        const iden = this.getIden(identation);
+        return [
+            `${iden}var ${varName} []string = nil`,
+            `${iden}if ${field} != nil {`,
+            `${iden}\t${varName} = make([]string, 0, len(${field}))`,
+            `${iden}\tfor objectKey := range ${field} {`,
+            `${iden}\t\t${varName} = append(${varName}, objectKey)`,
+            `${iden}\t}`,
+            `${iden}}`,
+        ].join('\n');
+    }
+
+    // `a && b` / `a || b` whose two operands are the same cache field's nil test (`this.f !== undefined && this.f !== null`):
+    // one test, as Go vet rejects the doubled operand
+    goG09CacheDuplicateNilTest(node): string | undefined {
+        const op = node.operatorToken.kind;
+        if ((op !== SyntaxKind.AmpersandAmpersandToken) && (op !== SyntaxKind.BarBarToken)) {
+            return undefined;
+        }
+        const test = (n: any): { field: any, eq: boolean } | undefined => {
+            const t: any = this.goUnwrapParenthesizedNode(n);
+            if (t?.kind !== SyntaxKind.BinaryExpression) {
+                return undefined;
+            }
+            const k = t.operatorToken.kind;
+            const eq = (k === SyntaxKind.EqualsEqualsEqualsToken) || (k === SyntaxKind.EqualsEqualsToken);
+            const ne = (k === SyntaxKind.ExclamationEqualsEqualsToken) || (k === SyntaxKind.ExclamationEqualsToken);
+            if (!eq && !ne) {
+                return undefined;
+            }
+            if (this.goG09CacheField(t.left) && this.goIsNilLiteral(t.right)) {
+                return { field: t.left, eq };
+            }
+            return (this.goG09CacheField(t.right) && this.goIsNilLiteral(t.left)) ? { field: t.right, eq } : undefined;
+        };
+        const l = test(node.left);
+        const r = test(node.right);
+        if ((l === undefined) || (r === undefined) || (l.eq !== r.eq) || (l.field.name.text !== r.field.name.text)
+            || (l.eq !== (op === SyntaxKind.BarBarToken))) {
+            return undefined;
+        }
+        const field = this.printNode(l.field, 0);
+        return field.includes('\n') ? undefined : `${field} ${l.eq ? '==' : '!='} nil`;
+    }
+
+    // an element of the `[]string` key list a cache range produced (`const keys = Object.keys (this.f)`), read as a call
+    // argument at the counter of the `for (let i = 0; i < keys.length; i++)` that bounds it: the plain Go index
+    goG09CacheKeysElementRead(node, baseExpr, containerStr: string, keyNodes, keyStrs: string[]): string | undefined {
+        const key = keyNodes[0];
+        if ((keyNodes.length !== 1) || (baseExpr?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)
+            || (node.parent?.kind !== SyntaxKind.CallExpression) || !node.parent.arguments.includes(node)
+            || this.isGoElementAccessAssignmentTarget(node)) {
+            return undefined;
+        }
+        const declaration: any = this.goDeclarationOfIdentifier(baseExpr);
+        const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+        const callee: any = init?.expression;
+        if ((init?.kind !== SyntaxKind.CallExpression) || (init.arguments?.length !== 1) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (callee.name?.text !== 'keys') || (callee.expression?.text !== 'Object') || !this.goG09CacheField(init.arguments[0])
+            || (this.goDeclaredTypeOfIdentifier(baseExpr) !== '[]string') || !this.goG09IndexBoundedBy(key, baseExpr, node)) {
+            return undefined;
+        }
+        return `${containerStr}[${keyStrs[0]}]`;
+    }
+
+    // `this.f[key]` over a cache: the map index answers what GetValue answered (absent key and nil map both nil)
+    // because the cache only ever holds the plain dictionaries its writers store
+    goG09CacheRead(node, baseExpr, containerStr: string, keyNodes, keyStrs: string[]): string | undefined {
+        if (!this.goG09CacheField(baseExpr) || containerStr.includes('\n') || this.isGoElementAccessAssignmentTarget(node)
+            || this.goMarketComparisonElementRead(node)) {
+            return undefined;
+        }
+        const first = this.goG09CacheKeyText(keyNodes[0], keyStrs[0]);
+        return (first === undefined) ? undefined : this.goElementAccessChain(`${containerStr}[${first}]`, [ first ].concat(keyStrs.slice(1)));
+    }
+
+    // `this.f[key] = value`: AddElementToObject skips a nil key and a nil map and stores derefScalar(value). The native
+    // store keeps the key guard (a `*string` key under its own `!== undefined` test), a nil map is excluded by the
+    // function's own `if (this.f === undefined) this.f = {}` that precedes the write, and the value is a local that
+    // never holds a pointer box (derefScalar is then the identity)
+    goG09CacheWrite(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, compound: boolean, valueNode): string | undefined {
+        if (compound || (valueNode === undefined) || valueStr.includes('\n') || containerStr.includes('\n') || !this.goG09CacheField(containerNode)) {
+            return undefined;
+        }
+        const value = this.goUnwrapParenthesizedNode(valueNode);
+        const plainValue = (value?.kind === SyntaxKind.ObjectLiteralExpression)
+            || ((value?.kind === SyntaxKind.Identifier) && (this.goDeclarationOfIdentifier(value) !== undefined)
+                && !this.goValueMayHoldPointer(value) && !String(this.goDeclaredTypeOfIdentifier(value) ?? '').startsWith('*'));
+        if (!plainValue || !this.goG09CacheInitializedBefore(containerNode)) {
+            return undefined;
+        }
+        if (this.goIsStringKeyExpression(keyNode)) {
+            return `${containerStr}[${keyStr}] = ${valueStr}`;
+        }
+        return this.goIsNilGuardedStringPointerKey(keyNode) ? `${containerStr}[*${keyStr}] = ${valueStr}` : undefined;
+    }
+
+    // an `if (this.f === undefined) { this.f = {}; }` (or a bare `this.f = {}`) among the statements before the write
+    // in an enclosing block of the same function, with no non-literal store to the field in between
+    goG09CacheInitializedBefore(access): boolean {
+        const field = access.name.text;
+        const isField = (n: any): boolean => (n?.kind === SyntaxKind.PropertyAccessExpression) && (n.expression?.kind === SyntaxKind.ThisKeyword)
+            && (n.name?.text === field);
+        const isLiteralStore = (n: any): boolean => {
+            const e: any = (n?.kind === SyntaxKind.ExpressionStatement) ? n.expression : undefined;
+            return (e?.kind === SyntaxKind.BinaryExpression) && (e.operatorToken.kind === SyntaxKind.EqualsToken) && isField(e.left)
+                && (e.right?.kind === SyntaxKind.ObjectLiteralExpression);
+        };
+        const isUndefinedTest = (c: any): boolean => {
+            const t: any = this.goUnwrapParenthesizedNode(c);
+            if ((t?.kind !== SyntaxKind.BinaryExpression) || ![ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.EqualsEqualsToken ].includes(t.operatorToken.kind)) {
+                return false;
+            }
+            return (isField(t.left) && this.goIsNilLiteral(t.right)) || (isField(t.right) && this.goIsNilLiteral(t.left));
+        };
+        const initializes = (st: any): boolean => {
+            if (isLiteralStore(st)) {
+                return true;
+            }
+            if ((st?.kind !== SyntaxKind.IfStatement) || (st.elseStatement !== undefined) || !isUndefinedTest(st.expression)) {
+                return false;
+            }
+            const then: any = st.thenStatement;
+            return (then?.kind === SyntaxKind.Block) ? then.statements.some((s: any) => isLiteralStore(s)) : isLiteralStore(then);
+        };
+        const storesOther = (st: any): boolean => {
+            let found = false;
+            const visit = (n: any): void => {
+                if (found) {
+                    return;
+                }
+                if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind >= SyntaxKind.FirstAssignment)
+                    && (n.operatorToken.kind <= SyntaxKind.LastAssignment) && isField(n.left) && (n.right?.kind !== SyntaxKind.ObjectLiteralExpression)) {
+                    found = true;
+                    return;
+                }
+                n.forEachChild(visit);
+            };
+            visit(st);
+            return found;
+        };
+        let child: any = access;
+        for (let parent: any = access.parent; parent !== undefined; child = parent, parent = parent.parent) {
+            if (isFunctionLike(parent) || (parent.kind === SyntaxKind.SourceFile)) {
+                return false;
+            }
+            const statements: any = ((parent.kind === SyntaxKind.Block) || (parent.kind === SyntaxKind.CaseClause) || (parent.kind === SyntaxKind.DefaultClause))
+                ? parent.statements : undefined;
+            if (statements === undefined) {
+                continue;
+            }
+            const at = statements.indexOf(child);
+            for (let j = at - 1; j >= 0; j--) {
+                if (initializes(statements[j])) {
+                    return !statements.slice(j + 1, at + 1).some((s: any) => storesOther(s));
+                }
+                if (storesOther(statements[j])) {
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+    // ---- end RFM-G4 G09 ----------------------------------------------------------------------------------------
+
     goIsStringKeyExpression(node): boolean {
         if ((node.kind === SyntaxKind.StringLiteral) || (node.kind === SyntaxKind.NoSubstitutionTemplateLiteral)) {
             return true;
@@ -7764,6 +8667,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.goIsBaseMapResultLocal(containerNode) && !this.goMapWriteValueIsNotPointer(valueNode)) {
             return undefined;
         }
+        const cacheWrite = this.goG09CacheWrite(containerNode, containerStr, keyNode, keyStr, valueStr, compound, valueNode);  // RFM-G4 G09
+        if (cacheWrite !== undefined) {
+            return cacheWrite;
+        }
+        valueStr = this.goRf6fSlotStoreText(valueNode, valueStr); // RF-go-6-F
         const containerType = this.goElementAssignmentContainerType(containerNode, containerStr);
         const fieldType = this.goFieldContainerTypeNative(containerNode);
         if ((fieldType !== undefined) || (containerType === 'map[string]any')) {
@@ -7843,6 +8751,38 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         const iden = this.getIden(identation);
         return `if ${keyStr} != nil {\n${iden}\t${containerStr}[*${keyStr}] = ${valueStr}\n${iden}}`;
+    }
+
+    // `this.<option dict>[k] = v` with a string-typed or nil-guarded *string key: the helper's map store
+    // behind the nil checks it applies; a pointer value is stored dereferenced, any other `any` keeps it
+    printOptionDictFieldWrite(containerNode, containerStr: string, keyNode, keyStr: string, valueNode, identation: number): string | undefined {
+        const name = (containerNode?.kind === SyntaxKind.PropertyAccessExpression) && (containerNode.expression?.kind === SyntaxKind.ThisKeyword)
+            ? this.transformPropertyAccessExpressionName(containerNode.name.text, containerNode.name) : undefined;
+        if ((name === undefined) || !GO_OPTION_DICT_FIELDS.includes(name) || (valueNode === undefined)) {
+            return undefined;
+        }
+        let keyType = this.goDeclaredTypeOfIdentifier(keyNode);
+        if ((keyType === undefined) && (keyNode?.kind === SyntaxKind.Identifier)) {
+            const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(keyNode)?.valueDeclaration?.resolve();
+            keyType = this.goGetArgParameterType(declaration);
+        }
+        if ((keyType !== 'string') && (keyType !== '*string')) {
+            return undefined;
+        }
+        const inner = this.goUnwrapParenthesizedNode(valueNode);
+        let storeValue: (text: string) => string;
+        if (this.goMapWriteValueIsNotPointer(valueNode)) {
+            storeValue = (text) => text;
+        } else if ((inner?.kind === SyntaxKind.Identifier) && this.goWritePrintsPointerBox(inner)) {
+            storeValue = (text) => `DerefScalar(${text})`;
+        } else {
+            return undefined;
+        }
+        const value = storeValue(this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(valueNode, identation + 1)).trimStart());
+        const pointerKey = keyType === '*string';
+        const guard = pointerKey ? `${containerStr} != nil && ${keyStr} != nil` : `${containerStr} != nil`;
+        const iden = this.getIden(identation);
+        return `if ${guard} {\n${iden}\t${containerStr}[${pointerKey ? '*' : ''}${keyStr}] = ${value}\n${iden}}`;
     }
 
     // the helper stores derefScalar(value): a numeric literal is already the value it stores
@@ -8398,6 +9338,321 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return `func() bool {\n${this.getIden(level + 1)}${read}\n${this.getIden(level + 1)}return ok\n${this.getIden(level)}}()`;
     }
 
+    // ---- FM-A9F L3: negated lookups hoisted out of an `||` chain; ws book entries as receivers ----
+    // `if <pure terms> || !(k in m) {` with k a `*string` and m a Go map: InOp answers false for a nil key,
+    // so a flag set under `k != nil` just before the `if` keeps the behaviour while the lookup is the
+    // native comma-ok. Only pure terms may sit around the lookup (nothing is evaluated early).
+
+    // `this.markets` / `this.markets_by_id` / `this.currencies` / `this.currencies_by_id`: the book getters
+    goL3BookReceiver(node): boolean {
+        return (node?.kind === SyntaxKind.PropertyAccessExpression) && (node.expression?.kind === SyntaxKind.ThisKeyword)
+            && (typeof node.name?.text === 'string')
+            && (this.GO_NATIVE_MAP_ACCESSORS.indexOf(this.transformPropertyAccessExpressionName(node.name.text, node.name)) >= 0);
+    }
+
+    // `this.ohlcvs[symbol]` with a Go `string` (or provably non-nil `*string`) index: one book of the
+    // map[string]map[string]any field, as the native index text (the generic element read prints GetValue, which is `any`)
+    goL3BookEntryText(node): string | undefined {
+        const access: any = this.goUnwrapParenthesizedNode(node);
+        const field: any = access?.expression;
+        if ((access?.kind !== SyntaxKind.ElementAccessExpression) || (field?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (field.expression?.kind !== SyntaxKind.ThisKeyword) || (typeof field.name?.text !== 'string')) {
+            return undefined;
+        }
+        const name = this.transformPropertyAccessExpressionName(field.name.text, field.name);
+        if (this.GO_NATIVE_MAP_FIELDS[name] !== 'map[string]map[string]any') {
+            return undefined;
+        }
+        const index: any = access.argumentExpression;
+        if (index?.kind !== SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const indexType = this.goDeclaredTypeOfIdentifier(index);
+        if (indexType === 'string') {
+            return `this.${name}[${this.printNode(index, 0)}]`;
+        }
+        // a `*string` local every write of which is a literal-default SafeString: it is a plain Go string at the use
+        return ((indexType === '*string') && this.goDefaultedSafeStringLocal(index)) ? `this.${name}[*${this.printNode(index, 0)}]` : undefined;
+    }
+
+    // `k in book` directly under a `!`: a negated book-entry lookup keeps the helper (the cache-entry proofs
+    // downstream key on that guard), only the positive read is native
+    goL3UnderNegation(inNode): boolean {
+        let current: any = inNode?.parent;
+        while (current?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        return (current?.kind === SyntaxKind.PrefixUnaryExpression) && (current.operator === SyntaxKind.ExclamationToken);
+    }
+
+    // a Go map the lookup may read: a book getter, or a local the printer declares map[string]any
+    goL3MapReceiver(node): boolean {
+        return this.goL3BookReceiver(node) || (this.goFieldContainerTypeNative(node) === 'map[string]any')
+            || ((node?.kind === SyntaxKind.Identifier)
+                && ((this.goDeclaredTypeOfIdentifier(node) === 'map[string]any') || this.goL3DefaultedDictLocal(node)));
+    }
+
+    // `const m = this.safeDict(<plain map>, key, {})`: the decoded dictionary or the never-nil literal default, so
+    // the local is a `map[string]any` at every use below (the printed declaration is the typed SafeDictMap read).
+    // The local is declared once, never rebound, and every use reads it as a map or hands it on as a value.
+    goL3DefaultedDictLocal(node): boolean {
+        const declaration: any = this.goDeclarationOfIdentifier(node);
+        return (declaration !== undefined) && this.goL3DefaultedDictDeclaration(declaration);
+    }
+
+    goL3DefaultedDictDeclaration(declaration): boolean {
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+            return false;
+        }
+        const args: any = this.goSafeDictLocalArgs(declaration.initializer);
+        if ((args === undefined) || (declaration.initializer.arguments.length !== 3)) {
+            return false;
+        }
+        const container: any = this.goUnwrapParenthesizedNode(args.container);
+        if (!this.goL3PlainDictContainer(container)) {
+            return false;
+        }
+        const scope: any = this.goEnclosingFunction(declaration);
+        if ((scope === undefined) || this.goLocalIsRebound(scope, declaration.name)) {
+            return false;
+        }
+        const name = declaration.name.text;
+        let clean = true;
+        const visit = (n) => {
+            if (!clean) {
+                return;
+            }
+            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)) {
+                clean = this.goL3DictUseKeepsMap(n);
+                return;
+            }
+            if (((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter)) && (n !== declaration)
+                && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+                clean = false; // a shadowing binding
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        return clean;
+    }
+
+    // the defaulted dict local is typed by the printer when a negated `k in m` read over it hoists (the hoisted
+    // comma-ok indexes the local, which only compiles against the map type)
+    goL3DictLocalBacksHoist(declaration): boolean {
+        if (!this.goL3DefaultedDictDeclaration(declaration)) {
+            return false;
+        }
+        const scope: any = this.goEnclosingFunction(declaration);
+        const name = declaration.name.text;
+        let backs = false;
+        const visit = (n) => {
+            if (backs) {
+                return;
+            }
+            if ((n.kind === SyntaxKind.IfStatement) && (n.parent?.kind === SyntaxKind.Block)) {
+                const shape = this.goL3HoistShape(n);
+                const dict: any = shape?.dict;
+                if ((dict?.kind === SyntaxKind.Identifier) && (dict.text === name) && (this.goDeclarationOfIdentifier(dict) === declaration)) {
+                    backs = true;
+                    return;
+                }
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        return backs;
+    }
+
+    // the container of a defaulted dict read: a hand-written map field, or another map local the printer declared
+    goL3PlainDictContainer(node): boolean {
+        if (node?.kind === SyntaxKind.Identifier) {
+            return this.goDeclaredTypeOfIdentifier(node) === 'map[string]any';
+        }
+        return (this.goFieldContainerTypeNative(node) === 'map[string]any')
+            && (this.goUnwrapParenthesizedNode(node)?.name?.text === 'options');
+    }
+
+    // one use of the dict local: never a type probe, an assertion, an address or a call target
+    goL3DictUseKeepsMap(node): boolean {
+        const parent: any = node.parent;
+        switch (parent?.kind) {
+        case SyntaxKind.ElementAccessExpression:
+            return parent.expression === node;
+        case SyntaxKind.BinaryExpression: {
+            const op = parent.operatorToken?.kind;
+            if (op === SyntaxKind.InKeyword) {
+                return parent.right === node;
+            }
+            if (op === SyntaxKind.EqualsToken) {
+                return parent.right === node; // `this.x[k] = m`: the value is handed on
+            }
+            return this.goIsNilComparisonOperand(node, parent);
+        }
+        case SyntaxKind.CallExpression: {
+            if (parent.expression === node) {
+                return false;
+            }
+            const callee: any = parent.expression;
+            // Array.isArray / typeof-style probes read the box, not the map
+            return !((callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.text === 'Array'));
+        }
+        case SyntaxKind.PropertyAssignment:
+        case SyntaxKind.ShorthandPropertyAssignment:
+            return true;
+        }
+        return false;
+    }
+
+    // a leaf of the pure part of the condition: a local, a literal, a book getter
+    goL3PureLeaf(node): boolean {
+        const inner: any = this.goUnwrapParenthesizedNode(node);
+        switch (inner?.kind) {
+        case SyntaxKind.Identifier:
+        case SyntaxKind.NullKeyword:
+        case SyntaxKind.TrueKeyword:
+        case SyntaxKind.FalseKeyword:
+        case SyntaxKind.NumericLiteral:
+        case SyntaxKind.StringLiteral:
+        case SyntaxKind.NoSubstitutionTemplateLiteral:
+            return true;
+        }
+        return this.goL3BookReceiver(inner) || (this.goFieldContainerTypeNative(inner) === 'map[string]any');
+    }
+
+    // true when every term of the `&&` / `||` / `!` chain is pure; each `k in m` found is collected
+    goL3OrHoistTerms(node, reads: any[]): boolean {
+        const inner: any = this.goUnwrapParenthesizedNode(node);
+        if (inner?.kind === SyntaxKind.PrefixUnaryExpression) {
+            if (inner.operator !== SyntaxKind.ExclamationToken) {
+                return false;
+            }
+            const operand: any = this.goUnwrapParenthesizedNode(inner.operand);
+            if ((operand?.kind === SyntaxKind.BinaryExpression) && (operand.operatorToken?.kind === SyntaxKind.InKeyword)) {
+                reads.push({ 'node': operand, 'negated': true });
+                return true;
+            }
+            return this.goL3OrHoistTerms(operand, reads);
+        }
+        if (inner?.kind === SyntaxKind.BinaryExpression) {
+            const op = inner.operatorToken?.kind;
+            if ((op === SyntaxKind.AmpersandAmpersandToken) || (op === SyntaxKind.BarBarToken)) {
+                return this.goL3OrHoistTerms(inner.left, reads) && this.goL3OrHoistTerms(inner.right, reads);
+            }
+            if (op === SyntaxKind.InKeyword) {
+                reads.push({ 'node': inner, 'negated': false });
+                return true;
+            }
+            if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken)
+                || (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+                return this.goL3PureLeaf(inner.left) && this.goL3PureLeaf(inner.right);
+            }
+            return false;
+        }
+        return this.goL3PureLeaf(inner);
+    }
+
+    // the identifier text anywhere in the function body (the flag name must be free)
+    goL3NameIsUsed(scope, name: string): boolean {
+        let used = false;
+        const visit = (n) => {
+            if (used) {
+                return;
+            }
+            if ((n.kind === SyntaxKind.Identifier) && (n.text === name)) {
+                used = true;
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        scope?.forEachChild(visit);
+        return used;
+    }
+
+    // `(m !== undefined) && (k in m)` over a Go map with a proven `*string` key: the comma-ok read of a nil
+    // map is already absent, so the receiver's nil test adds nothing to the init clause's `ok`
+    goL3NilMapTermIsRedundant(condition, read): boolean {
+        const whole: any = this.goUnwrapParenthesizedNode(condition);
+        if ((whole?.kind !== SyntaxKind.BinaryExpression) || (whole.operatorToken?.kind !== SyntaxKind.AmpersandAmpersandToken)
+            || (this.goUnwrapParenthesizedNode(whole.right) !== read.inNode) || !read.keyText.startsWith('*')) {
+            return false;
+        }
+        const test: any = this.goUnwrapParenthesizedNode(whole.left);
+        if ((test?.kind !== SyntaxKind.BinaryExpression) || ((test.operatorToken?.kind !== SyntaxKind.ExclamationEqualsToken)
+            && (test.operatorToken?.kind !== SyntaxKind.ExclamationEqualsEqualsToken))) {
+            return false;
+        }
+        const dict: any = this.goUnwrapParenthesizedNode(read.inNode.right);
+        const other = this.goIsNilLiteral(test.right) ? test.left : (this.goIsNilLiteral(test.left) ? test.right : undefined);
+        const field = this.goFieldContainerTypeNative(dict);
+        return (other !== undefined) && (field === 'map[string]any') && (this.printNode(other, 0) === read.dictText);
+    }
+
+    // the structural shape of a hoistable condition: pure terms around one negated `k in m`, k an identifier
+    goL3HoistShape(node): any {
+        if (node?.parent?.kind !== SyntaxKind.Block) {
+            return undefined; // an `else if` or a bare statement body has no place for the flag
+        }
+        const reads = [];
+        if (!this.goL3OrHoistTerms(node.expression, reads) || (reads.length !== 1) || !reads[0].negated) {
+            return undefined;
+        }
+        const read = reads[0].node;
+        const key = this.goUnwrapPrintedAssertions(read.left);
+        if (key?.kind !== SyntaxKind.Identifier) {
+            return undefined;
+        }
+        return { read, key, 'dict': this.goUnwrapParenthesizedNode(read.right) };
+    }
+
+    goL3OrHoistIf(node, identation): string | undefined {
+        const shape = this.goL3HoistShape(node);
+        if (shape === undefined) {
+            return undefined;
+        }
+        const { read, key, dict } = shape;
+        if ((this.goDeclaredTypeOfIdentifier(key) !== '*string') || !this.goL3MapReceiver(dict)) {
+            return undefined;
+        }
+        // a key the source already proves non-nil never needs the flag: a literal-default SafeString is a plain
+        // string at the read, and an exit guard / enclosing guard lets the lookup read through the deref
+        if (this.goDefaultedSafeStringLocal(key) || this.goInOpPointerKeyProvenNonNil(node, key)) {
+            return undefined;
+        }
+        // the shapes an existing rule prints stay with it: the if-init comma-ok and the inline closure
+        if (this.goInOpIfInitClause(node.expression) !== undefined) {
+            return undefined;
+        }
+        const dictText = this.printNode(dict, 0);
+        const keyText = this.printNode(key, 0);
+        // a local typed only because this hoist reads it has no closure arm of its own
+        const hoistTyped = (dict?.kind === SyntaxKind.Identifier) && (this.goSafeDictLocalUnboxStandard(this.goDeclarationOfIdentifier(dict)) === undefined)
+            && this.goL3DefaultedDictLocal(dict);
+        if (dictText.includes('\n') || keyText.includes('\n') || (!hoistTyped && (this.printInlineInOp(dict, read.left, dictText, keyText) !== undefined))) {
+            return undefined;
+        }
+        const flag = `${keyText}Known`;
+        if (this.goL3NameIsUsed(this.goEnclosingFunction(node), flag)) {
+            return undefined;
+        }
+        const saved = this.goInOpSubstitution;
+        this.goInOpSubstitution = new Map([[read, flag]]);
+        let printed;
+        try {
+            printed = super.printIfStatement(node, identation);
+        } finally {
+            this.goInOpSubstitution = saved;
+        }
+        if (typeof printed !== 'string') {
+            return undefined;
+        }
+        printed = printed.split(`(${flag})`).join(flag);
+        const iden = this.getIden(identation);
+        const hoist = `${iden}var ${flag} bool\n${iden}if ${keyText} != nil {\n${iden}\t_, ${flag} = ${dictText}[*${keyText}]\n${iden}}\n`;
+        const lead = this.printLeadingComments(node, identation);
+        return printed.startsWith(lead) ? lead + hoist + printed.substring(lead.length) : undefined;
+    }
+
     // ---- hx10w5-G14: `key in dict` in an if condition -------------------------------
     // The two-value map read is a *statement* in Go, which is why the emission above is a
     // closure. An `if` can hold it in its init clause instead — `if _, ok := m["k"]; ok {`
@@ -8453,6 +9708,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             condition = collapsed;
         }
         condition = condition.split(sentinel).join(name);
+        if (this.goL3NilMapTermIsRedundant(node, read)) {
+            condition = name;
+        }
         return `_, ${name} := ${read.dictText}[${read.keyText}]; ${condition}`;
     }
 
@@ -8495,7 +9753,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.goLocalIsRebound(this.goEnclosingFunction(keyNode), keyNode)) {
             return undefined;
         }
-        const dictText = this.printNode(dict, 0);
+        const bookEntry = negated ? undefined : this.goL3BookEntryText(dict);
+        const dictText = bookEntry ?? this.printNode(dict, 0);
         const dictMapType = (dict?.kind === SyntaxKind.Identifier ? this.goPrintedTypeOfExpression(dict, dictText) : undefined)
             ?? this.goInOpDictMapType(dict, dictText);
         const keyText = this.printNode(keyNode, 0);
@@ -8528,8 +9787,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     || (key?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)
                     || (key?.kind === SyntaxKind.Identifier);
                 const identifier = (dict?.kind === SyntaxKind.Identifier);
-                if ((identifier || (dict?.kind === SyntaxKind.PropertyAccessExpression) || (dict?.kind === SyntaxKind.CallExpression)) && keyIsText) {
-                    const dictText = this.printNode(dict, 0);
+                const bookEntry = this.goL3UnderNegation(n) ? undefined : this.goL3BookEntryText(dict);
+                if ((identifier || (dict?.kind === SyntaxKind.PropertyAccessExpression) || (dict?.kind === SyntaxKind.CallExpression) || (bookEntry !== undefined)) && keyIsText) {
+                    const dictText = bookEntry ?? this.printNode(dict, 0);
                     let keyText = this.printNode(key, 0);
                     const dictMapType = (identifier ? this.goPrintedTypeOfExpression(dict, dictText) : undefined) ?? this.goInOpDictMapType(dict, dictText);
                     // a `*string` key the enclosing control flow proved non-nil reads through the deref
@@ -8557,10 +9817,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // Orderbooks is absent on purpose: the go book-local pass proves a stored book from the
     // `!InOp(this.Orderbooks, key)` guard, so that guard must reach it as the helper call.
     GO_NATIVE_MAP_FIELDS: { [name: string]: string } = {
+        'Options': 'map[string]any',
         'Has': 'map[string]any',
         'Features': 'map[string]any',
+        'Fees': 'map[string]any',
+        'Limits': 'map[string]any',
         'Trades': 'map[string]any',
         'Ohlcvs': 'map[string]map[string]any',
+        'Clients': 'map[string]any', // FM-A9F L3: the ws client registry
         // hx10w8-GP03: declared `map[string]any` in go/v4/exchange.go
         'Timeframes': 'map[string]any',
         'Balance': 'map[string]any',
@@ -8575,6 +9839,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // book getter. undefined for every other receiver, which keeps the runtime helper. The field
     // and accessor names are matched on the *printed* Go text (this.Orderbooks, this.Markets()).
     goInOpDictMapType(dictNode, dictText?: string): string | undefined {
+        if ((dictText !== undefined) && (dictText === this.goL3BookEntryText(dictNode))) {
+            return 'map[string]any';
+        }
         if (dictNode?.kind === SyntaxKind.Identifier) {
             // a GetArgMap-bound parameter is that Go map in the line that binds it; InOp only asks
             // membership, which the two-value read answers without the helper's deref of the value
@@ -8587,6 +9854,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return ((decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === 'map[string]any')) ? 'map[string]any' : undefined;
         }
         const text = this.goUnwrapPrintedParens(dictText ?? '');
+        // FM-A9F L3: the owner-snapshot read of the ws client registry (`this.clients` printed `this.WsClientsSnapshot()`)
+        // is the `map[string]any` the snapshot method returns
+        if ((this.goOwnedField !== undefined) && (text === `this.${this.goOwnedField.snapshot}()`) && this.goOwnedFieldAccess(dictNode)) {
+            return 'map[string]any';
+        }
         const field = /^this\.([A-Za-z_]\w*)$/.exec(text);
         if ((field !== null) && (dictNode?.kind === SyntaxKind.PropertyAccessExpression) && (dictNode.expression?.kind === SyntaxKind.ThisKeyword)) {
             const name = field[1];
@@ -9058,6 +10330,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (nested !== undefined) {
             return nested;
         }
+        const hoisted = this.goL3OrHoistIf(node, identation);
+        if (hoisted !== undefined) {
+            return hoisted;
+        }
         return super.printIfStatement(node, identation);
     }
 
@@ -9070,6 +10346,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const initClause = this.goInOpIfInitClause(node);
         if (initClause !== undefined) {
             return `${this.getIden(identation)}${initClause}`;
+        }
+        // RFM-G4 G09: `(this.f !== undefined && this.f !== null)` collapses to one nil test of the cache field, which
+        // needs no parentheses as an operand of `&&` / `||`
+        const cacheDup = ((node?.kind === SyntaxKind.ParenthesizedExpression) && (node.expression?.kind === SyntaxKind.BinaryExpression)
+            && (node.parent?.kind === SyntaxKind.BinaryExpression)
+            && ((node.parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken) || (node.parent.operatorToken.kind === SyntaxKind.BarBarToken)))
+            ? this.goG09CacheDuplicateNilTest(node.expression) : undefined;
+        if (cacheDup !== undefined) {
+            return `${this.getIden(identation)}${cacheDup}`;
         }
         // `!x` is handled by printPrefixUnaryExpression, which calls back into this
         // method with the operand; let the base class keep that recursion intact
@@ -9213,6 +10498,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         if (rFam === 'nil' && lPtr) {
             return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+        }
+        const cacheNil = this.goG09CacheNilCompare(left, right, leftText, rightText, isEq, lFam, rFam);  // RFM-G4 G09
+        if (cacheNil !== undefined) {
+            return cacheNil;
         }
         // a local the printer declared a Go map or slice: its absent value is a nil map/slice,
         // for which the native test answers what the box's nil did
@@ -10380,6 +11669,85 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
+    // ===== RF-go-6-F =====
+    // a destructured tuple slot whose producer's Go slot type is `*int64` (the checker types the slot
+    // `number | undefined`): the local is declared `*int64` and read natively.
+    // `*int64` when this binding element is slot i of a `this.<producer>(..)` tuple whose table row names
+    // `*int64` there, the checker types the slot `number | undefined`, the local is declared at the top
+    // of its function, never written, and every read is a nil test or sits under a dominating non-nil guard
+    goRf6fTupleSlotCache = new Map<any, string | undefined>();
+    goRf6fTupleSlotPointerType(element): string | undefined {
+        if (this.goRf6fTupleSlotCache.has(element)) {
+            return this.goRf6fTupleSlotCache.get(element);
+        }
+        this.goRf6fTupleSlotCache.set(element, undefined);
+        const result = this.goRf6fTupleSlotPointerTypeOf(element);
+        this.goRf6fTupleSlotCache.set(element, result);
+        return result;
+    }
+
+    goRf6fTupleSlotPointerTypeOf(element): string | undefined {
+        const checker: any = this.checkerOrUndefined();
+        const pattern: any = element?.parent;
+        const holder: any = pattern?.parent;
+        if ((checker === undefined) || (element?.kind !== SyntaxKind.BindingElement) || (pattern?.kind !== SyntaxKind.ArrayBindingPattern)
+            || (holder?.kind !== SyntaxKind.VariableDeclaration) || (holder.name !== pattern)
+            || (element.dotDotDotToken !== undefined) || (element.initializer !== undefined) || (element.name?.kind !== SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        const producer = this.goTupleBindingProducerName(holder);
+        const index = pattern.elements.indexOf(element);
+        const slotType = (producer === undefined) ? undefined : this.goTupleSlotTypes[producer]?.[index];
+        const scope: any = this.goEnclosingFunction(element);
+        if ((slotType !== '*int64') || (scope === undefined) || (holder.parent?.parent?.parent !== scope.body)) {
+            return undefined;
+        }
+        const defaultAt = this.goTupleValueDefaultArg[producer as string];
+        const defaultArg: any = (defaultAt === undefined) ? undefined : holder.initializer?.arguments?.[defaultAt];
+        const literal: any = (defaultArg?.kind === SyntaxKind.PrefixUnaryExpression) ? defaultArg.operand : defaultArg;
+        if ((literal?.kind === SyntaxKind.NumericLiteral) || this.goTypeNameIsShadowed(scope, '*int64')) {
+            return undefined;
+        }
+        const name = element.name.text;
+        const unread = this.hasNodeWhere(scope, (n: any) => {
+            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === element.name)) {
+                return (n !== element) && (n.kind === SyntaxKind.BindingElement || n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter)
+                    && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name); // a shadowing binding
+            }
+            const parent: any = this.goUnwrapParenthesizedNode(n)?.parent;
+            if (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)
+                    && (parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (parent.operatorToken.kind <= SyntaxKind.LastAssignment))
+                || (parent?.kind === SyntaxKind.PrefixUnaryExpression) && (parent.operator !== SyntaxKind.ExclamationToken)
+                || (parent?.kind === SyntaxKind.PostfixUnaryExpression) || (parent?.kind === SyntaxKind.ArrayLiteralExpression)
+                || (parent?.kind === SyntaxKind.SpreadElement)) {
+                return true; // a write, or a destructuring target
+            }
+            const nilTest = (parent?.kind === SyntaxKind.BinaryExpression) && [SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken,
+                SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken].includes(parent.operatorToken.kind)
+                && this.goIsNilLiteral((parent.left === n) ? parent.right : parent.left);
+            // RF-go-6-F: `i < slot` is a nil-safe native read (a nil slot compares false)
+            const ordered = (parent?.kind === SyntaxKind.BinaryExpression) && [SyntaxKind.LessThanToken, SyntaxKind.LessThanEqualsToken,
+                SyntaxKind.GreaterThanToken, SyntaxKind.GreaterThanEqualsToken].includes(parent.operatorToken.kind);
+            return !nilTest && !ordered && !this.goHasEnclosingNilGuard(n) && !this.gp15HasExitingNilGuard(n);
+        });
+        return unread ? undefined : '*int64';
+    }
+
+    // the helper this store replaces stores derefScalar(value): a guarded `*int64` tuple-slot local stores its value
+    goRf6fSlotStoreText(valueNode, valueStr: string): string {
+        const value: any = this.goUnwrapParenthesizedNode(valueNode);
+        const declaration: any = (value?.kind === SyntaxKind.Identifier)
+            ? this.checkerOrUndefined()?.getSymbolAtLocation(value)?.valueDeclaration?.resolve() : undefined;
+        return ((declaration?.kind === SyntaxKind.BindingElement) && (this.goRf6fTupleSlotPointerType(declaration) === '*int64')
+            && (this.goHasEnclosingNilGuard(value) || this.gp15HasExitingNilGuard(value))) ? '*' + valueStr : valueStr;
+    }
+
+    goRf6fTupleSlotPointerLines(name: string, holder: string, index: number, iden: string): string {
+        return iden + 'var ' + name + ' *int64 = nil\n' + iden + 'if p, ok := ' + holder + '[' + index + '].(*int64); ok {\n'
+            + iden + '\t' + name + ' = p\n' + iden + '}';
+    }
+    // ===== end RF-go-6-F =====
+
     // a typed slot local is only printed when every later use reads it as that type: a write, an
     // address, a switch/case subject or an element-access index all need the box
     goTupleSlotNameIsSafe(nameNode: any, declaration: any): boolean {
@@ -10478,6 +11846,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return elements.map((element: any, index: number) => {
             const name = this.printNode(element.name, 0);
             const unbox = (element.name?.kind === SyntaxKind.Identifier) ? this.goTupleSlotUnbox(element) : undefined;
+            if (nativeBinding && (this.goRf6fTupleSlotPointerType(element) === '*int64')) {
+                return this.goRf6fTupleSlotPointerLines(name, holder, index, iden); // RF-go-6-F
+            }
             if (!sliceHolder || (unbox === undefined) || !this.goTupleSlotNameIsSafe(element.name, declaration)) {
                 return iden + name + ' := GetValue(' + holder + ', ' + index + ')';
             }
@@ -11088,6 +12459,105 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
         return `ObjectValues(${parsedArg})`;
+    }
+
+    // ---- FM-GO4-3: `Object.keys(m)` / `Object.values(m)` on a declared map[string]any ------------------
+    // The runtime helpers derefScalar their argument and type-switch it; a receiver the printer
+    // already declares `map[string]any` needs neither, so the local is collected by a range over the
+    // map: nil for a nil map, a fresh non-nil slice otherwise (the helper's answers). Everything else
+    // (an `any` box, a *sync.Map, a parameter the call-site proof left boxed) keeps the helper call.
+
+    // the Go slice type of the local an `Object.keys/values(m)` declaration collects into, with the
+    // receiver and the loop variable name; undefined when the declaration is any other shape
+    goMapRangeLocalDeclaration(statement, declaration, identation: number): string | undefined {
+        if ((statement?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration?.name?.kind !== SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        const call: any = declaration.initializer;
+        const callee: any = call?.expression;
+        if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 1)
+            || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (callee.expression?.kind !== SyntaxKind.Identifier) || (callee.expression.text !== 'Object')) {
+            return undefined;
+        }
+        const method = callee.name?.text;
+        if ((method !== 'keys') && (method !== 'values')) {
+            return undefined;
+        }
+        const receiver: any = call.arguments[0];
+        if ((receiver?.kind !== SyntaxKind.Identifier) || !this.goIsRebindFreeMapReceiver(receiver)) {
+            return undefined;
+        }
+        const scope: any = this.goEnclosingFunction(declaration);
+        const isKeys = (method === 'keys');
+        const goType = isKeys ? GO_STRING_LIST_LOCAL_TYPE : GO_SAFE_LIST_LOCAL_TYPE;
+        const loopVariable = isKeys ? 'objectKey' : 'objectValue';
+        if ((scope === undefined) || this.goTypeNameIsShadowed(scope, goType)
+            || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === loopVariable))) {
+            return undefined;
+        }
+        const receiverText = this.printNode(receiver, 0);
+        const nameText = this.printNode(declaration.name, 0);
+        if (receiverText.includes('\n') || (nameText === receiverText)) {
+            return undefined;
+        }
+        // Object.keys: the printer types the collecting local itself (ObjectKeys answers []string).
+        // Object.values: the local holds the helper's []any, named only while no use observes the box
+        const named = isKeys
+            ? (this.getGoLocalType(declaration, `ObjectKeys(${receiverText})`) === goType)
+            : this.goObjectValuesLocalIsList(declaration, scope);
+        if (!named) {
+            return undefined;
+        }
+        const indent = this.getIden(identation);
+        const inner = this.getIden(identation + 1);
+        const body = this.getIden(identation + 2);
+        const header = isKeys ? `for ${loopVariable} := range ${receiverText} {` : `for _, ${loopVariable} := range ${receiverText} {`;
+        return [
+            `${indent}var ${nameText} ${goType} = nil`,
+            `${indent}if ${receiverText} != nil {`,
+            `${inner}${nameText} = make(${goType}, 0, len(${receiverText}))`,
+            `${inner}${header}`,
+            `${body}${nameText} = append(${nameText}, ${loopVariable})`,
+            `${inner}}`,
+            `${indent}}`,
+        ].join('\n');
+    }
+
+    // the receiver's declared Go type is map[string]any and nothing rebinds it, so a nil map is the
+    // only value besides a real map (the helper's nil and non-map answers coincide for it)
+    goIsRebindFreeMapReceiver(receiver): boolean {
+        let declaration: any;
+        try {
+            declaration = this.checkerOrUndefined()?.getSymbolAtLocation(receiver)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return false;
+        }
+        if ((declaration === undefined) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+            return false;
+        }
+        // a defaulted `params = {}` is the GetArgMap-bound Go map in the line that binds it
+        const declared = (declaration.kind === SyntaxKind.Parameter)
+            ? this.goGetArgParameterType(declaration)
+            : this.goDeclaredTypeOfIdentifier(receiver);
+        if (declared !== 'map[string]any') {
+            return false;
+        }
+        return !this.goLocalIsRebound(this.goEnclosingFunction(declaration), declaration.name);
+    }
+
+    // `const xs = Object.values(m)` keeps the helper's []any in an `any` box today. Naming that
+    // slice on the declaration is identity for every read except one that observes the box itself:
+    // a nil test (a box holding a nil slice is not nil), or a write/push/spread/destructuring shape
+    // goLocalIsSafeToType refuses. Each remaining use reads the same slice value.
+    goObjectValuesLocalIsList(declaration, scope): boolean {
+        const name = declaration.name.text as string;
+        if (this.goLocalIsRebound(scope, declaration.name)) {
+            return false;
+        }
+        const observed = this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+            && (n !== declaration.name) && (n.parent !== undefined) && this.goIsNilComparisonOperand(n, n.parent));
+        return !observed && this.goLocalIsSafeToType(scope, declaration, name, GO_SAFE_LIST_LOCAL_TYPE);
     }
 
     printJsonParseCall(node, identation, parsedArg = undefined) {
@@ -12510,6 +13980,10 @@ ${tryBodyBlock}
             && this.goIsUnifiedAnySliceParameterNode(this.checkerOrUndefined()?.getSymbolAtLocation(readBase)?.valueDeclaration?.resolve?.())) {
             return undefined;
         }
+        const bounded = this.goGb08BoundedListRead(node, keyNode); // RFM-G4 GB08
+        if (bounded !== undefined) {
+            return (bounded === 'native') ? `${containerStr}[${keyStr}]` : `DerefScalar(${containerStr}[${keyStr}])`;
+        }
         const level = this.goStatementLevel;
         const body = this.getIden(level + 1);
         return `func() any {\n${body}if ${keyStr} >= 0 && ${keyStr} < len(${containerStr}) {\n${this.getIden(level + 2)}return DerefScalar(${containerStr}[${keyStr}])\n${body}}\n${body}return nil\n${this.getIden(level)}}()`;
@@ -12578,7 +14052,8 @@ ${tryBodyBlock}
         if (this.isGoElementAccessAssignmentTarget(node) || containerStr.includes('\n') || keyStr.includes('\n')) {
             return undefined;
         }
-        if (this.goResolvedLocalGoType(baseExpr) !== GO_STRING_LIST_LOCAL_TYPE) {
+        const listType = this.goResolvedLocalGoType(baseExpr);
+        if ((listType !== GO_STRING_LIST_LOCAL_TYPE) && !((listType === GO_SAFE_LIST_LOCAL_TYPE) && this.goListElementsAreObjects(baseExpr))) {
             return undefined;
         }
         const mutators = [ 'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin' ];
@@ -12607,6 +14082,25 @@ ${tryBodyBlock}
         }
         return undefined;
     }
+    // RF-go-6-C (DerefScalar follow-up): the checker types every element of this list as an object type
+    // (a Trade / Order / Position interface, a Dict, a nested array), never a scalar, `any` or a union with
+    // one. A Go `[]any` holding such elements holds maps or slices, never a *string/*int64/*float64/*bool, so
+    // the DerefScalar the guarded element read carries is the identity and the read is the slice index.
+    goListElementsAreObjects(baseExpr): boolean {
+        const checker: any = this.checkerOrUndefined();
+        const type: any = checker?.getTypeAtLocation(baseExpr);
+        if ((type === undefined) || (typeof checker.isArrayType !== 'function') || !checker.isArrayType(type)) {
+            return false;
+        }
+        const element: any = checker.getIndexTypeOfType(type, IndexKind.Number);
+        if (element === undefined) {
+            return false;
+        }
+        const parts: any[] = ((typeof element.isUnionType === 'function') && element.isUnionType()) ? element.getTypes().slice() : [element];
+        const real = parts.filter((p) => !(p.flags & (TypeFlags.Undefined | TypeFlags.Null)));
+        return (real.length > 0) && real.every((p) => ((p.flags & TypeFlags.Object) !== 0) && ((p.flags & (TypeFlags.Any | TypeFlags.Unknown)) === 0));
+    }
+
     // a same-named identifier that the checker binds to ANOTHER declaration (a sibling block's
     // `let quote`) is not a write of this loop-bounded element local
     goOtherBindingOfLoopBoundedElement(n, declaration): boolean {
@@ -12653,9 +14147,191 @@ ${tryBodyBlock}
             return undefined;
         }
         const index = `${base.text}[${key.text}]`;
+        if (this.goResolvedLocalGoType(base) !== GO_STRING_LIST_LOCAL_TYPE) {
+            return undefined;
+        }
         return (printedValue.trim() === index) && (this.goLoopBoundedSliceRead(node, base, key, base.text, key.text) === index) ? 'string' : undefined;
     }
     // ===== end RF-go-6-C =====
+
+    // ===== RFM-G4 GB08 (folded from build/hx10w8-GB08.ts): the prediction tier's dead bounds guard =====
+    // `list[i]` inside `for (let i = 0; i < list.length; i++)` (or `i < n` with `const n = list.length`)
+    // can never leave the slice, so the guard closure's nil branch is unreachable. Proof, all on the AST:
+    // the counter starts at a non-negative literal and only the incrementor `i++` writes it, the list
+    // local is never rebound in its function and no method call on it can resize it while the bound
+    // is live. 'native' = `list[i]` (the list is a SafeList unbox or `[]` whose every write is a
+    // dictionary, so DerefScalar cannot warp an element); 'deref' = `DerefScalar(list[i])`.
+    goGb08PredictionFile(): boolean {
+        const fileName = String(this.getSrc()?.fileName ?? '').replace(/\\/g, '/');
+        return /(^|\/)ts\/src\/(prediction\/[^/]+|base\/PredictionExchange(\.nooverloads[^/]*)?)\.ts$/.test(fileName);
+    }
+
+    // an element written into the list that is an object (not a scalar, not an array): the Go value is
+    // a map or struct, never one of derefScalar's `*string *int64 *float64 *bool *[]…` pointers
+    goGb08IsDictExpression(expr): boolean {
+        if (expr?.kind === SyntaxKind.ObjectLiteralExpression) {
+            return true;
+        }
+        // a row read out of a decoded SafeList is a JSON value, never a pointer
+        if ((expr?.kind === SyntaxKind.ElementAccessExpression) && (expr.expression?.kind === SyntaxKind.Identifier)
+            && this.goSafeListUnboxIdentifier(expr.expression)) {
+            return true;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const type: any = (checker !== undefined && expr !== undefined) ? checker.getTypeAtLocation(expr) : undefined;
+        if (type === undefined) {
+            return false;
+        }
+        const parts: any[] = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes().slice() : [type];
+        const real = parts.filter((p) => !(p.flags & (TypeFlags.Undefined | TypeFlags.Null)));
+        return (real.length === 1) && ((real[0].flags & TypeFlags.Object) !== 0)
+            && !checker.isArrayType(real[0]) && !checker.isTupleType?.(real[0]);
+    }
+
+    goGb08BoundedListRead(node, keyNode): 'native' | 'deref' | undefined {
+        const checker: any = this.checkerOrUndefined();
+        const base: any = node?.expression;
+        if ((checker === undefined) || (keyNode?.kind !== SyntaxKind.Identifier) || (base?.kind !== SyntaxKind.Identifier)
+            || !this.goGb08PredictionFile()) {
+            return undefined;
+        }
+        const symbolOf = (n): any => checker.getSymbolAtLocation(n);
+        const counterSymbol = symbolOf(keyNode);
+        const counterDecl: any = counterSymbol?.valueDeclaration?.resolve?.();
+        const counterList: any = counterDecl?.parent;
+        const loop: any = counterList?.parent;
+        if ((counterDecl?.kind !== SyntaxKind.VariableDeclaration) || (counterList?.kind !== SyntaxKind.VariableDeclarationList)
+            || (loop?.kind !== SyntaxKind.ForStatement) || (loop.initializer !== counterList) || (counterList.declarations?.length !== 1)
+            || (counterDecl.initializer?.kind !== SyntaxKind.NumericLiteral) || !/^\d+$/.test(`${counterDecl.initializer.text ?? ''}`)
+            || (loop.statement === undefined) || (node.pos < loop.statement.pos) || (node.end > loop.statement.end)) {
+            return undefined;
+        }
+        const listSymbol = symbolOf(base);
+        const listDecl: any = listSymbol?.valueDeclaration?.resolve?.();
+        const fn: any = this.goEnclosingFunction(node);
+        if ((listDecl === undefined) || (fn === undefined) || (this.goEnclosingFunction(loop) !== fn)
+            || (this.goEnclosingFunction(listDecl) !== fn)
+            || ((listDecl.kind !== SyntaxKind.VariableDeclaration) && (listDecl.kind !== SyntaxKind.Parameter))
+            || this.goLocalIsRebound(fn, listDecl.name)) {
+            return undefined;
+        }
+        // the loop is `i < list.length`, or `i < n` where `const n = list.length` was read before it
+        const cond: any = loop.condition;
+        if ((cond?.kind !== SyntaxKind.BinaryExpression) || (cond.operatorToken?.kind !== SyntaxKind.LessThanToken)
+            || (cond.left?.kind !== SyntaxKind.Identifier) || (symbolOf(cond.left) !== counterSymbol)) {
+            return undefined;
+        }
+        let bound: any = cond.right;
+        let hoistedEnd = -1;
+        if (bound?.kind === SyntaxKind.Identifier) {
+            const hoisted: any = symbolOf(bound)?.valueDeclaration?.resolve?.();
+            if ((hoisted?.kind !== SyntaxKind.VariableDeclaration) || (hoisted.initializer === undefined)
+                || (((hoisted.parent?.flags ?? 0) & NodeFlags.Const) === 0)
+                || (hoisted.end > loop.pos) || (this.goEnclosingFunction(hoisted) !== fn)) {
+                return undefined;
+            }
+            hoistedEnd = hoisted.end;
+            bound = hoisted.initializer;
+        }
+        if ((bound?.kind !== SyntaxKind.PropertyAccessExpression) || (bound.name?.text !== 'length')
+            || (bound.expression?.kind !== SyntaxKind.Identifier) || (symbolOf(bound.expression) !== listSymbol)) {
+            return undefined;
+        }
+        const step: any = loop.incrementor;
+        if (((step?.kind !== SyntaxKind.PostfixUnaryExpression) && (step?.kind !== SyntaxKind.PrefixUnaryExpression))
+            || (step.operator !== SyntaxKind.PlusPlusToken) || (step.operand?.kind !== SyntaxKind.Identifier)
+            || (symbolOf(step.operand) !== counterSymbol)) {
+            return undefined;
+        }
+        const isAssignment = (n): boolean => {
+            const op = n?.operatorToken?.kind;
+            return (n?.kind === SyntaxKind.BinaryExpression)
+                && ((op === SyntaxKind.EqualsToken) || ((op >= SyntaxKind.FirstCompoundAssignment) && (op <= SyntaxKind.LastCompoundAssignment)));
+        };
+        let sound = true;
+        let dictOnly = true;
+        const visit = (n): void => {
+            if (!sound) {
+                return;
+            }
+            if (n.kind === SyntaxKind.Identifier) {
+                const inLoop = (n.pos >= loop.pos) && (n.end <= loop.end);
+                if ((n.text === keyNode.text) && inLoop && (symbolOf(n) === counterSymbol)) {
+                    const parent: any = n.parent;
+                    const moved = (this.goRebindingTargetOf(n) !== undefined)
+                        || (((parent?.kind === SyntaxKind.PostfixUnaryExpression) || (parent?.kind === SyntaxKind.PrefixUnaryExpression))
+                            && (parent !== step) && ((parent.operator === SyntaxKind.PlusPlusToken) || (parent.operator === SyntaxKind.MinusMinusToken)));
+                    if (moved) {
+                        sound = false;
+                        return;
+                    }
+                }
+                if ((n.text === base.text) && (n !== listDecl.name) && (symbolOf(n) === listSymbol)) {
+                    const parent: any = n.parent;
+                    const live = inLoop || ((hoistedEnd >= 0) && (n.pos > hoistedEnd));
+                    if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)) {
+                        const lengthWrite = (parent.name?.text === 'length') && isAssignment(parent.parent) && (parent.parent.left === parent);
+                        const call = (parent.parent?.kind === SyntaxKind.CallExpression) && (parent.parent.expression === parent);
+                        if (lengthWrite || (call && live)) {
+                            sound = false;
+                            return;
+                        }
+                        // a dictionary-only list takes elements through `push (dict)` and nothing else
+                        if (call && !((parent.name?.text === 'push') && (parent.parent.arguments.length === 1)
+                            && this.goGb08IsDictExpression(parent.parent.arguments[0]))) {
+                            dictOnly = false;
+                        }
+                    } else if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)
+                        && isAssignment(parent.parent) && (parent.parent.left === parent)) {
+                        if (!((parent.parent.operatorToken.kind === SyntaxKind.EqualsToken) && this.goGb08IsDictExpression(parent.parent.right))) {
+                            dictOnly = false;
+                        }
+                    }
+                }
+            }
+            n.forEachChild(visit);
+        };
+        visit(fn);
+        if (!sound) {
+            return undefined;
+        }
+        const init: any = listDecl.initializer;
+        const fromJson = (listDecl.kind === SyntaxKind.VariableDeclaration)
+            && (this.goSafeListUnboxIdentifier(base) || ((init?.kind === SyntaxKind.ArrayLiteralExpression) && (init.elements.length === 0)));
+        return (fromJson && dictOnly) ? 'native' : 'deref';
+    }
+
+    // RFM-G4 G21 (folded from build/hx10w5-G21.ts): `const xs = await this.m (..)` whose receive the printer
+    // declares `[]any` (goAwaitReceiveUnbox) and whose awaited TS type is an array of objects (Dict[], a
+    // Prediction* interface array). The carrier lists (MapSliceToList, Prediction*ToList, ListTyped of a
+    // Dict[] endpoint) hold maps, never derefScalar's pointers, so a read the GB08 proof bounds is the bare
+    // element. goNativeListElementRead only fires for locals the declared-type table calls []any; the
+    // awaited receive is declared by printVariableDeclarationList, so it is answered here.
+    goG21AwaitedObjectListRead(node, keyNode): boolean {
+        const checker: any = this.checkerOrUndefined();
+        const base: any = node?.expression;
+        if ((checker === undefined) || (base?.kind !== SyntaxKind.Identifier) || (keyNode?.kind !== SyntaxKind.Identifier)) {
+            return false;
+        }
+        const listDecl: any = checker.getSymbolAtLocation(base)?.valueDeclaration?.resolve?.();
+        const awaited: any = listDecl?.initializer;
+        if ((listDecl?.kind !== SyntaxKind.VariableDeclaration) || (listDecl.name?.kind !== SyntaxKind.Identifier)
+            || (awaited?.kind !== SyntaxKind.AwaitExpression) || this.goDeclaredTypeInProgress.has(listDecl)
+            || (this.goGb08BoundedListRead(node, keyNode) === undefined)) {
+            return false;
+        }
+        const type: any = checker.getTypeAtLocation(awaited);
+        if ((type === undefined) || !(type.flags & TypeFlags.Object) || !checker.isArrayType(type)
+            || !this.goGb08IsDictExpression(node)) {
+            return false;
+        }
+        this.goDeclaredTypeInProgress.add(listDecl);
+        try {
+            return this.goAwaitReceiveUnbox(awaited, this.printNode(awaited, 0))?.goType === GO_SAFE_LIST_LOCAL_TYPE;
+        } finally {
+            this.goDeclaredTypeInProgress.delete(listDecl);
+        }
+    }
 
     printElementAccessExpression(node, identation) {
         const bookSide = this.goOrderBookSideRead(node);  // RF-go-6-D
@@ -12705,6 +14381,12 @@ ${tryBodyBlock}
             return urlsView;
         }
 
+        const cacheRead = this.goG09CacheRead(node, baseExpr, containerStr, keys, keyStrs)
+            ?? this.goG09CacheKeysElementRead(node, baseExpr, containerStr, keys, keyStrs);  // RFM-G4 G09
+        if (cacheRead !== undefined) {
+            return cacheRead;
+        }
+
         // GetValue(m, "k") is a read of a Go map[string]any already: a missing key
         // and a nil element both come back as the `any` nil, so the native index
         // yields the identical value without the helper call
@@ -12722,6 +14404,10 @@ ${tryBodyBlock}
             }
         }
 
+        if (this.rf6aNativeMapRead(node, baseExpr, keys[0], keyStrs[0])) {
+            return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
+        }
+
         // Now build nested helpers.
         let acc = containerStr;
         keyStrs.forEach(k => {
@@ -12736,6 +14422,12 @@ ${tryBodyBlock}
             if (nativeRead !== undefined) {
                 return this.goElementAccessChain(nativeRead, keyStrs);
             }
+        }
+        // RFM-G4 G21: an awaited `[]any` local of objects (see goG21AwaitedObjectListRead)
+        if ((baseExpr?.kind === SyntaxKind.Identifier) && (keys.length === 1) && !containerStr.includes('\n') && !keyStrs[0].includes('\n')
+            && !this.isGoElementAccessAssignmentTarget(node) && this.goIntIndexExpression(keys[0])
+            && this.goG21AwaitedObjectListRead(node, keys[0])) {
+            return `${containerStr}[${keyStrs[0]}]`;
         }
 
         return acc;

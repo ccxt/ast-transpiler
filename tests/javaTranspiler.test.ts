@@ -4786,6 +4786,33 @@ describe('java native split (Helpers.split -> Arrays.asList(String.split(Pattern
         expect(output).not.toContain("Helpers.split");
     });
 
+    test('a literal-index read of a native split prints a null-safe stream read', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        const a = s.split('/')[0];\n" +
+        "        const b = s.split('/')[1];\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("java.util.Arrays.stream(((String)s).split(java.util.regex.Pattern.quote(\"/\"))).findFirst().orElse(null)");
+        expect(output).toContain("java.util.Arrays.stream(((String)s).split(java.util.regex.Pattern.quote(\"/\"))).skip(1).findFirst().orElse(null)");
+        expect(output).not.toContain("Helpers.GetValue");
+        expect(output).not.toContain("Helpers.split");
+    });
+
+    test('a literal-index read of an any receiver split keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        const a = x.split('/')[0];\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.split(x, \"/\")");
+        expect(output).not.toContain("findFirst");
+    });
+
     // fallbacks: every shape without the proof keeps the runtime helper
     test('an any receiver keeps the helper', () => {
         const input =
@@ -7049,6 +7076,76 @@ describe('hx4 J02: more hand-written base map fields read natively', () => {
     });
 });
 
+describe('java base map fields and `as string` keys read natively (hx11 1F J02)', () => {
+    const fields =
+        "class T {\n" +
+        "    has: any = {};\n" +
+        "    features: any = {};\n" +
+        "    currencies: any = {};\n" +
+        "    requiredCredentials: any = {};\n";
+    const java = (body: string) => transpiler.transpileJava(fields + body + "\n}").content;
+
+    test('has / features / requiredCredentials reads print the guarded accessor', () => {
+        const output = java(
+            "    test(k: any, s: string): void {\n" +
+            "        const a = this.has[k];\n" +
+            "        const b = this.features[s];\n" +
+            "        const c = this.requiredCredentials[k];\n" +
+            "        const d = this.has['x'];\n" +
+            "        this.sink(a, b, c, d);\n" +
+            "    }\n" +
+            "    sink(...args: any[]): void {}");
+        expect(output).toContain("(this.has == null || k == null ? null : this.has.get(k))");
+        expect(output).toContain("(this.features == null || s == null ? null : this.features.get(s))");
+        expect(output).toContain("(this.requiredCredentials == null || k == null ? null : ((java.util.Map<?, ?>)this.requiredCredentials).get(k))");
+        expect(output).toContain("(this.has == null ? null : this.has.get(\"x\"))");
+        expect(output).not.toContain("Helpers.GetValue(this.");
+    });
+
+    test('currencies keeps the helper for a key that is not provably a String', () => {
+        const output = java(
+            "    test(k: any, s: string): void {\n" +
+            "        const a = this.currencies[k];\n" +
+            "        const b = this.currencies[s];\n" +
+            "        this.sink(a, b);\n" +
+            "    }\n" +
+            "    sink(...args: any[]): void {}");
+        expect(output).toContain("Helpers.GetValue(this.currencies, k)");
+        expect(output).toContain("(this.currencies == null || s == null ? null : this.currencies.get(s))");
+    });
+
+    test('a write target and an unlisted field keep the helper', () => {
+        const output = java(
+            "    other: any = {};\n" +
+            "    test(k: any, v: any): void {\n" +
+            "        this.has[k] = v;\n" +
+            "        const a = this.other[k];\n" +
+            "        this.sink(a);\n" +
+            "    }\n" +
+            "    sink(...args: any[]): void {}");
+        expect(output).toContain("Helpers.addElementToObject(this.has, k, v)");
+        expect(output).toContain("Helpers.GetValue(this.other, k)");
+    });
+
+    test('`k as string` on a declared Map local keeps the cast key and tests the bare name', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = () => 'java.util.Map<String, Object>';
+        try {
+            const output = transpiler.transpileJava(
+                "class T {\n" +
+                "    test(m: any, k: string | undefined): any {\n" +
+                "        const a = m[k as string];\n" +
+                "        return a;\n" +
+                "    }\n" +
+                "}").content;
+            expect(output).toContain("(m == null || k == null ? null : m.get(((String)k)))");
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    });
+});
+
 describe('hx4 J05: integral mod compared with an int literal', () => {
     const java = (src: string) => transpiler.transpileJava(src).content;
     test('`(s.length % 2) !== 0` goes native', () => {
@@ -8313,5 +8410,189 @@ describe('java venue-callee local type (hx11 FJ4-D)', () => {
         const out = run(undefined);
         expect(out).not.toContain('viaMap.get("k")');
         expect(out).toContain('Helpers.GetValue(viaMap, "k")');
+    });
+});
+
+
+describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded native reads (FJ4-B)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-fj4b-typed-reads');
+    const CLIENT_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'ws', 'Client.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'pro', 'probe.ts');
+    const OTHER_FIXTURE = path.join(TMP, 'ts', 'src', 'pro', 'other.ts');
+    let out: string;
+    let other: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(CLIENT_FIXTURE), { recursive: true });
+        fs.mkdirSync(path.dirname(VENUE_FIXTURE), { recursive: true });
+        fs.writeFileSync(CLIENT_FIXTURE,
+            "export default class Client {\n" +
+            "    futures: { [key: string]: any } = {};\n" +
+            "    subscriptions: { [key: string]: any } = {};\n" +
+            "    rejections: { [key: string]: any } = {};\n" +
+            "    other: { [key: string]: any } = {};\n" +
+            "}\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "type Dict = { [key: string]: any };\n" +
+            "type Strings = string[] | undefined;\n" +
+            "export default class Exchange {\n" +
+            "    ohlcvs: { [key: string]: { [key: string]: any } } = {};\n" +
+            "    safeDict (obj: any, key: any, defaultValue: any = undefined): Dict { return defaultValue; }\n" +
+            "    marketSymbols (symbols: Strings = undefined): Strings { return symbols; }\n" +
+            "    market (symbol: string): any { return symbol; }\n" +
+            "}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import Exchange from '../base/Exchange';\n" +
+            "import Client from '../base/ws/Client';\n" +
+            "class Probe extends Exchange {\n" +
+            "    readSubs (client: Client, key: string, messageHash: string) {\n" +
+            "        const a = client.subscriptions[key];\n" +
+            "        const b = client.subscriptions['authenticated'];\n" +
+            "        const c = client.rejections[messageHash];\n" +
+            "        const f = client.futures[messageHash];\n" +
+            "        const g = client.other[key];\n" +
+            "        const h = client.subscriptions[this.market (key)];\n" +
+            "        client.subscriptions['authenticated']['expires'] = 1;\n" +
+            "        return [ a, b, c, f, g, h ];\n" +
+            "    }\n" +
+            "    markets (symbols: string[]) {\n" +
+            "        const normalized: string[] | undefined = this.marketSymbols (symbols);\n" +
+            "        for (let i = 0; i < (normalized as string[]).length; i++) {\n" +
+            "            this.market ((normalized as string[])[i]);\n" +
+            "        }\n" +
+            "        const loose: any = this.marketSymbols (symbols);\n" +
+            "        for (let j = 1; j < 3; j++) {\n" +
+            "            this.market ((loose as string[])[j]);\n" +
+            "        }\n" +
+            "    }\n" +
+            "    ohlcvRead (symbol: string, timeframe: string) {\n" +
+            "        this.ohlcvs[symbol] = this.safeDict (this.ohlcvs, symbol, {});\n" +
+            "        const stored = this.ohlcvs[symbol][timeframe];\n" +
+            "        return stored;\n" +
+            "    }\n" +
+            "    ohlcvPutIf (symbol: string, timeframe: string) {\n" +
+            "        if (!(symbol in this.ohlcvs)) {\n" +
+            "            this.ohlcvs[symbol] = {};\n" +
+            "        }\n" +
+            "        return this.ohlcvs[symbol][timeframe];\n" +
+            "    }\n" +
+            "    ohlcvNoPut (symbol: string, timeframe: string) {\n" +
+            "        return this.ohlcvs[symbol][timeframe];\n" +
+            "    }\n" +
+            "    ohlcvRewritten (symbol: string, other: string, timeframe: string) {\n" +
+            "        this.ohlcvs[symbol] = {};\n" +
+            "        symbol = other;\n" +
+            "        return this.ohlcvs[symbol][timeframe];\n" +
+            "    }\n" +
+            "    ohlcvDeleted (symbol: string, timeframe: string) {\n" +
+            "        this.ohlcvs[symbol] = {};\n" +
+            "        delete this.ohlcvs[symbol];\n" +
+            "        return this.ohlcvs[symbol][timeframe];\n" +
+            "    }\n" +
+            "}\n");
+        fs.writeFileSync(OTHER_FIXTURE,
+            "class NotAClient {\n" +
+            "    futures: { [key: string]: any } = {};\n" +
+            "}\n" +
+            "class Other {\n" +
+            "    read (client: NotAClient, key: string) {\n" +
+            "        return client.futures[key];\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+        other = byPath.transpileJavaByPath(OTHER_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('client.<owner map>[k] reads natively behind the null guards the helper answers', () => {
+        expect(out).toContain('(client.subscriptions == null || key == null ? null : client.subscriptions.get(key))');
+        expect(out).toContain('((java.util.Map<String, Object>)client.subscriptions).get("authenticated")');
+        expect(out).toContain('Helpers.addElementToObject((client.subscriptions == null ? null : client.subscriptions.get("authenticated")), "expires", 1)');
+        expect(out).toContain('(client.rejections == null || messageHash == null ? null : client.rejections.get(messageHash))');
+        expect(out).toContain('(client.futures == null || messageHash == null ? null : client.futures.get(messageHash))');
+    });
+
+    test('other fields, computed keys and non-client receivers keep the helper', () => {
+        expect(out).toContain('Helpers.GetValue(client.other, key)');
+        expect(out).toMatch(/Helpers\.GetValue\(client\.subscriptions, this\.market/);
+        expect(other).toContain('Helpers.GetValue(client.futures, key)');
+    });
+
+    test('a string[]-asserted marketSymbols result read by a for-counter is the guarded List get', () => {
+        expect(out).toContain('(((java.util.List<String>)(normalized)) == null || i < 0 || i >= ((java.util.List<String>)(normalized)).size() ? null : ((java.util.List<String>)(normalized)).get(i))');
+    });
+
+    test('an assertion over an any-typed operand keeps the helper', () => {
+        expect(out).toContain('Helpers.GetValue((java.util.List<String>)(loose), j)');
+    });
+
+    test('ohlcvs[symbol][timeframe] after a fresh put under symbol reads the per-symbol map natively', () => {
+        const reads = out.split('\n').filter((line) => line.includes('this.ohlcvs.get('));
+        expect(reads.length).toBe(2);
+        expect(reads[0]).toContain('((java.util.Map<?, ?>)this.ohlcvs.get(symbol)).get(timeframe)');
+    });
+
+    test('no put, a rewritten symbol or a deleted entry keep the helper', () => {
+        const helperReads = out.split('\n').filter((line) => /Helpers\.GetValue\(\(\(java\.util\.Map<\?, \?>\)this\.ohlcvs\)\.get\(symbol\), timeframe\)/.test(line));
+        expect(helperReads.length).toBe(3);
+    });
+});
+
+describe('java plain map field writes from owner-executor members', () => {
+    const cls = (member: string, body: string) =>
+        "class T {\n" +
+        "    tickers: any = {};\n" +
+        "    has: any = {};\n" +
+        `    ${member}(symbol: string, k: any, v: any): void {\n` +
+        `        ${body}\n` +
+        "    }\n" +
+        "}";
+    // the build layer's local-type resolver declares `symbol` a Java String
+    const java = (member: string, body: string) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'symbol' ? 'String' : undefined);
+        try {
+            return transpiler.transpileJava(cls(member, body)).content;
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+
+    test('a String-keyed write of a plain map field in a ws handler prints put', () => {
+        const output = java('handleTicker', "this.tickers[symbol] = v;");
+        expect(output).toContain("this.tickers.put(symbol, v);");
+        expect(output).not.toContain("Helpers.addElementToObject(this.tickers");
+    });
+
+    test('a literal key prints put too', () => {
+        expect(java('handleTicker', "this.tickers['a'] = 1;")).toContain("this.tickers.put(\"a\", 1);");
+    });
+
+    test('a member that can run off the owner executor keeps the helper', () => {
+        expect(java('watchTicker', "this.tickers[symbol] = v;")).toContain("Helpers.addElementToObject(this.tickers, symbol, v);");
+    });
+
+    test('a field outside the plain map set keeps the helper', () => {
+        expect(java('handleTicker', "this.has[symbol] = v;")).toContain("Helpers.addElementToObject(this.has, symbol, v);");
+    });
+
+    test('a key that is not a proven String keeps the helper', () => {
+        expect(java('handleTicker', "this.tickers[k] = v;")).toContain("Helpers.addElementToObject(this.tickers, k, v);");
+    });
+
+    test('a String key written through an `as IndexType` assertion prints put (blofin handleTrades)', () => {
+        const output = java('handleTicker', "this.tickers[symbol as IndexType] = v;");
+        expect(output).toContain("this.tickers.put(symbol, v);");
+        expect(output).not.toContain("Helpers.addElementToObject(this.tickers");
+    });
+
+    test('an asserted key that is not a proven String keeps the helper', () => {
+        expect(java('handleTicker', "this.tickers[k as IndexType] = v;")).toContain("Helpers.addElementToObject(this.tickers, k, v);");
     });
 });

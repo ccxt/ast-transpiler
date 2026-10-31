@@ -72,6 +72,32 @@ const SRC = 'type Trade = { id: string };\n'
     + '        const b = a;\n'
     + '        return b.length;\n'
     + '    }\n'
+    + '    r1 (p: any): any {\n'
+    + '        const trades = this.parseTrades (p);\n'
+    + '        let out: any = undefined;\n'
+    + '        for (let i = 0; i < trades.length; i++) {\n'
+    + '            const trade = trades[i];\n'
+    + '            out = trade;\n'
+    + '        }\n'
+    + '        return out;\n'
+    + '    }\n'
+    + '    r2 (p: any): any {\n'
+    + '        const rows = this.safeList (p, \'rows\', []);\n'
+    + '        let out: any = undefined;\n'
+    + '        for (let i = 0; i < rows.length; i++) {\n'
+    + '            out = rows[i];\n'
+    + '        }\n'
+    + '        return out;\n'
+    + '    }\n'
+    + '    r3 (p: any): any {\n'
+    + '        const trades = this.parseTrades (p);\n'
+    + '        let out: any = undefined;\n'
+    + '        for (let i = 0; i < trades.length; i++) {\n'
+    + '            trades.push (p);\n'
+    + '            out = trades[i];\n'
+    + '        }\n'
+    + '        return out;\n'
+    + '    }\n'
     + '}\n';
 
 const print = (callees: string[]): string => new Transpiler ({ 'verbose': false, 'go': { 'generatedListCallees': callees, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo (SRC).content;
@@ -105,6 +131,18 @@ describe('RF-go-6-C list reads', () => {
     test('a nil-initialised local whose every write is a list prints []any; a nil compare keeps the box', () => {
         expect (fn (print ([]), 'M')).toContain ('var symbols []any = nil');
         expect (fn (print ([]), 'N')).not.toContain ('var symbols []any');
+    });
+    test('a loop-bounded read of an object-element []any local is the slice index, no guard closure, no DerefScalar', () => {
+        const r1 = fn (print ([ 'ParseTrades' ]), 'R1');
+        expect (r1).toContain ('var trade any = trades[i]');
+        expect (r1).not.toContain ('DerefScalar');
+        expect (r1).not.toContain ('func() any');
+    });
+    test('an object-element read keeps the guard when the element type is not provably an object, or the list is mutated', () => {
+        const r2 = fn (print ([ 'SafeList' ]), 'R2');
+        expect (r2).toContain ('return DerefScalar(rows[i])');
+        const r3 = fn (print ([ 'ParseTrades' ]), 'R3');
+        expect (r3).toContain ('return DerefScalar(trades[i])');
     });
     test('an alias of a nil-join list local carries its slice type', () => {
         const t: any = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });

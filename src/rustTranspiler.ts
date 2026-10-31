@@ -4159,6 +4159,9 @@ export class RustTranspiler extends BaseTranspiler {
         const keyText = this.printNode(keyNode, 0).trim();
         // A text that already carries the post-pass `&` is not a place.
         if (!keyText || keyText.startsWith('&')) return undefined;
+        if (this.rustI64CounterOf(this.rustSkipWrappers(keyNode)) !== undefined) {
+            return `${receiverText}.as_array().map(Vec::as_slice).unwrap_or_default().get(${keyText} as usize).cloned().unwrap_or(Value::Null)`;
+        }
         return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
     }
 
@@ -5134,10 +5137,33 @@ export class RustTranspiler extends BaseTranspiler {
     printForStatement(node, identation) {
         const idn = this.getIden(identation);
         const idn1 = this.getIden(identation + 1);
-        const initStr = node.initializer ? this.printNode(node.initializer, identation + 1) + ';\n' : '';
-        const condStr = node.condition ? this.printComparisonInBooleanContext(node.condition, 0).trim() : 'true';
+        let initStr = node.initializer ? this.printNode(node.initializer, identation + 1) + ';\n' : '';
+        let condStr = node.condition ? this.printComparisonInBooleanContext(node.condition, 0).trim() : 'true';
         const incrStr = node.incrementor ? this.printNode(node.incrementor, 0) : '';
-        const statements = node.statement.statements.map(s => this.printNode(s, identation + 1)).join('\n');
+        // A proven `Value::Int` counter steps in place; one that only indexes lists is a plain `i64`.
+        const counter = incrStr !== '' ? this.rustIntCounter(node, initStr, incrStr) : undefined;
+        const bound = counter?.sign === '+' ? this.rustI64CounterPlan(node, counter, condStr) : undefined;
+        const printBody = () => node.statement.statements.map(s => this.printNode(s, identation + 1)).join('\n');
+        let statements: string;
+        let typed = false;
+        if (bound !== undefined && counter !== undefined) {
+            const before = this.forLoopCounter;
+            const previous = this.rustI64Counters.get(counter.name);
+            this.rustI64Counters.set(counter.name, counter.symbol);
+            try {
+                statements = printBody();
+            } finally {
+                if (previous === undefined) this.rustI64Counters.delete(counter.name);
+                else this.rustI64Counters.set(counter.name, previous);
+            }
+            typed = this.rustI64BodyIsClosed(statements, counter.name);
+            if (!typed) {
+                this.forLoopCounter = before;
+                statements = printBody();
+            }
+        } else {
+            statements = printBody();
+        }
         const body = `{\n${statements}\n${idn}}`;
         // A C-style `for` becomes a Rust `while`. The increment must run on
         // every iteration *including* one ended by `continue`, so it is folded
@@ -5145,10 +5171,113 @@ export class RustTranspiler extends BaseTranspiler {
         // the body a `continue` would skip it and spin the loop forever.
         if (incrStr !== '') {
             const flag = `__for_first_${this.forLoopCounter++}`;
-            const cond = `{ if !${flag} { ${incrStr}; } ${flag} = false; ${condStr} }`;
+            let step = `${incrStr};`;
+            if (counter !== undefined) {
+                // `n` unless the function already uses that name: an early text pass reads `*n` as a use of that local.
+                const bind = (this.rustScopeNameNodes(this.rustEnclosingFunction(node), 'n') as any[]).length > 0 ? '__n' : 'n';
+                step = `if let Value::Int(${bind}) = &mut ${counter.name} { *${bind} ${counter.sign}= 1; }`;
+            }
+            if (typed && counter !== undefined && bound !== undefined) {
+                initStr = initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
+                condStr = `${counter.name} < (${bound}.len() as i64)`;
+                step = `${counter.name} += 1;`;
+            }
+            const cond = `{ if !${flag} { ${step} } ${flag} = false; ${condStr} }`;
             return `${idn}{\n${idn1}${initStr}${idn1}let mut ${flag}: bool = true;\n${idn1}while ${cond} ${body}\n${idn}}`;
         }
         return `${idn}{\n${idn1}${initStr}${idn1}while ${condStr} ${body}\n${idn}}`;
+    }
+
+    // `for (let i = <int>; …; i++)` over a `Value` counter: when the incrementor is the only write
+    // to `i` the payload is always `Value::Int`, so the step bumps it in place (no 5-arm match).
+    rustIntCounter(node, initStr: string, incrStr: string): { name: string, sign: '+' | '-', literal: string, symbol: any } | undefined {
+        const init: any = node.initializer;
+        const incr: any = node.incrementor;
+        if (init?.kind !== SyntaxKind.VariableDeclarationList || init.declarations.length !== 1 || !(init.flags & NodeFlags.BlockScoped)) return undefined;
+        const declaration: any = init.declarations[0];
+        if (!isIdentifier(declaration.name) || /\/test\//.test(String(node.getSourceFile?.().fileName ?? ''))) return undefined;
+        const name = String(declaration.name.text);
+        // The declaration must print as the boxed int literal the Int payload relies on.
+        const printed = new RegExp(`^let mut ${name}: Value = Value::Int\\((-?\\d+)\\);$`).exec(initStr.trim());
+        if (printed === null) return undefined;
+        const sign = [ '+', '-' ].find((s) => incrStr.trim() === `${name} = ${this.printNativeNumeric(s === '+' ? SyntaxKind.PlusToken : SyntaxKind.MinusToken, name, 'Value::Int(1)')}`) as '+' | '-' | undefined;
+        if (sign === undefined) return undefined;
+        const symbol = this.rustSymbolOf(declaration.name);
+        if (symbol === undefined) return undefined;
+        for (const n of this.rustScopeNameNodes(node, name) as any[]) {
+            if (n === declaration || n === declaration.name || this.isNodeInsideNode(n, incr)) continue;
+            if (n.kind === SyntaxKind.VariableDeclaration && this.rustBindsName(n, name)) return undefined;
+            if (n.kind === SyntaxKind.Identifier && this.rustSymbolOf(n) === symbol && this.rustIdentifierIsWritten(n)) return undefined;
+        }
+        return { name, sign, literal: printed[1], symbol };
+    }
+
+    /** True when the identifier is (part of) an assignment target, a `++`/`--` operand or a `for-in/of` head. */
+    rustIdentifierIsWritten(id: any): boolean {
+        let current: any = id;
+        while (current.parent !== undefined && (isParenthesizedExpression(current.parent) || isArrayLiteralExpression(current.parent)
+            || isObjectLiteralExpression(current.parent) || isShorthandPropertyAssignment(current.parent)
+            || current.parent.kind === SyntaxKind.PropertyAssignment || current.parent.kind === SyntaxKind.SpreadElement
+            || current.parent.kind === SyntaxKind.SpreadAssignment || isAsExpression(current.parent) || isNonNullExpression(current.parent))) {
+            current = current.parent;
+        }
+        const up: any = current.parent;
+        if (up === undefined) return false;
+        if (isBinaryExpression(up)) return up.left === current && rustIsAssignmentOperator(up.operatorToken.kind);
+        if (up.kind === SyntaxKind.PostfixUnaryExpression || up.kind === SyntaxKind.PrefixUnaryExpression) {
+            return up.operator === SyntaxKind.PlusPlusToken || up.operator === SyntaxKind.MinusMinusToken;
+        }
+        return (isForInStatement(up) || isForOfStatement(up)) && up.initializer === current;
+    }
+
+    // ── `i64` loop counters ───────────────────────────────────────────────────
+    // A proven `Value::Int` counter bounded by `i < <place>.length` whose every other use is a list
+    // index read or a boxed argument/initializer is a plain `i64`: reads become `.get(i as usize)`,
+    // boxed uses `Value::Int(i)`. The body is printed with the counter registered; if any use printed
+    // another way the body is printed again as a `Value` counter.
+    private rustI64Counters = new Map<string, any>();
+
+    /** The place `X` of a `i < X.length` condition over this counter, when its uses are all admissible. */
+    rustI64CounterPlan(node, counter: { name: string, symbol: any }, condStr: string): string | undefined {
+        const printed = new RegExp(`^${counter.name}\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\) < Value::Int\\((self\\.\\w+|\\w+)\\.len\\(\\) as i64\\)\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\)$`).exec(condStr);
+        if (printed === null) return undefined;
+        for (const id of this.rustScopeNameNodes(node.statement, counter.name) as any[]) {
+            if (id.kind !== SyntaxKind.Identifier || this.rustIdentifierIsPropertyName(id) || this.rustSymbolOf(id) !== counter.symbol) continue;
+            const up: any = id.parent;
+            const admissible = (isElementAccessExpression(up) && up.argumentExpression === id)
+                || this.rustI64BoxedUse(id)
+                || (isVariableDeclaration(up) && up.initializer === id);
+            if (!admissible) return undefined;
+        }
+        return printed[1];
+    }
+
+    /** A bare counter use that is an argument of a `this.m(..)` call or the value of an `x[k] = i` write. */
+    rustI64BoxedUse(id: any): boolean {
+        const up: any = id.parent;
+        if (isCallExpression(up)) {
+            const callee: any = up.expression;
+            return callee.kind === SyntaxKind.PropertyAccessExpression && callee.expression.kind === SyntaxKind.ThisKeyword
+                && up.arguments.some((a) => a === id);
+        }
+        return isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken && up.right === id
+            && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left));
+    }
+
+    /** The registered counter's symbol when `node` is a use of it, else undefined. */
+    rustI64CounterOf(node: any): any {
+        const symbol = this.rustI64Counters.size === 0 || !isIdentifier(node) ? undefined : this.rustI64Counters.get(String(node.text));
+        return symbol !== undefined && this.rustSymbolOf(node) === symbol ? symbol : undefined;
+    }
+
+    /** True when every use of `name` in the printed body is a `.get(name as usize)` read or a `Value::Int(name)` box. */
+    rustI64BodyIsClosed(text: string, name: string): boolean {
+        const masked = text.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/\/\/[^\n]*/g, '');
+        const count = (re: RegExp): number => (masked.match(re) ?? []).length;
+        const word = `(?<![\\w.])${name}(?![\\w])`;
+        const uses = count(new RegExp(word, 'g'));
+        const closed = count(new RegExp(`\\.get\\(${name} as usize\\)`, 'g')) + count(new RegExp(`Value::Int\\(${name}\\)`, 'g'));
+        return uses > 0 && uses === closed;
     }
 
     private static readonly COMPARISON_OPS = new Set([
@@ -6095,6 +6224,8 @@ export class RustTranspiler extends BaseTranspiler {
     transformIdentifier(node, identifier) {
         const text = super.transformIdentifier(node, identifier);
         const parent = node?.parent;
+        if (this.rustI64Counters.size > 0 && this.rustI64CounterOf(node) !== undefined
+            && (this.rustI64BoxedUse(node) || (isVariableDeclaration(parent) && parent.initializer === node))) return `Value::Int(${text})`;
         // hx10w9 RP02: an argument in a native-map slot passes the map itself
         // (`&mut` is added by the caller printer), never a `Value::Map` box.
         if (parent !== undefined && isCallExpression(parent) && parent.arguments.some((a) => a === node)) {
@@ -6898,6 +7029,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
         // A `Value` index: an in-range Int reads, a negative/absent/other key misses
         // (`-1 as usize` is out of range, exactly `get_value`'s default branch).
+        if (this.rustI64CounterOf(key) !== undefined) return `${receiverText}.get(${keyText} as usize).cloned().unwrap_or(Value::Null)`;
         return `${receiverText}.get(${keyText}.as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)`;
     }
 

@@ -23,7 +23,37 @@ beforeAll(() => {
         }
     }
     transpiler = new Transpiler(config);
+    installDeclaredMembers((transpiler as any).csharpTranspiler);
 })
+
+// the declared C# types of the hand-written runtime members (cs/ccxt/base/Exchange.Options.cs,
+// Exchange.Generic.cs, ws/Client.cs), as the embedding build layer reads them from those files
+const DECLARED_THIS: { [name: string]: any } = {
+    'has': { type: 'Dictionary<string, object>', initializer: 'new dict()' },
+    'features': { type: 'Dictionary<string, object>' },
+    'timeframes': { type: 'Dictionary<string, object>', initializer: 'null' },
+    'options': { type: 'ccxt.pro.OwnedTable<object>', initializer: 'new ccxt.pro.OwnedTable<object>()' },
+    'markets': { type: 'IDictionary<string, object>', initializer: 'null' },
+    'markets_by_id': { type: 'IDictionary<string, object>', initializer: 'null' },
+    'exceptions': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
+    'headers': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
+    'fees': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
+    'requiredCredentials': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
+    'urls': { type: 'IDictionary<string, object>', initializer: 'new dict()', views: { api: { view: 'urlsApi', sections: 'urlsApiSections' } }, refresh: 'RefreshUrlsViews' },
+    'accounts': { type: 'List<object>', initializer: 'new List<object>()' },
+    'symbols': { type: 'List<object>', initializer: 'null' },
+    'currencies': { type: 'object', initializer: 'new dict()' },
+    'positions': { type: 'object' },
+    'ohlcvs': { type: 'IDictionary<string, object>', routed: true },
+};
+const DECLARED_CLIENT: { [name: string]: any } = {
+    'subscriptions': { type: 'OwnedTable<object>' },
+    'rejections': { type: 'OwnedTable<object>' },
+};
+function installDeclaredMembers(printer: any, members = DECLARED_THIS) {
+    printer.csharpDeclaredMemberType = (owner: string, name: string) => (owner === 'this' ? members : DECLARED_CLIENT)[name];
+    printer.csharpDeclaredMethodReturnType = (name: string) => (name === 'isDictionary' ? 'bool' : undefined);
+}
 
 describe('csharp transpiling tests', () => {
     test('basic variable declaration', () => {
@@ -1890,7 +1920,7 @@ describe('csharp typed body locals', () => {
         expect(output).toContain('(items != null && i < items.Count ? items[i] : null)');
         expect(output).toContain('object a = (row != null && key != null && row.ContainsKey(key) ? row[key] : null);');
         expect(output).toContain('object b = (this.has != null && key != null && this.has.ContainsKey(key) ? this.has[key] : null);');
-        expect(output).toContain('object c = (this.urls != null && key != null && ((IDictionary<string, object>)this.urls).ContainsKey(key) ? ((IDictionary<string, object>)this.urls)[key] : null);');
+        expect(output).toContain('object c = (this.urls != null && key != null && this.urls.ContainsKey(key) ? this.urls[key] : null);');
         expect(output).toContain('object d = getValue(other, key);');
         expect(output).toContain('object e = getValue(items, big);');
         expect(output).toContain('object f = getValue(row, k2);');
@@ -2178,7 +2208,15 @@ describe('isTrue is dropped for a call whose C# signature is a non-nullable bool
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain("if (isTrue(this.isDictionary(v)))");
+        // the hand-written base declares `bool isDictionary` (Exchange.Generic.cs): the declared return
+        // type, not the TS annotation, decides, so the wrapper goes
+        expect(output).toContain("if (this.isDictionary(v))");
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpDeclaredMethodReturnType;
+        printer.csharpDeclaredMethodReturnType = (name: string) => (name === 'isDictionary' ? 'object' : undefined);
+        const shadowed = transpiler.transpileCSharp(input).content;
+        printer.csharpDeclaredMethodReturnType = previous;
+        expect(shadowed).toContain("if (isTrue(this.isDictionary(v)))");
         expect(output).toContain("if (this.check(v))");
         expect(output).toContain("if (isTrue(o.check(v)))");
     });
@@ -3195,9 +3233,9 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         const output = transpiler.transpileCSharp(input).content;
         // both members print a C# bool, so the isTrue round-trip is gone with the helper
         expect(output).toContain('if (this.options.ContainsKey("cached"))');
-        // `urls` is a hand-written `object` field whose box is always a dict: the same
-        // (IDictionary<string, object>) cast the helper body applies
-        expect(output).toContain('if (((IDictionary<string, object>)this.urls).ContainsKey("test"))');
+        // `urls` is declared `IDictionary<string, object>` (Exchange.Options.cs): its own members, with the
+        // helper's null-receiver branch as a null test
+        expect(output).toContain('if ((this.urls != null && this.urls.ContainsKey("test")))');
         // the key is not proven a string -> the runtime helper keeps its coercion
         expect(output).toContain('if (inOp(this.options, key))');
     });
@@ -4815,9 +4853,8 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        // `urls` is declared `object`: the same (IDictionary<string, object>) cast the helper
-        // body applies to its box, on both the key test and the indexer
-        expect(output).toContain('(this.urls != null && ((IDictionary<string, object>)this.urls).ContainsKey("demo") ? ((IDictionary<string, object>)this.urls)["demo"] : null)');
+        // `urls` is declared `IDictionary<string, object>`: no cast, the helper's null-receiver test stays
+        expect(output).toContain('(this.urls != null && this.urls.ContainsKey("demo") ? this.urls["demo"] : null)');
         expect(output).not.toContain('getValue(this.urls,');
     });
     test('a non-literal key and a numeric key keep the helper on these fields', () => {
@@ -4859,7 +4896,7 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
         "}";
         const output = transpiler.transpileCSharp(input).content;
         // the guard proves the key is there: no key test is needed, the read stays as it was
-        expect(output).toContain('return ((IDictionary<string,object>)this.urls)["apiBackup"];');
+        expect(output).toContain('return this.urls["apiBackup"];');
         expect(output).not.toContain('ContainsKey("apiBackup") ?');
     });
     test('a nested read keeps the helper on the outer access and reads the inner one natively', () => {
@@ -4873,7 +4910,7 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
         const output = transpiler.transpileCSharp(input).content;
         // the inner 'api' read is a field read; the outer key is an identifier, so the helper
         // still picks the endpoint the way the runtime helper does
-        expect(output).toContain('getValue((this.urls != null && ((IDictionary<string, object>)this.urls).ContainsKey("api") ? ((IDictionary<string, object>)this.urls)["api"] : null), endpoint)');
+        expect(output).toContain('getValue((this.urls != null && this.urls.ContainsKey("api") ? this.urls["api"] : null), endpoint)');
     });
 });
 
@@ -4999,9 +5036,8 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         "    }\n" +
         "}\n";
         const output = transpiler.transpileCSharp(input).content;
-        // `exceptions` is declared `object` (Exchange.Options.cs `= new dict()`): the same cast the
-        // transpiled helper body applies to its box, on both the key test and the indexer
-        expect(output).toContain('(this.exceptions != null && ((IDictionary<string, object>)this.exceptions).ContainsKey("exact") ? ((IDictionary<string, object>)this.exceptions)["exact"] : null)');
+        // `exceptions` is declared `IDictionary<string, object>` (Exchange.Options.cs): no cast
+        expect(output).toContain('(this.exceptions != null && this.exceptions.ContainsKey("exact") ? this.exceptions["exact"] : null)');
         expect(output).not.toContain('getValue(this.exceptions,');
     });
     test('a literal-key read of the markets field goes native too', () => {
@@ -5013,7 +5049,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         "    }\n" +
         "}\n";
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain('(this.markets != null && ((IDictionary<string, object>)this.markets).ContainsKey("BTC/USDT") ? ((IDictionary<string, object>)this.markets)["BTC/USDT"] : null)');
+        expect(output).toContain('(this.markets != null && this.markets.ContainsKey("BTC/USDT") ? this.markets["BTC/USDT"] : null)');
         expect(output).not.toContain('getValue(this.markets,');
     });
     test('a non-literal key on these fields keeps the helper', () => {

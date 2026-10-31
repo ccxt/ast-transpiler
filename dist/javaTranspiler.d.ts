@@ -223,7 +223,21 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaOwnerStoreHandoffs: {
         [key: string]: [string, string];
     };
+    javaPlainCacheFields: ReadonlySet<string>;
+    javaPlainCacheFieldReceiver(expression: any): boolean;
+    javaStringProvenKey(key: any): boolean;
+    javaPlainCacheReadText(receiver: any, key: any): string | undefined;
+    javaPlainMapFieldReceiver(expression: any): boolean;
+    javaInOwnerMember(node: any): boolean;
     javaOwnerStoreFieldReceiver(expression: any): boolean;
+    javaOhlcvsElementRead(node: any): string | undefined;
+    javaStringArrayAssertedCounterRead(node: any): string | undefined;
+    unwrapParenthesized(node: any): any;
+    javaOhlcvsSymbolMapRead(node: any, inner: any): string | undefined;
+    javaIsOhlcvsField(node: any): boolean;
+    javaOhlcvsEntryIsFresh(site: any, symbolNode: any): boolean;
+    javaOhlcvsFreshAnchor(statement: any, symbol: any): boolean;
+    javaOhlcvsDisturbed(statement: any, symbol: any): boolean;
     javaWsClientMapField(expression: any): string | undefined;
     javaWsClientMapReadText(receiver: any, key: any): string | undefined;
     javaWsClientMapRead(node: any): string | undefined;
@@ -277,6 +291,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPrintWidenedOperand(kind: any, resultKind: any, node: any, text: any): any;
     javaSplitTernaryReceiver(node: any): boolean;
     javaNativeSplitCall(node: any, name: any, parsedArg: any): string | undefined;
+    javaNativeSplitText(name: any, parsedArg: any): string;
+    javaNativeSplitIndexRead(node: any, index: number): string | undefined;
     javaPrintOperandAsLong(node: any, text: any): any;
     javaProvableCounterInt(node: any): boolean;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
@@ -324,6 +340,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaIsLiteralDefault(initializer: any): boolean;
     javaDefaultedLocalName(node: any): string | undefined;
     printFunctionBody(node: any, identation: any): string;
+    javaFailedFutureOfThrow(statement: Node, identation: number): string | undefined;
     printBlock(node: any, identation: any, chainBlock?: boolean): string;
     printInstanceOfExpression(node: any, identation: any): string;
     printAwaitExpression(node: any, identation: any): string;
@@ -461,6 +478,10 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaHx4InProgress: Set<any>;
     javaHx4NonSharedValue(value: any, depth: number): boolean;
     javaJ02FieldMapReadText(receiver: any, key: any): string | undefined;
+    javaBaseMapFieldReadText(receiver: any, key: any, field: {
+        declared: boolean;
+        anyKey: boolean;
+    }): string | undefined;
     javaHx4J05IntegralModOperand(node: any): boolean;
     printHx4J05ModComparison(left: any, right: any, op: any): string | undefined;
     javaHx4J06NarrowedIndexOf(node: any, name: any, parsedArg: any): string;

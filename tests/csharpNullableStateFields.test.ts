@@ -15,10 +15,18 @@ const config = {
 
 // the build layer (build/csharp-local-types.js) answers the declared C# type of a local through
 // csharpLocalTypeOf; this stands in for it: the loop counter `i` is an int, `key` a string?
+const DECLARED: { [name: string]: any } = {
+    'fees': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
+    'requiredCredentials': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
+    'accounts': { type: 'List<object>', initializer: 'new List<object>()' },
+};
 function printed(lines: string): string {
-    const source = 'class T {\n    f () {\n' + lines + '\n    }\n}';
+    const source = 'class BaseExchange {\n    fees: any; requiredCredentials: any; accounts: any[];\n    f (key: string | undefined) {\n' + lines + '\n    }\n}';
     const transpiler = new Transpiler(config);
     (transpiler as any).csharpTranspiler.csharpLocalTypeOf = (node: any) => ({ 'i': 'int', 'key': 'string?' } as any)[node.text];
+    // hx11 RF-cs-2: the member rules read the declared C# type of the hand-written members (Exchange.Options.cs);
+    // the fixture declares the same three members, the expectations below are unchanged
+    (transpiler as any).csharpTranspiler.csharpDeclaredMemberType = (owner: string, name: string) => (owner === 'this' ? DECLARED : {} as any)[name];
     return transpiler.transpileCSharp(source).content;
 }
 

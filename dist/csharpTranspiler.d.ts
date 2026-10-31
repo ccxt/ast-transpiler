@@ -1,6 +1,18 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { type Node, type ParameterDeclaration } from 'typescript/unstable/ast';
 import { type Program, type Symbol as TsSymbol } from 'typescript/unstable/sync';
+export interface CsharpDeclaredMember {
+    type: string;
+    initializer?: string;
+    routed?: boolean;
+    refresh?: string;
+    views?: {
+        [key: string]: {
+            view: string;
+            sections?: string;
+        };
+    };
+}
 export declare class CSharpTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     csharpBooleanReturnTypes: WeakMap<Node, string>;
@@ -10,10 +22,14 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpGuardIndex: WeakMap<Node, Map<string, any[]>>;
     csharpExpressionTypeResolver?: (node: any) => string | undefined;
     csharpDeclaredLocalTypeResolver?: (declaration: any) => string | undefined;
+    csharpDeclaredMemberType?: (owner: 'this' | 'client', name: string) => CsharpDeclaredMember | undefined;
+    csharpDeclaredMethodReturnType?: (name: string) => string | undefined;
     csharpListParamExclusions?: (name: string, index: number) => boolean;
     csharpElementRowLocalSource?: (fileName: string) => boolean;
     csharpTypedLocals: WeakMap<Node, string>;
     csharpListParamDeclarations: WeakSet<Node>;
+    csharpMemberWriteCache: WeakMap<object, Map<string, boolean>>;
+    csharpMemberKeyCounters: WeakMap<object, number>;
     csharpBaseListParamDeclarations: WeakSet<Node>;
     csharpPromiseAllSites: WeakMap<Node, any>;
     csharpPromiseAllTaskDeclarations: WeakSet<Node>;
@@ -53,14 +69,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredLocalResolverType(node: any): string | undefined;
     csharpDeclaredLocalResolverRowRead(expression: any, argumentExpression: any): string | undefined;
     csharpMissingKeyFieldRead(expression: any, argumentExpression: any, isStringKey: any): string | undefined;
-    csharpNullableStateField(node: any): {
-        text: string;
-        type: string;
-    } | undefined;
-    csharpNullableStateRead(state: {
-        text: string;
-        type: string;
-    }, argumentExpression: any, isStringKey: boolean, isNumberKey: boolean): string | undefined;
     csharpDeclaredCollectionRead(node: any, expression: any, argumentExpression: any, isStringKey: any, isNumberKey: any): string | undefined;
     csharpDeclaredStringIndexRead(node: any, expression: any, argumentExpression: any, isNumberKey: any): string | undefined;
     csharpDeclaredCollectionType(expression: any): string | undefined;
@@ -146,6 +154,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpArithmeticOperandType(node: any): string | undefined;
     csharpArithmeticKindsCompare(leftKind: string, rightKind: string): boolean;
     csharpNativeArithmeticEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
+    csharpNativeModEquality(left: any, right: any, isEquality: boolean): string | undefined;
     csharpScalarFieldKind(node: any): string | undefined;
     csharpNativeScalarFieldEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpNumericCallKind(node: any): string | undefined;
@@ -195,6 +204,23 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeLiteralProduct(left: any, right: any): string | undefined;
     csharpNativeModExpression(left: any, right: any, leftText: any): string;
     csharpNativeNegatedLocal(operand: any, leftSide: any): string;
+    csharpMemberSectionRead(expression: any, argumentExpression: any): string | undefined;
+    csharpUnwrapAssertion(node: any): any;
+    csharpMemberRefreshStatement(node: any, identation: any): string | undefined;
+    printExpressionStatement(node: any, identation: any): string;
+    csharpMemberReceiver(node: any): {
+        text: string;
+        type: string;
+        kind: 'dict' | 'list';
+        declared: boolean;
+        routed?: boolean;
+        nullTest?: string;
+    } | undefined;
+    csharpDeclaredMember(node: any, owner: 'this' | 'client', name: string): CsharpDeclaredMember | undefined;
+    csharpDeclaredMethodReturn(node: any, name: string): string | undefined;
+    csharpMemberDeclaredIn(node: any, owner: 'this' | 'client'): boolean;
+    csharpMemberIsOfOwner(node: any, owner: 'this' | 'client'): boolean;
+    csharpMemberWritesOnlyDictionaries(node: any, name: string): boolean;
     csharpNativeReceiver(node: any): {
         text: string;
         type: string;
@@ -215,6 +241,9 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         nullTest?: string;
     } | undefined;
     csharpNativeInExpression(key: any, obj: any): string | undefined;
+    csharpMemberInExpression(key: any, obj: any): string | undefined;
+    csharpMemberKeyKind(key: any): 'string' | 'string?' | 'object' | 'param' | undefined;
+    csharpMemberKeyVariable(key: any): string;
     csharpDeclaredDictInExpression(key: any, obj: any): string | undefined;
     csharpDeclaredStringKey(key: any): string | undefined;
     csharpNativeLengthExpression(expression: any): string | undefined;
@@ -235,6 +264,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNonNullStringOperandType(node: any, self?: any, guardedConcat?: boolean): string | undefined;
     csharpNonNullStringLeafType(value: any, self?: any, guardedConcat?: boolean): string | undefined;
     csharpBoolCallTyped(node: any): boolean;
+    csharpClassIsOrExtends(cls: any, owner: any): boolean;
     csharpEnclosingFunction(node: any): any;
     csharpTypeNameIsShadowed(scope: any, csharpType: string): boolean;
     csharpLocalIsSafeToType(scope: any, declaration: any, varName: string, csharpType: string, safeAccessor?: boolean): boolean;
@@ -259,6 +289,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNegatedConditionOperand(operand: any): string;
     csharpConditionPositionAllowsNative(node: any): boolean;
     printVariableDeclarationList(node: any, identation: any): string;
+    csharpOmitMemberLocalType(declaration: any): string | undefined;
     csharpElementRowLocalType(declaration: any): string | undefined;
     csharpElementRowKeyIsString(node: any): boolean;
     csharpBindingNames(name: any): string[];
@@ -282,6 +313,11 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpBooleanParamType(node: any): string;
     csharpBooleanParamProofs: WeakMap<Program<import("typescript/unstable/sync").ProjectId>, Map<Node, Set<number>>>;
     csharpBooleanParamCensus(): Map<Node, Set<number>>;
+    csharpSpawnedMethodCall(node: any): {
+        name: string;
+        key: string;
+        arguments: any[];
+    } | undefined;
     csharpNodeText(node: any): string;
     csharpNodePositionKey(node: any): string;
     csharpBooleanParamCandidateRows(node: any, candidates: any, byName: any): void;

@@ -77,7 +77,10 @@ describe('RFM-C2-B: declared base-field dictionary reads', () => {
         const out = printer(true);
         expect(out).toContain('((x % y) == 0)');
         expect(out).toContain('((x % y) != 3)');
-        expect(out).toContain('isEqual(mod(x, 7), 0)');
+        // RF-cs-2 c (folds ccxt build/hx10w2-C04 nestedEqualText): a literal divisor of an Int64 identifier prints the
+        // same remainder the host's mod pass would (`(Int64)((double)x % 7)`) behind the operator, so isEqual(mod (x, 7), 0)
+        // no longer reaches that pass. The non-Int64 and non-literal-divisor shapes below keep the helper.
+        expect(out).toContain('(((Int64)((double)x % 7)) == 0)');
         expect(out).not.toContain('isEqual(mod(x, y)');
         expect(out).toContain('mod(x, this.foo)');
     });

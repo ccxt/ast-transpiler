@@ -183,6 +183,29 @@ const JAVA_WS_CLIENT_MAP_FIELDS: { [field: string]: string } = {
 };
 const JAVA_WS_CLIENT_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]ws[\\/]Client\.ts$/;
 
+// hand-written BaseExchange.java fields declared `Map<String, Object>` over a fresh plain HashMap that
+// nothing in the port ever sets to null or to a concurrent map: a put on one (null value included) is
+// the helper's Map branch verbatim. The ws handlers that write them run on the exchange's owner executor.
+const JAVA_PLAIN_MAP_FIELDS: Set<string> = new Set([
+    'balance',
+    'bidsasks',
+    'fundingRates',
+    'headers',
+    'ohlcvs',
+    'orderbooks',
+    'tickers',
+    'timeframes',
+    'trades',
+    'transformedApi',
+]);
+
+// printed operand text holding a Java box cast such as `(String) x` or `(Map<String, Object>) x`
+const JAVA_BOX_CAST = /\((?:final\s+)?(?:[A-Z][\w.]*|(?:java|io|com)\.[\w.]+)(?:<[^()]*>)?\)/;
+
+// class members that run on the owner executor (ws handlers); watch*/load*/setSandboxMode can write
+// the same map from another thread, so a site inside them keeps the helper's monitor
+const JAVA_OWNER_MEMBER_NAME = /^(?:handle[A-Z]\w*|parseWSBalances)$/;
+
 // hand-written base fields (BaseExchange.java) whose Java declaration is exactly
 // `Map<String, Object>`: a local bound to one prints that type, so its element reads bind the
 // accessor with no cast. Fields the base declares `Object` (currencies, fees, timeframes) are
@@ -4728,11 +4751,27 @@ export class JavaTranspiler extends BaseTranspiler {
                 && !this.elementWriteValueMayBeNull(right)) {
                 return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
+            // `this.<cache>[k] = v` on a plain HashMap cache of the base header: the helper's Map branch
+            // stores a null value too, so a String key makes it the native put
+            if (keys.length === 1 && this.javaPlainCacheFieldReceiver(baseExpr)
+                && this.javaStringProvenKey(keys[0])) {
+                return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
+            }
             // `this.<owner store>[lit] = v`: the store's `put(key, null)` removes the key like the
-            // helper's null write does, so any value but a bare null/undefined literal (which the
-            // base tier turns into `remove`) is the same write
+            // helper's null write does, so any value is the same write
             if (keys.length === 1 && this.javaOwnerStoreFieldReceiver(baseExpr)
-                && isStringLiteralLikeNode(keys[0]) && !this.isNullishLiteral(this.unwrapPrintTransparentExpression(right))) {
+                && isStringLiteralLikeNode(keys[0])) {
+                // the store's `put(key, null)` removes the key, so a null literal prints the removal
+                return this.isNullishLiteral(this.unwrapPrintTransparentExpression(right))
+                    ? `${prefixes}${acc}.remove(${lastKey})`
+                    : `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
+            }
+            // a statement-level write of a plain map field from an owner-executor member, String key and
+            // no box cast in either operand: the field is never null, so put takes any value
+            if (keys.length === 1 && node.parent?.kind === SyntaxKind.ExpressionStatement
+                && this.javaPlainMapFieldReceiver(baseExpr)
+                && (isStringLiteralLikeNode(this.unwrapPrintTransparentExpression(keys[0])) || this.javaDeclaredStringType(this.unwrapPrintTransparentExpression(keys[0])))
+                && this.javaInOwnerMember(node) && !JAVA_BOX_CAST.test(lastKey) && !JAVA_BOX_CAST.test(rhs)) {
                 return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
             if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
@@ -5001,6 +5040,74 @@ export class JavaTranspiler extends BaseTranspiler {
     // null default, accessor with an empty-map default]; filled by the build layer from the header.
     javaOwnerStoreHandoffs: { [key: string]: [string, string] } = {};
 
+    // BaseExchange.java fields declared `Map<String, Object> f = new HashMap<>()` that the header only
+    // ever reassigns to a fresh HashMap: `m.put(k, v)` stores a null value like the helper does.
+    // Named by the build layer from the header; empty = every site keeps the helper.
+    javaPlainCacheFields: ReadonlySet<string> = new Set<string>();
+
+    // `this.<cache>` whose TS declaration types the values (an `any`-valued bag is reassigned freely)
+    javaPlainCacheFieldReceiver(expression): boolean {
+        if (expression === undefined || !isPropertyAccessExpression(expression)
+            || expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !this.javaPlainCacheFields.has(expression.name.text)) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return false;
+        }
+        const value = checker.getIndexTypeOfType(checker.getTypeAtLocation(expression), IndexKind.String);
+        return value !== undefined && (value.flags & (TypeFlags.Any | TypeFlags.Unknown)) === 0;
+    }
+
+    // a key Java proves String: a literal, an `x as string` (prints `((String)x)`) or a String-declared name
+    javaStringProvenKey(key): boolean {
+        if (isStringLiteralLikeNode(key)) {
+            return true;
+        }
+        let node = key;
+        while (isParenthesizedExpression(node)) {
+            node = node.expression;
+        }
+        return (isAsExpression(node) && node.type?.kind === SyntaxKind.StringKeyword) || this.javaDeclaredStringType(node);
+    }
+
+    // `this.<cache>[k]` with a non-literal String key: GetValue answers null for a null receiver or
+    // key and the plain map get is its Map branch. The key prints twice, so it must be repeatable.
+    javaPlainCacheReadText(receiver, key): string | undefined {
+        if (isStringLiteralLikeNode(key) || !this.javaPlainCacheFieldReceiver(receiver) || !this.javaStringProvenKey(key)) {
+            return undefined;
+        }
+        let operand = key;
+        while (isParenthesizedExpression(operand) || isAsExpression(operand)) {
+            operand = operand.expression;
+        }
+        if (!isIdentifier(operand)) {
+            return undefined;
+        }
+        const target = this.printNode(receiver, 0);
+        const keyText = this.printNode(operand, 0);
+        return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
+    }
+
+    // `this.<field>` for a BaseExchange.java field in JAVA_PLAIN_MAP_FIELDS
+    javaPlainMapFieldReceiver(expression): boolean {
+        return expression !== undefined && isPropertyAccessExpression(expression)
+            && expression.expression.kind === SyntaxKind.ThisKeyword
+            && JAVA_PLAIN_MAP_FIELDS.has(expression.name.text);
+    }
+
+    // the node sits in a class member whose name marks it as running on the owner executor
+    javaInOwnerMember(node): boolean {
+        for (let current = node?.parent; current; current = current.parent) {
+            if (isMethodDeclaration(current) && current.parent !== undefined && isClassDeclaration(current.parent)) {
+                const name = (current.name as any)?.text;
+                return typeof name === 'string' && JAVA_OWNER_MEMBER_NAME.test(name);
+            }
+        }
+        return false;
+    }
+
     // `this.<field>` for a BaseExchange.java field declared over a single-owner store
     javaOwnerStoreFieldReceiver(expression): boolean {
         if (expression === undefined || !isPropertyAccessExpression(expression)) {
@@ -5008,6 +5115,208 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         return expression.expression.kind === SyntaxKind.ThisKeyword
             && this.javaOwnerStoreFields.has(expression.name.text);
+    }
+
+    // `x[k]` where x is `this.ohlcvs[s]`: see javaOhlcvsSymbolMapRead
+    javaOhlcvsElementRead(node): string | undefined {
+        if (node.parent?.kind === SyntaxKind.ExpressionStatement || node.parent?.kind === SyntaxKind.DeleteExpression
+            || this.printElementAccessExpressionExceptionIfAny(node) !== undefined || this.isLeftSideOfAssignment(node)) {
+            return undefined;
+        }
+        const receiver = this.unwrapPrintTransparentExpression(node.expression);
+        return receiver !== undefined && isElementAccessExpression(receiver) ? this.javaOhlcvsSymbolMapRead(node, receiver) : undefined;
+    }
+
+    // `(x as string[])[i]` over a for-counter, x a side-effect-free reference the checker types
+    // `string[]` (| undefined): the printed receiver is the cast `(java.util.List<String>)(x)` either way,
+    // so the helper's null / range answers become the explicit guard on that same cast
+    javaStringArrayAssertedCounterRead(node): string | undefined {
+        if (node.parent?.kind === SyntaxKind.ExpressionStatement || this.isLeftSideOfAssignment(node)
+            || this.printElementAccessExpressionExceptionIfAny(node) !== undefined) {
+            return undefined;
+        }
+        const asserted = this.unwrapParenthesized(node.expression);
+        if (asserted === undefined || !isAsExpression(asserted) || !isArrayTypeNode(asserted.type)
+            || asserted.type.elementType.kind !== SyntaxKind.StringKeyword) {
+            return undefined;
+        }
+        const operand = this.unwrapParenthesized(asserted.expression);
+        if (operand === undefined || !isIdentifier(operand) || this.isVarargsArrayReference(operand)
+            || this.javaStringElementsReceiver(operand) || this.printNode(operand, 0).trim() !== operand.text) {
+            return undefined;
+        }
+        const checker: any = this.checkerOrUndefined();
+        let operandType;
+        try {
+            operandType = checker?.getTypeAtLocation(operand);
+        } catch (e) {
+            return undefined;
+        }
+        if (operandType === undefined || !this.javaIsStringArrayType(checker, operandType)) {
+            return undefined;
+        }
+        const list = `((java.util.List<String>)(${operand.text}))`;
+        const index = this.printNode(node.argumentExpression, 0);
+        return `(${list} == null || ${index} < 0 || ${index} >= ${list}.size() ? null : ${list}.get(${index}))`;
+    }
+
+    unwrapParenthesized(node): any {
+        let current = node;
+        while (current !== undefined && isParenthesizedExpression(current)) {
+            current = current.expression;
+        }
+        return current;
+    }
+
+    // `this.ohlcvs[s][k]` (base field `Dictionary<Dictionary<ArrayCacheByTimestamp>>`): once the member
+    // has put a fresh map under s the per-symbol value is a non-null Map, so the helper's read is the
+    // plain get. Both names must be plain strings and nothing may disturb the entry in between.
+    javaOhlcvsSymbolMapRead(node, inner): string | undefined {
+        if (!this.javaIsOhlcvsField(inner.expression)) {
+            return undefined;
+        }
+        const symbolNode = inner.argumentExpression;
+        const key = this.unwrapPrintTransparentExpression(node.argumentExpression);
+        const isString = (n) => this.javaScalarFamily(n) === 'string' || this.javaDeclaredStringType(n);
+        if (!isIdentifier(symbolNode) || key === undefined || !isIdentifier(key) || !isString(symbolNode) || !isString(key)) {
+            return undefined;
+        }
+        const symbolText = this.printNode(symbolNode, 0).trim();
+        if (symbolText !== symbolNode.text || this.printNode(key, 0).trim() !== key.text) {
+            return undefined; // a capture rename prints a box
+        }
+        const keyText = key.text;
+        if (!this.isJavaMapStructureType(this.getChecker().getTypeAtLocation(inner))) {
+            return undefined;
+        }
+        if (!this.javaOhlcvsEntryIsFresh(node, symbolNode)) {
+            return undefined;
+        }
+        return `((java.util.Map<?, ?>)this.ohlcvs.get(${symbolText})).get(${keyText})`;
+    }
+
+    javaIsOhlcvsField(node): boolean {
+        const field = this.unwrapPrintTransparentExpression(node);
+        return field !== undefined && isPropertyAccessExpression(field)
+            && field.expression.kind === SyntaxKind.ThisKeyword && field.name.text === 'ohlcvs';
+    }
+
+    // an earlier statement of an enclosing block of the read puts a fresh map under s
+    // (`this.ohlcvs[s] = {}`, `= this.safeDict(this.ohlcvs, s, {})`, or the same under
+    // `if (!(s in this.ohlcvs))`), and the statements from there to the read neither write the
+    // entry, s or the field, nor suspend
+    javaOhlcvsEntryIsFresh(site, symbolNode): boolean {
+        const checker: any = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(symbolNode);
+        if (symbol === undefined) {
+            return false;
+        }
+        let child = site;
+        while (child?.parent !== undefined) {
+            const parent = child.parent;
+            if (isFunctionLike(parent)) {
+                return false;
+            }
+            if (isBlock(parent) || isSourceFile(parent)) {
+                const statements: any[] = Array.from(parent.statements);
+                const at = statements.indexOf(child);
+                for (let j = at - 1; j >= 0; j--) {
+                    if (this.javaOhlcvsFreshAnchor(statements[j], symbol)) {
+                        for (let m = j + 1; m <= at; m++) {
+                            if (this.javaOhlcvsDisturbed(statements[m], symbol)) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
+            child = parent;
+        }
+        return false;
+    }
+
+    javaOhlcvsFreshAnchor(statement, symbol): boolean {
+        const checker: any = this.getChecker();
+        const isSymbol = (n) => isIdentifier(n) && checker.getSymbolAtLocation(n) === symbol;
+        const emptyLiteral = (n) => n !== undefined && isObjectLiteralExpression(n) && n.properties.length === 0;
+        const freshPut = (candidate): boolean => {
+            if (candidate === undefined || !isExpressionStatement(candidate)) {
+                return false;
+            }
+            const put = candidate.expression;
+            if (!isBinaryExpression(put) || put.operatorToken.kind !== SyntaxKind.EqualsToken
+                || !isElementAccessExpression(put.left) || !this.javaIsOhlcvsField(put.left.expression)
+                || !isSymbol(put.left.argumentExpression)) {
+                return false;
+            }
+            if (emptyLiteral(put.right)) {
+                return true;
+            }
+            const call = put.right;
+            return isCallExpression(call) && isPropertyAccessExpression(call.expression)
+                && call.expression.expression.kind === SyntaxKind.ThisKeyword && call.expression.name.text === 'safeDict'
+                && call.arguments.length === 3 && this.javaIsOhlcvsField(call.arguments[0]) && isSymbol(call.arguments[1])
+                && emptyLiteral(call.arguments[2]) && this.javaCalleeResolves(call)
+                && JAVA_THIS_RETURN_TYPES_BASE_FILE.test(checker.getResolvedSignature(call)?.declaration?.resolve()?.getSourceFile?.()?.fileName ?? '');
+        };
+        if (freshPut(statement)) {
+            return true;
+        }
+        if (!isIfStatement(statement) || statement.elseStatement !== undefined) {
+            return false;
+        }
+        const condition = this.unwrapParenthesized(statement.expression);
+        if (condition === undefined || !isPrefixUnaryExpression(condition) || condition.operator !== SyntaxKind.ExclamationToken) {
+            return false;
+        }
+        const test = this.unwrapParenthesized(condition.operand);
+        if (test === undefined || !isBinaryExpression(test) || test.operatorToken.kind !== SyntaxKind.InKeyword
+            || !isSymbol(test.left) || !this.javaIsOhlcvsField(test.right)) {
+            return false;
+        }
+        const then = statement.thenStatement;
+        return isBlock(then) ? then.statements.length === 1 && freshPut(then.statements[0]) : freshPut(then);
+    }
+
+    javaOhlcvsDisturbed(statement, symbol): boolean {
+        const checker: any = this.getChecker();
+        let disturbed = false;
+        const writesSymbol = (n) => {
+            const target = this.unwrapPrintTransparentExpression(n);
+            return target !== undefined && isIdentifier(target) && checker.getSymbolAtLocation(target) === symbol;
+        };
+        const walk = (n) => {
+            if (disturbed || n === undefined) {
+                return;
+            }
+            if (n.kind === SyntaxKind.AwaitExpression) {
+                disturbed = true;
+                return;
+            }
+            if (isBinaryExpression(n) && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(n.operatorToken.kind)) {
+                const left = this.unwrapPrintTransparentExpression(n.left);
+                if (writesSymbol(left) || this.javaIsOhlcvsField(left)
+                    || (isElementAccessExpression(left) && this.javaIsOhlcvsField(left.expression))) {
+                    disturbed = true;
+                    return;
+                }
+            }
+            if (n.kind === SyntaxKind.DeleteExpression) {
+                const target = this.unwrapPrintTransparentExpression(n.expression);
+                if (target !== undefined && isElementAccessExpression(target) && this.javaIsOhlcvsField(target.expression)) {
+                    disturbed = true;
+                    return;
+                }
+            }
+            if ((isPrefixUnaryExpression(n) || isPostfixUnaryExpression(n)) && writesSymbol(n.operand)) {
+                disturbed = true;
+                return;
+            }
+            n.forEachChild(walk);
+        };
+        walk(statement);
+        return disturbed;
     }
 
     // `<client>.<futures|subscriptions|rejections>` where the property is declared by the ws Client
@@ -5162,14 +5471,17 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const key = node.argumentExpression;
-        if (!isIdentifier(key) || !this.javaRepeatableOperand(key)) {
+        // `k as string` only narrows the static type: the Java key is the name cast `((String)k)`,
+        // and the null test reads the bare name
+        const operand = isAsExpression(key) && key.type?.kind === SyntaxKind.StringKeyword ? key.expression : key;
+        if (!isIdentifier(operand) || !this.javaRepeatableOperand(operand)) {
             return undefined; // the guard prints the key twice
         }
-        const declared = this.javaDeclaredTypeOf(key);
+        const declared = this.javaDeclaredTypeOf(operand);
         if (declared !== undefined && JAVA_PRIMITIVE_DECLARED_TYPES.has(declared.trim())) {
             return undefined; // a java primitive cannot take the `instanceof` test
         }
-        if (declared === undefined && this.javaOperandPrintsPrimitiveNumber(key)) {
+        if (declared === undefined && this.javaOperandPrintsPrimitiveNumber(operand)) {
             return undefined;
         }
         let keyType;
@@ -5187,7 +5499,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (keyType.getAliasSymbol?.() === undefined && keyType.flags === TypeFlags.String) {
             // a plain `string` key prints a java String; the null test keeps a receiver that
             // aliases a ConcurrentHashMap from throwing on a null the alias admits
-            return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
+            return `(${target} == null || ${this.printNode(operand, 0)} == null ? null : ${target}.get(${keyText}))`;
         }
         return `(${target} == null || !(${keyText} instanceof String) ? null : ${target}.get(${keyText}))`;
     }
@@ -5307,7 +5619,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const name = receiver.name?.text;
         const field = (typeof name === 'string') ? JAVA_FIELD_TYPES[name] : undefined;
         if (field === undefined || field.map !== true) {
-            return this.javaJ02FieldMapReadText(receiver, key);
+            return this.javaJ02FieldMapReadText(receiver, key) ?? this.javaPlainCacheReadText(receiver, key);
         }
         const keyText = this.printNode(key, 0);
         let keyGuarded = false;
@@ -5363,6 +5675,11 @@ export class JavaTranspiler extends BaseTranspiler {
             if (field !== undefined) {
                 return field;
             }
+            // `this.ohlcvs[symbol][timeframe]` after a fresh put under symbol (base field type)
+            const ohlcvsRead = this.javaOhlcvsElementRead(node);
+            if (ohlcvsRead !== undefined) {
+                return ohlcvsRead;
+            }
             // a declared List with an integer expression index reads natively with the
             // helper's own bounds test
             const listIndexRead = this.javaDeclaredListIndexRead(node);
@@ -5404,11 +5721,15 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         if (isCounterKey) {
             // a `var` int loop index on a declared List: the only proof that prints an int
-            return this.javaDeclaredListElementRead(node, true);
+            return this.javaDeclaredListElementRead(node, true) ?? this.javaStringArrayAssertedCounterRead(node);
         }
         const index = Number(key.text);
         if (!Number.isInteger(index) || index < 0) {
             return undefined;
+        }
+        const splitRead = this.javaNativeSplitIndexRead(node, index);
+        if (splitRead !== undefined) {
+            return splitRead;
         }
         if (this.isJavaListStructureType(type)) {
             if (index >= this.tupleRequiredElementCount(type)) {
@@ -6169,7 +6490,35 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaScalarFamily(receiver) !== 'string' || this.javaScalarFamily(separator) !== 'string') {
             return undefined;
         }
-        return `${this.ARRAY_OPENING_TOKEN}((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))${this.ARRAY_CLOSING_TOKEN}`;
+        return `${this.ARRAY_OPENING_TOKEN}${this.javaNativeSplitText(name, parsedArg)}${this.ARRAY_CLOSING_TOKEN}`;
+    }
+
+    javaNativeSplitText(name, parsedArg): string {
+        return `((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))`;
+    }
+
+    // `s.split (<literal>)[<int literal>]` on the native split: the helper's List branch answers
+    // null off range (e.g. "/".split("/") is empty), which findFirst().orElse(null) keeps, with
+    // no local to hoist and the receiver evaluated once.
+    javaNativeSplitIndexRead(node, index: number): string | undefined {
+        const call = node.expression;
+        if (node.questionDotToken !== undefined || !isCallExpression(call) || call.questionDotToken !== undefined
+            || !isPropertyAccessExpression(call.expression) || call.expression.questionDotToken !== undefined) {
+            return undefined;
+        }
+        const receiver = call.expression.expression;
+        const separator = call.arguments?.[0];
+        if (separator === undefined) {
+            return undefined;
+        }
+        const name = this.printNode(receiver, 0);
+        const parsedArg = this.printNode(separator, 0).trimStart();
+        if (this.javaNativeSplitCall(call, name, parsedArg) === undefined) {
+            return undefined;
+        }
+        const array = this.javaNativeSplitText(name, parsedArg);
+        const skip = index > 0 ? `.skip(${index})` : '';
+        return `java.util.Arrays.stream(${array})${skip}.findFirst().orElse(null)`;
     }
 
     // integer literals print as Java `int`; the helpers normalize Integer to Long before
@@ -7477,6 +7826,10 @@ export class JavaTranspiler extends BaseTranspiler {
             const insideWrappers = isMethodDeclaration(node) ? '\n' : this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
             const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
             // Check if last statement is a return — if not, add return null for supplyAsync lambda
+            const failedFuture = bodyStatements.length === 1 && insideWrappers.trim() === '' ? this.javaFailedFutureOfThrow(bodyStatements[0], identation + 1) : undefined;
+            if (failedFuture !== undefined) {
+                return blockOpen + finalWrapperVars + failedFuture + blockClose;
+            }
             const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : (bodyStatements.length > 0 ? bodyStatements[0] : undefined);
             const lastStmtIsReturn = lastStatement && (isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
             const returnNull = lastStmtIsReturn ? "" : (this.getIden(identation + 2) + "return null;\n");
@@ -7491,6 +7844,25 @@ export class JavaTranspiler extends BaseTranspiler {
 
         }
         return blockOpen + firstStatement + remainingString + blockClose;
+    }
+
+    // An async body that is only `throw new X(..)` can complete its future exceptionally and
+    // nothing else, so the native completion API stands in for the supplier lambda.
+    javaFailedFutureOfThrow(statement: Node, identation: number): string | undefined {
+        if (!isThrowStatement(statement) || statement.expression.kind !== SyntaxKind.NewExpression) {
+            return undefined;
+        }
+        const thrown = (statement.expression as any).expression;
+        if (thrown === undefined || !isIdentifier(thrown)) {
+            return undefined;
+        }
+        const printed = this.printNode(statement, 0).trim();
+        const head = `${this.THROW_TOKEN} ${this.NEW_TOKEN} `;
+        if (!printed.startsWith(head)) {
+            return undefined;
+        }
+        const value = printed.slice(this.THROW_TOKEN.length + 1).replace(/;\s*$/, "").trim();
+        return this.getIden(identation) + `return java.util.concurrent.CompletableFuture.failedFuture(${value});\n`;
     }
 
     printBlock(node, identation, chainBlock = false) {
@@ -9518,6 +9890,9 @@ export class JavaTranspiler extends BaseTranspiler {
     // be null too. Key and receiver print twice, so both must be side-effect free.
     javaJ02FieldMapReadText(receiver, key): string | undefined {
         const name = receiver?.name?.text;
+        if (typeof name === 'string' && Object.prototype.hasOwnProperty.call(JAVA_BASE_MAP_READ_FIELDS, name)) {
+            return this.javaBaseMapFieldReadText(receiver, key, JAVA_BASE_MAP_READ_FIELDS[name]);
+        }
         if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name)) {
             return undefined;
         }
@@ -9529,6 +9904,24 @@ export class JavaTranspiler extends BaseTranspiler {
         const keyText = this.printNode(key, 0);
         const keyGuard = literal ? '' : `${keyText} == null || `;
         return `(${keyGuard}${target} == null ? null : ((java.util.Map<?, ?>)${target}).get(${keyText}))`;
+    }
+
+    javaBaseMapFieldReadText(receiver, key, field: { declared: boolean, anyKey: boolean }): string | undefined {
+        const operand = isAsExpression(key) && key.type?.kind === SyntaxKind.StringKeyword ? key.expression : key;
+        const literal = isStringLiteralLikeNode(key);
+        if (!literal) {
+            if (!isIdentifier(operand) || !this.javaRepeatableOperand(operand)) {
+                return undefined;
+            }
+            if (!field.anyKey && !this.isJavaStringType(this.getChecker().getTypeAtLocation(key))
+                && !this.javaDeclaredStringType(operand)) {
+                return undefined;
+            }
+        }
+        const target = this.printNode(receiver, 0);
+        const read = field.declared ? target : `((java.util.Map<?, ?>)${target})`;
+        const guard = literal ? `${target} == null` : `${target} == null || ${this.printNode(operand, 0)} == null`;
+        return `(${guard} ? null : ${read}.get(${this.printNode(key, 0)}))`;
     }
 
     // hx4 J05
@@ -9634,6 +10027,16 @@ const JAVA_J02_MAP_FIELDS: { [name: string]: true } = {
     'fees': true,
     'urls': true,
     'markets_by_id': true,
+};
+
+// BaseExchange.java fields read by `this.<field>[k]` with the helper's null answers kept: `declared` =
+// the field prints a Map (the read needs no cast; else every write is a Map cast, so the cast holds),
+// `anyKey` = a hash-backed map answers null for any key, otherwise only a String key is read.
+const JAVA_BASE_MAP_READ_FIELDS: { [name: string]: { declared: boolean, anyKey: boolean } } = {
+    'has': { declared: true, anyKey: true },
+    'features': { declared: true, anyKey: true },
+    'currencies': { declared: true, anyKey: false },
+    'requiredCredentials': { declared: false, anyKey: true },
 };
 
 // hx4 J09: isTrue / isInstance / toLongOrNull / toStringArg go native on proven operands
