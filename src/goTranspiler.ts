@@ -853,7 +853,7 @@ export class GoTranspiler extends BaseTranspiler {
     goTupleValueDefaultArg: { [producer: string]: number } = {};
     // hx11 1F hx10w4-OG03: ws caches of BaseExchange owned by the dispatch loop (see goOwnedCache*)
     goOwnedCaches: { declaredIn: string; maps: { [field: string]: string }; objects: { [field: string]: string }; mapLiteral: string;
-        asyncUserPath: RegExp; syncUserPath: RegExp; ops: { [op: string]: string } } | undefined;
+        asyncUserPath: RegExp; syncUserPath: RegExp; ops: { [op: string]: string }; typedMapRead: string | undefined } | undefined;
     // FOLD-1F hx10w6-G01: the owner-goroutine map field BaseExchange.balance (see goOwnedBalanceField)
     goOwnedBalance: { field: string; declaredIn: string; entryRead: string; entryWrite: string; replace: string; asyncUserPath: RegExp; userPath: RegExp; boxedKeys: string[] } | undefined;
     // array literals the current print opens as a Go slice (set by the call-argument rule)
@@ -936,6 +936,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.goOwnedCaches = (caches === undefined) ? undefined : {
             declaredIn: caches['declaredIn'], maps: caches['maps'] ?? {}, objects: caches['objects'] ?? {}, mapLiteral: caches['mapLiteral'],
             asyncUserPath: new RegExp(caches['asyncUserPath']), syncUserPath: new RegExp(caches['syncUserPath']), ops: caches['ops'],
+            typedMapRead: caches['typedMapRead'],  // RD-GO-5
         };
         const balance = config['ownedBalance'];  // FOLD-1F hx10w6-G01
         this.goOwnedBalance = (balance === undefined) ? undefined : {
@@ -12176,6 +12177,68 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
         return "return nil";
     }
 
+    // `return this.tickers` / `return this.filterByArray (this.tickers, 'symbol', symbols)` in an async method
+    // that answers `Promise<Tickers>`: both read the owned ticker cache (`ownedCaches.maps`, declared
+    // `Dictionary<Ticker>`) and answer its rows, so the send is the owner's typed read
+    // `this.<ownedCaches.typedMapRead>(name[, symbols])`, boxed back to the map shape the carrier pass unwraps.
+    goTickerCacheTypedRead(node): string | undefined {
+        const checker: any = this.checkerOrUndefined();
+        const caches = this.goOwnedCaches;
+        const SK = SyntaxKind;
+        if ((caches === undefined) || (caches.typedMapRead === undefined)) {
+            return undefined;
+        }
+        const unparen = (n: any) => { while (n?.kind === SK.ParenthesizedExpression) { n = n.expression; } return n; };
+        const exp: any = unparen(node.expression);
+        if ((checker === undefined) || (exp === undefined)) {
+            return undefined;
+        }
+        const baseMember = (n: any, kind: number): string | undefined => {
+            if ((n?.kind !== SK.PropertyAccessExpression) || (n.expression?.kind !== SK.ThisKeyword)) {
+                return undefined;
+            }
+            const declaration: any = checker.getSymbolAtLocation(n.name)?.valueDeclaration?.resolve();
+            return ((declaration?.kind === kind) && (declaration.parent?.name?.text === caches.declaredIn)) ? (n.name.text as string) : undefined;
+        };
+        const cacheField = (n: any): string | undefined => {
+            const name = baseMember(n, SK.PropertyDeclaration);
+            if ((name === undefined) || !Object.prototype.hasOwnProperty.call(caches.maps, name)) {
+                return undefined;
+            }
+            const declared: any = checker.getSymbolAtLocation(n.name)?.valueDeclaration?.resolve()?.type;
+            return (declared?.typeName?.text === 'Dictionary') && (declared.typeArguments?.length === 1)
+                && (declared.typeArguments[0]?.typeName?.text === 'Ticker') ? name : undefined;
+        };
+        let field: string | undefined;
+        let symbols = '';
+        if (exp.kind === SK.CallExpression) {
+            const args: any = exp.arguments ?? [];
+            if ((baseMember(exp.expression, SK.MethodDeclaration) !== 'filterByArray') || (args.length !== 3)
+                || (args[1]?.kind !== SK.StringLiteral) || (args[1].text !== 'symbol') || (args[2]?.kind !== SK.Identifier)) {
+                return undefined;
+            }
+            field = cacheField(unparen(args[0]));
+            symbols = ', ' + this.printNode(args[2], 0).trim();
+        } else {
+            field = cacheField(exp);
+        }
+        if ((field === undefined) || !this.goOwnedCacheUserPath(node)) {
+            return undefined;
+        }
+        let method: any = node.parent;
+        while ((method !== undefined) && (method.kind !== SK.MethodDeclaration) && (method.kind !== SK.FunctionDeclaration)) {
+            method = method.parent;
+        }
+        const returned: any = method?.type;
+        const element: any = (returned?.typeName?.text === 'Promise') ? returned.typeArguments?.[0] : undefined;
+        const answersTickers = (element?.typeName?.text === 'Tickers')
+            || ((element?.typeName?.text === 'Dictionary') && (element.typeArguments?.[0]?.typeName?.text === 'Ticker'));
+        if (!answersTickers) {
+            return undefined;
+        }
+        return `TickerMapToMap(this.${caches.typedMapRead}("${caches.maps[field]}"${symbols}))`;
+    }
+
     printReturnStatement(node, identation) {
 
         const isAsyncFunction = this.isInsideAsyncFunction(node);
@@ -12190,7 +12253,7 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
         let trailingComment = this.printTraillingComment(node, identation);
         trailingComment = trailingComment ? " " + trailingComment : trailingComment;
         const exp =  node.expression;
-        let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
+        let rightPart = exp ? (' ' + (this.goTickerCacheTypedRead(node) ?? this.printNode(exp, identation))) : '';
         rightPart = rightPart.trim();
 
         // `return nil` only exits the synthetic try/catch closure; at the function's own
