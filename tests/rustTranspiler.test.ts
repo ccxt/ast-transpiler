@@ -4835,7 +4835,7 @@ ${body}
     });
     test('a dynamic index read on an Arr-only local is native', () => {
         const out = rs("        const parts = s.split ('-');\n        parts.push ('x');\n        for (let i = 0; i < parts.length; i++) {\n            const v = parts[i];\n            if (v !== undefined) { return v; }\n        }\n        return undefined;", 's: string');
-        expect(out).toContain('parts.as_array().and_then(|__arr| match &i {');
+        expect(out).toContain('parts.as_array().map(Vec::as_slice).unwrap_or_default().get(i as usize).cloned().unwrap_or(Value::Null)');
         expect(out).not.toContain('get_value(&parts');
     });
     test('negative: a string receiver or a dict keeps the helper', () => {
@@ -5073,8 +5073,8 @@ ${body}
     test('a loop counter indexes the bearer natively, `.length` is `len()`', () => {
         const out = rs("        const xs = v.split (',');\n        for (let i = 0; i < xs.length; i++) {\n            const e = xs[i];\n            if (e) { return e; }\n        }\n        return 0;");
         expect(out).toContain('let mut xs: Vec<Value> = split(&v, &Value::Str(",".into())).as_array().cloned().unwrap_or_default();');
-        expect(out).toContain('Value::Int(xs.len() as i64)');
-        expect(out).toContain('xs.get(i.as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('i < (xs.len() as i64)');
+        expect(out).toContain('xs.get(i as usize).cloned().unwrap_or(Value::Null)');
         expect(out).not.toContain('get_array_length(&xs');
         expect(out).not.toContain('get_value(&xs');
     });
@@ -5401,5 +5401,58 @@ describe('RF-rust-1 type-keyed closure-free native forms', () => {
     test('an empty startsWith literal keeps the closure (an empty prefix matches only a Str)', () => {
         const o = body("        return a.startsWith('');");
         expect(o).toContain('a.as_str().is_some_and(|__s| __s.starts_with(""))');
+    });
+});
+
+describe('FM-RS1 L2 integer for-loop counters', () => {
+    const body = (stmts: string, params = 'n: number, v: any') =>
+        transpiler.transpileRust(`class A {\n    run(${params}) {\n${stmts}\n    }\n    bar(x) {}\n}`).content;
+    const step = (v: string, sign = '+') => new RegExp(`if !__for_first_\\d+ \\{ if let Value::Int\\(n\\) = &mut ${v} \\{ \\*n \\${sign}= 1; \\} \\}`);
+    const matchStep = (v: string, k = 1) => `${v} = (match (&(${v}), &(Value::Int(${k})))`;
+
+    test('i++ / i-- on an int-literal counter bumps the Int payload in place', () => {
+        const o = body("        for (let i = 0; i < n; i++) { this.bar (n); }\n        for (let j = 5; j > 0; j--) { this.bar (n); }");
+        expect(o).toMatch(step('i'));
+        expect(o).toMatch(step('j', '-'));
+        expect(o).not.toContain(matchStep('i'));
+    });
+
+    test('a counter written in the body keeps the printNativeNumeric step', () => {
+        const o = body("        for (let i = 0; i < n; i++) { i += 2; }\n        for (let j = 0; j < n; j++) { j = n; }");
+        expect(o).toContain(matchStep('i'));
+        expect(o).toContain(matchStep('j'));
+    });
+
+    test('a non-literal start, a float start or a +=2 step keeps the match', () => {
+        const o = body("        for (let a = n; a < 9; a++) { }\n        for (let b = 0.5; b < 9; b++) { }\n        for (let c = 0; c < 9; c += 2) { }");
+        expect(o).toContain(matchStep('a'));
+        expect(o).toContain(matchStep('b'));
+        expect(o).toContain(matchStep('c', 2));
+        expect(o).not.toContain('if let Value::Int(n) = &mut');
+    });
+
+    test('a counter that only indexes a list and is passed to this.m() is an i64', () => {
+        const o = body("        const xs = v.split (',');\n        for (let i = 0; i < xs.length; i++) {\n            const e = xs[i];\n            this.bar (i);\n        }");
+        expect(o).toContain('let mut i: i64 = 0;');
+        expect(o).toMatch(/if !__for_first_\d+ \{ i \+= 1; \}/);
+        expect(o).toContain('i < (xs.len() as i64)');
+        expect(o).toContain('xs.get(i as usize).cloned().unwrap_or(Value::Null)');
+        expect(o).toContain('self.bar(Value::Int(i))');
+    });
+
+    test('a counter with any other use stays a Value counter', () => {
+        const o = body("        const xs = v.split (',');\n        for (let i = 0; i < xs.length; i++) {\n            const e = xs[i];\n            if (i === 3) { return e; }\n        }");
+        expect(o).toContain('let mut i: Value = Value::Int(0);');
+        expect(o).toMatch(step('i'));
+        expect(o).not.toContain('i: i64');
+        expect(o).toContain('xs.get(i.as_i64().unwrap_or(-1) as usize)');
+    });
+
+    test('nested counters type independently and number their loop flags once each', () => {
+        const o = body("        const xs = v.split (',');\n        for (let i = 0; i < xs.length; i++) {\n            for (let j = 0; j < xs.length; j++) { const e = xs[j]; this.bar (i); }\n        }");
+        expect(o).toContain('let mut i: i64 = 0;');
+        expect(o).toContain('let mut j: i64 = 0;');
+        expect((o.match(/let mut __for_first_\d+: bool/g) ?? []).length).toBe(2);
+        expect(new Set(o.match(/__for_first_\d+/g)).size).toBe(2);
     });
 });
