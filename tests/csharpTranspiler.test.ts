@@ -4899,7 +4899,7 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
         expect(output).toContain('return this.urls["apiBackup"];');
         expect(output).not.toContain('ContainsKey("apiBackup") ?');
     });
-    test('a nested read keeps the helper on the outer access and reads the inner one natively', () => {
+    test('a nested read of urls[\'api\'] with a parameter key reads the urlsApi view, casting the key like GetValue', () => {
         const input =
         "class Exchange {\n" +
         "    urls: { [key: string]: any } = {};\n" +
@@ -4908,9 +4908,10 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        // the inner 'api' read is a field read; the outer key is an identifier, so the helper
-        // still picks the endpoint the way the runtime helper does
-        expect(output).toContain('getValue((this.urls != null && this.urls.ContainsKey("api") ? this.urls["api"] : null), endpoint)');
+        // urls['api'] is the Dict view the hand-written base declares (urlsApi); the key is an untyped
+        // parameter, so it carries GetValue's own null test and (string) cast
+        expect(output).toContain('(this.urlsApi != null && endpoint != null && this.urlsApi.ContainsKey((string)endpoint) ? this.urlsApi[(string)endpoint] : null)');
+        expect(output).not.toContain('getValue(');
     });
 });
 
