@@ -8204,7 +8204,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (value.kind === SyntaxKind4.ConditionalExpression) {
       return this.csharpIsStringValued(value.whenTrue, depth + 1) && this.csharpIsStringValued(value.whenFalse, depth + 1);
     }
-    if (isIdentifier(value) && this.csharpObjectStringLocal(value, depth + 1)) {
+    if (isIdentifier(value) && (this.csharpObjectStringLocal(value, depth + 1) || this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(value) ?? ""))) {
       return true;
     }
     if (value.kind === SyntaxKind4.BinaryExpression && value.operatorToken?.kind === SyntaxKind4.PlusToken) {

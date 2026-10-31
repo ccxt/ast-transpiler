@@ -8203,7 +8203,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (value.kind === _ast.SyntaxKind.ConditionalExpression) {
       return this.csharpIsStringValued(value.whenTrue, depth + 1) && this.csharpIsStringValued(value.whenFalse, depth + 1);
     }
-    if (_is.isIdentifier.call(void 0, value) && this.csharpObjectStringLocal(value, depth + 1)) {
+    if (_is.isIdentifier.call(void 0, value) && (this.csharpObjectStringLocal(value, depth + 1) || this.csharpTypeIsStringType(_nullishCoalesce(this.csharpHx4DeclaredKeyType(value), () => ( ""))))) {
       return true;
     }
     if (value.kind === _ast.SyntaxKind.BinaryExpression && _optionalChain([value, 'access', _747 => _747.operatorToken, 'optionalAccess', _748 => _748.kind]) === _ast.SyntaxKind.PlusToken) {
