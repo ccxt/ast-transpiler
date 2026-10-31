@@ -30,6 +30,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpListParamDeclarations: WeakSet<Node>;
     csharpMemberWriteCache: WeakMap<object, Map<string, boolean>>;
     csharpMemberKeyCounters: WeakMap<object, number>;
+    csharpBaseListParamDeclarations: WeakSet<Node>;
     csharpPromiseAllSites: WeakMap<Node, any>;
     csharpPromiseAllTaskDeclarations: WeakSet<Node>;
     csharpPromiseAllTypedAwaits: Map<string, string>;
@@ -303,9 +304,12 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printInstanceOfExpression(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
     csharpArrayListParamType(node: any): string | undefined;
-    csharpListParamSpelling(node: any): string | undefined;
-    csharpListSpellingOfType(type: any, unionArms?: number): string | undefined;
+    csharpListParamSpelling(node: any, anyCell?: boolean): string | undefined;
+    csharpListSpellingOfType(type: any, unionArms?: number, anyCell?: boolean): string | undefined;
     csharpListParamCensus(): Map<string, boolean> | undefined;
+    csharpListParamBodyReadsAsList(parameter: any): boolean;
+    csharpArgumentMayBeList(type: any): boolean;
+    printArgsForCallExpression(node: any, identation: any): any;
     csharpListParamIsWritten(parameter: any): boolean;
     csharpListBindingIsWritten(declaration: any): boolean;
     csharpListParamArgumentPrintsList(argument: any, decide?: (key: string) => boolean): boolean;
