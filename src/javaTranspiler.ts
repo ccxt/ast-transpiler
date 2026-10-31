@@ -714,6 +714,10 @@ export class JavaTranspiler extends BaseTranspiler {
     // declared type or the operator will not compile. Only `String` is consumed (native `+` anchor).
     javaExpressionTypeResolver?: (node) => string | undefined;
 
+    // optional proof, installed by the embedding build layer, that a local's final printed declaration
+    // is the nullable box `Long <name> = `; consumed only by the `x + <int literal>` null-propagating add.
+    javaBoxedLongResolver?: (node) => boolean;
+
     // the embedding build layer (build/java-local-types.js) installs this: it names the
     // Java type of a local whose printed declaration line it rewrote (`Long`/`Double`).
     // The arithmetic rule reads it for identifier operands only.
@@ -2553,6 +2557,8 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     // RF-java-2: `const x = Object.values(..)` with no other write prints the helper's exact return type
+    // `const x = Object.keys(this.<BaseExchange Map field>)` prints the null-guarded key copy
+    // (printNativeBaseMapFieldKeys), a fresh ArrayList, so the same List<Object> local applies.
     javaObjectValuesLocalType(declaration): string | undefined {
         if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || !declaration.initializer) {
             return undefined;
@@ -2560,7 +2566,12 @@ export class JavaTranspiler extends BaseTranspiler {
         const init = this.unwrapPrintTransparentExpression(declaration.initializer);
         if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression)
             || !isIdentifier(init.expression.expression) || init.expression.expression.text !== 'Object'
-            || init.expression.name.text !== 'values' || init.arguments.length !== 1) {
+            || init.arguments.length !== 1) {
+            return undefined;
+        }
+        const method = init.expression.name.text;
+        const arg = init.arguments[0];
+        if (method === 'keys' ? !(isPropertyAccessExpression(arg) && this.printNativeBaseMapFieldKeys(arg) !== undefined) : method !== 'values') {
             return undefined;
         }
         if (this.javaLocalHasWriteAtAll(declaration.name)) {
@@ -6454,6 +6465,24 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${leftOperand} + ${rightOperand})`;
     }
 
+    // `x + <int literal>` where the embedding layer reports x printed as the nullable box `Long x`:
+    // Helpers.add's Long arm is the long sum and its null arm answers null, so the null test
+    // keeps both. Only a plain name (read twice) qualifies.
+    printBoxedLongLiteralAdd(left, right, leftText, rightText) {
+        if (this.javaBoxedLongResolver === undefined || !isIdentifier(left) || !isNumericLiteral(right)
+            || this.javaIntegerLiteralKind(right) === undefined || !/^\d{1,15}$/.test(rightText)
+            || leftText !== left.text) {
+            return undefined;
+        }
+        let boxed = false;
+        try {
+            boxed = this.javaBoxedLongResolver(left) === true;
+        } catch (e) {
+            boxed = false;
+        }
+        return boxed ? `(${leftText} == null ? null : (Object) (${leftText} + ${rightText}L))` : undefined;
+    }
+
     // an int operand is widened to long explicitly: `i + 1` would box an Integer where
     // Helpers.add hands back a Long, and an all-int sum wraps where the helper's long
     // does not. Integer literals print long; a Double result needs no widening.
@@ -6652,11 +6681,13 @@ export class JavaTranspiler extends BaseTranspiler {
             }
         }
         if (leftFamily !== 'number' || rightFamily !== 'number') {
-            return undefined;
+            // a tuple element typed `Int` (nullable alias) has no plain-number family; the printed `Long` box decides
+            return op === SyntaxKind.PlusToken ? this.printBoxedLongLiteralAdd(left, right, leftText, rightText) : undefined;
         }
         if (op === SyntaxKind.PlusToken) {
             // the widened rule: literals + the non-null numeric proofs this printer owns
-            return this.printWidenedNativeAdd(left, right, leftText, rightText);
+            return this.printWidenedNativeAdd(left, right, leftText, rightText)
+                ?? this.printBoxedLongLiteralAdd(left, right, leftText, rightText);
         }
         if (isMod) {
             // Helpers.mod normalizes both operands to double and returns their double
@@ -8252,8 +8283,11 @@ export class JavaTranspiler extends BaseTranspiler {
 
     printNativeObjectKeysCall(node) {
         const argument = node?.arguments?.[0];
-        if (argument === undefined || isPropertyAccessExpression(argument)) {
+        if (argument === undefined) {
             return undefined;
+        }
+        if (isPropertyAccessExpression(argument)) {
+            return this.printNativeBaseMapFieldKeys(argument);
         }
         // a local the pass declares a Map needs no checkcast: the key copy binds on the
         // declaration's own type, exactly the helper's synchronized map branch
@@ -8269,6 +8303,31 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${this.printNode(argument, 0)}).keySet())`;
+    }
+
+    // `Object.keys(this.<f>)` where f is a BaseExchange field the hand-written Java declares
+    // Map<String, Object>: the key copy of that Map, an empty list for the null the field may hold
+    // (the helper's non-Map branch). Owner stores and every other receiver keep the helper.
+    printNativeBaseMapFieldKeys(access) {
+        if (access.expression.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const name = String(access.name.text);
+        if (!JAVA_DECLARED_MAP_FIELD_NAMES.has(name) || this.javaOwnerStoreFields.has(name)) {
+            return undefined;
+        }
+        let file = '';
+        try {
+            const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(access.name);
+            file = symbol?.valueDeclaration?.resolve()?.getSourceFile?.()?.fileName ?? '';
+        } catch (e) {
+            return undefined;
+        }
+        if (!/(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(file)) {
+            return undefined;
+        }
+        const receiver = this.printNode(access, 0);
+        return `(${receiver} == null ? new java.util.ArrayList<Object>() : new java.util.ArrayList<Object>(${receiver}.keySet()))`;
     }
 
     printObjectValuesCall(_node, _identation, parsedArg = undefined) {
