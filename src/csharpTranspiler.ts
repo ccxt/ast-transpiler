@@ -6440,28 +6440,75 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `((object)(${name} == null ? null : ${name} + ${texts.join(' + ')}))`;
     }
 
-    // a single-binding local whose printed declaration is the untyped box and whose checker type is a string
-    csharpObjectStringLocal(identifier): boolean {
+    // a single-binding local whose printed declaration is the untyped box and whose initializer and every write
+    // store null or a value the printed C# makes a string (a literal, a string-typed call, a string concatenation,
+    // another such local): the box holds a string or null at every read, so add's string branch is the concat
+    csharpObjectStringLocal(identifier, depth = 0): boolean {
         const declaration: any = this.csharpReceiverBinding(identifier);
-        if (declaration?.kind !== SyntaxKind.VariableDeclaration || (declaration.parent as any)?.declarations?.length !== 1) {
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || (declaration.parent as any)?.declarations?.length !== 1
+            || declaration.initializer === undefined || depth > 4) {
             return false;
         }
-        if (this.getCSharpLocalType(declaration) !== this.VAR_TOKEN) {
+        // a declaration whose type is being decided right now (the typing scan prints its uses) is not provable;
+        // the printed declaration must be the untyped box, or the build layer's own string rules own the read
+        if ((this as any).csharpLocalTypeInProgress?.has(declaration) || this.getCSharpLocalType(declaration) !== this.VAR_TOKEN
+            || this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(identifier) ?? '')) {
             return false;
         }
-        const type = this.getChecker().getTypeAtLocation(identifier);
-        const members = ((type.flags & TypeFlags.Union) !== 0) ? ((type as UnionType).getTypes() ?? []) : [ type ];
-        let strings = 0;
-        for (const member of members) {
-            if ((member.flags & (TypeFlags.Undefined | TypeFlags.Null)) !== 0) {
-                continue;
-            }
-            if (!this.isStringType(member.flags)) {
-                return false;
-            }
-            strings++;
+        const scope = this.csharpEnclosingFunction(declaration);
+        if (scope === undefined || !this.csharpIsStringValued(declaration.initializer, depth + 1)) {
+            return false;
         }
-        return strings > 0;
+        let ok = true;
+        const symbol = this.getChecker().getSymbolAtLocation(identifier);
+        const visit = (n) => {
+            if (!ok) {
+                return;
+            }
+            if (isIdentifier(n) && n.text === identifier.text && n !== declaration.name && n.parent?.kind !== SyntaxKind.PropertyAccessExpression
+                && this.getChecker().getSymbolAtLocation(n) === symbol) {
+                const parent: any = n.parent;
+                if (parent?.kind === SyntaxKind.BinaryExpression && parent.left === n && this.csharpIsAssignmentOperator(parent.operatorToken.kind)) {
+                    const op = parent.operatorToken.kind;
+                    if (op === SyntaxKind.PlusEqualsToken) {
+                        // the append keeps a string or null box
+                    } else if (op !== SyntaxKind.EqualsToken || !this.csharpIsStringValued(parent.right, depth + 1)) {
+                        ok = false;
+                    }
+                } else if ((parent?.kind === SyntaxKind.PrefixUnaryExpression || parent?.kind === SyntaxKind.PostfixUnaryExpression)
+                    && (parent.operator === SyntaxKind.PlusPlusToken || parent.operator === SyntaxKind.MinusMinusToken)) {
+                    ok = false;
+                }
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        return ok;
+    }
+
+    // the printed C# of this expression is null or a string
+    csharpIsStringValued(node, depth = 0): boolean {
+        let value = node;
+        while (value?.kind === SyntaxKind.ParenthesizedExpression) {
+            value = value.expression;
+        }
+        if (value === undefined || depth > 6) {
+            return false;
+        }
+        if (value.kind === SyntaxKind.NullKeyword || (isIdentifier(value) && value.text === 'undefined')) {
+            return true;
+        }
+        if (value.kind === SyntaxKind.ConditionalExpression) {
+            return this.csharpIsStringValued(value.whenTrue, depth + 1) && this.csharpIsStringValued(value.whenFalse, depth + 1);
+        }
+        if (isIdentifier(value) && this.csharpObjectStringLocal(value, depth + 1)) {
+            return true;
+        }
+        if (value.kind === SyntaxKind.BinaryExpression && value.operatorToken?.kind === SyntaxKind.PlusToken) {
+            const spine = this.csharpPlusSpine(value);
+            return spine !== undefined && this.csharpIsStringValued(spine.base, depth + 1);
+        }
+        return this.csharpConcatOperandPrintsString(value, 0, true);
     }
 
     csharpEvaluationHasEffects(node): boolean {
