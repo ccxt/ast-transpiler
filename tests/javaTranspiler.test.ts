@@ -8542,3 +8542,47 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
         expect(helperReads.length).toBe(3);
     });
 });
+
+describe('java plain map field writes from owner-executor members', () => {
+    const cls = (member: string, body: string) =>
+        "class T {\n" +
+        "    tickers: any = {};\n" +
+        "    has: any = {};\n" +
+        `    ${member}(symbol: string, k: any, v: any): void {\n` +
+        `        ${body}\n` +
+        "    }\n" +
+        "}";
+    // the build layer's local-type resolver declares `symbol` a Java String
+    const java = (member: string, body: string) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'symbol' ? 'String' : undefined);
+        try {
+            return transpiler.transpileJava(cls(member, body)).content;
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+
+    test('a String-keyed write of a plain map field in a ws handler prints put', () => {
+        const output = java('handleTicker', "this.tickers[symbol] = v;");
+        expect(output).toContain("this.tickers.put(symbol, v);");
+        expect(output).not.toContain("Helpers.addElementToObject(this.tickers");
+    });
+
+    test('a literal key prints put too', () => {
+        expect(java('handleTicker', "this.tickers['a'] = 1;")).toContain("this.tickers.put(\"a\", 1);");
+    });
+
+    test('a member that can run off the owner executor keeps the helper', () => {
+        expect(java('watchTicker', "this.tickers[symbol] = v;")).toContain("Helpers.addElementToObject(this.tickers, symbol, v);");
+    });
+
+    test('a field outside the plain map set keeps the helper', () => {
+        expect(java('handleTicker', "this.has[symbol] = v;")).toContain("Helpers.addElementToObject(this.has, symbol, v);");
+    });
+
+    test('a key that is not a proven String keeps the helper', () => {
+        expect(java('handleTicker', "this.tickers[k] = v;")).toContain("Helpers.addElementToObject(this.tickers, k, v);");
+    });
+});
