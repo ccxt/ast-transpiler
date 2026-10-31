@@ -16109,10 +16109,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return `${this.printNode(node.expression, 0)}.${this.goOrderBook.sides[node.argumentExpression.text]}()`;
   }
-  // a pro `handle*` method's book parameter prints the book interface when every call site hands it one
+  // A book-class parameter prints the book interface when (1) the method is the base's or overrides it (the hand-written
+  // base and IDerivedExchange carry the interface), (2) a pro `handle*` method hands it to a callee whose own parameter
+  // prints the interface and each call site passes a book, or (3) every call site hands it a typed book.
   goOrderBookParameterType(fn, param) {
     const cfg = this.goOrderBook;
-    if (cfg === void 0 || !this.goIsProHandlerMethod(fn) || this.isAsyncFunction(fn) || param.name?.kind !== SyntaxKind5.Identifier) {
+    if (cfg === void 0 || this.isAsyncFunction(fn) || param.name?.kind !== SyntaxKind5.Identifier) {
+      return void 0;
+    }
+    const declaredBook = this.goNodeIsOrderBook(param.name);
+    const inheritsBase = /(^|\/)ts\/src\/base\//.test(fn.getSourceFile().fileName) || (this.goEnclosingClass(fn)?.heritageClauses ?? []).length > 0;
+    if (declaredBook && inheritsBase && this.goMethodKeepsBaseSignature(fn)) {
+      return this.goLocalIsSafeToType(fn.body, param, param.name.text, cfg.type) ? cfg.type : void 0;
+    }
+    if (!this.goIsProHandlerMethod(fn)) {
       return void 0;
     }
     let declaredAny = false;
@@ -16121,12 +16131,37 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     } catch (e) {
       return void 0;
     }
-    if (!declaredAny && !this.goNodeIsOrderBook(param.name)) {
+    if (!declaredAny && !declaredBook) {
       return void 0;
     }
     const index = fn.parameters.indexOf(param);
     const calls = this.goSameFileCallsOf(fn, fn.name.text);
-    return calls.length > 0 && calls.every((call) => call.arguments?.[index] !== void 0 && call.arguments[index].kind !== SyntaxKind5.SpreadElement && this.goPrintedArgType(call.arguments[index]) === cfg.type) && this.goLocalIsSafeToType(fn.body, param, param.name.text, cfg.type) ? cfg.type : void 0;
+    if (calls.length === 0 || calls.some((call) => call.arguments?.[index] === void 0 || call.arguments[index].kind === SyntaxKind5.SpreadElement)) {
+      return void 0;
+    }
+    const forwarded = declaredBook && this.goOrderBookForwardedToBookParameter(fn, param) && calls.every((call) => this.goNodeIsOrderBook(call.arguments[index]));
+    return (forwarded || calls.every((call) => this.goPrintedArgType(call.arguments[index]) === cfg.type)) && this.goLocalIsSafeToType(fn.body, param, param.name.text, cfg.type) ? cfg.type : void 0;
+  }
+  // the body hands `param` itself to a callee parameter that prints the book interface
+  goOrderBookForwardedToBookParameter(fn, param) {
+    const checker = this.getChecker();
+    return this.hasNodeWhere(fn.body, (n) => {
+      if (n.kind !== SyntaxKind5.CallExpression || n.expression?.kind !== SyntaxKind5.PropertyAccessExpression) {
+        return false;
+      }
+      return (n.arguments ?? []).some((arg, at) => {
+        if (arg.kind !== SyntaxKind5.Identifier || arg.text !== param.name.text) {
+          return false;
+        }
+        try {
+          const callee = checker.getResolvedSignature(n)?.declaration?.resolve();
+          const target = callee?.parameters?.[at];
+          return callee !== fn && target !== void 0 && this.goNativeParameterType(target) === this.goOrderBook?.type;
+        } catch (e) {
+          return false;
+        }
+      });
+    });
   }
   goNativeParameterType(param) {
     if (param?.kind !== SyntaxKind5.Parameter) {
