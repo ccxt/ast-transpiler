@@ -3096,7 +3096,14 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const declared = this.csharpArithmeticOperandType(inner) ?? this.csharpParameterOperandType(inner);
         const kind = (declared === 'long') ? 'Int64' : declared;
-        return ((kind === 'int') || (kind === 'Int64') || (kind === 'Int64?')) ? { kind, node: inner, literal: false, zero: false, small: false } : undefined;
+        if ((kind !== 'int') && (kind !== 'Int64') && (kind !== 'Int64?')) {
+            return undefined;
+        }
+        // a non-null kind needs the checker's plain number too; an Int64? read is proven by its null test
+        if ((kind !== 'Int64?') && !this.csharpOperandIsPlainNumber(inner)) {
+            return undefined;
+        }
+        return { kind, node: inner, literal: false, zero: false, small: false };
     }
 
     // `a % b` over Int64 / Int64? / literal operands (not two literals, divisor not 0 or a small positive literal):
@@ -3133,12 +3140,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 return undefined; // a long literal widens an int operand's pair to long
             }
         } else if (base(left) !== base(right)) {
-            // `int x = mathMin(anInt64, anInt)` would receive the pair's `long` result
-            const declaration: any = (node.parent?.kind === SyntaxKind.VariableDeclaration) ? node.parent : undefined;
-            const sink = (declaration !== undefined) ? (this.csharpExpressionTypeOf(declaration.name) ?? this.getCSharpLocalType(declaration)) : undefined;
-            if ((sink === 'int') || (sink === 'uint') || (sink === 'short') || (sink === 'byte')) {
-                return undefined;
-            }
+            return undefined; // Math.Min(int, long) boxes a long; the helper hands back the original box
         }
         const l = this.csharpIntegralNonNullText(node, left, parsedArg1);
         const r = this.csharpIntegralNonNullText(node, right, parsedArg2);
