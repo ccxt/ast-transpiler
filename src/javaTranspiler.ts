@@ -7573,27 +7573,12 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaProvableNumericKind(node) !== undefined ? `String.valueOf(${text})` : `Helpers.toString(${text})`;
     }
 
-    // The runtime uses Long.parseLong (parseInt) / Double.parseDouble (parseFloat) inside a catch; a
-    // literal the native parser ACCEPTS cannot reach the catch, so the native call cannot change the
-    // answer (parseInt additionally needs the value in long range, else the helper answers null).
-    javaScalarParseAccepts(callee, text) {
-        if (callee === 'parseInt') {
-            if (!/^[+-]?[0-9]+$/.test(text)) {
-                return false;
-            }
-            const value = BigInt(text.replace(/^\+/, ''));
-            return value >= BigInt('-9223372036854775808') && value <= BigInt('9223372036854775807');
-        }
-        // Double.parseDouble's grammar minus the suffix forms; NaN/Infinity are parsed
-        // by both, whitespace and hex floats by neither of the two the same way.
-        return /^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$/.test(text)
-            || /^[+-]?Infinity$/.test(text)
-            || text === 'NaN';
-    }
-
-    // RF-java-3: `parseInt(x)` / `parseFloat(x)` whose single operand prints as a java.lang.String
-    // (a String-declared name, a `x as string` cast, or any form the embedding layer proves String)
-    // calls the String-typed twin of the helper (same bodies, String parameter).
+    // `parseInt(x)` / `parseFloat(x)` whose single operand prints as a java.lang.String (a
+    // String-declared name, a `x as string` cast, or any form the embedding layer proves String)
+    // prints the JDK parse directly: Long.parseLong / Double.parseDouble. Unlike the helper they
+    // throw NumberFormatException (NullPointerException for parseDouble(null)) on input the helper
+    // answered null / 0.0 for; that divergence is accepted. An operand that prints a Java numeric
+    // primitive goes through String.valueOf so the parse still reads a String.
     printStringTypedParse(node, callee) {
         const args = node?.arguments;
         if (args === undefined || args.length !== 1) {
@@ -7611,10 +7596,21 @@ export class JavaTranspiler extends BaseTranspiler {
             && (operand.expression.name.text === 'replace' || operand.expression.name.text === 'replaceAll')
             && this.javaScalarFamily(operand.expression.expression) === 'string'
             && /\.replace(First|All)?\(/.test(printed);
+        const nativeName = callee === 'parseInt' ? 'Long.parseLong' : 'Double.parseDouble';
         if (!castToString && !nativeReplace && !this.javaDeclaredStringType(operand) && !this.javaResolvedString(operand)) {
+            // a numeric literal / native arithmetic prints a Java primitive: stringify it in place
+            // (parseInt only over integral kinds: Long.parseLong("1.5") throws where JS truncates)
+            const kind = this.javaProvableNumericKind(operand);
+            if (kind !== undefined && (callee === 'parseFloat' || kind !== 'double')) {
+                return `${nativeName}(String.valueOf(${printed}))`;
+            }
+            // a checker-plain TS string the printer spelled as an Object: type it at the site
+            if (this.javaScalarFamily(operand) === 'string') {
+                return `${nativeName}(((String)${printed}))`;
+            }
             return undefined;
         }
-        return `io.github.ccxt.base.JsParse.${callee}(${printed})`;
+        return `${nativeName}(${printed})`;
     }
 
     // `parseInt(x)` / `parseFloat(x)` -> the native parse, or undefined to keep the helper
@@ -7623,9 +7619,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (args === undefined || args.length !== 1 || !isStringLiteral(args[0])) {
             return undefined;
         }
-        if (!this.javaScalarParseAccepts(callee, args[0].text)) {
-            return undefined;
-        }
+        // a literal the JDK parser rejects throws where the helper answered null / 0.0 (accepted)
         const nativeName = callee === 'parseInt' ? 'Long.parseLong' : 'Double.parseDouble';
         return `${nativeName}(${this.printNode(args[0], 0)})`;
     }

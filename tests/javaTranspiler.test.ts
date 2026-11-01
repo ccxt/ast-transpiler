@@ -5170,8 +5170,8 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
         expect(output).not.toContain("Helpers.parseFloat(");
     });
 
-    test('parseInt/parseFloat of a literal the native parser rejects keep the helper', () => {
-        // the helper catches the NumberFormatException (null / 0.0); the native call throws
+    test('parseInt/parseFloat of a literal the native parser rejects print the JDK parse (throws where the helper answered null / 0.0)', () => {
+        // the helper caught the NumberFormatException (null / 0.0); the JDK parse throws, which is accepted
         const input =
         "class T {\n" +
         "    f(): void {\n" +
@@ -5185,18 +5185,17 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Object a = Helpers.parseInt("1.5");');
-        expect(output).toContain('Object b = Helpers.parseInt(" 8");');
-        expect(output).toContain('Object c = Helpers.parseInt("0x10");');
-        expect(output).toContain('Object d = Helpers.parseInt("99999999999999999999");');
-        expect(output).toContain('Object e = Helpers.parseFloat("abc");');
-        expect(output).toContain('Object g = Helpers.parseFloat(" 1.5");');
-        expect(output).toContain('Object h = Helpers.parseFloat("1.5f");');
-        expect(output).not.toContain("Long.parseLong(");
-        expect(output).not.toContain("Double.parseDouble(");
+        expect(output).toContain('Object a = Long.parseLong("1.5");');
+        expect(output).toContain('Object b = Long.parseLong(" 8");');
+        expect(output).toContain('Object c = Long.parseLong("0x10");');
+        expect(output).toContain('Object d = Long.parseLong("99999999999999999999");');
+        expect(output).toContain('Object e = Double.parseDouble("abc");');
+        expect(output).toContain('Object g = Double.parseDouble(" 1.5");');
+        expect(output).toContain('Object h = Double.parseDouble("1.5f");');
+        expect(output).not.toContain("Helpers.parse");
     });
 
-    test('parseInt/parseFloat of a non-literal keep the helper', () => {
+    test('parseInt/parseFloat of a plain-string non-literal print the JDK parse', () => {
         const input =
         "class T {\n" +
         "    f(s: string): void {\n" +
@@ -5205,8 +5204,8 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Object a = Helpers.parseInt(s);");
-        expect(output).toContain("Object b = Helpers.parseFloat(s);");
+        expect(output).toContain("Object a = Long.parseLong(((String)s));");
+        expect(output).toContain("Object b = Double.parseDouble(((String)s));");
     });
 
     test('Math.* Helpers.toString -> String.valueOf when the argument cannot be null', () => {
@@ -10153,6 +10152,7 @@ describe ('rfJava3StringTypedParse', () => {
             "    a (p: any): any { return parseInt (p as string); }\n" +
             "    b (p: any): any { return parseFloat (p); }\n" +
             "    c (p: any): any { const s = 'x'; return parseFloat (s as string); }\n" +
+            "    d (): any { return parseFloat (3); }\n" +
             "}\n";
         let out: string;
         beforeAll(() => {
@@ -10163,9 +10163,13 @@ describe ('rfJava3StringTypedParse', () => {
         });
         afterAll(() => { fs.rmSync(TMP, { recursive: true, force: true }); });
 
-        test('a string-cast operand calls the typed twin', () => {
-            expect(out).toContain('io.github.ccxt.base.JsParse.parseInt(');
-            expect(out).toContain('io.github.ccxt.base.JsParse.parseFloat(');
+        test('a string-cast operand prints the JDK parse', () => {
+            expect(out).toContain('Long.parseLong(((String)p))');
+            expect(out).toContain('Double.parseDouble(((String)s))');
+            expect(out).not.toContain('JsParse');
+        });
+        test('a numeric literal operand is stringified', () => {
+            expect(out).toContain('Double.parseDouble(String.valueOf(3))');
         });
         test('an any operand keeps the helper', () => {
             expect(out).toContain('Helpers.parseFloat(p)');
