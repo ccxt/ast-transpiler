@@ -13147,6 +13147,43 @@ describe ('rfGo6bNativeStoreFields', () => {
         test('delete of a literal key is the map delete', () => {
             expect (print ("delete this.balance['spot'];")).toContain ('delete(this.Balance, "spot")');
         });
+        test('hx11 r3: a whole GetValue value stores natively; a guarded *string key reads the plain index', () => {
+            const stored = print ("const k = 'a'; this.balance[k] = message[k];");
+            expect (stored).toContain ('this.Balance[k] = ');
+            expect (stored).not.toContain ('AddElementToObject(this.Balance');
+            const read = print ("const t = this.safeString (message, 't'); if (t === undefined) { return; } const b = this.balance[t];");
+            expect (read).toContain ('this.Balance[*t]');
+            expect (read).not.toContain ('func() any');
+        });
+        test('hx11 r3: a spawn/delay site counts as a call of the referenced method, with the arguments after it', () => {
+            const t: any = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const go: any = t.goTranspiler;
+            let seen: any[] = [];
+            const original = go.goSameFileCallsOf;
+            go.goSameFileCallsOf = function (fn, name) {
+                const calls = original.call (this, fn, name);
+                if (name === 'loadIt') { seen = calls.map ((c) => c.arguments.map ((a) => a.getText ())); }
+                return calls;
+            };
+            const hook = go.goNativeParameterTypeOf;
+            go.goNativeParameterTypeOf = function (param) {
+                if (param.parent?.name?.text === 'loadIt') { this.goSameFileCallsOf (param.parent, 'loadIt'); }
+                return hook.call (this, param);
+            };
+            t.transpileGo ('class Exchange {\n    spawn (f: any, ...a: any[]): void {}\n    delay (ms: any, f: any, ...a: any[]): void {}\n'
+                + '    go1 () { this.spawn (this.loadIt, \'spot\'); this.delay (5, this.loadIt, \'swap\'); }\n'
+                + '    async loadIt (type: string) { return type; }\n}\n');
+            expect (seen).toEqual ([ [ "'spot'" ], [ "'swap'" ] ]);
+        });
+        test('hx11 r3: delete of a client url from the registry is the map delete', () => {
+            const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const out = t.transpileGo ('class Client { url: string; }\nclass Exchange {\n    clients: any = {};\n'
+                + '    client (u: string): Client { return new Client (); }\n'
+                + '    drop (u: string) { const client = this.client (u); delete this.clients[client.url]; }\n'
+                + '    dropAny (u: any) { delete this.clients[u]; }\n}\n').content;
+            expect (out).toContain ('delete(this.Clients, client.Url)');
+            expect (out).toContain ('Remove(this.Clients, u)');
+        });
         test('an untabled field and an entry store keep the helper', () => {
             const other = print ("this.balance['info'] = message;", { 'positions': TABLE['balance'] });
             expect (other).toContain ('AddElementToObject(this.Balance, "info", message)');

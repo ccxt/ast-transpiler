@@ -21249,6 +21249,39 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     // the base Balance map can be indexed: every write of the field in the file leaves a map
+    // `GetValue(..)` as the whole printed value: the helper already answers derefScalar of the element,
+    // so AddElementToObject's own derefScalar (idempotent) stores the identical value
+    goIsWholeGetValueText(rhs: string): boolean {
+        const text = (rhs ?? '').trim();
+        if (!/^(?:ccxt\.)?GetValue\(/.test(text) || !text.endsWith(')')) {
+            return false;
+        }
+        let depth = 0;
+        let quote: string | undefined;
+        for (let i = text.indexOf('('); i < text.length; i++) {
+            const c = text[i];
+            if (quote !== undefined) {
+                if (c === '\\') {
+                    i++;
+                } else if (c === quote) {
+                    quote = undefined;
+                }
+                continue;
+            }
+            if ((c === '"') || (c === '`')) {
+                quote = c;
+            } else if (c === '(') {
+                depth++;
+            } else if (c === ')') {
+                depth--;
+                if ((depth === 0) && (i !== text.length - 1)) {
+                    return false;
+                }
+            }
+        }
+        return depth === 0;
+    }
+
     goBalanceIndexable(field): boolean {
         const table = this.nativeStoreFields?.['balance'];
         return (this.goA9fL1CacheField(field) === 'Balance') && (table !== undefined)
@@ -21258,7 +21291,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // `this.balance[k] = v` / `this.balance[k1][k2] = v` statements: the map store, the entry store through the entry's map
     goBalanceStoreText(node, baseExpr, keys: any[], valueNode, rhs: string, identation: number): string | undefined {
         if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || (keys.length > 2) || rhs.includes('\n')
-            || !this.goBalanceIndexable(baseExpr) || !this.goBalancePlainValue(valueNode)) {
+            || !this.goBalanceIndexable(baseExpr) || !(this.goBalancePlainValue(valueNode) || this.goIsWholeGetValueText(rhs))) {
             return undefined;
         }
         const parsed = keys.map((k) => this.goBalanceKey(k));
@@ -23664,7 +23697,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const tableSlot = ((goType === '[]string') || (goType === '[][]string')) && this.goIsUnifiedSliceParameter(name, index);
             const argType = tableSlot ? this.goSliceArgumentType(arg) : this.goPrintedArgType(arg);
             if ((argType !== goType)
-                && !((goType === 'string') && this.gp15NilProvenStringPtrArg(arg))) {
+                && !((goType === 'string') && (call.runner === undefined) && this.gp15NilProvenStringPtrArg(arg))) {
                 return false;
             }
         }
@@ -24031,6 +24064,26 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 result.push(call);
             }
         }
+        // `this.spawn (this.m, a, b)` / `this.delay (t, this.m, a, b)` call `m (a, b)` through CallDynamically:
+        // the arguments after the method reference are the call's arguments, each passed as its own Go value
+        for (const [ runner, at ] of [ [ 'spawn', 0 ], [ 'delay', 1 ] ] as Array<[string, number]>) {
+            for (const call of (index.get(runner) ?? [])) {
+                const ref: any = call.arguments?.[at];
+                if ((call.expression?.expression?.kind !== SyntaxKind.ThisKeyword) || (ref?.kind !== SyntaxKind.PropertyAccessExpression)
+                    || (ref.expression?.kind !== SyntaxKind.ThisKeyword) || (ref.name?.text !== name)) {
+                    continue;
+                }
+                let declaration;
+                try {
+                    declaration = checker.getSymbolAtLocation(ref.name)?.valueDeclaration?.resolve();
+                } catch (e) {
+                    declaration = undefined;
+                }
+                if (declaration === fn) {
+                    result.push({ 'arguments': call.arguments.slice(at + 1), 'runner': call });
+                }
+            }
+        }
         return result;
     }
 
@@ -24097,6 +24150,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     const list = callIndex.get(match[1]) ?? [];
                     list.push({ file: relPath, args, at: callRe.lastIndex - 1 });
                     callIndex.set(match[1], list);
+                    // a spawned/delayed `this.m` is a call of `m` with the arguments that follow the reference
+                    const refAt = (match[1] === 'spawn') ? 0 : ((match[1] === 'delay') ? 1 : -1);
+                    const ref = (refAt >= 0) ? /^this\s*\.\s*([A-Za-z_$][\w$]*)$/.exec((args[refAt] ?? '').trim()) : null;
+                    if (ref !== null) {
+                        const refList = callIndex.get(ref[1]) ?? [];
+                        refList.push({ file: relPath, args: args.slice(refAt + 1), at: callRe.lastIndex - 1 });
+                        callIndex.set(ref[1], refList);
+                    }
                 }
             }
         };
@@ -30184,13 +30245,37 @@ ${this.getIden(identation)}${returnStatement}`;
         if (wsDelete !== undefined) {
             return wsDelete;
         }
-        const native = this.goNativeDelete(node) ?? this.goBalanceDeleteText(node);
+        const native = this.goNativeDelete(node) ?? this.goBalanceDeleteText(node) ?? this.goClientsDeleteText(node);
         if (native !== undefined) {
             return native;
         }
         const object = this.printNode (node.expression.expression, 0);
         const key = this.printNode (node.expression.argumentExpression, 0);
         return `Remove(${object}, ${key})`;
+    }
+
+    // `delete this.clients[k]` with a Go-string key: Clients is the plain `map[string]any` ws client
+    // registry (go/v4/exchange.go), so Remove's string-key branch is exactly the builtin delete
+    goClientsDeleteText(node): string | undefined {
+        const access: any = node.expression;
+        const field: any = access?.expression;
+        if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || (access?.kind !== SyntaxKind.ElementAccessExpression)
+            || (field?.kind !== SyntaxKind.PropertyAccessExpression) || (field.expression?.kind !== SyntaxKind.ThisKeyword)
+            || (field.name?.text !== 'clients')) {
+            return undefined;
+        }
+        // `client.url` of a `client: Client` parameter prints the Go string GetUrl()
+        const keyNode = this.goUnwrapParenthesizedNode(access.argumentExpression);
+        let clientUrl = this.goIsClientUrl(keyNode);
+        if (!clientUrl && (keyNode?.kind === SyntaxKind.PropertyAccessExpression) && (keyNode.name?.text === 'url') && (keyNode.expression?.kind === SyntaxKind.Identifier)) {
+            const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(keyNode.expression)?.valueDeclaration?.resolve?.();
+            const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
+            // `const client = this.client (url)`: the base accessor returns the Client the url names
+            clientUrl = (decl?.kind === SyntaxKind.VariableDeclaration) && (init?.kind === SyntaxKind.CallExpression)
+                && (this.rfGo6bThisCallName(init) === 'client') && !this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name);
+        }
+        const key = clientUrl ? { 'index': this.printNode(keyNode, 0) } : this.goWsKey(access.argumentExpression);
+        return ((key === undefined) || (key.pointer !== undefined)) ? undefined : `delete(${this.printNode(field, 0)}, ${key.index})`;
     }
 
     // `delete m[k]` as a statement on a receiver Go types as map[string]any (a local the printer
@@ -32047,6 +32132,13 @@ ${tryBodyBlock}
             if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)
                 && !this.goMarketComparisonElementRead(node)) {
                 return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
+            }
+            // a Balance entry read whose `*string` key a guard proves non-nil: the plain index of `*k`,
+            // the value GetValue answers for a present key, without the nil-key closure
+            const balanceKey = (this.goA9fL1CacheField(baseExpr) === 'Balance') && !this.isGoElementAccessAssignmentTarget(node)
+                ? this.goBalanceKey(keys[0]) : undefined;
+            if ((balanceKey !== undefined) && (balanceKey.pointer === undefined)) {
+                return this.goElementAccessChain(`${containerStr}[${balanceKey.index}]`, keyStrs);
             }
             // a Safe*-boxed string key holds a nilable `*string`, so the read needs the
             // helper's nil answer and deref around the same map index. A multi-line
