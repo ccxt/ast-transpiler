@@ -274,6 +274,19 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSafeDictUnboxValue(declaration: any, identation: number): string | undefined;
     goBaseMapCalleeName(name: string): boolean;
     goNodeIsInPredictionTree(node: any): boolean;
+    GO_MARKET_TABLES: {
+        [name: string]: {
+            add: string;
+        };
+    };
+    goMarketTable(node: any): {
+        add: string;
+    } | undefined;
+    goMarketTableWriteTarget(node: any): {
+        add: string;
+        owner: any;
+    } | undefined;
+    goMarketTableWriteText(node: any): string | undefined;
     goBookAccessorRead(initializer: any): boolean;
     goIsBaseMapResultLocal(node: any): boolean;
     goBaseMapResultLocal(initializer: any): boolean;
@@ -1041,6 +1054,11 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIntOperandIdentifier(node: any): boolean;
     goSafeListUnboxIdentifier(node: any): boolean;
     goDeclaredListIdentifier(node: any): boolean;
+    goNameWriteSites(scope: any, name: string, declaration?: any): any[];
+    goEnclosingLoopExcluding(loop: any, declaration: any): boolean;
+    goBoundedLoopListRead(node: any): boolean;
+    goSafeListContainerAdmitted(container: any): boolean;
+    goListElementsArePointerFree(list: any, depth?: number): boolean;
     goNativeListElementRead(node: any, containerStr: string, keyNode: any, keyStr: string): string | undefined;
     generatedListCallees: Set<string>;
     goHostListCalleeType(callee: string, initializer: any): string | undefined;

@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-MEKZ6QY3.js";
+} from "./chunk-AWK6QGCM.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -21802,11 +21802,7 @@ var GO_NIL_EQUIVALENT_POINTER_TYPES_Native = /* @__PURE__ */ new Set([
 ]);
 var GO_SYNC_MAP_FIELDS = [
   "Options",
-  "Markets",
-  "Markets_by_id",
   "MarketsById",
-  "Currencies",
-  "Currencies_by_id",
   "CurrenciesById",
   "BaseCurrencies",
   "QuoteCurrencies",
@@ -22395,6 +22391,12 @@ var GoTranspiler = class extends BaseTranspiler {
     // same member read, and every later use reads the local; with the absent case a nil map,
     // GetValue/InOp/ObjectKeys/IsDictionary and Safe* normalise a nil receiver. Else keep the box.
     this.goSafeDictLocalUnboxCache = /* @__PURE__ */ new Map();
+    this.GO_MARKET_TABLES = {
+      "markets": { add: "AddMarketsEntry" },
+      "markets_by_id": { add: "AddMarketsByIdEntry" },
+      "currencies": { add: "AddCurrenciesEntry" },
+      "currencies_by_id": { add: "AddCurrenciesByIdEntry" }
+    };
     // ===== RF-go-6-A =====
     // Two type-keyed rules for Go map locals (moved out of ccxt build/hx11-m43-safedict-local.ts and
     // build/hx10w10-GP26.ts, which rewrote the printed text):
@@ -22568,8 +22570,8 @@ var GoTranspiler = class extends BaseTranspiler {
       "Timeframes": "map[string]any",
       "Balance": "map[string]any"
     };
-    // the market/currency book accessors hand-written in go/v4/exchange_markets_book.go: each is a
-    // load of the published immutable book, so a call is a pure read of a `map[string]any`
+    // the market/currency tables are plain `map[string]any` fields of BaseExchange (go/v4/exchange.go),
+    // written only by whole-map assignment or AddMarketsEntry-style copy-on-write, never in place
     this.GO_NATIVE_MAP_ACCESSORS = ["Markets", "Markets_by_id", "Currencies", "Currencies_by_id"];
     // comparison helpers that normalize int/int64/float64 against each other, so a
     // literal operand's Go default type (int) behaves like the int64 OpNeg produces
@@ -24546,9 +24548,72 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
     const fileName = String(node?.getSourceFile?.()?.fileName ?? "");
     return /(^|[\\/])ts[\\/]src[\\/](prediction[\\/]|base[\\/]PredictionExchange\.ts$)/.test(fileName);
   }
-  // `this.markets` / `this.currencies` (and the `_by_id` twins): the hand-written book getters of
-  // go/v4/exchange_markets_book.go print `this.Markets()` and answer a `map[string]any` (nil before
-  // the first load). Same box argument as the base callees above.
+  // `<recv>.markets` (and the other three tables) whose checker declaration is the base exchange's own
+  // property: a local or a same-named member of another class is a different declaration
+  goMarketTable(node) {
+    if (node?.kind !== SyntaxKind5.PropertyAccessExpression || !Object.prototype.hasOwnProperty.call(this.GO_MARKET_TABLES, node.name?.text)) {
+      return void 0;
+    }
+    let declaration;
+    try {
+      declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+    } catch (e) {
+      declaration = void 0;
+    }
+    const owner = declaration?.parent;
+    if (declaration?.kind !== SyntaxKind5.PropertyDeclaration || owner?.kind !== SyntaxKind5.ClassDeclaration || owner.name?.text !== "BaseExchange") {
+      return void 0;
+    }
+    return this.GO_MARKET_TABLES[node.name.text];
+  }
+  // the table an element write lands in: `<recv>.markets[k] = v`, or the same through a const local initialised
+  // from `this.markets` (checker-resolved); the owner is the receiver the Add*Entry method is called on
+  goMarketTableWriteTarget(node) {
+    const direct = this.goMarketTable(node);
+    if (direct !== void 0) {
+      return { add: direct.add, owner: node.expression };
+    }
+    if (node?.kind !== SyntaxKind5.Identifier) {
+      return void 0;
+    }
+    let declaration;
+    try {
+      declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    } catch (e) {
+      declaration = void 0;
+    }
+    const init = declaration?.kind === SyntaxKind5.VariableDeclaration ? this.goUnwrapParenthesizedNode(declaration.initializer) : void 0;
+    const constant = ((declaration?.parent?.flags ?? 0) & NodeFlags2.Const) !== 0;
+    const table = constant && init?.expression?.kind === SyntaxKind5.ThisKeyword ? this.goMarketTable(init) : void 0;
+    return table === void 0 ? void 0 : { add: table.add, owner: init.expression };
+  }
+  // `recv.<table> = v` as a statement: the field takes a whole new map (nil, an empty map, or the map
+  // the right side builds), so a reader holding the old map never sees it change
+  goMarketTableWriteText(node) {
+    if (this.goMarketTable(node.left) === void 0 || node.parent?.kind !== SyntaxKind5.ExpressionStatement) {
+      return void 0;
+    }
+    const right = this.goUnwrapParenthesizedNode(node.right);
+    const callee = right?.kind === SyntaxKind5.CallExpression && right.expression?.kind === SyntaxKind5.PropertyAccessExpression ? right.expression.name?.text : void 0;
+    const args = right?.arguments ?? [];
+    const left = this.printNode(node.left, 0);
+    if (right?.kind === SyntaxKind5.NullKeyword || right?.kind === SyntaxKind5.Identifier && right.text === "undefined") {
+      return `${left} = nil`;
+    }
+    if (callee === "createSafeDictionary" && args.length <= 1) {
+      return `${left} = map[string]any{}`;
+    }
+    if (callee === "indexBySafe" && args.length === 2) {
+      return `${left} = this.IndexBy(${args.map((a) => this.printNode(a, 0)).join(", ")})`;
+    }
+    const valueNode = callee === "mapToSafeMap" && args.length === 1 ? this.goUnwrapParenthesizedNode(args[0]) : right;
+    const text = this.printNode(valueNode, 0).trim();
+    const sharesTable = valueNode?.kind === SyntaxKind5.PropertyAccessExpression && valueNode.name?.text === node.left.name?.text && valueNode.expression?.kind === SyntaxKind5.Identifier;
+    const isMap = sharesTable || this.goMarketTable(valueNode) !== void 0 || this.goIndexableTypeOf(valueNode, text) === "map[string]any";
+    return `${left} = ${isMap ? text : `MapTyped(${text})`}`;
+  }
+  // `this.markets` / `this.currencies` (and the `_by_id` twins): plain `map[string]any` fields of the
+  // Go base (nil before the first load). Same box argument as the base callees above.
   goBookAccessorRead(initializer) {
     if (initializer?.kind !== SyntaxKind5.PropertyAccessExpression || initializer.expression?.kind !== SyntaxKind5.ThisKeyword) {
       return false;
@@ -27390,6 +27455,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       if (op === SyntaxKind5.PlusEqualsToken) {
         const rhs2 = this.printNode(right, 0);
         const currentValue = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${lastKey}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+        const compoundTable = keyStrs.length === 1 ? this.goMarketTableWriteTarget(baseExpr) : void 0;
+        if (compoundTable !== void 0) {
+          return `${this.printNode(compoundTable.owner, 0)}.${compoundTable.add}(${lastKey}, Add(${currentValue}, ${rhs2}))`;
+        }
         const native2 = keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, `Add(${containerStr}[${lastKey}], ${rhs2})`, true) : void 0;
         return native2 !== void 0 ? native2 : `AddElementToObject(${acc}, ${lastKey}, Add(${currentValue}, ${rhs2}))`;
       }
@@ -29632,6 +29701,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (typeof name !== "string") {
       return void 0;
     }
+    if (this.goMarketTable(node) !== void 0) {
+      return "map[string]any";
+    }
     return GO_FIELD_CONTAINER_TYPES_NATIVE[this.transformPropertyAccessExpressionName(name, node.name)];
   }
   // the printed key is a Go string when the printer knows it: a string literal, or
@@ -29989,6 +30061,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // native `container[key] = value` when the receiver's Go type is proved by the
   // printer, otherwise undefined and the caller keeps the runtime helper
   printNativeElementAssignment(containerNode, containerStr, keyNode, keyStr, valueStr, compound = false, valueNode) {
+    const marketTable = this.goMarketTableWriteTarget(containerNode);
+    if (marketTable !== void 0) {
+      return compound ? void 0 : `${this.printNode(marketTable.owner, 0)}.${marketTable.add}(${keyStr}, ${valueStr})`;
+    }
     keyNode = this.goUnwrapPrintedAssertions(keyNode);
     if (this.goNilInitContainerLocal(containerNode)) {
       return void 0;
@@ -31660,9 +31736,9 @@ ${indent}}`);
     return reads.length === 1 ? reads[0] : void 0;
   }
   // the Go map type a `key in <dict>` receiver is *declared* with, for the dict shapes the
-  // init clause can hold: a `this.<field>` of a hand-written map field, or a `this.<accessor>()`
-  // book getter. undefined for every other receiver, which keeps the runtime helper. The field
-  // and accessor names are matched on the *printed* Go text (this.Orderbooks, this.Markets()).
+  // init clause can hold: a `this.<field>` of a hand-written map field. undefined for every other
+  // receiver, which keeps the runtime helper. The field names are matched on the *printed* Go text
+  // (this.Orderbooks, this.Markets).
   goInOpDictMapType(dictNode, dictText) {
     if (dictText !== void 0 && dictText === this.goL3BookEntryText(dictNode)) {
       return "map[string]any";
@@ -35318,6 +35394,10 @@ ${this.getIden(identation)}return nil`;
       if (this.goWsTradesField(left) && right?.kind === SyntaxKind5.ObjectLiteralExpression && (right.properties?.length ?? 0) === 0) {
         return `${this.printNode(left, 0)} = TradesCache{}`;
       }
+      const marketTableWrite = this.goMarketTableWriteText(node);
+      if (marketTableWrite !== void 0) {
+        return marketTableWrite;
+      }
       const pointerWrite = this.goPointerWriteText(node, identation);
       if (pointerWrite !== void 0) {
         return pointerWrite;
@@ -35556,7 +35636,7 @@ ${tryBodyBlock}
       case SyntaxKind5.Identifier:
         return this.goDeclaredTypeOfIdentifier(node) ?? this.g01MapParamType(node);
       case SyntaxKind5.PropertyAccessExpression:
-        return this.goIsPlainValuedMapField(node) ? "map[string]any" : void 0;
+        return this.goIsPlainValuedMapField(node) || this.goMarketTable(node) !== void 0 ? "map[string]any" : void 0;
     }
     return void 0;
   }
@@ -35684,6 +35764,8 @@ ${tryBodyBlock}
         return this.goDeclaredTypeOfIdentifier(node) === "string";
       case SyntaxKind5.CallExpression:
         return this.goTypeOfInitializer(node, printed) === "string";
+      case SyntaxKind5.ElementAccessExpression:
+        return node.expression?.kind === SyntaxKind5.Identifier && this.goDeclaredTypeOfIdentifier(node.expression) === "[]string" && /^[A-Za-z_]\w*\[[^\[\]()]+\]$/.test((printed ?? "").trim());
     }
     return false;
   }
@@ -35784,6 +35866,259 @@ ${this.getIden(level)}}()`;
   goDeclaredListIdentifier(node) {
     return this.goResolvedLocalGoType(node) === GO_SAFE_LIST_LOCAL_TYPE || this.goSafeListUnboxIdentifier(node);
   }
+  // ---- hx11 FM-GO1-B (GP19): a list element read inside a counting loop over the list's own length ----
+  // The `i >= 0 && i < len(x)` guard of goNativeListElementRead is dead when the read sits in the
+  // body of `for (let i = 0; i < x.length; i++)` (or `i < n` with `const n = x.length` before the
+  // loop) and neither `i` nor `x` is written there: the condition holds at every statement of the
+  // body, so the read is the plain slice index. DerefScalar stays unless every element the list can
+  // hold is provably not a scalar pointer (goListElementsArePointerFree).
+  // the identifier occurrences of `name` under `scope` that write it (or bind it again)
+  goNameWriteSites(scope, name, declaration) {
+    const sites = [];
+    const checker = this.checkerOrUndefined();
+    const sameVariable = (n) => {
+      if (declaration === void 0 || checker === void 0) {
+        return true;
+      }
+      try {
+        const symbol = checker.getSymbolAtLocation(n);
+        if (symbol === void 0) {
+          return true;
+        }
+        const found = symbol.valueDeclaration?.resolve?.() ?? symbol.valueDeclaration;
+        return found === void 0 || found === declaration || found.pos === declaration.pos && found.end === declaration.end;
+      } catch (e) {
+        return true;
+      }
+    };
+    const visit = (n) => {
+      if (n.kind === SyntaxKind5.Identifier && n.text === name && n !== declaration?.name && sameVariable(n)) {
+        let up = n;
+        let parent = n.parent;
+        while (parent !== void 0 && (parent.kind === SyntaxKind5.ArrayLiteralExpression || parent.kind === SyntaxKind5.ObjectLiteralExpression || parent.kind === SyntaxKind5.SpreadElement || parent.kind === SyntaxKind5.ShorthandPropertyAssignment || parent.kind === SyntaxKind5.PropertyAssignment || parent.kind === SyntaxKind5.ParenthesizedExpression)) {
+          up = parent;
+          parent = parent.parent;
+        }
+        const kind = parent?.kind;
+        const assignment = kind === SyntaxKind5.BinaryExpression && parent.left === up && parent.operatorToken.kind >= SyntaxKind5.FirstAssignment && parent.operatorToken.kind <= SyntaxKind5.LastAssignment;
+        const stepped = (kind === SyntaxKind5.PrefixUnaryExpression || kind === SyntaxKind5.PostfixUnaryExpression) && parent.operand === n && (parent.operator === SyntaxKind5.PlusPlusToken || parent.operator === SyntaxKind5.MinusMinusToken);
+        const iterated = (kind === SyntaxKind5.ForInStatement || kind === SyntaxKind5.ForOfStatement) && parent.initializer === up;
+        const bound = (kind === SyntaxKind5.VariableDeclaration || kind === SyntaxKind5.Parameter || kind === SyntaxKind5.BindingElement) && parent.name === n;
+        const member = n.parent?.kind === SyntaxKind5.PropertyAccessExpression && n.parent.expression === n && (n.parent.name?.text !== "length" || n.parent.parent?.kind === SyntaxKind5.BinaryExpression && n.parent.parent.left === n.parent && n.parent.parent.operatorToken.kind >= SyntaxKind5.FirstAssignment && n.parent.parent.operatorToken.kind <= SyntaxKind5.LastAssignment);
+        if (assignment || stepped || iterated || bound || member || kind === SyntaxKind5.DeleteExpression) {
+          sites.push(n);
+        }
+      }
+      n.forEachChild(visit);
+    };
+    scope?.forEachChild(visit);
+    return sites;
+  }
+  // true when an iteration statement encloses `loop` without enclosing `declaration`: a write after
+  // the loop could then run before the loop is entered again
+  goEnclosingLoopExcluding(loop, declaration) {
+    for (let up = loop.parent; up !== void 0 && !isFunctionLike(up); up = up.parent) {
+      if (GO_ITERATION_STATEMENT_KINDS.has(up.kind) && !(declaration.pos >= up.pos && declaration.end <= up.end)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  // `x[i]` in the body of a counting loop bounded by x's own length, with `i` and `x` unwritten
+  goBoundedLoopListRead(node) {
+    const list = node?.expression;
+    const key = node?.argumentExpression;
+    if (list?.kind !== SyntaxKind5.Identifier || key?.kind !== SyntaxKind5.Identifier || list.text === key.text) {
+      return false;
+    }
+    const fileName = String(node.getSourceFile?.()?.fileName ?? "").replace(/\\/g, "/");
+    if (/(^|\/)ts\/src\/test\//.test(fileName)) {
+      return false;
+    }
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return false;
+    }
+    const keyDeclaration = checker.getSymbolAtLocation(key)?.valueDeclaration?.resolve?.();
+    const keyList = keyDeclaration?.parent;
+    const loop = keyList?.parent;
+    if (keyDeclaration?.kind !== SyntaxKind5.VariableDeclaration || keyList?.kind !== SyntaxKind5.VariableDeclarationList || keyList.declarations?.length !== 1 || loop?.kind !== SyntaxKind5.ForStatement || loop.initializer !== keyList || keyDeclaration.initializer?.kind !== SyntaxKind5.NumericLiteral || `${keyDeclaration.initializer.text}` !== "0") {
+      return false;
+    }
+    const step = loop.incrementor;
+    if (!((step?.kind === SyntaxKind5.PostfixUnaryExpression || step?.kind === SyntaxKind5.PrefixUnaryExpression) && step.operator === SyntaxKind5.PlusPlusToken && step.operand?.kind === SyntaxKind5.Identifier && step.operand.text === key.text)) {
+      return false;
+    }
+    let inBody = false;
+    for (let up = node.parent; up !== void 0; up = up.parent) {
+      if (up === loop.statement) {
+        inBody = true;
+        break;
+      }
+      if (isFunctionLike(up) || up === loop) {
+        break;
+      }
+    }
+    if (!inBody) {
+      return false;
+    }
+    const condition = loop.condition;
+    if (condition?.kind !== SyntaxKind5.BinaryExpression || condition.operatorToken.kind !== SyntaxKind5.LessThanToken || condition.left?.kind !== SyntaxKind5.Identifier || condition.left.text !== key.text) {
+      return false;
+    }
+    const scope = this.goEnclosingFunction(node);
+    const bound = condition.right;
+    let from = loop.pos;
+    if (bound?.kind === SyntaxKind5.Identifier) {
+      const boundDeclaration = checker.getSymbolAtLocation(bound)?.valueDeclaration?.resolve?.();
+      const init = boundDeclaration?.initializer;
+      if (boundDeclaration?.kind !== SyntaxKind5.VariableDeclaration || this.goEnclosingFunction(boundDeclaration) !== scope || boundDeclaration.end > loop.pos || init?.kind !== SyntaxKind5.PropertyAccessExpression || init.name?.text !== "length" || init.expression?.kind !== SyntaxKind5.Identifier || init.expression.text !== list.text || this.goNameWriteSites(scope, bound.text, boundDeclaration).some((site) => site.pos < loop.end || this.goEnclosingLoopExcluding(loop, boundDeclaration))) {
+        return false;
+      }
+      from = boundDeclaration.end;
+    } else if (!(bound?.kind === SyntaxKind5.PropertyAccessExpression && bound.name?.text === "length" && bound.expression?.kind === SyntaxKind5.Identifier && bound.expression.text === list.text)) {
+      return false;
+    }
+    const keyWrites = this.goNameWriteSites(loop.statement, key.text);
+    if (keyWrites.length > 0) {
+      return false;
+    }
+    const listDeclaration = checker.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    if (this.goEnclosingFunction(listDeclaration) !== scope) {
+      return false;
+    }
+    return !this.goNameWriteSites(scope, list.text, listDeclaration).some((site) => site.pos >= from && site.pos < loop.end);
+  }
+  // the container a safeList is cut from: a local must be the JSON-origin proof (bound once, unwritten, not handed
+  // out; an endpoint response or a safeDict of one); a parameter or any other expression is not tracked here
+  goSafeListContainerAdmitted(container) {
+    if (container?.kind !== SyntaxKind5.Identifier) {
+      return true;
+    }
+    const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(container)?.valueDeclaration?.resolve?.();
+    return declaration?.kind !== SyntaxKind5.VariableDeclaration || this.goJsonOriginContainer(container);
+  }
+  // every element the list can hold is a map/slice/JSON value, never a scalar pointer, so
+  // DerefScalar(x[i]) is x[i]: the checker proves an object element type, or every write into
+  // it (initializer, assignment, push) is such a value. A safeList cut from a local container
+  // counts only when that container is a decoded JSON document (goJsonOriginContainer), so a
+  // rebound, written or escaping response keeps the guarded read.
+  goListElementsArePointerFree(list, depth = 0) {
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return false;
+    }
+    const objectType = (type) => {
+      if (type === void 0) {
+        return false;
+      }
+      const parts = typeof type.isUnionType === "function" && type.isUnionType() ? type.getTypes().slice() : [type];
+      return parts.length > 0 && parts.every((p) => (p.flags & TypeFlags4.Object) !== 0);
+    };
+    const listObjects = (type) => {
+      try {
+        if (type === void 0 || typeof checker.isArrayType !== "function" || !checker.isArrayType(type)) {
+          return false;
+        }
+        return objectType(checker.getIndexTypeOfType(type, IndexKind2.Number));
+      } catch (e) {
+        return false;
+      }
+    };
+    const unwrap = (e) => {
+      let current = e;
+      while (current?.kind === SyntaxKind5.ParenthesizedExpression || current?.kind === SyntaxKind5.AsExpression || current?.kind === SyntaxKind5.NonNullExpression) {
+        current = current.expression;
+      }
+      return current;
+    };
+    const thisCall = (e, test) => e?.kind === SyntaxKind5.CallExpression && e.expression?.kind === SyntaxKind5.PropertyAccessExpression && e.expression.expression?.kind === SyntaxKind5.ThisKeyword && test(`${e.expression.name?.text ?? ""}`);
+    const dictElement = (e) => {
+      const value = unwrap(e);
+      if (value?.kind === SyntaxKind5.ObjectLiteralExpression) {
+        return true;
+      }
+      if (value?.kind === SyntaxKind5.ElementAccessExpression && value.expression?.kind === SyntaxKind5.Identifier && depth < 3 && this.goListElementsArePointerFree(value.expression, depth + 1)) {
+        return true;
+      }
+      if (thisCall(value, (name) => /^(parse[A-Z]\w*|safeDict2?)$/.test(name))) {
+        return true;
+      }
+      try {
+        return objectType(checker.getTypeAtLocation(value));
+      } catch (err) {
+        return false;
+      }
+    };
+    const ENDPOINT_METHOD = /^\w*(?:public|private|Public|Private)\w*(?:Get|Post|Put|Delete|Patch)[A-Z0-9]\w*$/;
+    const listValue = (e, hops = 0, self) => {
+      const value = unwrap(e);
+      if (value?.kind === SyntaxKind5.ArrayLiteralExpression) {
+        return value.elements.every((el) => dictElement(el));
+      }
+      if (value?.kind === SyntaxKind5.AwaitExpression) {
+        return thisCall(unwrap(value.expression), (name) => ENDPOINT_METHOD.test(name));
+      }
+      if (thisCall(value, (name) => /^safeList2?$/.test(name))) {
+        return value.arguments.length >= 1 && this.goSafeListContainerAdmitted(value.arguments[0]);
+      }
+      if (thisCall(value, (name) => name === "arrayConcat")) {
+        return value.arguments.length === 2 && value.arguments.every((a) => listValue(a, hops + 1, self));
+      }
+      if (value?.kind === SyntaxKind5.CallExpression && value.expression?.kind === SyntaxKind5.PropertyAccessExpression && value.expression.expression?.kind === SyntaxKind5.Identifier && value.expression.expression.text === "Object" && value.expression.name?.text === "values") {
+        return true;
+      }
+      if (value?.kind === SyntaxKind5.Identifier && self !== void 0 && value.text === self) {
+        return true;
+      }
+      if (value?.kind === SyntaxKind5.Identifier && hops < 3) {
+        const hop = checker.getSymbolAtLocation(value)?.valueDeclaration?.resolve?.();
+        if (hop?.kind === SyntaxKind5.VariableDeclaration && hop.initializer !== void 0 && this.goEnclosingFunction(hop) === this.goEnclosingFunction(value) && this.goNameWriteSites(this.goEnclosingFunction(hop), value.text, hop).length === 0) {
+          return listValue(hop.initializer, hops + 1);
+        }
+      }
+      try {
+        return listObjects(checker.getTypeAtLocation(value));
+      } catch (err) {
+        return false;
+      }
+    };
+    const declaration = checker.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    if (declaration === void 0) {
+      return false;
+    }
+    if (declaration.kind === SyntaxKind5.VariableDeclaration && this.goSafeListLocalUnbox(declaration) === GO_SAFE_LIST_LOCAL_TYPE) {
+      return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name)) && this.goSafeListContainerAdmitted(this.goSafeListLocalArgs(this.goUnwrapParenthesizedNode(declaration.initializer))?.container);
+    }
+    try {
+      if (listObjects(checker.getTypeAtLocation(list))) {
+        return true;
+      }
+    } catch (e) {
+    }
+    if (declaration.kind !== SyntaxKind5.VariableDeclaration || declaration.initializer === void 0 || !listValue(declaration.initializer, 0, list.text)) {
+      return false;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    return this.goNameWriteSites(scope, list.text, declaration).every((site) => {
+      const parent = site.parent;
+      if (parent?.kind === SyntaxKind5.BinaryExpression && parent.left === site && parent.operatorToken.kind === SyntaxKind5.EqualsToken) {
+        return listValue(parent.right, 0, list.text);
+      }
+      if (parent?.kind === SyntaxKind5.PropertyAccessExpression && parent.expression === site) {
+        const call = parent.parent;
+        const method = `${parent.name?.text ?? ""}`;
+        if (call?.kind !== SyntaxKind5.CallExpression || call.expression !== parent) {
+          return false;
+        }
+        if (method === "push") {
+          return call.arguments.every((a) => dictElement(a));
+        }
+        return method === "pop" || method === "shift";
+      }
+      return false;
+    });
+  }
   // `x[k]` on a local the printer declared []any is a slice index: GetValue answered nil for an
   // absent index (negative or out of range) and derefs a pointer element, so the native read is
   // the same index behind that guard. Only a key printed as an `int` carries it; every other
@@ -35801,6 +36136,9 @@ ${this.getIden(level)}}()`;
     const bounded = this.goGb08BoundedListRead(node, keyNode);
     if (bounded !== void 0) {
       return bounded === "native" ? `${containerStr}[${keyStr}]` : `DerefScalar(${containerStr}[${keyStr}])`;
+    }
+    if (this.goBoundedLoopListRead(node)) {
+      return this.goListElementsArePointerFree(readBase) ? `${containerStr}[${keyStr}]` : `DerefScalar(${containerStr}[${keyStr}])`;
     }
     const level = this.goStatementLevel;
     const body = this.getIden(level + 1);
@@ -59268,7 +59606,11 @@ var NIL_TESTABLE_FIELDS = /* @__PURE__ */ new Set([
   "Proxy",
   "Proxy_url",
   "ProxyUrlCallback",
-  "Proxy_url_callback"
+  "Proxy_url_callback",
+  "Markets",
+  "Markets_by_id",
+  "Currencies",
+  "Currencies_by_id"
 ]);
 function isNilLiteral2(node) {
   return node?.kind === ts.SyntaxKind.NullKeyword || node?.kind === ts.SyntaxKind.Identifier && node.text === "undefined";

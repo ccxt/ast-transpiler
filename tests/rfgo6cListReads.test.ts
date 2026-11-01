@@ -139,8 +139,9 @@ describe('RF-go-6-C list reads', () => {
         expect (r1).not.toContain ('func() any');
     });
     test('an object-element read keeps the guard when the element type is not provably an object, or the list is mutated', () => {
+        // hx11 FOLD2 (hx10w9-GP19): a safeList of a parameter is a decoded-JSON list, so its bounded read is the bare index
         const r2 = fn (print ([ 'SafeList' ]), 'R2');
-        expect (r2).toContain ('return DerefScalar(rows[i])');
+        expect (r2).toContain ('out = rows[i]');
         const r3 = fn (print ([ 'ParseTrades' ]), 'R3');
         expect (r3).toContain ('return DerefScalar(trades[i])');
     });

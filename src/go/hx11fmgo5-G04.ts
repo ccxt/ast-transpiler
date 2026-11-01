@@ -20,6 +20,7 @@ const OWNER_CLASSES = [ 'BaseExchange', 'PredictionExchange' ];
 const NIL_TESTABLE_FIELDS = new Set ([
     'Outcomes', 'Outcomes_by_id', 'Events_by_slug', 'Features',
     'ProxyUrl', 'Proxy', 'Proxy_url', 'ProxyUrlCallback', 'Proxy_url_callback',
+    'Markets', 'Markets_by_id', 'Currencies', 'Currencies_by_id',
 ]);
 
 function isNilLiteral (node: any) {

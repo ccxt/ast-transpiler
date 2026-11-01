@@ -1,10 +1,11 @@
 import { assert } from 'console';
-import { Transpiler, alignGoTrailingComments, installCcxtGoHooks } from '../src/transpiler';
+import { installFmGo5G04, Transpiler, alignGoTrailingComments, installCcxtGoHooks } from '../src/transpiler';
 
 import { SyntaxKind } from 'typescript/unstable/ast';
 import { readFileSync } from 'fs';
 import * as nodefs from 'fs';
 import * as nodepath from 'path';
+import * as nodeos from 'os';
 
 jest.mock('module',()=>({
     __esModule: true,                 // this makes it work
@@ -807,7 +808,9 @@ describe('go pointer-typed Safe* body locals', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var data []any = SafeListTyped(item, \"data\")");
         expect(output).toContain("i < len(data)");
-        expect(output).toContain("DerefScalar(data[i])");
+        // the loop bounds the read (hx11 FM-GO1-B): the plain index of a SafeList element
+        expect(output).toContain("this.SafeValue(data[i], \"id\")");
+        expect(output).not.toContain("DerefScalar(data[i])");
         expect(output).toContain("DerefScalar(data[0])");
         expect(output).not.toContain("GetArrayLength(data)");
     });
@@ -2303,10 +2306,10 @@ describe('go inline equality', () => {
         const input =
         "class T {\n" +
         "    f () {\n" +
-        "        if (this.markets === undefined) { return 1; }\n" +
-        "        if (this.markets !== undefined) { return 2; }\n" +
-        "        const a = this.markets_by_id === undefined;\n" +
-        "        const b = this.currencies_by_id !== undefined;\n" +
+        "        if (this.orderbooks === undefined) { return 1; }\n" +
+        "        if (this.orderbooks !== undefined) { return 2; }\n" +
+        "        const a = this.transactions === undefined;\n" +
+        "        const b = this.baseCurrencies !== undefined;\n" +
         "        const c = this.tickers === undefined;\n" +
         "        return [ a, b, c ];\n" +
         "    }\n" +
@@ -2314,12 +2317,12 @@ describe('go inline equality', () => {
         const output = transpiler.transpileGo(input).content;
         // go/v4/exchange.go declares these BaseExchange fields as *sync.Map: the Go nil
         // test answers exactly what the IsEqual helper answers for a nil pointer
-        expect(output).toContain("if this.Markets == nil {");
-        expect(output).toContain("if this.Markets != nil {");
-        expect(output).toContain("var a bool = (this.Markets_by_id == nil)");
-        expect(output).toContain("var b bool = (this.Currencies_by_id != nil)");
+        expect(output).toContain("if this.Orderbooks == nil {");
+        expect(output).toContain("if this.Orderbooks != nil {");
+        expect(output).toContain("var a bool = (this.Transactions == nil)");
+        expect(output).toContain("var b bool = (this.BaseCurrencies != nil)");
         expect(output).toContain("var c bool = (this.Tickers == nil)");
-        expect(output).not.toContain("IsEqual(this.Markets");
+        expect(output).not.toContain("IsEqual(this.Orderbooks");
     });
     test('fields whose Go nil test the helpers do not reproduce keep IsEqual', () => {
         // Orders is an `any` field, Hostname a plain string, Clients a map, Ids a slice,
@@ -5334,12 +5337,12 @@ describe('go native element assignment on a hand-written container field', () =>
         const input =
         "class Exchange {\n" +
         "    main() {\n" +
-        "        this.markets['a'] = 1;\n" +
+        "        this.tickers['a'] = 1;\n" +
         "        return this.options;\n" +
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("this.Markets.Store(\"a\", 1)");
+        expect(output).toContain("this.Tickers.Store(\"a\", 1)");
         expect(output).not.toContain("AddElementToObject");
     });
     test('a sync.Map field with a string-typed local key assigns through Store', () => {
@@ -5384,12 +5387,12 @@ describe('go native element assignment on a hand-written container field', () =>
         const input =
         "class Exchange {\n" +
         "    main() {\n" +
-        "        this.markets['a'] += 1;\n" +
+        "        this.tickers['a'] += 1;\n" +
         "        return this.options;\n" +
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("AddElementToObject(this.Markets, \"a\", Add(GetValue(this.Markets, \"a\"), 1))");
+        expect(output).toContain("AddElementToObject(this.Tickers, \"a\", Add(GetValue(this.Tickers, \"a\"), 1))");
     });
     test('the field table never types a local of the same name', () => {
         const input =
@@ -6769,6 +6772,117 @@ describe('native parameter types, Dict/List across the ts/src tree (D-01)', () =
 // (a slice literal, a `[]any`-returning accessor, the SafeList unbox) prints the guarded
 // native index instead of GetValue(x, key) — the guard reproduces the helper's answer for
 // an absent index (nil) while the native index cannot panic.
+describe('hx11 FM-GO1-B GP19: a list read bounded by its own counting loop is the plain index', () => {
+    // hx11 FOLD1 (hx10w9-GP19): the prediction tier takes the same rule; the build pass it replaces ran on prediction/*.go
+    const predictionRead = (file: string): string => {
+        const dir = nodefs.mkdtempSync(nodepath.join(nodeos.tmpdir(), 'hx11-fold1-gp19-'));
+        try {
+            const target = nodepath.join(dir, file);
+            nodefs.mkdirSync(nodepath.dirname(target), { recursive: true });
+            nodefs.writeFileSync(target,
+                "export class Test {\n" +
+                "    safeList (a, b, c?) { return undefined; }\n" +
+                "    f (a: any) {\n" +
+                "        const rows = [ a ];\n" +
+                "        for (let i = 0; i < rows.length; i++) {\n            const v = rows[i];\n            a += v;\n        }\n" +
+                "        return a;\n    }\n}\n");
+            return new Transpiler({ verbose: false, go: {} }).transpileGoByPath(target).content.replace(/[\t\n ]+/g, ' ');
+        } finally {
+            nodefs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+
+    test('a bounded-loop read in ts/src/prediction loses the dead guard; the same read in ts/src/test keeps it', () => {
+        const prediction = predictionRead('ts/src/prediction/venue.ts');
+        expect(prediction).not.toContain('func() any');
+        expect(prediction).toContain('var v any = DerefScalar(rows[i])');
+        expect(predictionRead('ts/src/test/venue.ts')).toContain('func() any');
+    });
+
+    const squash = (output: string) => output.replace(/[\t\n ]+/g, ' ');
+    const transpile = (ts: string) => squash(transpiler.transpileGo(ts).content);
+    const fixture = (loop: string, body: string, decl = "const list = this.safeList (a, 'rows', []);\n        ") =>
+        "class Test {\n" +
+        "    safeList (a, b, c?) { return undefined; }\n" +
+        "    f (a: any) {\n" +
+        "        " + decl +
+        "        " + loop + " {\n" +
+        "            " + body + "\n" +
+        "        }\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}\n";
+
+    test('x[i] under i < x.length with i and x unwritten drops the guard; a SafeList element drops DerefScalar too', () => {
+        const output = transpile(fixture("for (let i = 0; i < list.length; i++)", "const v = list[i]; a += v;"));
+        expect(output).toContain('var v any = list[i]');
+        expect(output).not.toContain('func() any');
+    });
+
+    test('a hoisted length bound that reads this list counts', () => {
+        const output = transpile(fixture("for (let i = 0; i < n; i++)", "const v = list[i]; a += v;", "const list = this.safeList (a, 'rows', []);\n        const n = list.length;\n        "));
+        expect(output).toContain('var v any = list[i]');
+        expect(output).not.toContain('func() any');
+    });
+
+    test('an element of an unproven list keeps DerefScalar but loses the dead guard', () => {
+        const output = transpile(fixture("for (let i = 0; i < list.length; i++)", "const v = list[i]; a += v;", "const list = [ a ];\n        "));
+        expect(output).toContain('var v any = DerefScalar(list[i])');
+        expect(output).not.toContain('func() any');
+    });
+
+    test('a list proven pointer-free through an endpoint response, arrayConcat of lists, Object.values and a pointer-free list element drops DerefScalar', () => {
+        const hooked = new Transpiler({ verbose: false, go: {} });
+        installCcxtGoHooks(hooked.goTranspiler);
+        const transpile = (ts: string) => squash(hooked.transpileGo(ts).content);
+        const cls = (body: string) =>
+            "class Test {\n    safeList (a, b, c?) { return undefined; }\n    arrayConcat (a, b) { return a; }\n    publicGetRows (p) { return undefined; }\n    async f (a: any) {\n" + body + "        return a;\n    }\n}\n";
+        const endpoint = transpile(cls(
+            "        const response = await this.publicGetRows (a);\n        let rows = [];\n        if (Array.isArray (response)) {\n            rows = response;\n        }\n" +
+            "        for (let i = 0; i < rows.length; i++) {\n            const v = rows[i];\n            a += v;\n        }\n"));
+        expect(endpoint).toContain('var v any = rows[i]');
+        expect(endpoint).not.toContain('DerefScalar(rows[i])');
+        const concat = transpile(cls(
+            "        let rows = [];\n        const data = this.safeList (a, 'd', []);\n        rows = this.arrayConcat (rows, data);\n" +
+            "        for (let i = 0; i < rows.length; i++) {\n            const v = rows[i];\n            a += v;\n        }\n"));
+        expect(concat).toContain('var v any = rows[i]');
+        const values = transpile(cls(
+            "        const rows = Object.values (a);\n        for (let i = 0; i < rows.length; i++) {\n            const v = rows[i];\n            a += v;\n        }\n"));
+        expect(values).toContain('var v any = rows[i]');
+        const element = transpile(cls(
+            "        const all = this.safeList (a, 'd', []);\n        const ids = [];\n        for (let i = 0; i < all.length; i++) {\n            ids.push (all[i]);\n        }\n" +
+            "        for (let j = 0; j < ids.length; j++) {\n            const v = ids[j];\n            a += v;\n        }\n"));
+        expect(element).toContain('var v any = ids[j]');
+        // negative: a list also fed a scalar from a Safe* accessor keeps DerefScalar
+        const mixed = transpile(cls(
+            "        const ids = [];\n        ids.push (this.safeList (a, 'd', []));\n        ids.push (this.safeString (a, 'x'));\n" +
+            "        for (let j = 0; j < ids.length; j++) {\n            const v = ids[j];\n            a += v;\n        }\n").replace('safeList (a, b, c?)', 'safeString (a, b) { return undefined; }\n    safeList (a, b, c?)'));
+        expect(mixed).not.toContain('var v any = ids[j]');
+    });
+
+    test('negative controls keep the guard closure', () => {
+        // a counter that moves in the body
+        expect(transpile(fixture("for (let i = 0; i < list.length; i++)", "i = i + 1; const v = list[i]; a += v;"))).toContain('if i >= 0 && i < len(list)');
+        // a list pushed to in the body
+        expect(transpile(fixture("for (let i = 0; i < list.length; i++)", "list.push (a); const v = list[i]; a += v;"))).toContain('if i >= 0 && i < len(list)');
+        // a list reassigned in the body stays boxed: no native index at all
+        const reassigned = transpile(fixture("for (let i = 0; i < list.length; i++)", "list = []; const v = list[i]; a += v;"));
+        expect(reassigned).toContain('GetValue(list, i)');
+        expect(reassigned).not.toContain('list[i]');
+        // a loop not bounded by the list
+        expect(transpile(fixture("for (let i = 0; i < 3; i++)", "const v = list[i]; a += v;"))).toContain('if i >= 0 && i < len(list)');
+        // a read after the loop closed
+        const after =
+            "class Test {\n    safeList (a, b, c?) { return undefined; }\n    f (a: any) {\n" +
+            "        const list = this.safeList (a, 'rows', []);\n        let i = 0;\n" +
+            "        for (i = 0; i < list.length; i++) {\n            a += 1;\n        }\n" +
+            "        const v = list[i];\n        return v;\n    }\n}\n";
+        expect(transpile(after)).not.toContain('list[i]');
+        // a read inside a closure may run after the loop
+        expect(transpile(fixture("for (let i = 0; i < list.length; i++)", "const g = () => list[i]; a += g ();"))).not.toContain('var g any = list[i]');
+    });
+});
+
 describe('go GetValue(x, key) -> guarded native index on a declared []any', () => {
     const squash = (output: string) => output.replace(/[\t\n ]+/g, ' ');
     const transpile = (ts: string) => squash(transpiler.transpileGo(ts).content);
@@ -6788,7 +6902,9 @@ describe('go GetValue(x, key) -> guarded native index on a declared []any', () =
         const output = transpile(ts);
         expect(output).toContain('var list []any = []any{}');
         expect(output).toContain('for i := 0; i < len(list); i++');
-        expect(output).toContain('if i >= 0 && i < len(list) { return DerefScalar(list[i]) } return nil }()');
+        // hx11 FM-GO1-B: the loop bounds the read, so the guard closure is gone
+        expect(output).toContain('var v any = list[i]');
+        expect(output).not.toContain('func() any');
         expect(output).not.toContain('GetValue(list');
     });
 
@@ -8108,8 +8224,14 @@ describe('go literal-defaulted safeString locals are strings', () => {
 describe('FM-A9F L3: negated lookups hoisted out of an || chain, indexed ws book receivers', () => {
     const head = 'type Str = string | undefined;\nclass T {\n    markets_by_id = {};\n    ohlcvs = {};\n    clients = {};\n    safeString (o, k, d = undefined): Str { return o[k]; }\n    safeDict (o, k, d = undefined) { return o[k]; }\n';
     const go = (body: string) => new Transpiler({ verbose: false }).transpileGo(head + body + '}\n').content;
+    // the market tables are BaseExchange fields: their nil test is keyed on that declaration
+    const goBase = (body: string) => {
+        const t = new Transpiler({ verbose: false });
+        installFmGo5G04(t.goTranspiler);
+        return t.transpileGo(head.replace('class T {', 'class BaseExchange {') + body + '}\n').content;
+    };
     test('a negated base-map lookup under || hoists the comma-ok behind the key nil test', () => {
-        const output = go("    f (rows: any) {\n        for (let i = 0; i < rows.length; i++) {\n            const entryId = this.safeString (rows[i], 'symbol');\n            if ((entryId === undefined) || (this.markets_by_id === undefined) || !(entryId in this.markets_by_id)) {\n                continue;\n            }\n        }\n    }\n");
+        const output = goBase("    f (rows: any) {\n        for (let i = 0; i < rows.length; i++) {\n            const entryId = this.safeString (rows[i], 'symbol');\n            if ((entryId === undefined) || (this.markets_by_id === undefined) || !(entryId in this.markets_by_id)) {\n                continue;\n            }\n        }\n    }\n");
         expect(output).toContain('\t\tvar entryIdKnown bool\n\t\tif entryId != nil {\n\t\t\t_, entryIdKnown = this.Markets_by_id[*entryId]\n\t\t}\n\t\tif (entryId == nil) || (this.Markets_by_id == nil) || !entryIdKnown {');
         expect(output).not.toContain('InOp(');
     });

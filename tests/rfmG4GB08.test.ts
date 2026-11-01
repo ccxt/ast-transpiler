@@ -113,13 +113,14 @@ describe('RFM-G4 GB08 bounded list reads in the prediction tier', () => {
         expect (out).not.toContain ('rows[i]'); // no native read: the list is not proven a slice either
     });
 
-    test('a venue file outside the prediction tier is out of this rule', () => {
+    // hx11 FOLD2 (hx10w9-GP19): the bounded-loop rule now covers the venue and pro tiers too; only ts/src/test stays out
+    test('a file of the test tree is out of this rule', () => {
         const out = go (
             "        const rows = this.safeList (response, 'rows', []);\n" +
             '        for (let i = 0; i < rows.length; i++) {\n' +
             '            const row = rows[i];\n' +
             '            this.parseRow (row);\n' +
-            '        }', 'pro');
+            '        }', 'test');
         expect (out).toContain (GUARD);
     });
 });
