@@ -133,13 +133,38 @@ describe('hx10 GP01 native map writes on proven locals', () => {
         expect(out).toContain('AddElementToObject(params, "a", 1)');
     });
 
-    test('a multi-line value keeps the helper', () => {
+    test('a multi-line object literal value sits one level deeper inside the nil-key guard', () => {
         const out = go(cls('    make (symbols: Strings): any {\n' +
             '        const result: Dict = {};\n' +
             '        const symbol = this.safeString (symbols, 0);\n' +
             "        result[symbol] = { 'min': 1, 'max': 2 };\n" +
             '        return result;\n' +
             '    }\n' + SAFE));
-        expect(out).toContain('AddElementToObject(result, symbol,');
+        expect(out).toContain('\tif symbol != nil {\n\t\tresult[*symbol] = map[string]any{\n\t\t\t"min": 1,\n\t\t\t"max": 2,\n\t\t}\n\t}');
+        expect(out).not.toContain('AddElementToObject(result, symbol,');
+    });
+
+    test('a numeric literal under a *string key is a guarded store; an `in` read of the map does not share it', () => {
+        const out = go(cls('    make (entries: any): any {\n' +
+            '        const seen: Dict = {};\n' +
+            '        const id = this.safeString (entries, 0);\n' +
+            '        if (!(id in seen)) {\n' +
+            '            seen[id] = 1;\n' +
+            '        }\n' +
+            '        return seen;\n' +
+            '    }\n' + SAFE));
+        expect(flat(out)).toContain('if id != nil { seen[*id] = 1 }');
+        expect(out).not.toContain('AddElementToObject(seen, id,');
+    });
+
+    test('a map handed to a call before the write keeps the helper', () => {
+        const out = go(cls('    make (entries: any): any {\n' +
+            '        const seen: Dict = {};\n' +
+            '        const id = this.safeString (entries, 0);\n' +
+            '        this.keep (seen);\n' +
+            "        seen[id] = { 'a': 1, 'b': 2 };\n" +
+            '        return seen;\n' +
+            '    }\n' + SAFE + '    keep (a: any): void {}\n'));
+        expect(out).toContain('AddElementToObject(seen, id,');
     });
 });
