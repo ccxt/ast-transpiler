@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-O5MZOAMZ.js";
+} from "./chunk-MEKZ6QY3.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -14093,7 +14093,7 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
     } catch (e) {
       return false;
     }
-    const isMap = decl?.kind === SyntaxKind5.Parameter ? this.goGetArgParameterType(decl) === "map[string]any" : decl?.kind === SyntaxKind5.VariableDeclaration && this.goResolvedLocalGoType(baseExpr) === "map[string]any";
+    const isMap = decl?.kind === SyntaxKind5.Parameter ? this.goGetArgParameterType(decl) === "map[string]any" : decl?.kind === SyntaxKind5.VariableDeclaration && (this.goResolvedLocalGoType(baseExpr) === "map[string]any" || this.rf6aAwaitedMapLocal(decl));
     const scope = decl === void 0 ? void 0 : this.rf6aTopFunction(decl);
     if (!isMap || scope === void 0 || !this.rf6aMapWritesArePointerFree(scope, baseExpr.text)) {
       return false;
@@ -14103,7 +14103,25 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
       operand = operand.parent;
     }
     const cmp = operand.parent;
-    return !(cmp?.kind === SyntaxKind5.BinaryExpression && (cmp.left === operand || cmp.right === operand) && [SyntaxKind5.EqualsEqualsToken, SyntaxKind5.EqualsEqualsEqualsToken, SyntaxKind5.ExclamationEqualsToken, SyntaxKind5.ExclamationEqualsEqualsToken].includes(cmp.operatorToken.kind));
+    const compared = cmp?.kind === SyntaxKind5.BinaryExpression && (cmp.left === operand || cmp.right === operand) && [SyntaxKind5.EqualsEqualsToken, SyntaxKind5.EqualsEqualsEqualsToken, SyntaxKind5.ExclamationEqualsToken, SyntaxKind5.ExclamationEqualsEqualsToken].includes(cmp.operatorToken.kind);
+    const other = compared ? this.goUnwrapParenthesizedNode(cmp.left === operand ? cmp.right : cmp.left) : void 0;
+    const againstNil = other?.kind === SyntaxKind5.NullKeyword || other?.kind === SyntaxKind5.Identifier && other.text === "undefined";
+    return !compared || againstNil && decl?.kind === SyntaxKind5.VariableDeclaration;
+  }
+  // `const x = await this.m (..)` whose receive the printer declares `map[string]any` (goAwaitReceiveUnbox: a struct
+  // channel, an endpoint, a ws watch): the declaration prints `var x map[string]any = <unbox>(..)`, so x is that map for
+  // every later read even though the declared-type resolver only sees the awaited expression
+  rf6aAwaitedMapLocal(decl) {
+    const init = decl?.initializer;
+    if (init?.kind !== SyntaxKind5.AwaitExpression || decl.name?.kind !== SyntaxKind5.Identifier || this.goDeclaredTypeInProgress.has(decl)) {
+      return false;
+    }
+    this.goDeclaredTypeInProgress.add(decl);
+    try {
+      return this.goAwaitReceiveUnbox(init, this.printNode(init, 0))?.goType === GO_SAFE_DICT_LOCAL_TYPE;
+    } finally {
+      this.goDeclaredTypeInProgress.delete(decl);
+    }
   }
   // ===== end RF-go-6-A =====
   // the TypeScript return type proves the boxed value is the market dictionary: the checker reports

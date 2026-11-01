@@ -302,6 +302,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     rf6aIsPointerFreeValue(value: any): boolean;
     rf6aMapWritesArePointerFree(scope: any, name: string): boolean;
     rf6aNativeMapRead(access: any, baseExpr: any, keyNode: any, keyStr: string): boolean;
+    rf6aAwaitedMapLocal(decl: any): boolean;
     goMarketCallReturnsDict(initializer: any): boolean;
     goMarketProducerMethods: string[];
     goMarketMapCalls: string[];

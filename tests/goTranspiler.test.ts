@@ -1,5 +1,5 @@
 import { assert } from 'console';
-import { Transpiler, alignGoTrailingComments } from '../src/transpiler';
+import { Transpiler, alignGoTrailingComments, installCcxtGoHooks } from '../src/transpiler';
 
 import { SyntaxKind } from 'typescript/unstable/ast';
 import { readFileSync } from 'fs';
@@ -8312,5 +8312,40 @@ describe('go JSON-origin list element reads', () => {
             "        const response = this.safeDict (params, 'a', {});\n" +
             "        const data = this.safeList (response, 'data', []);\n" + loop());
         expect(output).toContain("DerefScalar(data[i])");
+    });
+});
+
+describe('RF-go-6-A (FOLD2 GP26): element reads of map locals the printer types through an awaited receive', () => {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gp26-'));
+    afterAll(() => {
+        fs.rmSync(tmp, { 'recursive': true, 'force': true });
+    });
+    const run = (body: string): string => {
+        const dir = path.join(tmp, 'ts', 'src', 'pro');
+        fs.mkdirSync(dir, { 'recursive': true });
+        const file = path.join(dir, 'venue.ts');
+        fs.writeFileSync(file, 'type Dict = { [key: string]: any };\nclass Exchange {\n    async watchTicker (symbol: string, params: Dict = {}): Promise<Dict> { return {}; }\n    parseWsOrder (order: Dict): Dict { return order; }\n}\n'
+            + 'class venue extends Exchange {\n    async run (symbol: string) {\n' + body + '    }\n}\n');
+        const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+        installCcxtGoHooks(inst.goTranspiler);
+        return inst.transpileGoByPath(file).content;
+    };
+    test('a local map tested against undefined indexes natively (IsEqual derefs its operand)', () => {
+        const output = run("        const order: Dict = this.parseWsOrder ({});\n        if (order['x'] !== undefined) { return 1; }\n        return 0;\n");
+        expect(output).toContain('var order map[string]any = this.ParseWsOrder(');
+        expect(output).toContain('IsEqual(order["x"], nil)');
+    });
+    test('a local map compared with a non-nil operand keeps the helper deref', () => {
+        const output = run("        const order: Dict = this.parseWsOrder ({});\n        if (order['x'] === true) { return 1; }\n        return 0;\n");
+        expect(output).toContain('var order map[string]any = this.ParseWsOrder(');
+        expect(output).toContain('GetValue(order, "x")');
+    });
+    test('a bare element read of the awaited map local indexes natively', () => {
+        const output = run("        const order = await this.watchTicker (symbol);\n        return order['x'];\n");
+        expect(output).toContain('order["x"]');
+        expect(output).not.toContain('GetValue(order, "x")');
     });
 });

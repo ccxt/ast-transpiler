@@ -3386,7 +3386,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         const isMap = (decl?.kind === SyntaxKind.Parameter) ? (this.goGetArgParameterType(decl) === 'map[string]any')
-            : ((decl?.kind === SyntaxKind.VariableDeclaration) && (this.goResolvedLocalGoType(baseExpr) === 'map[string]any'));
+            : ((decl?.kind === SyntaxKind.VariableDeclaration) && ((this.goResolvedLocalGoType(baseExpr) === 'map[string]any')
+                || this.rf6aAwaitedMapLocal(decl)));
         const scope: any = (decl === undefined) ? undefined : this.rf6aTopFunction(decl);
         if (!isMap || (scope === undefined) || !this.rf6aMapWritesArePointerFree(scope, baseExpr.text)) {
             return false;
@@ -3397,8 +3398,29 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             operand = operand.parent;
         }
         const cmp: any = operand.parent;
-        return !((cmp?.kind === SyntaxKind.BinaryExpression) && ((cmp.left === operand) || (cmp.right === operand))
-            && [ SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken ].includes(cmp.operatorToken.kind));
+        const compared = (cmp?.kind === SyntaxKind.BinaryExpression) && ((cmp.left === operand) || (cmp.right === operand))
+            && [ SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken ].includes(cmp.operatorToken.kind);
+        // an element of a LOCAL map tested against undefined / null prints IsEqual(.., nil), which derefs its own operand,
+        // so the native index answers the same (a parameter's map is the caller's and keeps the helper)
+        const other: any = compared ? this.goUnwrapParenthesizedNode((cmp.left === operand) ? cmp.right : cmp.left) : undefined;
+        const againstNil = (other?.kind === SyntaxKind.NullKeyword) || ((other?.kind === SyntaxKind.Identifier) && (other.text === 'undefined'));
+        return !compared || (againstNil && (decl?.kind === SyntaxKind.VariableDeclaration));
+    }
+
+    // `const x = await this.m (..)` whose receive the printer declares `map[string]any` (goAwaitReceiveUnbox: a struct
+    // channel, an endpoint, a ws watch): the declaration prints `var x map[string]any = <unbox>(..)`, so x is that map for
+    // every later read even though the declared-type resolver only sees the awaited expression
+    rf6aAwaitedMapLocal(decl): boolean {
+        const init: any = decl?.initializer;
+        if ((init?.kind !== SyntaxKind.AwaitExpression) || (decl.name?.kind !== SyntaxKind.Identifier) || this.goDeclaredTypeInProgress.has(decl)) {
+            return false;
+        }
+        this.goDeclaredTypeInProgress.add(decl);
+        try {
+            return this.goAwaitReceiveUnbox(init, this.printNode(init, 0))?.goType === GO_SAFE_DICT_LOCAL_TYPE;
+        } finally {
+            this.goDeclaredTypeInProgress.delete(decl);
+        }
     }
     // ===== end RF-go-6-A =====
 
