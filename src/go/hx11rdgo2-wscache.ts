@@ -38,6 +38,10 @@ function cacheField (go: any, node: any) {
 }
 
 // code that does not run on the dispatch loop: the nearest enclosing method is async, or one of the sync helpers they call
+export function rdGo2UserPath (node: any) {
+    return userPath (node);
+}
+
 function userPath (node: any) {
     const SK = ts.SyntaxKind;
     for (let current = node?.parent; current; current = current.parent) {

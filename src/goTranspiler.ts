@@ -8,6 +8,7 @@ import { Checker, IndexKind, SymbolFlags, TypeFlags } from 'typescript/unstable/
 import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
 import { getAllSuperTypeNodes, isFunctionLike } from './tsUtils.js';
 import { ccxtGoTupleParamsElementType } from './go/go-local-types.js';
+import { rdGo2UserPath } from './go/hx11rdgo2-wscache.js';
 
 
 const GO_ITERATION_STATEMENT_KINDS = new Set<number>([SyntaxKind.ForStatement, SyntaxKind.ForInStatement,
@@ -1557,6 +1558,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             && this.goWsTradesRead(initializer)) {
             return GO_WS_CACHE_TYPE; // FM-CACHE: a TradesCache entry read
         }
+        if (this.goOrderBook !== undefined) {
+            const bookRead = this.goWsOrderbooksReadParts(initializer);
+            if ((bookRead !== undefined) && !bookRead.safeDict) {
+                return this.goOrderBook.type; // FOLD3 hx11w9: OrderBookCache.Get answers the book interface
+            }
+        }
         switch (initializer?.kind) {
         case SyntaxKind.NewExpression: // FM-CACHE: a ws list cache constructor answers the WsArrayCache interface
         case SyntaxKind.PropertyAccessExpression: // FM-CACHE: so does a base list-cache field read
@@ -2590,7 +2597,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                         }
                         if ((this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType)
                             && !((declaration.kind === SyntaxKind.VariableDeclaration) && this.goPointerWriteConversion(parent.right, goType) !== undefined)
-                            && !((goType === GO_WS_CACHE_TYPE) && (this.goWsCacheTypeOfNode(parent.right) !== undefined))) {
+                            && !((goType === GO_WS_CACHE_TYPE) && (this.goWsCacheTypeOfNode(parent.right) !== undefined))
+                            && !this.goOrderBookWriteKeepsType(goType, parent.right)) {
                             return true;
                         }
                     } else if ((op === SyntaxKind.PlusEqualsToken) && (goType === 'string')
@@ -2948,7 +2956,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         const args: any = this.goSafeDictLocalArgs(declaration.initializer);
-        const container = this.printNode(args.container, identation);
+        const container = this.printNode(args.container, identation) + (this.goWsOrderbooksField(args.container) ? '.ToMap()' : '');  // FOLD3 hx11w9
         const key = this.printNode(args.key, 0);
         if (this.goSafeDictLocalUnboxStandard(declaration) === undefined) {
             // FM-A9F L3: the literal default stays, the local is a map that is written into later
@@ -4406,7 +4414,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         let result;
         try {
             result = this.goNilInitLocalTypeScan(declaration) ?? this.goTuplePointerSlotNilInitType(declaration) ?? this.goNilInitStringLocalType(declaration) ?? this.goNilInitListLocalType(declaration)
-                ?? this.goNilInitCacheLocalType(declaration);
+                ?? this.goNilInitCacheLocalType(declaration) ?? this.goNilInitOrderBookLocalType(declaration);
         } finally {
             this.goNilInitLocalTypeInProgress.delete(declaration);
         }
@@ -5256,9 +5264,9 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 // a string has no nil: the accumulator's zero value is the empty string
                 return this.getIden(identation) + "var " + this.printNode(declaration.name) + " string";
             }
-            if (nilInitType === GO_WS_CACHE_TYPE) {
+            if ((nilInitType === GO_WS_CACHE_TYPE) || ((this.goOrderBook !== undefined) && (nilInitType === this.goOrderBook.type))) {
                 // an interface local starts nil
-                return this.getIden(identation) + "var " + this.printNode(declaration.name) + " " + GO_WS_CACHE_TYPE;
+                return this.getIden(identation) + "var " + this.printNode(declaration.name) + " " + nilInitType;
             }
             if (nilInitType !== undefined) {
                 return this.getIden(identation) + "var " + this.printNode(declaration.name) + " " + nilInitType + " = " + parsedValue;
@@ -5661,6 +5669,203 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return this.applyAsyncSuffixToCallee(nameNode, this.capitalize(name));
     }
 
+    // ---- FOLD3 hx11w9: BaseExchange.orderbooks is the typed OrderBookCache (go/v4/exchange_orderbook_cache.go) -------
+    // `this.orderbooks`: the BaseExchange field declared `Dictionary<WsOrderBook>`, read on the dispatch loop (user-path code is RD-GO-2's)
+    goWsOrderbooksField(node): boolean {
+        if ((this.goOrderBook === undefined) || (node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        try {
+            const declarations = this.getChecker().getSymbolAtLocation(node.name)?.declarations?.map((d) => d.resolve()) ?? [];
+            return (declarations.length > 0) && declarations.every((d) => (d.kind === SyntaxKind.PropertyDeclaration)
+                && /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.[\w.-]+)?\.ts$/.test(String(d.getSourceFile().fileName).replace(/\\/g, '/'))
+                && (((d as any).type?.getText?.() ?? "").trim() === "Dictionary<WsOrderBook>")) && !rdGo2UserPath(node);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // a read of one cache entry: `this.orderbooks[k]`, `this.safeValue (this.orderbooks, k[, dflt])`, `this.safeDict (this.orderbooks, k)`
+    goWsOrderbooksReadParts(node): { field: any, key: any, def?: any, safeDict?: boolean } | undefined {
+        let inner = this.goUnwrapParenthesizedNode(node);
+        while (((inner?.kind === SyntaxKind.AsExpression) && this.goNodeIsOrderBook(inner)) || (inner?.kind === SyntaxKind.NonNullExpression)) {
+            inner = this.goUnwrapParenthesizedNode(inner.expression);
+        }
+        if (inner?.kind === SyntaxKind.ElementAccessExpression) {
+            const parent: any = inner.parent;
+            return (this.goWsOrderbooksField(inner.expression) && !this.isGoElementAccessAssignmentTarget(inner)
+                && (parent?.kind !== SyntaxKind.DeleteExpression) && (parent?.kind !== SyntaxKind.PostfixUnaryExpression)
+                && (parent?.kind !== SyntaxKind.PrefixUnaryExpression)) ? { field: inner.expression, key: inner.argumentExpression } : undefined;
+        }
+        if (inner?.kind !== SyntaxKind.CallExpression) {
+            return undefined;
+        }
+        const callee = inner.expression;
+        const count = inner.arguments?.length ?? 0;
+        const name = callee?.name?.text;
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+            || !(((name === 'safeValue') && ((count === 2) || (count === 3))) || ((name === 'safeDict') && (count === 2)))
+            || !this.goWsOrderbooksField(inner.arguments[0])) {
+            return undefined;
+        }
+        try {
+            const declarations = this.getChecker().getSymbolAtLocation(callee.name)?.declarations?.map((d) => d.resolve()) ?? [];
+            return ((declarations.length > 0)
+                && declarations.every((d) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.[\w.-]+)?\.ts$/.test(String(d.getSourceFile()?.fileName ?? '').replace(/\\/g, '/'))))
+                ? { field: inner.arguments[0], key: inner.arguments[1], def: (count === 3) ? inner.arguments[2] : undefined, safeDict: name === 'safeDict' } : undefined;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    goWsOrderbooksReadText(node): string | undefined {
+        const parts = this.goWsOrderbooksReadParts(node);
+        if (parts === undefined) {
+            return undefined;
+        }
+        const key = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(parts.key, 0));
+        if (parts.def === undefined) {
+            return `${this.printNode(parts.field, 0)}.Get(${key})`;
+        }
+        return `${this.printNode(parts.field, 0)}.GetOr(${key}, ${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(parts.def, 0))})`;
+    }
+
+    // a write that keeps a book local an OrderBookInterface: a book constructor or nil
+    goOrderBookWriteKeepsType(goType: string, right): boolean {
+        if ((this.goOrderBook === undefined) || (goType !== this.goOrderBook.type)) {
+            return false;
+        }
+        const value = this.goUnwrapParenthesizedNode(right);
+        return this.goIsOrderBookProducer(value) || (value?.kind === SyntaxKind.NullKeyword)
+            || ((value?.kind === SyntaxKind.Identifier) && (value.text === 'undefined'));
+    }
+
+    // FOLD3 hx11w9: `book.reset / limit / cache` print the interface's own methods. A receiver the printer did not
+    // declare OrderBookInterface is an `any` box in Go and is asserted to the interface at the member access.
+    goOrderBookMemberText(node): string | undefined {
+        const cfg = this.goOrderBook;
+        const memberName = node?.name?.text;
+        const member = Object.prototype.hasOwnProperty.call(GO_ORDERBOOK_MEMBERS, memberName) ? GO_ORDERBOOK_MEMBERS[memberName] : undefined;
+        if ((cfg === undefined) || (member === undefined) || (node.expression?.kind !== SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        const parent: any = node.parent;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === node) && (parent.operatorToken.kind >= SyntaxKind.FirstAssignment)
+            && (parent.operatorToken.kind <= SyntaxKind.LastAssignment)) {
+            return undefined;  // the write is printed by goOrderBookCacheWrite
+        }
+        if (!this.goReceiverIsOrderBook(node.expression)) {
+            return undefined;
+        }
+        const receiver = this.printNode(node.expression, 0);
+        const asserted = (this.goBookDeclaredType(node.expression) === cfg.type) ? receiver : `${receiver}.(${cfg.type})`;
+        return (member === 'GetCache') ? `${asserted}.GetCache()` : `${asserted}.${member}`;
+    }
+
+    // `book.cache = v` -> `book.SetCache(v)`
+    goOrderBookCacheWrite(node): string | undefined {
+        const cfg = this.goOrderBook;
+        const left: any = node.left;
+        if ((cfg === undefined) || (node.operatorToken.kind !== SyntaxKind.EqualsToken) || (left?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (left.name?.text !== 'cache') || (left.expression?.kind !== SyntaxKind.Identifier) || !this.goReceiverIsOrderBook(left.expression)) {
+            return undefined;
+        }
+        const receiver = this.printNode(left.expression, 0);
+        const asserted = (this.goBookDeclaredType(left.expression) === cfg.type) ? receiver : `${receiver}.(${cfg.type})`;
+        return `${asserted}.SetCache(${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(node.right, 0)).trimStart()})`;
+    }
+
+    // `book.cache` as an operand that needs the *any (a push target): the accessor call, asserted when the box is `any`
+    goOrderBookCacheAccessor(node): string | undefined {
+        const cfg = this.goOrderBook;
+        while ((node?.kind === SyntaxKind.ParenthesizedExpression) || (node?.kind === SyntaxKind.AsExpression) || (node?.kind === SyntaxKind.NonNullExpression)) {
+            node = node.expression;
+        }
+        if ((cfg === undefined) || (node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.name?.text !== 'cache')
+            || (node.expression?.kind !== SyntaxKind.Identifier) || !this.goReceiverIsOrderBook(node.expression)) {
+            return undefined;
+        }
+        const receiver = this.printNode(node.expression, 0);
+        return `${(this.goBookDeclaredType(node.expression) === cfg.type) ? receiver : `${receiver}.(${cfg.type})`}.GetCache()`;
+    }
+
+    // the Go type the printer declares an identifier with, including a `const book = await this.watchX ()` local the
+    // await hook names OrderBookInterface
+    goBookDeclaredType(node): string | undefined {
+        const declared = this.goDeclaredTypeOfIdentifier(node);
+        if (declared !== undefined) {
+            return declared;
+        }
+        try {
+            const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+            const init: any = decl?.initializer;
+            if ((decl?.kind === SyntaxKind.VariableDeclaration) && (init?.kind === SyntaxKind.AwaitExpression)) {
+                return this.goAwaitReceiveUnbox(init, this.printNode(init, 0))?.goType;
+            }
+        } catch (e) {
+            return undefined;
+        }
+        return undefined;
+    }
+
+    goReceiverIsOrderBook(node): boolean {
+        if (this.goNodeIsOrderBook(node)) {
+            return true;
+        }
+        try {
+            return (this.getChecker().getTypeAtLocation(node).flags & TypeFlags.Any) !== 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // FOLD3 hx11w9: `book.timestamp = v` on a book local that is never nil by construction (a constructor, or a cache read
+    // behind its presence guard) prints the interface's setter, which skips a nil pointer exactly like the helper's deref.
+    // A receiver proven non-nil only by an earlier member call is left to goOrderBookSetterPass.
+    goOrderBookSetterText(baseExpr, containerStr: string, keyNode, valueNode, valueStr: string): string | undefined {
+        const cfg = this.goOrderBook;
+        if ((cfg?.setters === undefined) || (baseExpr?.kind !== SyntaxKind.Identifier) || (keyNode?.kind !== SyntaxKind.StringLiteral)
+            || !Object.prototype.hasOwnProperty.call(cfg.setters, keyNode.text)) {
+            return undefined;
+        }
+        const setter = cfg.setters[keyNode.text];
+        const value = valueStr.trim();
+        const open = value.indexOf('(');
+        const producerCall = new RegExp(setter.value).test(value) && (open > 0) && this.isWholePrintedCall(value, open);
+        const typedLocal = (this.goUnwrapParenthesizedNode(valueNode)?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(this.goUnwrapParenthesizedNode(valueNode)) === setter.type);
+        if ((!producerCall && !typedLocal) || (this.goBookDeclaredType(baseExpr) !== cfg.type) || !this.goOrderBookLocalNeverNil(baseExpr)) {
+            return undefined;
+        }
+        return `${containerStr}.${setter.method}(${value})`;
+    }
+
+    // every value the book local ever holds is a constructor result or a cache entry its presence guard proves
+    goOrderBookLocalNeverNil(id): boolean {
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(id)?.valueDeclaration?.resolve();
+        if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.initializer === undefined)) {
+            return false;
+        }
+        const scope: any = this.goEnclosingFunction(decl);
+        if (scope === undefined) {
+            return false;
+        }
+        const present = (rhs): boolean => {
+            if (this.goIsOrderBookProducer(rhs)) {
+                return true;
+            }
+            const read = this.goOrderBookCacheRead(rhs);
+            return (read !== undefined) && this.goOrderBookEntryPresent(rhs, read);
+        };
+        if (!present(decl.initializer)) {
+            return false;
+        }
+        const name: string = decl.name.text;
+        return !this.goDescendantsOf(scope).some((n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== decl.name)
+            && this.goIdentifierRefersToDeclaration(n, decl) && (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
+            && (n.parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.parent.operatorToken.kind <= SyntaxKind.LastAssignment)
+            && !((n.parent.operatorToken.kind === SyntaxKind.EqualsToken) && present(n.parent.right)));
+    }
+
     // ---- FM-CACHE: ws list caches (WsArrayCache) -------------------------------------------------
     // the checker type is one of the ws cache classes (a `| undefined` arm does not matter)
     goWsCacheClassType(type): boolean {
@@ -5758,6 +5963,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // a nil-declared local (`let c; if (..) { c = this.trades[k]; }`) whose every write is a ws cache or nil
     goNilInitCacheLocalType(declaration): string | undefined {
+        return this.goNilInitInterfaceLocalType(declaration, GO_WS_CACHE_TYPE);
+    }
+
+    // FOLD3 hx11w9: the same for the order book cache (`let ob; if (..) { ob = this.orderbooks[k]; }`)
+    goNilInitOrderBookLocalType(declaration): string | undefined {
+        return (this.goOrderBook === undefined) ? undefined : this.goNilInitInterfaceLocalType(declaration, this.goOrderBook.type);
+    }
+
+    goIsEqualityToken(kind): boolean {
+        return (kind === SyntaxKind.EqualsEqualsEqualsToken) || (kind === SyntaxKind.EqualsEqualsToken)
+            || (kind === SyntaxKind.ExclamationEqualsEqualsToken) || (kind === SyntaxKind.ExclamationEqualsToken);
+    }
+
+    goNilInitInterfaceLocalType(declaration, goType: string): string | undefined {
         const name = declaration.name.text;
         const scope = this.goEnclosingFunction(declaration);
         if (scope === undefined) {
@@ -5773,8 +5992,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const parent = n.parent;
                 if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
                     writes.push(parent.right);
-                } else if (this.goAssignmentWritesName(parent, name) || (parent?.kind === SyntaxKind.BinaryExpression && parent.left === n)) {
-                    bail = true;
+                } else if (this.goAssignmentWritesName(parent, name) || (parent?.kind === SyntaxKind.BinaryExpression && parent.left === n
+                    && !((goType === this.goOrderBook?.type) && this.goIsEqualityToken(parent.operatorToken?.kind)))) {
+                    bail = true;  // a book local may be compared to undefined: that reads it
                 }
                 return;
             }
@@ -5790,15 +6010,18 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if ((value?.kind === SyntaxKind.NullKeyword) || ((value?.kind === SyntaxKind.Identifier) && (value.text === 'undefined'))) {
                 continue;
             }
-            if (this.goTypeOfInitializer(right, this.printNode(right, 0)) !== GO_WS_CACHE_TYPE) {
+            if (this.goOrderBookWriteKeepsType(goType, right)) {
+                continue;
+            }
+            if (this.goTypeOfInitializer(right, this.printNode(right, 0)) !== goType) {
                 return undefined;
             }
             cacheWrites++;
         }
-        if ((cacheWrites === 0) || !this.goLocalIsSafeToType(scope, declaration, name, GO_WS_CACHE_TYPE)) {
+        if ((cacheWrites === 0) || !this.goLocalIsSafeToType(scope, declaration, name, goType)) {
             return undefined;
         }
-        return GO_WS_CACHE_TYPE;
+        return goType;
     }
 
     // `x.append(v)` where Go can call Append on x directly: a cache field, a local the printer typed WsArrayCache,
@@ -5916,6 +6139,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const tradesRead = this.goWsTradesReadText(node);
         if (tradesRead !== undefined) {
             return tradesRead;
+        }
+        const orderbooksRead = this.goWsOrderbooksReadText(node);  // FOLD3 hx11w9
+        if (orderbooksRead !== undefined) {
+            return orderbooksRead;
         }
         if (node.expression.kind === SyntaxKind.PropertyAccessExpression) {
             const args = node.arguments;
@@ -6108,10 +6335,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 ? (this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right)
                     ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
                     ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation)
-                    ?? this.goWsFieldWrite(baseExpr, containerStr, keys[0], right, identation))
+                    ?? this.goWsFieldWrite(baseExpr, containerStr, keys[0], right, identation)
+                    ?? this.goOrderBookSetterText(baseExpr, containerStr, keys[0], right, rhs))
                 : undefined) ?? this.goOwnedBalanceWrite(node, baseExpr, keys, nativeRhs, right);  // FOLD-1F hx10w6-G01
-            if ((keyStrs.length === 1) && this.goWsTradesField(baseExpr)) {
-                return `${containerStr}.Store(${lastKey}, ${rhs})`;  // FM-CACHE
+            if ((keyStrs.length === 1) && (this.goWsTradesField(baseExpr) || this.goWsOrderbooksField(baseExpr))) {
+                return `${containerStr}.Store(${lastKey}, ${rhs})`;  // FM-CACHE, FOLD3 hx11w9
             }
             return (native !== undefined) ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
@@ -6140,7 +6368,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 return inlined;
             }
             // FM-CACHE: the trades cache answers membership itself where the printer has no native form
-            return this.goWsTradesField(this.goUnwrapParenthesizedNode(right)) ? `${dictText}.Has(${keyText})` : `InOp(${dictText}, ${keyText})`;
+            const cacheField = this.goUnwrapParenthesizedNode(right);
+            return (this.goWsTradesField(cacheField) || this.goWsOrderbooksField(cacheField)) ? `${dictText}.Has(${keyText})` : `InOp(${dictText}, ${keyText})`;
         }
 
         // only print the operands when this op is actually handled here; otherwise
@@ -6706,7 +6935,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // (an enclosing `key in obj`, a preceding `if (!(key in obj)) {store | exit}`, or a preceding
     // `if (x === undefined) {x = ctor | exit}` that every later read follows). A pro handler parameter of the book
     // class is retyped when every call site in the tree hands it a typed book. Without config nothing changes.
-    goOrderBook: { classes: string[], constructors: string[], cacheReaders: string[], type: string, sideType: string, unbox: string, sides: { [side: string]: string } } | undefined;
+    goOrderBook: { classes: string[], constructors: string[], cacheReaders: string[], type: string, sideType: string, unbox: string, sides: { [side: string]: string },
+        setters?: { [field: string]: { method: string, value: string, type: string } } } | undefined;
     goOrderBookLocalCache = new Map<any, string | undefined>();
     goOrderBookEntryProven = new Map<any, boolean>();
 
@@ -7002,6 +7232,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const cfg = this.goOrderBook;
         if ((cfg === undefined) || (this.goOrderBookLocalUnbox(declaration) !== cfg.type) || this.goIsOrderBookProducer(declaration.initializer)) {
             return undefined;
+        }
+        if (this.goWsOrderbooksReadParts(declaration.initializer) !== undefined) {
+            return undefined;  // FOLD3 hx11w9: OrderBookCache.Get already answers the interface (nil when absent)
         }
         // an entry a dominating guard proved present is Go's own assertion (it cannot see a nil, and it is what proves
         // the book non-nil to the setter calls); an entry a later nil test repairs keeps the nil-tolerant unboxer
@@ -9657,7 +9890,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const field: any = access.expression;
         const name = this.goWsFieldName(field);
         const receiver = this.printNode(field, 0);
-        if ((name !== undefined) && GO_WS_DELETE_CACHE_FIELDS.includes(name)) {
+        if (((name !== undefined) && GO_WS_DELETE_CACHE_FIELDS.includes(name)) || this.goWsOrderbooksField(field)) {  // FOLD3 hx11w9
             return `${receiver}.Delete(${this.printNode(access.argumentExpression, 0).trim()})`;
         }
         const key = (node.parent?.kind === SyntaxKind.ExpressionStatement) && (this.goWsMapFieldType(field) !== undefined) ? this.goWsKey(access.argumentExpression) : undefined;
@@ -11117,7 +11350,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (inNode?.kind === SyntaxKind.BinaryExpression && inNode.operatorToken.kind === SyntaxKind.InKeyword) {
             const inlined = this.printInlineInOp(inNode.right, inNode.left, this.printNode(inNode.right, 0), this.printNode(inNode.left, 0))
                 // FM-CACHE: the trades cache's own Has is a Go bool where the printer has no native form
-                ?? (this.goWsTradesField(this.goUnwrapParenthesizedNode(inNode.right))
+                ?? ((this.goWsTradesField(this.goUnwrapParenthesizedNode(inNode.right)) || this.goWsOrderbooksField(this.goUnwrapParenthesizedNode(inNode.right)))
                     ? `${this.printNode(inNode.right, 0)}.Has(${this.printNode(inNode.left, 0)})` : undefined);
             if (inlined !== undefined) {
                 const text = (inNode === node) ? inlined : `(${inlined})`;
@@ -13660,6 +13893,11 @@ ${this.getIden(identation)}${returnStatement}`;
         let returnValue = '';
         let returnRandName = name;
         parsedArg = this.goPrintCallArgument(node.arguments?.[0], parsedArg);
+        // FOLD3 hx11w9: `book.cache.push (v)` appends through the interface's own *any accessor
+        const bookCache = this.goOrderBookCacheAccessor((node.expression as any)?.expression);
+        if (bookCache !== undefined) {
+            return `AppendToArray(${bookCache}, ${parsedArg})`;
+        }
         // a `[]any` local is the slice itself, so it appends natively
         const nativeReceiver = this.goNativeAppendReceiver(node);
         if (nativeReceiver !== undefined) {
@@ -14381,6 +14619,10 @@ ${this.getIden(identation)}${returnStatement}`;
     // ===== end FOLD-1F hx10w6-G01 =====
 
     printPropertyAccessExpression(node, identation) {
+        const bookMember = this.goOrderBookMemberText(node);  // FOLD3 hx11w9
+        if (bookMember !== undefined) {
+            return bookMember;
+        }
         const ownedCache = this.goOwnedCacheValue(node);
         if (ownedCache !== undefined) {
             return ownedCache;
@@ -14805,6 +15047,10 @@ ${this.getIden(identation)}${returnStatement}`;
         }
 
         if (operatorToken.kind === SyntaxKind.EqualsToken) {
+            const bookCacheWrite = this.goOrderBookCacheWrite(node);  // FOLD3 hx11w9
+            if (bookCacheWrite !== undefined) {
+                return bookCacheWrite;
+            }
             const a9fL1Init = this.goA9fL1CacheInitText(node);
             if (a9fL1Init !== undefined) {
                 return a9fL1Init;
@@ -14831,8 +15077,8 @@ ${this.getIden(identation)}${returnStatement}`;
                 const leftSide = this.printNode(elementAccess.expression, 0);
                 const propName = this.printNode(elementAccess.argumentExpression, 0);
                 const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
-                if (this.goWsTradesField(elementAccess.expression)) {
-                    return `${leftSide}.Store(${propName}, ${value})`;  // FM-CACHE
+                if (this.goWsTradesField(elementAccess.expression) || this.goWsOrderbooksField(elementAccess.expression)) {
+                    return `${leftSide}.Store(${propName}, ${value})`;  // FM-CACHE, FOLD3 hx11w9
                 }
                 const native = this.printNativeElementAssignment(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value, false, right)
                     ?? this.printNativeMapWriteOnProvenLocal(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value, right);
@@ -15235,7 +15481,10 @@ ${tryBodyBlock}
         }
         let acc = containerStr;
         let first = 0;
-        if ((keyStrs.length > 1) && (this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any')
+        if ((keyStrs.length > 1) && this.goWsOrderbooksField(baseExpr)) {
+            acc = `${containerStr}.Get(${keyStrs[0]})`;  // FOLD3 hx11w9
+            first = 1;
+        } else if ((keyStrs.length > 1) && (this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any')
             && this.goKeyIsString(keyNodes[0], keyStrs[0])) {
             acc = `${containerStr}[${keyStrs[0]}]`;
             first = 1;
@@ -16053,6 +16302,10 @@ ${tryBodyBlock}
         if (tradesRead !== undefined) {
             return tradesRead;
         }
+        const orderbooksRead = this.goWsOrderbooksReadText(node);  // FOLD3 hx11w9
+        if (orderbooksRead !== undefined) {
+            return orderbooksRead;
+        }
         const bookSide = this.goOrderBookSideRead(node);  // RF-go-6-D
         if (bookSide !== undefined) {
             return bookSide;
@@ -16573,6 +16826,7 @@ const GO_G02_SAFE_VALUE_KEYS: { [name: string]: number } = { 'safeValue': 2, 'sa
 // FM-CACHE: the ws list caches. Every class below satisfies go/v4's WsArrayCache interface (Append, ToArray, GetLimit);
 // BaseExchange fields declared `ArrayCache` are the Go fields of that interface type (go/v4/exchange.go).
 const GO_WS_CACHE_TYPE = 'WsArrayCache';
+const GO_ORDERBOOK_MEMBERS: { [name: string]: string } = { 'reset': 'Reset', 'limit': 'Limit', 'cache': 'GetCache' };
 const GO_WS_CACHE_CLASSES = [ 'ArrayCache', 'ArrayCacheByTimestamp', 'ArrayCacheBySymbolById', 'ArrayCacheBySymbolBySide', 'ArrayCacheByOutcomeById' ];
 const GO_WS_CACHE_FIELD_DECLARED = /^ArrayCache(?:\s*\|\s*undefined)?$/;
 const GO_G02_CACHE_CLASSES = [ 'ArrayCache', 'ArrayCacheByTimestamp', 'ArrayCacheBySymbolById', 'ArrayCacheBySymbolBySide' ];
