@@ -7611,6 +7611,12 @@ export class JavaTranspiler extends BaseTranspiler {
                 && this.javaScalarFamily(operand.expression) === 'number') {
                 return `((Number)${this.printNode(operand.expression, 0)}).longValue()`;
             }
+            // `parseX (s as any)` whose inner expression prints a java.lang.String (a declared
+            // String method / local): the `as any` only widens the TS type, so parse the inner text
+            if (isAsExpression(operand) && operand.type?.kind === SyntaxKind.AnyKeyword
+                && (this.javaDeclaredStringType(operand.expression) || this.javaResolvedString(operand.expression))) {
+                return `${nativeName}(${this.printNode(operand.expression, 0)})`;
+            }
             // a checker-plain TS string the printer spelled as an Object: type it at the site
             if (this.javaScalarFamily(operand) === 'string') {
                 return `${nativeName}(((String)${printed}))`;
