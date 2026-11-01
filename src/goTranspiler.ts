@@ -21217,7 +21217,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             || (right.expression.name?.text !== 'safeBalance')) {
             return undefined;
         }
-        return `${this.printNode(left, 0)} = MapTyped(${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim()})`;
+        return `${this.printNode(left, 0)}, _ = ${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim()}.(map[string]any)`;
     }
 
     goWsCacheEmptyLiteral(node): string | undefined {
@@ -31953,7 +31953,7 @@ ${tryBodyBlock}
         // GetValue(m, "k") is a read of a Go map[string]any already: a missing key
         // and a nil element both come back as the `any` nil, so the native index
         // yields the identical value without the helper call
-        if (this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') {
+        if ((this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') || (this.goA9fL1CacheField(baseExpr) === 'Balance')) {
             if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)
                 && !this.goMarketComparisonElementRead(node)) {
                 return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
