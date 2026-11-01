@@ -13,12 +13,18 @@ const SK = ts.SyntaxKind;
 // producers whose Go twin is a hand-written pair (a, b): slot 1 is their map result
 const G08_PAIR_MAP_PRODUCERS = [ 'handleMarketTypeAndParams', 'handleSubTypeAndParams' ];
 
+// pair twins (printed or hand-written Go `(T, map[string]any)`, or the `[]any` Nullable overloads) whose element 1 is the
+// params value they were given, omitted or extended: GetValue(h, 1) and h[1] read the same, but nothing proves a map
+// (the base handleOptionAndParams/2 return `[]any` and are read through a `var h []any` holder, so their slot 1 reads by index too)
+const G08_PAIR_PLAIN_PRODUCERS = [ 'handleOptionAndParams', 'handleOptionAndParams2', 'handleOptionStringAndParams', 'handleOptionStringAndParams2', 'handleMarginModeAndParams',
+    'handleOptionBoolAndParams', 'handleOptionBoolAndParams2', 'handleOptionIntegerAndParams', 'handleOptionIntegerAndParams2',
+    'handleParamString', 'handleParamString2', 'handleNetworkCodeAndParams', 'handleParamBool', 'handleParamBool2',
+    'handleParamInteger', 'handleParamInteger2' ];
+
 // base tuple helpers the Go base declares with a `[]any` return (the rest of the base prints `any`)
 const G08_BASE_SLICE_PRODUCERS = [
-    'handleOptionAndParams', 'handleOptionAndParams2', 'handleParamString', 'handleParamString2',
-    'handleNetworkCodeAndParams', 'handleWithdrawTagAndParams', 'handlePostOnly', 'handleParamBool',
-    'handleParamBool2', 'handleParamInteger', 'handleParamInteger2', 'handleTriggerPricesAndParams',
-    'handleTriggerDirectionAndParams',
+    'handleOptionAndParams', 'handleOptionAndParams2', 'handleWithdrawTagAndParams', 'handlePostOnly',
+    'handleTriggerPricesAndParams', 'handleTriggerDirectionAndParams',
 ];
 const G08_BASE_FILE = /[\/]base[\/]Exchange(\.nooverloads\.\d+)?\.ts$/;
 
@@ -168,6 +174,9 @@ class TupleSlots {
         const callee = call?.expression;
         if (G08_PAIR_MAP_PRODUCERS.includes (callee?.name?.text) && (callee.expression?.kind === SK.ThisKeyword)) {
             return this.go.getChecker () !== undefined ? { 'arity': 2, 'slots': { 1: 'plain:map' }, 'pair': true } : undefined;
+        }
+        if (G08_PAIR_PLAIN_PRODUCERS.includes (callee?.name?.text) && (callee.expression?.kind === SK.ThisKeyword)) {
+            return this.go.getChecker () !== undefined ? { 'arity': 2, 'slots': { 1: 'plain' }, 'pair': true } : undefined;
         }
         const method = this.producerDeclaration (call);
         if (method === undefined) { return undefined; }
@@ -478,7 +487,14 @@ class TupleSlots {
             if (m !== null) {
                 const cls = slotClass (m[2]);
                 if ((cls === 'typedmap') || (cls === 'plain:map')) { changed = true; return m[1] + holder + '[' + m[2] + '].(map[string]any)'; }
+                // MapTyped derefs its own argument, so it reads the slice element the same as GetValue does
+                if (cls !== undefined) { changed = true; return line.replace (new RegExp ('GetValue\\(' + h + ', (\\d+)\\)'), holder + '[$1]'); }
                 return line;
+            }
+            m = new RegExp ('^(.*?\\b(?:ccxt\\.)?(?:SafeStringPtr|SafeBoolPtr|SafeIntegerPtr)\\()(?:ccxt\\.)?GetValue\\(' + h + ', (\\d+)\\)(\\))$').exec (line);
+            if ((m !== null) && (slotClass (m[2]) !== undefined)) {
+                changed = true;
+                return m[1] + holder + '[' + m[2] + ']' + m[3];
             }
             m = new RegExp ('^(\\s*(?:var \\w+ bool = |\\w+ = ))(?:ccxt\\.)?GetValueBool\\(' + h + ', (\\d+), false\\)$').exec (line);
             if (m !== null) {

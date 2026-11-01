@@ -8349,3 +8349,72 @@ describe('RF-go-6-A (FOLD2 GP26): element reads of map locals the printer types 
         expect(output).not.toContain('GetValue(order, "x")');
     });
 });
+
+describe('FOLD3 B02+GP17: the base pair twins bind natively at every call site', () => {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fold3-'));
+    afterAll(() => {
+        fs.rmSync(tmp, { 'recursive': true, 'force': true });
+    });
+    const base =
+        'type Dict = { [key: string]: any };\ntype Str = string | undefined;\n'
+        + 'export class BaseExchange {\n'
+        + '    handleParamString (params: object, paramName: string, defaultValue: Str = undefined): [Str, Dict] {\n'
+        + '        const value = this.safeString (params, paramName, defaultValue);\n'
+        + '        let paramsOmitted = params;\n'
+        + '        if (value !== undefined) {\n            paramsOmitted = this.omit (params, paramName);\n        }\n'
+        + '        return [ value, paramsOmitted ];\n    }\n'
+        + '    handleOptionAndParams (params: object, methodName: Str, optionName: string, defaultValue: any = undefined): [any, Dict] {\n'
+        + '        const [ callerMethodName, paramsCallerMethodName ] = this.handleParamString (params, \'callerMethodName\', methodName);\n'
+        + '        return [ callerMethodName, paramsCallerMethodName ];\n    }\n'
+        + '    safeString (a: any, b: any, c: any = undefined): Str { return a; }\n'
+        + '    omit (a: any, b: any): Dict { return a; }\n'
+        + '    checkAddress (a: any, b: any = undefined, c: any = undefined): void {}\n}\n';
+    const run = (body: string, own = false): string => {
+        const dir = path.join(tmp, 'ts', 'src', 'base');
+        fs.mkdirSync(dir, { 'recursive': true });
+        const file = path.join(dir, 'Exchange.ts');
+        fs.writeFileSync(file, base + 'export default class Exchange extends BaseExchange {\n    run (params: Dict = {}) {\n' + body + '    }\n}\n');
+        const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+        installCcxtGoHooks(inst.goTranspiler);
+        return inst.transpileGoByPath(file).content;
+    };
+    test('a destructuring joins into one pair bind', () => {
+        const output = run("        const [ tag, paramsTag ] = this.handleParamString (params, 'tag');\n        this.checkAddress (tag);\n        return paramsTag;\n");
+        expect(output).toContain('tag, paramsTag := this.HandleParamString(params, "tag")');
+        expect(output).not.toContain('TupleSlice');
+        expect(output).not.toContain('GetValue(');
+    });
+    test('the twin prints the Go pair signature and return', () => {
+        const output = run('');
+        expect(output).toContain('HandleParamString(params any, paramName any, optionalArgs ...any) (*string, map[string]any)');
+        expect(output).toContain('return value, MapTyped(paramsOmitted)');
+    });
+    test('a holder whose reads are all literal slot indexes binds the pair into two locals', () => {
+        const output = run("        const tagAndParams = this.handleParamString (params, 'tag');\n        const tag: Str = tagAndParams[0];\n        const rest: Dict = tagAndParams[1];\n        this.checkAddress (tag);\n        return rest;\n");
+        expect(output).toContain('tagAndParamsSlot0, tagAndParamsSlot1 := this.HandleParamString(params, "tag")');
+        expect(output).toContain('var tag *string = tagAndParamsSlot0');
+        expect(output).toContain('rest := tagAndParamsSlot1');
+        expect(output).not.toContain('TupleSlice');
+    });
+    test('a holder that escapes or is written keeps the []any holder', () => {
+        const escaped = run("        const tagAndParams = this.handleParamString (params, 'tag');\n        const tag: Str = tagAndParams[0];\n        this.checkAddress (tagAndParams);\n        return tag;\n");
+        expect(escaped).toContain('TupleSlice(this.HandleParamString(params, "tag"))');
+        const written = run("        const tagAndParams = this.handleParamString (params, 'tag');\n        tagAndParams[1] = {};\n        return tagAndParams[0];\n");
+        expect(written).toContain('TupleSlice(this.HandleParamString(params, "tag"))');
+    });
+    test('FOLD4: the params slot of a base handleOptionAndParams holder reads by index', () => {
+        const output = run("        const [ value, paramsOption1 ] = this.handleOptionAndParams (params, 'run', 'o1');\n        if (value !== undefined) {\n            const paramsOmitted = this.omit (paramsOption1, 'o2');\n            return [ value, paramsOmitted ];\n        }\n        return this.handleOptionAndParams (paramsOption1, 'run', 'o2');\n");
+        expect(output).toContain('valueparamsOption1Variable[1]');
+        expect(output).not.toContain('GetValue(valueparamsOption1Variable, 1)');
+    });
+    test('the base callerMethodName probe reads inline and map free', () => {
+        const output = run('');
+        expect(output).toContain('var callerMethodName *string = this.SafeString(params, "callerMethodName", methodName)');
+        expect(output).toContain('paramsCallerMethodName := params');
+        expect(output).toContain('paramsCallerMethodName = this.Omit(params, "callerMethodName")');
+        expect(output).not.toContain('this.HandleParamString(params, "callerMethodName"');
+    });
+});

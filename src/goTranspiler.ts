@@ -770,6 +770,14 @@ const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
     'sign': [ 1, 3 ],
 };
 
+// base Exchange.ts twins typed `[Str|Bool|Int, Dict]` with one `return [ value, params ]`: they print the
+// Go pair `(<slot 0 pointer>, map[string]any)` and `return value, MapTyped(params)`
+const GO_BASE_PAIR_TWINS: { [name: string]: string } = {
+    'handleParamString': '*string', 'handleParamString2': '*string', 'handleNetworkCodeAndParams': '*string',
+    'handleParamBool': '*bool', 'handleParamBool2': '*bool',
+    'handleParamInteger': '*int64', 'handleParamInteger2': '*int64',
+};
+
 // base helpers typed `any[]` that hand back, at this index, the params map they were given
 // (unchanged, omitted or extended: always a map[string]any in Go)
 const GO_PARAMS_TUPLE_HELPERS: { [name: string]: number } = {
@@ -1459,7 +1467,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     printGoSignature(node, identation, receiver: string): string {
         const name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(node.name.text));
         // G03: a market producer whose every path answers a dictionary prints that map
-        const returnType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.goWsCacheReturnType(node) ?? this.printFunctionType(node)).trim();
+        const returnType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.goWsCacheReturnType(node) ?? this.goBasePairReturnType(node) ?? this.printFunctionType(node)).trim();
         const parsedArgs = this.printMethodParameters(node);
         const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
         const returnSignature = returnType ? " " + returnType : "";
@@ -3790,6 +3798,34 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     // the printed return type of a market producer, or undefined to keep the checker's answer
+    // `(*string, map[string]any)` for a GO_BASE_PAIR_TWINS method declared in base/Exchange.ts, undefined otherwise
+    goBasePairReturnType(node): string | undefined {
+        const slot = (node?.kind === SyntaxKind.MethodDeclaration) ? GO_BASE_PAIR_TWINS[String(node.name?.text)] : undefined;
+        if ((slot === undefined) || (node.body === undefined) || this.isAsyncFunction(node)
+            || !/[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(node.getSourceFile?.()?.fileName ?? ''))) {
+            return undefined;
+        }
+        const returns = this.goDescendantsOf(node.body).filter((n: any) => (n.kind === SyntaxKind.ReturnStatement) && (this.goEnclosingFunction(n) === node));
+        return (returns.length === 1) && this.goBasePairReturnIsPair(returns[0]) ? '(' + slot + ', map[string]any)' : undefined;
+    }
+
+    goBasePairReturnIsPair(node): boolean {
+        return (node?.expression?.kind === SyntaxKind.ArrayLiteralExpression) && (node.expression.elements.length === 2)
+            && node.expression.elements.every((e: any) => e.kind !== SyntaxKind.SpreadElement);
+    }
+
+    // `return [ value, params ]` of such a twin: `return value, MapTyped(params)`
+    goBasePairReturnText(node, identation): string | undefined {
+        const method: any = this.goEnclosingFunction(node);
+        if ((method?.kind !== SyntaxKind.MethodDeclaration) || (this.goBasePairReturnType(method) === undefined)) {
+            return undefined;
+        }
+        const [ value, params ] = node.expression.elements.map((e: any) => this.printNode(e, 0).trim());
+        const leadingComment = this.printLeadingComments(node, identation);
+        const trailing = this.printTraillingComment(node, identation);
+        return leadingComment + this.getIden(identation) + 'return ' + value + ', MapTyped(' + params + ')' + (trailing ? ' ' + trailing : '');
+    }
+
     goMarketProducerReturnType(node): string | undefined {
         if (node?.kind !== SyntaxKind.MethodDeclaration) {
             return undefined;
@@ -13854,6 +13890,10 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
 
     printReturnStatement(node, identation) {
 
+        const pairReturn = this.goBasePairReturnText(node, identation);
+        if (pairReturn !== undefined) {
+            return pairReturn;
+        }
         const isAsyncFunction = this.isInsideAsyncFunction(node);
         // if (node?.expression?.kind !== SyntaxKind.AwaitExpression) {
         //     return super.printReturnStatement(node, identation);
