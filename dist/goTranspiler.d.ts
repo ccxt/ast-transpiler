@@ -968,6 +968,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWritesOrRebindsName(n: any, name: string, mutators: string[]): boolean;
     goLoopBoundedSliceRead(node: any, baseExpr: any, keyNode: any, containerStr: string, keyStr: string): string | undefined;
     goLoopBoundedIndexRead(node: any, baseExpr: any, keyNode: any, containerStr: string, keyStr: string): string | undefined;
+    goAwaitedListLocal(base: any): boolean;
+    asyncMapRowListCallees: Set<string>;
+    goAwaitedMapRowList(base: any): boolean;
     goListElementsAreObjects(baseExpr: any): boolean;
     goJsonOriginUseIsReadOnly(node: any, name: string): boolean;
     goJsonOriginBindingIsReadOnly(declaration: any, readOnlyUse: (n: any, name: string) => boolean): boolean;

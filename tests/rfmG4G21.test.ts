@@ -92,13 +92,18 @@ describe('RFM-G4 G21 bounded reads of awaited object lists in the prediction tie
         expect (out).toContain (READ);
     });
 
-    test('a venue file outside the prediction tier is out of this rule', () => {
-        const out = go (
+    test('outside the prediction tier only the loop-bounded rule reads natively', () => {
+        const bounded = go (
             '        const rows = await this.fetchOrders ();\n' +
             '        for (let i = 0; i < rows.length; i++) {\n' +
             '            const row = rows[i];\n' +
             '            this.parseRow (row);\n' +
             '        }', 'pro');
-        expect (out).not.toContain ('var row any = rows[i]');
+        expect (bounded).toContain ('var row any = rows[i]');
+        const unbounded = go (
+            '        const rows = await this.fetchOrders ();\n' +
+            '        const row = rows[1];\n' +
+            '        this.parseRow (row);', 'pro');
+        expect (unbounded).not.toContain ('var row any = rows[1]');
     });
 });

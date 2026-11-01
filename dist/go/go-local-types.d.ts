@@ -620,6 +620,7 @@ export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     FetchRawEventsBySearchAsync: string;
     FetchRawEventsListAsync: string;
     FetchRawMarketsBySearchAsync: string;
+    FetchRawMarketsPagedAsync: string;
     FetchRawMarketsByTagsAsync: string;
     FetchRawMarketsListAsync: string;
     FetchRawQuestionsBySearchAsync: string;

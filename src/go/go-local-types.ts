@@ -5612,6 +5612,8 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawMarketsBySearchAsync': '[]any',
     // R2 TS annotations ['Promise<any[]>'] -> []any
+    'FetchRawMarketsPagedAsync': '[]any',
+    // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawMarketsByTagsAsync': '[]any',
     // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawMarketsListAsync': '[]any',
@@ -6073,6 +6075,14 @@ function ccxtGoAsyncReceiveReadsTheValue (goTranspiler, node, goType) {
     default:
         return false;
     }
+}
+
+// a `this.x` / `{ x: v }` name or another scope's binding is not a use of the awaited local `x`
+function ccxtGoIsNotAReference (goTranspiler, n, declaration) {
+    const parent = n.parent;
+    return ((parent?.kind === ts.SyntaxKind.PropertyAccessExpression) && (parent.name === n))
+        || ((parent?.kind === ts.SyntaxKind.PropertyAssignment) && (parent.name === n))
+        || ((typeof goTranspiler.goIdentifierRefersToDeclaration === 'function') && !goTranspiler.goIdentifierRefersToDeclaration (n, declaration));
 }
 
 // The `const x = await ...` declaration the await belongs to; undefined for the bare
@@ -6560,7 +6570,8 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
         }
         const safe = goTranspiler.goDeclaredLocalTypeIfSafe (declaration, goType,
             (n) => ccxtGoAsyncReceiveReadsTheValue (goTranspiler, n, goType)
-                || ((endpoint !== undefined) && ccxtGoEndpointLocalParserRead (n)));
+                || ((endpoint !== undefined) && ccxtGoEndpointLocalParserRead (n)),
+            (n) => ccxtGoIsNotAReference (goTranspiler, n, declaration));
         if (safe === undefined) {
             return undefined;
         }

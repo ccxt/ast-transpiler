@@ -20,6 +20,10 @@ const PRELUDE =
     '    parseTicker (ticker: Dict): Dict { return {}; }\n' +
     '    parseOther (ticker: Dict): Dict { return {}; }\n' +
     '    describe (): Dict { return {}; }\n' +
+    '    parseTickers (r: Dict): Dict { return {}; }\n' +
+    '    parseFundingRates (r: Dict): Dict { return {}; }\n' +
+    '    sign (path: string): Dict { return {}; }\n' +
+    '    handleRouteAndParams (name: string, params: Dict): Dict { return {}; }\n' +
     '    getMarketFromSymbols (symbols: string[]): Market { return undefined; }\n' +
     '    markets: Dict = undefined;\n' +
     '    %BODY%\n' +
@@ -94,6 +98,21 @@ describe ('hx11 RFM-X2 base map-returning callee locals', () => {
         expect (out).toContain ('var balance map[string]any = this.ParseBalance(m)');
         expect (out).toMatch (/var trade map\[string\]any = (MapTyped\()?this\.ParseWsTrade\(m\)/);
         expect (out).toContain ('var description map[string]any = this.Describe()');
+    });
+
+    test ('generated dict producers (tickers, sign, route params, rates) type their local', () => {
+        const out = go (
+            '    run (m: Dict): any {\n' +
+            '        const tickers = this.parseTickers (m);\n' +
+            '        const rates = this.parseFundingRates (m);\n' +
+            '        const request = this.sign (\'p\');\n' +
+            '        const routed = this.handleRouteAndParams (\'watch\', m);\n' +
+            '        return [ tickers[\'a\'], rates[\'a\'], request[\'url\'], routed[\'a\'] ];\n' +
+            '    }\n');
+        expect (out).toContain ('var tickers map[string]any = this.ParseTickers(m)');
+        expect (out).toContain ('var rates map[string]any = this.ParseFundingRates(m)');
+        expect (out).toContain ('var request map[string]any = this.Sign(');
+        expect (out).toContain ('var routed map[string]any = this.HandleRouteAndParams(');
     });
 
     test ('a base book accessor local (this.markets) is typed and its nil test goes native', () => {
