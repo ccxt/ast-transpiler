@@ -14105,3 +14105,61 @@ describe ('rfmG4GB08', () => {
         });
     });
 });
+
+describe ('hx11 fold ROOT-go-async-recv', () => {
+    // a receive from a same-class async producer whose every return is nil or a []any is bound to a holder
+    // named after its target: `<target>Recv, _ := PanicOnError((<-this.MAsync(..))).([]any)` + `var <target> []any = <target>Recv`
+    // (the comma-ok assertion answers what ListTyped did); a numeric suffix is added only on a name collision.
+    const BASE = 'export class Exchange {\n    safeString (o: any, k: string): string {\n        return k;\n    }\n}\n';
+    const PRODUCERS =
+        '    async handleAccountIndex (params = {}) {\n        if (params) {\n            return [ 1, params ];\n        }\n        return [ 2, params ];\n    }\n' +
+        '    async isUnifiedEnabled (params = {}) {\n        return undefined;\n    }\n' +
+        '    async handleLoose (params: any = {}) {\n        return params;\n    }\n';
+    function print (body: string): string {
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'hx11-async-recv-'));
+        try {
+            const src = path.join (tmp, 'ts', 'src');
+            fs.mkdirSync (path.join (src, 'base'), { 'recursive': true });
+            fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), BASE);
+            fs.writeFileSync (path.join (src, 'ex.ts'), "import { Exchange } from './base/Exchange.js';\nexport default class ex extends Exchange {\n" + PRODUCERS + body + '}\n');
+            const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 }, 'asyncMethodSuffix': 'Async' } });
+            installCcxtGoHooks (t.goTranspiler);
+            return t.transpileGoByPath (path.join (src, 'ex.ts')).content;
+        } finally {
+            fs.rmSync (tmp, { 'recursive': true, 'force': true });
+        }
+    }
+    const holders = (out: string): string[] => [ ...out.matchAll (/(\w+), _ := PanicOnError\(\(<-this\.\w+Async\(/g) ].map ((m) => m[1]);
+
+    test ('a declaration receive is bound to <name>Recv', () => {
+        const out = print ('    async fetchA (params = {}) {\n        const pair = await this.handleAccountIndex (params);\n        return pair[0];\n    }\n');
+        expect (out).toContain ('\tpairRecv, _ := PanicOnError((<-this.HandleAccountIndexAsync(params))).([]any)\n\tvar pair []any = pairRecv\n');
+        expect (out).not.toMatch (/listRecv|ListTyped\(PanicOnError\(\(<-this\.HandleAccountIndexAsync/);
+    });
+    test ('a destructuring receive and its assignment form name the holder after the synthetic binding', () => {
+        const out = print ('    async fetchA (params = {}) {\n        const [ a, rest ] = await this.handleAccountIndex (params);\n        let b = undefined;\n        let c = undefined;\n' +
+            '        if (rest) {\n            [ b, c ] = await this.handleAccountIndex (rest);\n        }\n        return [ a, b, c ];\n    }\n');
+        expect (out).toContain ('\tarestVariableRecv, _ := PanicOnError((<-this.HandleAccountIndexAsync(params))).([]any)\n\tvar arestVariable []any = arestVariableRecv\n');
+        expect (out).toContain ('\t\tbcVariableRecv, _ := PanicOnError((<-this.HandleAccountIndexAsync(rest))).([]any)\n\t\tvar bcVariable []any = bcVariableRecv\n');
+    });
+    test ('a nil-only producer and a forwarded return are bound too', () => {
+        const out = print ('    async fetchA (params = {}) {\n        const u = await this.isUnifiedEnabled ();\n        return u[0];\n    }\n' +
+            '    async fetchB (params = {}) {\n        return await this.handleAccountIndex (params);\n    }\n');
+        expect (out).toContain ('\tuRecv, _ := PanicOnError((<-this.IsUnifiedEnabledAsync())).([]any)\n\tvar u []any = uRecv\n');
+        expect (out).toMatch (/\t(retRes\d+)Recv, _ := PanicOnError\(\(<-this\.HandleAccountIndexAsync\(params\)\)\)\.\(\[\]any\)\n\tvar \1 \[\]any = \1Recv\n/);
+    });
+    test ('the name does not move when lines are added above', () => {
+        const body = '    async fetchA (params = {}) {\n        const pair = await this.handleAccountIndex (params);\n        return pair[0];\n    }\n';
+        expect (holders (print (body))).toEqual ([ 'pairRecv' ]);
+        expect (holders (print ('    // a\n    // b\n\n' + body))).toEqual ([ 'pairRecv' ]);
+    });
+    test ('a taken name or a second visible receive into the same target takes a numeric suffix', () => {
+        const out = print ('    async fetchA (params = {}) {\n        const pairRecv = 1;\n        const pair = await this.handleAccountIndex (params);\n        return [ pair[0], pairRecv ];\n    }\n' +
+            '    async fetchB (params = {}) {\n        let b = undefined;\n        let c = undefined;\n        [ b, c ] = await this.handleAccountIndex (params);\n        [ b, c ] = await this.handleAccountIndex (c);\n        return b;\n    }\n');
+        expect (holders (out)).toEqual ([ 'pairRecv2', 'bcVariableRecv', 'bcVariableRecv2' ]);
+    });
+    test ('an unproven producer keeps ListTyped', () => {
+        const out = print ('    async fetchA (params = {}) {\n        const [ a, b ] = await this.handleLoose (params);\n        return [ a, b ];\n    }\n');
+        expect (out).not.toContain ('Recv, _ :=');
+    });
+});
