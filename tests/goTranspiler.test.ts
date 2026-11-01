@@ -36,7 +36,6 @@ import fs__hx11rfmX2BaseMapLocals from 'fs';
 import os__hx11rfmX2BaseMapLocals from 'os';
 import path__hx11rfmX2BaseMapLocals from 'path';
 import { installCcxtGoDictParams } from '../src/transpiler';
-import { installRdGo2WsCache } from '../src/transpiler';
 import { installRfGo5OwnedTables } from '../src/transpiler';
 import fs__rfmG4G21 from 'fs';
 import os__rfmG4G21 from 'os';
@@ -2344,23 +2343,23 @@ describe('go inline equality', () => {
         const input =
         "class T {\n" +
         "    f () {\n" +
-        "        if (this.orderbooks === undefined) { return 1; }\n" +
-        "        if (this.orderbooks !== undefined) { return 2; }\n" +
+        "        if (this.quoteCurrencies === undefined) { return 1; }\n" +
+        "        if (this.quoteCurrencies !== undefined) { return 2; }\n" +
         "        const a = this.transactions === undefined;\n" +
         "        const b = this.baseCurrencies !== undefined;\n" +
-        "        const c = this.tickers === undefined;\n" +
+        "        const c = this.baseCurrencies === undefined;\n" +
         "        return [ a, b, c ];\n" +
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
         // go/v4/exchange.go declares these BaseExchange fields as *sync.Map: the Go nil
         // test answers exactly what the IsEqual helper answers for a nil pointer
-        expect(output).toContain("if this.Orderbooks == nil {");
-        expect(output).toContain("if this.Orderbooks != nil {");
+        expect(output).toContain("if this.QuoteCurrencies == nil {");
+        expect(output).toContain("if this.QuoteCurrencies != nil {");
         expect(output).toContain("var a bool = (this.Transactions == nil)");
         expect(output).toContain("var b bool = (this.BaseCurrencies != nil)");
-        expect(output).toContain("var c bool = (this.Tickers == nil)");
-        expect(output).not.toContain("IsEqual(this.Orderbooks");
+        expect(output).toContain("var c bool = (this.BaseCurrencies == nil)");
+        expect(output).not.toContain("IsEqual(this.QuoteCurrencies");
     });
     test('fields whose Go nil test the helpers do not reproduce keep IsEqual', () => {
         // Orders is an `any` field, Hostname a plain string, Clients a map, Ids a slice,
@@ -5375,12 +5374,12 @@ describe('go native element assignment on a hand-written container field', () =>
         const input =
         "class Exchange {\n" +
         "    main() {\n" +
-        "        this.tickers['a'] = 1;\n" +
+        "        this.transactions['a'] = 1;\n" +
         "        return this.options;\n" +
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("this.Tickers.Store(\"a\", 1)");
+        expect(output).toContain("this.Transactions.Store(\"a\", 1)");
         expect(output).not.toContain("AddElementToObject");
     });
     test('a sync.Map field with a string-typed local key assigns through Store', () => {
@@ -5388,13 +5387,13 @@ describe('go native element assignment on a hand-written container field', () =>
         "class Exchange {\n" +
         "    main() {\n" +
         "        const k = 'x';\n" +
-        "        this.orderbooks[k] = 1;\n" +
-        "        return this.orderbooks;\n" +
+        "        this.transactions[k] = 1;\n" +
+        "        return this.transactions;\n" +
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var k string = \"x\"");
-        expect(output).toContain("this.Orderbooks.Store(k, 1)");
+        expect(output).toContain("this.Transactions.Store(k, 1)");
         expect(output).not.toContain("AddElementToObject");
     });
     test('a sync.Map field with an unproven key stays on the helper', () => {
@@ -5425,12 +5424,12 @@ describe('go native element assignment on a hand-written container field', () =>
         const input =
         "class Exchange {\n" +
         "    main() {\n" +
-        "        this.tickers['a'] += 1;\n" +
+        "        this.transactions['a'] += 1;\n" +
         "        return this.options;\n" +
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("AddElementToObject(this.Tickers, \"a\", Add(GetValue(this.Tickers, \"a\"), 1))");
+        expect(output).toContain("AddElementToObject(this.Transactions, \"a\", Add(GetValue(this.Transactions, \"a\"), 1))");
     });
     test('the field table never types a local of the same name', () => {
         const input =
@@ -7947,56 +7946,6 @@ describe('hx10 G10: `x := y` aliases carry the source local printed type', () =>
     });
 });
 
-describe('hx11 rfm-X4 OG03: owner-goroutine base field reads (ws client registry)', () => {
-    const owned = { 'field': 'clients', 'declaredIn': 'BaseExchange', 'snapshot': 'WsClientsSnapshot', 'remove': 'WsClientRemove',
-        'ownerSideMethods': [ '^handle', '^isOrderBookDeltaInSequence$' ] };
-    const source = (body: string, base = 'clients: Dictionary<any> = {};') =>
-        'type Dictionary<T> = { [key: string]: T };\n' +
-        'class BaseExchange { ' + base + ' safeValue (d: any, k: any): any { return d[k]; } }\n' +
-        'class Ex extends BaseExchange {\n' + body + '}\n';
-    const run = (body: string, config: any = owned, base?: string) => new Transpiler({ 'verbose': false, 'go': { ...((config === null) ? {} : { 'ownedField': config }), 'parser': { 'NUM_LINES_END_FILE': 0 } } })
-        .transpileGo(source(body, base)).content;
-    test('a user-path read asks the owner for a copy', () => {
-        const out = run("    watch (url: string): any {\n        const all = Object.values (this.clients);\n        const one = this.safeValue (this.clients, url);\n        return [ all, one ];\n    }\n");
-        expect(out).toContain('ObjectValues(this.WsClientsSnapshot())');
-        expect(out).toContain('this.SafeValue(this.WsClientsSnapshot(), url)');
-        expect(out).not.toContain('this.Clients');
-    });
-    test('a user-path drop is the owner delete op', () => {
-        const out = run("    drop (client: any): any {\n        delete this.clients[client.url];\n        return true;\n    }\n");
-        expect(out).toContain('this.WsClientRemove(');
-        expect(out).not.toContain('Remove(this.Clients');
-    });
-    test('handlers and the handler-called helper keep the field', () => {
-        const out = run("    handleMessage (client: any, url: string): any {\n        delete this.clients[url];\n        return Object.values (this.clients);\n    }\n" +
-            "    isOrderBookDeltaInSequence (client: any, url: string): any {\n        delete this.clients[url];\n        return this.safeValue (this.clients, url);\n    }\n");
-        expect(out).toContain('Remove(this.Clients, url)');
-        expect(out).toContain('ObjectValues(this.Clients)');
-        expect(out).toContain('this.SafeValue(this.Clients, url)');
-        expect(out).not.toContain('WsClients');
-    });
-    test('field writes keep the field', () => {
-        const out = run("    reset (url: string): any {\n        this.clients = {};\n        this.clients[url] = 1;\n        return true;\n    }\n");
-        expect(out).toContain('this.Clients = ');
-        expect(out).not.toContain('WsClientsSnapshot');
-    });
-    test('the closure of a user-path method is user path', () => {
-        const out = run("    watch (url: string): any {\n        const f = () => this.safeValue (this.clients, url);\n        return f ();\n    }\n");
-        expect(out).toContain('this.SafeValue(this.WsClientsSnapshot(), url)');
-    });
-    test('a same-named field of another class is not the registry', () => {
-        const out = new Transpiler({ 'verbose': false, 'go': { 'ownedField': owned, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo(
-            'class Other { clients: any = {}; }\nclass Ex extends Other {\n    watch (url: string): any {\n        return Object.values (this.clients);\n    }\n}\n').content;
-        expect(out).toContain('ObjectValues(this.Clients)');
-        expect(out).not.toContain('WsClientsSnapshot');
-    });
-    test('no ownedField config = no rewrite', () => {
-        const out = run("    watch (url: string): any {\n        delete this.clients[url];\n        return Object.values (this.clients);\n    }\n", null);
-        expect(out).toContain('ObjectValues(this.Clients)');
-        expect(out).not.toContain('WsClient');
-    });
-});
-
 describe('RFM-G4 G09: PredictionExchange cache fields declared map[string]any print natively', () => {
     const FIELDS = ['Outcomes', 'Outcomes_by_id', 'Events', 'Events_by_slug'];
     const HEAD =
@@ -8142,7 +8091,7 @@ describe('go ws cache field init (FM-A9F L1)', () => {
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain('this.Orderbooks = map[string]any{}');
-        expect(output).toContain('this.Ohlcvs = map[string]any{}');
+        expect(output).toContain('this.Ohlcvs = map[string]map[string]any{}');
         expect(output).toContain('this.Trades = map[string]any{}');
         expect(output).toContain('this.FundingRates = map[string]any{}');
         expect(output).not.toContain('CreateSafeDictionary');
@@ -8164,7 +8113,7 @@ describe('go ws cache field init (FM-A9F L1)', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain('this.Balance = this.CreateSafeDictionary(true)');
+        expect(output).toContain('this.Balance = map[string]any{}');
         expect(output).toContain('this.Orderbooks = this.CreateSafeDictionary(true)');
     });
 });
@@ -8319,68 +8268,9 @@ describe('FM-A9F L3: negated lookups hoisted out of an || chain, indexed ws book
         expect(output).toContain('if _, ok := this.Ohlcvs[symbol][*timeframe]; ok {');
         expect(output).not.toContain('this.Ohlcvs[*symbol]');
     });
-    test('an exit-guarded *string key into the owner snapshot of the client registry is a comma-ok read (queue r5)', () => {
-        const owned = { 'field': 'clients', 'declaredIn': 'T', 'snapshot': 'WsClientsSnapshot', 'remove': 'WsClientRemove', 'ownerSideMethods': [ '^handle' ] };
-        const output = new Transpiler({ verbose: false, go: { ownedField: owned } } as any).transpileGo(head + "    authenticate (params: any) {\n        const url = this.safeString (params, 'url');\n        if (url === undefined) {\n            return undefined;\n        }\n        if ((this.clients !== undefined) && (url in this.clients)) {\n            return undefined;\n        }\n        return url;\n    }\n}\n").content;
-        expect(output).toContain('this.WsClientsSnapshot()[*url]');
-        expect(output).not.toContain('InOp(this.WsClientsSnapshot()');
-    });
     test('a ws client registry lookup is a comma-ok read', () => {
         const output = go("    n (o: any) {\n        const url = this.safeString (o, 'url');\n        if (url === undefined) {\n            return;\n        }\n        if ((this.clients !== undefined) && (url in this.clients)) {\n            return;\n        }\n    }\n");
         expect(output).toContain('if _, ok := this.Clients[*url]; ok {');
-    });
-});
-
-describe('RD-GO-5: ws ticker cache reads answer the owner\'s typed read', () => {
-    const SRC = (body: string, cache = 'tickers: Dictionary<Ticker> = {};') =>
-        'type Dictionary<T> = { [key: string]: T };\n' +
-        'interface Ticker { symbol: string }\n' +
-        'interface Tickers extends Dictionary<Ticker> {}\n' +
-        'class BaseExchange {\n    ' + cache + '\n    bidsasks: Dictionary<Ticker> = {};\n' +
-        '    filterByArray (objects: any, key: string, values: any = undefined, indexed = true): any { return objects; }\n' +
-        '    filterBySymbol (objects: any, key: string, values: any = undefined): any { return objects; }\n}\n' +
-        'class Ex extends BaseExchange {\n' + body + '}\n';
-    const owned = {
-        'declaredIn': 'BaseExchange', 'maps': { 'tickers': 'Tickers', 'bidsasks': 'Bidsasks' }, 'objects': {}, 'mapLiteral': 'TickerCache{}',
-        'asyncUserPath': '^(?:watch|load|subscribe)', 'syncUserPath': '^(?:cleanWsData)$', 'typedMapRead': 'WsCacheTickerMap',
-        'ops': { 'set': 'WsCacheSet', 'get': 'WsCacheGet', 'has': 'WsCacheHas', 'delete': 'WsCacheDelete', 'keys': 'WsCacheKeys', 'reset': 'WsCacheReset',
-            'snapshot': 'WsCacheSnapshot', 'objGet': 'WsCacheObjGet', 'objSet': 'WsCacheObjSet' },
-    };
-    const run = (body: string, cache?: string, config: any = owned) => new Transpiler({ 'verbose': false, 'go': { 'ownedCaches': config, 'parser': { 'NUM_LINES_END_FILE': 0 } } })
-        .transpileGo(SRC(body, cache)).content;
-    const watch = (expr: string, ret = 'Promise<Tickers>') => '    async watchTickers (symbols: string[] = undefined): ' + ret + ' {\n        return ' + expr + ';\n    }\n';
-    test('a filtered read of the ticker cache is the owner\'s typed read', () => {
-        const out = run(watch("this.filterByArray (this.tickers, 'symbol', symbols)"));
-        expect(out).toContain('TickerMapToMap(this.WsCacheTickerMap("Tickers", symbols))');
-        expect(out).not.toContain('FilterByArray(this.Tickers');
-    });
-    test('the bidsasks cache and the whole-cache read use their field', () => {
-        expect(run(watch("this.filterByArray (this.bidsasks, 'symbol', symbols)"))).toContain('TickerMapToMap(this.WsCacheTickerMap("Bidsasks", symbols))');
-        expect(run(watch('this.tickers'))).toContain('TickerMapToMap(this.WsCacheTickerMap("Tickers"))');
-    });
-    test('a method not answering Tickers keeps the generic read', () => {
-        const out = run(watch("this.filterByArray (this.tickers, 'symbol', symbols)", 'Promise<any>'));
-        expect(out).not.toContain('WsCacheTickerMap');
-    });
-    test('a cache field not declared Dictionary<Ticker>, or another filter, keeps the generic read', () => {
-        expect(run(watch('this.tickers'), 'tickers: any = {};')).not.toContain('WsCacheTickerMap');
-        expect(run(watch("this.filterBySymbol (this.tickers, 'symbol', symbols)"))).not.toContain('WsCacheTickerMap');
-    });
-    test('a same-named field of an unrelated class keeps the generic read', () => {
-        const src = 'type Dictionary<T> = { [key: string]: T };\ninterface Ticker { symbol: string }\ninterface Tickers extends Dictionary<Ticker> {}\n' +
-            'class Other {\n    tickers: Dictionary<Ticker> = {};\n}\nclass Ex extends Other {\n' + watch('this.tickers') + '}\n';
-        const out = new Transpiler({ 'verbose': false, 'go': { 'ownedCaches': owned, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo(src).content;
-        expect(out).not.toContain('WsCacheTickerMap');
-    });
-    test('no typedMapRead in the owned caches config keeps the owner snapshot read (OG03 shape)', () => {
-        const { typedMapRead, ...plain } = owned;
-        const out = run(watch('this.tickers'), undefined, plain);
-        expect(out).not.toContain('WsCacheTickerMap');
-        expect(out).toContain('any(this.WsCacheSnapshot("Tickers"))');
-    });
-    test('a handler path (not the owner user path) keeps the field read', () => {
-        const out = run('    handleTickers (): Tickers {\n        return this.tickers;\n    }\n');
-        expect(out).not.toContain('WsCacheTickerMap');
     });
 });
 
@@ -8857,11 +8747,11 @@ describe ('fmCache', () => {
                 expect (out).toContain (want);
             }
         });
-        test ('the trades cache prints its own Get / Has / Store and the typed locals', () => {
+        test ('the trades cache prints native map reads, stores, membership and the typed locals', () => {
             for (const want of [
-                'var stored WsArrayCache = this.Trades.Get(symbol)', 'this.Trades.Store(symbol, stored)', 'if !(this.Trades.Has(symbol)) {',
-                'var trades WsArrayCache\n', 'trades = this.Trades.Get(symbol)', 'var t2 WsArrayCache = this.Trades.Get(symbol)',
-                'if z == nil {', 'this.Trades = TradesCache{}', 'if this.Trades == nil {', 'if this.Trades.Get("a") == nil {',
+                'var stored WsArrayCache = this.Trades[*symbol]', 'this.Trades[*symbol] = stored', 'if !(symbol != nil && this.Trades[*symbol] != nil) {',
+                'var trades WsArrayCache\n', 'trades = this.Trades[*symbol]', 'var t2 WsArrayCache = this.Trades[*symbol]',
+                'if z == nil {', 'this.Trades = map[string]WsArrayCache{}', 'if this.Trades == nil {', 'if this.Trades["a"] == nil {',
             ]) {
                 expect (out).toContain (want);
             }
@@ -8885,7 +8775,7 @@ describe ('fmCache', () => {
             const nil = print ('tmp-fmcache-c', NIL_ARM_TERNARY);
             expect (nil).toContain ('var tradesArray WsArrayCache = func() WsArrayCache {');
             expect (nil).toContain ('\ttradesArray.Append(message)');
-            expect (nil).toContain ('this.Trades.Store(symbol, tradesArray)');
+            expect (nil).toContain ('this.Trades[*symbol] = tradesArray');
         });
         test ('a cast of a cache field keeps the cache type and a field nil test is plain', () => {
             const cast = print ('tmp-fmcache-d', CAST_AND_FIELD_NIL);
@@ -9362,59 +9252,6 @@ describe ('fmgo4NonceInt64', () => {
     });
 });
 
-describe ('fold1FG01OwnedBalance', () => {
-    // FOLD-1F hx10w6-G01: BaseExchange.balance, the map owned by the ws dispatch loop (config ownedBalance)
-    const OWNED = {
-        'field': 'balance',
-        'declaredIn': 'BaseExchange',
-        'entryRead': 'WsBalanceEntry',
-        'entryWrite': 'WsBalanceEntryForWrite',
-        'replace': 'WsBalanceReplace',
-        'userPath': '^(?:setBalanceCache|cleanWsData)$',
-        'asyncUserPath': '^(?:(?:watch|fetch|seed)\\w*|loadBalanceSnapshot)$',
-        'boxedKeys': [ 'info', 'timestamp', 'datetime', 'free', 'used', 'total' ],
-    };
-    const HEAD = 'type Dict = { [key: string]: any };\n'
-        + 'class BaseExchange {\n'
-        + '    balance: Dict = {};\n'
-        + '    safeString (d: any, k: any, def: any = undefined): string | undefined { return d; }\n'
-        + '    safeDict (d: any, k: any, def: any = undefined): Dict | undefined { return d; }\n'
-        + '    safeBalance (b: any): Dict { return b; }\n'
-        + '    iso8601 (x: any): string | undefined { return undefined; }\n'
-        + '    account (): Dict { return {}; }\n';
-    const print = (body: string, config: any = OWNED, method = 'handleBalance (message: Dict)', modifier = ''): string => {
-        const t = new Transpiler ({ 'verbose': false, 'go': { 'ownedBalance': config ?? undefined, 'parser': { 'NUM_LINES_END_FILE': 0 } } });
-        return t.transpileGo (HEAD + '    ' + modifier + method + ' {\n' + body + '\n    }\n}\n').content;
-    };
-
-    describe('FOLD-1F owned balance map', () => {
-        test('loop-side reads, writes, membership-free deletes and whole-map replaces are native (fail on the base printer: no config)', () => {
-            const out = print ("const type = 'spot'; this.balance[type] = this.safeBalance (this.balance[type]); delete this.balance['swap']; this.balance = this.safeBalance (this.balance);");
-            expect (out).toContain ('this.Balance[typeVar] = this.SafeBalance(this.Balance[typeVar])');
-            expect (out).toContain ('delete(this.Balance, "swap")');
-            expect (out).toContain ('this.WsBalanceReplace(this.SafeBalance(this.Balance))');
-            const base = print ("const type = 'spot'; this.balance[type] = this.safeBalance (this.balance[type]);", null);
-            expect (base).toContain ('AddElementToObject(this.Balance, typeVar');
-        });
-        test('entry stores and entry reads go through the owner views', () => {
-            const out = print ("const type = 'spot'; const code = this.safeString (message, 'c'); const account = {}; this.balance[type]['info'] = this.safeDict (message, 'i', {}); if (code !== undefined) { this.balance[type][code] = account; const old = this.safeString (this.balance[type][code], 'free'); }");
-            expect (out).toContain ('this.WsBalanceEntryForWrite(typeVar)["info"] = this.SafeDict(message, "i", map[string]any{})');
-            expect (out).toContain ('this.WsBalanceEntryForWrite(typeVar)[*code] = account');
-            expect (out).toContain ('this.WsBalanceEntry(typeVar)[*code]');
-        });
-        test('a bookkeeping key read, an unguarded pointer key, a scalar into a bookkeeping slot and an any value keep the helper', () => {
-            expect (print ("const t = this.balance['timestamp'];")).toContain ('GetValue(this.Balance, "timestamp")');
-            expect (print ("const code = this.safeString (message, 'c'); this.balance[code] = {};")).toContain ('AddElementToObject(this.Balance, code');
-            expect (print ("const type = 'spot'; this.balance[type]['timestamp'] = this.safeString (message, 'c');")).toContain ('AddElementToObject(');
-            expect (print ("const type = 'spot'; this.balance[type]['free'] = message['x'];")).toContain ('AddElementToObject(');
-        });
-        test('user-path methods keep the helper calls', () => {
-            expect (print ("const type = 'spot'; this.balance[type] = {};", OWNED, 'setBalanceCache (client: any, type: string)')).toContain ('AddElementToObject(this.Balance');
-            expect (print ("const type = 'spot'; const x = this.balance[type];", OWNED, 'watchBalance (params: Dict)', 'async ')).toContain ('GetValue(this.Balance');
-        });
-    });
-});
-
 describe ('fold1GoWsCacheFields', () => {
     // FOLD1 GOCACHE: element write, delete and `in` over the symbol-keyed ws map fields of BaseExchange
     const HEAD = 'type Dict = { [key: string]: any };\n'
@@ -9453,10 +9290,9 @@ describe ('fold1GoWsCacheFields', () => {
             expect (out).toContain ('if symbol != nil {\n\t\tdelete(this.FundingRates, *symbol)\n\t}');
             expect (out).not.toContain ('Remove(this.FundingRates');
         });
-        test('delete over the trades cache goes through its own Delete', () => {
+        test('delete over an untyped trades field keeps the helper', () => {
             const out = print ("const symbol = this.safeString (message, 's'); delete this.trades[symbol];");
-            expect (out).toContain ('this.Trades.Delete(symbol)');
-            expect (out).not.toContain ('Remove(this.Trades');
+            expect (out).toContain ('Remove(this.Trades, symbol)');
         });
         test('a delete used as an expression keeps the helper', () => {
             const out = print ("const symbol = this.safeString (message, 's'); const gone = delete this.fundingRates[symbol];");
@@ -9664,23 +9500,87 @@ describe ('fold3OrderbooksCache', () => {
         + '    }\n'
         + '}\n';
 
+    describe('native ws cache maps (tickers / bidsasks / trades / orderbooks are plain Go maps)', () => {
+        const KEYS = 'type Dictionary<T> = { [key: string]: T };\n'
+            + 'class Ticker { symbol: string; }\n'
+            + 'class ArrayCache { append (x: any) {} }\n'
+            + 'class Exchange {\n'
+            + '    tickers: Dictionary<Ticker> = {};\n'
+            + '    bidsasks: Dictionary<Ticker> = {};\n'
+            + '    trades: Dictionary<ArrayCache>;\n'
+            + '    safeString (o: any, k: string, d: any = undefined): string | undefined { return o[k]; }\n'
+            + '    safeValue (o: any, k: string, d: any = undefined): any { return o[k]; }\n'
+            + '    parseTicker (t: any): Ticker { return t; }\n'
+            + '}\n';
+        const printBase = (body: string): string => {
+            const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'nativecache-'));
+            try {
+                fs.mkdirSync (path.join (dir, 'ts', 'src', 'base'), { 'recursive': true });
+                fs.mkdirSync (path.join (dir, 'ts', 'src', 'pro'), { 'recursive': true });
+                const file = path.join (dir, 'ts', 'src', 'pro', 'x.ts');
+                const base = path.join (dir, 'ts', 'src', 'base', 'Exchange.ts');
+                fs.writeFileSync (base, 'type Dictionary<T> = { [key: string]: T };\n' + KEYS.replace ('type Dictionary<T> = { [key: string]: T };\n', '') + '\nexport default Exchange;\n');
+                fs.writeFileSync (file, 'import Exchange from \'../base/Exchange.js\';\n' + body);
+                return new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGoByPath (file).content;
+            } finally {
+                fs.rmSync (dir, { 'recursive': true, 'force': true });
+            }
+        };
+        const HANDLER = 'class x extends Exchange {\n    handle (message: any, ticker: any) {\n'
+            + '        const symbol = this.safeString (message, \'s\');\n'
+            + '        if (symbol !== undefined) {\n'
+            + '            this.tickers[symbol] = ticker;\n'
+            + '            this.bidsasks[symbol] = ticker;\n'
+            + '            const last = this.tickers[symbol];\n'
+            + '            delete this.tickers[symbol];\n'
+            + '            delete this.bidsasks[symbol];\n'
+            + '            if (symbol in this.tickers) {\n'
+            + '                return last;\n'
+            + '            }\n'
+            + '        }\n'
+            + '        const keys = Object.keys (this.tickers);\n'
+            + '        return keys;\n'
+            + '    }\n}\n';
+        test('tickers and bidsasks print the map index, delete and membership with no cache method', () => {
+            const out = printBase (HANDLER);
+            expect (out).toContain ('this.Tickers[*symbol] = ticker');
+            expect (out).toContain ('this.Bidsasks[*symbol] = ticker');
+            expect (out).toContain ('delete(this.Tickers, *symbol)');
+            expect (out).toContain ('delete(this.Bidsasks, *symbol)');
+            expect (out).toContain ('if _, ok := this.Tickers[*symbol]; ok {');
+            expect (out).toContain ('slices.Collect(maps.Keys(this.Tickers))');
+            expect (out).toContain ('import "maps"');
+            for (const gone of [ '.Store(', '.Delete(', '.Has(', '.ToMap(', 'Tickers.Keys(', 'AddElementToObject(this.Tickers', 'Remove(this.Tickers', 'InOp(this.Tickers', 'ObjectKeys(this.Tickers' ]) {
+                expect (out).not.toContain (gone);
+            }
+        });
+        test('an any-typed key stores and deletes behind a comma-ok string assertion, never a panicking one', () => {
+            const out = printBase ('class x extends Exchange {\n    handle (market: any, ticker: any) {\n        this.tickers[market[\'symbol\']] = ticker;\n        delete this.tickers[market[\'symbol\']];\n    }\n}\n');
+            expect (out).toContain ('if wsKey, ok := (GetValue(market, \"symbol\")).(string); ok {\n\t\tthis.Tickers[wsKey] = ticker\n\t}');
+            expect (out).toContain ('if wsKey, ok := (GetValue(market, \"symbol\")).(string); ok {\n\t\tdelete(this.Tickers, wsKey)\n\t}');
+        });
+        test('an owned field name on another class keeps the helper', () => {
+            const out = printBase ('class Other {\n    tickers: any = {};\n    f (k: string) {\n        this.tickers[k] = 1;\n    }\n}\n');
+            expect (out).not.toContain ('this.Tickers[');
+        });
+    });
+
     describe('FOLD3 hx11w9 order book cache', () => {
         test('cache reads, stores, membership and deletes print the cache methods (fails on the base printer)', () => {
             const out = print (HANDLER);
-            expect (out).toContain ('this.Orderbooks.Has(symbol)');
-            expect (out).toContain ('this.Orderbooks.Store(symbol, this.OrderBook())');
-            expect (out).toContain ('this.Orderbooks.Get(symbol)');
-            expect (out).toContain ('this.Orderbooks.GetOr(symbol, this.OrderBook())');
-            expect (out).toContain ('this.Orderbooks.Delete(symbol)');
+            expect (out).toContain ('if !(this.Orderbooks[symbol.(string)] != nil) {');
+            expect (out).toContain ('if wsKey, ok := symbol.(string); ok {\n\t\t\tthis.Orderbooks[wsKey] = this.OrderBook()\n\t\t}');
+            expect (out).toContain ('var stored OrderBookInterface = this.Orderbooks[symbol.(string)]\n\tif stored == nil {\n\t\tstored = this.OrderBook()\n\t}');
+            expect (out).toContain ('if wsKey, ok := symbol.(string); ok {\n\t\tdelete(this.Orderbooks, wsKey)\n\t}');
             expect (out).not.toContain ('InOp(this.Orderbooks');
             expect (out).not.toContain ('AddElementToObject(this.Orderbooks');
             const base = print (HANDLER, null);
             expect (base).toContain ('InOp(this.Orderbooks');
-            expect (base).not.toContain ('this.Orderbooks.Has(');
+            expect (base).not.toContain ('this.Orderbooks[');
         });
         test('a local whose writes are cache reads is the interface and its members need no assertion', () => {
             const out = print (HANDLER);
-            expect (out).toContain ('var orderbook OrderBookInterface = this.Orderbooks.Get(symbol)');
+            expect (out).toContain ('var orderbook OrderBookInterface = this.Orderbooks[symbol.(string)]');
             expect (out).toContain ('orderbook.Reset(snapshot)');
             expect (out).toContain ('orderbook.SetCache([]any{})');
             expect (out).not.toContain ('.(OrderBookInterface)');
@@ -9707,7 +9607,7 @@ describe ('fold3OrderbooksCache', () => {
             expect (out).not.toContain ('var orderbook OrderBookInterface');
         });
         test('negative: without the config nothing changes', () => {
-            expect (print (HANDLER, null)).not.toContain ('Orderbooks.Get(');
+            expect (print (HANDLER, null)).not.toContain ('this.Orderbooks[');
         });
     });
 });
@@ -11198,75 +11098,6 @@ describe ('hx10w2G08TupleSlots', () => {
         test('a holder name printed by two destructurings keeps the helper', () => {
             const out = go ('    use (params = {}) {\n        const [ a, p ] = this.twice (params);\n        if (a) {\n            const [ a1, p1 ] = this.twice (params);\n        }\n        [ a, p ] = this.twice (params);\n        return [ a, p ];\n    }\n');
             expect (out).toContain ('GetValue(apVariable, 1)');
-        });
-    });
-});
-
-describe ('hx10w4OG03OwnedCaches', () => {
-    // hx10w4 OG03: ws caches of BaseExchange owned by the dispatch loop. Keyed on the checker declaration
-    // (BaseExchange property), the method kind (async watch/load/subscribe vs handlers) and the access shape.
-    const owned = {
-        'declaredIn': 'BaseExchange', 'maps': { 'tickers': 'Tickers', 'bidsasks': 'Bidsasks' }, 'objects': { 'positions': 'Positions' },
-        'mapLiteral': 'TickerCache{}', 'asyncUserPath': '^(?:watch|load|subscribe)', 'syncUserPath': '^(?:setPositionsCache|cleanWsData)$',
-        'ops': { 'set': 'WsCacheSet', 'get': 'WsCacheGet', 'has': 'WsCacheHas', 'delete': 'WsCacheDelete', 'keys': 'WsCacheKeys', 'reset': 'WsCacheReset',
-            'snapshot': 'WsCacheSnapshot', 'objGet': 'WsCacheObjGet', 'objSet': 'WsCacheObjSet' },
-    };
-    const HEAD = 'type Dictionary<T> = { [key: string]: T };\ntype Ticker = { symbol: string };\ntype Tickers = Dictionary<Ticker>;\n' +
-        'class BaseExchange {\n    tickers: Dictionary<Ticker> = {};\n    bidsasks: Dictionary<Ticker> = {};\n    positions: any = undefined;\n' +
-        '    createSafeDictionary (a: boolean = false): any { return {}; }\n    safeValue (d: any, k: any): any { return d[k]; }\n' +
-        '    filterByArray (d: any, k: string, v: any): any { return d; }\n}\n';
-    const run = (body: string, config: any = owned, head = HEAD) => new Transpiler({ 'verbose': false, 'go': { ...((config === null) ? {} : { 'ownedCaches': config }), 'parser': { 'NUM_LINES_END_FILE': 0 } } })
-        .transpileGo(head + 'class Ex extends BaseExchange {\n' + body + '}\n').content;
-
-    describe('hx10w4 OG03: ws caches owned by the dispatch loop', () => {
-        test('an async watch body hands every map operation to the owner', () => {
-            const out = run("    async watchTicker (symbol: string, t: Ticker): Promise<any> {\n        this.tickers[symbol] = t;\n        const a = this.tickers[symbol];\n" +
-                "        const b = this.safeValue (this.bidsasks, symbol);\n        if (symbol in this.tickers) {\n            delete this.tickers[symbol];\n        }\n" +
-                "        const ks = Object.keys (this.bidsasks);\n        return this.filterByArray (this.tickers, 'symbol', [ a, b, ks ]);\n    }\n");
-            expect(out).toContain('this.WsCacheSet("Tickers", symbol, t)');
-            expect(out).toContain('this.WsCacheGet("Tickers", symbol)');
-            expect(out).toContain('this.WsCacheGet("Bidsasks", symbol)');
-            expect(out).toContain('this.WsCacheHas("Tickers", symbol)');
-            expect(out).toContain('this.WsCacheDelete("Tickers", symbol)');
-            expect(out).toContain('this.WsCacheKeys("Bidsasks")');
-            expect(out).toContain('this.FilterByArray(this.WsCacheSnapshot("Tickers"), "symbol"');
-            expect(out).not.toContain('this.Tickers');
-        });
-        test('a watch body returning Tickers sends the snapshot boxed', () => {
-            const out = run("    async watchTickers (): Promise<Tickers> {\n        return this.tickers;\n    }\n");
-            expect(out).toContain('any(this.WsCacheSnapshot("Tickers"))');
-        });
-        test('the positions object goes through objGet / objSet', () => {
-            const out = run("    async loadPositionsSnapshot (): Promise<any> {\n        if (this.positions === undefined) {\n            this.positions = {};\n        }\n        return this.positions;\n    }\n");
-            expect(out).toContain('this.WsCacheObjSet("Positions", map[string]any{})');
-            expect(out).toContain('this.WsCacheObjGet("Positions")');
-            expect(out).not.toContain('this.Positions');
-        });
-        test('a listed sync method resets the map through the owner', () => {
-            const out = run("    cleanWsData () {\n        this.tickers = this.createSafeDictionary (true);\n        this.positions = undefined;\n    }\n");
-            expect(out).toContain('this.WsCacheReset("Tickers")');
-            expect(out).toContain('this.WsCacheObjSet("Positions", nil)');
-        });
-        test('handlers and unlisted sync methods keep the field', () => {
-            const out = run("    handleTicker (symbol: string, t: Ticker): any {\n        this.tickers[symbol] = t;\n        delete this.tickers[symbol];\n        return this.positions;\n    }\n" +
-                "    other (symbol: string): any {\n        return this.tickers[symbol];\n    }\n");
-            expect(out).toContain('this.Positions');
-            expect(out).toContain('Remove(this.Tickers, symbol)');
-            expect(out).not.toContain('WsCache');
-        });
-        test('the literal assigned on a handler path names the type through its package', () => {
-            const out = run("    handleTicker (): any {\n        this.tickers = this.createSafeDictionary (true);\n    }\n");
-            expect(out).toContain('this.Tickers = ccxt.TickerCache{}');
-        });
-        test('a same-named field of another class is not the cache', () => {
-            const head = 'class Other {\n    tickers: any = {};\n    positions: any = undefined;\n}\n';
-            const out = new Transpiler({ 'verbose': false, 'go': { 'ownedCaches': owned, 'parser': { 'NUM_LINES_END_FILE': 0 } } })
-                .transpileGo(head + 'class BaseExchange {}\nclass Ex extends Other {\n    async watchX (s: string): Promise<any> {\n        this.tickers[s] = 1;\n        return this.positions;\n    }\n}\n').content;
-            expect(out).not.toContain('WsCache');
-        });
-        test('no ownedCaches config = unchanged output', () => {
-            const out = run("    async watchTicker (symbol: string, t: Ticker): Promise<any> {\n        this.tickers[symbol] = t;\n        return this.positions;\n    }\n", null);
-            expect(out).not.toContain('WsCache');
         });
     });
 });
@@ -12977,85 +12808,6 @@ describe ('hx11w9GB01DictCalls', () => {
         test('a call to a method without a Dict return type keeps the box', () => {
             const out = printBase('tmp-gb01-any', 'parseBalanceHelper (entry: Dict)');
             expect(out).toContain('MergeBalanceAccount(result map[string]any, code any, account any)');
-        });
-    });
-});
-
-describe ('rdGo2WsCache', () => {
-    // RD-GO-2: the base ws caches belong to the dispatch loop; code that runs off it asks the owner. Every rule is keyed on
-    // the checker-resolved BaseExchange field and on the kind of the enclosing method, not on printed text.
-    const t = (install = true) => {
-        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
-        if (install) { installRdGo2WsCache (x.goTranspiler); }
-        return x;
-    };
-    const BASE = [
-        'class BaseExchange {',
-        '    orderbooks: any = {};',
-        '    balance: any = {};',
-        '    fundingRates: any = {};',
-        '    safeValue (d: any, k: string) { return d[k]; }',
-        '    safeDict (d: any, k: string) { return d[k]; }',
-        '    filterByArray (d: any, k: string, v: any) { return d; }',
-        '    extend (a: any, b: any) { return a; }',
-        '    createSafeDictionary (x: boolean = false): any { return {}; }',
-        '    cleanWsData () {',
-        '        this.balance = this.createSafeDictionary (true);',
-        '        this.orderbooks = this.createSafeDictionary (true);',
-        '    }',
-        '}',
-        '',
-    ].join ('\n');
-    const venue = (body: string) => BASE + 'class venue extends BaseExchange {\n' + body + '}\n';
-    const go = (body: string, install = true) => t (install).transpileGo (venue (body)).content;
-
-    describe('RD-GO-2 ws cache ownership', () => {
-        test('an async body asks the owner for membership, reads and writes', () => {
-            const out = go ('    async watchOrderBook (symbol: string): Promise<any> {\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = {};\n        }\n        return this.orderbooks[symbol];\n    }\n');
-            expect (out).toContain ('if !this.WsCacheHas("Orderbooks", symbol) {');
-            expect (out).toContain ('this.WsCacheSet("Orderbooks", symbol, ');
-            expect (out).toContain ('this.WsCacheGet("Orderbooks", symbol)');
-            expect (out).not.toContain ('InOp(this.Orderbooks');
-        });
-        test('a sync handler keeps the plain map', () => {
-            const out = go ('    handleOrderBook (symbol: string) {\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = {};\n        }\n    }\n');
-            const handler = out.substring (out.indexOf ('HandleOrderBook'));
-            expect (handler).not.toContain ('WsCache');
-            expect (handler).toContain ('InOp(this.Orderbooks, symbol)');
-            expect (handler).toContain ('AddElementToObject(this.Orderbooks, symbol');
-        });
-        test('safeValue and safeDict over a cache read through the owner', () => {
-            const out = go ('    async fetchOrderBookSnapshot (symbol: string): Promise<any> {\n        const a = this.safeValue (this.orderbooks, symbol);\n        const b = this.safeDict (this.orderbooks, symbol);\n        return [ a, b ];\n    }\n');
-            expect (out).toContain ('this.WsCacheGet("Orderbooks", symbol)');
-            expect (out).not.toContain ('this.SafeValue(this.WsCache');
-        });
-        test('walking a whole cache reads a snapshot', () => {
-            const out = go ('    async watchFundingRates (symbols: string): Promise<any> {\n        return this.filterByArray (this.fundingRates, \'symbol\', symbols);\n    }\n');
-            expect (out).toContain ('this.FilterByArray(this.WsCacheSnapshot("FundingRates"), "symbol", symbols)');
-        });
-        test('balance entries go through the scalar twins and a whole-map write replaces the contents', () => {
-            const out = go ('    setBalanceCache (type: string) {\n        if (!(type in this.balance)) {\n            this.balance[type] = {};\n        }\n    }\n    async loadBalanceSnapshot (type: string, response: any) {\n        this.balance[type] = this.extend (response, this.safeDict (this.balance, type));\n        this.balance = this.extend (response, this.balance);\n        return this.balance[type];\n    }\n');
-            expect (out).toContain ('this.WsCacheSetScalar("Balance", typeVar, map[string]any{})');
-            expect (out).toContain ('this.WsCacheSetScalar("Balance", typeVar, this.Extend(response, this.SafeDict(this.WsCacheSnapshot("Balance"), typeVar');
-            expect (out).toContain ('this.WsCacheReplace("Balance", this.Extend(response, this.WsCacheSnapshot("Balance")))');
-            expect (out).toContain ('this.WsCacheGetScalar("Balance", typeVar)');
-        });
-        test('cleanWsData resets each cache through the owner', () => {
-            const out = t ().transpileGo (BASE).content;
-            expect (out).toContain ('\tthis.WsCacheReset("Balance")\n\tthis.WsCacheReset("Orderbooks")');
-            expect (out).not.toContain ('this.CreateSafeDictionary(true)');
-        });
-        test('the same field name on an unrelated class is untouched', () => {
-            const src = 'class Other {\n    orderbooks: any = {};\n    async watchX (s: string) {\n        return s in this.orderbooks;\n    }\n}\n';
-            const out = t ().transpileGo (src).content;
-            expect (out).not.toContain ('WsCache');
-        });
-        test('fails without the hook (the printer keeps the plain map operations)', () => {
-            const body = '    async watchOrderBook (symbol: string): Promise<any> {\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = {};\n        }\n        return this.orderbooks[symbol];\n    }\n';
-            const out = go (body, false);
-            expect (out).not.toContain ('WsCacheHas');
-            expect (out).not.toContain ('WsCacheSet');
-            expect (t (false).transpileGo (BASE).content).not.toContain ('WsCacheReset');
         });
     });
 });
