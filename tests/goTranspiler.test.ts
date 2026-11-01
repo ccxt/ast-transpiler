@@ -13131,13 +13131,21 @@ describe ('rfGo6bNativeStoreFields', () => {
             const out = print ("this.balance['info'] = message;", TABLE, '    other (b: any) { this.balance = b; }\n');
             expect (out).toContain ('AddElementToObject(this.Balance, "info", message)');
         });
-        test('user-path methods, spawners and async bodies keep the helper', () => {
+        test('user-path methods, spawners and async bodies store into the plain map too', () => {
             const user = print ('', TABLE, "    setBalanceCache (message: Dict) { this.balance['info'] = message; }\n");
-            expect (user).toContain ('AddElementToObject(this.Balance, "info", message)');
+            expect (user).toContain ('this.Balance["info"] = message');
             const spawner = print ('', TABLE, "    loader (message: Dict) { this.balance['info'] = message; this.spawn (this.fetchSomething); }\n");
-            expect (spawner).toContain ('AddElementToObject(this.Balance, "info", message)');
+            expect (spawner).toContain ('this.Balance["info"] = message');
             const asyncBody = print ('', TABLE, "    async loadIt (message: Dict) { this.balance['info'] = message; }\n");
-            expect (asyncBody).toContain ('AddElementToObject(this.Balance, "info", message)');
+            expect (asyncBody).toContain ('this.Balance["info"] = message');
+        });
+        test('an entry store writes through the entry map; a pointer value keeps the helper', () => {
+            const entry = print ("const t = this.safeString (message, 't', 'spot'); this.balance[t]['info'] = message;");
+            expect (entry).toMatch (/if entry, ok := this\.Balance\[\*?t\]\.\(map\[string\]any\); ok && \(entry != nil\) \{\n\t*entry\["info"\] = message/);
+            expect (print ("this.balance['spot']['datetime'] = this.safeString (message, 'd');")).not.toContain ('entry["datetime"]');
+        });
+        test('delete of a literal key is the map delete', () => {
+            expect (print ("delete this.balance['spot'];")).toContain ('delete(this.Balance, "spot")');
         });
         test('an untabled field and an entry store keep the helper', () => {
             const other = print ("this.balance['info'] = message;", { 'positions': TABLE['balance'] });

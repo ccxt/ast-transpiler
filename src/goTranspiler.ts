@@ -21227,31 +21227,25 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return this.goWsKey(keyNode);
     }
 
-    // a Balance value the helper would store unchanged: no scalar pointer for its derefScalar to unwrap
+    // a Balance value the helper would store unchanged: no scalar pointer or typed-nil list for its derefScalar to fold
     goBalancePlainValue(valueNode): boolean {
-        if (this.goWritePrintsPointerBox(valueNode)) {
-            return false;
-        }
-        if (this.goMapWriteValueIsNotPointer(valueNode)) {
-            return true;
-        }
-        const value: any = this.goUnwrapPrintedAssertions(valueNode);
-        if ((value?.kind !== SyntaxKind.Identifier) && (value?.kind !== SyntaxKind.CallExpression)) {
-            return false;
-        }
         const field = this.nativeStoreFields?.['balance'];
-        if ((field !== undefined) && this.rfGo6bValueIsPlain(valueNode, field)) {
-            return true;
-        }
-        // a TS object (Dict, Balances, Account) is a map or list box at run time, never a scalar pointer
-        const checker: any = this.checkerOrUndefined();
-        const type: any = checker?.getTypeAtLocation(value);
-        if (type === undefined) {
+        if ((field === undefined) || this.goWritePrintsPointerBox(valueNode)) {
             return false;
         }
+        if (this.rfGo6bValueIsPlain(valueNode, field)) {
+            return true;
+        }
+        // an identifier or call the checker types as a non-array object (Dict, Account) holds a map box
+        const value: any = this.goUnwrapPrintedAssertions(valueNode);
+        const checker: any = this.checkerOrUndefined();
+        if (((value?.kind !== SyntaxKind.Identifier) && (value?.kind !== SyntaxKind.CallExpression)) || (checker === undefined)) {
+            return false;
+        }
+        const type: any = checker.getTypeAtLocation(value);
         const parts = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [type];
         const present = parts.filter((t) => (t.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0);
-        return (present.length > 0) && present.every((t) => (t.flags & TypeFlags.Object) !== 0);
+        return (present.length > 0) && present.every((t) => ((t.flags & TypeFlags.Object) !== 0) && !checker.isArrayType(t) && !checker.isTupleType(t));
     }
 
     // the base Balance map can be indexed: every write of the field in the file leaves a map
