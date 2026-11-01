@@ -8714,3 +8714,32 @@ describe ('rfmC2BDeclaredBaseField', () => {
         });
     });
 });
+
+describe ('csAwaitInt64TaskCalls', () => {
+    const input =
+    "type int = number;\n" +
+    "type Int = number | undefined;\n" +
+    "class Exchange {\n" +
+    "    async height (params = {}): Promise<int> { return 1; }\n" +
+    "    async nonce (params = {}): Promise<Int> { return 1; }\n" +
+    "    async other (params = {}): Promise<number> { return 1; }\n" +
+    "    async run () {\n" +
+    "        const a = await this.height ();\n" +
+    "        const b = await this.nonce ();\n" +
+    "        const c = await this.other ();\n" +
+    "        return [ a, b, c ];\n" +
+    "    }\n" +
+    "}";
+    test('awaited Promise<int|Int> this-calls bind the PascalCase Task<Int64> core when enabled', () => {
+        const local = new Transpiler({ csharp: { pascalInt64TaskCalls: true } });
+        const output = local.transpileCSharp(input).content;
+        expect(output).toContain("await this.Height()");
+        expect(output).toContain("await this.Nonce()");
+        expect(output).toContain("await this.other()");
+    });
+    test('off by default: calls keep the declared camelCase name', () => {
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("await this.height()");
+        expect(output).toContain("await this.nonce()");
+    });
+});
