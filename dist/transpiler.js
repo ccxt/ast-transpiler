@@ -17068,10 +17068,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return `${this.printNode(node.expression, 0)}.${this.goOrderBook.sides[node.argumentExpression.text]}()`;
   }
-  // a pro `handle*` method's book parameter prints the book interface when every call site hands it one
+  // A book-class parameter prints the book interface when (1) the method is the base's or overrides it (the hand-written
+  // base and IDerivedExchange carry the interface), (2) a pro `handle*` method hands it to a callee whose own parameter
+  // prints the interface and each call site passes a book, or (3) every call site hands it a typed book.
   goOrderBookParameterType(fn, param) {
     const cfg = this.goOrderBook;
-    if (cfg === void 0 || !this.goIsProHandlerMethod(fn) || this.isAsyncFunction(fn) || param.name?.kind !== SyntaxKind5.Identifier) {
+    if (cfg === void 0 || this.isAsyncFunction(fn) || param.name?.kind !== SyntaxKind5.Identifier) {
+      return void 0;
+    }
+    const declaredBook = this.goNodeIsOrderBook(param.name);
+    const inheritsBase = /(^|\/)ts\/src\/base\//.test(fn.getSourceFile().fileName) || (this.goEnclosingClass(fn)?.heritageClauses ?? []).length > 0;
+    if (declaredBook && inheritsBase && this.goMethodKeepsBaseSignature(fn)) {
+      return this.goLocalIsSafeToType(fn.body, param, param.name.text, cfg.type) ? cfg.type : void 0;
+    }
+    if (!this.goIsProHandlerMethod(fn)) {
       return void 0;
     }
     let declaredAny = false;
@@ -17080,12 +17090,37 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     } catch (e) {
       return void 0;
     }
-    if (!declaredAny && !this.goNodeIsOrderBook(param.name)) {
+    if (!declaredAny && !declaredBook) {
       return void 0;
     }
     const index = fn.parameters.indexOf(param);
     const calls = this.goSameFileCallsOf(fn, fn.name.text);
-    return calls.length > 0 && calls.every((call) => call.arguments?.[index] !== void 0 && call.arguments[index].kind !== SyntaxKind5.SpreadElement && this.goPrintedArgType(call.arguments[index]) === cfg.type) && this.goLocalIsSafeToType(fn.body, param, param.name.text, cfg.type) ? cfg.type : void 0;
+    if (calls.length === 0 || calls.some((call) => call.arguments?.[index] === void 0 || call.arguments[index].kind === SyntaxKind5.SpreadElement)) {
+      return void 0;
+    }
+    const forwarded = declaredBook && this.goOrderBookForwardedToBookParameter(fn, param) && calls.every((call) => this.goNodeIsOrderBook(call.arguments[index]));
+    return (forwarded || calls.every((call) => this.goPrintedArgType(call.arguments[index]) === cfg.type)) && this.goLocalIsSafeToType(fn.body, param, param.name.text, cfg.type) ? cfg.type : void 0;
+  }
+  // the body hands `param` itself to a callee parameter that prints the book interface
+  goOrderBookForwardedToBookParameter(fn, param) {
+    const checker = this.getChecker();
+    return this.hasNodeWhere(fn.body, (n) => {
+      if (n.kind !== SyntaxKind5.CallExpression || n.expression?.kind !== SyntaxKind5.PropertyAccessExpression) {
+        return false;
+      }
+      return (n.arguments ?? []).some((arg, at) => {
+        if (arg.kind !== SyntaxKind5.Identifier || arg.text !== param.name.text) {
+          return false;
+        }
+        try {
+          const callee = checker.getResolvedSignature(n)?.declaration?.resolve();
+          const target = callee?.parameters?.[at];
+          return callee !== fn && target !== void 0 && this.goNativeParameterType(target) === this.goOrderBook?.type;
+        } catch (e) {
+          return false;
+        }
+      });
+    });
   }
   goNativeParameterType(param) {
     if (param?.kind !== SyntaxKind5.Parameter) {
@@ -24057,6 +24092,11 @@ ${this.getIden(level)}}()`;
     if (listType !== GO_STRING_LIST_LOCAL_TYPE && !(listType === GO_SAFE_LIST_LOCAL_TYPE && this.goListElementsAreObjects(baseExpr))) {
       return void 0;
     }
+    return this.goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr);
+  }
+  // `xs[i]` inside `for (let i = 0; i < xs.length; i++)` with neither `i` nor `xs` written in the body
+  // and no function boundary between loop and read: the slice index `xs[i]`
+  goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr) {
     const mutators = ["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin"];
     let child = node;
     for (let current = node.parent; current !== void 0 && !isFunctionLike(current); child = current, current = current.parent) {
@@ -24094,6 +24134,129 @@ ${this.getIden(level)}}()`;
     const real = parts.filter((p) => !(p.flags & (TypeFlags4.Undefined | TypeFlags4.Null)));
     return real.length > 0 && real.every((p) => (p.flags & TypeFlags4.Object) !== 0 && (p.flags & (TypeFlags4.Any | TypeFlags4.Unknown)) === 0);
   }
+  // ===== JSON-origin list reads =====
+  // A `[]any` unboxed from `this.safeList(R, k)` where R is a decoded JSON document holds JSON values only
+  // (maps, slices, strings, float64), never a *string/*int64/*float64/*bool, so derefScalar answers the
+  // element unchanged and a counting-loop read is the slice index itself. R is JSON when it is
+  //   - the await of an implicit endpoint (the `<-chan any` wrapper over callEndpointAsync), or
+  //   - `this.safeDict(R2, 'literal')` of such an R2 the printer unboxes to a map,
+  // is bound once and never written, and is read only as the container of an unboxed safeList/safeDict
+  // local or in a nil test (anything else may store a pointer into it or hand it out).
+  goJsonOriginUseIsReadOnly(node, name) {
+    const parent = node.parent;
+    if (this.goWritesOrRebindsName(node, name, [])) {
+      return false;
+    }
+    if (parent?.kind === SyntaxKind5.CallExpression) {
+      const callee = parent.expression;
+      let wrapped = parent;
+      while ((wrapped.parent?.kind === SyntaxKind5.AsExpression || wrapped.parent?.kind === SyntaxKind5.NonNullExpression || wrapped.parent?.kind === SyntaxKind5.ParenthesizedExpression) && wrapped.parent.expression === wrapped) {
+        wrapped = wrapped.parent;
+      }
+      const local = wrapped.parent;
+      if (parent.arguments[0] !== node || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || local?.kind !== SyntaxKind5.VariableDeclaration || local.initializer !== wrapped || local.name?.kind !== SyntaxKind5.Identifier) {
+        return false;
+      }
+      const isType = (unboxed, type) => unboxed === type || wrapped !== parent && this.goResolvedLocalGoType(local.name) === type;
+      return callee.name?.text === "safeList" ? isType(this.goSafeListLocalUnbox(local), GO_SAFE_LIST_LOCAL_TYPE) : callee.name?.text === "safeDict" && isType(this.goSafeDictLocalUnbox(local), GO_SAFE_DICT_LOCAL_TYPE);
+    }
+    return this.goIsNilComparisonOperand(node, parent);
+  }
+  goJsonOriginBindingIsReadOnly(declaration, readOnlyUse) {
+    const name = declaration.name.text;
+    const scope = this.goEnclosingFunction(declaration);
+    if (scope === void 0) {
+      return false;
+    }
+    return !this.hasNodeWhere(scope, (n) => {
+      if ((n.kind === SyntaxKind5.VariableDeclaration || n.kind === SyntaxKind5.Parameter) && n !== declaration && n.name?.kind === SyntaxKind5.Identifier && n.name.text === name) {
+        return true;
+      }
+      return n.kind === SyntaxKind5.Identifier && n.text === name && n !== declaration.name && !readOnlyUse(n, name);
+    });
+  }
+  // the awaited `this.<name>(..)` resolves only to methods whose whole body is `return this.request(..)`:
+  // the generated endpoint stubs of an abstract exchange class, implemented by the target's callEndpointAsync
+  goAwaitedCallIsRequestStub(expression) {
+    const call = this.goUnwrapParenthesizedNode(expression);
+    const callee = call?.expression;
+    if (call?.kind !== SyntaxKind5.CallExpression || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || callee.name?.kind !== SyntaxKind5.Identifier) {
+      return false;
+    }
+    const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name);
+    const declarations = symbol?.declarations?.map((d) => d.resolve());
+    if (!declarations || declarations.length === 0) {
+      return false;
+    }
+    return declarations.every((d) => {
+      const statements = d.kind === SyntaxKind5.MethodDeclaration ? d.body?.statements : void 0;
+      const only = statements?.length === 1 ? statements[0] : void 0;
+      const sent = only?.kind === SyntaxKind5.ReturnStatement ? only.expression : void 0;
+      return sent?.kind === SyntaxKind5.CallExpression && sent.expression?.kind === SyntaxKind5.PropertyAccessExpression && sent.expression.expression?.kind === SyntaxKind5.ThisKeyword && sent.expression.name?.text === "request";
+    });
+  }
+  goJsonOriginContainer(node, depth = 0) {
+    if (depth > 5 || node?.kind !== SyntaxKind5.Identifier) {
+      return false;
+    }
+    const declaration = this.goAnyBoxLocalDeclaration(node);
+    if (declaration?.kind !== SyntaxKind5.VariableDeclaration || declaration.name?.kind !== SyntaxKind5.Identifier || declaration.parent?.parent?.kind !== SyntaxKind5.FirstStatement) {
+      return false;
+    }
+    const init = this.goUnwrapParenthesizedNode(declaration.initializer);
+    let fromJson = false;
+    if (init?.kind === SyntaxKind5.AwaitExpression) {
+      fromJson = this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression);
+    } else {
+      const args = this.goSafeDictLocalArgs(init);
+      fromJson = args !== void 0 && args.key?.kind === SyntaxKind5.StringLiteral && this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE && this.goJsonOriginContainer(args.container, depth + 1);
+    }
+    return fromJson && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginUseIsReadOnly(n, name));
+  }
+  // one use of a JSON list local: its length, or a read of one element that nothing writes through
+  goJsonOriginListUseIsReadOnly(node, name) {
+    if (this.goWritesOrRebindsName(node, name, [])) {
+      return false;
+    }
+    let use = node;
+    while ((use.parent?.kind === SyntaxKind5.AsExpression || use.parent?.kind === SyntaxKind5.NonNullExpression || use.parent?.kind === SyntaxKind5.ParenthesizedExpression) && use.parent.expression === use) {
+      use = use.parent;
+    }
+    const parent = use.parent;
+    if (parent?.kind === SyntaxKind5.PropertyAccessExpression) {
+      return parent.expression === use && parent.name?.text === "length";
+    }
+    if (parent?.kind !== SyntaxKind5.ElementAccessExpression || parent.expression !== use) {
+      return false;
+    }
+    let read = parent;
+    while (read.parent?.kind === SyntaxKind5.ElementAccessExpression && read.parent.expression === read) {
+      read = read.parent;
+    }
+    return !this.isGoElementAccessAssignmentTarget(read);
+  }
+  goJsonOriginList(baseExpr) {
+    const declaration = this.goAnyBoxLocalDeclaration(baseExpr);
+    if (declaration?.kind !== SyntaxKind5.VariableDeclaration) {
+      return false;
+    }
+    let initializer = declaration.initializer;
+    while (initializer?.kind === SyntaxKind5.AsExpression || initializer?.kind === SyntaxKind5.NonNullExpression || initializer?.kind === SyntaxKind5.ParenthesizedExpression) {
+      initializer = initializer.expression;
+    }
+    const args = this.goSafeListLocalArgs(initializer);
+    return args !== void 0 && this.goJsonOriginContainer(args.container) && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name));
+  }
+  goJsonOriginLoopRead(node, baseExpr, keyNode, containerStr, keyStr) {
+    if (baseExpr?.kind !== SyntaxKind5.Identifier || keyNode?.kind !== SyntaxKind5.Identifier || baseExpr.text === keyNode.text || this.isGoElementAccessAssignmentTarget(node) || containerStr.includes("\n") || keyStr.includes("\n")) {
+      return void 0;
+    }
+    if (!this.goDeclaredListIdentifier(baseExpr) || this.goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr) === void 0) {
+      return void 0;
+    }
+    return this.goJsonOriginList(baseExpr) ? `${containerStr}[${keyStr}]` : void 0;
+  }
+  // ===== end JSON-origin list reads =====
   // a same-named identifier that the checker binds to ANOTHER declaration (a sibling block's
   // `let quote`) is not a write of this loop-bounded element local
   goOtherBindingOfLoopBoundedElement(n, declaration) {
@@ -24322,6 +24485,10 @@ ${this.getIden(level)}}()`;
     const boundedRead = keys.length === 1 ? this.goLoopBoundedSliceRead(node, baseExpr, keys[0], containerStr, keyStrs[0]) : void 0;
     if (boundedRead !== void 0) {
       return boundedRead;
+    }
+    const jsonRead = keys.length === 1 ? this.goJsonOriginLoopRead(node, baseExpr, keys[0], containerStr, keyStrs[0]) : void 0;
+    if (jsonRead !== void 0) {
+      return jsonRead;
     }
     const urlsView = this.goUrlsViewRead(node, baseExpr, keys, keyStrs);
     if (urlsView !== void 0) {

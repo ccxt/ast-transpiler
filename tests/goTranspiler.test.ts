@@ -8224,3 +8224,93 @@ describe('RD-GO-5: ws ticker cache reads answer the owner\'s typed read', () => 
         expect(out).not.toContain('WsCacheTickerMap');
     });
 });
+
+describe('go JSON-origin list element reads', () => {
+    const endpoint =
+        "type Dict = {[key: string]: any};\n" +
+        "interface Test {\n" +
+        "    publicGetThing (params?: {}): Promise<any>;\n" +
+        "}\n";
+    const head =
+        "    safeList(a, b, c?) { return a; }\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    safeString(a, b) { return a; }\n";
+    const loop = (extra = '') =>
+        "        const out = [];\n" +
+        "        for (let i = 0; i < data.length; i++) {\n" +
+        "            const entry = data[i];\n" +
+        "            out.push (this.safeString (entry, 'id'));\n" +
+        "        }\n" + extra +
+        "        return out;\n";
+    const run = (body: string, owner = "    async f (params = {}) {\n") =>
+        transpiler.transpileGo(endpoint + "class Test {\n" + head + owner + body + "    }\n}\n").content;
+    test('a counting-loop read of a list unboxed from an endpoint response is the slice index', () => {
+        const output = run(
+            "        const response = await this.publicGetThing (params);\n" +
+            "        const data = this.safeList (response, 'data', []);\n" + loop());
+        expect(output).toContain("var entry any = data[i]\n");
+        expect(output).not.toContain("DerefScalar(data[i])");
+    });
+    test('an endpoint stub of an abstract class (return this.request) counts as the endpoint', () => {
+        const output = transpiler.transpileGo(
+            "type Dict = {[key: string]: any};\n" +
+            "class Base {\n" +
+            "    request (path: string, api: any, method: string, params: any) { return params; }\n" +
+            "}\n" +
+            "class Abstract extends Base {\n" +
+            "    publicGetThing (params = {}): Promise<Dict> {\n" +
+            "        return this.request ('thing', [ 'public' ], 'GET', params);\n" +
+            "    }\n" +
+            "}\n" +
+            "class Test extends Abstract {\n" + head +
+            "    async f (params = {}) {\n" +
+            "        const response = await this.publicGetThing (params);\n" +
+            "        const data = this.safeList (response, 'data', []);\n" + loop() +
+            "    }\n}\n").content;
+        expect(output).toContain("var entry any = data[i]\n");
+    });
+    test('a list unboxed from a safeDict of an endpoint response is the slice index', () => {
+        const output = run(
+            "        const response = await this.publicGetThing (params);\n" +
+            "        const inner = this.safeDict (response, 'result', {});\n" +
+            "        const data = this.safeList (inner, 'data', []);\n" + loop());
+        expect(output).toContain("var entry any = data[i]\n");
+        expect(output).not.toContain("DerefScalar(data[i])");
+    });
+    test('a response that escapes, is written or is not an endpoint keeps the guarded read', () => {
+        const escapes = run(
+            "        const response = await this.publicGetThing (params);\n" +
+            "        const data = this.safeList (response, 'data', []);\n" + loop("        this.safeString (response, 'x');\n") +
+            "        return response;\n");
+        expect(escapes).toContain("DerefScalar(data[i])");
+        const written = run(
+            "        const response = await this.publicGetThing (params);\n" +
+            "        const data = this.safeList (response, 'data', []);\n" + loop("        response['x'] = 1;\n"));
+        expect(written).toContain("DerefScalar(data[i])");
+        const own = transpiler.transpileGo(
+            "class Test {\n" + head +
+            "    async other (params = {}) { return this.safeDict (params, 'a', {}); }\n" +
+            "    async f (params = {}) {\n" +
+            "        const response = await this.other (params);\n" +
+            "        const data = this.safeList (response, 'data', []);\n" + loop() + "    }\n}\n").content;
+        expect(own).toContain("DerefScalar(data[i])");
+    });
+    test('a list that is rebound, written through or handed out keeps the guarded read', () => {
+        const base =
+            "        const response = await this.publicGetThing (params);\n" +
+            "        const data = this.safeList (response, 'data', []);\n";
+        // the write / escape re-boxes the local: no typed slice, so no native element read
+        expect(run(base + loop("        data[0] = 1;\n"))).not.toContain("var entry any = data[i]\n");
+        expect(run(base + loop("        this.safeString (data, 'x');\n"))).not.toContain("var entry any = data[i]\n");
+        // an append keeps the typed slice but the list is no longer the decoded document
+        const pushed = run(base + loop("        data.push (1);\n"));
+        expect(pushed).toContain("DerefScalar(data[i])");
+        expect(pushed).not.toContain("var entry any = data[i]\n");
+    });
+    test('a list of an unproven container keeps the guarded read', () => {
+        const output = run(
+            "        const response = this.safeDict (params, 'a', {});\n" +
+            "        const data = this.safeList (response, 'data', []);\n" + loop());
+        expect(output).toContain("DerefScalar(data[i])");
+    });
+});
