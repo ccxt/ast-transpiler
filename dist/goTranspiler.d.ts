@@ -822,8 +822,6 @@ export declare function installFmGo5G01(goTranspiler: any): void;
 export declare function installFmGo5G04(goTranspiler: any): void;
 export declare function installFmGo5GP08(goTranspiler: any): void;
 export declare function installFmGo5OG02(goTranspiler: any): void;
-export declare function rdGo2UserPath(node: any): any;
-export declare function installRdGo2WsCache(goTranspiler: any): void;
 export declare function installRfGo5OwnedTables(goTranspiler: any): void;
 export declare function installHx11w8NumParams(goTranspiler: any): void;
 export declare function installCcxtGoHooks(goTranspiler: any, unifiedInt64Params?: any): void;
@@ -852,13 +850,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     };
     stringPointerTupleCalls: string[];
     siblingStringPassthroughPattern: RegExp | undefined;
-    goOwnedField: {
-        field: string;
-        declaredIn: string;
-        snapshot: string;
-        remove: string;
-        ownerSide: RegExp[];
-    } | undefined;
     predictionMapFields: Set<string>;
     goTupleSlotTypes: {
         [producer: string]: string[];
@@ -866,32 +857,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goTupleValueDefaultArg: {
         [producer: string]: number;
     };
-    goOwnedCaches: {
-        declaredIn: string;
-        maps: {
-            [field: string]: string;
-        };
-        objects: {
-            [field: string]: string;
-        };
-        mapLiteral: string;
-        asyncUserPath: RegExp;
-        syncUserPath: RegExp;
-        ops: {
-            [op: string]: string;
-        };
-        typedMapRead: string | undefined;
-    } | undefined;
-    goOwnedBalance: {
-        field: string;
-        declaredIn: string;
-        entryRead: string;
-        entryWrite: string;
-        replace: string;
-        asyncUserPath: RegExp;
-        userPath: RegExp;
-        boxedKeys: string[];
-    } | undefined;
     goSliceLiteralTypes: Map<any, string>;
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
@@ -1285,6 +1250,35 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWsCacheField(node: any): boolean;
     goWsCacheTypeOfNode(node: any): string | undefined;
     goWsCacheOperand(node: any): boolean;
+    goWsTickersField(node: any): boolean;
+    goWsCacheMapType(node: any): string | undefined;
+    goWsCacheKey(keyNode: any): {
+        index: string;
+        pointer?: string;
+        asserted?: string;
+    };
+    goWsTickersReadParts(node: any): {
+        field: any;
+        key: any;
+    } | undefined;
+    goWsCacheReadText(node: any): string | undefined;
+    goWsCacheDefaultDeclaration(statement: any, declaration: any, identation: number): string | undefined;
+    goWsCacheStoreText(containerNode: any, keyNode: any, valueText: string, node: any, identation: number): string | undefined;
+    goWsCacheHasText(containerNode: any, keyNode: any): string | undefined;
+    goWsCacheValue(containerNode: any, valueNode: any, valueText: string): string;
+    goWsCacheKeysText(argNode: any): string | undefined;
+    goBalanceSafeBalanceWrite(node: any, identation: number): string | undefined;
+    goBalanceKey(keyNode: any): {
+        index: string;
+        pointer?: string;
+    } | undefined;
+    goBalancePlainValue(valueNode: any): boolean;
+    goIsWholeGetValueText(rhs: string): boolean;
+    goBalanceIndexable(field: any): boolean;
+    goBalanceStoreText(node: any, baseExpr: any, keys: any[], valueNode: any, rhs: string, identation: number): string | undefined;
+    goBalanceChainStep(baseExpr: any, containerStr: string, keyNode: any): string | undefined;
+    goBalanceDeleteText(node: any): string | undefined;
+    goWsCacheEmptyLiteral(node: any): string | undefined;
     goWsTradesField(node: any): boolean;
     goWsTradesRead(node: any): boolean;
     goWsTradesReadText(node: any): string | undefined;
@@ -1715,7 +1709,6 @@ export declare class GoTranspiler extends BaseTranspiler {
      * owns the single `return ch`, emitted by printFunctionBody.
      */
     getAsyncReturnStatement(node: any): string;
-    goTickerCacheTypedRead(node: any): string | undefined;
     printReturnStatement(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;
@@ -1788,39 +1781,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     printDateNowCall(node: any, identation: any): string;
     printLengthProperty(node: any, identation: any, name?: any): string;
     printConditionalExpression(node: any, identation: any): string;
-    goOwnedFieldAccess(node: any): boolean;
-    goOwnedFieldUserPath(node: any): boolean;
-    goOwnedFieldIsWrite(node: any): boolean;
-    goOwnedBalanceField(node: any): boolean;
-    goOwnedBalanceOwnerSide(node: any): boolean;
-    goOwnedBalanceKey(node: any, boxedOk?: boolean): string | undefined;
-    goInitializedByAssertion(node: any): boolean;
-    goOwnedBalancePlainValue(valueNode: any): boolean;
-    goOwnedBalanceReplace(node: any, identation: any): string | undefined;
-    goOwnedBalanceRead(node: any, baseExpr: any, keys: any[], keyStrs: string[]): string | undefined;
-    goOwnedBalanceWrite(node: any, baseExpr: any, keys: any[], rhs: string, valueNode: any): string | undefined;
-    goOwnedBalanceDelete(node: any): string | undefined;
-    goOwnedBalanceWriteContainer(baseExpr: any, containerStr: string, keyNodes: any): string | undefined;
     printPropertyAccessExpression(node: any, identation: any): any;
-    goOwnedFieldRemove(node: any): string | undefined;
-    goOwnedCacheRef(node: any): {
-        kind: string;
-        name: string;
-    } | undefined;
-    goOwnedCacheUserPath(node: any): boolean;
-    goOwnedCacheUser(node: any, kind: string): {
-        kind: string;
-        name: string;
-    } | undefined;
-    goOwnedCacheOp(receiver: any, op: string, name: string, args: string[]): string;
-    goOwnedCacheLiteral(node: any): string;
-    goIsCreateSafeDictionary(node: any): boolean;
-    goOwnedCacheBinary(node: any, identation: any): string | undefined;
-    goOwnedCacheRead(node: any): string | undefined;
-    goOwnedCacheDelete(node: any): string | undefined;
-    goOwnedCacheValue(node: any): string | undefined;
-    goReturnsTickerMap(node: any): boolean;
     printDeleteExpression(node: any, identation: any): string;
+    goClientsDeleteText(node: any): string | undefined;
     goNativeDelete(node: any): string | undefined;
     goDeleteReceiverText(node: any): string | undefined;
     goDeleteKeyText(keyNode: any): string | undefined;
