@@ -5441,6 +5441,12 @@ function ccxtGoWriteSiteAssignment (goTranspiler, node, identation) {
     const rightVar = goTranspiler.printNode (node.right, identation);
     if (node.right.kind === ts.SyntaxKind.AwaitExpression) {
         // PanicOnError sees the received Raw before the conversion, as the const receive does
+        const received = ccxtGoEndpointListReceive (goTranspiler, node.right, goType, rightVar);
+        if (received !== undefined) {
+            const holder = ccxtGoEndpointHolderName (goTranspiler, node.right, leftVar);
+            const iden = goTranspiler.getIden (identation);
+            return '\n' + iden + holder + ' := ' + received + '\n' + iden + 'PanicOnError(' + holder + '.Raw)\n' + iden + leftVar + ' = ' + holder + '.Value';
+        }
         const checked = ccxtGoEndpointCheckedRead (goTranspiler, node.right, goType, rightVar);
         if (checked !== undefined) {
             return '\n' + goTranspiler.getIden (identation) + leftVar + ' = ' + checked;
@@ -7190,9 +7196,8 @@ export function ccxtGoEndpointElement (goTranspiler, call) {
 // `MapTyped(PanicOnError((<-this.Stub(..)).Raw))` and `(<-this.Stub(..)).Checked()` read the same
 // map after the same failure check. The element comes from the receiver's own `*_api.go` stub
 // (ccxtGoEndpointElement), never from the stub name alone.
-// A []any receive printed on one line stays on the ListTyped(PanicOnError(..)) spelling that the
-// line-bound `listEp` rewrite in build/ turns into its own holder; only a receive that spans lines
-// (a multi-line argument literal, which that rewrite cannot read) is printed checked here.
+// A []any receive printed on one line is bound to a named holder instead (ccxtGoEndpointListReceive);
+// only a receive that spans lines (a multi-line argument literal) is printed checked here.
 function ccxtGoEndpointCheckedRead (goTranspiler, awaitNode, goType, printed) {
     const text = (printed ?? '').trim ();
     if ((awaitNode?.kind !== ts.SyntaxKind.AwaitExpression) || !text.startsWith ('(<-') || !text.endsWith (').Raw')) {
@@ -7205,6 +7210,118 @@ function ccxtGoEndpointCheckedRead (goTranspiler, awaitNode, goType, printed) {
         return undefined;
     }
     return (ccxtGoEndpointElement (goTranspiler, awaitNode.expression) === goType) ? (text.slice (0, -'.Raw'.length) + '.Checked()') : undefined;
+}
+
+// A single-line `[]any` endpoint receive bound to one local (`const x = await this.stub (..)` or `x = await this.stub (..)`)
+// is printed through a named holder, `xRecv := (<-this.Stub(..))` / `PanicOnError(xRecv.Raw)` / `var x []any = xRecv.Value`:
+// the carrier's Value already is endpointValue = ListTyped(Raw), and PanicOnError sees Raw first. Returns the printed
+// receive without its `.Raw`, or undefined when the receive is not that exact one-line, balanced, typed-stub shape.
+function ccxtGoEndpointListReceive (goTranspiler, awaitNode, goType, printed) {
+    const text = (printed ?? '').trim ();
+    if ((goType !== '[]any') || (awaitNode?.kind !== ts.SyntaxKind.AwaitExpression) || (text.indexOf ('\n') >= 0)
+        || !/^\(<-this\.\w+\(/.test (text) || !text.endsWith (').Raw')) {
+        return undefined;
+    }
+    const recv = text.slice (0, -'.Raw'.length);
+    let depth = 0;
+    for (let i = 0; i < recv.length; i++) {
+        const c = recv[i];
+        if ((c === '"') || (c === '\'') || (c === '`')) {
+            const end = (c === '`') ? recv.indexOf ('`', i + 1) : recv.indexOf (c, i + 1 + (recv[i + 1] === '\\\\' ? 1 : 0));
+            i = (end < 0) ? recv.length : end;
+            continue;
+        }
+        depth += (c === '(') ? 1 : ((c === ')') ? -1 : 0);
+        if ((depth === 0) && (i < recv.length - 1)) {
+            return undefined;                   // the outer parens do not span the receive
+        }
+    }
+    if ((depth !== 0) || (ccxtGoEndpointElement (goTranspiler, awaitNode.expression) !== '[]any')) {
+        return undefined;
+    }
+    return recv;
+}
+
+// the identifier an endpoint receive is bound to: `const x = await ..` or `x = await ..`
+function ccxtGoEndpointHolderTarget (awaitNode) {
+    const parent = awaitNode?.parent;
+    if ((parent?.kind === ts.SyntaxKind.VariableDeclaration) && (parent.initializer === awaitNode) && (parent.name?.kind === ts.SyntaxKind.Identifier)) {
+        return parent.name;
+    }
+    if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.right === awaitNode) && (parent.operatorToken?.kind === ts.SyntaxKind.EqualsToken)
+        && (parent.left?.kind === ts.SyntaxKind.Identifier)) {
+        return parent.left;
+    }
+    return undefined;
+}
+
+// true when printing this receive binds a holder (the same decision the declaration and assignment printers take)
+function ccxtGoEndpointHolderApplies (goTranspiler, awaitNode) {
+    const target = ccxtGoEndpointHolderTarget (awaitNode);
+    if (target === undefined) {
+        return false;
+    }
+    if (awaitNode.parent.kind === ts.SyntaxKind.VariableDeclaration) {
+        const printed = goTranspiler.printNode (awaitNode, 0);
+        return (ccxtGoEndpointListReceive (goTranspiler, awaitNode, '[]any', printed) !== undefined)
+            && (goTranspiler.goAwaitReceiveUnbox (awaitNode, printed)?.holder === true);
+    }
+    const assignment = awaitNode.parent;
+    return (ccxtGoWriteSiteLocalGoType (goTranspiler, assignment.left) === '[]any')
+        && (ccxtGoWriteSiteConversion (goTranspiler, '[]any', awaitNode, ccxtGoNilJoinDeclarationType (goTranspiler, assignment.left) === '[]any') !== undefined)
+        && (ccxtGoEndpointListReceive (goTranspiler, awaitNode, '[]any', goTranspiler.printNode (awaitNode, 0)) !== undefined);
+}
+
+// the nearest Go block scope of a node
+function ccxtGoEndpointHolderBlock (node) {
+    for (let current = node?.parent; current !== undefined; current = current.parent) {
+        if ((current.kind === ts.SyntaxKind.Block) || (current.kind === ts.SyntaxKind.CaseClause)
+            || (current.kind === ts.SyntaxKind.DefaultClause) || (current.kind === ts.SyntaxKind.SourceFile)) {
+            return current;
+        }
+    }
+    return undefined;
+}
+
+const CCXT_GO_ENDPOINT_HOLDER_NAMES = new WeakMap ();
+
+// `<target>Recv`, stable under line shifts. A numeric suffix (`xRecv2`, `xRecv3`..) is added only when the name is
+// already taken in the enclosing function: by any identifier of the source, or by the holder of an earlier receive
+// into the same local whose block is this one or encloses it (a sibling branch declares its own).
+function ccxtGoEndpointHolderName (goTranspiler, awaitNode, target: string) {
+    const cached = CCXT_GO_ENDPOINT_HOLDER_NAMES.get (awaitNode);
+    if (cached !== undefined) {
+        return cached;
+    }
+    const scope = goTranspiler.goEnclosingFunction (awaitNode);
+    const taken = new Set ();
+    for (const n of (scope === undefined) ? [] : goTranspiler.goDescendantsOf (scope)) {
+        if (n.kind === ts.SyntaxKind.Identifier) {
+            taken.add (String (n.text));
+            continue;
+        }
+        if ((n.kind !== ts.SyntaxKind.AwaitExpression) || (n === awaitNode) || (n.pos >= awaitNode.pos)) {
+            continue;
+        }
+        const earlierTarget = ccxtGoEndpointHolderTarget (n);
+        if ((earlierTarget === undefined) || (goTranspiler.printNode (earlierTarget, 0) !== target)) {
+            continue;
+        }
+        const block = ccxtGoEndpointHolderBlock (n);
+        let visible = false;
+        for (let current = awaitNode; (current !== undefined) && !visible; current = current.parent) {
+            visible = (current === block);
+        }
+        if (visible && ccxtGoEndpointHolderApplies (goTranspiler, n)) {
+            taken.add (ccxtGoEndpointHolderName (goTranspiler, n, target));
+        }
+    }
+    let name = target + 'Recv';
+    for (let n = 2; taken.has (name); n++) {
+        name = target + 'Recv' + n;
+    }
+    CCXT_GO_ENDPOINT_HOLDER_NAMES.set (awaitNode, name);
+    return name;
 }
 
 // a typed endpoint local handed as arg 0 to this.parse*/this.safe*/Object.keys: those readers only read
@@ -7569,6 +7686,8 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
     }
     return {
         goType: goType,
+        holder: (endpoint !== undefined) && (declaration?.initializer === awaitNode) && (declaration.name?.kind === ts.SyntaxKind.Identifier)
+            && (ccxtGoEndpointListReceive (goTranspiler, awaitNode, goType, printedInitializer) !== undefined),
         wrap: (recv) => ccxtGoEndpointCheckedRead (goTranspiler, awaitNode, goType, recv) ?? (conv + '(PanicOnError(' + recv.trim () + '))'),
     };
 }
@@ -20258,7 +20377,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // Typed async receive: an extension that knows the core's channel element type replaces
     // `x := (<-this.FooAsync(..))` + `PanicOnError(x)` with a typed declaration that runs PanicOnError
     // first (same frame and message). The default returns undefined and changes nothing.
-    goAwaitReceiveUnbox(awaitNode, printedInitializer: string): { goType: string, wrap: (recv: string) => string } | undefined {
+    goAwaitReceiveUnbox(awaitNode, printedInitializer: string): { goType: string, wrap: (recv: string) => string, holder?: boolean } | undefined {
         return undefined;
     }
 
@@ -20292,6 +20411,14 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 ${this.getIden(identation)}var ${parsedName} map[string]Ticker = PanicOnError(${parsedInitializer})`;
             }
             const awaitUnbox = this.goAwaitReceiveUnbox(declaration.initializer, parsedInitializer);
+            if (awaitUnbox?.holder === true) {
+                // a one-line []any endpoint receive: bound to `<name>Recv`, checked, then read as its typed Value
+                const holderName = ccxtGoEndpointHolderName(this, declaration.initializer, parsedName);
+                return `
+${this.getIden(identation)}${holderName} := ${parsedInitializer.trim().slice(0, -'.Raw'.length)}
+${this.getIden(identation)}PanicOnError(${holderName}.Raw)
+${this.getIden(identation)}var ${parsedName} ${awaitUnbox.goType} = ${holderName}.Value`;
+            }
             if (awaitUnbox !== undefined) {
                 // the conversion runs PanicOnError first (inside the bracket), so the panic
                 // path keeps the same caller, message and stack as the boxed pair below

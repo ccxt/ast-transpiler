@@ -12497,7 +12497,7 @@ describe ('hx11rfmG1GP18', () => {
             'func (this *Ex) PrivateGetRows(args ...any) <-chan EndpointResult[' + listElement + '] {\n\treturn nil\n}\n';
     }
 
-    function print (apiGo: string | undefined, install = true): string {
+    function print (apiGo: string | undefined, install = true, venue: string = VENUE): string {
         const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'rfm-g1-gp18-'));
         try {
             const src = path.join (tmp, 'ts', 'src');
@@ -12506,7 +12506,7 @@ describe ('hx11rfmG1GP18', () => {
             fs.writeFileSync (path.join (src, 'base', 'types.ts'), TYPES);
             fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), BASE);
             fs.writeFileSync (path.join (src, 'abstract', 'ex.ts'), ABSTRACT);
-            fs.writeFileSync (path.join (src, 'ex.ts'), VENUE);
+            fs.writeFileSync (path.join (src, 'ex.ts'), venue);
             if (apiGo !== undefined) {
                 fs.mkdirSync (path.join (tmp, 'go', 'v4'), { 'recursive': true });
                 fs.writeFileSync (path.join (tmp, 'go', 'v4', 'ex_api.go'), apiGo);
@@ -12539,6 +12539,51 @@ describe ('hx11rfmG1GP18', () => {
         });
         test('a stub whose element disagrees with the declared Promise<T> is refused, never retyped', () => {
             expect (() => print (stubs ('string', '[]any'))).toThrow ();
+        });
+    });
+
+    describe('a one-line []any endpoint receive is bound to a holder named after its target', () => {
+        const venueWith = (body: string): string =>
+            "import Exchange from './abstract/ex.js';\n" +
+            "import { Dict } from './base/types.js';\n" +
+            'export default class ex extends Exchange {\n' + body + '}\n';
+        const holders = (out: string): string[] => [ ...out.matchAll (/(\w+) := \(<-this\.PrivateGetRows\(/g) ].map ((m) => m[1]);
+
+        test('the declaration form reads <name>Recv.Raw then .Value', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, venueWith (
+                '    async fetchRows (params = {}) {\n        const data = await this.privateGetRows (params);\n        return this.indexBy (data, \'id\');\n    }\n'));
+            expect (out).toContain ('dataRecv := (<-this.PrivateGetRows(params))\n');
+            expect (out).toContain ('PanicOnError(dataRecv.Raw)\n');
+            expect (out).toContain ('var data []any = dataRecv.Value');
+            expect (out).not.toContain ('ListTyped(PanicOnError((<-this.PrivateGetRows');
+            expect (out).not.toMatch (/listEp|listRecv/);
+        });
+        test('the assignment form names the holder after the assigned local', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, venueWith (
+                '    async fetchRows (params = {}) {\n        let response = undefined;\n        if (params) {\n            response = await this.privateGetRows (params);\n        } else {\n            response = await this.privateGetRows ({});\n        }\n        return this.indexBy (response, \'id\');\n    }\n'));
+            expect (holders (out)).toEqual ([ 'responseRecv', 'responseRecv' ]);
+            expect (out).toContain ('response = responseRecv.Value');
+        });
+        test('the name does not move when lines are added above', () => {
+            const body = '    async fetchRows (params = {}) {\n        const data = await this.privateGetRows (params);\n        return this.indexBy (data, \'id\');\n    }\n';
+            const shifted = '    // a\n    // b\n    // c\n' + body;
+            expect (holders (print (stubs ('map[string]any', '[]any'), true, venueWith (body)))).toEqual ([ 'dataRecv' ]);
+            expect (holders (print (stubs ('map[string]any', '[]any'), true, venueWith (shifted)))).toEqual ([ 'dataRecv' ]);
+        });
+        test('a second receive into the same local in one scope takes a numeric suffix', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, venueWith (
+                '    async fetchRows (params = {}) {\n        let response = undefined;\n        response = await this.privateGetRows (params);\n        response = await this.privateGetRows (params);\n        response = await this.privateGetRows (params);\n        return this.indexBy (response, \'id\');\n    }\n'));
+            expect (holders (out)).toEqual ([ 'responseRecv', 'responseRecv2', 'responseRecv3' ]);
+        });
+        test('a name already used in the function gets the suffix', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, venueWith (
+                '    async fetchRows (params = {}) {\n        const dataRecv = 1;\n        const data = await this.privateGetRows (params);\n        return this.indexBy (data, \'id\') && dataRecv;\n    }\n'));
+            expect (holders (out)).toEqual ([ 'dataRecv2' ]);
+        });
+        test('a receive that stays boxed (no stub table) binds no holder', () => {
+            const out = print (undefined, true, venueWith (
+                '    async fetchRows (params = {}) {\n        const data = await this.privateGetRows (params);\n        return this.indexBy (data, \'id\');\n    }\n'));
+            expect (out).not.toContain ('dataRecv');
         });
     });
 });
