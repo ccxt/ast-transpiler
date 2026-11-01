@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-AWK6QGCM.js";
+} from "./chunk-O5MZOAMZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -28,7 +28,7 @@ var require_dirname = __commonJS({
 init_esm_shims();
 var import_dirname = __toESM(require_dirname(), 1);
 import { ScriptTarget, SyntaxKind as SyntaxKind9 } from "typescript/unstable/ast";
-import { API as API3, CheckFlags, ElementFlags as ElementFlags2, IndexKind as IndexKind5, ObjectFlags as ObjectFlags2, SignatureKind as SignatureKind3, SymbolFlags as SymbolFlags4, TypeFlags as TypeFlags8, TypeFormatFlags } from "typescript/unstable/sync";
+import { API as API3, CheckFlags, ElementFlags as ElementFlags2, IndexKind as IndexKind5, ObjectFlags as ObjectFlags2, SignatureKind as SignatureKind3, SymbolFlags as SymbolFlags4, TypeFlags as TypeFlags7, TypeFormatFlags } from "typescript/unstable/sync";
 
 // src/pythonTranspiler.ts
 init_esm_shims();
@@ -10954,28 +10954,21 @@ var CSharpTranspiler = class extends BaseTranspiler {
 };
 
 // src/transpiler.ts
-import * as path9 from "path";
-import * as fs8 from "fs";
+import * as path3 from "path";
+import * as fs4 from "fs";
 
 // src/goTranspiler.ts
 init_esm_shims();
-import * as fs3 from "fs";
-import * as path3 from "path";
+import * as fs2 from "fs";
+import * as path2 from "path";
 import { SyntaxKind as SyntaxKind5, getLeadingCommentRanges as getLeadingCommentRanges2 } from "typescript/unstable/ast";
-import { NodeFlags as NodeFlags2 } from "typescript/unstable/ast";
 import { isArrowFunction as isArrowFunction3, isBinaryExpression as isBinaryExpression3, isBlock as isBlock2, isBooleanLiteral as isBooleanLiteral3, isCallExpression as isCallExpression4, isClassDeclaration as isClassDeclarationNode, isElementAccessExpression as isElementAccessExpression2, isExpressionStatement as isExpressionStatement2, isFunctionDeclaration as isFunctionDeclaration3, isFunctionExpression as isFunctionExpression4, isIfStatement as isIfStatement2, isMethodDeclaration as isMethodDeclaration3, isReturnStatement as isReturnStatement2, isSourceFile as isSourceFile3, isStatement as isStatementNode, isThrowStatement as isThrowStatement2, isTryStatement } from "typescript/unstable/ast/is";
 import { IndexKind as IndexKind2, SymbolFlags, TypeFlags as TypeFlags4 } from "typescript/unstable/sync";
-
-// src/go/go-local-types.ts
-init_esm_shims();
-import fs2 from "fs";
-import path2 from "path";
-
-// src/go/tsApi.ts
-init_esm_shims();
+import os from "os";
 import * as tsAst from "typescript/unstable/ast";
 import * as tsIs from "typescript/unstable/ast/is";
 import * as tsSync from "typescript/unstable/sync";
+import { NodeFlags as NodeFlags2 } from "typescript/unstable/ast";
 var tsApi;
 var ts = {
   ...tsAst,
@@ -11178,9 +11171,6 @@ function urlsDescribeStringProducer(initializer) {
   }
   return true;
 }
-
-// src/go/hx10w3-G06.ts
-init_esm_shims();
 var HX10G06_TUPLE_MAP_SLOTS = {
   "handleOptionBoolAndParams": [1],
   "handleOptionBoolAndParams2": [1],
@@ -11809,8 +11799,7 @@ function hx10G06Check() {
   joins(method("let ticker = undefined;\n        ticker = bank[a];\n        return ticker;"), "");
   return problems;
 }
-
-// src/go/go-local-types.ts
+var hx10G06InstallTupleJoins = installHx10G06NilDeclaredTupleJoins;
 var CCXT_GO_BOOL_METHOD_NAMES = [
   "IsPostOnly",
   "IsRoundNumber",
@@ -17631,7 +17620,7 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0) {
   installCcxtGoNilDeclaredValueJoins(goTranspiler);
   installCcxtGoTernaryCast(goTranspiler);
   installCcxtGoNilDeclaredJoin(goTranspiler);
-  installHx10G06NilDeclaredTupleJoins(goTranspiler);
+  hx10G06InstallTupleJoins(goTranspiler);
   if (typeof goTranspiler.printVariableDeclarationList === "function" && typeof goTranspiler.goEnclosingFunction === "function" && typeof goTranspiler.goTypeNameIsShadowed === "function" && typeof goTranspiler.goLocalIsSafeToType === "function") {
     installNilDeclaredJoin(goTranspiler);
     installCcxtGoClosurePointerJoin(goTranspiler);
@@ -21331,10 +21320,2354 @@ function installHx5X32StringPtrParams(goTranspiler) {
     }).join(", ");
   };
 }
-
-// src/go/hx11rdgo2-wscache.ts
-init_esm_shims();
+var SK = ts.SyntaxKind;
+var G08_PAIR_MAP_PRODUCERS = ["handleMarketTypeAndParams", "handleSubTypeAndParams"];
+var G08_PAIR_PLAIN_PRODUCERS = [
+  "handleOptionAndParams",
+  "handleOptionAndParams2",
+  "handleOptionStringAndParams",
+  "handleOptionStringAndParams2",
+  "handleMarginModeAndParams",
+  "handleOptionBoolAndParams",
+  "handleOptionBoolAndParams2",
+  "handleOptionIntegerAndParams",
+  "handleOptionIntegerAndParams2",
+  "handleParamString",
+  "handleParamString2",
+  "handleNetworkCodeAndParams",
+  "handleParamBool",
+  "handleParamBool2",
+  "handleParamInteger",
+  "handleParamInteger2"
+];
+var G08_BASE_SLICE_PRODUCERS = [
+  "handleOptionAndParams",
+  "handleOptionAndParams2",
+  "handleWithdrawTagAndParams",
+  "handlePostOnly",
+  "handleTriggerPricesAndParams",
+  "handleTriggerDirectionAndParams"
+];
+var G08_BASE_FILE = /[\/]base[\/]Exchange(\.nooverloads\.\d+)?\.ts$/;
+var FUNCTION_LIKE = [
+  SK.FunctionDeclaration,
+  SK.FunctionExpression,
+  SK.ArrowFunction,
+  SK.MethodDeclaration,
+  SK.Constructor,
+  SK.GetAccessor,
+  SK.SetAccessor,
+  SK.ClassDeclaration,
+  SK.ClassExpression
+];
+function g08Mask(text) {
+  const out = text.split("");
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    const c = text[i];
+    if (c === "/" && text[i + 1] === "/") {
+      while (i < n && text[i] !== "\n") {
+        out[i] = " ";
+        i += 1;
+      }
+    } else if (c === '"' || c === "'") {
+      out[i] = " ";
+      i += 1;
+      while (i < n) {
+        if (text[i] === "\\" && i + 1 < n) {
+          out[i] = " ";
+          out[i + 1] = " ";
+          i += 2;
+          continue;
+        }
+        if (text[i] === c) {
+          out[i] = " ";
+          i += 1;
+          break;
+        }
+        if (text[i] !== "\n") {
+          out[i] = " ";
+        }
+        i += 1;
+      }
+    } else if (c === "`") {
+      out[i] = " ";
+      i += 1;
+      while (i < n && text[i] !== "`") {
+        if (text[i] !== "\n") {
+          out[i] = " ";
+        }
+        i += 1;
+      }
+      if (i < n) {
+        out[i] = " ";
+        i += 1;
+      }
+    } else {
+      i += 1;
+    }
+  }
+  return out.join("");
+}
+function g08CallClass(masked) {
+  if (/^(?:ccxt\.)?(?:GetValue|GetArg|ParseToInt|ParseInt|SafeMapToMap)\(/.test(masked)) {
+    return "plain";
+  }
+  if (/^(?:this\.|ccxt\.)?(?:OmitDict|Extend|DeepExtend)\(/.test(masked)) {
+    return "plain:map";
+  }
+  if (/^(?:this\.)?(?:Omit|OmitN|OmitMap)\(/.test(masked)) {
+    return "plain";
+  }
+  if (/^(?:ccxt\.)?(?:MapTyped|SafeMapTyped)\(/.test(masked)) {
+    return "typedmap";
+  }
+  if (/^GetArgMap\(/.test(masked)) {
+    return "typedmap";
+  }
+  if (/^(?:ccxt\.)?ListTyped\(/.test(masked)) {
+    return "typedslice";
+  }
+  if (/^(?:this\.)?SafeDict2?\(/.test(masked)) {
+    return "deref:map";
+  }
+  return void 0;
+}
+function g08Combine(classes) {
+  if (classes.length === 0 || classes.includes("no")) {
+    return "no";
+  }
+  const unique = [...new Set(classes)];
+  if (unique.length === 1) {
+    return unique[0];
+  }
+  const kind = (list) => list.some((c) => c.endsWith("map")) ? "map" : list.some((c) => c.endsWith("slice")) ? "slice" : "";
+  if (unique.every((c) => c.startsWith("plain"))) {
+    return "plain:" + kind(unique);
+  }
+  if (unique.every((c) => c.startsWith("plain") || c === "typedmap" || c === "typedslice")) {
+    return kind(unique) === "slice" ? "typedslice" : "typedmap";
+  }
+  return "deref:" + kind(unique);
+}
+function g08Balanced(masked, start) {
+  let depth = 0;
+  for (let i = start; i < masked.length; i++) {
+    if ("({[".includes(masked[i])) {
+      depth += 1;
+      continue;
+    }
+    if (")}]".includes(masked[i])) {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+function g08Unwrap(node) {
+  let current = node;
+  while (current?.kind === SK.ParenthesizedExpression) {
+    current = current.expression;
+  }
+  return current;
+}
+function g08Walk(scope, visit) {
+  const go = (n) => {
+    if (n === void 0) {
+      return;
+    }
+    if (visit(n) === false) {
+      return;
+    }
+    n.forEachChild(go);
+  };
+  scope?.forEachChild(go);
+}
+var TupleSlots = class {
+  constructor(go) {
+    this.producers = /* @__PURE__ */ new WeakMap();
+    this.declLines = /* @__PURE__ */ new WeakMap();
+    this.writeCounts = /* @__PURE__ */ new WeakMap();
+    this.go = go;
+  }
+  resolve(node) {
+    try {
+      return this.go.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    } catch (e) {
+      return void 0;
+    }
+  }
+  // the implementation (with a body) of the method `this.m (..)` calls
+  producerDeclaration(call) {
+    const callee = call?.expression;
+    if (call?.kind !== SK.CallExpression || callee?.kind !== SK.PropertyAccessExpression || callee.expression?.kind !== SK.ThisKeyword || call.questionDotToken !== void 0) {
+      return void 0;
+    }
+    let declaration;
+    try {
+      declaration = this.go.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration?.kind !== SK.MethodDeclaration) {
+      return void 0;
+    }
+    const name = declaration.name?.text;
+    let method = declaration;
+    if (method.body === void 0) {
+      method = (declaration.parent?.members ?? []).find((m) => m.kind === SK.MethodDeclaration && m.name?.text === name && m.body !== void 0);
+    }
+    if (method === void 0 || method.body === void 0 || method.type?.kind !== SK.TupleType) {
+      return void 0;
+    }
+    if ((method.modifiers ?? []).some((m) => m.kind === SK.AsyncKeyword || m.kind === SK.StaticKeyword)) {
+      return void 0;
+    }
+    return this.printsSlice(method) ? method : void 0;
+  }
+  // { arity, slots } of the tuple a producer returns, from every own `return [ .. ]`
+  producerInfo(call) {
+    const callee = call?.expression;
+    if (G08_PAIR_MAP_PRODUCERS.includes(callee?.name?.text) && callee.expression?.kind === SK.ThisKeyword) {
+      return this.go.getChecker() !== void 0 ? { "arity": 2, "slots": { 1: "plain:map" }, "pair": true } : void 0;
+    }
+    if (G08_PAIR_PLAIN_PRODUCERS.includes(callee?.name?.text) && callee.expression?.kind === SK.ThisKeyword) {
+      return this.go.getChecker() !== void 0 ? { "arity": 2, "slots": { 1: "plain" }, "pair": true } : void 0;
+    }
+    const method = this.producerDeclaration(call);
+    if (method === void 0) {
+      return void 0;
+    }
+    if (this.producers.has(method)) {
+      return this.producers.get(method);
+    }
+    this.producers.set(method, void 0);
+    const info = this.analyse(method);
+    this.producers.set(method, info);
+    return info;
+  }
+  analyse(method) {
+    const rows = [];
+    let ok = true;
+    g08Walk(method.body, (n) => {
+      if (!ok || FUNCTION_LIKE.includes(n.kind)) {
+        return false;
+      }
+      if (n.kind !== SK.ReturnStatement) {
+        return true;
+      }
+      const array = n.expression;
+      if (array?.kind !== SK.ArrayLiteralExpression || array.elements.some((e) => e.kind === SK.SpreadElement)) {
+        ok = false;
+        return false;
+      }
+      rows.push(array.elements.slice());
+      return false;
+    });
+    if (!ok || rows.length === 0) {
+      return void 0;
+    }
+    const arity = Math.min(...rows.map((row) => row.length));
+    const slots = {};
+    for (let i = 0; i < arity; i++) {
+      const combined = g08Combine(rows.map((row) => this.classOfNode(method, row[i], 0)));
+      if (combined !== "no") {
+        slots[i] = combined;
+      }
+    }
+    return Object.keys(slots).length > 0 ? { arity, slots } : void 0;
+  }
+  // true when the printed Go method returns `[]any`: a tabled base helper, or an exchange-local
+  // method (no base twin) whose every own return prints as one `return []any{..}` line
+  printsSlice(method) {
+    const name = method.name?.text;
+    if (G08_BASE_SLICE_PRODUCERS.includes(name)) {
+      return true;
+    }
+    if (this.baseDeclares(method)) {
+      return false;
+    }
+    let ok = true;
+    let any = false;
+    g08Walk(method.body, (n) => {
+      if (!ok || FUNCTION_LIKE.includes(n.kind)) {
+        return false;
+      }
+      if (n.kind !== SK.ReturnStatement) {
+        return true;
+      }
+      const text = this.printed(n);
+      any = true;
+      const code = (text ?? "").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+      ok = text !== void 0 && /^return \[\]any\{.*\}$/.test(code.replace(/\s+\/\/.*$/, "").trim());
+      return false;
+    });
+    return ok && any;
+  }
+  // a method of the same name declared by the Exchange base class in the class chain above
+  baseDeclares(method) {
+    if (G08_BASE_FILE.test(String(method.getSourceFile().fileName ?? ""))) {
+      return true;
+    }
+    const checker = this.go.getChecker();
+    let cls = method.parent;
+    for (let depth = 0; cls !== void 0 && depth < 12; depth++) {
+      const clause = (cls.heritageClauses ?? []).find((c) => c.token === SK.ExtendsKeyword);
+      if (clause === void 0) {
+        return false;
+      }
+      let declaration;
+      try {
+        const symbol = checker.getTypeAtLocation(clause.types?.[0])?.getProperty?.(method.name.text);
+        declaration = symbol?.valueDeclaration?.resolve?.() ?? symbol?.declarations?.map((d) => d.resolve())?.[0];
+      } catch (e) {
+        return false;
+      }
+      if (declaration === void 0) {
+        return false;
+      }
+      if (G08_BASE_FILE.test(String(declaration.getSourceFile().fileName ?? ""))) {
+        return true;
+      }
+      cls = declaration.parent;
+    }
+    return false;
+  }
+  printed(node) {
+    try {
+      const text = this.go.printNode(node, 0);
+      return typeof text === "string" ? text.trim() : void 0;
+    } catch (e) {
+      return void 0;
+    }
+  }
+  classOfNode(fn, node, depth) {
+    if (depth > 4) {
+      return "no";
+    }
+    const raw = this.printed(node);
+    if (raw === void 0 || raw.includes("\n")) {
+      return "no";
+    }
+    return this.classOfText(fn, g08Unwrap(node), g08Mask(raw).trim(), raw, depth);
+  }
+  classOfText(fn, node, m, r, depth) {
+    if (/^(?:true|false)$/.test(m)) {
+      return "plain:bool";
+    }
+    if (/^-?\d+(?:\.\d+)?$/.test(m)) {
+      return "plain:number";
+    }
+    if (m === "" && /^"(?:[^"\\]|\\.)*"$/.test(r)) {
+      return "plain:string";
+    }
+    if (/^map\[string\]any\{/.test(m)) {
+      return "plain:map";
+    }
+    if (/^\[\](?:any|string)\{/.test(m)) {
+      return "plain";
+    }
+    if (/^\[\](?:any|string)$/.test(m)) {
+      return "deref:slice";
+    }
+    if (/^GetArgMap\(\w+, \d+, map\[string\]any\{\}\)$/.test(m)) {
+      return "plain:map";
+    }
+    const call = g08CallClass(m);
+    if (call !== void 0) {
+      if (call === "deref:map" && /^(?:ccxt\.)?MapTyped\(/.test(m)) {
+        const open = m.indexOf("(");
+        const close = g08Balanced(m, open);
+        const arg = g08Unwrap(node)?.arguments?.[0];
+        if (close > 0 && arg !== void 0 && this.classOfNode(fn, arg, depth + 1) === "plain:map") {
+          return "plain:map";
+        }
+      }
+      return call;
+    }
+    if (/^func\s*\(/.test(m)) {
+      return "no";
+    }
+    if (node?.kind === SK.Identifier && /^[A-Za-z_]\w*$/.test(m)) {
+      return this.classOfIdent(fn, node, depth);
+    }
+    return "no";
+  }
+  // writes of the name inside the function: `=`, destructuring targets and compound writes
+  writesOf(fn, name) {
+    let counts = this.writeCounts.get(fn);
+    if (counts === void 0) {
+      counts = /* @__PURE__ */ new Map();
+      this.writeCounts.set(fn, counts);
+      const bump = (id) => counts.set(id, (counts.get(id) ?? 0) + 1);
+      const targets = (t) => {
+        const u = g08Unwrap(t);
+        if (u?.kind === SK.Identifier) {
+          bump(u.text);
+        }
+        if (u?.kind === SK.ArrayLiteralExpression) {
+          u.elements.forEach(targets);
+        }
+      };
+      g08Walk(fn.body, (n) => {
+        if ((n.kind === SK.VariableDeclaration || n.kind === SK.BindingElement) && n.name?.kind === SK.Identifier) {
+          bump(n.name.text);
+        } else if (n.kind === SK.BinaryExpression) {
+          const op = n.operatorToken?.kind;
+          if (op >= SK.FirstAssignment && op <= SK.LastAssignment) {
+            targets(n.left);
+          }
+        } else if ((n.kind === SK.PrefixUnaryExpression || n.kind === SK.PostfixUnaryExpression) && (n.operator === SK.PlusPlusToken || n.operator === SK.MinusMinusToken)) {
+          targets(n.operand);
+        }
+        return true;
+      });
+    }
+    return counts.get(name) ?? 0;
+  }
+  // `var x T = init` / `x := init` / `a, b := call` as the printer wrote the declaration of an identifier
+  declOf(node) {
+    const decl = this.resolve(node);
+    if (decl === void 0) {
+      return void 0;
+    }
+    if (this.declLines.has(decl)) {
+      return this.declLines.get(decl);
+    }
+    this.declLines.set(decl, void 0);
+    let result;
+    if (decl.kind === SK.Parameter) {
+      const bound = decl.initializer !== void 0 || decl.questionToken !== void 0;
+      if (bound && decl.dotDotDotToken === void 0 && decl.parent?.body !== void 0) {
+        const type = this.go.goGetArgParameterType(decl);
+        const emptyMap = decl.initializer?.kind === SK.ObjectLiteralExpression && decl.initializer.properties.length === 0;
+        result = type !== void 0 ? { "kind": "var", "type": type, "init": type === "map[string]any" && emptyMap ? "GetArgMap(optionalArgs, 0, map[string]any{})" : "GetArgX(optionalArgs, 0, nil)", "fn": decl.parent, "param": true } : { "kind": "short", "type": void 0, "init": "GetArg(optionalArgs, 0, nil)", "fn": decl.parent, "param": true };
+      }
+    } else if (decl.kind === SK.VariableDeclaration && decl.name?.kind === SK.Identifier) {
+      result = this.printedDeclaration(decl);
+    } else if (decl.kind === SK.BindingElement && decl.name?.kind === SK.Identifier) {
+      result = this.printedBinding(decl);
+    }
+    this.declLines.set(decl, result);
+    return result;
+  }
+  enclosingFunction(node) {
+    let current = node?.parent;
+    while (current !== void 0 && current.kind !== SK.MethodDeclaration && current.kind !== SK.FunctionDeclaration) {
+      current = current.parent;
+    }
+    return current;
+  }
+  printedDeclaration(decl) {
+    const statement = decl.parent?.parent;
+    if (statement?.kind !== SK.VariableStatement || decl.parent.declarations.length !== 1) {
+      return void 0;
+    }
+    const text = this.printed(statement);
+    if (text === void 0) {
+      return void 0;
+    }
+    const name = decl.name.text;
+    const fn = this.enclosingFunction(decl);
+    for (const line of text.split("\n")) {
+      const typed = new RegExp("^\\s*var " + name + " ([\\w\\[\\].*]+) = (.*)$").exec(line);
+      if (typed !== null) {
+        return { "kind": "var", "type": typed[1], "init": typed[2], fn };
+      }
+      const bare = new RegExp("^\\s*var " + name + " ([\\w\\[\\].*]+)\\s*$").exec(line);
+      if (bare !== null) {
+        return { "kind": "var", "type": bare[1], "init": null, fn };
+      }
+      const short = new RegExp("^\\s*" + name + " := (.*)$").exec(line);
+      if (short !== null) {
+        return { "kind": "short", "type": void 0, "init": short[1], fn };
+      }
+    }
+    return void 0;
+  }
+  // a destructured element: the typed pair `a, b := this.m (..)`, or the holder read it printed
+  printedBinding(element) {
+    const pattern = element.parent;
+    const declaration = pattern?.parent;
+    const statement = declaration?.parent?.parent;
+    if (pattern?.kind !== SK.ArrayBindingPattern || statement?.kind !== SK.VariableStatement) {
+      return void 0;
+    }
+    const text = this.printed(statement);
+    if (text === void 0) {
+      return void 0;
+    }
+    const name = element.name.text;
+    const fn = this.enclosingFunction(element);
+    for (const line of text.split("\n")) {
+      const pair = /^\s*([\w\[\].]*(?:\s*,\s*[\w\[\].]*)+)\s*:=\s*(.*)$/.exec(line);
+      if (pair !== null && pair[1].split(",").some((p) => p.trim() === name)) {
+        return { "kind": "multi", "type": void 0, "init": null, "index": pair[1].split(",").map((p) => p.trim()).indexOf(name), "call": declaration.initializer, fn };
+      }
+      const typed = new RegExp("^\\s*var " + name + " ([\\w\\[\\].*]+) = (.*)$").exec(line);
+      if (typed !== null) {
+        return { "kind": "var", "type": typed[1], "init": typed[2], fn };
+      }
+      const short = new RegExp("^\\s*" + name + " := (.*)$").exec(line);
+      if (short !== null) {
+        return { "kind": "short", "type": void 0, "init": short[1], fn };
+      }
+    }
+    return void 0;
+  }
+  // `this.omit (m, ..)` of a map-typed identifier is a fresh map[string]any (the Go OmitDict twin)
+  omitClass(fn, init, depth) {
+    const call = g08Unwrap(init);
+    const callee = call?.expression;
+    if (call?.kind !== SK.CallExpression || callee?.kind !== SK.PropertyAccessExpression || callee.expression?.kind !== SK.ThisKeyword || callee.name?.text !== "omit" || call.arguments?.length < 2 || call.arguments[0]?.kind !== SK.Identifier) {
+      return "no";
+    }
+    const arg = this.classOfIdent(fn, call.arguments[0], depth + 1);
+    return arg === "typedmap" || arg === "plain:map" ? "plain:map" : "no";
+  }
+  classOfIdent(fn, node, depth) {
+    if (depth > 4) {
+      return "no";
+    }
+    const decl = this.declOf(node);
+    if (decl === void 0 || decl.fn !== fn) {
+      return "no";
+    }
+    const name = node.text;
+    if (decl.kind === "multi") {
+      const info = decl.call === void 0 ? void 0 : this.producerInfo(decl.call);
+      return info?.slots?.[decl.index] ?? "no";
+    }
+    const writes = this.writesOf(fn, name) + (decl.param === true ? 1 : 0);
+    const tsInit = this.resolve(node)?.initializer;
+    const initClass = (init) => {
+      const c = this.classOfText(fn, void 0, g08Mask(init).trim(), init.trim(), depth + 1);
+      if (c.startsWith("plain")) {
+        return c;
+      }
+      const omitted = this.omitClass(fn, tsInit, depth);
+      return omitted === "no" ? c : omitted;
+    };
+    if (decl.kind === "short") {
+      if (writes > 1) {
+        return "no";
+      }
+      if (/^(?:this\.|ccxt\.)\w+\(/.test(g08Mask(decl.init))) {
+        return "no";
+      }
+      return initClass(decl.init);
+    }
+    const type = decl.type ?? "";
+    if (type === "bool") {
+      return "plain:bool";
+    }
+    if (type === "string") {
+      return "plain:string";
+    }
+    if (["int64", "float64", "int", "uint64"].includes(type)) {
+      return "plain:number";
+    }
+    if (type === "any") {
+      if (writes !== 1) {
+        return "no";
+      }
+      if (decl.init === null || decl.init === void 0) {
+        return "no";
+      }
+      if (decl.init.trim() === "nil") {
+        return "deref";
+      }
+      return initClass(decl.init);
+    }
+    if (type === "map[string]any" || type === "[]any" || type === "[]string") {
+      if (decl.init !== null && decl.init !== void 0 && decl.init.trim() !== "nil") {
+        const init = initClass(decl.init);
+        if (init.startsWith("plain") && writes === 1) {
+          return init;
+        }
+      }
+      return type === "map[string]any" ? "typedmap" : "typedslice";
+    }
+    return "no";
+  }
+  // two destructurings of one function that print the same holder name leave both reads boxed
+  holderIsUnique(statement, holder) {
+    const fn = this.enclosingFunction(statement);
+    if (fn === void 0) {
+      return false;
+    }
+    let count = 0;
+    const join3 = (elements, pattern) => elements.map((e) => this.printed(pattern ? e.name : e)).join("") + "Variable";
+    g08Walk(fn.body, (n) => {
+      if (n.kind === SK.VariableDeclaration && n.name?.kind === SK.ArrayBindingPattern) {
+        if (join3(n.name.elements, true) === holder) {
+          count += 1;
+        }
+      } else if (n.kind === SK.BinaryExpression && n.operatorToken?.kind === SK.EqualsToken && n.left?.kind === SK.ArrayLiteralExpression) {
+        if (join3(n.left.elements, false) === holder) {
+          count += 1;
+        }
+      }
+      return true;
+    });
+    return count === 1;
+  }
+  // rewrite the slot reads of one printed destructuring statement
+  rewrite(printed, holder, call, statement) {
+    if (!/GetValue/.test(printed) || call?.kind !== SK.CallExpression) {
+      return printed;
+    }
+    const info = this.producerInfo(call);
+    if (info === void 0) {
+      return printed;
+    }
+    const first = printed.split("\n")[0].trim();
+    const sliceHolder = new RegExp("^(?:var " + holder + " \\[\\]any = |" + holder + " :?= (?:ccxt\\.)?TupleSlice\\()").test(first) || info.pair !== true && new RegExp("^" + holder + " :?= (?:ccxt\\.)?this\\.").test(first);
+    if (!sliceHolder) {
+      return printed;
+    }
+    const classes = info.slots;
+    const slotClass = (text) => {
+      const i = Number(text);
+      return i < info.arity ? classes[i] : void 0;
+    };
+    let changed = false;
+    const h = holder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const lines = printed.split("\n").map((line) => {
+      let m = new RegExp("^(\\s*(?:var \\w+ map\\[string\\]any = |\\w+ = ))(?:ccxt\\.)?MapTyped\\((?:ccxt\\.)?GetValue\\(" + h + ", (\\d+)\\)\\)$").exec(line);
+      if (m !== null) {
+        const cls = slotClass(m[2]);
+        if (cls === "typedmap" || cls === "plain:map") {
+          changed = true;
+          return m[1] + holder + "[" + m[2] + "].(map[string]any)";
+        }
+        if (cls !== void 0) {
+          changed = true;
+          return line.replace(new RegExp("GetValue\\(" + h + ", (\\d+)\\)"), holder + "[$1]");
+        }
+        return line;
+      }
+      m = new RegExp("^(.*?\\b(?:ccxt\\.)?(?:SafeStringPtr|SafeBoolPtr|SafeIntegerPtr)\\()(?:ccxt\\.)?GetValue\\(" + h + ", (\\d+)\\)(\\))$").exec(line);
+      if (m !== null && slotClass(m[2]) !== void 0) {
+        changed = true;
+        return m[1] + holder + "[" + m[2] + "]" + m[3];
+      }
+      m = new RegExp("^(\\s*(?:var \\w+ bool = |\\w+ = ))(?:ccxt\\.)?GetValueBool\\(" + h + ", (\\d+), false\\)$").exec(line);
+      if (m !== null) {
+        if (slotClass(m[2]) === "plain:bool") {
+          changed = true;
+          return m[1] + holder + "[" + m[2] + "].(bool)";
+        }
+        return line;
+      }
+      m = new RegExp("^(\\s*\\w+ :?= )(?:ccxt\\.)?GetValue\\(" + h + ", (\\d+)\\)$").exec(line);
+      if (m !== null) {
+        if (slotClass(m[2])?.startsWith("plain")) {
+          changed = true;
+          return m[1] + holder + "[" + m[2] + "]";
+        }
+      }
+      return line;
+    });
+    return changed ? lines.join("\n") : printed;
+  }
+};
+function installCcxtGoTupleSlotReads(goTranspiler) {
+  if (goTranspiler === void 0 || goTranspiler.__ccxtGoTupleSlotReadsInstalled || typeof goTranspiler.printVariableDeclarationList !== "function") {
+    return;
+  }
+  const slots = new TupleSlots(goTranspiler);
+  const printDeclaration = goTranspiler.printVariableDeclarationList;
+  goTranspiler.printVariableDeclarationList = function(node, identation) {
+    const printed = printDeclaration.call(this, node, identation);
+    const declaration = node?.declarations?.[0];
+    if (typeof printed !== "string" || declaration?.name?.kind !== SK.ArrayBindingPattern || declaration.initializer?.kind !== SK.CallExpression || !printed.includes("GetValue")) {
+      return printed;
+    }
+    const holder = declaration.name.elements.map((e) => this.printNode(e.name, 0)).join("") + "Variable";
+    if (!slots.holderIsUnique(node.parent ?? node, holder)) {
+      return printed;
+    }
+    return slots.rewrite(printed, holder, declaration.initializer, node);
+  };
+  const printBinary = goTranspiler.printCustomBinaryExpressionIfAny;
+  if (typeof printBinary === "function") {
+    goTranspiler.printCustomBinaryExpressionIfAny = function(node, identation) {
+      const printed = printBinary.call(this, node, identation);
+      if (typeof printed !== "string" || node?.operatorToken?.kind !== SK.EqualsToken || node.left?.kind !== SK.ArrayLiteralExpression || node.right?.kind !== SK.CallExpression || !printed.includes("GetValue")) {
+        return printed;
+      }
+      const holder = node.left.elements.map((e) => this.printNode(e, 0)).join("") + "Variable";
+      if (!slots.holderIsUnique(node, holder)) {
+        return printed;
+      }
+      return slots.rewrite(printed, holder, node.right, node);
+    };
+  }
+  goTranspiler.__ccxtGoTupleSlotReadsInstalled = true;
+}
+var G08_WHITELIST = /* @__PURE__ */ new Set(["string", "bool", "map[string]any", "[]any"]);
+function g08UsesNullish(go, body, param) {
+  const SK2 = ts.SyntaxKind;
+  const name = param.name.text;
+  let found = false;
+  const visit = (n) => {
+    if (found || n === void 0) {
+      return;
+    }
+    if (n.kind === SK2.BinaryExpression && (n.operatorToken?.kind === SK2.QuestionQuestionToken || n.operatorToken?.kind === SK2.QuestionQuestionEqualsToken)) {
+      const left = n.left;
+      if (left?.kind === SK2.Identifier && left.text === name && go.goIdentifierRefersToDeclaration(left, param)) {
+        found = true;
+        return;
+      }
+    }
+    n.forEachChild(visit);
+  };
+  body.forEachChild(visit);
+  return found;
+}
+var G08_DYNAMIC_CACHE = /* @__PURE__ */ new WeakMap();
+function g08DynamicCallees(fn) {
+  const file = fn.getSourceFile();
+  let names = G08_DYNAMIC_CACHE.get(file);
+  if (names === void 0) {
+    names = /* @__PURE__ */ new Set();
+    const rx = /\[\s*['"]([A-Za-z_$][\w$]*)['"]\s*\]\s*\(/g;
+    const text = file.getFullText();
+    let m;
+    while ((m = rx.exec(text)) !== null) {
+      names.add(m[1]);
+    }
+    G08_DYNAMIC_CACHE.set(file, names);
+  }
+  return names;
+}
+function g08HasDynamicCall(fn, name) {
+  return g08DynamicCallees(fn).has(name);
+}
+function g08Derived(go, param) {
+  const SK2 = ts.SyntaxKind;
+  if (param?.kind !== SK2.Parameter) {
+    return void 0;
+  }
+  if (param.dotDotDotToken !== void 0 || param.initializer !== void 0) {
+    return void 0;
+  }
+  if (param.name?.kind !== SK2.Identifier) {
+    return void 0;
+  }
+  const fn = param.parent;
+  if (fn?.kind !== SK2.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SK2.Identifier) {
+    return void 0;
+  }
+  const name = param.name.text;
+  if (name === "this" || name === "chan" || name === "optionalArgs") {
+    return void 0;
+  }
+  const file = String(fn.getSourceFile().fileName ?? "");
+  if (!/(^|[\\/])ts[\\/]src[\\/]/.test(file) || /(^|[\\/])ts[\\/]src[\\/]base[\\/]/.test(file)) {
+    return void 0;
+  }
+  const methodName = fn.name.text;
+  if (methodName.startsWith("parse") || methodName.startsWith("handle")) {
+    return void 0;
+  }
+  if (go.isAsyncFunction(fn) || go.goMethodKeepsBaseSignature(fn)) {
+    return void 0;
+  }
+  const checker = go.checkerOrUndefined();
+  if (checker === void 0) {
+    return void 0;
+  }
+  const declared = param.type === void 0 ? void 0 : String(param.type.getText()).trim();
+  if (declared !== void 0 && declared !== "any" && declared !== "unknown") {
+    return void 0;
+  }
+  if (g08HasDynamicCall(fn, methodName)) {
+    return void 0;
+  }
+  const index = fn.parameters.indexOf(param);
+  const sites = go.goSameFileCallsOf(fn, methodName);
+  if (sites.length === 0) {
+    return void 0;
+  }
+  const types = /* @__PURE__ */ new Set();
+  for (const site of sites) {
+    const arg = site.arguments?.[index];
+    if (arg === void 0 || arg.kind === SK2.SpreadElement) {
+      return void 0;
+    }
+    const printed = go.goPrintedArgType(arg);
+    if (printed === void 0 || !G08_WHITELIST.has(printed)) {
+      return void 0;
+    }
+    types.add(printed);
+    if (types.size > 1) {
+      return void 0;
+    }
+  }
+  const candidates = [[...types][0]];
+  for (const goType of candidates) {
+    if (!go.goParameterCallSitesPassType(fn, index, goType)) {
+      continue;
+    }
+    if (!go.goLocalIsSafeToType(fn.body, param, name, goType)) {
+      continue;
+    }
+    if (!go.goParameterKeepsNilCompareNative(fn.body, param, goType)) {
+      continue;
+    }
+    if (g08UsesNullish(go, fn.body, param)) {
+      continue;
+    }
+    return goType;
+  }
+  return void 0;
+}
+function installCcxtGoParamTypes(goTranspiler) {
+  const flag = "hx10G08w3Installed";
+  const current = goTranspiler.goNativeParameterType;
+  if (current?.[flag] === true) {
+    return current;
+  }
+  const original = goTranspiler.goNativeParameterType;
+  const cache = /* @__PURE__ */ new Map();
+  const inProgress = /* @__PURE__ */ new Set();
+  const native = function(param) {
+    const answer = original.call(this, param);
+    if (answer !== void 0) {
+      return answer;
+    }
+    if (cache.has(param)) {
+      return cache.get(param);
+    }
+    if (inProgress.has(param)) {
+      return void 0;
+    }
+    inProgress.add(param);
+    let derived;
+    try {
+      derived = g08Derived(this, param);
+    } finally {
+      inProgress.delete(param);
+    }
+    cache.set(param, derived);
+    return derived;
+  };
+  native[flag] = true;
+  goTranspiler.goNativeParameterType = native;
+  return native;
+}
+var G08_TEST_BASE = `export type Dict = { [key: string]: any };
+export type Str = string | undefined;
+export class Exchange {
+    safeString (o: any, k: any, d: any = undefined): any { return d; }
+    extend (...args: any[]): any { return args[0]; }
+    baseHelper (id: string) { return id; }
+}
+`;
+var G08_TEST_EXCHANGE = `import { Exchange, Dict, Str } from './base/Exchange';
+export class ex extends Exchange {
+    byString (id, options) {
+        if (id === 'ETH') { return options['chain']; }
+        return this.safeString (options, 'x', id);
+    }
+    byInt (count) { return count; }
+    mixedTypes (id) { this.mixedTypes ('a'); return this.mixedTypes (1); }
+    nilCompare (options) { if (options === undefined) { return 0; } return 1; }
+    declaredDict (config: Dict) { return config['a']; }
+    dynamic (id) { return id; }
+    baseHelper (id) { return id; }
+    run (opts) {
+        this.byString ('ETH', { 'chain': 'x' });
+        this.byInt (1);
+        this.mixedTypes ('a');
+        this.nilCompare (undefined);
+        this['dynamic'] ('x');
+        return this.baseHelper ('x');
+    }
+}
+`;
+function g08w3Check() {
+  const problems = [];
+  const ok = (condition, message) => {
+    if (!condition) {
+      problems.push("hx10 G08w3: " + message);
+    }
+  };
+  const tmp = fs2.mkdtempSync(path2.join(os.tmpdir(), "hx10-G08w3-"));
+  try {
+    const src = path2.join(tmp, "ts", "src");
+    fs2.mkdirSync(path2.join(src, "base"), { "recursive": true });
+    fs2.writeFileSync(path2.join(src, "base", "Exchange.ts"), G08_TEST_BASE);
+    fs2.writeFileSync(path2.join(src, "ex.ts"), G08_TEST_EXCHANGE);
+    const print = (install) => {
+      const t = new Transpiler({ "verbose": false, "go": {} });
+      if (install) {
+        installCcxtGoParamTypes(t.goTranspiler);
+      }
+      return t.transpileGoByPath(path2.join(src, "ex.ts")).content;
+    };
+    const body = (go, name) => go.split(/\nfunc /).find((f) => f.startsWith("(this *ex) " + name + "(")) ?? "";
+    const base = print(false);
+    const hooked = print(true);
+    ok(body(base, "ByString").indexOf("(id any, options any)") >= 0, "the base generator prints the parameters as any: " + body(base, "ByString"));
+    ok(body(hooked, "ByString").indexOf("(id string, options map[string]any)") >= 0, "the call-site type prints both parameters: " + body(hooked, "ByString"));
+    ok(body(hooked, "ByString").indexOf('options["chain"]') >= 0, "a typed map parameter reads natively");
+    ok(body(hooked, "ByString").indexOf("GetValue(options") < 0, "the map read keeps no helper call");
+    ok(body(hooked, "ByInt").indexOf("(count any)") >= 0, "a numeric call site keeps the box: " + body(hooked, "ByInt"));
+    ok(body(hooked, "MixedTypes").indexOf("(id any)") >= 0, "call sites of two types keep the box: " + body(hooked, "MixedTypes"));
+    ok(body(hooked, "NilCompare").indexOf("(options any)") >= 0, "a nil-compared parameter keeps the box");
+    ok(body(hooked, "NilCompare").indexOf("IsEqual(options, nil)") >= 0, "the nil compare keeps its helper");
+    ok(body(hooked, "BaseHelper").indexOf("(id any)") >= 0, "a base-member override keeps the base signature");
+    ok(body(hooked, "DeclaredDict").indexOf("(config any)") >= 0, "a declared type stays the printer's own decision: " + body(hooked, "DeclaredDict"));
+    ok(body(hooked, "Dynamic").indexOf("(id any)") >= 0, "a dynamically named call site keeps the box: " + body(hooked, "Dynamic"));
+    ok(body(base, "ByString") !== body(hooked, "ByString"), "the rule changes the base generator output");
+  } catch (e) {
+    problems.push("hx10 G08w3 threw: " + e.message);
+  } finally {
+    fs2.rmSync(tmp, { recursive: true, force: true });
+  }
+  return problems;
+}
+var GB01_DICT_PARAMS = {
+  "safeTrade": [0],
+  "safeLedgerEntry": [0],
+  "safeLiquidation": [0],
+  "safeCurrencyStructure": [0],
+  "mergeBalanceAccount": [0]
+};
+var GB01_TYPE = "map[string]any";
+var GB01_DEBUG = process.env.GB01_DEBUG === "1";
+var GB01_LENIENT = process.env.GB01_LENIENT === "1";
+var GB01_FAILURES = [];
+function gb01Log(message) {
+  GB01_FAILURES.push(message);
+  if (GB01_DEBUG || GB01_LENIENT) {
+    console.error("hx10 GB01: " + message);
+  }
+}
+function gb01IsBaseFile(fn) {
+  return /(^|[\\/])ts[\\/]src[\\/]base[\\/]/.test(String(fn.getSourceFile().fileName ?? ""));
+}
+function gb01UsesNullish(go, body, param) {
+  const SK2 = ts.SyntaxKind;
+  const name = param.name.text;
+  let found = false;
+  const visit = (n) => {
+    if (found || n === void 0) {
+      return;
+    }
+    if (n.kind === SK2.BinaryExpression && (n.operatorToken?.kind === SK2.QuestionQuestionToken || n.operatorToken?.kind === SK2.QuestionQuestionEqualsToken)) {
+      const left = n.left;
+      if (left?.kind === SK2.Identifier && left.text === name && go.goIdentifierRefersToDeclaration(left, param)) {
+        found = true;
+        return;
+      }
+    }
+    n.forEachChild(visit);
+  };
+  body.forEachChild(visit);
+  return found;
+}
+function gb01IsDictMethodCall(tree, text) {
+  const call = /^this\s*\.\s*([A-Za-z_$][\w$]*)\s*\(/.exec(text.trim());
+  if (call === null) {
+    return false;
+  }
+  const declRe = new RegExp("^[ \\t]+(?:async\\s+)?" + call[1] + "\\s*\\([^)]*\\)\\s*(:[^{;\\n]*)?\\{", "gm");
+  let found = 0;
+  for (const fileText of tree.fileText.values()) {
+    let match;
+    declRe.lastIndex = 0;
+    while ((match = declRe.exec(fileText)) !== null) {
+      if (match[1] === void 0 || match[1].replace(/^:\s*/, "").trim() !== "Dict") {
+        return false;
+      }
+      found++;
+    }
+  }
+  return found > 0;
+}
+function gb01CallSitesPassMap(go, fn, index) {
+  const name = fn.name.text;
+  for (const call of go.goSameFileCallsOf(fn, name)) {
+    const arg = call.arguments?.[index];
+    if (arg === void 0 || arg.kind === ts.SyntaxKind.SpreadElement) {
+      return false;
+    }
+    if (go.goPrintedArgType(arg) !== GB01_TYPE) {
+      return false;
+    }
+  }
+  const tree = go.goTsSrcTree(fn.getSourceFile());
+  if (tree === void 0) {
+    return false;
+  }
+  const myClass = go.goEnclosingClassName(fn);
+  const myFile = tree.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
+  const sites = tree.callIndex.get(name) ?? [];
+  if (sites.length === 0) {
+    return true;
+  }
+  for (const site of sites) {
+    if (site.file === myFile) {
+      continue;
+    }
+    if (!go.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
+      continue;
+    }
+    const arg = String(site.args?.[index] ?? "").trim();
+    if (arg.startsWith("{")) {
+      continue;
+    }
+    if (/^this\s*\.\s*(extend|deepExtend|keysort|indexBy|groupBy)\s*\(/.test(arg)) {
+      continue;
+    }
+    if (gb01IsDictMethodCall(tree, arg)) {
+      continue;
+    }
+    const identifier = /^([A-Za-z_$][\w$]*)$/.exec(arg);
+    if (identifier === null) {
+      return false;
+    }
+    const text = tree.fileText.get(site.file) ?? "";
+    const declRe = new RegExp("(?:const|let|var)\\s+" + identifier[1] + "\\s*(?::[^=]*)?=\\s*([^;\\n]+)", "g");
+    let declaration;
+    let match;
+    while ((match = declRe.exec(text)) !== null) {
+      if (match.index > site.at) {
+        break;
+      }
+      declaration = match;
+    }
+    if (declaration === void 0) {
+      return false;
+    }
+    const initializer = declaration[1].trim();
+    if (initializer.startsWith("{") || /^this\s*\.\s*(extend|deepExtend|safeDict)\s*\(/.test(initializer)) {
+      continue;
+    }
+    if (gb01IsDictMethodCall(tree, initializer)) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+function gb01Rejection(go, fn, param) {
+  const SK2 = ts.SyntaxKind;
+  if (param?.kind !== SK2.Parameter) {
+    return "not a parameter";
+  }
+  if (param.dotDotDotToken !== void 0 || param.initializer !== void 0) {
+    return "optional/variadic parameter";
+  }
+  if (param.name?.kind !== SK2.Identifier) {
+    return "destructured parameter";
+  }
+  if (fn?.kind !== SK2.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SK2.Identifier) {
+    return "not a method with a body";
+  }
+  if (go.isAsyncFunction(fn)) {
+    return "async method";
+  }
+  if (go.goMethodKeepsBaseSignature(fn) && !gb01IsBaseFile(fn)) {
+    const cls = go.goEnclosingClass(fn);
+    if ((cls?.heritageClauses ?? []).some((c) => c.token === SK2.ExtendsKeyword) === false) {
+      return "root class member";
+    }
+  }
+  const index = fn.parameters.indexOf(param);
+  const name = param.name.text;
+  if (!gb01CallSitesPassMap(go, fn, index)) {
+    return "call site passes another type";
+  }
+  if (!go.goLocalIsSafeToType(fn.body, param, name, GB01_TYPE)) {
+    return "body writes another type";
+  }
+  if (!go.goParameterKeepsNilCompareNative(fn.body, param, GB01_TYPE)) {
+    return "body nil-compares the parameter";
+  }
+  if (gb01UsesNullish(go, fn.body, param)) {
+    return "body reads the parameter with ??";
+  }
+  return void 0;
+}
+function gb01Derived(go, param) {
+  if (param?.kind !== ts.SyntaxKind.Parameter) {
+    return void 0;
+  }
+  const fn = param.parent;
+  if (fn?.kind !== ts.SyntaxKind.MethodDeclaration || fn.name?.kind !== ts.SyntaxKind.Identifier) {
+    return void 0;
+  }
+  const method = fn.name.text;
+  const indexes = Object.prototype.hasOwnProperty.call(GB01_DICT_PARAMS, method) ? GB01_DICT_PARAMS[method] : void 0;
+  if (indexes === void 0 || indexes.indexOf(fn.parameters.indexOf(param)) < 0) {
+    return void 0;
+  }
+  const reason = gb01Rejection(go, fn, param);
+  if (reason !== void 0) {
+    const file = String(fn.getSourceFile().fileName ?? "").split(/[\\/]/).slice(-3).join("/");
+    const message = `${file}: ${method}(${param.name?.text}) keeps the box: ${reason}`;
+    if (!GB01_LENIENT) {
+      if (!gb01IsBaseFile(fn) || reason === "not a parameter") {
+        throw new Error("hx10 GB01: " + message + " (the base prints map[string]any, an override must too)");
+      }
+    }
+    gb01Log(message);
+    return void 0;
+  }
+  if (GB01_DEBUG) {
+    gb01Log(`typed ${method}(${param.name.text}) in ${String(fn.getSourceFile().fileName ?? "")}`);
+  }
+  return GB01_TYPE;
+}
+function installCcxtGoDictParams(goTranspiler) {
+  const flag = "hx10GB01w8Installed";
+  const current = goTranspiler.goNativeParameterType;
+  if (current?.[flag] === true) {
+    return current;
+  }
+  const original = goTranspiler.goNativeParameterType;
+  const cache = /* @__PURE__ */ new Map();
+  const inProgress = /* @__PURE__ */ new Set();
+  const native = function(param) {
+    const answer = original.call(this, param);
+    if (answer !== void 0) {
+      return answer;
+    }
+    if (cache.has(param)) {
+      return cache.get(param);
+    }
+    if (inProgress.has(param)) {
+      return void 0;
+    }
+    inProgress.add(param);
+    let derived;
+    try {
+      derived = gb01Derived(this, param);
+    } finally {
+      inProgress.delete(param);
+    }
+    cache.set(param, derived);
+    return derived;
+  };
+  native[flag] = true;
+  goTranspiler.goNativeParameterType = native;
+  return native;
+}
+function hx10w8GB01Check() {
+  const problems = [];
+  const ok = (condition, message) => {
+    if (!condition) {
+      problems.push("hx10 GB01: " + message);
+    }
+  };
+  for (const entry of Object.values(GB01_DICT_PARAMS)) {
+    ok(entry.length > 0, "table entry without an index");
+  }
+  return problems;
+}
+var GB05_METHODS = {
+  "parseBalance": 0,
+  "safeBalance": 0,
+  "safePosition": 0,
+  "safeTicker": 0
+};
+var GB05_NULLISH_CACHE = /* @__PURE__ */ new WeakMap();
+function gb05DynamicCallees(fn) {
+  const file = fn.getSourceFile();
+  let names = GB05_NULLISH_CACHE.get(file);
+  if (names === void 0) {
+    names = /* @__PURE__ */ new Set();
+    const rx = /\[\s*['"]([A-Za-z_$][\w$]*)['"]\s*\]\s*\(/g;
+    const text = file.getFullText();
+    let m;
+    while ((m = rx.exec(text)) !== null) {
+      names.add(m[1]);
+    }
+    GB05_NULLISH_CACHE.set(file, names);
+  }
+  return names;
+}
+function gb05UsesNullish(go, body, param) {
+  const SK2 = ts.SyntaxKind;
+  const name = param.name.text;
+  let found = false;
+  const visit = (n) => {
+    if (found || n === void 0) {
+      return;
+    }
+    if (n.kind === SK2.BinaryExpression && (n.operatorToken?.kind === SK2.QuestionQuestionToken || n.operatorToken?.kind === SK2.QuestionQuestionEqualsToken)) {
+      const left = n.left;
+      if (left?.kind === SK2.Identifier && left.text === name && go.goIdentifierRefersToDeclaration(left, param)) {
+        found = true;
+        return;
+      }
+    }
+    n.forEachChild(visit);
+  };
+  body.forEachChild(visit);
+  return found;
+}
+function gb05Derived(go, param) {
+  const SK2 = ts.SyntaxKind;
+  if (param?.kind !== SK2.Parameter) {
+    return void 0;
+  }
+  if (param.dotDotDotToken !== void 0 || param.initializer !== void 0) {
+    return void 0;
+  }
+  if (param.name?.kind !== SK2.Identifier) {
+    return void 0;
+  }
+  const fn = param.parent;
+  if (fn?.kind !== SK2.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SK2.Identifier) {
+    return void 0;
+  }
+  const name = param.name.text;
+  if (name === "this" || name === "chan" || name === "optionalArgs") {
+    return void 0;
+  }
+  const methodName = fn.name.text;
+  const indexes = Object.prototype.hasOwnProperty.call(GB05_METHODS, methodName) ? GB05_METHODS[methodName] : void 0;
+  if (indexes === void 0) {
+    return void 0;
+  }
+  if (fn.parameters.indexOf(param) !== indexes) {
+    return void 0;
+  }
+  if (go.isAsyncFunction(fn)) {
+    return void 0;
+  }
+  const checker = go.checkerOrUndefined();
+  if (checker === void 0) {
+    return void 0;
+  }
+  const declared = param.type === void 0 ? void 0 : String(param.type.getText()).trim();
+  if (declared !== void 0 && declared !== "any" && declared !== "unknown" && declared !== "Dict") {
+    return void 0;
+  }
+  if (declared !== void 0 && declared !== "any" && declared !== "unknown" && !go.goParameterTypeIsDict(checker.getTypeAtLocation(param))) {
+    return void 0;
+  }
+  if (gb05DynamicCallees(fn).has(methodName)) {
+    return void 0;
+  }
+  if (!go.goHasTreeCallSite(fn)) {
+    return void 0;
+  }
+  if (!go.goParameterCallSitesPassType(fn, indexes, "map[string]any")) {
+    return void 0;
+  }
+  if (!go.goLocalIsSafeToType(fn.body, param, name, "map[string]any")) {
+    return void 0;
+  }
+  if (!go.goParameterKeepsNilCompareNative(fn.body, param, "map[string]any")) {
+    return void 0;
+  }
+  if (gb05UsesNullish(go, fn.body, param)) {
+    return void 0;
+  }
+  return "map[string]any";
+}
+function installCcxtGoGb05ParamTypes(goTranspiler) {
+  const flag = "hx10Gb05w8Installed";
+  const current = goTranspiler.goNativeParameterType;
+  if (current?.[flag] === true) {
+    return current;
+  }
+  const original = goTranspiler.goNativeParameterType;
+  const cache = /* @__PURE__ */ new Map();
+  const inProgress = /* @__PURE__ */ new Set();
+  const native = function(param) {
+    const answer = original.call(this, param);
+    if (answer !== void 0) {
+      return answer;
+    }
+    if (cache.has(param)) {
+      return cache.get(param);
+    }
+    if (inProgress.has(param)) {
+      return void 0;
+    }
+    inProgress.add(param);
+    let derived;
+    try {
+      derived = gb05Derived(this, param);
+    } finally {
+      inProgress.delete(param);
+    }
+    cache.set(param, derived);
+    return derived;
+  };
+  native[flag] = true;
+  goTranspiler.goNativeParameterType = native;
+  return native;
+}
+var GB05_TEST_BASE = `export type Dict = { [key: string]: any };
+export class Exchange {
+    fetchFrame (): any { return {}; }
+    safePosition (position: Dict): any { position['a'] = 1; return position; }
+    safeTicker (ticker: Dict): any { ticker['b'] = 2; return ticker; }
+    safeBalance (balance: Dict): any { return balance; }
+    safeOrder (order: Dict): any { return order; }
+    parseBalance (response): any { return response['total']; }
+    parseTicker (ticker: Dict): any { return ticker['c']; }
+}
+`;
+var GB05_TEST_EXCHANGE = `import { Exchange, Dict } from './base/Exchange';
+export class ex extends Exchange {
+    parseBalance (response) { return response['total']; }
+    run () {
+        this.safePosition ({ 'a': 1 });
+        this.safeTicker ({ 'b': 2 });
+        this.safeBalance ({ 'free': 1 });
+        this.parseBalance ({ 'total': 1 });
+        this.safeOrder ({ 'id': 1 });
+        this.parseTicker ({ 'c': 3 });
+        return 0;
+    }
+}
+`;
+function hx10w8GB05Check() {
+  const problems = [];
+  const ok = (condition, message) => {
+    if (!condition) {
+      problems.push("hx10 w8 GB05: " + message);
+    }
+  };
+  const tmp = fs2.mkdtempSync(path2.join(os.tmpdir(), "hx10-GB05w8-"));
+  try {
+    const src = path2.join(tmp, "ts", "src");
+    fs2.mkdirSync(path2.join(src, "base"), { recursive: true });
+    fs2.writeFileSync(path2.join(src, "base", "Exchange.ts"), GB05_TEST_BASE);
+    fs2.writeFileSync(path2.join(src, "ex.ts"), GB05_TEST_EXCHANGE);
+    const print = (file, install) => {
+      const t = new Transpiler({ verbose: false, go: {} });
+      if (install) {
+        installCcxtGoGb05ParamTypes(t.goTranspiler);
+      }
+      return t.transpileGoByPath(path2.join(src, file)).content;
+    };
+    const fnBody = (go, name) => go.split(/\nfunc /).find((f) => f.indexOf(" " + name + "(") >= 0) ?? "";
+    const base = print("base/Exchange.ts", false);
+    const baseHooked = print("base/Exchange.ts", true);
+    const exHooked = print("ex.ts", true);
+    const safePosition = fnBody(baseHooked, "SafePosition");
+    ok(safePosition.indexOf("(position map[string]any)") >= 0, "a proven frame parameter prints the map: " + safePosition);
+    ok(safePosition.indexOf('position["a"] = 1') >= 0, "the frame write is native: " + safePosition);
+    ok(safePosition.indexOf("AddElementToObject(position") < 0, "the frame write keeps no helper");
+    ok(fnBody(base, "SafePosition").indexOf("(position any)") >= 0, "the base generator boxes the frame parameter");
+    ok(fnBody(baseHooked, "SafeTicker").indexOf("(ticker map[string]any)") >= 0, "safeTicker types like safePosition");
+    ok(fnBody(baseHooked, "SafeBalance").indexOf("(balance map[string]any)") >= 0, "safeBalance types like safePosition");
+    ok(fnBody(exHooked, "ParseBalance").indexOf("(response map[string]any)") >= 0, "a venue parseBalance override types off its own call sites: " + fnBody(exHooked, "ParseBalance"));
+    ok(fnBody(exHooked, "ParseBalance").indexOf("GetValue(response") < 0, "the override reads the frame natively");
+    ok(fnBody(baseHooked, "ParseTicker").indexOf("(ticker any)") >= 0, "parseTicker keeps the box (IDerivedExchange pins it)");
+    ok(fnBody(baseHooked, "SafeOrder").indexOf("(order any)") >= 0, "a method outside the table keeps the box");
+  } catch (e) {
+    problems.push("hx10 w8 GB05 threw: " + e.message);
+  } finally {
+    fs2.rmSync(tmp, { recursive: true, force: true });
+  }
+  return problems;
+}
+var GB11_METHOD = "handleErrors";
+var GB11_INDEX = 0;
+var GB11_NUMERIC_TYPES = ["int", "number", "Int"];
+var GB11_COMPARISONS = {};
+function gb11ComparisonOperators(SK2) {
+  if (Object.keys(GB11_COMPARISONS).length !== 0) {
+    return GB11_COMPARISONS;
+  }
+  for (const op of [
+    "EqualsEqualsToken",
+    "EqualsEqualsEqualsToken",
+    "ExclamationEqualsToken",
+    "ExclamationEqualsEqualsToken",
+    "LessThanToken",
+    "LessThanEqualsToken",
+    "GreaterThanToken",
+    "GreaterThanEqualsToken"
+  ]) {
+    GB11_COMPARISONS[SK2[op]] = true;
+  }
+  return GB11_COMPARISONS;
+}
+function gb11RefersToParam(go, node, param) {
+  const checker = go.checkerOrUndefined();
+  if (checker === void 0) {
+    return false;
+  }
+  try {
+    const symbol = checker.getSymbolAtLocation(node);
+    return symbol?.valueDeclaration?.resolve() === param;
+  } catch (e) {
+    return false;
+  }
+}
+function gb11UsesAreIntOnly(go, body, param) {
+  const SK2 = ts.SyntaxKind;
+  const comparisons = gb11ComparisonOperators(SK2);
+  const name = param.name.text;
+  let ok = true;
+  const visit = (n) => {
+    if (!ok || n === void 0) {
+      return;
+    }
+    if (n.kind === SK2.Identifier && n.text === name && gb11RefersToParam(go, n, param)) {
+      const parent = n.parent;
+      if (parent?.kind === SK2.PropertyAccessExpression && parent.expression === n && parent.name?.text === "toString") {
+        return;
+      }
+      if (parent?.kind === SK2.BinaryExpression && comparisons[parent.operatorToken?.kind]) {
+        const other = parent.left === n ? parent.right : parent.left;
+        const literal = other?.kind === SK2.NumericLiteral || other?.kind === SK2.PrefixUnaryExpression && other.operator === SK2.MinusToken && other.operand?.kind === SK2.NumericLiteral;
+        if (!literal) {
+          ok = false;
+        }
+        return;
+      }
+      if (parent?.kind === SK2.CallExpression && (parent.arguments ?? []).includes(n)) {
+        const callee = parent.expression;
+        if (callee?.kind === SK2.PropertyAccessExpression && callee.name?.text === "parseToInt") {
+          return;
+        }
+      }
+      ok = false;
+      return;
+    }
+    n.forEachChild(visit);
+  };
+  body.forEachChild(visit);
+  return ok;
+}
+function gb11Derived(go, param) {
+  const SK2 = ts.SyntaxKind;
+  if (param?.kind !== SK2.Parameter) {
+    return void 0;
+  }
+  if (param.dotDotDotToken !== void 0 || param.initializer !== void 0) {
+    return void 0;
+  }
+  if (param.name?.kind !== SK2.Identifier) {
+    return void 0;
+  }
+  const fn = param.parent;
+  if (fn?.kind !== SK2.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SK2.Identifier) {
+    return void 0;
+  }
+  if (fn.name.text !== GB11_METHOD) {
+    return void 0;
+  }
+  if (fn.parameters.indexOf(param) !== GB11_INDEX) {
+    return void 0;
+  }
+  if (go.isAsyncFunction(fn)) {
+    return void 0;
+  }
+  const declared = param.type === void 0 ? void 0 : String(param.type.getText()).trim();
+  if (GB11_NUMERIC_TYPES.indexOf(declared) < 0) {
+    return void 0;
+  }
+  if (!go.goLocalIsSafeToType(fn.body, param, param.name.text, "int64")) {
+    return void 0;
+  }
+  if (!go.goParameterKeepsNilCompareNative(fn.body, param, "int64")) {
+    return void 0;
+  }
+  if (!gb11UsesAreIntOnly(go, fn.body, param)) {
+    return void 0;
+  }
+  return "int64";
+}
+function gb11SplitArgs(text) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  let quote;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote !== void 0) {
+      if (c === "\\") {
+        i++;
+        continue;
+      }
+      if (c === quote) {
+        quote = void 0;
+      }
+      continue;
+    }
+    if (c === '"' || c === "`" || c === "'") {
+      quote = c;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{") {
+      depth++;
+      continue;
+    }
+    if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      continue;
+    }
+    if (c === "," && depth === 0) {
+      parts.push(text.substring(start, i));
+      start = i + 1;
+    }
+  }
+  if (quote !== void 0 || depth !== 0) {
+    return void 0;
+  }
+  parts.push(text.substring(start));
+  return parts;
+}
+function gb11ArgIsInt64(go, arg) {
+  const SK2 = ts.SyntaxKind;
+  if (arg?.kind === SK2.NumericLiteral) {
+    return true;
+  }
+  if (arg?.kind === SK2.PrefixUnaryExpression && arg.operator === SK2.MinusToken && arg.operand?.kind === SK2.NumericLiteral) {
+    return true;
+  }
+  return go.goPrintedArgType(arg) === "int64";
+}
+function gb11CodeArg(go, node, printed) {
+  const SK2 = ts.SyntaxKind;
+  const callee = node.expression;
+  if (callee?.kind !== SK2.PropertyAccessExpression) {
+    return void 0;
+  }
+  if (callee.name?.text !== GB11_METHOD) {
+    return void 0;
+  }
+  if (callee.expression?.kind !== SK2.ThisKeyword) {
+    return void 0;
+  }
+  const args = node.arguments ?? [];
+  if (args.length === 0 || args.some((a) => a.kind === SK2.SpreadElement)) {
+    return void 0;
+  }
+  if (gb11ArgIsInt64(go, args[0])) {
+    return void 0;
+  }
+  const parts = gb11SplitArgs(printed);
+  if (parts === void 0 || parts.length !== args.length) {
+    return void 0;
+  }
+  parts[0] = "this.ParseToInt(" + parts[0].trim() + ")";
+  return parts.join(",");
+}
+function installCcxtGoGb11HandleErrorsCode(goTranspiler) {
+  const flag = "hx10Gb11w9Installed";
+  const current = goTranspiler.goNativeParameterType;
+  if (current?.[flag] === true) {
+    return current;
+  }
+  const originalArgs = goTranspiler.goUnifiedStringCallArgs;
+  const args = function(node, identation, flat = false) {
+    const printed = originalArgs.call(this, node, identation, flat);
+    if (printed === void 0) {
+      return printed;
+    }
+    const rewritten = gb11CodeArg(this, node, printed);
+    return rewritten !== void 0 ? rewritten : printed;
+  };
+  args[flag] = true;
+  goTranspiler.goUnifiedStringCallArgs = args;
+  const original = goTranspiler.goNativeParameterType;
+  const cache = /* @__PURE__ */ new Map();
+  const inProgress = /* @__PURE__ */ new Set();
+  const native = function(param) {
+    const answer = original.call(this, param);
+    if (answer !== void 0) {
+      return answer;
+    }
+    if (cache.has(param)) {
+      return cache.get(param);
+    }
+    if (inProgress.has(param)) {
+      return void 0;
+    }
+    inProgress.add(param);
+    let derived;
+    try {
+      derived = gb11Derived(this, param);
+    } finally {
+      inProgress.delete(param);
+    }
+    cache.set(param, derived);
+    return derived;
+  };
+  native[flag] = true;
+  goTranspiler.goNativeParameterType = native;
+  return native;
+}
+var GB11_TEST_BASE = `export type Dict = { [key: string]: any };
+export class Exchange {
+    id: string = 'x';
+    safeInteger (o: any, k: string): any { return o[k]; }
+    handleErrors (statusCode: int, statusText: string, url: string, method: string, responseHeaders: Dict, responseBody: string, response: any, requestHeaders: any, requestBody: any) {
+        throw new Error (this.id + ' not implemented');
+    }
+}
+`;
+var GB11_TEST_EXCHANGE = `import { Exchange, Dict } from './base/Exchange';
+export class ex extends Exchange {
+    override handleErrors (code: int, reason: string, url: string, method: string, headers: Dict, body: string, response: any, requestHeaders: any, requestBody: any) {
+        if ((code === 418) || (code === 429)) {
+            throw new Error (this.id + ' ' + code.toString () + ' ' + reason);
+        }
+        if (code >= 400) {
+            throw new Error ('http ' + code.toString ());
+        }
+        return undefined;
+    }
+    handleOther (code: int) { return code === 400; }
+    run (err: any) {
+        const code = this.safeInteger (err, 'code');
+        this.handleErrors (code, '', '', '', {}, '', err, {}, {});
+        this.handleErrors (418, '', '', '', {}, '', err, {}, {});
+    }
+}
+`;
+var GB11_TEST_UNSAFE = `import { Exchange, Dict } from './base/Exchange';
+export class ex extends Exchange {
+    override handleErrors (code: int, reason: string, url: string, method: string, headers: Dict, body: string, response: any, requestHeaders: any, requestBody: any) {
+        if (code === undefined) { return undefined; }
+        return undefined;
+    }
+}
+`;
+var GB11_TEST_NULLABLE = `import { Exchange, Dict } from './base/Exchange';
+export class ex extends Exchange {
+    override handleErrors (code: Int, reason: string, url: string, method: string, headers: Dict, body: string, response: any, requestHeaders: any, requestBody: any) {
+        if (code === 401) { return undefined; }
+        return undefined;
+    }
+}
+`;
+var GB11_TEST_REASSIGNED = `import { Exchange, Dict } from './base/Exchange';
+export class ex extends Exchange {
+    override handleErrors (code: any, reason: string, url: string, method: string, headers: Dict, body: string, response: any, requestHeaders: any, requestBody: any) {
+        code = this.safeString (response, 'code');
+        if (code === 400) { return undefined; }
+        return undefined;
+    }
+}
+`;
+function hx10w9GB11Check() {
+  const problems = [];
+  const ok = (condition, message) => {
+    if (!condition) {
+      problems.push("hx10 w9 GB11: " + message);
+    }
+  };
+  const tmp = fs2.mkdtempSync(path2.join(os.tmpdir(), "hx10-GB11w9-"));
+  try {
+    const src = path2.join(tmp, "ts", "src");
+    fs2.mkdirSync(path2.join(src, "base"), { recursive: true });
+    fs2.writeFileSync(path2.join(src, "base", "Exchange.ts"), GB11_TEST_BASE);
+    fs2.writeFileSync(path2.join(src, "ex.ts"), GB11_TEST_EXCHANGE);
+    fs2.writeFileSync(path2.join(src, "unsafe.ts"), GB11_TEST_UNSAFE);
+    fs2.writeFileSync(path2.join(src, "reassigned.ts"), GB11_TEST_REASSIGNED);
+    fs2.writeFileSync(path2.join(src, "nullable.ts"), GB11_TEST_NULLABLE);
+    const print = (file, install) => {
+      const t = new Transpiler({ verbose: false, go: { unifiedStringParams: { "handleErrors": [2, 5] } } });
+      if (install) {
+        installCcxtGoGb11HandleErrorsCode(t.goTranspiler);
+      }
+      return t.transpileGoByPath(path2.join(src, file)).content;
+    };
+    const fnBody = (go, name) => go.split(/\nfunc /).find((f) => f.indexOf(" " + name + "(") >= 0) ?? "";
+    const base = print("base/Exchange.ts", false);
+    const baseHooked = print("base/Exchange.ts", true);
+    const exHooked = print("ex.ts", true);
+    const handle = fnBody(exHooked, "HandleErrors");
+    ok(fnBody(base, "HandleErrors").indexOf("(statusCode any,") >= 0, "the base generator boxes the code");
+    ok(fnBody(baseHooked, "HandleErrors").indexOf("(statusCode int64,") >= 0, "the base method types the code: " + fnBody(baseHooked, "HandleErrors"));
+    ok(handle.indexOf("(code int64,") >= 0, "a venue override types the code: " + handle);
+    ok(handle.indexOf("code == 418") >= 0, "a numeric comparison is native: " + handle);
+    ok(handle.indexOf("code >= 400") >= 0, "an ordered comparison is native: " + handle);
+    ok(handle.indexOf("IsEqual(code") < 0 && handle.indexOf("IsGreaterThan") < 0, "no comparison helper survives");
+    ok(handle.indexOf("ToString(code)") < 0, "the string conversion bails out of the helper: " + handle);
+    ok(fnBody(exHooked, "HandleOther").indexOf("(code any)") >= 0, "a method outside the table keeps the box");
+    ok(fnBody(print("unsafe.ts", true), "HandleErrors").indexOf("(code any,") >= 0, "a nil compare keeps the box");
+    ok(fnBody(print("reassigned.ts", true), "HandleErrors").indexOf("(code any,") >= 0, "a written code keeps the box");
+    ok(fnBody(print("nullable.ts", true), "HandleErrors").indexOf("(code int64,") >= 0, "a nullable Int without a nil compare types the code");
+    const run = fnBody(exHooked, "Run");
+    ok(run.indexOf("this.HandleErrors(this.ParseToInt(code),") >= 0, "a boxed call argument converts: " + run);
+    ok(run.indexOf("this.HandleErrors(418,") >= 0, "a numeric literal stays a literal: " + run);
+  } catch (e) {
+    problems.push("hx10 w9 GB11 threw: " + e.message);
+  } finally {
+    fs2.rmSync(tmp, { recursive: true, force: true });
+  }
+  return problems;
+}
+var SIGN_API_METHODS = { "sign": 1, "fetch2": 1, "request": 1 };
+function signApiParameter(param) {
+  const SK2 = ts.SyntaxKind;
+  const fn = param?.parent;
+  if (param?.kind !== SK2.Parameter || fn?.kind !== SK2.MethodDeclaration || fn.name?.kind !== SK2.Identifier) {
+    return false;
+  }
+  if (SIGN_API_METHODS[fn.name.text] !== fn.parameters.indexOf(param)) {
+    return false;
+  }
+  if (String(param.type?.getText?.() ?? "").replace(/\s+/g, "") !== "string[]") {
+    return false;
+  }
+  const init = param.initializer;
+  return init?.kind === SK2.ArrayLiteralExpression && (init.elements ?? []).every((e) => e.kind === SK2.StringLiteral);
+}
+function signApiElement(go, node) {
+  const SK2 = ts.SyntaxKind;
+  if (node?.kind !== SK2.ElementAccessExpression || node.expression?.kind !== SK2.Identifier || node.argumentExpression?.kind !== SK2.NumericLiteral || !/^\d+$/.test(String(node.argumentExpression.text))) {
+    return false;
+  }
+  const decl = go.checkerOrUndefined()?.getSymbolAtLocation(node.expression)?.valueDeclaration?.resolve();
+  return signApiParameter(decl) && go.goGetArgParameterType(decl) === "[]string";
+}
+function installCcxtGoSignTyping(goTranspiler) {
+  const flag = "hx11SignTypingInstalled";
+  if (goTranspiler[flag] === true) {
+    return;
+  }
+  goTranspiler[flag] = true;
+  const printLiteral = goTranspiler.printArrayLiteralExpression;
+  goTranspiler.printArrayLiteralExpression = function(node, ...rest) {
+    if (signApiParameter(node?.parent)) {
+      this.goSliceLiteralTypes.set(node, "[]string");
+    }
+    return printLiteral.call(this, node, ...rest);
+  };
+  const printElement = goTranspiler.printElementAccessExpression;
+  goTranspiler.printElementAccessExpression = function(node, ...rest) {
+    if (signApiElement(this, node) && !this.isGoElementAccessAssignmentTarget(node)) {
+      return node.expression.text + "[" + node.argumentExpression.text + "]";
+    }
+    return printElement.call(this, node, ...rest);
+  };
+  const initType = goTranspiler.goTypeOfInitializer;
+  goTranspiler.goTypeOfInitializer = function(node, printed) {
+    if (signApiElement(this, node)) {
+      return "string";
+    }
+    return initType.call(this, node, printed);
+  };
+  const original = goTranspiler.goGetArgParameterType;
+  goTranspiler.goGetArgParameterType = function(decl) {
+    const answer = original.call(this, decl);
+    if (answer !== void 0 || !signApiParameter(decl)) {
+      return answer;
+    }
+    if (!this.goLocalIsSafeToType(decl.parent.body, decl, decl.name.text, "[]string")) {
+      return void 0;
+    }
+    return "[]string";
+  };
+}
+var SUBSCRIPTIONS_CLASS = "Client";
+function clientSubscriptions(go, node) {
+  const SK2 = ts.SyntaxKind;
+  if (node?.kind !== SK2.PropertyAccessExpression || node.name?.text !== "subscriptions") {
+    return void 0;
+  }
+  const checker = go.checkerOrUndefined();
+  const symbol = checker?.getSymbolAtLocation(node.name);
+  if (symbol === void 0) {
+    const flags = checker?.getTypeAtLocation(node.expression)?.flags ?? 0;
+    return (flags & TypeFlags4.Any) !== 0 ? node : void 0;
+  }
+  const decl = symbol.valueDeclaration?.resolve();
+  if (decl?.kind !== SK2.PropertyDeclaration && decl?.kind !== SK2.PropertySignature) {
+    return void 0;
+  }
+  return decl.parent?.name?.text === SUBSCRIPTIONS_CLASS ? node : void 0;
+}
+function clientIsInterfaceFrame(node) {
+  let current = node;
+  while (current !== void 0 && current.parent !== void 0) {
+    current = current.parent;
+  }
+  const fileName = current !== void 0 && current.fileName !== void 0 ? String(current.fileName) : "";
+  return /(^|[\\/])ts[\\/]src[\\/](pro|prediction)[\\/]/.test(fileName);
+}
+function installFmGo5G01(goTranspiler) {
+  const flag = "fmGo5G01Installed";
+  if (goTranspiler[flag] === true) {
+    return;
+  }
+  goTranspiler[flag] = true;
+  const SK2 = ts.SyntaxKind;
+  const owner = (go, access) => {
+    const printed = go.printNode(access.expression, 0);
+    return clientIsInterfaceFrame(access) ? printed + ".(ClientInterface)" : printed;
+  };
+  const printAccess = goTranspiler.printPropertyAccessExpression;
+  goTranspiler.printPropertyAccessExpression = function(node, identation) {
+    if (clientSubscriptions(this, node) !== void 0) {
+      return owner(this, node) + ".SubscriptionsSnapshot()";
+    }
+    return printAccess.call(this, node, identation);
+  };
+  const printElement = goTranspiler.printElementAccessExpression;
+  goTranspiler.printElementAccessExpression = function(node, ...rest) {
+    if (this.isGoElementAccessAssignmentTarget(node)) {
+      return printElement.call(this, node, ...rest);
+    }
+    const keys = [];
+    let root = node;
+    while (root?.kind === SK2.ElementAccessExpression) {
+      keys.unshift(root.argumentExpression);
+      root = root.expression;
+    }
+    const table = clientSubscriptions(this, root);
+    if (table === void 0) {
+      return printElement.call(this, node, ...rest);
+    }
+    if (keys.length === 1) {
+      const declaration = node.parent;
+      if (declaration?.kind === SK2.VariableDeclaration && declaration.initializer === node && declaration.parent?.parent?.kind === SK2.FirstStatement) {
+        const base = printElement.call(this, node, ...rest);
+        if (this.getGoLocalType(declaration, base) === "any") {
+          return base;
+        }
+      }
+    }
+    let acc = owner(this, table) + ".SubscriptionGet(" + this.printNode(keys[0], 0) + ")";
+    for (let i = 1; i < keys.length; i++) {
+      acc = this.ELEMENT_ACCESS_WRAPPER_OPEN + acc + ", " + this.printNode(keys[i], 0) + this.ELEMENT_ACCESS_WRAPPER_CLOSE;
+    }
+    return acc;
+  };
+  const printDelete = goTranspiler.printDeleteExpression;
+  goTranspiler.printDeleteExpression = function(node, identation) {
+    const target = node.expression;
+    const table = target?.kind === SK2.ElementAccessExpression ? clientSubscriptions(this, target.expression) : void 0;
+    if (table !== void 0) {
+      return owner(this, table) + ".SubscriptionDel(" + this.printNode(target.argumentExpression, 0) + ")";
+    }
+    return printDelete.call(this, node, identation);
+  };
+  const printBinary = goTranspiler.printBinaryExpression;
+  goTranspiler.printBinaryExpression = function(node, identation) {
+    const op = node.operatorToken?.kind;
+    if (op === SK2.InKeyword) {
+      const table = clientSubscriptions(this, node.right);
+      if (table !== void 0) {
+        return owner(this, table) + ".SubscriptionHas(" + this.printNode(node.left, 0) + ")";
+      }
+    } else if (op === SK2.EqualsToken && node.left?.kind === SK2.ElementAccessExpression) {
+      const keys = [];
+      let root = node.left;
+      while (root?.kind === SK2.ElementAccessExpression) {
+        keys.unshift(root.argumentExpression);
+        root = root.expression;
+      }
+      const table = clientSubscriptions(this, root);
+      if (table !== void 0) {
+        const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(node.right, identation)).trimStart();
+        if (keys.length === 1) {
+          return owner(this, table) + ".SubscriptionSet(" + this.printNode(keys[0], 0) + ", " + value + ")";
+        }
+        let acc = owner(this, table) + ".SubscriptionGet(" + this.printNode(keys[0], 0) + ")";
+        for (let i = 1; i < keys.length - 1; i++) {
+          acc = this.ELEMENT_ACCESS_WRAPPER_OPEN + acc + ", " + this.printNode(keys[i], 0) + this.ELEMENT_ACCESS_WRAPPER_CLOSE;
+        }
+        return "AddElementToObject(" + acc + ", " + this.printNode(keys[keys.length - 1], 0) + ", " + value + ")";
+      }
+    }
+    return printBinary.call(this, node, identation);
+  };
+  const tableCall = (original, suffix) => function(node, identation, parsedArg = void 0) {
+    const table = clientSubscriptions(this, node.arguments?.[0]);
+    if (table !== void 0) {
+      return owner(this, table) + "." + suffix + "()";
+    }
+    return original.call(this, node, identation, parsedArg);
+  };
+  goTranspiler.printObjectKeysCall = tableCall(goTranspiler.printObjectKeysCall, "SubscriptionKeys");
+  goTranspiler.printObjectValuesCall = tableCall(goTranspiler.printObjectValuesCall, "SubscriptionValues");
+  const initType = goTranspiler.goTypeOfInitializer;
+  goTranspiler.goTypeOfInitializer = function(node, printed) {
+    if (node?.kind === SK2.BinaryExpression && node.operatorToken?.kind === SK2.InKeyword && clientSubscriptions(this, node.right) !== void 0) {
+      return "bool";
+    }
+    if (node?.kind === SK2.CallExpression && node.arguments?.length === 1 && clientSubscriptions(this, node.arguments[0]) !== void 0) {
+      const callee = node.expression?.getText?.();
+      if (callee === "Object.keys") {
+        return "[]string";
+      }
+      if (callee === "Object.values") {
+        return "[]any";
+      }
+    }
+    return initType.call(this, node, printed);
+  };
+  const dictValue = goTranspiler.goSafeDictUnboxValue;
+  goTranspiler.goSafeDictUnboxValue = function(declaration, identation) {
+    const known = dictValue.call(this, declaration, identation);
+    let initializer = declaration.initializer;
+    while (initializer?.kind === SK2.AsExpression || initializer?.kind === SK2.ParenthesizedExpression || initializer?.kind === SK2.NonNullExpression) {
+      initializer = initializer.expression;
+    }
+    const args = known !== void 0 ? this.goSafeDictLocalArgs(initializer) : void 0;
+    const table = args !== void 0 ? clientSubscriptions(this, args.container) : void 0;
+    if (table !== void 0 && known.startsWith("SafeMapTyped(")) {
+      return owner(this, table) + ".SubscriptionDict(" + this.printNode(args.key, 0) + ")";
+    }
+    return known;
+  };
+}
+var OWNER_CLASSES = ["BaseExchange", "PredictionExchange"];
+var NIL_TESTABLE_FIELDS = /* @__PURE__ */ new Set([
+  "Outcomes",
+  "Outcomes_by_id",
+  "Events_by_slug",
+  "Features",
+  "ProxyUrl",
+  "Proxy",
+  "Proxy_url",
+  "ProxyUrlCallback",
+  "Proxy_url_callback",
+  "Markets",
+  "Markets_by_id",
+  "Currencies",
+  "Currencies_by_id"
+]);
+function isNilLiteral(node) {
+  return node?.kind === ts.SyntaxKind.NullKeyword || node?.kind === ts.SyntaxKind.Identifier && node.text === "undefined";
+}
+function nilTestableBaseField(go, node) {
+  const SK2 = ts.SyntaxKind;
+  if (node?.kind !== SK2.PropertyAccessExpression || node.expression?.kind !== SK2.ThisKeyword || node.name?.kind !== SK2.Identifier) {
+    return false;
+  }
+  if (!NIL_TESTABLE_FIELDS.has(go.transformPropertyAccessExpressionName(node.name.text, node.name))) {
+    return false;
+  }
+  const decl = go.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+  return decl?.kind === SK2.PropertyDeclaration && OWNER_CLASSES.includes(decl.parent?.name?.text);
+}
+function negativeIntegerLiteral(node) {
+  const SK2 = ts.SyntaxKind;
+  return node?.kind === SK2.PrefixUnaryExpression && node.operator === SK2.MinusToken && node.operand?.kind === SK2.NumericLiteral && /^\d{1,15}$/.test(node.operand.text) ? node.operand.text : void 0;
+}
+function installFmGo5G04(goTranspiler) {
+  const flag = "fmGo5G04Installed";
+  if (goTranspiler[flag] === true || typeof goTranspiler.printInlineEquality !== "function") {
+    return;
+  }
+  goTranspiler[flag] = true;
+  const upstream = goTranspiler.printInlineEquality;
+  goTranspiler.printInlineEquality = function(left, right, leftText, rightText, isEq) {
+    const SK2 = ts.SyntaxKind;
+    const op = isEq ? ["==", "!="] : ["!=", "=="];
+    if (isNilLiteral(right) && nilTestableBaseField(this, left)) {
+      return `(${leftText} ${op[0]} nil)`;
+    }
+    if (isNilLiteral(left) && nilTestableBaseField(this, right)) {
+      return `(${rightText} ${op[0]} nil)`;
+    }
+    for (const [ptr, lit, ptrText, ptrIsLeft] of [[left, right, leftText, true], [right, left, rightText, false]]) {
+      const digits = negativeIntegerLiteral(lit);
+      if (digits === void 0 || ptr?.kind !== SK2.Identifier) {
+        continue;
+      }
+      const declared = this.goDeclaredTypeOfIdentifier(ptr);
+      if (declared !== "*int64" && declared !== "*float64" && declared !== "*int") {
+        continue;
+      }
+      const constant = declared === "*int" ? `-${digits}` : `${declared.substring(1)}(-${digits})`;
+      const value = `*${ptrText}`;
+      const lhs = ptrIsLeft ? value : constant;
+      const rhs = ptrIsLeft ? constant : value;
+      return isEq ? `(${ptrText} != nil && ${lhs} == ${rhs})` : `(${ptrText} == nil || ${lhs} != ${rhs})`;
+    }
+    return upstream.call(this, left, right, leftText, rightText, isEq);
+  };
+}
+var SLOT_TYPE = { "SafeStringPtr": "*string", "MapTyped": "map[string]any", "GetValueBool": "bool", "Int64Value": "int64" };
+var POINTER_TWIN = { "bool": "*bool", "int64": "*int64" };
 var OWNER_CLASS = "BaseExchange";
+function baseTupleCall(go, node) {
+  if (!ccxtGoTupleResultCall(node)) {
+    return void 0;
+  }
+  try {
+    const declaration = go.checkerOrUndefined()?.getResolvedSignature(node)?.declaration?.resolve();
+    return declaration?.parent?.name?.text === OWNER_CLASS ? node : void 0;
+  } catch (e) {
+    return void 0;
+  }
+}
+function isFirstElement(node) {
+  return node?.kind === ts.SyntaxKind.ElementAccessExpression && node.argumentExpression?.kind === ts.SyntaxKind.NumericLiteral && node.argumentExpression.text === "0";
+}
+function firstResultSource(go, declaration) {
+  if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts.SyntaxKind.Identifier || !isFirstElement(declaration.initializer)) {
+    return void 0;
+  }
+  const base = declaration.initializer.expression;
+  const direct = baseTupleCall(go, base);
+  if (direct !== void 0) {
+    return { "call": direct, "held": false };
+  }
+  const holder = heldHolder(go, base);
+  return holder === void 0 ? void 0 : { "call": baseTupleCall(go, holder.initializer), "held": true, "holder": holder };
+}
+function heldHolder(go, identifier) {
+  if (identifier?.kind !== ts.SyntaxKind.Identifier) {
+    return void 0;
+  }
+  let holder;
+  try {
+    holder = go.checkerOrUndefined()?.getSymbolAtLocation(identifier)?.valueDeclaration?.resolve();
+  } catch (e) {
+    return void 0;
+  }
+  const list = holder?.parent;
+  const statement = list?.parent;
+  if (holder?.kind !== ts.SyntaxKind.VariableDeclaration || holder.name?.kind !== ts.SyntaxKind.Identifier || (list.flags & ts.NodeFlags.Const) === 0 || list.declarations.length !== 1 || statement?.kind !== ts.SyntaxKind.FirstStatement || baseTupleCall(go, holder.initializer) === void 0) {
+    return void 0;
+  }
+  const siblings = statement.parent?.statements;
+  const reader = siblings?.[siblings.indexOf(statement) + 1];
+  if (siblings === void 0 || reader?.kind !== ts.SyntaxKind.FirstStatement || reader.declarationList.declarations.length !== 1 || reader.declarationList.declarations[0].initializer?.expression?.text !== holder.name.text) {
+    return void 0;
+  }
+  const scope = go.goEnclosingFunction(holder);
+  let reads = 0;
+  go.hasNodeWhere(scope, (n) => {
+    if (n.kind === ts.SyntaxKind.Identifier && n.text === holder.name.text && n !== holder.name) {
+      reads++;
+    }
+    return false;
+  });
+  return reads === 1 ? holder : void 0;
+}
+var ABSORBED = "FMGO5GP08";
+function readerOf(go, holderDeclaration) {
+  const siblings = holderDeclaration.parent?.parent?.parent?.statements;
+  return siblings?.[siblings.indexOf(holderDeclaration.parent.parent) + 1]?.declarationList?.declarations?.[0];
+}
+function installFmGo5GP08(goTranspiler) {
+  const flag = "fmGo5GP08Installed";
+  if (goTranspiler[flag] === true || typeof goTranspiler.printVariableDeclarationList !== "function") {
+    return;
+  }
+  goTranspiler[flag] = true;
+  const upstream = goTranspiler.printVariableDeclarationList;
+  goTranspiler.printVariableDeclarationList = function(node, identation) {
+    const printed = upstream.call(this, node, identation);
+    const declaration = node?.declarations?.[0];
+    if (typeof printed !== "string" || node.declarations.length !== 1 || node.parent?.kind !== ts.SyntaxKind.FirstStatement) {
+      return printed;
+    }
+    if (declaration.name?.kind === ts.SyntaxKind.Identifier && baseTupleCall(this, declaration.initializer) !== void 0) {
+      const reader = readerOf(this, declaration);
+      const source2 = reader === void 0 ? void 0 : firstResultSource(this, reader);
+      const folded2 = source2 === void 0 || source2.holder !== declaration ? void 0 : this.fmGo5GP08Shape(reader, source2, identation);
+      return folded2 === void 0 ? printed : folded2;
+    }
+    const source = firstResultSource(this, declaration);
+    if (source === void 0) {
+      return printed;
+    }
+    const folded = this.fmGo5GP08Shape(declaration, source, identation);
+    if (folded === void 0) {
+      return printed;
+    }
+    return source.held ? ABSORBED : folded;
+  };
+  const printFile = goTranspiler.printSourceFileStatements;
+  goTranspiler.printSourceFileStatements = function(node, identation) {
+    const out = printFile.call(this, node, identation);
+    return typeof out === "string" && out.includes(ABSORBED) ? out.split(ABSORBED + "\n").join("").split(ABSORBED).join("") : out;
+  };
+  goTranspiler.fmGo5GP08Shape = function(declaration, source, identation) {
+    const slot = SLOT_TYPE[ccxtGoTupleResultFirst(source.call)];
+    const bound = ccxtGoTupleResultUnwrap(this.printNode(source.call, 0));
+    if (slot === void 0 || bound === void 0 || bound.includes("\n")) {
+      return void 0;
+    }
+    const type = this.getGoLocalType(declaration, this.printNode(declaration.initializer, 0));
+    const name = this.printNode(declaration.name, 0);
+    const iden = this.getIden(identation);
+    if (type === slot || slot === "map[string]any" && type === "any" && !source.held) {
+      return source.held && type.charAt(0) === "*" ? iden + "var " + name + " " + type + " = nil\n" + iden + name + ", _ = " + bound : iden + name + ", _ := " + bound;
+    }
+    if (POINTER_TWIN[slot] === type) {
+      const temporary = name + "Value";
+      let clashes = false;
+      this.hasNodeWhere(this.goEnclosingFunction(declaration), (n) => {
+        clashes = clashes || n.kind === ts.SyntaxKind.Identifier && n.text === temporary;
+        return false;
+      });
+      return clashes ? void 0 : iden + temporary + ", _ := " + bound + "\n" + iden + name + " := &" + temporary;
+    }
+    return void 0;
+  };
+}
+var OWNER_CLASS_hx11fmgo5_OG02 = "BaseExchange";
+function unparen(node) {
+  while (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+    node = node.expression;
+  }
+  return node;
+}
+function baseMemberDecl(go, node, name) {
+  const SK2 = ts.SyntaxKind;
+  if (node?.kind !== SK2.PropertyAccessExpression || node.expression?.kind !== SK2.ThisKeyword || node.name?.text !== name) {
+    return void 0;
+  }
+  const decl = go.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+  if (decl === void 0 || decl.parent?.name?.text !== OWNER_CLASS_hx11fmgo5_OG02) {
+    return void 0;
+  }
+  return decl;
+}
+function isBaseCall(go, node, name, args) {
+  node = unparen(node);
+  return node?.kind === ts.SyntaxKind.CallExpression && (node.arguments?.length ?? 0) === args && baseMemberDecl(go, node.expression, name) !== void 0;
+}
+function callStatement(go, stmt, name) {
+  return stmt?.kind === ts.SyntaxKind.ExpressionStatement && isBaseCall(go, stmt.expression, name, 0);
+}
+function constDecl(stmt) {
+  const SK2 = ts.SyntaxKind;
+  if (stmt?.kind !== SK2.VariableStatement) {
+    return void 0;
+  }
+  const declarations = stmt.declarationList?.declarations;
+  if (declarations?.length !== 1 || declarations[0].name?.kind !== SK2.Identifier || declarations[0].initializer === void 0) {
+    return void 0;
+  }
+  return declarations[0];
+}
+function stringLiteral(node) {
+  return node?.kind === ts.SyntaxKind.StringLiteral ? node : void 0;
+}
+function optionWrite(go, stmt) {
+  const SK2 = ts.SyntaxKind;
+  const e = stmt?.kind === SK2.ExpressionStatement ? stmt.expression : void 0;
+  if (e?.kind !== SK2.BinaryExpression || e.operatorToken?.kind !== SK2.EqualsToken) {
+    return void 0;
+  }
+  const target = e.left;
+  if (target?.kind !== SK2.ElementAccessExpression || baseMemberDecl(go, target.expression, "options") === void 0 || stringLiteral(target.argumentExpression) === void 0 || e.right?.kind !== SK2.Identifier) {
+    return void 0;
+  }
+  return [target.argumentExpression, e.right.text];
+}
+function counterRead(go, node) {
+  node = unparen(node);
+  if (!isBaseCall(go, node, "safeInteger", 3)) {
+    return void 0;
+  }
+  const [options, key, dflt] = node.arguments;
+  if (baseMemberDecl(go, options, "options") === void 0 || stringLiteral(key) === void 0 || dflt?.kind !== ts.SyntaxKind.NumericLiteral || dflt.text !== "0") {
+    return void 0;
+  }
+  return key;
+}
+function countIdentifier(root, name) {
+  let n = 0;
+  const visit = (node) => {
+    if (node.kind === ts.SyntaxKind.Identifier && node.text === name) {
+      n++;
+    }
+    node.forEachChild(visit);
+  };
+  visit(root);
+  return n;
+}
+function counterSpan(go, body, fn) {
+  const SK2 = ts.SyntaxKind;
+  const sumOfOne = (call) => {
+    call = unparen(call);
+    return isBaseCall(go, call, "sum", 2) && call.arguments[1]?.kind === SK2.NumericLiteral && call.arguments[1].text === "1" ? call : void 0;
+  };
+  if (body.length === 2) {
+    const decl = constDecl(body[0]);
+    const write = optionWrite(go, body[1]);
+    const sum = decl !== void 0 ? sumOfOne(decl.initializer) : void 0;
+    const key = sum !== void 0 ? counterRead(go, sum.arguments[0]) : void 0;
+    if (key !== void 0 && write !== void 0 && write[0].text === key.text && write[1] === decl.name.text) {
+      return [decl.name, key];
+    }
+    return void 0;
+  }
+  if (body.length === 3) {
+    const seed = constDecl(body[0]);
+    const next = constDecl(body[1]);
+    const write = optionWrite(go, body[2]);
+    const key = seed !== void 0 ? counterRead(go, seed.initializer) : void 0;
+    const sum = next !== void 0 ? sumOfOne(next.initializer) : void 0;
+    if (key !== void 0 && sum !== void 0 && write !== void 0 && sum.arguments[0]?.kind === SK2.Identifier && sum.arguments[0].text === seed.name.text && write[0].text === key.text && write[1] === next.name.text && countIdentifier(fn, seed.name.text) === 2) {
+      return [next.name, key];
+    }
+  }
+  return void 0;
+}
+function bareStatement(go, stmt) {
+  return go.printLeadingComments(stmt, 0) === "" && go.printTraillingComment(stmt, 0) === "";
+}
+function nonceShape(go, method) {
+  const SK2 = ts.SyntaxKind;
+  if (method?.kind !== SK2.MethodDeclaration || method.name?.text !== "incrementingNonce" || method.parent?.name?.text !== OWNER_CLASS_hx11fmgo5_OG02 || method.parameters?.length !== 0) {
+    return void 0;
+  }
+  const s = method.body?.statements;
+  if (s === void 0 || s.length !== 7) {
+    return void 0;
+  }
+  const current = constDecl(s[0]);
+  const last = constDecl(s[2]);
+  const result = constDecl(s[3]);
+  const write = optionWrite(go, s[4]);
+  if (current === void 0 || last === void 0 || result === void 0 || write === void 0 || !isBaseCall(go, current.initializer, "nonce", 0) || !callStatement(go, s[1], "lockLastNonce") || !callStatement(go, s[5], "unlockLastNonce")) {
+    return void 0;
+  }
+  const key = counterRead(go, last.initializer);
+  const cond = unparen(result.initializer);
+  if (key?.text !== "lastNonce" || write[0].text !== "lastNonce" || write[1] !== result.name.text || cond?.kind !== SK2.ConditionalExpression) {
+    return void 0;
+  }
+  const compare = unparen(cond.condition);
+  const plusOne = unparen(cond.whenFalse);
+  const isId = (n, name) => n?.kind === SK2.Identifier && n.text === name;
+  if (compare?.kind !== SK2.BinaryExpression || compare.operatorToken?.kind !== SK2.GreaterThanToken || !isId(compare.left, current.name.text) || !isId(compare.right, last.name.text) || !isId(cond.whenTrue, current.name.text) || plusOne?.kind !== SK2.BinaryExpression || plusOne.operatorToken?.kind !== SK2.PlusToken || !isId(plusOne.left, last.name.text) || plusOne.right?.kind !== SK2.NumericLiteral || plusOne.right.text !== "1" || s[6].kind !== SK2.ReturnStatement || !isId(s[6].expression, result.name.text)) {
+    return void 0;
+  }
+  for (let i = 0; i < 6; i++) {
+    if (!bareStatement(go, s[i])) {
+      return void 0;
+    }
+  }
+  return { "current": current, "result": result };
+}
+function resetOf(go, stmt, field) {
+  const SK2 = ts.SyntaxKind;
+  const e = stmt?.kind === SK2.ExpressionStatement ? stmt.expression : void 0;
+  return e?.kind === SK2.BinaryExpression && e.operatorToken?.kind === SK2.EqualsToken && e.right?.kind === SK2.Identifier && e.right.text === "undefined" && baseMemberDecl(go, e.left, field) !== void 0;
+}
+var HEADER_FIELDS = ["last_response_headers", "last_request_headers"];
+function blockPlan(go, block) {
+  const stmts = block.statements;
+  if (stmts === void 0 || stmts.length === 0) {
+    return void 0;
+  }
+  let plan;
+  const set = (stmt, value) => {
+    (plan ??= /* @__PURE__ */ new Map()).set(stmt, value);
+  };
+  const fn = block.parent;
+  const nonce = nonceShape(go, fn);
+  if (nonce !== void 0) {
+    const s = stmts;
+    set(s[0], { "nonce": nonce });
+    for (let i = 1; i < 6; i++) {
+      set(s[i], { "drop": true, "silent": true });
+    }
+  }
+  for (let i = 0; i < stmts.length; i++) {
+    if (callStatement(go, stmts[i], "lockId")) {
+      let end = i + 1;
+      while (end < stmts.length && !callStatement(go, stmts[end], "unlockId")) {
+        end++;
+      }
+      if (end >= stmts.length) {
+        continue;
+      }
+      const body = Array.from(stmts).slice(i + 1, end);
+      const found = counterSpan(go, body, fn);
+      if (found !== void 0 && body.every((s) => bareStatement(go, s)) && bareStatement(go, stmts[end])) {
+        set(stmts[i], { "counter": found });
+        for (let k = i + 1; k <= end; k++) {
+          set(stmts[k], { "drop": true, "silent": true });
+        }
+        i = end;
+      }
+    }
+  }
+  const reset = Array.from(stmts).find((s) => resetOf(go, s, "last_http_response"));
+  if (reset !== void 0) {
+    set(reset, { "reset": true });
+    for (const s of stmts) {
+      if (HEADER_FIELDS.some((field) => resetOf(go, s, field))) {
+        set(s, { "drop": true });
+      }
+    }
+  }
+  return plan;
+}
+function installFmGo5OG02(goTranspiler) {
+  const flag = "fmGo5OG02Installed";
+  if (goTranspiler[flag] === true) {
+    return;
+  }
+  goTranspiler[flag] = true;
+  const printBlock = goTranspiler.printBlock;
+  goTranspiler.printBlock = function(node, identation, chainBlock = false) {
+    const plan = blockPlan(this, node);
+    if (plan === void 0) {
+      return printBlock.call(this, node, identation, chainBlock);
+    }
+    const iden = this.getIden(identation + 1);
+    const parts = [];
+    for (const stmt of node.statements) {
+      const step = plan.get(stmt);
+      if (step === void 0) {
+        parts.push(this.printNode(stmt, identation + 1));
+      } else if (step.counter !== void 0) {
+        const [name, key] = step.counter;
+        const line = iden + "var " + this.printNode(name, 0) + " int64 = this.NextRequestId(" + this.printNode(key, 0) + ")";
+        parts.push(this.printNodeCommentsIfAny(stmt, identation + 1, line));
+      } else if (step.nonce !== void 0) {
+        const { current, result } = step.nonce;
+        const cn = this.printNode(current.name, 0);
+        const line = iden + "var " + cn + " int64 = " + this.printNode(current.initializer, 0) + "\n" + iden + "var " + this.printNode(result.name, 0) + " int64 = this.nextNonce(" + cn + ")";
+        parts.push(this.printNodeCommentsIfAny(stmt, identation + 1, line));
+      } else if (step.reset === true) {
+        parts.push(this.printNodeCommentsIfAny(stmt, identation + 1, iden + "this.handOffRequestBook(requestBookOp{kind: requestBookReset})"));
+      } else if (step.silent !== true) {
+        const comments = this.printLeadingComments(stmt, identation + 1);
+        if (comments !== "") {
+          parts.push(comments.replace(/\n$/, ""));
+        }
+      }
+    }
+    return this.getBlockOpen(identation) + parts.join("\n") + this.getBlockClose(identation, chainBlock);
+  };
+  const printFunctionType = goTranspiler.printFunctionType;
+  goTranspiler.printFunctionType = function(node) {
+    if (nonceShape(this, node) !== void 0) {
+      return "int64";
+    }
+    return printFunctionType.call(this, node);
+  };
+  const printAccess = goTranspiler.printPropertyAccessExpression;
+  goTranspiler.printPropertyAccessExpression = function(node, identation) {
+    const SK2 = ts.SyntaxKind;
+    if (node?.name?.text === "last_http_response" && baseMemberDecl(this, node, "last_http_response") !== void 0) {
+      const parent = node.parent;
+      const written = parent?.kind === SK2.BinaryExpression && parent.left === node && parent.operatorToken?.kind === SK2.EqualsToken;
+      if (!written) {
+        return "this.GetLast_http_response()";
+      }
+    }
+    return printAccess.call(this, node, identation);
+  };
+}
+var OWNER_CLASS_hx11rdgo2_wscache = "BaseExchange";
 var CACHES = {
   "orderbooks": { "go": "Orderbooks", "get": "WsCacheGet", "set": "WsCacheSet", "scalar": false },
   "ohlcvs": { "go": "Ohlcvs", "get": "WsCacheGet", "set": "WsCacheSet", "scalar": false },
@@ -21350,7 +23683,7 @@ function cacheField(go, node) {
     return void 0;
   }
   const decl = go.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
-  return decl?.kind === SK2.PropertyDeclaration && decl.parent?.name?.text === OWNER_CLASS ? CACHES[name] : void 0;
+  return decl?.kind === SK2.PropertyDeclaration && decl.parent?.name?.text === OWNER_CLASS_hx11rdgo2_wscache ? CACHES[name] : void 0;
 }
 function rdGo2UserPath(node) {
   return userPath(node);
@@ -21381,7 +23714,7 @@ function isWriteTarget(node) {
   }
   return parent?.kind === SK2.ElementAccessExpression && parent.expression === node && (isAssignment(parent.parent, parent) || parent.parent?.kind === SK2.DeleteExpression);
 }
-function unparen(node) {
+function unparen_hx11rdgo2_wscache(node) {
   while (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
     node = node.expression;
   }
@@ -21398,14 +23731,14 @@ function safeRead(go, node) {
     return void 0;
   }
   const decl = go.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve();
-  return decl?.parent?.name?.text === OWNER_CLASS ? field : void 0;
+  return decl?.parent?.name?.text === OWNER_CLASS_hx11rdgo2_wscache ? field : void 0;
 }
 function keyText(go, key) {
   const text = go.printNode(key, 0).trim();
   const proven = go.goAssertedStringDeref(key) || key?.kind === ts.SyntaxKind.Identifier && go.goDeclaredTypeOfIdentifier(key) === "*string" && (go.goHasEnclosingNilGuard(key) || go.goDefaultedSafeStringLocal(key));
   return proven ? "*" + text : text;
 }
-function isNilLiteral(node) {
+function isNilLiteral_hx11rdgo2_wscache(node) {
   return node?.kind === ts.SyntaxKind.NullKeyword || node?.kind === ts.SyntaxKind.Identifier && node.text === "undefined";
 }
 function installRdGo2WsCache(goTranspiler) {
@@ -21457,7 +23790,7 @@ function installRdGo2WsCache(goTranspiler) {
       } else {
         const field = ownedField(this, left);
         if (field !== void 0) {
-          const right = unparen(node.right);
+          const right = unparen_hx11rdgo2_wscache(node.right);
           const callee = right?.kind === SK2.CallExpression ? right.expression : void 0;
           if (callee?.kind === SK2.PropertyAccessExpression && callee.expression?.kind === SK2.ThisKeyword && callee.name?.text === "createSafeDictionary") {
             return 'this.WsCacheReset("' + field.go + '")';
@@ -21473,7 +23806,7 @@ function installRdGo2WsCache(goTranspiler) {
   };
   const printInlineInOp = goTranspiler.printInlineInOp;
   goTranspiler.printInlineInOp = function(dictNode, keyNode, dictText, keyText2) {
-    const field = ownedField(this, unparen(dictNode));
+    const field = ownedField(this, unparen_hx11rdgo2_wscache(dictNode));
     if (field !== void 0) {
       return 'this.WsCacheHas("' + field.go + '", ' + keyText2.trim() + ")";
     }
@@ -21481,8 +23814,8 @@ function installRdGo2WsCache(goTranspiler) {
   };
   const printPrefix = goTranspiler.printPrefixUnaryExpression;
   goTranspiler.printPrefixUnaryExpression = function(node, identation) {
-    const inner = unparen(node.operand);
-    if (node.operator === SK2.ExclamationToken && node.parent?.kind === SK2.IfStatement && inner?.kind === SK2.BinaryExpression && inner.operatorToken?.kind === SK2.InKeyword && ownedField(this, unparen(inner.right))?.scalar === false) {
+    const inner = unparen_hx11rdgo2_wscache(node.operand);
+    if (node.operator === SK2.ExclamationToken && node.parent?.kind === SK2.IfStatement && inner?.kind === SK2.BinaryExpression && inner.operatorToken?.kind === SK2.InKeyword && ownedField(this, unparen_hx11rdgo2_wscache(inner.right))?.scalar === false) {
       return this.getIden(identation) + "!" + this.printNode(inner, 0).trim();
     }
     return printPrefix.call(this, node, identation);
@@ -21490,21 +23823,21 @@ function installRdGo2WsCache(goTranspiler) {
   const printEquality = goTranspiler.printInlineEquality;
   goTranspiler.printInlineEquality = function(left, right, leftText, rightText, isEq) {
     const [eq, ne] = ["==", "!="];
-    if (isNilLiteral(right) && ownedField(this, unparen(left)) !== void 0 && leftText.indexOf("WsCacheSnapshot") >= 0) {
+    if (isNilLiteral_hx11rdgo2_wscache(right) && ownedField(this, unparen_hx11rdgo2_wscache(left)) !== void 0 && leftText.indexOf("WsCacheSnapshot") >= 0) {
       return "(" + leftText + " " + (isEq ? eq : ne) + " nil)";
     }
-    if (isNilLiteral(left) && ownedField(this, unparen(right)) !== void 0 && rightText.indexOf("WsCacheSnapshot") >= 0) {
+    if (isNilLiteral_hx11rdgo2_wscache(left) && ownedField(this, unparen_hx11rdgo2_wscache(right)) !== void 0 && rightText.indexOf("WsCacheSnapshot") >= 0) {
       return "(" + rightText + " " + (isEq ? eq : ne) + " nil)";
     }
     return printEquality.call(this, left, right, leftText, rightText, isEq);
   };
   const dictMapType = goTranspiler.goInOpDictMapType;
   goTranspiler.goInOpDictMapType = function(dictNode, dictText) {
-    const field = ownedField(this, unparen(dictNode));
+    const field = ownedField(this, unparen_hx11rdgo2_wscache(dictNode));
     if (field === void 0) {
       return dictMapType.call(this, dictNode, dictText);
     }
-    return field.scalar ? dictMapType.call(this, unparen(dictNode), "this." + field.go) : void 0;
+    return field.scalar ? dictMapType.call(this, unparen_hx11rdgo2_wscache(dictNode), "this." + field.go) : void 0;
   };
   const printCall = goTranspiler.printCallExpression;
   goTranspiler.printCallExpression = function(node, identation) {
@@ -21516,15 +23849,147 @@ function installRdGo2WsCache(goTranspiler) {
   };
   const initType = goTranspiler.goTypeOfInitializer;
   goTranspiler.goTypeOfInitializer = function(node, printed) {
-    const inner = unparen(node);
-    if (inner?.kind === SK2.BinaryExpression && inner.operatorToken?.kind === SK2.InKeyword && ownedField(this, unparen(inner.right)) !== void 0) {
+    const inner = unparen_hx11rdgo2_wscache(node);
+    if (inner?.kind === SK2.BinaryExpression && inner.operatorToken?.kind === SK2.InKeyword && ownedField(this, unparen_hx11rdgo2_wscache(inner.right)) !== void 0) {
       return "bool";
     }
     return initType.call(this, node, printed);
   };
 }
-
-// src/goTranspiler.ts
+var OWNED_TABLES = {
+  "baseCurrencies": { "publish": "PublishBaseCurrencies", "read": "BaseCurrenciesTable" },
+  "quoteCurrencies": { "publish": "PublishQuoteCurrencies", "read": "QuoteCurrenciesTable" },
+  "transactions": { "publish": "PublishTransactions", "read": "TransactionsTable" }
+};
+var OWNER_CLASS_hx11rf_go5 = "BaseExchange";
+function ownedTable(go, node) {
+  const SK2 = ts.SyntaxKind;
+  if (node?.kind !== SK2.PropertyAccessExpression || !Object.prototype.hasOwnProperty.call(OWNED_TABLES, node.name?.text)) {
+    return void 0;
+  }
+  const checker = go.checkerOrUndefined();
+  const decl = checker?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+  if (decl?.kind !== SK2.PropertyDeclaration || decl.parent?.name?.text !== OWNER_CLASS_hx11rf_go5) {
+    return void 0;
+  }
+  return OWNED_TABLES[node.name.text];
+}
+function isWrapperCall(node, name, args) {
+  const SK2 = ts.SyntaxKind;
+  return node?.kind === SK2.CallExpression && node.expression?.kind === SK2.PropertyAccessExpression && node.expression.expression?.kind === SK2.ThisKeyword && node.expression.name?.text === name && (node.arguments?.length ?? 0) <= args;
+}
+function installRfGo5OwnedTables(goTranspiler) {
+  const flag = "rfGo5OwnedTablesInstalled";
+  if (goTranspiler[flag] === true) {
+    return;
+  }
+  goTranspiler[flag] = true;
+  const printAccess = goTranspiler.printPropertyAccessExpression;
+  goTranspiler.printPropertyAccessExpression = function(node, identation) {
+    const table = ownedTable(this, node);
+    if (table !== void 0) {
+      return this.printNode(node.expression, 0) + "." + table.read + "()";
+    }
+    return printAccess.call(this, node, identation);
+  };
+  const printBinary = goTranspiler.printBinaryExpression;
+  goTranspiler.printBinaryExpression = function(node, identation) {
+    const SK2 = ts.SyntaxKind;
+    const table = node.operatorToken?.kind === SK2.EqualsToken ? ownedTable(this, node.left) : void 0;
+    if (table !== void 0 && node.parent?.kind === SK2.ExpressionStatement) {
+      const right = node.right;
+      let value;
+      if (isWrapperCall(right, "createSafeDictionary", 1)) {
+        value = "map[string]any{}";
+      } else if (isWrapperCall(right, "mapToSafeMap", 1) && right.arguments.length === 1) {
+        value = this.printNode(right.arguments[0], 0);
+      } else if (right?.kind === SK2.PropertyAccessExpression && right.name?.text === node.left.name.text) {
+        value = this.printNode(right.expression, 0) + "." + table.read + "()";
+      } else {
+        value = this.printNode(right, 0);
+      }
+      return this.printNode(node.left.expression, 0) + "." + table.publish + "(" + value.trim() + ")";
+    }
+    return printBinary.call(this, node, identation);
+  };
+}
+var NUM_SIGNATURE = /\n {4}(?:(?:override|async|public|private|protected) )*[A-Za-z_$][\w$]* \(([^\n]*)\)(?:: [^\n{]*)? \{/g;
+function hx11w8SiblingNumIdentifier(text, at, arg) {
+  const name = /^([A-Za-z_$][\w$]*)$/.exec((arg ?? "").trim())?.[1];
+  if (name === void 0 || at === void 0) {
+    return false;
+  }
+  const head = text.substring(0, at);
+  let last = null;
+  let m;
+  NUM_SIGNATURE.lastIndex = 0;
+  while ((m = NUM_SIGNATURE.exec(head)) !== null) {
+    last = m;
+  }
+  if (last === null) {
+    return false;
+  }
+  if (!new RegExp("(?:^|[(,]\\s*)" + name + ": Num = undefined(?:,|$)").test(last[1])) {
+    return false;
+  }
+  const body = head.substring(last.index + last[0].length);
+  return !new RegExp("(?<![\\w.$])" + name + "\\s*(?:[-+*/]?=(?!=)|\\+\\+|--)").test(body);
+}
+function installHx11w8NumParams(goTranspiler) {
+  const flag = "hx11w8NumParamsInstalled";
+  if (goTranspiler === void 0 || goTranspiler[flag] === true || typeof goTranspiler.goParameterCallSitesPassType !== "function" || typeof goTranspiler.goSameFileCallsOf !== "function" || typeof goTranspiler.goTsSrcTree !== "function") {
+    return;
+  }
+  goTranspiler[flag] = true;
+  const upstream = goTranspiler.goParameterCallSitesPassType;
+  goTranspiler.goParameterCallSitesPassType = function(fn, index, goType) {
+    if (upstream.call(this, fn, index, goType)) {
+      return true;
+    }
+    if (goType !== "*float64") {
+      return false;
+    }
+    const name = fn.name.text;
+    for (const call of this.goSameFileCallsOf(fn, name)) {
+      const arg = call.arguments?.[index];
+      if (arg === void 0 || arg.kind === ts.SyntaxKind.SpreadElement || this.goPrintedArgType(arg) !== "*float64") {
+        return false;
+      }
+    }
+    const tree = this.goTsSrcTree(fn.getSourceFile());
+    if (tree === void 0) {
+      return true;
+    }
+    const myClass = this.goEnclosingClassName(fn);
+    const myFile = tree.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
+    for (const site of tree.callIndex.get(name) ?? []) {
+      if (site.file === myFile || !this.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
+        continue;
+      }
+      if (!hx11w8SiblingNumIdentifier(tree.fileText.get(site.file) ?? "", site.at, site.args[index])) {
+        return false;
+      }
+    }
+    return true;
+  };
+}
+function installCcxtGoHooks(goTranspiler, unifiedInt64Params) {
+  installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params);
+  installCcxtGoIndexableTypes(goTranspiler);
+  installCcxtGoParamTypes(goTranspiler);
+  installCcxtGoDictParams(goTranspiler);
+  installCcxtGoGb05ParamTypes(goTranspiler);
+  installCcxtGoGb11HandleErrorsCode(goTranspiler);
+  installCcxtGoSignTyping(goTranspiler);
+  installHx11w8NumParams(goTranspiler);
+  installRfGo5OwnedTables(goTranspiler);
+  installFmGo5G01(goTranspiler);
+  installFmGo5OG02(goTranspiler);
+  installFmGo5GP08(goTranspiler);
+  installFmGo5G04(goTranspiler);
+  installCcxtGoTupleSlotReads(goTranspiler);
+  installRdGo2WsCache(goTranspiler);
+}
 var GO_ITERATION_STATEMENT_KINDS = /* @__PURE__ */ new Set([
   SyntaxKind5.ForStatement,
   SyntaxKind5.ForInStatement,
@@ -28574,7 +31039,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return true;
     }
     const name = fn.name.text;
-    const myFile = tree.relativeOf.get(path3.resolve(fn.getSourceFile().fileName));
+    const myFile = tree.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
     const myClass = this.goEnclosingClassName(fn);
     const declarationRx = new RegExp("(?<![\\w.$])" + name + "\\s*\\(\\s*[A-Za-z_$][\\w$]*\\s*:\\s*([^,)]+)", "g");
     let matches = true;
@@ -28602,7 +31067,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (tree === void 0) {
       return true;
     }
-    const myFile = tree.relativeOf.get(path3.resolve(fn.getSourceFile().fileName));
+    const myFile = tree.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
     const myClass = this.goEnclosingClassName(fn);
     const callRx = new RegExp("\\.\\s*" + methodName + "\\s*\\(", "g");
     let passes = true;
@@ -29115,7 +31580,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     const tree = this.goTsSrcTree(fn.getSourceFile());
     if (tree !== void 0) {
       const myClass = this.goEnclosingClassName(fn);
-      const myFile = tree.relativeOf.get(path3.resolve(fn.getSourceFile().fileName));
+      const myFile = tree.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
       for (const site of tree.callIndex.get(name) ?? []) {
         if (site.file === myFile) {
           continue;
@@ -29125,9 +31590,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         let arg = site.args[index];
         if ((goType === "[]string" || goType === "[][]string") && site.at !== void 0) {
-          const callArgs3 = goBalancedSliceArgs(tree.fileText.get(site.file) ?? "", site.at);
-          if (callArgs3 !== void 0) {
-            arg = callArgs3[index];
+          const callArgs2 = goBalancedSliceArgs(tree.fileText.get(site.file) ?? "", site.at);
+          if (callArgs2 !== void 0) {
+            arg = callArgs2[index];
           }
         }
         const passthrough = goType === "string" && this.siblingStringPassthroughPattern !== void 0 && this.siblingStringPassthroughPattern.test(name) && arg !== void 0 && this.goSiblingPassesUnifiedString(arg, tree.fileText.get(site.file) ?? "", site.at);
@@ -29162,7 +31627,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return true;
     }
     const myClass = this.goEnclosingClassName(fn);
-    const myFile = tree.relativeOf.get(path3.resolve(fn.getSourceFile().fileName));
+    const myFile = tree.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
     for (const site of tree.callIndex.get(name) ?? []) {
       if (site.file === myFile || !this.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
         continue;
@@ -29461,7 +31926,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // `this.x(...)`, each file's text and its class -> base map. A scoped run's
   // program holds one exchange, so the sibling files are only provable textually.
   goTsSrcTree(file) {
-    const fileName = path3.resolve(file.fileName);
+    const fileName = path2.resolve(file.fileName);
     const marker = "/ts/src/";
     const at = fileName.lastIndexOf(marker);
     if (at < 0) {
@@ -29481,14 +31946,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     const walk = (dir, rel) => {
       let entries;
       try {
-        entries = fs3.readdirSync(dir, { withFileTypes: true });
+        entries = fs2.readdirSync(dir, { withFileTypes: true });
       } catch (e) {
         return;
       }
       for (const entry of entries) {
         if (entry.isDirectory()) {
           if (entry.name !== "node_modules") {
-            walk(path3.join(dir, entry.name), rel + entry.name + "/");
+            walk(path2.join(dir, entry.name), rel + entry.name + "/");
           }
           continue;
         }
@@ -29498,12 +31963,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const relPath = rel + entry.name;
         let text;
         try {
-          text = fs3.readFileSync(path3.join(dir, entry.name), "utf8");
+          text = fs2.readFileSync(path2.join(dir, entry.name), "utf8");
         } catch (e) {
           continue;
         }
         fileText.set(relPath, text);
-        relativeOf.set(path3.join(dir, entry.name), relPath);
+        relativeOf.set(path2.join(dir, entry.name), relPath);
         const classRe = /\bclass\s+([A-Za-z_$][\w$]*)\s+extends\s+([A-Za-z_$][\w$]*)/g;
         let match;
         while ((match = classRe.exec(text)) !== null) {
@@ -32093,7 +34558,7 @@ ${indent}}`);
     if (fileImports.size === 0) {
       return body;
     }
-    return [...fileImports].sort().map((path10) => `import "${path10}"`).join("\n") + "\n\n" + body;
+    return [...fileImports].sort().map((path4) => `import "${path4}"`).join("\n") + "\n\n" + body;
   }
   goBinaryMemoized(node, key, compute) {
     const outermost = this.goBinaryMemo === void 0;
@@ -32132,10 +34597,10 @@ ${indent}}`);
     if (node?.kind === SyntaxKind5.BinaryExpression && GO_ARITHMETIC_KINDS.indexOf(node.operatorToken.kind) >= 0) {
       return this.goPrintBinaryMemoized(node, identation);
     }
-    const isStatement3 = node !== void 0 && isStatementNode(node) && node.kind !== SyntaxKind5.Block;
+    const isStatement2 = node !== void 0 && isStatementNode(node) && node.kind !== SyntaxKind5.Block;
     const previousLevel = this.goStatementLevel;
     const previousStatement = this.goStatement;
-    if (isStatement3) {
+    if (isStatement2) {
       this.goStatementLevel = identation;
       this.goStatement = node;
     }
@@ -33939,13 +36404,13 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
     if (caches === void 0 || caches.typedMapRead === void 0) {
       return void 0;
     }
-    const unparen3 = (n) => {
+    const unparen2 = (n) => {
       while (n?.kind === SK2.ParenthesizedExpression) {
         n = n.expression;
       }
       return n;
     };
-    const exp = unparen3(node.expression);
+    const exp = unparen2(node.expression);
     if (checker === void 0 || exp === void 0) {
       return void 0;
     }
@@ -33971,7 +36436,7 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
       if (baseMember(exp.expression, SK2.MethodDeclaration) !== "filterByArray" || args.length !== 3 || args[1]?.kind !== SK2.StringLiteral || args[1].text !== "symbol" || args[2]?.kind !== SK2.Identifier) {
         return void 0;
       }
-      field = cacheField2(unparen3(args[0]));
+      field = cacheField2(unparen2(args[0]));
       symbols = ", " + this.printNode(args[2], 0).trim();
     } else {
       field = cacheField2(exp);
@@ -35677,7 +38142,7 @@ ${tryBodyBlock}
     if (this.isGoElementAccessAssignmentTarget(node)) {
       return void 0;
     }
-    const path10 = keys.slice();
+    const path4 = keys.slice();
     const printed = keyStrs.slice();
     let receiver = baseExpr;
     let apiAccess = void 0;
@@ -35688,24 +38153,24 @@ ${tryBodyBlock}
       if (receiver?.kind !== SyntaxKind5.ElementAccessExpression) {
         break;
       }
-      path10.unshift(receiver.argumentExpression);
+      path4.unshift(receiver.argumentExpression);
       printed.unshift(this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(receiver.argumentExpression, 0)));
       apiAccess = receiver;
       receiver = receiver.expression;
     }
-    if (path10.length < 2 || !this.goIsUrlsField(receiver)) {
+    if (path4.length < 2 || !this.goIsUrlsField(receiver)) {
       return void 0;
     }
     if (apiAccess === void 0) {
       apiAccess = node;
-      for (let i = path10.length - 1; i > 0; i--) {
+      for (let i = path4.length - 1; i > 0; i--) {
         apiAccess = apiAccess.expression;
       }
     }
-    if (path10[0]?.kind !== SyntaxKind5.StringLiteral || path10[0].text !== "api" || !this.goKeyIsString(path10[1], printed[1]) || !this.goUrlsApiIsDict(apiAccess)) {
+    if (path4[0]?.kind !== SyntaxKind5.StringLiteral || path4[0].text !== "api" || !this.goKeyIsString(path4[1], printed[1]) || !this.goUrlsApiIsDict(apiAccess)) {
       return void 0;
     }
-    const section = path10.length > 2 && this.goKeyIsString(path10[2], printed[2]);
+    const section = path4.length > 2 && this.goKeyIsString(path4[2], printed[2]);
     const view = section ? `this.UrlsApiSections[${printed[1]}][${printed[2]}]` : `this.UrlsApi[${printed[1]}]`;
     return this.goElementAccessChain(view, printed.slice(section ? 2 : 1));
   }
@@ -47055,7 +49520,7 @@ var JAVA_CRC32_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]crypt
 }
 {
   const proto = JavaTranspiler.prototype;
-  const unparen3 = (node) => {
+  const unparen2 = (node) => {
     while (node?.kind === SyntaxKind6.ParenthesizedExpression) {
       node = node.expression;
     }
@@ -47074,7 +49539,7 @@ var JAVA_CRC32_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]crypt
     return decl?.parent?.name?.text === JAVA_OWNER_CLASS ? decl : void 0;
   };
   const baseCall = (java, node, name, args) => {
-    node = unparen3(node);
+    node = unparen2(node);
     return node?.kind === SyntaxKind6.CallExpression && (node.arguments?.length ?? 0) === args && baseMemberDecl2(java, node.expression, name) !== void 0;
   };
   const callStatement2 = (java, stmt, name) => stmt?.kind === SyntaxKind6.ExpressionStatement && baseCall(java, stmt.expression, name, 0);
@@ -47099,7 +49564,7 @@ var JAVA_CRC32_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]crypt
     return [target.argumentExpression, e.right.text];
   };
   const counterRead2 = (java, node) => {
-    node = unparen3(node);
+    node = unparen2(node);
     if (!baseCall(java, node, "safeInteger", 3)) {
       return void 0;
     }
@@ -47121,7 +49586,7 @@ var JAVA_CRC32_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]crypt
     return n;
   };
   const sumOfOne = (java, call) => {
-    call = unparen3(call);
+    call = unparen2(call);
     return baseCall(java, call, "sum", 2) && call.arguments[1]?.kind === SyntaxKind6.NumericLiteral && call.arguments[1].text === "1" ? call : void 0;
   };
   const counterSpan2 = (java, body, fn) => {
@@ -47163,12 +49628,12 @@ var JAVA_CRC32_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]crypt
       return void 0;
     }
     const key = counterRead2(java, last.initializer);
-    const cond = unparen3(result.initializer);
+    const cond = unparen2(result.initializer);
     if (key?.text !== "lastNonce" || write[0].text !== "lastNonce" || write[1] !== result.name.text || cond?.kind !== SyntaxKind6.ConditionalExpression) {
       return void 0;
     }
-    const compare = unparen3(cond.condition);
-    const plusOne = unparen3(cond.whenFalse);
+    const compare = unparen2(cond.condition);
+    const plusOne = unparen2(cond.whenFalse);
     const isId = (n, name) => n?.kind === SyntaxKind6.Identifier && n.text === name;
     if (compare?.kind !== SyntaxKind6.BinaryExpression || compare.operatorToken?.kind !== SyntaxKind6.GreaterThanToken || !isId(compare.left, current.name.text) || !isId(compare.right, last.name.text) || !isId(cond.whenTrue, current.name.text) || plusOne?.kind !== SyntaxKind6.BinaryExpression || plusOne.operatorToken?.kind !== SyntaxKind6.PlusToken || !isId(plusOne.left, last.name.text) || plusOne.right?.kind !== SyntaxKind6.NumericLiteral || plusOne.right.text !== "1" || s[6].kind !== SyntaxKind6.ReturnStatement || !isId(s[6].expression, result.name.text) || countIdentifier2(method, last.name.text) !== 3) {
       return void 0;
@@ -47252,12 +49717,7836 @@ init_esm_shims();
 import { NodeFlags as NodeFlags4, SyntaxKind as SyntaxKind7 } from "typescript/unstable/ast";
 import { isArrayLiteralExpression as isArrayLiteralExpression4, isArrowFunction as isArrowFunction5, isAsExpression as isAsExpression3, isBinaryExpression as isBinaryExpression5, isBindingElement, isBlock as isBlock4, isCallExpression as isCallExpression6, isClassDeclaration as isClassDeclaration4, isClassExpression as isClassExpression2, isConditionalExpression as isConditionalExpression3, isDeleteExpression as isDeleteExpression2, isElementAccessExpression as isElementAccessExpression4, isForInStatement as isForInStatement2, isForOfStatement as isForOfStatement2, isIdentifier as isIdentifier3, isMethodDeclaration as isMethodDeclaration5, isNoSubstitutionTemplateLiteral, isNonNullExpression as isNonNullExpression2, isNumericLiteral as isNumericLiteral4, isObjectLiteralExpression as isObjectLiteralExpression4, isParameterDeclaration as isParameterDeclaration3, isParenthesizedExpression as isParenthesizedExpression3, isPrefixUnaryExpression as isPrefixUnaryExpression3, isPropertyAccessExpression as isPropertyAccessExpression3, isReturnStatement as isReturnStatement4, isShorthandPropertyAssignment as isShorthandPropertyAssignment2, isSourceFile as isSourceFile5, isStatement, isStringLiteral as isStringLiteral3, isStringLiteralLikeNode as isStringLiteralLikeNode4, isTypeAssertion as isTypeAssertion3, isVariableDeclaration as isVariableDeclaration3 } from "typescript/unstable/ast/is";
 import { IndexKind as IndexKind4, ObjectFlags, SignatureKind as SignatureKind2, SymbolFlags as SymbolFlags3, TypeFlags as TypeFlags6 } from "typescript/unstable/sync";
-
-// src/rustNativeForms.ts
-init_esm_shims();
+import * as fs3 from "fs";
+var IDENT = "[A-Za-z_][A-Za-z0-9_]*";
+var MARKER_KEYS = ["__book_id", "__cache_id", "__cacheKind", "__sideKind", "__live_id"];
+var ROUTED_KEYS = ["cache", "hashmap", "subscriptions", "futures", "timestamp", "datetime", "nonce", "symbol", "checksum"];
+function maskText(src) {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < src.length && src[i] !== "\n") {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    if (c === '"') {
+      out += " ";
+      i++;
+      while (i < src.length && src[i] !== '"') {
+        if (src[i] === "\\") {
+          out += "  ";
+          i += 2;
+          continue;
+        }
+        out += src[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      if (i < src.length) {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+function closeBracket(src, open) {
+  let depth = 0;
+  for (let k = open; k < src.length; k++) {
+    const c = src[k];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0)
+        return k + 1;
+    }
+  }
+  return -1;
+}
+function statementEnd(src, from) {
+  let depth = 0;
+  for (let k = from; k < src.length; k++) {
+    const c = src[k];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      if (depth === 0)
+        return -1;
+      depth--;
+    } else if (c === ";" && depth === 0)
+      return k + 1;
+    else if (c === "\n" && depth === 0)
+      return -1;
+  }
+  return -1;
+}
+var ARRAY_INIT = /^(?:Value::Array\(|Value::from\(\s*vec!\[|Value::from\(\s*std::sync::Arc::new\(\s*vec!\[|split\(|object_keys\(|object_values\(|self\.array_concat\(|self\.safe_list(?:_k|_n)?\()/;
+var DICT_INIT = /^(?:Value::Map\(|Value::Dict\()/;
+var SEQ_TYPE = /^(?:&)?(?:mut )?(?:Vec<(?:crate::)?Value>|\[(?:crate::)?Value\])$/;
+var INDEXED = ".cloned().unwrap_or(Value::Null)";
+function literalIndex(keyText2) {
+  const key = keyText2.trim().replace(/^&/, "").trim();
+  const int = /^Value::Int\(\s*(\d+)\s*\)$/.exec(key);
+  if (int !== null)
+    return Number(int[1]);
+  const str = /^Value::Str\(\s*"(\d+)"\s*(?:\.into\(\)|\.to_string\(\))?\s*\)$/.exec(key);
+  if (str !== null)
+    return Number(str[1]);
+  return -1;
+}
+function literalStrKey(keyText2) {
+  const key = keyText2.trim().replace(/^&/, "").trim();
+  const m = /^Value::Str\(\s*"([^"\\]*)"\s*(?:\.into\(\)|\.to_string\(\))?\s*\)$/.exec(key);
+  return m === null ? void 0 : m[1];
+}
+function identKey(keyText2) {
+  const m = /^&?([A-Za-z_][A-Za-z0-9_]*)$/.exec(keyText2.trim());
+  return m === null ? void 0 : m[1];
+}
+function callArgs(masked, callStart, recv) {
+  const head = "get_value(&" + recv;
+  if (masked.slice(callStart, callStart + head.length) !== head)
+    return void 0;
+  const afterRecv = callStart + head.length;
+  if (masked[afterRecv] !== ",")
+    return void 0;
+  const close = closeBracket(masked, masked.indexOf("(", callStart));
+  if (close < 0)
+    return void 0;
+  return [afterRecv, close];
+}
+function intPinned(region, name) {
+  const declRe = new RegExp("^[ \\t]*let (?:mut )?" + name + ":\\s*(?:crate::)?Value\\s*=\\s*Value::Int\\(\\s*\\d+\\s*\\);", "m");
+  const decl = declRe.exec(region);
+  if (decl === null)
+    return false;
+  const declEnd = decl.index + decl[0].length;
+  const useRe = new RegExp("(?<![A-Za-z0-9_.])" + name + "(?![A-Za-z0-9_])", "g");
+  let um;
+  while ((um = useRe.exec(region)) !== null) {
+    const at = um.index;
+    if (at >= decl.index && at < declEnd)
+      continue;
+    const before = region.slice(Math.max(0, at - 5), at);
+    const after = region.slice(at + name.length);
+    if (before === "&mut " && /^\s*\{\s*\*n \+= 1;\s*\}/.test(after))
+      continue;
+    if (before.endsWith("&"))
+      continue;
+    if (/^\.(?:as_(?:i64|f64)|clone)\(\)/.test(after))
+      continue;
+    return false;
+  }
+  return true;
+}
+function nativeGetValue(content, stats) {
+  const masked = maskText(content);
+  const edits = [];
+  const headers = [];
+  const headerRe = /^[ \t]*(?:pub )?(?:async )?fn /gm;
+  let hm;
+  while ((hm = headerRe.exec(masked)) !== null)
+    headers.push(hm.index);
+  headers.push(content.length);
+  for (let h = 0; h + 1 < headers.length; h++) {
+    const from = headers[h];
+    const to = h + 2 < headers.length ? headers[h + 1] : content.length;
+    const region = masked.slice(from, to);
+    const readText = (recv, seq, keyText2) => {
+      if (seq) {
+        const idx = literalIndex(keyText2);
+        if (idx >= 0)
+          return recv + ".get(" + idx + ")" + INDEXED;
+        const key = identKey(keyText2);
+        if (key !== void 0 && intPinned(region, key)) {
+          return recv + ".get(" + key + ".as_i64().unwrap() as usize)" + INDEXED;
+        }
+        return void 0;
+      }
+      const str = literalStrKey(keyText2);
+      if (str === void 0 || ROUTED_KEYS.indexOf(str) >= 0)
+        return void 0;
+      return recv + '.as_map().unwrap().get("' + str + '").cloned().unwrap_or(Value::Null)';
+    };
+    const rewriteRead = (recv, seq, callStart) => {
+      const args = callArgs(masked, callStart, recv);
+      if (args === void 0)
+        return void 0;
+      const text = readText(recv, seq, content.slice(args[0] + 1, args[1] - 1));
+      return text === void 0 ? void 0 : { start: callStart, end: args[1], text };
+    };
+    const declared = /* @__PURE__ */ new Map();
+    const declType = new RegExp("\\blet (?:mut )?(" + IDENT + ")\\s*:\\s*([^=;]+?)\\s*=", "g");
+    let dm;
+    while ((dm = declType.exec(region)) !== null)
+      declared.set(dm[1], dm[2].trim());
+    const headerEnd = region.indexOf("{");
+    const headerText = headerEnd < 0 ? region : region.slice(0, headerEnd);
+    const paramRe = new RegExp("\\b(?:mut )?(" + IDENT + ")\\s*:\\s*([&\\[A-Za-z_][A-Za-z0-9_:<>,\\s&\\[\\]]*)", "g");
+    while ((dm = paramRe.exec(headerText)) !== null) {
+      if (!declared.has(dm[1]))
+        declared.set(dm[1], dm[2].trim());
+    }
+    for (const [name, type] of declared) {
+      if (!SEQ_TYPE.test(type))
+        continue;
+      const useRe = new RegExp("get_value\\(&" + name + "(?![A-Za-z0-9_])", "g");
+      let um;
+      while ((um = useRe.exec(region)) !== null) {
+        const read = rewriteRead(name, true, from + um.index);
+        if (read === void 0)
+          continue;
+        edits.push(read);
+        if (stats)
+          stats.seqReads++;
+      }
+    }
+    const declRe = new RegExp("^([ \\t]*)let (mut )?(" + IDENT + "):\\s*(?:crate::)?Value\\s*=\\s*", "gm");
+    while ((dm = declRe.exec(region)) !== null) {
+      const name = dm[3];
+      const declAt = from + dm.index;
+      const initStart = declAt + dm[0].length;
+      const stmtEnd2 = statementEnd(masked, initStart);
+      if (stmtEnd2 < 0)
+        continue;
+      const initText = content.slice(initStart, stmtEnd2).trim();
+      const isSeq = ARRAY_INIT.test(initText);
+      const isDict = DICT_INIT.test(initText);
+      if (!isSeq && !isDict)
+        continue;
+      const declCount = (region.match(new RegExp("\\blet (?:mut )?" + name + "\\b", "g")) ?? []).length;
+      if (declCount !== 1)
+        continue;
+      if (new RegExp("(?<![A-Za-z0-9_.])" + name + "\\s*=[^=]").test(region))
+        continue;
+      const dictKeys = [];
+      if (isDict) {
+        const keys = insertedKeys(initText);
+        if (keys === void 0)
+          continue;
+        for (const k of keys)
+          dictKeys.push(k);
+      }
+      const useRe = new RegExp("(?<![A-Za-z0-9_.])" + name + "(?![A-Za-z0-9_])", "g");
+      const reads = [];
+      let ok = true;
+      let um;
+      while ((um = useRe.exec(region)) !== null) {
+        const at2 = um.index;
+        if (at2 >= dm.index && at2 < dm.index + dm[0].length)
+          continue;
+        const gv = region.lastIndexOf("get_value(", at2);
+        if (gv >= 0 && region.slice(gv, at2) === "get_value(&") {
+          const read = rewriteRead(name, isSeq, from + gv);
+          if (read === void 0) {
+            ok = false;
+            break;
+          }
+          reads.push(read);
+          continue;
+        }
+        if (isSeq && /^\.\s*(?:len|is_empty)\s*\(\s*\)/.test(region.slice(at2 + name.length)))
+          continue;
+        if (isSeq) {
+          ok = false;
+          break;
+        }
+        const before = region.slice(Math.max(0, at2 - 24), at2);
+        const writeHead = /(?:add_element_to_object|set_value)\(\s*&mut\s+$/.exec(before);
+        if (writeHead !== null) {
+          const keyStart = at2 + name.length;
+          const key = /^\s*,\s*&?\s*Value::Str\(\s*"([^"\\]*)"\s*(?:\.into\(\)|\.to_string\(\))?\s*\)\s*,/.exec(region.slice(keyStart));
+          if (key === null) {
+            ok = false;
+            break;
+          }
+          if (ROUTED_KEYS.indexOf(key[1]) >= 0 || MARKER_KEYS.indexOf(key[1]) >= 0) {
+            ok = false;
+            break;
+          }
+          dictKeys.push(key[1]);
+          continue;
+        }
+        if (/&mut\s+$/.test(before)) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok || reads.length === 0)
+        continue;
+      if (dictKeys.some((k) => MARKER_KEYS.indexOf(k) >= 0))
+        continue;
+      if (isSeq) {
+        const typeAt = declAt + dm[0].length - "Value = ".length;
+        edits.push({ start: typeAt, end: typeAt + "Value".length, text: "Vec<Value>" });
+        const initExpr = content.slice(initStart, stmtEnd2 - 1).replace(/\s+$/, "");
+        const inner = arrayPayload(initExpr);
+        edits.push({
+          start: initStart,
+          end: initStart + initExpr.length,
+          text: inner !== void 0 ? inner : initExpr + ".as_array().unwrap().clone()"
+        });
+        if (stats) {
+          stats.seqLocals++;
+          stats.seqReads += reads.length;
+        }
+      } else if (stats) {
+        stats.dictLocals++;
+        stats.dictReads += reads.length;
+      }
+      for (const r of reads)
+        edits.push(r);
+    }
+  }
+  if (edits.length === 0)
+    return content;
+  edits.sort((a, b) => a.start - b.start);
+  let out = "";
+  let at = 0;
+  for (const e of edits) {
+    if (e.start < at)
+      continue;
+    out += content.slice(at, e.start) + e.text;
+    at = e.end;
+  }
+  return out + content.slice(at);
+}
+function arrayPayload(initExpr) {
+  const strip = (text, prefix) => {
+    if (!text.startsWith(prefix) || !text.endsWith(")"))
+      return void 0;
+    return text.slice(prefix.length, -1).trim();
+  };
+  const direct = strip(initExpr, "Value::Array(");
+  if (direct !== void 0 && direct.length > 0)
+    return direct;
+  let inner = strip(initExpr, "Value::from(");
+  if (inner !== void 0)
+    inner = strip(inner, "std::sync::Arc::new(") ?? inner;
+  if (inner === void 0 || !inner.startsWith("vec!["))
+    return void 0;
+  return inner;
+}
+function insertedKeys(initText) {
+  const keys = [];
+  const insertRe = /\.insert\(\s*(?:"([^"\\]*)"\s*(?:\.to_string\(\)|\.into\(\))|([^,]+?))\s*,/g;
+  let im;
+  while ((im = insertRe.exec(initText)) !== null) {
+    if (im[1] === void 0)
+      return void 0;
+    keys.push(im[1]);
+  }
+  return keys;
+}
+var CASES = [
+  {
+    name: "seq: Value::from(vec![..]) local retyped, literal int key",
+    src: [
+      "pub fn demo(&mut self) -> Value {",
+      "    let mut rows: Value = Value::from(vec![Value::Int(1), Value::Int(2)]);",
+      "    let mut first: Value = get_value(&rows, &Value::Int(1));",
+      "    return first;",
+      "}"
+    ].join("\n"),
+    want: ["let mut rows: Vec<Value> =", "rows.get(1).cloned().unwrap_or(Value::Null)"],
+    gone: ["get_value("]
+  },
+  {
+    name: "seq: safe_list_k local, numeric-string key",
+    src: [
+      "pub fn demo(&mut self) -> Value {",
+      '    let mut data: Value = self.safe_list_k(response.clone(), "data", &[Value::from(vec![])]);',
+      '    let mut head: Value = get_value(&data, &Value::Str("0".into()));',
+      "    return head;",
+      "}"
+    ].join("\n"),
+    want: ["let mut data: Vec<Value> =", "data.get(0).cloned().unwrap_or(Value::Null)"],
+    gone: ["get_value("]
+  },
+  {
+    name: "seq: split local read by a Value::Int-pinned counter",
+    src: [
+      "pub fn demo(&mut self) -> Value {",
+      '    let mut parts: Value = split(&raw, &Value::Str("_".into()));',
+      "    let mut i: Value = Value::Int(0);",
+      "    while i.as_f64().unwrap_or(f64::NAN) < 2.0 {",
+      "        let mut part: Value = get_value(&parts, &i);",
+      "        if let Value::Int(n) = &mut i { *n += 1; }",
+      "    }",
+      "    return Value::Null;",
+      "}"
+    ].join("\n"),
+    want: ["let mut parts: Vec<Value> =", "parts.get(i.as_i64().unwrap() as usize).cloned().unwrap_or(Value::Null)"],
+    gone: ["get_value("]
+  },
+  {
+    name: "seq: unpinned dynamic key stays a helper call",
+    src: [
+      "pub fn demo(&mut self, mut key: Value) -> Value {",
+      '    let mut parts: Value = split(&raw, &Value::Str("_".into()));',
+      "    return get_value(&parts, &key);",
+      "}"
+    ].join("\n"),
+    want: ["let mut parts: Value =", "get_value(&parts, &key)"],
+    gone: ["Vec<Value>"]
+  },
+  {
+    name: "seq: a Value sink keeps the box",
+    src: [
+      "pub fn demo(&mut self) -> Value {",
+      '    let mut data: Value = self.safe_list_k(response.clone(), "data", &[Value::from(vec![])]);',
+      "    let mut first: Value = get_value(&data, &Value::Int(0));",
+      "    return self.parse_trades(data, &[]);",
+      "}"
+    ].join("\n"),
+    want: ["let mut data: Value =", "get_value(&data, &Value::Int(0))"],
+    gone: []
+  },
+  {
+    name: "dict: fresh literal with a literal key",
+    src: [
+      "pub fn demo(&mut self) -> Value {",
+      "    let mut request: Value = Value::Map({",
+      "        let mut m = indexmap::IndexMap::new();",
+      '        m.insert("amount".to_string(), amount);',
+      "        m",
+      "    });",
+      '    let mut amount2: Value = get_value(&request, &Value::Str("amount".into()));',
+      "    return amount2;",
+      "}"
+    ].join("\n"),
+    want: ["let mut request: Value =", 'request.as_map().unwrap().get("amount").cloned().unwrap_or(Value::Null)'],
+    gone: ["get_value("]
+  },
+  {
+    name: "dict: a routed key stays a helper call",
+    src: [
+      "pub fn demo(&mut self) -> Value {",
+      "    let mut book: Value = Value::Map({",
+      "        let mut m = indexmap::IndexMap::new();",
+      '        m.insert("bids".to_string(), bids);',
+      "        m",
+      "    });",
+      '    return get_value(&book, &Value::Str("cache".into()));',
+      "}"
+    ].join("\n"),
+    want: ['get_value(&book, &Value::Str("cache".into()))'],
+    gone: []
+  },
+  {
+    name: "dict: a computed insert key makes the key set dynamic",
+    src: [
+      "pub fn demo(&mut self, mut key: Value) -> Value {",
+      "    let mut request: Value = Value::Map({",
+      "        let mut m = indexmap::IndexMap::new();",
+      "        m.insert(crate::runtime::stringify_param(&key), amount);",
+      "        m",
+      "    });",
+      '    return get_value(&request, &Value::Str("amount".into()));',
+      "}"
+    ].join("\n"),
+    want: ['get_value(&request, &Value::Str("amount".into()))'],
+    gone: []
+  },
+  {
+    name: "seq: a reassigned local keeps the box",
+    src: [
+      "pub fn demo(&mut self) -> Value {",
+      "    let mut rows: Value = Value::from(vec![Value::Int(1)]);",
+      "    rows = self.parse_rows();",
+      "    return get_value(&rows, &Value::Int(0));",
+      "}"
+    ].join("\n"),
+    want: ["let mut rows: Value =", "get_value(&rows, &Value::Int(0))"],
+    gone: []
+  },
+  {
+    name: "seq: an already typed receiver goes native as is",
+    src: [
+      "pub fn demo(&mut self, mut rows: &[Value]) -> Value {",
+      "    return get_value(&rows, &Value::Int(2));",
+      "}"
+    ].join("\n"),
+    want: ["rows.get(2).cloned().unwrap_or(Value::Null)"],
+    gone: ["get_value("]
+  }
+];
+var CALL = "add_element_to_object(";
+var TAGFREE_FIELDS = /* @__PURE__ */ new Set([
+  "balance",
+  "orderbooks",
+  "trades",
+  "tickers",
+  "bidsasks",
+  "ohlcvs",
+  "clients",
+  "transactions",
+  "headers",
+  "currencies",
+  "has",
+  "tokenBucket",
+  "options",
+  "markets",
+  "urls",
+  "positions",
+  "fees",
+  "exceptions",
+  "markets_by_id",
+  "currencies_by_id"
+]);
+var NEST_FIELDS = /* @__PURE__ */ new Set([
+  "options",
+  "urls",
+  "fees",
+  "exceptions",
+  "markets",
+  "currencies",
+  "headers",
+  "has",
+  "tokenBucket",
+  "markets_by_id",
+  "currencies_by_id"
+]);
+var TAG_ACCESS = [
+  "self.orderbooks",
+  "self.balance",
+  "self.ohlcvs",
+  "self.tickers",
+  "self.trades",
+  "self.bidsasks",
+  "self.positions",
+  "self.clients",
+  "self.transactions",
+  '"subscriptions"',
+  '"futures"',
+  '"cache"',
+  ".hashmap",
+  "self.order_book(",
+  "self.order_book_side("
+];
+var BUILDERS = /* @__PURE__ */ new Set(["account", "safe_ledger_entry", "deposit_withdraw_fee"]);
+var EXTENDERS = /* @__PURE__ */ new Set(["extend", "omit", "keysort"]);
+var PARSERS = /* @__PURE__ */ new Set([
+  "parse_order",
+  "parse_ws_order",
+  "parse_trade",
+  "parse_ws_trade",
+  "parse_ticker",
+  "parse_ws_ticker",
+  "parse_position",
+  "parse_ws_position",
+  "parse_balance",
+  "parse_market",
+  "parse_currency",
+  "parse_transaction",
+  "parse_ledger_entry",
+  "parse_deposit_withdraw_fee",
+  "parse_account",
+  "parse_funding_rate",
+  "parse_open_interest",
+  "parse_liquidation",
+  "parse_borrow_rate",
+  "parse_income"
+]);
+var LITERAL_KEY = /^&Value::Str\(("(?:[^"\\]|\\.)*")\.(?:into|to_string)\(\)\)$/;
+var PLACE_KEY = /^&([A-Za-z_][A-Za-z0-9_]*)$/;
+var IDENT_hx10w2_R02 = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function isWordChar(c) {
+  return c >= "a" && c <= "z" || c >= "A" && c <= "Z" || c >= "0" && c <= "9" || c === "_";
+}
+function splitArgs(text) {
+  const out = [];
+  let depth = 0, inStr = false, esc = false, cur = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (esc)
+        esc = false;
+      else if (c === "\\")
+        esc = true;
+      else if (c === '"')
+        inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}")
+      depth--;
+    else if (c === "," && depth === 0) {
+      out.push(text.slice(cur, i));
+      cur = i + 1;
+    }
+  }
+  out.push(text.slice(cur));
+  return out.length > 0 ? out : void 0;
+}
+function closeParenAt(content, open) {
+  let depth = 0, inStr = false, esc = false;
+  for (let i = open; i < content.length; i++) {
+    const c = content[i];
+    if (inStr) {
+      if (esc)
+        esc = false;
+      else if (c === "\\")
+        esc = true;
+      else if (c === '"')
+        inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      continue;
+    }
+    if (c === "(")
+      depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0)
+        return i + 1;
+    }
+  }
+  return -1;
+}
+function fnRegions(content) {
+  const headers = [];
+  const rx = /^[ \t]*(?:pub )?(?:async )?fn [A-Za-z0-9_]+/gm;
+  let m;
+  while ((m = rx.exec(content)) !== null)
+    headers.push(m.index);
+  const out = [];
+  for (let i = 0; i < headers.length; i++) {
+    out.push({ start: headers[i], end: i + 1 < headers.length ? headers[i + 1] : content.length });
+  }
+  return out;
+}
+function regionAt(regions, pos) {
+  let lo = 0, hi = regions.length - 1, hit;
+  while (lo <= hi) {
+    const mid = lo + hi >> 1;
+    if (regions[mid].start <= pos) {
+      hit = regions[mid];
+      lo = mid + 1;
+    } else
+      hi = mid - 1;
+  }
+  return hit && pos < hit.end ? hit : void 0;
+}
+function firstArg(text) {
+  const open = text.indexOf("(");
+  if (open < 0)
+    return void 0;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (esc)
+        esc = false;
+      else if (c === "\\")
+        esc = true;
+      else if (c === '"')
+        inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      continue;
+    }
+    if (c === "(")
+      depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0)
+        return text.slice(open + 1, i);
+    } else if (c === "," && depth === 1)
+      return text.slice(open + 1, i);
+  }
+  return void 0;
+}
+var Proof = class {
+  constructor(content, regions) {
+    this.calls = /* @__PURE__ */ new Map();
+    this.locals = /* @__PURE__ */ new Map();
+    this.content = content;
+    this.regions = regions;
+  }
+  /** A local whose every binding is a fresh tag-free literal. */
+  localTagFree(name, body, region, depth = 0) {
+    if (depth > 2)
+      return false;
+    const key = region.start + ":" + name;
+    if (depth === 0) {
+      const cached = this.locals.get(key);
+      if (cached !== void 0)
+        return cached;
+    }
+    const verdict = this.localTagFreeUncached(name, body, region, depth);
+    if (depth === 0)
+      this.locals.set(key, verdict);
+    return verdict;
+  }
+  localTagFreeUncached(name, body, region, depth) {
+    if (body.includes('"__'))
+      return false;
+    const decl = new RegExp("^[ \\t]*let mut " + name + "[ \\t]*:[ \\t]*Value\\b(.*)$", "gm");
+    const bare = new RegExp("^[ \\t]*let mut " + name + "[ \\t]*=(.*)$", "gm");
+    const bound = new RegExp("(^|[^.\\w])" + name + "[ \\t]*=(?!=)(.*)$", "gm");
+    const sources = [];
+    let sawBind = false;
+    let m;
+    while ((m = bare.exec(body)) !== null) {
+      sawBind = true;
+      sources.push(m[1]);
+    }
+    while ((m = decl.exec(body)) !== null) {
+      sawBind = true;
+      const rest = m[1].trim();
+      if (rest.length > 0) {
+        if (rest[0] !== "=")
+          return false;
+        sources.push(rest.slice(1));
+      }
+    }
+    if (!sawBind)
+      return false;
+    while ((m = bound.exec(body)) !== null)
+      sources.push(m[2]);
+    for (const src of sources) {
+      if (!this.srcTagFree(src, body, region, depth))
+        return false;
+    }
+    return true;
+  }
+  /** A value expression that can only be a fresh plain dict. */
+  srcTagFree(src, body, region, depth = 0) {
+    const t = src.trim();
+    if (depth > 2)
+      return false;
+    if (t.startsWith("Value::Map("))
+      return true;
+    if (t.startsWith("Value::Null"))
+      return true;
+    const callee = t.match(/^self\.([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(/);
+    if (callee === null)
+      return false;
+    const name = callee[1];
+    if (BUILDERS.has(name) || PARSERS.has(name))
+      return true;
+    if (EXTENDERS.has(name)) {
+      const arg = firstArg(t);
+      if (arg === void 0)
+        return false;
+      const head = arg.trim();
+      if (IDENT_hx10w2_R02.test(head))
+        return this.localTagFree(head, body, region, depth + 1);
+      return this.srcTagFree(head, body, region, depth + 1);
+    }
+    return this.calleePlain(name, region);
+  }
+  /** Same-file method whose only `return` is a proven tag-free local. */
+  calleePlain(name, caller) {
+    const key = caller.start;
+    const cache = this.calls.get(key * 1e5 + (name.charCodeAt(0) || 0));
+    if (cache !== void 0)
+      return cache;
+    let verdict = false;
+    for (const r of this.regions) {
+      const body = this.content.slice(r.start, r.end);
+      const header = body.slice(0, body.indexOf("\n") < 0 ? body.length : body.indexOf("\n"));
+      if (!new RegExp("fn " + name + "\\s*\\(").test(header))
+        continue;
+      if (body.includes('"__'))
+        continue;
+      const ret = body.match(/^[ \t]*return ([A-Za-z_][A-Za-z0-9_]*);/m);
+      if (ret !== null) {
+        if (this.localTagFree(ret[1], body, r)) {
+          verdict = true;
+          break;
+        }
+        continue;
+      }
+      if (new RegExp("\\b[A-Za-z0-9_]+Core::" + name + "\\(").test(body)) {
+        verdict = true;
+        break;
+      }
+    }
+    this.calls.set(key * 1e5 + (name.charCodeAt(0) || 0), verdict);
+    return verdict;
+  }
+};
+function callArgs_hx10w2_R02(text, name) {
+  if (!text.startsWith(name + "("))
+    return void 0;
+  const after = closeParenAt(text, name.length);
+  if (after !== text.length)
+    return void 0;
+  return splitArgs(text.slice(name.length + 1, after - 1));
+}
+function keyConv(arg, intermediate) {
+  const lit = arg.trim().match(LITERAL_KEY);
+  if (lit !== null)
+    return lit[1] + ".to_string()";
+  if (intermediate)
+    return void 0;
+  const place = arg.trim().match(PLACE_KEY);
+  if (place !== null)
+    return "crate::runtime::stringify_param(&" + place[1] + ")";
+  return void 0;
+}
+function r02NativeInserts(content) {
+  if (!content.includes(CALL))
+    return content;
+  const regions = fnRegions(content);
+  const proof = new Proof(content, regions);
+  const edits = [];
+  let i = 0;
+  while (true) {
+    const at = content.indexOf(CALL, i);
+    if (at < 0)
+      break;
+    i = at + 1;
+    if (at > 0 && isWordChar(content[at - 1]))
+      continue;
+    const open = at + CALL.length - 1;
+    const after = closeParenAt(content, open);
+    if (after < 0)
+      break;
+    const args = splitArgs(content.slice(open + 1, after - 1));
+    if (args === void 0 || args.length !== 3)
+      continue;
+    const region = regionAt(regions, at);
+    if (region === void 0)
+      continue;
+    const body = content.slice(region.start, region.end);
+    const chain = [];
+    let cur = args[0].trim();
+    let ok = true;
+    while (true) {
+      const outer = callArgs_hx10w2_R02(cur, "get_value_mut");
+      if (outer === void 0 || outer.length !== 2)
+        break;
+      const inner = outer[0].trim();
+      if (!inner.startsWith("&mut "))
+        break;
+      chain.push(outer[1].trim());
+      cur = inner.slice(5).trim();
+    }
+    let base;
+    let place;
+    if (cur.startsWith("&mut ")) {
+      base = cur.slice(5).trim();
+      place = "&mut " + base;
+    } else if (cur.startsWith("unsafe {")) {
+      const coerce = cur.match(/^unsafe \{ (crate::runtime::coerce_value_to_mut\(&self\.[A-Za-z_][A-Za-z0-9_]*\)) \}$/);
+      if (coerce === null)
+        continue;
+      place = cur;
+      base = coerce[1].replace("coerce_value_to_mut(&self.", "self.").replace(/\)$/, "");
+    } else if (/^(?:self\.)?[A-Za-z_][A-Za-z0-9_]*$/.test(cur)) {
+      base = cur;
+      place = "&mut " + cur;
+    } else
+      continue;
+    const field = base.match(/^self\.([A-Za-z_][A-Za-z0-9_]*)$/);
+    const local = base.match(/^([A-Za-z_][A-Za-z0-9_]*)$/);
+    if (field !== null) {
+      const name = field[1];
+      if (!TAGFREE_FIELDS.has(name))
+        continue;
+      if (chain.length > 0 && !NEST_FIELDS.has(name))
+        continue;
+    } else if (local !== null) {
+      if (!proof.localTagFree(local[1], body, region))
+        continue;
+      if (chain.length > 0 && TAG_ACCESS.some((t) => body.includes(t)))
+        continue;
+    } else
+      continue;
+    const keys = [];
+    for (const k of chain.reverse()) {
+      const conv = keyConv(k, true);
+      if (conv === void 0) {
+        ok = false;
+        break;
+      }
+      keys.push(conv);
+    }
+    if (!ok)
+      continue;
+    const last = keyConv(args[1], false);
+    if (last === void 0)
+      continue;
+    const value = args[2].trim();
+    const receiverName = field !== null ? field[1] : local !== null ? local[1] : "";
+    const readsReceiver = field !== null ? /\bself\b/.test(value) : new RegExp("\\b" + receiverName + "\\b").test(value);
+    if (keys.length > 9)
+      continue;
+    const tag = (i2) => "__rd" + "abcdefghij"[i2];
+    let insert = "std::sync::Arc::make_mut(" + tag(keys.length) + ").insert(" + last + ", " + value + ");";
+    for (let d = keys.length - 1; d >= 0; d--) {
+      insert = "if let Value::Dict(" + tag(d + 1) + ") = std::sync::Arc::make_mut(" + tag(d) + ").entry(" + keys[d] + ").or_insert(Value::Null) { " + insert + " }";
+    }
+    let native = "if let Value::Dict(" + tag(0) + ") = " + place + " { " + insert + " }";
+    if (readsReceiver)
+      native = "{ let __rdt = " + value + "; " + native.replace(", " + value + ");", ", __rdt);") + " }";
+    const lineStart = content.lastIndexOf("\n", at) + 1;
+    let lineEnd = content.indexOf("\n", after);
+    if (lineEnd < 0)
+      lineEnd = content.length;
+    const before = content.slice(lineStart, lineEnd);
+    let suffix = content.slice(after, lineEnd);
+    if (suffix.startsWith(";"))
+      suffix = suffix.slice(1);
+    const merged = content.slice(lineStart, at) + native + suffix;
+    if (before.length <= 400 && merged.length > 400)
+      continue;
+    edits.push({ start: at, end: after, text: native });
+  }
+  if (edits.length === 0)
+    return content;
+  let out = "";
+  let pos = 0;
+  for (const e of edits) {
+    out += content.slice(pos, e.start) + e.text;
+    let p = e.end;
+    while (p < content.length && (content[p] === " " || content[p] === "	"))
+      p++;
+    if (p < content.length && content[p] === ";")
+      p++;
+    pos = p;
+  }
+  out += content.slice(pos);
+  return out;
+}
+var R03_SITE_RX = /(?<![A-Za-z0-9_:.])(in_op|object_keys|object_values|get_array_length)\(/g;
+var R03_LITERAL_KEY = /^&Value::Str\(("(?:[^"\\]|\\.)*")\.(?:to_string|into)\(\)\)$/;
+var R03_IDENT_ARG = /^&([a-z_][A-Za-z0-9_]*)$/;
+var R03_CLIENT_STATE = /^&get_value\(&(client), &Value::Str\("(subscriptions|futures)"\.(?:to_string|into)\(\)\)\)$/;
+var R03_SIDE_WORD = /asks|bids|[Ss]ide|[Bb]ook|entries|__sideKind/;
+var R03_JSON_SOURCE = /^(?:crate::value::)?(?:get_value|get_value_k)\(|^self\.(?:safe_\w+|parse_\w+|fetch\w*|to_array|array_concat|extend|omit)\(|^get_arg\(|^split\(|^Value::(?:Map|List|Array|Str|from)\(/;
+var R03_READS = /* @__PURE__ */ new Set([
+  "clone",
+  "len",
+  "is_empty",
+  "as_map",
+  "as_array",
+  "as_str",
+  "as_i64",
+  "as_f64",
+  "as_bool",
+  "is_truthy",
+  "is_null",
+  "is_str",
+  "is_map",
+  "is_array",
+  "to_string",
+  "to_json"
+]);
+var R03_SHAPE_WRITES = /(?:(?<![A-Za-z0-9_:.])(?:add_element_to_object|set_value|append_to_array|remove)\(|(?:^|[^A-Za-z0-9_:.])if let (?:Value::(?:Dict|Arr)\(__[a-z]+\)|\(Value::(?:Dict|Arr)\(__[a-z]+\), ?(?:&mut )?[a-z_][A-Za-z0-9_]*\)) = )$/;
+function r03Mask(content) {
+  const out = content.split("");
+  let i = 0;
+  while (i < content.length) {
+    const c = content[i];
+    if (c === "/" && content[i + 1] === "/") {
+      while (i < content.length && content[i] !== "\n")
+        out[i++] = " ";
+      continue;
+    }
+    if (c === '"') {
+      out[i++] = " ";
+      while (i < content.length && content[i] !== '"') {
+        if (content[i] === "\\")
+          out[i++] = " ";
+        out[i++] = " ";
+      }
+      if (i < content.length)
+        out[i++] = " ";
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+function r03Close(content, open) {
+  const pairs = { "(": ")", "[": "]", "{": "}" };
+  const close = pairs[content[open]];
+  if (close === void 0)
+    return -1;
+  let depth = 0;
+  let i = open;
+  while (i < content.length) {
+    const c = content[i];
+    if (c === '"') {
+      i++;
+      while (i < content.length && content[i] !== '"') {
+        if (content[i] === "\\")
+          i++;
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0)
+        return c === close ? i : -1;
+    }
+    i++;
+  }
+  return -1;
+}
+function r03Split(inner) {
+  const parts = [];
+  let depth = 0;
+  let cur = "";
+  let i = 0;
+  while (i < inner.length) {
+    const c = inner[i];
+    if (c === '"') {
+      const start = i;
+      i++;
+      while (i < inner.length && inner[i] !== '"') {
+        if (inner[i] === "\\")
+          i++;
+        i++;
+      }
+      i++;
+      cur += inner.slice(start, i);
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}")
+      depth--;
+    if (c === "," && depth === 0) {
+      parts.push(cur);
+      cur = "";
+    } else {
+      cur += c;
+    }
+    i++;
+  }
+  parts.push(cur);
+  return parts;
+}
+function r03StmtEnd(content, i) {
+  let depth = 0;
+  while (i < content.length) {
+    const c = content[i];
+    if (c === '"') {
+      i++;
+      while (i < content.length && content[i] !== '"') {
+        if (content[i] === "\\")
+          i++;
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth < 0)
+        return -1;
+    } else if (c === ";" && depth === 0) {
+      return i;
+    }
+    i++;
+  }
+  return -1;
+}
+function r03Parens(e) {
+  let t = e.trim();
+  while (t.startsWith("(") && r03Close(t, 0) === t.length - 1)
+    t = t.slice(1, -1).trim();
+  return t;
+}
+function r03IsCall(e, name) {
+  if (!e.startsWith(name + "("))
+    return false;
+  return r03Close(e, name.length) === e.length - 1;
+}
+var R03Prover = class {
+  constructor(content) {
+    this.headers = [0];
+    this.memo = /* @__PURE__ */ new Map();
+    this.pending = /* @__PURE__ */ new Set();
+    this.content = content;
+    this.masked = r03Mask(content);
+    for (const m of this.masked.matchAll(/\n[ \t]*(?:pub(?:\([a-z]+\))? )?(?:async )?fn /g)) {
+      this.headers.push(m.index + 1);
+    }
+    this.headers.push(content.length);
+  }
+  // Enclosing fn region containing `pos`.
+  region(pos) {
+    let lo = 0;
+    for (let h = 0; h + 1 < this.headers.length; h++)
+      if (this.headers[h] <= pos)
+        lo = h;
+    return lo;
+  }
+  facts(name, pos) {
+    if (!/^[a-z_][A-Za-z0-9_]*$/.test(name))
+      return void 0;
+    const lo = this.region(pos);
+    const key = `${lo}:${name}`;
+    if (this.memo.has(key))
+      return this.memo.get(key);
+    if (this.pending.has(key))
+      return void 0;
+    this.pending.add(key);
+    const result = this.prove(name, this.headers[lo], this.headers[lo + 1], /* @__PURE__ */ new Set());
+    this.pending.delete(key);
+    this.memo.set(key, result);
+    return result;
+  }
+  prove(name, from, to, seen) {
+    const region = this.masked.slice(from, to);
+    const real = this.content.slice(from, to);
+    const header = real.slice(0, Math.max(0, real.indexOf("{")));
+    const isParam = new RegExp(`[^A-Za-z0-9_]${name}\\s*:`).test(header);
+    const rebind = new RegExp(`(?<!\\|)\\|(?!\\|)[^|\\n]*\\b${name}\\b[^|\\n]*(?<!\\|)\\|(?!\\|)|\\bfor [^\\n]*\\b${name}\\b[^\\n]* in |\\blet \\([^)]*\\b${name}\\b|\\b${name}\\s*@|\\b${name}\\s*[-+*/%|&^]=`);
+    if (rebind.test(region) || new RegExp(`\\*\\s*${name}\\b\\s*=(?!=)`).test(region))
+      return void 0;
+    let writes = 0;
+    let proof;
+    let shapeUnknown = false;
+    let lenSafe = !R03_SIDE_WORD.test(name);
+    const writesRe = new RegExp(`(?<![A-Za-z0-9_.*])(let (?:mut )?)?${name}\\b(\\s*:\\s*([A-Za-z_][A-Za-z0-9_<>,:& ]*?))?\\s*=(?!=)`, "g");
+    for (const m of region.matchAll(writesRe)) {
+      const typed = m[3] === void 0 ? "Value" : m[3].replace(/\s+/g, "");
+      if (typed !== "Value")
+        return void 0;
+      const rhsStart = m.index + m[0].length;
+      const end = r03StmtEnd(real, rhsStart);
+      if (end < 0)
+        return void 0;
+      const raw = r03Parens(real.slice(rhsStart, end));
+      const write = this.source(raw, from + m.index, seen);
+      writes++;
+      if (write === void 0) {
+        lenSafe = lenSafe && R03_JSON_SOURCE.test(raw) && !R03_SIDE_WORD.test(raw);
+        shapeUnknown = true;
+        continue;
+      }
+      if (shapeUnknown) {
+        lenSafe = lenSafe && write.markerFree && !R03_SIDE_WORD.test(raw);
+        continue;
+      }
+      if (proof === void 0)
+        proof = { ...write };
+      else if (proof.kind !== write.kind)
+        shapeUnknown = true;
+      else {
+        proof.markerFree = proof.markerFree && write.markerFree;
+        proof.untagged = proof.untagged && write.untagged;
+      }
+      lenSafe = lenSafe && write.markerFree && !R03_SIDE_WORD.test(raw);
+    }
+    if (writes === 0)
+      return void 0;
+    for (const m of region.matchAll(new RegExp(`&mut ${name}\\b`, "g"))) {
+      const before = region.slice(Math.max(0, m.index - 96), m.index);
+      if (!R03_SHAPE_WRITES.test(before))
+        return void 0;
+    }
+    for (const m of region.matchAll(new RegExp(`(?<![A-Za-z0-9_.])${name}\\.([A-Za-z_][A-Za-z0-9_]*)`, "g"))) {
+      if (!R03_READS.has(m[1]))
+        return void 0;
+    }
+    if (isParam)
+      return lenSafe ? { lenSafe } : void 0;
+    return shapeUnknown ? { lenSafe } : { proof, lenSafe };
+  }
+  // Shape and marker safety of one right-hand side.
+  source(raw, absPos, seen) {
+    const e = r03Parens(raw);
+    if (e === "")
+      return void 0;
+    const lit = (kind, untagged = true) => ({ kind, markerFree: true, untagged });
+    const tagged = e.includes("subscriptions") || e.includes("client");
+    if (r03IsCall(e, "Value::Map"))
+      return lit("map", !tagged && !e.includes("__ws_sub"));
+    if (r03IsCall(e, "Value::List") || r03IsCall(e, "Value::Array") || r03IsCall(e, "Value::from")) {
+      return e.includes("vec![") ? lit("arr") : void 0;
+    }
+    if (r03IsCall(e, "Value::Str"))
+      return lit("str");
+    const readers = [
+      [/^self\.safe_dict(?:_k|2|_k2)?\(/, "map"],
+      [/^self\.safe_list(?:_k|2|_k2)?\(/, "arr"],
+      [/^self\.(?:parse_ids|to_array|array_concat)\(/, "arr"],
+      [/^split\(/, "arr"]
+    ];
+    for (const [rx, kind] of readers) {
+      if (rx.test(e) && r03Close(e, e.indexOf("(")) === e.length - 1)
+        return lit(kind, !tagged);
+    }
+    const merge = /^self\.(?:extend|omit)\(/.exec(e);
+    if (merge !== null && r03Close(e, merge[0].length - 1) === e.length - 1) {
+      const args = r03Split(e.slice(merge[0].length, -1));
+      const first = args.length > 0 ? this.source(args[0], absPos, seen) : void 0;
+      if (first === void 0)
+        return void 0;
+      return { kind: first.kind, markerFree: first.markerFree, untagged: first.untagged && !tagged };
+    }
+    const alias = /^([a-z_][A-Za-z0-9_]*)\.clone\(\)$/.exec(e);
+    if (alias !== null) {
+      if (seen.has(alias[1]))
+        return void 0;
+      seen.add(alias[1]);
+      return this.facts(alias[1], absPos)?.proof;
+    }
+    return void 0;
+  }
+};
+function r03KeyText(key) {
+  const lit = R03_LITERAL_KEY.exec(key);
+  if (lit !== null)
+    return lit[1];
+  const ident = R03_IDENT_ARG.exec(key);
+  if (ident !== null)
+    return ident[1];
+  return void 0;
+}
+function hx10w2R03(content) {
+  if (!/\b(?:in_op|object_keys|object_values|get_array_length)\(&/.test(content))
+    return content;
+  const prover = new R03Prover(content);
+  for (let round = 0; round < 6; round++) {
+    const masked = r03Mask(content);
+    const rewrites = [];
+    for (const m of masked.matchAll(R03_SITE_RX)) {
+      const start = m.index;
+      const name = m[1];
+      if (/\bfn\s+$/.test(masked.slice(Math.max(0, start - 8), start)))
+        continue;
+      if (rewrites.some((r) => start >= r.start && start < r.end))
+        continue;
+      const open = start + name.length;
+      const close = r03Close(content, open);
+      if (close < 0)
+        continue;
+      const args = r03Split(content.slice(open + 1, close)).map((s) => s.trim());
+      let expr;
+      let kind;
+      let untagged = false;
+      let lenSafe = false;
+      const recv = R03_IDENT_ARG.exec(args[0] ?? "");
+      const state = R03_CLIENT_STATE.exec(args[0] ?? "");
+      if (recv !== null) {
+        const facts = prover.facts(recv[1], start);
+        if (facts === void 0)
+          continue;
+        expr = recv[1];
+        kind = facts.proof?.kind;
+        untagged = facts.proof?.untagged === true;
+        lenSafe = facts.lenSafe;
+      } else if (state !== null) {
+        expr = (args[0] ?? "").trim().slice(1);
+        kind = "map";
+        untagged = state[2] === "futures";
+        lenSafe = true;
+      } else {
+        continue;
+      }
+      let text;
+      if (name === "get_array_length" && args.length === 1) {
+        if (lenSafe)
+          text = `Value::Int(${expr}.len() as i64)`;
+      } else if (name === "in_op" && args.length === 2 && kind === "map") {
+        const key = r03KeyText(args[1]);
+        if (key !== void 0) {
+          text = key.startsWith('"') ? `matches!(&${expr}, Value::Dict(__d) if __d.contains_key(${key}))` : `matches!((&${expr}, &${key}), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))`;
+        }
+      } else if ((name === "object_keys" || name === "object_values") && args.length === 1 && kind === "map" && untagged) {
+        const body = name === "object_keys" ? "__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()" : "__m.values().cloned().collect()";
+        text = `Value::Array(${expr}.as_map().map(|__m| ${body}).unwrap_or_default())`;
+      }
+      if (text === void 0)
+        continue;
+      rewrites.push({ start, end: close + 1, text });
+    }
+    if (rewrites.length === 0)
+      break;
+    let out = "";
+    let at = 0;
+    for (const r of rewrites) {
+      if (r.start < at)
+        continue;
+      out += content.slice(at, r.start) + r.text;
+      at = r.end;
+    }
+    content = out + content.slice(at);
+  }
+  return content;
+}
+var BOOL_FNS = /* @__PURE__ */ new Set(["safe_bool", "safe_bool_k", "safe_bool_2", "get_arg_bool"]);
+var INT_FNS = /* @__PURE__ */ new Set(["safe_integer", "safe_integer_k", "safe_integer_2", "safe_int", "safe_timestamp"]);
+var STR_FNS = /* @__PURE__ */ new Set(["safe_string", "safe_string_k", "safe_string_2", "safe_string_lower", "safe_string_upper", "safe_string_lower_k", "safe_string_upper_k"]);
+var FLOAT_FNS = /* @__PURE__ */ new Set(["safe_float", "safe_float_k", "safe_number", "safe_number_k", "safe_number_2"]);
+function mask(content) {
+  const out = content.split("");
+  let i = 0;
+  while (i < out.length) {
+    if (out[i] === '"') {
+      let j = i + 1;
+      while (j < out.length && out[j] !== '"') {
+        if (out[j] === "\\")
+          j++;
+        j++;
+      }
+      for (let k = i + 1; k < j && k < out.length; k++)
+        out[k] = " ";
+      i = j + 1;
+      continue;
+    }
+    if (out[i] === "/" && out[i + 1] === "/") {
+      let j = i;
+      while (j < out.length && out[j] !== "\n") {
+        out[j] = " ";
+        j++;
+      }
+      i = j;
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+function closeParen(masked, open) {
+  let depth = 0;
+  for (let i = open; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0)
+        return i;
+    }
+  }
+  return -1;
+}
+function splitTopLevel(src, sep) {
+  const parts = [];
+  let depth = 0;
+  let cur = "";
+  let inStr = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (inStr) {
+      cur += c;
+      if (c === "\\") {
+        cur += src[i + 1] ?? "";
+        i++;
+        continue;
+      }
+      if (c === '"')
+        inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      cur += c;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}")
+      depth--;
+    if (c === sep && depth === 0) {
+      parts.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  parts.push(cur);
+  return parts.map((p) => p.trim());
+}
+function stripOuter(src) {
+  let s = src.trim();
+  while (s.startsWith("(") && closeParen(s, 0) === s.length - 1)
+    s = s.slice(1, -1).trim();
+  return s;
+}
+function statementBefore(masked, pos) {
+  let depth = 0;
+  for (let i = pos; i > 0; i--) {
+    const c = masked[i - 1];
+    if (c === ")" || c === "]")
+      depth++;
+    else if (c === "(" || c === "[") {
+      if (depth > 0)
+        depth--;
+    } else if (depth === 0 && (c === ";" || c === "{" || c === "}" || c === "\n"))
+      return masked.slice(i, pos);
+  }
+  return masked.slice(0, pos);
+}
+function fnRegionOf(masked, pos) {
+  const heads = [0];
+  for (const m of masked.matchAll(/\n[ \t]*(?:pub )?(?:async )?fn /g))
+    heads.push(m.index + 1);
+  heads.push(masked.length);
+  let lo = 0;
+  for (let h = 0; h + 1 < heads.length; h++)
+    if (heads[h] <= pos)
+      lo = h;
+  const body = masked.slice(heads[lo], heads[lo + 1]);
+  const brace = body.indexOf("{");
+  return { start: heads[lo], end: heads[lo + 1], header: brace < 0 ? body : body.slice(0, brace) };
+}
+function rhsAfter(masked, from) {
+  let depth = 0;
+  for (let i = from; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}")
+      depth--;
+    else if (c === ";" && depth === 0)
+      return masked.slice(from, i).trim();
+  }
+  return "";
+}
+function stripTrailingOperand(s) {
+  let depth = 0;
+  for (let i = s.length - 1; i >= 0; i--) {
+    const c = s[i];
+    if (c === ")" || c === "]" || c === "}")
+      depth++;
+    else if (c === "(" || c === "[" || c === "{") {
+      if (depth === 0)
+        return s.slice(0, i);
+      depth--;
+      if (depth === 0 && !/[A-Za-z0-9_.)\]]/.test(s[i - 1] ?? ""))
+        return s.slice(0, i);
+    } else if (depth === 0) {
+      if (c === "&" && s[i - 1] === "&" || c === "|" && s[i - 1] === "|")
+        return s.slice(0, i - 1);
+      if (c === "," || c === ";" || c === "=")
+        return s.slice(0, i + 1);
+      if (/[A-Za-z0-9_.)]/.test(c)) {
+        let k = i;
+        while (k >= 0 && /[A-Za-z0-9_.]/.test(s[k]))
+          k--;
+        return k < 0 ? s : s.slice(0, k + 1);
+      }
+    }
+  }
+  return "";
+}
+function boolSlotAt(masked, start) {
+  let prefix = statementBefore(masked, start);
+  for (let hop = 0; hop < 60; hop++) {
+    prefix = prefix.replace(/[\s!]+$/, "");
+    if (/(?:^|[^\w])(?:if|while|for|assert|assert_eq)$/.test(prefix))
+      return true;
+    if (/Value::Bool\($/.test(prefix))
+      return true;
+    if (/(?:&&|\|\|)$/.test(prefix)) {
+      prefix = stripTrailingOperand(prefix.slice(0, -2));
+      continue;
+    }
+    if (/[^=!<>]=$/.test(prefix))
+      return /:\s*bool\s*=?$/.test(prefix.slice(0, -1));
+    if (/\($/.test(prefix)) {
+      prefix = prefix.slice(0, -1);
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+var UNION = ["bool", "null"];
+function variantOf(expr, masked, region, depth) {
+  const e = stripOuter(expr);
+  const lit = /^Value::(Bool|Int|Float|Str)\(/.exec(e);
+  if (lit !== null && closeParen(e, "Value::".length + lit[1].length) === e.length - 1) {
+    return /* @__PURE__ */ new Set([lit[1].toLowerCase()]);
+  }
+  if (e === "Value::Null" || e === "crate::Value::Null")
+    return /* @__PURE__ */ new Set(["null"]);
+  const call = /^self\.([a-z_][a-z0-9_]*)\(/.exec(e);
+  if (call !== null && closeParen(e, "self.".length + call[1].length) === e.length - 1) {
+    const name = call[1];
+    if (BOOL_FNS.has(name))
+      return safeBoolVariants(e, masked, region, depth);
+    if (INT_FNS.has(name))
+      return /* @__PURE__ */ new Set(["int", "null"]);
+    if (STR_FNS.has(name))
+      return /* @__PURE__ */ new Set(["str", "null"]);
+    if (FLOAT_FNS.has(name))
+      return /* @__PURE__ */ new Set(["float", "int", "null"]);
+    return void 0;
+  }
+  if (/^\(?if /.test(e) && e.includes("} else {")) {
+    const at = e.indexOf("} else {");
+    const a = variantOf(e.slice(e.indexOf("{") + 1, at), masked, region, depth);
+    const b = variantOf(e.slice(at + "} else {".length, e.lastIndexOf("}")), masked, region, depth);
+    if (a !== void 0 && b !== void 0)
+      return /* @__PURE__ */ new Set([...a, ...b]);
+  }
+  return void 0;
+}
+function safeBoolVariants(call, masked, region, depth) {
+  const open = call.indexOf("(");
+  const args = splitTopLevel(call.slice(open + 1, closeParen(call, open)), ",");
+  const list = /^&\[(.*)\]$/.exec(args[args.length - 1] ?? "");
+  if (list === null)
+    return void 0;
+  const items = list[1].trim();
+  if (items === "")
+    return new Set(UNION);
+  return boolDefault(items, masked, region, depth);
+}
+function boolDefault(expr, masked, region, depth) {
+  const e = stripOuter(expr);
+  if (/^Value::Bool\(/.test(e) || e === "Value::Null")
+    return new Set(UNION);
+  const name = /^([A-Za-z_][A-Za-z0-9_]*)(?:\.clone\(\))?$/.exec(e);
+  if (name === null)
+    return void 0;
+  const proof = proveLocal(masked, name[1], region, depth + 1);
+  if (proof.variants === void 0)
+    return void 0;
+  return [...proof.variants].every((v) => v === "bool" || v === "null") ? new Set(UNION) : void 0;
+}
+function proveLocal(masked, name, region, depth) {
+  if (depth > 3)
+    return { kind: "none" };
+  const body = masked.slice(region.start, region.end);
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const shadow = new RegExp(`(?<!\\|)\\|(?!\\|)[^|\\n]*\\b${esc}\\b[^|\\n]*(?<!\\|)\\|(?!\\|)|\\bfor [^\\n]*\\b${esc}\\b[^\\n]* in |\\blet \\([^)]*\\b${esc}\\b`);
+  if (shadow.test(body))
+    return { kind: "none" };
+  const types = /* @__PURE__ */ new Set();
+  const param = new RegExp(`\\b(?:mut )?${esc}\\s*:\\s*([A-Za-z_][A-Za-z0-9_<>]*)`).exec(region.header);
+  if (param !== null)
+    types.add(param[1]);
+  const writes = [];
+  const spans = [];
+  const letRe = new RegExp(`\\blet (?:mut )?${esc}\\b\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_<>]*))?\\s*=`, "g");
+  for (const m of body.matchAll(letRe)) {
+    const at = m.index;
+    const rhs = rhsAfter(masked, region.start + at + m[0].length);
+    spans.push([at, at + m[0].length + rhs.length]);
+    if (m[1] !== void 0)
+      types.add(m[1]);
+    writes.push(rhs);
+  }
+  const assignRe = new RegExp(`(?<![A-Za-z0-9_.])${esc}\\s*=(?!=)`, "g");
+  for (const m of body.matchAll(assignRe)) {
+    const at = m.index;
+    if (spans.some(([s, e]) => at >= s && at < e))
+      continue;
+    writes.push(rhsAfter(masked, region.start + at + m[0].length));
+    types.add("?");
+  }
+  const only = [...types];
+  if (writes.length === 0 || only.some((t) => t !== "Value" && t !== "?"))
+    return { kind: "none" };
+  let acc = void 0;
+  for (const w of writes) {
+    const v = variantOf(w, masked, region, depth);
+    if (v === void 0)
+      return { kind: "none" };
+    acc = acc === void 0 ? v : new Set([...acc].filter((x) => v.has(x)));
+    if (acc.size === 0)
+      return { kind: "none" };
+  }
+  return acc === void 0 ? { kind: "none" } : { kind: "variant", variants: acc };
+}
+var isBoolOnly = (v) => [...v].every((x) => x === "bool" || x === "null");
+function pushEdit(edits, masked, start, close, text) {
+  let k = start - 1;
+  while (k >= 0 && (masked[k] === " " || masked[k] === "	"))
+    k--;
+  if (k >= 0 && masked[k] === "!" && masked[k - 1] !== "=") {
+    edits.push({ start: k, end: close + 1, text: text.replace(" == ", " != ") });
+    return;
+  }
+  edits.push({ start, end: close + 1, text });
+}
+function r04Scalars(content) {
+  if (!content.includes("is_true(&") && !content.includes("is_equal(&"))
+    return content;
+  const masked = mask(content);
+  const edits = [];
+  for (const m of masked.matchAll(/(?<![A-Za-z0-9_:.])(is_true|is_equal)\(&/g)) {
+    const start = m.index;
+    const open = start + m[1].length;
+    const close = closeParen(masked, open);
+    if (close < 0)
+      continue;
+    if (!boolSlotAt(masked, start))
+      continue;
+    const args = splitTopLevel(content.slice(open + 1, close), ",");
+    const region = fnRegionOf(masked, start);
+    const proofOf = (e) => {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(e))
+        return void 0;
+      return proveLocal(masked, e, region, 0).variants;
+    };
+    if (m[1] === "is_true") {
+      if (args.length !== 1)
+        continue;
+      const operand = stripOuter(args[0].replace(/^&/, ""));
+      const variants = proofOf(operand);
+      if (variants === void 0 || !isBoolOnly(variants))
+        continue;
+      pushEdit(edits, masked, start, close, `${operand}.as_bool() == Some(true)`);
+      continue;
+    }
+    if (args.length !== 2)
+      continue;
+    const a = stripOuter(args[0].replace(/^&/, ""));
+    const b = stripOuter(args[1].replace(/^&/, ""));
+    const lit = (e) => e === "Value::Null" || /^Value::Bool\((?:true|false)\)$/.test(e);
+    if (lit(a) && lit(b))
+      continue;
+    const va = lit(a) ? new Set(UNION) : proofOf(a);
+    const vb = lit(b) ? new Set(UNION) : proofOf(b);
+    if (va === void 0 || vb === void 0 || !isBoolOnly(va) || !isBoolOnly(vb))
+      continue;
+    const asOption = (e) => {
+      const box = /^Value::Bool\((true|false)\)$/.exec(e);
+      if (box !== null)
+        return `Some(${box[1]})`;
+      return e === "Value::Null" ? "None" : `${e}.as_bool()`;
+    };
+    pushEdit(edits, masked, start, close, `${asOption(a)} == ${asOption(b)}`);
+  }
+  if (edits.length === 0)
+    return content;
+  let out = "";
+  let at = 0;
+  for (const e of edits) {
+    if (e.start < at)
+      continue;
+    out += content.slice(at, e.start) + e.text;
+    at = e.end;
+  }
+  return out + content.slice(at);
+}
+var R06_HELPER = "append_to_array";
+var R06_MAX_LINE = 400;
+var R06_CALL_RX = new RegExp("(?<![\\w.:])" + R06_HELPER + "\\(", "g");
+var R06_ARR_INIT = [
+  /^Value::from\(vec!\[/,
+  /^Value::from\(Vec::new\(\)\)$/,
+  /^Value::Null$/,
+  /^\(match [\s\S]*Some\(__v\) if matches!\(__v, Value::Arr\(_\)\) => __v, _ => Value::from\(vec!\[/
+];
+function r06MaskText(src) {
+  const out = [];
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < n && src[i] !== "\n") {
+        out.push(" ");
+        i++;
+      }
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      out.push("  ");
+      i += 2;
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        out.push(src[i] === "\n" ? "\n" : " ");
+        i++;
+      }
+      if (i < n) {
+        out.push("  ");
+        i += 2;
+      }
+      continue;
+    }
+    if (c === '"') {
+      out.push(" ");
+      i++;
+      while (i < n && src[i] !== '"') {
+        if (src[i] === "\\") {
+          out.push("  ");
+          i += 2;
+          continue;
+        }
+        out.push(src[i] === "\n" ? "\n" : " ");
+        i++;
+      }
+      if (i < n) {
+        out.push(" ");
+        i++;
+      }
+      continue;
+    }
+    out.push(c);
+    i++;
+  }
+  return out.join("");
+}
+function r06FnRegions(masked) {
+  const regions = [];
+  const head = /\bfn\s+[A-Za-z0-9_]*\s*[(<]/g;
+  let m;
+  while ((m = head.exec(masked)) !== null) {
+    let i = m.index + m[0].length - 1;
+    let depth = 0;
+    let open = -1;
+    while (i < masked.length) {
+      const c = masked[i];
+      if (c === "(" || c === "[" || c === "<")
+        depth++;
+      else if (c === ")" || c === "]" || c === ">")
+        depth--;
+      else if (c === "{") {
+        if (depth <= 0) {
+          open = i;
+          break;
+        }
+        depth++;
+      } else if (c === ";" && depth <= 0)
+        break;
+      i++;
+    }
+    if (open < 0)
+      continue;
+    let close = -1;
+    let d = 0;
+    for (let j = open; j < masked.length; j++) {
+      if (masked[j] === "{")
+        d++;
+      else if (masked[j] === "}") {
+        d--;
+        if (d === 0) {
+          close = j;
+          break;
+        }
+      }
+    }
+    if (close > open)
+      regions.push([open, close]);
+  }
+  return regions;
+}
+function r06CloseParen(src, open) {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === "(")
+      depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0)
+        return i;
+    }
+  }
+  return -1;
+}
+function r06ExprEnd(masked, from) {
+  let depth = 0;
+  for (let i = from; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}")
+      depth--;
+    else if (c === ";" && depth <= 0)
+      return i;
+  }
+  return -1;
+}
+function r06IsArrInit(init) {
+  const t = init.trim();
+  return R06_ARR_INIT.some((rx) => rx.test(t));
+}
+function r06Bal(s) {
+  let d = 0;
+  for (const c of s) {
+    if (c === "(" || c === "[" || c === "{")
+      d++;
+    else if (c === ")" || c === "]" || c === "}") {
+      d--;
+      if (d < 0)
+        return false;
+    }
+  }
+  return d === 0;
+}
+function r06GuardClone(masked, rhs, stmtStart, rhsEnd) {
+  const m = /^([A-Za-z_][A-Za-z0-9_]*)\.clone\(\)$/.exec(rhs.trim());
+  if (m === null)
+    return false;
+  const open = masked.lastIndexOf("{", stmtStart);
+  if (open < 0 || masked.slice(open + 1, stmtStart).trim() !== "" || !/^\s*\}/.test(masked.slice(rhsEnd + 1)))
+    return false;
+  const ifStart = masked.lastIndexOf("if", open);
+  if (ifStart < 0 || /[\w.]/.test(masked[ifStart - 1] ?? ""))
+    return false;
+  let cond = masked.slice(ifStart + 2, open).trim();
+  while (cond.startsWith("(") && cond.endsWith(")") && r06Bal(cond.slice(1, -1)))
+    cond = cond.slice(1, -1).trim();
+  const cm = /^matches!\(\s*&\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*Value::Arr\(_\)\s*\)$/.exec(cond);
+  return cm !== null && cm[1] === m[1];
+}
+function r06Push(content) {
+  if (!content.includes(R06_HELPER + "("))
+    return content;
+  const masked = r06MaskText(content);
+  const regions = r06FnRegions(masked);
+  const jobs = [];
+  const rx = new RegExp(R06_CALL_RX.source, "g");
+  let m;
+  while ((m = rx.exec(masked)) !== null) {
+    const start = m.index;
+    const lineStart = masked.lastIndexOf("\n", start) + 1;
+    if (/^\s*(?:pub\s+)?fn /.test(masked.slice(lineStart, start)))
+      continue;
+    const region = regions.find((r) => r[0] < start && start < r[1]);
+    if (region === void 0)
+      continue;
+    const argStart = start + R06_HELPER.length + 1;
+    const recv = /^&mut\s+([A-Za-z_][A-Za-z0-9_]*)\s*,/.exec(content.slice(argStart, argStart + 120));
+    if (recv === null)
+      continue;
+    const name = recv[1];
+    const nameRx = new RegExp("(?<![\\w.])" + name + "(?![\\w])");
+    const headerStart = masked.lastIndexOf("fn ", region[0]);
+    if (new RegExp("(?<![\\w])" + name + "\\s*:").test(masked.slice(headerStart, region[0])))
+      continue;
+    const declRx = new RegExp("let (?:mut )?" + name + "\\s*:\\s*([^=;]+?)\\s*=(?!=)", "g");
+    const decls = [];
+    let d;
+    const head = masked.slice(0, start);
+    while ((d = declRx.exec(head)) !== null) {
+      if (d.index <= region[0])
+        continue;
+      if (d[1].trim() !== "Value") {
+        decls.length = 0;
+        break;
+      }
+      const initStart = d.index + d[0].length;
+      const initEnd = r06ExprEnd(masked, initStart);
+      if (initEnd < 0) {
+        decls.length = 0;
+        break;
+      }
+      decls.push({ start: d.index, initStart, initEnd });
+    }
+    if (decls.length === 0)
+      continue;
+    if (!decls.every((x) => r06IsArrInit(content.slice(x.initStart, x.initEnd))))
+      continue;
+    const useRx = new RegExp(nameRx.source, "g");
+    const body = masked.slice(region[0], region[1]);
+    let u;
+    let ok = true;
+    while ((u = useRx.exec(body)) !== null) {
+      const s = region[0] + u.index;
+      const e = s + name.length;
+      if (decls.some((x) => s >= x.start && s < x.initEnd))
+        continue;
+      const before = masked.slice(Math.max(0, s - 40), s);
+      const after = masked.slice(e, e + 80);
+      if (/&mut\s*$/.test(before)) {
+        if (!(new RegExp(R06_HELPER + "\\(\\s*&mut\\s*$").test(before) && /^\s*,/.test(after))) {
+          ok = false;
+          break;
+        }
+        continue;
+      }
+      const assign = /^\s*=(?!=)/.exec(after);
+      if (assign !== null) {
+        const rhsStart = e + assign[0].length;
+        const rhsEnd = r06ExprEnd(masked, rhsStart);
+        if (rhsEnd < 0) {
+          ok = false;
+          break;
+        }
+        let aStart = masked.lastIndexOf(";", s);
+        aStart = Math.max(aStart, masked.lastIndexOf("{", s), masked.lastIndexOf("}", s)) + 1;
+        const init = content.slice(rhsStart, rhsEnd);
+        if (!r06IsArrInit(init) && !r06GuardClone(masked, init, aStart, rhsEnd)) {
+          ok = false;
+          break;
+        }
+      }
+    }
+    if (!ok)
+      continue;
+    const callEnd2 = r06CloseParen(masked, argStart - 1);
+    if (callEnd2 < 0)
+      continue;
+    const valueStart = argStart + recv[0].length;
+    const value = content.slice(valueStart, callEnd2);
+    if (nameRx.test(value))
+      continue;
+    let stmtStart = masked.lastIndexOf(";", start);
+    stmtStart = Math.max(stmtStart, masked.lastIndexOf("{", start), masked.lastIndexOf("}", start)) + 1;
+    if (masked.slice(stmtStart, start).trim() !== "")
+      continue;
+    if (!/^\)\s*;/.test(masked.slice(callEnd2, callEnd2 + 4)))
+      continue;
+    const text = `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value.trim()}); }`;
+    const lStart = content.lastIndexOf("\n", start) + 1;
+    const lEnd = content.indexOf("\n", callEnd2) < 0 ? content.length : content.indexOf("\n", callEnd2);
+    const lenNow = lEnd - lStart;
+    if (lenNow <= R06_MAX_LINE && lenNow - (callEnd2 + 1 - start) + text.length > R06_MAX_LINE)
+      continue;
+    jobs.push({ start, end: callEnd2 + 1, text });
+  }
+  if (jobs.length === 0)
+    return content;
+  let out = content;
+  for (let i = jobs.length - 1; i >= 0; i--) {
+    const j = jobs[i];
+    out = out.slice(0, j.start) + j.text + out.slice(j.end);
+  }
+  return out;
+}
+var STR_LIT = String.raw`"(?:[^"\\]|\\.)*"`;
+function maskText_hx10w3_R01(src) {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < src.length && src[i] !== "\n") {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    if (c === '"') {
+      out += " ";
+      i++;
+      while (i < src.length && src[i] !== '"') {
+        if (src[i] === "\n") {
+          out += "\n";
+          i++;
+          continue;
+        }
+        if (src[i] === "\\") {
+          out += "  ";
+          i += 2;
+          continue;
+        }
+        out += " ";
+        i++;
+      }
+      if (i < src.length) {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+function closeParen_hx10w3_R01(masked, open) {
+  let depth = 0;
+  for (let k = open; k < masked.length; k++) {
+    const c = masked[k];
+    if (c === "(")
+      depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0)
+        return k + 1;
+    }
+  }
+  return -1;
+}
+function closeAt(src, open) {
+  const openCh = src[open];
+  const closeCh = openCh === "(" ? ")" : openCh === "[" ? "]" : "}";
+  let depth = 0;
+  for (let k = open; k < src.length; k++) {
+    const c = src[k];
+    if (c === openCh)
+      depth++;
+    else if (c === closeCh) {
+      depth--;
+      if (depth === 0)
+        return k + 1;
+    }
+  }
+  return -1;
+}
+function closeBrace(masked, open) {
+  let depth = 0;
+  for (let k = open; k < masked.length; k++) {
+    const c = masked[k];
+    if (c === "{")
+      depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0)
+        return k + 1;
+    }
+  }
+  return -1;
+}
+function stmtEnd(masked, from) {
+  let depth = 0;
+  for (let k = from; k < masked.length; k++) {
+    const c = masked[k];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth < 0)
+        return -1;
+    } else if (c === ";" && depth === 0)
+      return k;
+  }
+  return -1;
+}
+function splitArgs_hx10w3_R01(masked, from, to) {
+  const args = [];
+  let depth = 0;
+  let start = from;
+  for (let k = from; k < to; k++) {
+    const c = masked[k];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}")
+      depth--;
+    else if (c === "," && depth === 0) {
+      args.push(masked.slice(start, k));
+      start = k + 1;
+    }
+  }
+  args.push(masked.slice(start, to));
+  return args;
+}
+function openerMap(masked) {
+  const kind = new Uint8Array(masked.length);
+  const at = new Int32Array(masked.length).fill(-1);
+  const stack = [];
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "(")
+      stack.push({ kind: 1, at: i });
+    else if (c === "[")
+      stack.push({ kind: masked[i - 1] === "&" ? 3 : 2, at: i });
+    else if (c === "{")
+      stack.push({ kind: 4, at: i });
+    else if (c === ")" || c === "]" || c === "}") {
+      if (stack.length > 0)
+        stack.pop();
+    }
+    const top = stack[stack.length - 1];
+    kind[i] = top === void 0 ? 0 : top.kind;
+    at[i] = top === void 0 ? -1 : top.at;
+  }
+  return { kind, at };
+}
+var KEYWORDS = /* @__PURE__ */ new Set(["if", "while", "match", "return", "for", "in", "else", "loop", "not"]);
+function valueSlot(masked, content, s, name, open) {
+  const kind = open.kind[s];
+  if (kind !== 1 && kind !== 2 && kind !== 3)
+    return 0;
+  if (kind === 1) {
+    const head = masked.slice(Math.max(0, open.at[s] - 40), open.at[s]);
+    const word = /([A-Za-z_][A-Za-z0-9_]*)\s*$/.exec(head);
+    if (word === null || KEYWORDS.has(word[1]))
+      return 0;
+    const ctor = /Value::([A-Za-z_][A-Za-z0-9_]*)\s*$/.exec(head);
+    if (ctor !== null)
+      return 0;
+  }
+  let k = s - 1;
+  while (k >= 0 && /\s/.test(masked[k]))
+    k--;
+  if (masked[k] === "&" || masked[k] === "." || masked[k] === "!")
+    return 0;
+  if (/\bmut\s+$/.test(masked.slice(Math.max(0, s - 8), s)))
+    return 0;
+  const after = content.slice(s + name.length);
+  const m = /^(?:\.clone\(\))?\s*[,)\];]/.exec(after);
+  if (m === null)
+    return 0;
+  return after.startsWith(".clone()") ? 2 : 1;
+}
+var FN_HEADER = /(?:^|\n)[ \t]*(?:pub(?:\([a-z]+\))? )?(?:async )?fn /g;
+function fnRegions_hx10w3_R01(masked) {
+  const heads = [0];
+  for (const m of masked.matchAll(FN_HEADER))
+    heads.push(m.index + 1);
+  return heads;
+}
+var RUST_TYPE = {
+  "String": "String",
+  "Int": "i64",
+  "Float": "f64",
+  "Bool": "bool",
+  "Vec": "Vec<Value>",
+  "Map": "indexmap::IndexMap<String, Value>"
+};
+function boxed(shape, expr) {
+  switch (shape) {
+    case "String":
+      return `Value::str(${expr})`;
+    case "Int":
+      return `Value::Int(${expr})`;
+    case "Float":
+      return `Value::Float(${expr})`;
+    case "Bool":
+      return `Value::Bool(${expr})`;
+    case "Vec":
+      return `Value::Array(${expr})`;
+    case "Map":
+      return `Value::Map(${expr})`;
+  }
+}
+function initShape(init) {
+  const pinned = (head, shape) => {
+    if (!init.startsWith(head))
+      return void 0;
+    const open = head.length - 1;
+    const close = closeAt(init, open);
+    if (close < 0)
+      return void 0;
+    const inner = init.slice(open + 1, close - 1);
+    if (inner.trim() === "" || inner.trim().startsWith("Value::"))
+      return void 0;
+    return { shape, inner, wrapperEnd: close };
+  };
+  for (const [head, shape] of [
+    ["Value::Str(", "String"],
+    ["Value::Int(", "Int"],
+    ["Value::Float(", "Float"],
+    ["Value::Bool(", "Bool"],
+    ["Value::Map(", "Map"]
+  ]) {
+    const hit = pinned(head, shape);
+    if (hit !== void 0)
+      return hit;
+  }
+  for (const head of ["Value::Array(", "Value::List(", "Value::from("]) {
+    if (!init.startsWith(head))
+      continue;
+    const close = closeAt(init, head.length - 1);
+    if (close < 0)
+      return void 0;
+    const inner = init.slice(head.length, close - 1);
+    if (!inner.startsWith("vec![") || closeAt(inner, 4) !== inner.length)
+      return void 0;
+    return { shape: "Vec", inner, wrapperEnd: close };
+  }
+  if (init.startsWith("vec![")) {
+    const close = closeAt(init, 4);
+    if (close !== init.length)
+      return void 0;
+    return { shape: "Vec", inner: init.slice(5, close - 1), wrapperEnd: close };
+  }
+  return void 0;
+}
+function rebound(region, name) {
+  const n = name;
+  const rx = new RegExp(
+    `\\blet\\s+(?:mut\\s+)?${n}\\b|\\bfor\\s+(?:mut\\s+)?${n}\\b|\\|\\s*(?:mut\\s+)?${n}\\s*[:|,]|\\blet\\s*\\([^)]*\\b${n}\\b|\\b${n}\\s*@|\\b${n}\\b[^;\\n]*=>`
+  );
+  return rx.test(region);
+}
+function classify(shape, ctx, masked, content, where) {
+  const { name, useStart: s, before, after } = ctx;
+  const open = where;
+  const nameEnd = s + name.length;
+  const boxStr = `&Value::Str\\(\\s*(${STR_LIT})\\s*(?:\\.into\\(\\)|\\.to_string\\(\\))?\\s*\\)`;
+  const boxInt = `&Value::Int\\(\\s*(-?\\d+)\\s*\\)`;
+  const boxFlt = `&Value::Float\\(\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\s*\\)`;
+  const boxNum = shape === "Int" ? boxInt : boxFlt;
+  const numeric = shape === "Int" || shape === "Float";
+  const eqOp = (op, lit, len, prefix) => {
+    const start = s - prefix.length;
+    return [{ start, end: nameEnd + len, text: `(${name} ${op} ${lit})` }];
+  };
+  if (shape === "String" && before.endsWith("is_equal(&")) {
+    const m = new RegExp(`^,\\s*${boxStr}\\)`).exec(after);
+    if (m !== null)
+      return eqOp("==", m[1], m[0].length, "is_equal(&");
+  }
+  if (numeric && before.endsWith("is_equal(&")) {
+    const m = new RegExp(`^,\\s*${boxNum}\\)`).exec(after);
+    if (m !== null)
+      return eqOp("==", m[1], m[0].length, "is_equal(&");
+  }
+  if (numeric) {
+    const cmp = [
+      ["is_less_than(&", "<"],
+      ["is_greater_than(&", ">"],
+      ["is_less_than_or_equal(&", "<="],
+      ["is_greater_than_or_equal(&", ">="]
+    ];
+    for (const [prefix, op] of cmp) {
+      if (!before.endsWith(prefix))
+        continue;
+      const m = new RegExp(`^,\\s*${boxNum}\\)`).exec(after);
+      if (m !== null)
+        return eqOp(op, m[1], m[0].length, prefix);
+    }
+  }
+  if (shape === "String" && before.endsWith("to_string_val(&") && after.startsWith(")")) {
+    return [{ start: s - "to_string_val(&".length, end: nameEnd + 1, text: `${name}.clone()` }];
+  }
+  if (shape === "String") {
+    for (const [prefix, method] of [["ends_with(&", "ends_with"], ["starts_with(&", "starts_with"]]) {
+      if (!before.endsWith(prefix))
+        continue;
+      const m = new RegExp(`^,\\s*${boxStr}\\)`).exec(after);
+      if (m !== null) {
+        const start = s - prefix.length;
+        return [{ start, end: nameEnd + m[0].length, text: `${name}.${method}(${m[1]})` }];
+      }
+    }
+  }
+  if (shape === "Bool" && before.endsWith("is_true(&") && after.startsWith(")")) {
+    return [{ start: s - "is_true(&".length, end: nameEnd + 1, text: name }];
+  }
+  if (shape === "Bool") {
+    const m = /^\.as_bool\(\)\s*(==|!=)\s*Some\((true|false)\)/.exec(after);
+    if (m !== null) {
+      const eq = m[1] === "==";
+      const positive = m[2] === "true";
+      return [{ start: s, end: nameEnd + m[0].length, text: eq === positive ? name : `!${name}` }];
+    }
+  }
+  if (shape === "Vec" && before.endsWith("get_array_length(&") && after.startsWith(")")) {
+    return [{ start: s - "get_array_length(&".length, end: nameEnd + 1, text: `Value::Int(${name}.len() as i64)` }];
+  }
+  if (shape === "Vec" && before.endsWith("append_to_array(&mut ") && after.startsWith(",")) {
+    const open2 = s - "(&mut ".length;
+    const close = closeParen_hx10w3_R01(masked, open2);
+    if (close > 0) {
+      const args = splitArgs_hx10w3_R01(masked, open2 + 1, close - 1);
+      if (args !== void 0 && args.length === 2) {
+        const val = content.slice(open2 + 1 + args[0].length + 1, close - 1).trim();
+        return [{ start: open2 - "append_to_array".length, end: close, text: `${name}.push(${val})` }];
+      }
+    }
+  }
+  if (shape === "Vec" && before.endsWith("= &mut ")) {
+    const varM = /if let Value::Arr\((\w+)\) = &mut $/.exec(before);
+    if (varM !== null) {
+      const stmtStart = s - varM[0].length;
+      const brace = masked.indexOf("{", nameEnd);
+      const close = brace < 0 ? -1 : closeBrace(masked, brace);
+      const head = `std::sync::Arc::make_mut(${varM[1]}).push(`;
+      if (close > 0) {
+        const rel = masked.slice(brace + 1, close - 1).indexOf(head);
+        if (rel >= 0) {
+          const pushOpen = brace + 1 + rel + head.length - 1;
+          const pushClose = closeParen_hx10w3_R01(masked, pushOpen);
+          if (pushClose > 0) {
+            const val = content.slice(pushOpen + 1, pushClose - 1).trim();
+            return [{ start: stmtStart, end: close, text: `${name}.push(${val});` }];
+          }
+        }
+      }
+    }
+  }
+  if (shape === "Map" && before.endsWith("get_value(&")) {
+    const m = new RegExp(`^,\\s*${boxStr}\\)`).exec(after);
+    if (m !== null) {
+      const start = s - "get_value(&".length;
+      return [{ start, end: nameEnd + m[0].length, text: `${name}.get(${m[1]}).cloned().unwrap_or(Value::Null)` }];
+    }
+  }
+  if (shape === "Map" && before.endsWith("in_op(&")) {
+    const m = new RegExp(`^,\\s*${boxStr}\\)`).exec(after);
+    if (m !== null) {
+      const start = s - "in_op(&".length;
+      return [{ start, end: nameEnd + m[0].length, text: `${name}.contains_key(${m[1]})` }];
+    }
+  }
+  if (shape === "Map" && before.endsWith("add_element_to_object(&mut ")) {
+    const m = new RegExp(`^,\\s*${boxStr}\\s*,`).exec(after);
+    if (m !== null) {
+      const open2 = s - "(&mut ".length;
+      const close = closeParen_hx10w3_R01(masked, open2);
+      if (close > 0) {
+        const args = splitArgs_hx10w3_R01(masked, open2 + 1, close - 1);
+        if (args !== void 0 && args.length === 3) {
+          const val = content.slice(open2 + 1 + args[0].length + 1 + args[1].length + 1, close - 1).trim();
+          return [{ start: open2 - "add_element_to_object".length, end: close, text: `${name}.insert(${m[1]}.to_string(), ${val})` }];
+        }
+      }
+    }
+  }
+  if (shape === "Map" && before.endsWith("= &mut ")) {
+    const varM = /if let Value::Dict\((\w+)\) = &mut $/.exec(before);
+    if (varM !== null && /^\s*\{/.test(after)) {
+      const stmtStart = s - varM[0].length;
+      const brace = nameEnd + after.indexOf("{");
+      const close = closeBrace(masked, brace);
+      const head = `std::sync::Arc::make_mut(${varM[1]}).insert(`;
+      if (close > 0) {
+        const body = content.slice(brace + 1, close - 1).trim();
+        if (body.startsWith(head)) {
+          const pushOpen = brace + 1 + content.slice(brace + 1).indexOf(head) + head.length - 1;
+          const pushClose = closeParen_hx10w3_R01(masked, pushOpen);
+          if (pushClose > 0 && content.slice(pushClose, close - 1).trim() === ";") {
+            const val = content.slice(pushOpen + 1, pushClose - 1).trim();
+            return [{ start: stmtStart, end: close, text: `${name}.insert(${val});` }];
+          }
+        }
+      }
+    }
+  }
+  if (shape === "Bool" && open.kind[s] === 1 && /matches!$/.test(masked.slice(Math.max(0, open.at[s] - 12), open.at[s]))) {
+    const m = /^,\s*Value::Bool\(\s*(true|false)\s*\)\)/.exec(after);
+    const start = s - "matches!(&".length;
+    if (m !== null) {
+      const positive = m[1] === "true";
+      return [{ start, end: nameEnd + m[0].length, text: positive ? name : `!${name}` }];
+    }
+  }
+  if (shape === "String" && before.endsWith("Value::str(") && (after.startsWith(")") || after.startsWith(".clone())") || after.startsWith(".to_string())")))
+    return [];
+  if (shape === "String" && after.startsWith(".as_str()")) {
+    const m = /^\.as_str\(\)\s*(==|!=)\s*Some\(\s*("(?:[^"\\]|\\.)*")\s*\)/.exec(after);
+    if (m !== null)
+      return [{ start: s, end: nameEnd + m[0].length, text: `(${name} ${m[1]} ${m[2]})` }];
+    const rev = /^\.as_str\(\)\s*(==|!=)\s*Some\(\s*("(?:[^"\\]|\\.)*")\s*\.to_string\(\)\s*\)/.exec(after);
+    if (rev !== null)
+      return [{ start: s, end: nameEnd + rev[0].length, text: `(${name} ${rev[1]} ${rev[2]})` }];
+  }
+  if (numeric && after.startsWith(".as_f64()")) {
+    const plain = shape === "Float" ? name : `(${name} as f64)`;
+    const nan = /^\.as_f64\(\)\.unwrap_or\(f64::NAN\)/.exec(after);
+    if (nan !== null)
+      return [{ start: s, end: nameEnd + nan[0].length, text: plain }];
+    const some = /^\.as_f64\(\)\s*(==|!=)\s*Some\(\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*\)/.exec(after);
+    if (some !== null)
+      return [{ start: s, end: nameEnd + some[0].length, text: `(${plain} ${some[1]} ${some[2]})` }];
+  }
+  if ((shape === "String" || numeric || shape === "Bool") && open.kind[s] === 1) {
+    const macroOpen = open.at[s];
+    const macroHead = /([A-Za-z_][A-Za-z0-9_]*)!$/.exec(masked.slice(Math.max(0, macroOpen - 40), macroOpen));
+    const pre = masked.slice(Math.max(0, s - 12), s);
+    const tail = after.startsWith(".clone()") ? ".clone()" : after.startsWith(".to_string()") ? ".to_string()" : "";
+    const rest = after.slice(tail.length);
+    const closes = rest.startsWith(")") || rest.startsWith(",");
+    if (macroHead !== void 0 && /[(,]\s*$/.test(pre) && closes) {
+      const close = closeParen_hx10w3_R01(masked, macroOpen);
+      if (close > 0) {
+        const args = splitArgs_hx10w3_R01(masked, macroOpen + 1, close - 1);
+        const raw = content.slice(macroOpen + 1, close - 1);
+        const tpl = args === void 0 ? void 0 : /^\s*"((?:[^"\\]|\\.)*)"\s*$/.exec(raw.slice(0, args[0].length));
+        const holes = tpl === null || tpl === void 0 ? [] : tpl[1].match(/\{[^}]*\}/g) ?? [];
+        if (args !== void 0 && args.length > 1 && holes.length === args.length - 1 && holes.every((h) => h === "{}"))
+          return [];
+      }
+    }
+  }
+  {
+    const tail = after.startsWith(".clone()") && after.slice(".clone()".length).startsWith(")") ? ".clone()" : after.startsWith(")") ? "" : null;
+    if (tail !== null) {
+      const wide = content.slice(Math.max(0, s - 160), s);
+      const lit = shape === "String" ? /is_equal\(&Value::Str\(\s*("(?:[^"\\]|\\.)*")\s*(?:\.into\(\)|\.to_string\(\))?\s*\)\s*,\s*&$/.exec(wide) : shape === "Bool" ? /is_equal\(&Value::Bool\(\s*(true|false)\s*\)\s*,\s*&$/.exec(wide) : numeric ? /(is_equal|is_less_than|is_greater_than|is_less_than_or_equal|is_greater_than_or_equal)\(&\s*Value::(?:Int|Float)\(\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*\)\s*,\s*&$/.exec(wide) : null;
+      if (lit !== null) {
+        const ops = {
+          "is_equal": "==",
+          "is_less_than": "<",
+          "is_greater_than": ">",
+          "is_less_than_or_equal": "<=",
+          "is_greater_than_or_equal": ">="
+        };
+        const op = shape === "String" || shape === "Bool" ? "==" : ops[lit[1]];
+        const value = shape === "String" || shape === "Bool" ? lit[1] : lit[2];
+        const start = s - lit[0].length;
+        return [{ start, end: nameEnd + tail.length + 1, text: `(${value} ${op} ${name}${tail})` }];
+      }
+    }
+  }
+  if ((shape === "Int" || shape === "Float" || shape === "Bool") && before.endsWith("to_string_val(&") && after.startsWith(")")) {
+    return [{ start: s - "to_string_val(&".length, end: nameEnd + 1, text: `Value::str(${name}.to_string())` }];
+  }
+  if (before.endsWith("Value::Str(") && shape === "String") {
+    if (after.startsWith(")") || after.startsWith(".clone())")) {
+      return [{ start: s - "Value::Str".length, end: s - 1, text: "Value::str" }];
+    }
+  }
+  const nativeMethod = /^\.(?:len|is_empty|push|insert|contains_key|get|keys|values|iter|first|last)\(/.exec(after);
+  if (nativeMethod !== null && (shape === "Vec" || shape === "Map"))
+    return [];
+  if (shape === "Int" && /^\.as_i64\(\)/.test(after))
+    return null;
+  if (before.endsWith("Value::Int(") && shape === "Int" && after.startsWith(")"))
+    return [];
+  if (before.endsWith("Value::Float(") && shape === "Float" && after.startsWith(")"))
+    return [];
+  if (before.endsWith("Value::Bool(") && shape === "Bool" && after.startsWith(")"))
+    return [];
+  if ((before.endsWith("Value::Array(") || before.endsWith("Value::List(")) && shape === "Vec" && after.startsWith(")"))
+    return [];
+  if (before.endsWith("Value::Map(") && shape === "Map" && after.startsWith(")"))
+    return [];
+  if (before.endsWith("Value::from(") && after.startsWith(")"))
+    return [];
+  return null;
+}
+function blockHeader(masked, from, open) {
+  let i = open - 1;
+  let depth = 0;
+  while (i >= from) {
+    const c = masked[i];
+    if (c === ")" || c === "]" || c === "}")
+      depth++;
+    else if (c === "(" || c === "[" || c === "{") {
+      if (depth === 0)
+        break;
+      depth--;
+    } else if (c === ";" && depth === 0)
+      break;
+    i--;
+  }
+  return masked.slice(i + 1, open);
+}
+function inRepeatedBlock(masked, from, pos, declAt = -1) {
+  const stack = [];
+  for (let k = from; k < pos; k++) {
+    const c = masked[k];
+    if (c === "{")
+      stack.push(k);
+    else if (c === "}" && stack.length > 0)
+      stack.pop();
+  }
+  for (const open of stack) {
+    if (open < declAt)
+      continue;
+    const head = blockHeader(masked, from, open);
+    if (/\b(for|while|loop)\b/.test(head))
+      return true;
+    if (/\|[^|]*\|/.test(head))
+      return true;
+    if (/\bmove\s*$/.test(head))
+      return true;
+  }
+  return false;
+}
+function assignRewrite(shape, name, s, after, content, masked) {
+  const m = /^\s*=\s*/.exec(after);
+  if (m === null)
+    return null;
+  const rhsStart = s + name.length + m[0].length;
+  const end = stmtEnd(masked, rhsStart);
+  if (end < 0)
+    return null;
+  const rhs = content.slice(rhsStart, end).trim();
+  if (shape === "Vec" && rhs.startsWith("self.array_concat(")) {
+    const prev = /[^\s]/.exec(content.slice(0, s).split("").reverse().join(""));
+    if (prev === null || ![";", "{", "}"].includes(prev[0]))
+      return null;
+    const open = "self.array_concat".length;
+    if (closeParen_hx10w3_R01(rhs, open) !== rhs.length)
+      return null;
+    const args = splitArgs_hx10w3_R01(rhs, open + 1, rhs.length - 1);
+    if (args === void 0 || args.length !== 2)
+      return null;
+    const first = args[0].trim();
+    const second = args[1].trim();
+    if (first !== name && first !== `${name}.clone()`)
+      return null;
+    if (new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`).test(second))
+      return null;
+    return [{ start: s, end, text: `match &${second} { Value::Arr(__b) => ${name}.extend(__b.iter().cloned()), _ => ${name}.clear() }` }];
+  }
+  const heads = {
+    "String": ["Value::Str("],
+    "Int": ["Value::Int("],
+    "Float": ["Value::Float("],
+    "Bool": ["Value::Bool("],
+    "Vec": ["Value::Array(vec![", "Value::List(vec![", "Value::from(vec![", "vec!["],
+    "Map": ["Value::Map("]
+  };
+  const head = heads[shape].find((h) => rhs.startsWith(h));
+  if (head === void 0)
+    return null;
+  const close = closeParen_hx10w3_R01(rhs, head.length - 1);
+  if (close < 0 || close !== rhs.length)
+    return null;
+  const inner = rhs.slice(head.length, close - 1);
+  if (inner.trim() === "" || inner.trim().startsWith("Value::"))
+    return null;
+  return [{ start: rhsStart, end, text: inner }];
+}
+var r01Rejects = [];
+function r01TypedLocals(content) {
+  r01Rejects = [];
+  if (!content.includes(": Value = "))
+    return content;
+  const masked = maskText_hx10w3_R01(content);
+  const openers = openerMap(masked);
+  const anyOpen = openers.kind;
+  const atOpen = openers;
+  const heads = fnRegions_hx10w3_R01(masked);
+  const rewrites = [];
+  let group = 0;
+  const declRe = /^([ \t]*)let (?:mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = /gm;
+  let m;
+  while ((m = declRe.exec(content)) !== null) {
+    const name = m[2];
+    const declStart = m.index;
+    const initStart = declStart + m[0].length;
+    const end = stmtEnd(masked, initStart);
+    if (end < 0)
+      continue;
+    const rawInit = content.slice(initStart, end);
+    const lead = rawInit.length - rawInit.trimStart().length;
+    const init = rawInit.trim();
+    const parsed = initShape(init);
+    if (parsed === void 0) {
+      continue;
+    }
+    const { shape } = parsed;
+    if (parsed.wrapperEnd !== init.length) {
+      continue;
+    }
+    if (shape === "Float" && /^-?\d+$/.test(parsed.inner))
+      continue;
+    let lo = 0;
+    for (let h = 0; h < heads.length; h++)
+      if (heads[h] <= declStart)
+        lo = h;
+    const regionStart = heads[lo];
+    let regionEnd = lo + 1 < heads.length ? heads[lo + 1] : content.length;
+    if (shape === "Map") {
+      let depth = 0;
+      for (let k = end; k < regionEnd; k++) {
+        const c = masked[k];
+        if (c === "{")
+          depth++;
+        else if (c === "}") {
+          if (depth === 0) {
+            regionEnd = k;
+            break;
+          }
+          depth--;
+        }
+      }
+    }
+    const region = masked.slice(end, regionEnd);
+    if (rebound(region, name))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
+    const uses = [];
+    const boxes = [];
+    let ok = true;
+    let gained = 0;
+    let lastUse = -1;
+    let skipUntil = -1;
+    let u;
+    while ((u = useRe.exec(region)) !== null) {
+      const s = end + u.index;
+      const before = content.slice(Math.max(regionStart, s - 60), s);
+      const after = content.slice(s + name.length, s + name.length + 90);
+      if (s < skipUntil)
+        continue;
+      lastUse = s;
+      const slot = valueSlot(masked, content, s, name, atOpen);
+      if (slot > 0) {
+        const dotClone = after.startsWith(".clone()") ? ".clone()".length : 0;
+        boxes.push({ pos: s, tail: dotClone, move: slot === 1 });
+        continue;
+      }
+      const ctx = { name, useStart: s, before, after };
+      const rw = classify(shape, ctx, masked, content, atOpen);
+      if (rw !== null && rw.length > 0)
+        gained++;
+      if (rw === null) {
+        const asg = assignRewrite(shape, name, s, after, content, masked);
+        if (asg === null) {
+          ok = false;
+          const ls = content.lastIndexOf("\n", s) + 1;
+          const le = content.indexOf("\n", s);
+          r01Rejects.push({ shape, name, line: content.slice(0, s).split("\n").length, text: content.slice(ls, le < 0 ? content.length : le).trim() });
+          break;
+        }
+        uses.push(...asg);
+        for (const a of asg)
+          skipUntil = Math.max(skipUntil, a.end);
+        continue;
+      }
+      uses.push(...rw);
+    }
+    if (!ok)
+      continue;
+    if (gained === 0)
+      continue;
+    for (const b of boxes) {
+      const canMove = b.pos === lastUse && !inRepeatedBlock(masked, regionStart, b.pos, shape === "Map" ? declStart : -1);
+      const collection = shape === "Vec" || shape === "Map";
+      if (!canMove && (b.tail === 0 || collection)) {
+        ok = false;
+        break;
+      }
+      const expr = canMove ? name : `${name}.clone()`;
+      uses.push({ start: b.pos, end: b.pos + name.length + b.tail, text: boxed(shape, expr) });
+    }
+    if (!ok)
+      continue;
+    for (const a of uses) {
+      for (const b of uses) {
+        if (a !== b && a.start <= b.start && b.end < a.end) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok)
+        break;
+    }
+    if (!ok)
+      continue;
+    const growth = /* @__PURE__ */ new Map();
+    const lineOf = (pos) => content.lastIndexOf("\n", pos) + 1;
+    for (const rw of uses) {
+      const lineStart = lineOf(rw.start);
+      if (lineOf(rw.end) !== lineStart)
+        continue;
+      const lineEnd = content.indexOf("\n", lineStart);
+      const len = (lineEnd < 0 ? content.length : lineEnd) - lineStart;
+      const next = (growth.get(lineStart) ?? 0) + rw.text.length - (rw.end - rw.start);
+      growth.set(lineStart, next);
+      if (len + next > 400 && len <= 400) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok)
+      continue;
+    const typeAt = declStart + m[0].indexOf(": Value") + 2;
+    const exprAt = initStart + lead;
+    const g = group++;
+    rewrites.push({ start: typeAt, end: typeAt + 5, text: RUST_TYPE[shape], g });
+    rewrites.push({ start: exprAt, end: exprAt + parsed.wrapperEnd, text: parsed.inner, g });
+    for (const u2 of uses)
+      rewrites.push({ ...u2, g });
+  }
+  if (rewrites.length === 0)
+    return content;
+  const sorted = [...rewrites].sort((a, b) => a.start - b.start || a.end - b.end);
+  const dirty = /* @__PURE__ */ new Set();
+  const active = [];
+  for (const r of sorted) {
+    for (let i = active.length - 1; i >= 0; i--)
+      if (active[i].end <= r.start)
+        active.splice(i, 1);
+    for (const a of active) {
+      if (a.g !== r.g) {
+        dirty.add(a.g);
+        dirty.add(r.g);
+      }
+    }
+    active.push(r);
+  }
+  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (dirty.has(r.g))
+      continue;
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  out += content.slice(last);
+  return out;
+}
+var R03_ROUTED = /* @__PURE__ */ new Set(["cache", "hashmap", "subscriptions", "futures", "timestamp", "datetime", "nonce", "symbol", "checksum"]);
+var R03_MARKER = ["__book_id", "__cache_id", "__cacheKind", "__sideKind", "__live_id"];
+var R03_BASE_FILE = "rust/ccxt-common/src/exchange_generated.rs";
+var r03BaseShapes = void 0;
+function r03Mask_hx10w3_R03(src) {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < src.length && src[i] !== "\n") {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    if (c === '"') {
+      out += " ";
+      i++;
+      while (i < src.length && src[i] !== '"') {
+        if (src[i] === "\n") {
+          out += "\n";
+          i++;
+          continue;
+        }
+        if (src[i] === "\\") {
+          out += "  ";
+          i += 2;
+          continue;
+        }
+        out += " ";
+        i++;
+      }
+      if (i < src.length) {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+function r03Close_hx10w3_R03(src, open) {
+  const openCh = src[open];
+  const closeCh = openCh === "(" ? ")" : openCh === "[" ? "]" : openCh === "{" ? "}" : "";
+  if (closeCh === "")
+    return -1;
+  let depth = 0;
+  for (let k = open; k < src.length; k++) {
+    const c = src[k];
+    if (c === openCh)
+      depth++;
+    else if (c === closeCh) {
+      depth--;
+      if (depth === 0)
+        return k;
+    }
+  }
+  return -1;
+}
+function r03Args(masked, open, close) {
+  const spans = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let k = open + 1; k < close; k++) {
+    const c = masked[k];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}")
+      depth--;
+    else if (c === "," && depth === 0) {
+      spans.push([start, k]);
+      start = k + 1;
+    }
+  }
+  if (masked.slice(start, close).trim() !== "")
+    spans.push([start, close]);
+  return spans;
+}
+function r03StmtEnd_hx10w3_R03(masked, from) {
+  let depth = 0;
+  for (let k = from; k < masked.length; k++) {
+    const c = masked[k];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth < 0)
+        return -1;
+    } else if (c === ";" && depth === 0)
+      return k;
+  }
+  return -1;
+}
+function r03Returns(masked) {
+  const out = [];
+  const rx = /(?<![A-Za-z0-9_])return\b/g;
+  let m;
+  while ((m = rx.exec(masked)) !== null) {
+    const end = r03StmtEnd_hx10w3_R03(masked, m.index + 6);
+    if (end < 0)
+      continue;
+    out.push(masked.slice(m.index + 6, end).trim());
+  }
+  return out;
+}
+function r03Tail(body) {
+  const t = body.replace(/\s+$/, "");
+  if (t === "" || t.endsWith(";"))
+    return void 0;
+  const cut = t.lastIndexOf(";");
+  const tail = (cut < 0 ? t : t.slice(cut + 1)).trim();
+  if (tail === "" || /^(?:if|match|while|for|loop|\{)/.test(tail))
+    return void 0;
+  return tail;
+}
+function r03TailIsDead(body) {
+  const cut = body.replace(/\s+$/, "").lastIndexOf(";");
+  if (cut < 0)
+    return false;
+  let depth = 0;
+  let k = cut - 1;
+  for (; k >= 0; k--) {
+    const c = body[k];
+    if (c === ")" || c === "]" || c === "}")
+      depth++;
+    else if (c === "(" || c === "[" || c === "{") {
+      depth--;
+      if (depth < 0)
+        break;
+    } else if (c === ";" && depth === 0)
+      break;
+  }
+  return /^\s*return\b/.test(body.slice(k + 1, cut));
+}
+function r03FreshShape(t) {
+  const s = t.replace(/^\(+/, "").trim();
+  if (/^Value::(?:Map|Dict)\(/.test(s)) {
+    const open = s.indexOf("(");
+    if (/^Value::(?:Map|Dict)\(\s*(?:\{|indexmap::IndexMap::new\(\)|HashMap::new\(\))/.test(s))
+      return "dict";
+    return void 0;
+  }
+  if (/^Value::(?:Array|List)\(\s*(?:vec!\[|std::sync::Arc::new\(\s*vec!\[)/.test(s))
+    return "arr";
+  if (/^Value::from\(\s*(?:std::sync::Arc::new\(\s*)?vec!\[/.test(s))
+    return "arr";
+  return void 0;
+}
+function r03Decl(region, name) {
+  const rx = new RegExp("\\blet (?:mut )?" + name + "\\s*(?::\\s*[^=;]+)?=\\s*", "g");
+  let hit = null;
+  let count = 0;
+  let m;
+  while ((m = rx.exec(region)) !== null) {
+    hit = m;
+    count++;
+  }
+  if (count !== 1 || hit === null)
+    return void 0;
+  return { init: region.slice(hit.index + hit[0].length, hit.index + hit[0].length + 400) };
+}
+function r03MethodShapes(content, masked, loose = false) {
+  const shapes = /* @__PURE__ */ new Map();
+  const hdr = loose ? /\n    (?:pub )?fn (\w+)\s*\(/g : /\n    pub fn (\w+)\s*\(/g;
+  let hm;
+  while ((hm = hdr.exec(masked)) !== null) {
+    const lineEnd = masked.indexOf("\n", hm.index + 1);
+    const line = masked.slice(hm.index, lineEnd < 0 ? masked.length : lineEnd);
+    if (!/->\s*(?:crate::)?Value\b/.test(line))
+      continue;
+    const open = masked.indexOf("(", hm.index);
+    const close = r03Close_hx10w3_R03(masked, open);
+    if (close < 0)
+      continue;
+    const braceOpen = masked.indexOf("{", close);
+    if (braceOpen < 0)
+      continue;
+    if (!/^(?:->\s*(?:crate::)?Value)?$/.test(masked.slice(close + 1, braceOpen).trim()))
+      continue;
+    const braceClose = r03Close_hx10w3_R03(masked, braceOpen);
+    if (braceClose < 0)
+      continue;
+    const body = masked.slice(braceOpen + 1, braceClose);
+    const exprs = r03Returns(body);
+    if (exprs.length === 0)
+      continue;
+    const tail = r03Tail(body);
+    if (tail !== void 0 && !r03TailIsDead(body)) {
+      exprs.push(tail);
+    }
+    const kinds = /* @__PURE__ */ new Set();
+    for (const e of exprs) {
+      if (loose && /^__\w+$/.test(e))
+        continue;
+      kinds.add(r03FreshShape(e) ?? "other");
+    }
+    if (kinds.size !== 1)
+      continue;
+    const only = [...kinds][0];
+    if (only === "other")
+      continue;
+    shapes.set(hm[1], only);
+  }
+  return shapes;
+}
+function r03BaseShapeTable() {
+  if (r03BaseShapes !== void 0)
+    return r03BaseShapes;
+  r03BaseShapes = /* @__PURE__ */ new Map();
+  try {
+    const src = fs3.readFileSync(R03_BASE_FILE, "utf8");
+    r03BaseShapes = r03MethodShapes(src, r03Mask_hx10w3_R03(src), true);
+  } catch (e) {
+    if (e === void 0 || e.code !== "ENOENT")
+      throw e;
+  }
+  return r03BaseShapes;
+}
+var R03_PASSTHROUGH = /* @__PURE__ */ new Set(["extend", "omit", "keysort", "clone_value"]);
+var R03Prover_hx10w3_R03 = class {
+  constructor(region, maskedRegion, own, base) {
+    this.visiting = /* @__PURE__ */ new Set();
+    this.region = region;
+    this.masked = maskedRegion;
+    this.own = own;
+    this.base = base;
+  }
+  /** Shape of the local `name` in this region, or undefined when unproven. */
+  shape(name) {
+    if (this.visiting.has(name))
+      return void 0;
+    this.visiting.add(name);
+    const out = this.prove(name);
+    this.visiting.delete(name);
+    return out;
+  }
+  prove(name) {
+    const decl = r03Decl(this.masked, name);
+    if (decl === void 0)
+      return void 0;
+    return this.shapeOfInit(decl.init);
+  }
+  shapeOfInit(init) {
+    const fresh = r03FreshShape(init);
+    if (fresh !== void 0)
+      return fresh;
+    const call = /^self\.(\w+)\s*\(/.exec(init);
+    if (call === null)
+      return void 0;
+    const callee = call[1];
+    const own = this.own.get(callee);
+    if (own !== void 0)
+      return own;
+    const base = this.base.get(callee);
+    if (base !== void 0)
+      return base;
+    if (R03_PASSTHROUGH.has(callee)) {
+      const open = init.indexOf("(");
+      const close = r03Close_hx10w3_R03(init, open);
+      if (close < 0)
+        return void 0;
+      const args = r03Args(init, open, close);
+      if (args === void 0 || args.length === 0)
+        return void 0;
+      const first = init.slice(args[0][0], args[0][1]).trim();
+      if (!/^[a-z_][A-Za-z0-9_]*$/.test(first))
+        return void 0;
+      return this.shape(first);
+    }
+    return void 0;
+  }
+};
+function r03LiteralKey(arg) {
+  if (arg === void 0)
+    return void 0;
+  const m = /^&\s*Value::Str\(\s*("(?:[^"\\]|\\.)*")\s*(?:\.into\(\)|\.to_string\(\))?\s*\)$/.exec(arg.trim());
+  return m === null ? void 0 : m[1].slice(1, -1);
+}
+function r03PlainReceiver(region, name) {
+  const rx = new RegExp("&mut " + name + "(?![A-Za-z0-9_])", "g");
+  let m;
+  while ((m = rx.exec(region)) !== null) {
+    const before = region.slice(Math.max(0, m.index - 40), m.index);
+    if (/(?:add_element_to_object|get_value_mut|set_value)\($/.test(before))
+      continue;
+    if (/if let Value::(?:Dict|Arr|Map)\(\s*__\w+\s*\)\s*=\s*$/.test(before))
+      continue;
+    return false;
+  }
+  return true;
+}
+function r03SingleWrite(region, name) {
+  const rx = new RegExp("(?<![A-Za-z0-9_.])" + name + "\\s*=\\s*(?!=)", "g");
+  let m;
+  while ((m = rx.exec(region)) !== null) {
+    const before = region.slice(Math.max(0, m.index - 5), m.index);
+    if (/\blet $/.test(before) || /\blet mut $/.test(region.slice(Math.max(0, m.index - 8), m.index)))
+      continue;
+    return false;
+  }
+  return true;
+}
+function hx10w3R03(content, stats) {
+  if (content.indexOf("add_element_to_object(") < 0 && content.indexOf("get_value(&") < 0 && content.indexOf("in_op(") < 0 && content.indexOf("object_keys(") < 0 && content.indexOf("object_values(") < 0 && content.indexOf("get_array_length(") < 0)
+    return content;
+  const masked = r03Mask_hx10w3_R03(content);
+  const own = r03MethodShapes(content, masked);
+  const base = r03BaseShapeTable();
+  const heads = [];
+  const hdr = /^[ \t]*(?:pub(?:\([a-z]+\))? )?(?:async )?fn /gm;
+  let hm;
+  while ((hm = hdr.exec(masked)) !== null)
+    heads.push(hm.index);
+  heads.push(content.length);
+  const edits = [];
+  const FAM = /(?<![A-Za-z0-9_:.])(add_element_to_object|get_value|in_op|object_keys|object_values|get_array_length)\(/g;
+  for (let h = 0; h + 1 < heads.length; h++) {
+    const from = heads[h];
+    const to = heads[h + 1];
+    const maskedRegion = masked.slice(from, to);
+    const prover = new R03Prover_hx10w3_R03(content.slice(from, to), maskedRegion, own, base);
+    FAM.lastIndex = 0;
+    let fm;
+    while ((fm = FAM.exec(maskedRegion)) !== null) {
+      const name = fm[1];
+      const open = fm.index + fm[0].length - 1;
+      const close = r03Close_hx10w3_R03(maskedRegion, open);
+      if (close < 0)
+        continue;
+      const spans = r03Args(maskedRegion, open, close);
+      if (spans === void 0)
+        continue;
+      let recv;
+      let keyArg;
+      let valueStart = -1;
+      if (name === "add_element_to_object") {
+        if (spans.length !== 3)
+          continue;
+        const first = maskedRegion.slice(spans[0][0], spans[0][1]).trim();
+        const head = /^&mut\s+([a-z_][A-Za-z0-9_]*)$/.exec(first);
+        if (head === null)
+          continue;
+        recv = head[1];
+        keyArg = content.slice(from + spans[1][0], from + spans[1][1]);
+        valueStart = spans[2][0];
+      } else if (name === "get_array_length" || name === "object_keys" || name === "object_values") {
+        if (spans.length !== 1)
+          continue;
+        const head = /^&\s*([a-z_][A-Za-z0-9_]*)$/.exec(maskedRegion.slice(spans[0][0], spans[0][1]).trim());
+        if (head === null)
+          continue;
+        recv = head[1];
+      } else {
+        if (spans.length !== 2)
+          continue;
+        const head = /^&\s*([a-z_][A-Za-z0-9_]*)$/.exec(maskedRegion.slice(spans[0][0], spans[0][1]).trim());
+        if (head === null)
+          continue;
+        recv = head[1];
+        keyArg = content.slice(from + spans[1][0], from + spans[1][1]);
+      }
+      const shape = prover.shape(recv);
+      if (shape === void 0)
+        continue;
+      if (name === "get_array_length") {
+        if (shape !== "arr")
+          continue;
+        if (!r03SingleWrite(maskedRegion, recv))
+          continue;
+        edits.push({ start: from + fm.index, end: from + close + 1, text: `Value::Int(${recv}.len() as i64)` });
+        continue;
+      }
+      if (shape !== "dict")
+        continue;
+      if (!r03PlainReceiver(maskedRegion, recv) || !r03SingleWrite(maskedRegion, recv))
+        continue;
+      if (name === "add_element_to_object") {
+        const key2 = r03LiteralKey(keyArg);
+        if (key2 === void 0 || R03_MARKER.indexOf(key2) >= 0)
+          continue;
+        const valueEnd = spans[2][1];
+        const value = content.slice(from + valueStart, from + valueEnd).trim();
+        const stmtEnd2 = maskedRegion[close + 1] === ";" ? close + 2 : close + 1;
+        edits.push({
+          start: from + fm.index,
+          end: from + stmtEnd2,
+          text: `if let Value::Dict(__r03d) = &mut ${recv} { std::sync::Arc::make_mut(__r03d).insert("${key2}".into(), ${value}); }`
+        });
+        continue;
+      }
+      const key = r03LiteralKey(keyArg);
+      if (key === void 0 || R03_ROUTED.has(key) || R03_MARKER.indexOf(key) >= 0)
+        continue;
+      if (name === "get_value") {
+        edits.push({
+          start: from + fm.index,
+          end: from + close + 1,
+          text: `${recv}.as_map().unwrap().get("${key}").cloned().unwrap_or(Value::Null)`
+        });
+      } else if (name === "in_op") {
+        if (!r03BoolPosition(maskedRegion, fm.index))
+          continue;
+        edits.push({
+          start: from + fm.index,
+          end: from + close + 1,
+          text: `matches!(&${recv}, Value::Dict(__r03k) if __r03k.contains_key("${key}"))`
+        });
+      } else {
+        const body = name === "object_keys" ? "__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()" : "__m.values().cloned().collect()";
+        edits.push({
+          start: from + fm.index,
+          end: from + close + 1,
+          text: `Value::Array(${recv}.as_map().map(|__m| ${body}).unwrap_or_default())`
+        });
+      }
+    }
+  }
+  if (edits.length === 0)
+    return content;
+  edits.sort((a, b) => a.start - b.start || b.end - a.end);
+  let out = "";
+  let at = 0;
+  let count = 0;
+  for (const e of edits) {
+    if (e.start < at)
+      continue;
+    out += content.slice(at, e.start) + e.text;
+    at = e.end;
+    count++;
+  }
+  out += content.slice(at);
+  if (stats !== void 0)
+    stats.sites += count;
+  return out;
+}
+function r03BoolPosition(masked, pos) {
+  const lineStart = masked.lastIndexOf("\n", pos) + 1;
+  const pre = masked.slice(lineStart, pos).trim();
+  const headed = /^(?:\}\s*else\s+)?(?:if|while)$/.test(pre);
+  const wrapped = /is_true\(&$/.test(pre);
+  return headed || wrapped;
+}
+function hx10R04Mask(text) {
+  const out = text.split("");
+  const n = out.length;
+  let i = 0;
+  while (i < n) {
+    const c = out[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < n && out[j] !== '"') {
+        if (out[j] === "\\")
+          j += 1;
+        j += 1;
+      }
+      for (let k = i + 1; k < j && k < n; k++)
+        out[k] = " ";
+      i = j + 1;
+      continue;
+    }
+    if (c === "/" && out[i + 1] === "/") {
+      let j = i;
+      while (j < n && out[j] !== "\n") {
+        out[j] = " ";
+        j += 1;
+      }
+      i = j;
+      continue;
+    }
+    i += 1;
+  }
+  return out.join("");
+}
+function hx10R04Close(masked, open) {
+  let depth = 0;
+  for (let i = open; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0)
+        return i;
+    }
+  }
+  return -1;
+}
+function hx10R04Strip(src) {
+  let s = src.trim();
+  while (s.startsWith("(") && hx10R04Close(s, 0) === s.length - 1)
+    s = s.slice(1, -1).trim();
+  return s;
+}
+var HX10R04_FN = /\n[ \t]*(?:pub )?(?:async )?fn (\w+)/g;
+function hx10R04Regions(masked) {
+  const heads = [0];
+  for (const m of masked.matchAll(HX10R04_FN))
+    heads.push(m.index + 1);
+  heads.push(masked.length);
+  const out = [];
+  for (let h = 0; h + 1 < heads.length; h++) {
+    const seg = masked.slice(heads[h], heads[h + 1]);
+    const head = /^[ \t]*(?:pub )?(?:async )?fn (\w+)\s*(?:<[^>]*>)?\s*\(/.exec(seg);
+    if (head === null)
+      continue;
+    const open = seg.indexOf("(", head[0].length - 1);
+    const close = hx10R04Close(seg, open);
+    if (close < 0)
+      continue;
+    const brace = seg.indexOf("{", close);
+    out.push({ start: heads[h], end: heads[h + 1], name: head[1], ret: brace < 0 ? "" : seg.slice(close + 1, brace), body: brace < 0 ? "" : seg.slice(brace) });
+  }
+  return out;
+}
+function hx10R04RetExprs(region) {
+  if (!/^\s*->\s*(?:crate::)?Value\s*$/.test(region.ret.replace(/\s+/g, " ")))
+    return void 0;
+  const body = region.body;
+  const rets = [];
+  for (const m of body.matchAll(/\breturn\b/g)) {
+    const at = m.index + m[0].length;
+    let depth = 0;
+    let j = at;
+    for (; j < body.length; j++) {
+      const c = body[j];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}") {
+        if (depth === 0)
+          break;
+        depth--;
+      } else if (c === ";" && depth === 0)
+        break;
+    }
+    rets.push(body.slice(at, j));
+  }
+  const close = body.lastIndexOf("}");
+  const tailEnd = body.slice(0, close).replace(/\s+$/, "");
+  const semi = tailEnd.lastIndexOf(";");
+  const braceOpen = tailEnd.lastIndexOf("{");
+  if (semi > braceOpen || semi < 0 && braceOpen < 0) {
+    const tail = tailEnd.slice(semi + 1).trim();
+    if (tail !== "" && !tail.startsWith("}"))
+      rets.push(tail);
+  }
+  if (rets.length === 0)
+    return void 0;
+  return rets;
+}
+function hx10R04SafeBoolDefault(call) {
+  const open = call.indexOf("(");
+  const close = hx10R04Close(call, open);
+  if (close < 0)
+    return void 0;
+  const inner = call.slice(open + 1, close);
+  const listAt = inner.lastIndexOf("&[");
+  if (listAt < 0)
+    return void 0;
+  const list = hx10R04Strip(inner.slice(listAt));
+  if (!list.startsWith("&[") || !list.endsWith("]"))
+    return void 0;
+  const items = list.slice(2, -1).trim();
+  if (items === "")
+    return true;
+  const one = hx10R04Strip(items);
+  if (/^Value::Bool\((?:true|false)\)$/.test(one))
+    return true;
+  if (one === "Value::Null")
+    return true;
+  return void 0;
+}
+var HX10R04_BOOL_BASE = /^(?:in_array|is_json_encoded_object)$/;
+var HX10R04_BOOLISH = (v) => [...v].every((x) => x === "bool" || x === "null");
+function hx10R04Variant(expr, masked, byName, region, depth, visiting) {
+  if (depth > 6)
+    return void 0;
+  let e = hx10R04Strip(expr);
+  while (e.endsWith(".clone()"))
+    e = hx10R04Strip(e.slice(0, -".clone()".length));
+  while (e.endsWith(".await"))
+    e = e.slice(0, -".await".length).trim();
+  const lit = /^Value::(Bool|Int|Float|Str)\(/.exec(e);
+  if (lit !== null && hx10R04Close(e, "Value::".length + lit[1].length) === e.length - 1) {
+    return /* @__PURE__ */ new Set([lit[1].toLowerCase()]);
+  }
+  if (e === "Value::Null" || e === "crate::Value::Null")
+    return /* @__PURE__ */ new Set(["null"]);
+  if (/^\(?if .+\)?$/.test(e) && e.includes("} else {")) {
+    const at = e.indexOf("} else {");
+    const a = hx10R04Variant(e.slice(e.indexOf("{") + 1, at), masked, byName, region, depth, visiting);
+    const b = hx10R04Variant(e.slice(at + "} else {".length, e.lastIndexOf("}")), masked, byName, region, depth, visiting);
+    if (a !== void 0 && b !== void 0)
+      return /* @__PURE__ */ new Set([...a, ...b]);
+    return void 0;
+  }
+  const precise = /^crate::precise::Precise::(\w+)\((?:(?!\()[^()]|\((?!\()(?:[^()]|\([^()]*\))*\))*\)$/.exec(e);
+  if (precise !== null && /^string(?:Eq|Gt|Ge|Lt|Le|Equals)$/.test(precise[1]))
+    return /* @__PURE__ */ new Set(["bool"]);
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(e)) {
+    const writes = hx10R04Writes(masked, e, region);
+    if (writes === void 0)
+      return void 0;
+    let acc = void 0;
+    for (const w of writes) {
+      const v = hx10R04Variant(w, masked, byName, region, depth + 1, visiting);
+      if (v === void 0)
+        return void 0;
+      acc = acc === void 0 ? v : new Set([...acc].filter((x) => v.has(x)));
+    }
+    return acc;
+  }
+  const call = /^self\.([a-z_][a-z0-9_]*)\s*\(/.exec(e);
+  if (call !== null && hx10R04Close(e, "self.".length + call[1].length) === e.length - 1) {
+    if (HX10R04_BOOL_BASE.test(call[1]))
+      return /* @__PURE__ */ new Set(["bool"]);
+    if (/^safe_bool(_2|_k)?$/.test(call[1])) {
+      return hx10R04SafeBoolDefault(e) === true ? /* @__PURE__ */ new Set(["bool", "null"]) : void 0;
+    }
+    return hx10R04CalleeVariant(call[1], masked, byName, depth + 1, visiting);
+  }
+  return void 0;
+}
+function hx10R04CalleeVariant(name, masked, byName, depth, visiting) {
+  if (visiting.has(name) || depth > 6)
+    return void 0;
+  const decls = byName.get(name);
+  if (decls === void 0 || decls.length === 0)
+    return void 0;
+  const next = new Set(visiting);
+  next.add(name);
+  let acc = void 0;
+  for (const decl of decls) {
+    const rets = hx10R04RetExprs(decl);
+    if (rets === void 0)
+      return void 0;
+    for (const r of rets) {
+      const v = hx10R04Variant(r, masked, byName, decl, depth + 1, next);
+      if (v === void 0)
+        return void 0;
+      acc = acc === void 0 ? v : /* @__PURE__ */ new Set([...acc, ...v]);
+    }
+  }
+  return acc;
+}
+function hx10R04Writes(masked, ident, region) {
+  const esc = ident.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const body = masked.slice(region.start, region.end);
+  const shadow = new RegExp(`\\|(?!\\|)[^|\\n]*\\b${esc}\\b[^|\\n]*\\|(?!\\|)|\\bfor [^\\n]*\\b${esc}\\b[^\\n]* in |\\blet \\([^)]*\\b${esc}\\b`);
+  if (shadow.test(body))
+    return void 0;
+  const writes = [];
+  const spans = [];
+  const letRe = new RegExp(`\\blet (?:mut )?${esc}\\b\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_<>]*))?\\s*=`, "g");
+  for (const m of body.matchAll(letRe)) {
+    const at = m.index;
+    if (m[1] !== void 0 && m[1] !== "Value")
+      return void 0;
+    let depth = 0;
+    let j = at + m[0].length;
+    for (; j < body.length; j++) {
+      const c = body[j];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}") {
+        if (depth === 0)
+          break;
+        depth--;
+      } else if (c === ";" && depth === 0)
+        break;
+    }
+    writes.push(body.slice(at + m[0].length, j));
+    spans.push([at, j]);
+  }
+  const assignRe = new RegExp(`(?<![A-Za-z0-9_.])${esc}\\s*=(?!=)`, "g");
+  for (const m of body.matchAll(assignRe)) {
+    const at = m.index;
+    if (spans.some(([s, e]) => at >= s && at < e))
+      continue;
+    let depth = 0;
+    let j = at + m[0].length;
+    for (; j < body.length; j++) {
+      const c = body[j];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}") {
+        if (depth === 0)
+          break;
+        depth--;
+      } else if (c === ";" && depth === 0)
+        break;
+    }
+    writes.push(body.slice(at + m[0].length, j));
+  }
+  if (writes.length === 0)
+    return void 0;
+  return writes;
+}
+function r04StmtBefore(masked, pos) {
+  let depth = 0;
+  for (let i = pos; i > 0; i--) {
+    const c = masked[i - 1];
+    if (c === ")" || c === "]")
+      depth++;
+    else if (c === "(" || c === "[") {
+      if (depth > 0)
+        depth--;
+    } else if (depth === 0 && (c === ";" || c === "{" || c === "}" || c === "\n"))
+      return masked.slice(i, pos);
+  }
+  return masked.slice(0, pos);
+}
+function r04DropOperand(s) {
+  let depth = 0;
+  for (let i = s.length - 1; i >= 0; i--) {
+    const c = s[i];
+    if (c === ")" || c === "]" || c === "}")
+      depth++;
+    else if (c === "(" || c === "[" || c === "{") {
+      if (depth === 0)
+        return s.slice(0, i);
+      depth--;
+      if (depth === 0 && !/[A-Za-z0-9_.)\]]/.test(s[i - 1] ?? ""))
+        return s.slice(0, i);
+    } else if (depth === 0) {
+      if (c === "&" && s[i - 1] === "&" || c === "|" && s[i - 1] === "|")
+        return s.slice(0, i - 1);
+      if (c === "," || c === ";" || c === "=")
+        return s.slice(0, i + 1);
+      if (/[A-Za-z0-9_.)\]]/.test(c)) {
+        let k = i;
+        while (k >= 0 && /[A-Za-z0-9_.]/.test(s[k]))
+          k--;
+        return k < 0 ? s : s.slice(0, k + 1);
+      }
+    }
+  }
+  return "";
+}
+function r04BoolSlot(masked, start) {
+  let prefix = r04StmtBefore(masked, start);
+  for (let hop = 0; hop < 60; hop++) {
+    prefix = prefix.replace(/[\s!]+$/, "");
+    if (/(?:^|[^\w])(?:if|while|for|assert)$/.test(prefix))
+      return true;
+    if (/Value::Bool\($/.test(prefix))
+      return true;
+    if (/(?:&&|\|\|)$/.test(prefix)) {
+      prefix = r04DropOperand(prefix.slice(0, -2));
+      continue;
+    }
+    if (/[^=!<>]=$/.test(prefix))
+      return /:\s*bool\s*=?$/.test(prefix.slice(0, -1));
+    if (/\($/.test(prefix)) {
+      prefix = prefix.slice(0, -1);
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+function r04Callee(content) {
+  if (!content.includes("is_true(&"))
+    return content;
+  const masked = hx10R04Mask(content);
+  const regions = hx10R04Regions(masked);
+  const byName = /* @__PURE__ */ new Map();
+  for (const r of regions) {
+    const list = byName.get(r.name);
+    if (list === void 0)
+      byName.set(r.name, [r]);
+    else
+      list.push(r);
+  }
+  const edits = [];
+  for (const m of masked.matchAll(/(?<![A-Za-z0-9_:.])is_true\(&/g)) {
+    const start = m.index;
+    const open = start + "is_true".length;
+    const close = hx10R04Close(masked, open);
+    if (close < 0)
+      continue;
+    const arg = content.slice(open + 1, close);
+    if (arg.includes("\n"))
+      continue;
+    const expr = hx10R04Strip(arg.replace(/^&/, ""));
+    if (expr === "")
+      continue;
+    const region = regions.find((r) => start >= r.start && start < r.end);
+    if (region === void 0)
+      continue;
+    if (!r04BoolSlot(masked, start))
+      continue;
+    const variants = hx10R04Variant(expr, masked, byName, region, 0, /* @__PURE__ */ new Set());
+    if (variants === void 0 || !HX10R04_BOOLISH(variants))
+      continue;
+    let k = start - 1;
+    while (k >= 0 && (masked[k] === " " || masked[k] === "	"))
+      k--;
+    const negated = k >= 0 && masked[k] === "!" && masked[k - 1] !== "=";
+    edits.push({ start: negated ? k : start, end: close + 1, text: `${expr}.as_bool() == Some(${negated ? "false" : "true"})` });
+  }
+  if (edits.length === 0)
+    return content;
+  let out = "";
+  let at = 0;
+  for (const e of edits) {
+    if (e.start < at)
+      continue;
+    out += content.slice(at, e.start) + e.text;
+    at = e.end;
+  }
+  return out + content.slice(at);
+}
+var FIELDS_ARR = ["balance", "ohlcvs", "options"];
+var RECV = "self\\.(?:(?:core|parent)\\.)*(" + FIELDS_ARR.join("|") + ")";
+var STR_KEY = '&Value::Str\\("((?:[^"\\\\]|\\\\.)*)"\\.(?:into|to_string)\\(\\)\\)';
+var MAX_LINE = 400;
+function maskSrc(src) {
+  const out = src.split("");
+  const blank = (from, to) => {
+    for (let i2 = from; i2 < to && i2 < out.length; i2++)
+      if (out[i2] !== "\n")
+        out[i2] = " ";
+  };
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      const end = src.indexOf("\n", i);
+      const stop = end < 0 ? src.length : end;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      const end = src.indexOf("*/", i + 2);
+      const stop = end < 0 ? src.length : end + 2;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (c === "'") {
+      const m = /^'(?:\\.|[^\\'])'/.exec(src.slice(i, i + 4));
+      if (m !== null) {
+        i += m[0].length;
+        continue;
+      }
+    }
+    if (c === '"') {
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (src[j] === '"')
+          break;
+        j++;
+      }
+      blank(i, Math.min(j + 1, src.length));
+      i = j + 1;
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+function argSpans(masked, open) {
+  let depth = 0;
+  const spans = [];
+  let start = open + 1;
+  for (let j = open; j < masked.length; j++) {
+    const c = masked[j];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0) {
+        spans.push([start, j]);
+        return spans;
+      }
+    } else if (c === "," && depth === 1) {
+      spans.push([start, j]);
+      start = j + 1;
+    }
+  }
+  return void 0;
+}
+function callEnd(masked, open) {
+  let depth = 0;
+  for (let j = open; j < masked.length; j++) {
+    const c = masked[j];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0)
+        return j + 1;
+    }
+  }
+  return -1;
+}
+function isStatement_hx10w3_R05(masked, from, to) {
+  let k = to;
+  while (k < masked.length && (masked[k] === " " || masked[k] === "	"))
+    k++;
+  if (masked[k] !== ";")
+    return false;
+  let s = from - 1;
+  while (s >= 0 && (masked[s] === " " || masked[s] === "	" || masked[s] === "\n"))
+    s--;
+  return s < 0 || "{};".indexOf(masked[s]) >= 0;
+}
+function firstArg_hx10w3_R05(expr) {
+  const open = expr.indexOf("(");
+  if (open < 0)
+    return "";
+  let depth = 0;
+  for (let j = open; j < expr.length; j++) {
+    const c = expr[j];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0)
+        return expr.slice(open + 1, j).trim();
+    } else if (c === "," && depth === 1) {
+      return expr.slice(open + 1, j).trim();
+    }
+  }
+  return "";
+}
+function chainField(recv) {
+  const direct = new RegExp("^&mut\\s+" + RECV + "$").exec(recv);
+  if (direct !== null)
+    return direct[1];
+  let expr = recv;
+  for (let hop = 0; hop < 8; hop++) {
+    if (!expr.startsWith("get_value_mut("))
+      return "";
+    const a = firstArg_hx10w3_R05(expr);
+    const mutRoot = new RegExp("^&mut\\s+" + RECV + "$").exec(a);
+    if (mutRoot !== null)
+      return mutRoot[1];
+    const coerced = new RegExp("^unsafe\\s*\\{\\s*crate::runtime::coerce_value_to_mut\\(&" + RECV + "\\)\\s*\\}$").exec(a);
+    if (coerced !== null)
+      return coerced[1];
+    if (!a.startsWith("get_value_mut("))
+      return "";
+    expr = a;
+  }
+  return "";
+}
+var FN_HEAD = /(?:^|\n)[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+[A-Za-z_][A-Za-z0-9_]*/g;
+function fnSpan(src, at) {
+  FN_HEAD.lastIndex = 0;
+  let start = 0;
+  let m;
+  while ((m = FN_HEAD.exec(src)) !== null) {
+    if (m.index > at)
+      return [start, m.index];
+    start = m.index;
+  }
+  return [start, src.length];
+}
+function identKeyArg(body, ident, header) {
+  const asStr = new RegExp("\\blet\\s+(?:mut\\s+)?" + ident + "\\s*:\\s*String\\s*=");
+  const asVal = new RegExp("\\blet\\s+(?:mut\\s+)?" + ident + "\\s*:\\s*Value\\s*=");
+  if (asStr.test(body))
+    return ident + ".clone()";
+  if (asVal.test(body))
+    return "crate::runtime::stringify_param(&" + ident + ")";
+  const paramVal = new RegExp("(?:^|[(,]\\s*)(?:mut\\s+)?" + ident + "\\s*:\\s*Value\\b");
+  const paramStr = new RegExp("(?:^|[(,]\\s*)(?:mut\\s+)?" + ident + "\\s*:\\s*String\\b");
+  if (paramStr.test(header))
+    return ident + ".clone()";
+  if (paramVal.test(header))
+    return "crate::runtime::stringify_param(&" + ident + ")";
+  return "";
+}
+function runPass(content) {
+  if (!content.includes("add_element_to_object("))
+    return content;
+  const masked = maskSrc(content);
+  const callRe = /(?<![A-Za-z0-9_:.])(add_element_to_object)\(/g;
+  const rws = [];
+  let m;
+  while ((m = callRe.exec(masked)) !== null) {
+    const open = m.index + m[1].length;
+    const spans = argSpans(masked, open);
+    if (spans === void 0 || spans.length !== 3)
+      continue;
+    const end = callEnd(masked, open);
+    if (end < 0)
+      continue;
+    if (!isStatement_hx10w3_R05(masked, m.index, end))
+      continue;
+    const raw = spans.map((sp) => content.slice(sp[0], sp[1]).trim());
+    if (chainField(raw[0]) === "")
+      continue;
+    const value = raw[2];
+    if (/\bself\b/.test(value))
+      continue;
+    let keyArg = "";
+    const lit = new RegExp("^" + STR_KEY + "$").exec(raw[1]);
+    if (lit !== null) {
+      keyArg = '"' + lit[1] + '".to_string()';
+    } else {
+      const ident = /^&([A-Za-z_][A-Za-z0-9_]*)$/.exec(raw[1]);
+      if (ident === null)
+        continue;
+      const [fnStart, fnEnd] = fnSpan(masked, m.index);
+      const headerEnd = masked.indexOf("\n", fnStart + 1);
+      const header = masked.slice(fnStart, headerEnd < 0 ? fnEnd : headerEnd);
+      keyArg = identKeyArg(masked.slice(fnStart, m.index), ident[1], header);
+      if (keyArg === "")
+        continue;
+    }
+    const text = "if let Value::Dict(__r05d) = " + raw[0] + " { std::sync::Arc::make_mut(__r05d).insert(" + keyArg + ", " + value + "); }";
+    const lineStart = content.lastIndexOf("\n", m.index) + 1;
+    const lineEndIdx = content.indexOf("\n", end);
+    const lineLen = (lineEndIdx < 0 ? content.length : lineEndIdx) - lineStart;
+    if (lineLen > MAX_LINE || lineLen - (end - m.index) + text.length > MAX_LINE)
+      continue;
+    let stop = end;
+    while (stop < content.length && (content[stop] === " " || content[stop] === "	"))
+      stop++;
+    if (content[stop] !== ";")
+      continue;
+    rws.push({ start: m.index, end: stop + 1, text });
+  }
+  if (rws.length === 0)
+    return content;
+  rws.sort((a, b) => a.start - b.start);
+  let out = "";
+  let at = 0;
+  for (const r of rws) {
+    if (r.start < at)
+      continue;
+    out += content.slice(at, r.start) + r.text;
+    at = r.end;
+  }
+  return out + content.slice(at);
+}
+function r05FieldChainInserts(content) {
+  let out = content;
+  for (let i = 0; i < 4; i++) {
+    const next = runPass(out);
+    if (next === out)
+      break;
+    out = next;
+  }
+  return out;
+}
+var helperName = "append_to_array";
+var lineBudget = 400;
+var plainFields = /* @__PURE__ */ new Set([
+  "orders",
+  "positions",
+  "tickers",
+  "trades",
+  "ohlcvs",
+  "bidsasks",
+  "clients",
+  "balance",
+  "options",
+  "markets",
+  "markets_by_id",
+  "currencies",
+  "events",
+  "outcomes",
+  "outcomes_by_id",
+  "events_by_slug",
+  "symbols",
+  "free",
+  "used",
+  "total"
+]);
+var keeperCalls = ["add_element_to_object", "set_value", "remove"];
+var literalPrefixes = ["Value::Null", "Value::Int(", "Value::Float(", "Value::Bool(", "Value::Str(", "Value::Map({", "Value::Array("];
+function maskText_hx10w3_R06(src) {
+  const out = [];
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < n && src[i] !== "\n") {
+        out.push(" ");
+        i++;
+      }
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      out.push("  ");
+      i += 2;
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        out.push(src[i] === "\n" ? "\n" : " ");
+        i++;
+      }
+      if (i < n) {
+        out.push("  ");
+        i += 2;
+      }
+      continue;
+    }
+    if (c === '"') {
+      out.push(" ");
+      i++;
+      while (i < n && src[i] !== '"') {
+        if (src[i] === "\\") {
+          out.push("  ");
+          i += 2;
+          continue;
+        }
+        out.push(src[i] === "\n" ? "\n" : " ");
+        i++;
+      }
+      if (i < n) {
+        out.push(" ");
+        i++;
+      }
+      continue;
+    }
+    out.push(c);
+    i++;
+  }
+  return out.join("");
+}
+function fnRegions_hx10w3_R06(masked) {
+  const regions = [];
+  const head = /\bfn\s+[A-Za-z0-9_]*\s*[(<]/g;
+  let m;
+  while ((m = head.exec(masked)) !== null) {
+    let i = m.index + m[0].length - 1;
+    let depth = 0;
+    let open = -1;
+    while (i < masked.length) {
+      const c = masked[i];
+      if (c === "(" || c === "[" || c === "<")
+        depth++;
+      else if (c === ")" || c === "]" || c === ">")
+        depth--;
+      else if (c === "{") {
+        if (depth <= 0) {
+          open = i;
+          break;
+        }
+        depth++;
+      } else if (c === ";" && depth <= 0)
+        break;
+      i++;
+    }
+    if (open < 0)
+      continue;
+    let close = -1;
+    let d = 0;
+    for (let j = open; j < masked.length; j++) {
+      if (masked[j] === "{")
+        d++;
+      else if (masked[j] === "}") {
+        d--;
+        if (d === 0) {
+          close = j;
+          break;
+        }
+      }
+    }
+    if (close > open)
+      regions.push([open, close]);
+  }
+  return regions;
+}
+function closeParenAt_hx10w3_R06(src, open) {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === "(")
+      depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0)
+        return i;
+    }
+  }
+  return -1;
+}
+function exprEnd(masked, from) {
+  let depth = 0;
+  for (let i = from; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}")
+      depth--;
+    else if (c === ";" && depth <= 0)
+      return i;
+  }
+  return -1;
+}
+function r06w3Push(content) {
+  if (!content.includes(helperName + "("))
+    return content;
+  const masked = maskText_hx10w3_R06(content);
+  const regions = fnRegions_hx10w3_R06(masked);
+  const callRx = new RegExp("(?<![\\w.:])" + helperName + "\\(", "g");
+  const jobs = [];
+  const memo = /* @__PURE__ */ new Map();
+  const factsOf = (region) => {
+    const key = region[0] + ":" + region[1];
+    let hit = memo.get(key);
+    if (hit === void 0) {
+      hit = /* @__PURE__ */ new Map();
+      memo.set(key, hit);
+    }
+    return hit;
+  };
+  const isPlainField = (expr) => {
+    const f = /^self\.([A-Za-z_][A-Za-z0-9_]*)\b/.exec(expr.trim());
+    return f !== null && plainFields.has(f[1]);
+  };
+  const chainRoot = (expr) => {
+    const m2 = /^([A-Za-z_][A-Za-z0-9_]*)\.(?:as_map|as_array)\(\)/.exec(expr.trim());
+    return m2 === null ? null : m2[1];
+  };
+  const sourceFree = (expr, region, seen) => {
+    const t = expr.trim();
+    if (literalPrefixes.some((p) => t.startsWith(p)))
+      return true;
+    if (/^Value::from\(vec!\[/.test(t) || /^Value::from\(Vec::new\(\)\)$/.test(t))
+      return true;
+    if (t.startsWith("self.safe_list"))
+      return true;
+    if (/^[A-Za-z_][A-Za-z0-9_]*\.as_str\(\)\.map\(/.test(t))
+      return true;
+    if (/^\(if let Some\(__s\) = [A-Za-z_][A-Za-z0-9_.]*\.(?:as_str|as_deref)\(\) \{ Value::Str\(.*\) \} else \{ Value::Null \}\)$/.test(t))
+      return true;
+    if (isPlainField(t))
+      return true;
+    const safeValue = /^self\.safe_value(?:_k)?\(\(?(?:if let \(Some\(__m\), Some\(__k\)\) = \()?self\.([A-Za-z_][A-Za-z0-9_]*)/.exec(t);
+    if (safeValue !== null && plainFields.has(safeValue[1]))
+      return true;
+    const matchRead = /^match\s*&\s*([A-Za-z_][A-Za-z0-9_]*)\s*\{\s*Value::Dict\(__m\d+\)\s*=>\s*__m\d+\.get\("/.exec(t);
+    if (matchRead !== null)
+      return localFree(matchRead[1], region, seen);
+    const read = /^(?:crate::value::)?(?:get_value_k|get_value)\(/.exec(t);
+    if (read !== null) {
+      const open = read[0].length - 1;
+      const close = closeParenAt_hx10w3_R06(t, open);
+      if (close < 0)
+        return false;
+      const args = t.slice(open + 1, close);
+      const comma = args.indexOf(",");
+      if (comma < 0)
+        return false;
+      const recv = args.slice(0, comma).trim().replace(/^&\s*/, "");
+      if (isPlainField(recv))
+        return true;
+      const root2 = chainRoot(recv);
+      if (root2 !== null)
+        return localFree(root2, region, seen);
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(recv))
+        return localFree(recv, region, seen);
+      return false;
+    }
+    const freeRead = /^\(if let \(Some\(__m\), Some\(__k\)\) = \(([A-Za-z_][A-Za-z0-9_.]*)\.as_map\(\), /.exec(t);
+    if (freeRead !== null) {
+      if (isPlainField(freeRead[1]))
+        return true;
+      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(freeRead[1]) && localFree(freeRead[1], region, seen);
+    }
+    const clone = /^([A-Za-z_][A-Za-z0-9_]*)\.clone\(\)$/.exec(t);
+    if (clone !== null)
+      return localFree(clone[1], region, seen);
+    const root = chainRoot(t);
+    if (root !== null)
+      return localFree(root, region, seen);
+    return false;
+  };
+  const localFree = (name, region, seen) => {
+    const facts = factsOf(region);
+    const known = facts.get(name);
+    if (known !== void 0)
+      return known;
+    if (seen.has(name))
+      return false;
+    const body = masked.slice(region[0], region[1]);
+    const declRx = new RegExp("let (?:mut )?" + name + "\\s*:\\s*([^=;]+?)\\s*=(?!=)", "g");
+    const spans = [];
+    let d;
+    while ((d = declRx.exec(body)) !== null) {
+      if (d[1].trim() !== "Value") {
+        facts.set(name, false);
+        return false;
+      }
+      const rhsStart = region[0] + d.index + d[0].length;
+      const rhsEnd = exprEnd(masked, rhsStart);
+      if (rhsEnd < 0) {
+        facts.set(name, false);
+        return false;
+      }
+      spans.push([d.index, rhsEnd - region[0]]);
+    }
+    if (spans.length === 0) {
+      facts.set(name, false);
+      return false;
+    }
+    seen.add(name);
+    let ok = true;
+    for (const [d0, d1] of spans) {
+      const rhsStart = region[0] + d0 + body.slice(d0).indexOf("=") + 1;
+      if (!sourceFree(content.slice(rhsStart, region[0] + d1), region, seen)) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      const wrx = new RegExp("(?<![\\w.])" + name + "\\s*=(?!=)", "g");
+      let w;
+      while ((w = wrx.exec(body)) !== null) {
+        if (spans.some(([d0, d1]) => w.index >= d0 + body.slice(d0).indexOf("=") && w.index < d1))
+          continue;
+        const rhsStart = region[0] + w.index + w[0].length;
+        const rhsEnd = exprEnd(masked, rhsStart);
+        if (rhsEnd < 0 || !sourceFree(content.slice(rhsStart, rhsEnd), region, seen)) {
+          ok = false;
+          break;
+        }
+      }
+    }
+    seen.delete(name);
+    facts.set(name, ok);
+    return ok;
+  };
+  let m;
+  while ((m = callRx.exec(masked)) !== null) {
+    const start = m.index;
+    const lineStart = masked.lastIndexOf("\n", start) + 1;
+    if (/^\s*(?:pub\s+)?fn /.test(masked.slice(lineStart, start)))
+      continue;
+    const region = regions.find((r) => r[0] < start && start < r[1]);
+    if (region === void 0)
+      continue;
+    const argStart = start + helperName.length + 1;
+    const recv = /^&mut\s+([A-Za-z_][A-Za-z0-9_]*)\s*,/.exec(content.slice(argStart, argStart + 160));
+    if (recv === null)
+      continue;
+    const name = recv[1];
+    const nameRx = new RegExp("(?<![\\w.])" + name + "(?![\\w])");
+    const headerStart = masked.lastIndexOf("fn ", region[0]);
+    if (new RegExp("(?<![\\w])" + name + "\\s*:").test(masked.slice(headerStart, region[0])))
+      continue;
+    if (!localFree(name, region, /* @__PURE__ */ new Set()))
+      continue;
+    const body = masked.slice(region[0], region[1]);
+    const mutRx = new RegExp("&mut\\s+" + name + "(?![\\w])", "g");
+    let ok = true;
+    let mu;
+    while ((mu = mutRx.exec(body)) !== null) {
+      const at = region[0] + mu.index;
+      const before = masked.slice(Math.max(0, at - 60), at);
+      const after = masked.slice(at + mu[0].length, at + mu[0].length + 8);
+      const pushRecv = new RegExp(helperName + "\\(\\s*$").test(before) && /^\s*,/.test(after);
+      const keeper = keeperCalls.some((c) => new RegExp("(?<![\\w.])" + c + "\\(\\s*$").test(before)) && /^\s*,/.test(after);
+      if (!pushRecv && !keeper) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok)
+      continue;
+    const callEnd2 = closeParenAt_hx10w3_R06(masked, argStart - 1);
+    if (callEnd2 < 0)
+      continue;
+    const valueStart = argStart + recv[0].length;
+    const value = content.slice(valueStart, callEnd2);
+    if (nameRx.test(value))
+      continue;
+    let stmtStart = masked.lastIndexOf(";", start);
+    stmtStart = Math.max(stmtStart, masked.lastIndexOf("{", start), masked.lastIndexOf("}", start)) + 1;
+    if (masked.slice(stmtStart, start).trim() !== "")
+      continue;
+    if (!/^\)\s*;/.test(masked.slice(callEnd2, callEnd2 + 4)))
+      continue;
+    const text = `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value.trim()}); }`;
+    const lStart = content.lastIndexOf("\n", start) + 1;
+    const lEnd = content.indexOf("\n", callEnd2) < 0 ? content.length : content.indexOf("\n", callEnd2);
+    const lenNow = lEnd - lStart;
+    if (lenNow <= lineBudget && lenNow - (callEnd2 + 1 - start) + text.length > lineBudget)
+      continue;
+    jobs.push({ start, end: callEnd2 + 1, text });
+  }
+  if (jobs.length === 0)
+    return content;
+  let out = content;
+  for (let i = jobs.length - 1; i >= 0; i--) {
+    const j = jobs[i];
+    out = out.slice(0, j.start) + j.text + out.slice(j.end);
+  }
+  return out;
+}
+var SCALAR = /* @__PURE__ */ new Set(["str", "int", "float", "bool", "null"]);
+var NATIVE_TY = /* @__PURE__ */ new Set(["String", "Vec<String>", "i64", "f64", "bool", "usize", "u32", "isize"]);
+function maskText_hx10w3_R07(src) {
+  const out = src.split("");
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < src.length && src[i] !== "\n")
+        out[i++] = " ";
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) {
+        if (src[i] !== "\n")
+          out[i] = " ";
+        i++;
+      }
+      if (i < src.length) {
+        out[i] = " ";
+        out[i + 1] = " ";
+        i += 2;
+      }
+      continue;
+    }
+    if (c === '"') {
+      out[i++] = " ";
+      while (i < src.length && src[i] !== '"') {
+        if (src[i] === "\\")
+          out[i++] = " ";
+        if (i < src.length) {
+          if (src[i] !== "\n")
+            out[i] = " ";
+          i++;
+        }
+      }
+      if (i < src.length)
+        out[i++] = " ";
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+function closeParen_hx10w3_R07(masked, open) {
+  const openCh = masked[open];
+  const closeCh = openCh === "(" ? ")" : openCh === "[" ? "]" : "}";
+  let depth = 0;
+  for (let k = open; k < masked.length; k++) {
+    const c = masked[k];
+    if (c === openCh)
+      depth++;
+    else if (c === closeCh) {
+      depth--;
+      if (depth === 0)
+        return k + 1;
+    }
+  }
+  return -1;
+}
+function splitArgs_hx10w3_R07(masked, from, to) {
+  const args = [];
+  let depth = 0;
+  let start = from;
+  for (let k = from; k < to; k++) {
+    const c = masked[k];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}")
+      depth--;
+    else if (c === "," && depth === 0) {
+      args.push(masked.slice(start, k));
+      start = k + 1;
+    }
+  }
+  args.push(masked.slice(start, to));
+  return args;
+}
+function stmtEnd_hx10w3_R07(masked, from) {
+  let depth = 0;
+  for (let k = from; k < masked.length; k++) {
+    const c = masked[k];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth < 0)
+        return -1;
+    } else if (c === ";" && depth === 0)
+      return k;
+  }
+  return -1;
+}
+var FN_HEAD_hx10w3_R07 = /(?:^|\n)[ \t]*(?:pub(?:\([a-z]+\))? )?(?:async )?fn /g;
+function fnBounds(masked, pos) {
+  let start = 0;
+  for (const m of masked.matchAll(FN_HEAD_hx10w3_R07)) {
+    const at = m.index;
+    if (at <= pos)
+      start = at + 1;
+    else
+      return [start, at + 1];
+  }
+  return [start, masked.length];
+}
+function strBox(arg) {
+  const m = /^&\s*Value::Str\(\s*("(?:[^"\\]|\\.)*")\s*(?:\.into\(\)|\.to_string\(\))?\s*\)$/.exec(arg.trim());
+  return m === null ? void 0 : m[1];
+}
+function intBox(arg) {
+  const m = /^&\s*Value::Int\(\s*(-?\d+)\s*\)$/.exec(arg.trim());
+  return m === null ? void 0 : m[1];
+}
+function elemKind(expr, locals, depth = 0) {
+  const e = expr.trim().replace(/;$/, "").trim();
+  const vec = /^(?:Value::(?:Array|List|from)|vec!)\(?(vec!)?\[/.exec(e) ?? /^vec!\[/.exec(e);
+  if (vec !== null) {
+    const open = e.indexOf("[");
+    const close = closeParen_hx10w3_R07(e, open);
+    if (close < 0 || !/^\)*$/.test(e.slice(close)))
+      return void 0;
+    const items = splitArgs_hx10w3_R07(e, open + 1, close - 1);
+    if (items === void 0)
+      return void 0;
+    for (const it of items) {
+      if (it.trim() === "")
+        continue;
+      if (!/^\s*Value::Str\(/.test(it))
+        return void 0;
+    }
+    return "str";
+  }
+  const arr = /^Value::(?:Array|List)\(/.exec(e);
+  if (arr !== null) {
+    const open = arr[0].length - 1;
+    const close = closeParen_hx10w3_R07(e, open);
+    if (close !== e.length)
+      return void 0;
+    const inner = e.slice(open + 1, close - 1);
+    if (/\.map\(\|__p\| Value::Str\(|\.split\([^()]*\)\.map\(Value::from\)/.test(inner))
+      return "str";
+    return void 0;
+  }
+  if (/^(?:crate::runtime::)?split\(/.test(e))
+    return "str";
+  const slice = /^(?:self\.)?array_slice\(\s*&?([A-Za-z_]\w*)/.exec(e);
+  if (slice !== null && depth === 0) {
+    const src = locals.get(slice[1]);
+    return src === void 0 ? void 0 : src.elems;
+  }
+  return void 0;
+}
+function inferSet(expr, locals) {
+  const e = expr.trim().replace(/;$/, "").trim();
+  for (const [head, variant] of [["Value::Str(", "str"], ["Value::Int(", "int"], ["Value::Float(", "float"], ["Value::Bool(", "bool"]]) {
+    if (e.startsWith(head))
+      return /* @__PURE__ */ new Set([variant]);
+  }
+  if (e === "Value::Null")
+    return /* @__PURE__ */ new Set(["null"]);
+  const copy = /^([A-Za-z_]\w*)(?:\.clone\(\))?$/.exec(e);
+  if (copy !== null) {
+    const src = locals.get(copy[1]);
+    if (src === void 0)
+      return void 0;
+    if (src.ty === "Value")
+      return src.set === void 0 ? void 0 : new Set(src.set);
+    if (src.ty === "String")
+      return /* @__PURE__ */ new Set(["str"]);
+  }
+  const own = /^(?:crate::runtime::)?(to_string_val|replace_str|replace_all_str|join|pad_end|to_fixed)\(/.exec(e);
+  if (own !== null)
+    return own[1] === "pad_end" ? /* @__PURE__ */ new Set(["str", "null"]) : /* @__PURE__ */ new Set(["str"]);
+  if (/^(?:crate::runtime::)?split\(/.test(e))
+    return /* @__PURE__ */ new Set(["arr"]);
+  const call = /^(?:crate::value::)?(?:self\.)?(safe_string(?:_k|_2|_lower|_upper|_lower_k|_upper_k)?|safe_bool(?:_k|_2)?|safe_integer(?:_k|_2)?|safe_int|safe_timestamp|safe_float(?:_k)?|safe_number(?:_k|_2)?|parse_int|parse_float|parse_to_int|number_to_string|decimal_to_precision|sum)\(/.exec(e);
+  if (call !== null) {
+    const name = call[1];
+    const open = call[0].length - 1;
+    if (closeParen_hx10w3_R07(e, open) !== e.length)
+      return void 0;
+    if (name === "decimal_to_precision")
+      return /* @__PURE__ */ new Set(["str"]);
+    if (name === "number_to_string")
+      return /* @__PURE__ */ new Set(["str", "null"]);
+    if (name === "sum")
+      return /* @__PURE__ */ new Set(["int", "float", "str", "null"]);
+    let own2 = "str";
+    if (name.startsWith("safe_bool"))
+      own2 = "bool";
+    else if (name.startsWith("safe_float") || name.startsWith("safe_number") || name === "parse_float")
+      own2 = "float";
+    else if (!name.startsWith("safe_string") && name !== "parse_to_int")
+      own2 = "int";
+    const out = /* @__PURE__ */ new Set([own2]);
+    if (name.startsWith("safe")) {
+      const args = splitArgs_hx10w3_R07(e, open + 1, e.length - 1);
+      if (args === void 0)
+        return void 0;
+      const last = args[args.length - 1].trim();
+      if (last === "&[]")
+        out.add("null");
+      else {
+        const inner = /^&\[(.*)\]$/.exec(last);
+        if (inner === null)
+          return void 0;
+        const lit = strBox(`&${inner[1]}`);
+        const num = intBox(`&${inner[1]}`);
+        if (lit !== void 0)
+          out.add("str");
+        else if (num !== void 0)
+          out.add("int");
+        else
+          return void 0;
+      }
+    } else {
+      out.add("null");
+    }
+    return out;
+  }
+  if (/^(?:Value::(?:Array|List)\(|Value::from\(vec!\[|vec!\[)/.test(e))
+    return /* @__PURE__ */ new Set(["arr"]);
+  const slice = /^(?:crate::value::)?(?:self\.)?(?:array_slice|array_concat)\(\s*&?([A-Za-z_]\w*)/.exec(e);
+  if (slice !== null) {
+    const src = locals.get(slice[1]);
+    return src === void 0 || src.set === void 0 ? void 0 : new Set(src.set);
+  }
+  if (/^\(match &\w+ \{ Value::Str\(__parse_s\) => __parse_s\.trim\(\)\.parse::<f64>\(\)\.map\(Value::Float\)/.test(e))
+    return /* @__PURE__ */ new Set(["float", "null"]);
+  if (/^\(match &\w+ \{ Value::Str\(__parse_s\) => __parse_s\.trim\(\)\.parse::<i64>\(\)\.map\(Value::Int\)/.test(e))
+    return /* @__PURE__ */ new Set(["int", "null"]);
+  if (/^\(match \(&\(/.test(e))
+    return /* @__PURE__ */ new Set(["int", "float", "null"]);
+  return void 0;
+}
+function valueSets(region, maskedRegion, sig) {
+  const locals = /* @__PURE__ */ new Map();
+  const declRe = /let\s+(?:mut\s+)?([A-Za-z_]\w*)\s*:\s*([^=;]+?)\s*=/g;
+  const decls = [];
+  let m;
+  while ((m = declRe.exec(maskedRegion)) !== null) {
+    const rel = new RegExp(`\\b${m[1]}\\b`).exec(m[0]);
+    decls.push({ name: m[1], ty: m[2].replace(/\s+/g, ""), at: m.index + (rel === null ? 0 : rel.index), init: m.index + m[0].length });
+  }
+  const multi = /* @__PURE__ */ new Map();
+  for (const d of decls)
+    multi.set(d.name, (multi.get(d.name) ?? 0) + 1);
+  for (const p of sig.matchAll(/\(\s*(?:&?\s*(?:mut\s+)?([A-Za-z_]\w*)\s*:\s*([^,)]+)|&[A-Za-z_]\w*)|,\s*(?:mut\s+)?([A-Za-z_]\w*)\s*:\s*([^,)]+)/g)) {
+    const name = p[1] ?? p[3];
+    const ty = (p[2] ?? p[4] ?? "").replace(/\s+/g, "");
+    if (name !== void 0 && NATIVE_TY.has(ty))
+      locals.set(name, { ty });
+  }
+  for (const d of decls) {
+    if (multi.get(d.name) !== 1)
+      continue;
+    locals.set(d.name, { ty: d.ty });
+    if (d.ty !== "Value")
+      continue;
+    const bind = new RegExp(`(?:[(,|]\\s*(?:mut\\s+)?${d.name}\\s*:|\\bfor\\s+(?:mut\\s+)?${d.name}\\b)`);
+    if (bind.test(sig))
+      continue;
+    const set = /* @__PURE__ */ new Set();
+    let ok = true;
+    let elems = "str";
+    const word = new RegExp(`(?<![A-Za-z0-9_.])${d.name}(?![A-Za-z0-9_])`, "g");
+    for (let k = 0; k < maskedRegion.length; k++) {
+      word.lastIndex = k;
+      const hit = word.exec(maskedRegion);
+      if (hit === null)
+        break;
+      const s = hit.index;
+      k = s;
+      if (/&\s*mut\s*$/.test(maskedRegion.slice(Math.max(0, s - 12), s))) {
+        ok = false;
+        break;
+      }
+      const tail = maskedRegion.slice(s + d.name.length);
+      const rhs = /^\s*=(?!=)/.exec(tail);
+      if (s === d.at) {
+        const end = stmtEnd_hx10w3_R07(maskedRegion, d.init);
+        const ex = end < 0 ? "" : region.slice(d.init, end);
+        const got = end < 0 ? void 0 : inferSet(ex, locals);
+        if (got === void 0) {
+          ok = false;
+          break;
+        }
+        got.forEach((v) => set.add(v));
+        if (elemKind(ex, locals) !== "str")
+          elems = void 0;
+        k = end < 0 ? s + d.name.length : end;
+        continue;
+      }
+      if (rhs !== null) {
+        const from = s + d.name.length + rhs[0].length;
+        const end = stmtEnd_hx10w3_R07(maskedRegion, from);
+        const ex = end < 0 ? "" : region.slice(from, end);
+        const got = end < 0 ? void 0 : inferSet(ex, locals);
+        if (got === void 0) {
+          ok = false;
+          break;
+        }
+        got.forEach((v) => set.add(v));
+        if (elemKind(ex, locals) !== "str")
+          elems = void 0;
+        k = end < 0 ? from : end;
+        continue;
+      }
+    }
+    if (ok && set.size > 0)
+      locals.set(d.name, { ty: d.ty, set, elems });
+  }
+  return locals;
+}
+function rewrite(name, args, locals) {
+  const arg0 = (args[0] ?? "").trim();
+  const recv = /^&\s*([A-Za-z_]\w*)$/.exec(arg0);
+  const x = recv === null ? void 0 : recv[1];
+  const local = x === void 0 ? void 0 : locals.get(x);
+  const set = local?.set;
+  const ty = local?.ty;
+  const provenScalar = set !== void 0 && set.size > 0 && [...set].every((v) => SCALAR.has(v));
+  const strTyped = ty === "String";
+  const strProven = strTyped || set !== void 0 && set.size === 1 && set.has("str");
+  const scalarProven = strTyped || provenScalar;
+  const numProven = ty === "i64" || ty === "f64" || set !== void 0 && set.size > 0 && [...set].every((v) => v === "int" || v === "float" || v === "null");
+  if (x === void 0) {
+    if (name !== "to_string_val")
+      return void 0;
+    const held = arg0.replace(/^&/, "").replace(/;$/, "").trim();
+    const got = inferSet(held, locals);
+    if (got === void 0 || [...got].some((v) => !SCALAR.has(v)))
+      return void 0;
+    return `Value::str(${held}.to_string())`;
+  }
+  switch (name) {
+    case "to_string_val": {
+      if (args.length !== 1)
+        return void 0;
+      if (strProven)
+        return `Value::str(${x}.clone())`;
+      if (scalarProven)
+        return `Value::str(${x}.to_string())`;
+      return void 0;
+    }
+    case "replace_str":
+    case "replace_all_str": {
+      if (!strProven || args.length !== 3)
+        return void 0;
+      const a = strBox(args[1]);
+      const b = strBox(args[2]);
+      if (a === void 0 || b === void 0)
+        return void 0;
+      const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
+      return `Value::str(${holder}.replace(${a}, ${b}))`;
+    }
+    case "split": {
+      if (!strProven || args.length !== 2)
+        return void 0;
+      const d = strBox(args[1]);
+      if (d === void 0)
+        return void 0;
+      const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
+      return `Value::Array(${holder}.split(${d}).map(Value::str).collect())`;
+    }
+    case "starts_with":
+    case "ends_with": {
+      if (!strProven || args.length !== 2)
+        return void 0;
+      const s = strBox(args[1]);
+      if (s === void 0)
+        return void 0;
+      const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
+      return `${holder}.${name}(${s})`;
+    }
+    case "to_fixed": {
+      if (!numProven || args.length !== 2)
+        return void 0;
+      const d = intBox(args[1]);
+      if (d === void 0)
+        return void 0;
+      const n = ty === "f64" ? x : ty === "i64" ? `(${x} as f64)` : `${x}.as_f64().unwrap_or(0.0)`;
+      return `Value::str(format!("{:.*}", ${d}, ${n}))`;
+    }
+    case "join": {
+      if (args.length !== 2)
+        return void 0;
+      const s = strBox(args[1]);
+      if (s === void 0)
+        return void 0;
+      if (ty === "Vec<String>")
+        return `Value::str(${x}.join(${s}))`;
+      if (local?.elems === "str" && set !== void 0 && set.size === 1 && set.has("arr")) {
+        return `Value::str(${x}.as_array().cloned().unwrap_or_default().iter().filter_map(Value::as_str).collect::<Vec<_>>().join(${s}))`;
+      }
+      return void 0;
+    }
+    default:
+      return void 0;
+  }
+}
+function r07StringNatives(content) {
+  if (!/to_string_val\(|replace_str\(|replace_all_str\(|split\(|join\(|starts_with\(|ends_with\(|to_fixed\(/.test(content))
+    return content;
+  const masked = maskText_hx10w3_R07(content);
+  const rx = /(?<![A-Za-z0-9_:.])(to_string_val|replace_str|replace_all_str|split|join|starts_with|ends_with|to_fixed)\(/g;
+  const hits = [];
+  for (const m of masked.matchAll(rx)) {
+    const start = m.index;
+    if (/\bfn\s+$/.test(masked.slice(Math.max(0, start - 8), start)))
+      continue;
+    const open = start + m[1].length;
+    const close = closeParen_hx10w3_R07(masked, open);
+    if (close < 0)
+      continue;
+    hits.push({ start, end: close, name: m[1] });
+  }
+  if (hits.length === 0)
+    return content;
+  const rewrites = [];
+  const cache = /* @__PURE__ */ new Map();
+  for (const h of hits) {
+    const [lo, hi] = fnBounds(masked, h.start);
+    let locals = cache.get(lo);
+    if (locals === void 0) {
+      const region = content.slice(lo, hi);
+      const head = content.slice(lo, hi).indexOf("{");
+      const sig = head < 0 ? "" : region.slice(0, head);
+      locals = valueSets(region, masked.slice(lo, hi), sig);
+      cache.set(lo, locals);
+    }
+    const args = splitArgs_hx10w3_R07(content, h.start + h.name.length + 1, h.end - 1);
+    if (args === void 0)
+      continue;
+    const text = rewrite(h.name, args, locals);
+    if (text === void 0)
+      continue;
+    const lineStart = content.lastIndexOf("\n", h.start) + 1;
+    const lineEnd = content.indexOf("\n", h.end);
+    const len = (lineEnd < 0 ? content.length : lineEnd) - lineStart;
+    if (len <= 400 && len - (h.end - h.start) + text.length > 400)
+      continue;
+    rewrites.push({ start: h.start, end: h.end, text });
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start);
+  let out = "";
+  let at = 0;
+  for (const r of rewrites) {
+    if (r.start < at)
+      continue;
+    out += content.slice(at, r.start) + r.text;
+    at = r.end;
+  }
+  return out + content.slice(at);
+}
+var FIELDS = ["options", "markets", "balance", "ohlcvs"];
+var RECV_hx10w4_BF03 = "self\\.(?:(?:core|parent)\\.)*(" + FIELDS.join("|") + ")";
+var STR_KEY_hx10w4_BF03 = /^&Value::Str\("((?:[^"\\]|\\.)*)"\.(?:into|to_string)\(\)\)$/;
+var ROOT = new RegExp("^&mut\\s+" + RECV_hx10w4_BF03 + "$");
+var COERCED = new RegExp("^unsafe\\s*\\{\\s*crate::runtime::coerce_value_to_mut\\(&" + RECV_hx10w4_BF03 + "\\)\\s*\\}$");
+var MAX_LINE_hx10w4_BF03 = 400;
+function maskSrc_hx10w4_BF03(src) {
+  const out = src.split("");
+  const blank = (from, to) => {
+    for (let i2 = from; i2 < to && i2 < out.length; i2++)
+      if (out[i2] !== "\n")
+        out[i2] = " ";
+  };
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      const end = src.indexOf("\n", i);
+      const stop = end < 0 ? src.length : end;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      const end = src.indexOf("*/", i + 2);
+      const stop = end < 0 ? src.length : end + 2;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (c === "'") {
+      const m = /^'(?:\\.|[^\\'])'/.exec(src.slice(i, i + 4));
+      if (m !== null) {
+        i += m[0].length;
+        continue;
+      }
+    }
+    if (c === '"') {
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (src[j] === '"')
+          break;
+        j++;
+      }
+      blank(i, Math.min(j + 1, src.length));
+      i = j + 1;
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+function argSpans_hx10w4_BF03(masked, open) {
+  let depth = 0;
+  const spans = [];
+  let start = open + 1;
+  for (let j = open; j < masked.length; j++) {
+    const c = masked[j];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0) {
+        spans.push([start, j]);
+        return spans;
+      }
+    } else if (c === "," && depth === 1) {
+      spans.push([start, j]);
+      start = j + 1;
+    }
+  }
+  return void 0;
+}
+function closeOf(masked, open) {
+  let depth = 0;
+  for (let j = open; j < masked.length; j++) {
+    const c = masked[j];
+    if (c === "(" || c === "[" || c === "{")
+      depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0)
+        return j;
+    }
+  }
+  return -1;
+}
+function hopAt(content, masked, at) {
+  if (!/^get_value_mut\(/.test(masked.slice(at, at + 14)))
+    return void 0;
+  const open = at + "get_value_mut".length;
+  const spans = argSpans_hx10w4_BF03(masked, open);
+  if (spans === void 0 || spans.length !== 2)
+    return void 0;
+  const close = closeOf(masked, open);
+  if (close < 0)
+    return void 0;
+  const key = content.slice(spans[1][0], spans[1][1]).trim();
+  const lit = STR_KEY_hx10w4_BF03.exec(key);
+  return {
+    recv: content.slice(spans[0][0], spans[0][1]).trim(),
+    key,
+    literal: lit === null ? void 0 : lit[1],
+    close
+  };
+}
+function chainAt(content, masked, at) {
+  const hops = [];
+  let cur = at;
+  for (let n = 0; n < 8; n++) {
+    const h = hopAt(content, masked, cur);
+    if (h === void 0)
+      return void 0;
+    hops.push(h);
+    const lead = h.recv.length - h.recv.replace(/^\s+/, "").length;
+    if (!/^get_value_mut\(/.test(h.recv))
+      return { hops, root: h.recv };
+    cur = content.indexOf(h.recv, cur) + lead;
+  }
+  return void 0;
+}
+function valueIdentKey(masked, at, key) {
+  const id = /^&([A-Za-z_][A-Za-z0-9_]*)$/.exec(key);
+  if (id === null)
+    return "";
+  const fnHead = /(?:^|\n)[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+[A-Za-z_][A-Za-z0-9_]*/g;
+  let start = 0;
+  let m;
+  while ((m = fnHead.exec(masked)) !== null) {
+    if (m.index > at)
+      break;
+    start = m.index;
+  }
+  const nl = masked.indexOf("\n", start + 1);
+  const header = masked.slice(start, nl < 0 ? at : nl);
+  const ident = id[1];
+  const local = new RegExp("\\blet\\s+(?:mut\\s+)?" + ident + "\\s*:\\s*Value\\s*=");
+  const other = new RegExp("\\blet\\s+(?:mut\\s+)?" + ident + "\\b(?!\\s*:\\s*Value\\s*=)");
+  const param = new RegExp("(?:^|[(,]\\s*)(?:mut\\s+)?" + ident + "\\s*:\\s*Value\\b");
+  const body = masked.slice(start, at);
+  if (other.test(body))
+    return "";
+  if (local.test(body) || param.test(header))
+    return "crate::runtime::stringify_param(&" + ident + ")";
+  return "";
+}
+function runPass_hx10w4_BF03(content) {
+  if (!content.includes("get_value_mut("))
+    return content;
+  const masked = maskSrc_hx10w4_BF03(content);
+  const headRe = /if let Value::Dict\(\s*(\w+)\s*\)\s*=\s*get_value_mut\(/g;
+  const rws = [];
+  let m;
+  while ((m = headRe.exec(masked)) !== null) {
+    const bind = m[1];
+    const at2 = m.index + m[0].length - "get_value_mut(".length;
+    const chain = chainAt(content, masked, at2);
+    if (chain === void 0)
+      continue;
+    if (!ROOT.test(chain.root) && !COERCED.test(chain.root))
+      continue;
+    const outer = chain.hops[0];
+    const allLiteral = chain.hops.every((h) => h.literal !== void 0);
+    const identKey2 = !allLiteral && chain.hops.length === 1 ? valueIdentKey(masked, m.index, outer.key) : "";
+    if (!allLiteral && outer.literal === void 0 && identKey2 === "")
+      continue;
+    const end = chain.hops[0].close + 1;
+    const braceOpen = masked.indexOf("{", end);
+    if (braceOpen < 0)
+      continue;
+    if (masked.slice(end, braceOpen).trim() !== "")
+      continue;
+    let depth = 0;
+    let braceClose = -1;
+    for (let j = braceOpen; j < masked.length; j++) {
+      const c = masked[j];
+      if (c === "{")
+        depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          braceClose = j;
+          break;
+        }
+      }
+    }
+    if (braceClose < 0)
+      continue;
+    const body = content.slice(braceOpen + 1, braceClose);
+    if (body.includes("__bf03"))
+      continue;
+    const lineStart = content.lastIndexOf("\n", m.index) + 1;
+    const pad = /^[ \t]*/.exec(content.slice(lineStart, m.index));
+    const level = (n) => pad[0] + "    ".repeat(n + 1);
+    const keys = identKey2 !== "" ? [identKey2] : allLiteral ? chain.hops.map((h) => '"' + h.literal + '".to_string()').reverse() : ['"' + outer.literal + '".to_string()'];
+    const head = allLiteral || identKey2 !== "" ? chain.root : outer.recv;
+    const lines = ["if let Value::Dict(__bf03d0) = " + head + " {"];
+    const parts = ["if let Value::Dict(__bf03d0) = " + head + " {"];
+    const bodyText = body.replace(/\s+$/, "");
+    let tooLong = false;
+    for (let i = 0; i < keys.length; i++) {
+      const last = i === keys.length - 1;
+      const entry = "let __bf03e" + (i + 1) + " = std::sync::Arc::make_mut(__bf03d" + i + ").entry(" + keys[i] + ").or_insert(Value::Null);";
+      const test = last ? "if let Value::Dict(" + bind + ") = __bf03e" + (i + 1) + " {" : "if let Value::Dict(__bf03d" + (i + 1) + ") = __bf03e" + (i + 1) + " {";
+      if (level(i).length + entry.length > MAX_LINE_hx10w4_BF03) {
+        tooLong = true;
+        break;
+      }
+      lines.push(level(i) + entry);
+      lines.push(level(i) + test);
+      parts.push(entry + " " + test);
+    }
+    if (tooLong)
+      continue;
+    const closers = [];
+    for (let k = keys.length; k >= 0; k--)
+      closers.push(pad[0] + "    ".repeat(k) + "}");
+    const inline = new Array(keys.length + 1).fill("}").join(" ");
+    const compact = parts.join(" ") + " " + bodyText.trim() + " " + inline;
+    const multi = lines.join("\n") + bodyText + "\n" + closers.join("\n");
+    const text = bodyText.indexOf("\n") < 0 && pad[0].length + compact.length <= MAX_LINE_hx10w4_BF03 ? compact : multi;
+    rws.push({ start: m.index, end: braceClose + 1, text });
+    headRe.lastIndex = braceClose + 1;
+  }
+  if (rws.length === 0)
+    return content;
+  rws.sort((a, b) => a.start - b.start);
+  let out = "";
+  let at = 0;
+  for (const r of rws) {
+    if (r.start < at)
+      continue;
+    out += content.slice(at, r.start) + r.text;
+    at = r.end;
+  }
+  return out + content.slice(at);
+}
+function bf03PlainDictChains(content) {
+  return runPass_hx10w4_BF03(content);
+}
+var R10_KEYS = ["subscriptions", "futures", "rejections", "url"];
+var R10_HANDLE = "crate::pro::ws_client::ClientHandle";
+function r10Mask(src) {
+  let out = "";
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < n && src[i] !== "\n") {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      out += "  ";
+      i += 2;
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        out += src[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      if (i < n) {
+        out += "  ";
+        i += 2;
+      }
+      continue;
+    }
+    if (c === '"') {
+      out += '"';
+      i++;
+      while (i < n && src[i] !== '"') {
+        if (src[i] === "\\") {
+          out += "  ";
+          i += 2;
+          continue;
+        }
+        out += src[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      if (i < n) {
+        out += '"';
+        i++;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+function r10ClientHandle(content) {
+  if (!content.includes("&client"))
+    return content;
+  const lines = content.split("\n");
+  const braces = r10BraceDeltas(content).split("\n");
+  const out = [];
+  let depth = 0;
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const startsMethod = depth === 1 && /^\s*pub\s+(?:async\s+)?fn\s+[A-Za-z_][A-Za-z0-9_]*\s*\(/.test(line);
+    if (!startsMethod) {
+      out.push(line);
+      depth += r10DeltaAt(braces, i);
+      i++;
+      continue;
+    }
+    let j = i;
+    let level = depth;
+    while (j < lines.length) {
+      level += r10DeltaAt(braces, j);
+      if (j > i && level <= depth)
+        break;
+      j++;
+    }
+    if (j >= lines.length) {
+      out.push(line);
+      depth += r10DeltaAt(braces, i);
+      i++;
+      continue;
+    }
+    out.push(...r10Block(lines.slice(i, j + 1)));
+    for (let k = i; k <= j; k++)
+      depth += r10DeltaAt(braces, k);
+    i = j + 1;
+  }
+  return r10TypedReads(r10SubsWrites(out.join("\n")));
+}
+var R10_SUBS_WRITES = [
+  [/(?<![\w:.])remove\(&mut __ch\.subscriptions,\s*/g, "__ch.remove_subscription("],
+  [/(?<![\w:.])add_element_to_object\(&mut __ch\.subscriptions,\s*/g, "__ch.add_subscription("]
+];
+function r10SubsWrites(content) {
+  if (!content.includes("&mut __ch.subscriptions"))
+    return content;
+  let text = content;
+  for (const [rx, repl] of R10_SUBS_WRITES) {
+    const masked = r10Mask(text);
+    const hits = [];
+    rx.lastIndex = 0;
+    let m;
+    while ((m = rx.exec(masked)) !== null)
+      hits.push({ at: m.index, len: m[0].length });
+    for (let n = hits.length - 1; n >= 0; n--) {
+      text = text.slice(0, hits[n].at) + repl + text.slice(hits[n].at + hits[n].len);
+    }
+  }
+  return text;
+}
+var R10_NAMES = { subscriptions: "subscription", futures: "future" };
+function r10TypedReads(content) {
+  if (!content.includes("__ch."))
+    return content;
+  return content.replace(
+    /matches!\(\(&__ch\.(subscriptions|futures)\.clone\(\), (&[^\n]+?)\), \(Value::Dict\(__d\), Value::Str\(__k\)\) if __d\.contains_key\(__k\.as_ref\(\)\)\)/g,
+    (_m, k, key) => "__ch.has_" + R10_NAMES[k] + "(" + key + ")"
+  ).replace(
+    /(?<![\w:.])get_value\(&__ch\.(subscriptions|futures)\.clone\(\), (&[A-Za-z_][A-Za-z0-9_]*)\)/g,
+    (_m, k, key) => "__ch.get_" + R10_NAMES[k] + "(" + key + ")"
+  ).replace(
+    /(?<![\w:.])object_keys\(&__ch\.(subscriptions|futures)\.clone\(\)\)\.as_array\(\)\.cloned\(\)\.unwrap_or_default\(\)/g,
+    (_m, k) => "__ch." + R10_NAMES[k] + "_keys()"
+  );
+}
+function r10BraceDeltas(content) {
+  return r10Mask(content);
+}
+function r10DeltaAt(maskedLines, idx) {
+  const line = maskedLines[idx] ?? "";
+  let d = 0;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === "{")
+      d++;
+    else if (c === "}")
+      d--;
+  }
+  return d;
+}
+var R10_LET_CLIENT = /^ {8}let mut client: Value = /;
+var R10_LET_CLIENT_NESTED = /^ {9,}let mut client: Value = /;
+var R10_REASSIGN = /^\s*client\s*=[^=]/;
+var R10_COMMENT = /^\s*(?:\/\/|\/\*|\*)/;
+function r10Block(block) {
+  const header = block[0];
+  const fromParam = /\bclient\s*:\s*Value\b/.test(header);
+  let anchor;
+  let bodyStart;
+  if (fromParam) {
+    if (/\blet\s+(?:mut\s+)?client\b/.test(block.join("\n")))
+      return block;
+    anchor = 0;
+    bodyStart = 1;
+  } else {
+    const decls = [];
+    for (let k = 1; k < block.length; k++)
+      if (R10_LET_CLIENT.test(block[k]))
+        decls.push(k);
+    if (decls.length === 0) {
+      for (let k = 1; k < block.length; k++)
+        if (R10_LET_CLIENT_NESTED.test(block[k]))
+          decls.push(k);
+      const nestedAt = decls.length;
+      if (nestedAt === 1 && !block[decls[0]].trimEnd().endsWith(";"))
+        return block;
+    }
+    if (decls.length !== 1)
+      return block;
+    anchor = decls[0];
+    bodyStart = anchor + 1;
+  }
+  for (let k = bodyStart; k < block.length; k++)
+    if (R10_REASSIGN.test(block[k]))
+      return block;
+  const rewritten = /* @__PURE__ */ new Map();
+  let needsMut = false;
+  let touched = false;
+  for (const key of R10_KEYS) {
+    const rx = new RegExp('get_value\\(\\s*&client\\s*,\\s*&Value::Str\\("' + key + '"\\.(?:into|to_string)\\(\\)\\)\\s*\\)', "g");
+    const reads = [];
+    const writes = [];
+    for (let k = bodyStart; k < block.length; k++) {
+      const text = block[k];
+      if (R10_COMMENT.test(text))
+        continue;
+      rx.lastIndex = 0;
+      let m;
+      while ((m = rx.exec(text)) !== null) {
+        const before = text.slice(Math.max(0, m.index - 8), m.index);
+        (/(?<![\w.])&mut\s*$/.test(before) ? writes : reads).push({ line: k, col: m.index, len: m[0].length });
+      }
+    }
+    if (reads.length === 0 && writes.length === 0)
+      continue;
+    const firstWriteLine = writes.length > 0 ? writes[0].line : Number.MAX_SAFE_INTEGER;
+    for (const r of reads) {
+      if (r.line >= firstWriteLine)
+        continue;
+      if (!rewritten.has(r.line))
+        rewritten.set(r.line, []);
+      rewritten.get(r.line).push(...r10Span(r.col, r.len, "__ch." + key + ".clone()"));
+      touched = true;
+    }
+    for (const w of writes) {
+      if (!rewritten.has(w.line))
+        rewritten.set(w.line, []);
+      rewritten.get(w.line).push(...r10Span(w.col, w.len, "__ch." + key));
+      needsMut = true;
+      touched = true;
+    }
+  }
+  if (!touched)
+    return block;
+  const bindIndent = fromParam ? "        " : block[anchor].match(/^ */)[0];
+  const binding = bindIndent + "let " + (needsMut ? "mut " : "") + "__ch = " + R10_HANDLE + "::from_value(client.clone());";
+  const result = [];
+  for (let k = 0; k < block.length; k++) {
+    const spans = rewritten.get(k);
+    result.push(spans === void 0 ? block[k] : r10Apply(block[k], spans));
+    if (k === anchor)
+      result.push(binding);
+  }
+  return result;
+}
+function r10Span(col, len, text) {
+  return [col + ":" + len + ":" + text];
+}
+function r10Apply(line, spans) {
+  const parsed = spans.map((s) => {
+    const first = s.indexOf(":");
+    const second = s.indexOf(":", first + 1);
+    return { col: Number(s.slice(0, first)), len: Number(s.slice(first + 1, second)), text: s.slice(second + 1) };
+  }).sort((a, b) => b.col - a.col);
+  let out = line;
+  for (const p of parsed)
+    out = out.slice(0, p.col) + p.text + out.slice(p.col + p.len);
+  return out;
+}
+var MAP_PARAM_RE = /:\s*&mut\s+indexmap::IndexMap<String, Value>/;
+function hx10w9Rp02ParamKind(printedParam) {
+  return MAP_PARAM_RE.test(printedParam) ? "map" : void 0;
+}
+function hx10w9Rp02DispatchArg(index) {
+  return `&mut { let mut __m = args.get(${index}).cloned().unwrap_or_default().as_map().cloned().unwrap_or_default();
+                    __m }`;
+}
+function hx10w9Rp02SplitArgs(argList) {
+  return splitArgs_hx10w9_RP02(argList);
+}
+function splitArgs_hx10w9_RP02(argList) {
+  const out = [];
+  let depth = 0;
+  let current = "";
+  for (const char of argList) {
+    if (char === "<" || char === "(" || char === "[") {
+      depth++;
+    } else if (char === ">" || char === ")" || char === "]") {
+      depth--;
+    }
+    if (char === "," && depth === 0) {
+      out.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  out.push(current);
+  return out;
+}
+var REF_MAP_PARAM_RE = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*&mut\s+indexmap::IndexMap<String, Value>/g;
+function hx10w9Rp02RefMapParamNames(content) {
+  const names = /* @__PURE__ */ new Set();
+  REF_MAP_PARAM_RE.lastIndex = 0;
+  let m;
+  while ((m = REF_MAP_PARAM_RE.exec(content)) !== null) {
+    names.add(m[1]);
+  }
+  return names;
+}
+function narrowStrSinkLocals(content) {
+  const OPT = {
+    safe_string: "safe_string_opt",
+    safe_string_k: "safe_string_k_opt",
+    safe_string_lower_k: "safe_string_lower_k_opt",
+    safe_string_upper_k: "safe_string_upper_k_opt"
+  };
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_string[a-z_0-9]*)\(/gm;
+  const strKeyRe = /^"(?:[^"\\]|\\.)*"$/;
+  const maskText2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const closeParen2 = (src, open) => {
+    let depth = 0;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const braceEnd = (src, from) => {
+    let depth = 0;
+    for (let k = from; k < src.length; k++) {
+      const c = src[k];
+      if (c === "{")
+        depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return src.length;
+  };
+  const argSpans2 = (src) => {
+    const out2 = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      else if (c === "," && depth === 0) {
+        out2.push([start, i]);
+        start = i + 1;
+      }
+    }
+    out2.push([start, src.length]);
+    return out2;
+  };
+  const masked = maskText2(content);
+  const rewrites = [];
+  let m;
+  while ((m = declRe.exec(masked)) !== null) {
+    const fam = m[4];
+    const opt = OPT[fam];
+    if (opt === void 0)
+      continue;
+    const name = m[3];
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeParen2(masked, callOpen);
+    if (callClose < 0)
+      continue;
+    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
+    if (tail === null)
+      continue;
+    const stmtEnd2 = callClose + tail[0].length;
+    const base = callOpen + 1;
+    const spans = argSpans2(masked.slice(base, callClose - 1));
+    if (spans.length !== 3)
+      continue;
+    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
+    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
+    const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
+    if (obj.length === 0 || keyRaw.length === 0)
+      continue;
+    if (fam.endsWith("_k") && !strKeyRe.test(keyRaw))
+      continue;
+    if (defRaw !== "&[]" && !/^&\[\s*Value::Str\(/.test(defRaw))
+      continue;
+    const end = braceEnd(masked, stmtEnd2);
+    const body = masked.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
+      continue;
+    const fRe = /format!\(/g;
+    const fSpans = [];
+    let f;
+    while ((f = fRe.exec(body)) !== null) {
+      const close = closeParen2(body, f.index + f[0].length - 1);
+      if (close < 0)
+        continue;
+      const lit = /^"(?:[^"\\]|\\.)*"/.exec(body.slice(f.index + f[0].length, close));
+      fSpans.push([f.index, close, lit !== null && /:\?/.test(lit[0])]);
+    }
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
+    let ok = true;
+    let uses = 0;
+    let u;
+    while ((u = useRe.exec(body)) !== null) {
+      const at = u.index;
+      const cand = fSpans.filter(([s, e]) => at > s && at < e);
+      if (cand.length === 0) {
+        ok = false;
+        break;
+      }
+      const hit = cand.reduce((a, b) => b[0] > a[0] ? b : a);
+      if (hit[2]) {
+        ok = false;
+        break;
+      }
+      const inner = hit[0] + "format!(".length;
+      const slot = argSpans2(body.slice(inner, hit[1] - 1)).filter(([a, b]) => inner + a <= at && at + name.length <= inner + b);
+      if (slot.length === 0) {
+        ok = false;
+        break;
+      }
+      if (body.slice(inner + slot[0][0], inner + slot[0][1]).replace(/\s+/g, "") !== name) {
+        ok = false;
+        break;
+      }
+      uses++;
+    }
+    if (!ok || uses === 0)
+      continue;
+    const indent = m[1];
+    const text = `${indent}let ${name}: String = self.${opt}(${obj}, ${keyRaw}, ${defRaw}).unwrap_or_default();`;
+    if (indent.length + text.length > 400 && stmtEnd2 - m.index <= 400)
+      continue;
+    rewrites.push({ start: m.index, end: stmtEnd2, text });
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  out += content.slice(last);
+  return out;
+}
+function narrowStrNullLocals(content) {
+  const OPT = {
+    safe_string: "safe_string_opt",
+    safe_string_k: "safe_string_k_opt",
+    safe_string_lower_k: "safe_string_lower_k_opt",
+    safe_string_upper_k: "safe_string_upper_k_opt"
+  };
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_string[a-z_0-9]*)\(/gm;
+  const strKeyRe = /^"(?:[^"\\]|\\.)*"$/;
+  const maskText2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const closeParen2 = (src, open) => {
+    let depth = 0;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const braceEnd = (src, from) => {
+    let depth = 0;
+    for (let k = from; k < src.length; k++) {
+      const c = src[k];
+      if (c === "{")
+        depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return src.length;
+  };
+  const argSpans2 = (src) => {
+    const out2 = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      else if (c === "," && depth === 0) {
+        out2.push([start, i]);
+        start = i + 1;
+      }
+    }
+    out2.push([start, src.length]);
+    return out2;
+  };
+  const masked = maskText2(content);
+  const grown = /* @__PURE__ */ new Map();
+  const groups = [];
+  const rewrites = [];
+  const cands = [];
+  let m;
+  while ((m = declRe.exec(masked)) !== null) {
+    const opt = OPT[m[4]];
+    if (opt === void 0)
+      continue;
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeParen2(masked, callOpen);
+    if (callClose < 0)
+      continue;
+    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
+    if (tail === null)
+      continue;
+    const base = callOpen + 1;
+    const spans = argSpans2(masked.slice(base, callClose - 1));
+    if (spans.length !== 3)
+      continue;
+    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
+    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
+    const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
+    if (obj.length === 0 || keyRaw.length === 0)
+      continue;
+    if (m[4].endsWith("_k") && !strKeyRe.test(keyRaw))
+      continue;
+    if (defRaw !== "&[]")
+      continue;
+    cands.push({
+      index: m.index,
+      stmtEnd: callClose + tail[0].length,
+      name: m[3],
+      declText: `${m[1]}let ${m[2] ?? ""}${m[3]}: Option<String> = self.${opt}(${obj}, ${keyRaw}, ${defRaw});`
+    });
+  }
+  const inlineRe = new RegExp('^([ \\t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = \\(match __pro_message\\.get\\(("(?:[^"\\\\]|\\\\.)*")\\)\\.cloned\\(\\) \\{ Some\\(Value::Str\\(__s\\)\\) if !__s\\.is_empty\\(\\) => Value::Str\\(__s\\), Some\\(Value::Int\\(__n\\)\\) => Value::Str\\(__n\\.to_string\\(\\)\\.into\\(\\)\\), Some\\(Value::Float\\(__f\\)\\) => Value::Str\\(__f\\.to_string\\(\\)\\.into\\(\\)\\), _ => Value::Null \\}\\);', "gm");
+  while ((m = inlineRe.exec(content)) !== null) {
+    cands.push({
+      index: m.index,
+      stmtEnd: m.index + m[0].length,
+      name: m[3],
+      declText: `${m[1]}let ${m[2] ?? ""}${m[3]}: Option<String> = match __pro_message.get(${m[4]}).cloned() { Some(Value::Str(__s)) if !__s.is_empty() => Some(__s.to_string()), Some(Value::Int(__n)) => Some(__n.to_string()), Some(Value::Float(__f)) => Some(__f.to_string()), _ => None };`
+    });
+  }
+  const intRe = new RegExp('^([ \\t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = \\(match __pro_message\\.get\\(("(?:[^"\\\\]|\\\\.)*")\\)\\.cloned\\(\\) \\{ Some\\(Value::Int\\(__n\\)\\) => Value::Int\\(__n\\), Some\\(Value::Float\\(__f\\)\\) => Value::Int\\(__f as i64\\), Some\\(Value::Str\\(__s\\)\\) if !__s\\.is_empty\\(\\) => match __s\\.parse::<i64>\\(\\) \\{ Ok\\(__n\\) => Value::Int\\(__n\\), Err\\(_\\) => match __s\\.parse::<f64>\\(\\) \\{ Ok\\(__f\\) if __f\\.is_finite\\(\\) => Value::Int\\(__f as i64\\), _ => Value::Null \\} \\}, _ => Value::Null \\}\\);', "gm");
+  while ((m = intRe.exec(content)) !== null) {
+    cands.push({
+      index: m.index,
+      stmtEnd: m.index + m[0].length,
+      name: m[3],
+      intOnly: true,
+      declText: `${m[1]}let ${m[2] ?? ""}${m[3]}: Option<i64> = match __pro_message.get(${m[4]}).cloned() { Some(Value::Int(__n)) => Some(__n), Some(Value::Float(__f)) => Some(__f as i64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>() { Ok(__n) => Some(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Some(__f as i64), _ => None } }, _ => None };`
+    });
+  }
+  cands.sort((a, b) => a.index - b.index);
+  for (const cand of cands) {
+    const name = cand.name;
+    const stmtEnd2 = cand.stmtEnd;
+    const end = braceEnd(masked, stmtEnd2);
+    const body = masked.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
+    const edits = [];
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(body)) !== null) {
+      const at = u.index;
+      const abs = stmtEnd2 + at;
+      const after = body.slice(at + name.length);
+      const before = body.slice(0, at);
+      let g;
+      if (cand.intOnly === true && !/^\s*(==|!=)\s*Value::Null\b/.test(after)) {
+        ok = false;
+        break;
+      }
+      if ((g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
+      } else if ((g = /^\.as_str\(\)/.exec(after)) !== null) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.as_deref()` });
+      } else if (/get_value\(&$/.test(before) && (g = /^, &Value::Int\(0\)\)\.as_str\(\) (==|!=) Some\("/.exec(after)) !== null) {
+        const chPos = abs + name.length + g[0].length;
+        const ch = /^([^"\\])"\)/.exec(content.slice(chPos, chPos + 3));
+        if (ch === null) {
+          ok = false;
+          break;
+        }
+        const probe = `${name}.as_deref().unwrap_or("").starts_with("${ch[1]}")`;
+        edits.push({ start: abs - "get_value(&".length, end: chPos + ch[0].length, text: g[1] === "==" ? probe : `!${probe}` });
+      } else if (/crate::runtime::stringify_param\(&$/.test(before) && /^\)/.test(after)) {
+        const from = abs - "crate::runtime::stringify_param(&".length;
+        edits.push({ start: from, end: abs + name.length + 1, text: `${name}.as_deref().unwrap_or("null").to_string()` });
+      } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
+        const lastUse = !new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`).test(after.slice(g[0].length));
+        const inLoop = /\b(?:loop|while|for)\b/.test(body);
+        const move = lastUse && !inLoop && !/&\s*$/.test(before);
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}${move ? "" : ".clone()"}.map(Value::from).unwrap_or(Value::Null)` });
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok || edits.length === 0)
+      continue;
+    const declText = cand.declText;
+    const all = [{ start: cand.index, end: stmtEnd2, text: declText }, ...edits];
+    const lineGrow = /* @__PURE__ */ new Map();
+    for (const e of all) {
+      const ls = content.lastIndexOf("\n", e.start) + 1;
+      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
+    }
+    let longer = false;
+    for (const [ls, grow] of lineGrow) {
+      let le = content.indexOf("\n", ls);
+      if (le < 0)
+        le = content.length;
+      const cur = le - ls + (grown.get(ls) ?? 0);
+      if (cur <= 400 && cur + grow > 400)
+        longer = true;
+    }
+    if (longer)
+      continue;
+    for (const [ls, grow] of lineGrow)
+      grown.set(ls, (grown.get(ls) ?? 0) + grow);
+    groups.push({ decl: { start: cand.index, end: stmtEnd2, text: declText }, edits });
+  }
+  for (let again = true; again; ) {
+    again = false;
+    for (let a = 0; a < groups.length; a++) {
+      const hit = groups.some((b, bi) => bi !== a && groups[a].edits.some((e) => e.start >= b.decl.start && e.start < b.decl.end));
+      if (hit) {
+        groups.splice(a, 1);
+        again = true;
+        break;
+      }
+    }
+  }
+  for (const gr of groups) {
+    rewrites.push(gr.decl);
+    for (const e of gr.edits)
+      rewrites.push(e);
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  out += content.slice(last);
+  return out;
+}
+function hx11RustSignApiStr(content) {
+  content = content.replace(/\b(api|section)\.as_array\(\)\.and_then\(\|__arr\| __arr\.get\((\d+)\)\)/g, "$1.as_array().into_iter().flatten().nth($2)");
+  if (content.indexOf(".get(") < 0) {
+    return content;
+  }
+  const lines = content.split("\n");
+  const decl = /^(\s*)let mut (\w+): Value = (?:api|section)\.get\((\d+)\)\.cloned\(\)\.unwrap_or\(Value::Null\);$/;
+  const fnHead = /^ {4}(?:pub )?(?:async )?fn /;
+  for (let i = 0; i < lines.length; i++) {
+    const m = decl.exec(lines[i]);
+    if (m === null) {
+      continue;
+    }
+    let end = i + 1;
+    while (end < lines.length && !fnHead.test(lines[end])) {
+      end++;
+    }
+    const name = new RegExp("(?<![\\w.])" + m[2] + "(?![\\w])", "g");
+    const use = new RegExp("(?<![\\w.])" + m[2] + '\\.as_str\\(\\) (==|!=) Some\\("', "g");
+    let uses = 0;
+    let others = 0;
+    for (let j = i + 1; j < end; j++) {
+      const masked = lines[j].replace(/"(?:[^"\\]|\\.)*"/g, '""');
+      uses += (lines[j].match(use) ?? []).length;
+      others += (masked.match(name) ?? []).length;
+    }
+    if (uses === 0 || uses !== others) {
+      continue;
+    }
+    lines[i] = m[1] + "let mut " + m[2] + ": Option<String> = " + (m[0].indexOf("section") >= 0 ? "section" : "api") + ".get(" + m[3] + ").and_then(Value::as_str).map(str::to_owned);";
+    for (let j = i + 1; j < end; j++) {
+      lines[j] = lines[j].replace(use, (all, op) => m[2] + ".as_deref() " + op + ' Some("');
+    }
+  }
+  return lines.join("\n");
+}
+function hx11w9RustBoolKLocalOptionBool(content) {
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_bool_k|safe_bool)\(/gm;
+  const strKeyRe = /^"(?:[^"\\]|\\.)*"$/;
+  const maskText2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const closeParen2 = (src, open) => {
+    let depth = 0;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const braceEnd = (src, from) => {
+    let depth = 0;
+    for (let k = from; k < src.length; k++) {
+      const c = src[k];
+      if (c === "{")
+        depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return src.length;
+  };
+  const argSpans2 = (src) => {
+    const out2 = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      else if (c === "," && depth === 0) {
+        out2.push([start, i]);
+        start = i + 1;
+      }
+    }
+    out2.push([start, src.length]);
+    return out2;
+  };
+  const masked = maskText2(content);
+  const grown = /* @__PURE__ */ new Map();
+  const rewrites = [];
+  let m;
+  while ((m = declRe.exec(masked)) !== null) {
+    const callee = m[4];
+    const name = m[3];
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeParen2(masked, callOpen);
+    if (callClose < 0)
+      continue;
+    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
+    if (tail === null)
+      continue;
+    const stmtEnd2 = callClose + tail[0].length;
+    const base = callOpen + 1;
+    const spans = argSpans2(masked.slice(base, callClose - 1));
+    if (spans.length !== 3)
+      continue;
+    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
+    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
+    const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
+    if (obj.length === 0 || keyRaw.length === 0)
+      continue;
+    if (callee === "safe_bool_k" && !strKeyRe.test(keyRaw))
+      continue;
+    let dflt;
+    const dm = /^&\[Value::Bool\((true|false)\)\]$/.exec(defRaw);
+    if (defRaw === "&[]")
+      dflt = null;
+    else if (dm !== null)
+      dflt = dm[1] === "true";
+    else
+      continue;
+    const isOpt = dflt === null;
+    const end = braceEnd(masked, stmtEnd2);
+    const body = masked.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
+    const edits = [];
+    const cmp = (eq, b) => {
+      if (isOpt)
+        return `${name} ${eq ? "==" : "!="} Some(${b})`;
+      return eq === b ? name : `!${name}`;
+    };
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(body)) !== null) {
+      const at = u.index;
+      const abs = stmtEnd2 + at;
+      const after = body.slice(at + name.length);
+      const before = body.slice(0, at);
+      let g;
+      if ((g = /^\.as_bool\(\) (==|!=) Some\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
+      } else if ((g = /^\.is_truthy\(\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: isOpt ? `${name} == Some(true)` : name });
+      } else if ((g = /^\s*(==|!=)\s*Value::Bool\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
+      } else if (isOpt && (g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
+      } else if ((g = /^\s*=\s*Value::Bool\((true|false)\);/.exec(after)) !== null && /(?:^|[;{}\s])\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name} = ${isOpt ? `Some(${g[1]})` : g[1]};` });
+      } else if (!isOpt && /is_true\(&$/.test(before) && /^\)/.test(after)) {
+        continue;
+      } else if (/\.insert\(\s*"[^"]*"(?:\.to_string\(\)|\.into\(\))?,\s*$/.test(before.slice(-80).replace(/\n/g, " ")) && (g = /^(\.clone\(\))?\)/.exec(after)) !== null) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length - 1, text: isOpt ? `${name}.map(Value::Bool).unwrap_or(Value::Null)` : `Value::Bool(${name})` });
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok || edits.length === 0)
+      continue;
+    const optName = callee === "safe_bool_k" ? "safe_bool_k_opt" : "safe_bool_opt";
+    const typeStart = m.index + m[1].length + "let ".length + (m[2] ?? "").length + name.length;
+    const declEdits = [
+      { start: typeStart, end: callOpen, text: `: ${isOpt ? "Option<bool>" : "bool"} = self.${optName}` }
+    ];
+    if (!isOpt)
+      declEdits.push({ start: callClose, end: callClose, text: `.unwrap_or(${dflt})` });
+    const all = [...declEdits, ...edits];
+    const lineGrow = /* @__PURE__ */ new Map();
+    for (const e of all) {
+      const ls = content.lastIndexOf("\n", e.start) + 1;
+      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
+    }
+    let longer = false;
+    for (const [ls, grow] of lineGrow) {
+      let le = content.indexOf("\n", ls);
+      if (le < 0)
+        le = content.length;
+      const cur = le - ls + (grown.get(ls) ?? 0);
+      if (cur <= 400 && cur + grow > 400)
+        longer = true;
+    }
+    if (longer)
+      continue;
+    for (const [ls, grow] of lineGrow)
+      grown.set(ls, (grown.get(ls) ?? 0) + grow);
+    for (const e of all)
+      rewrites.push(e);
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  out += content.slice(last);
+  return out;
+}
+function hx11w9StrLocalReassign(content) {
+  const OPT = {
+    safe_string: "safe_string_opt",
+    safe_string_k: "safe_string_k_opt",
+    safe_string_lower_k: "safe_string_lower_k_opt",
+    safe_string_upper_k: "safe_string_upper_k_opt"
+  };
+  const declRe = /^([ \t]*)let mut ([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_string[a-z_0-9]*)\(/gm;
+  const strKeyRe = /^"(?:[^"\\]|\\.)*"$/;
+  const strLitRe = /^Value::Str\(("(?:[^"\\]|\\.)*")\.into\(\)\)$/;
+  const maskText2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const closeParen2 = (src, open) => {
+    let depth = 0;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const braceEnd = (src, from) => {
+    let depth = 0;
+    for (let k = from; k < src.length; k++) {
+      const c = src[k];
+      if (c === "{")
+        depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return src.length;
+  };
+  const stmtEndAt = (src, from) => {
+    let depth = 0;
+    for (let k = from; k < src.length; k++) {
+      const c = src[k];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}") {
+        depth--;
+        if (depth < 0)
+          return -1;
+      } else if (c === ";" && depth === 0)
+        return k;
+    }
+    return -1;
+  };
+  const argSpans2 = (src) => {
+    const out2 = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      else if (c === "," && depth === 0) {
+        out2.push([start, i]);
+        start = i + 1;
+      }
+    }
+    out2.push([start, src.length]);
+    return out2;
+  };
+  const masked = maskText2(content);
+  const grown = /* @__PURE__ */ new Map();
+  const groups = [];
+  let m;
+  while ((m = declRe.exec(masked)) !== null) {
+    const fam = m[3];
+    const opt = OPT[fam];
+    if (opt === void 0)
+      continue;
+    const name = m[2];
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeParen2(masked, callOpen);
+    if (callClose < 0)
+      continue;
+    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
+    if (tail === null)
+      continue;
+    const stmtEnd2 = callClose + tail[0].length;
+    const callEdit = (famName, open, close) => {
+      const twin = OPT[famName];
+      if (twin === void 0)
+        return null;
+      const base = open + 1;
+      const spans = argSpans2(masked.slice(base, close - 1));
+      if (spans.length !== 3)
+        return null;
+      const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
+      if (famName.endsWith("_k") && !strKeyRe.test(keyRaw))
+        return null;
+      if (keyRaw.length === 0)
+        return null;
+      const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
+      const defMasked = masked.slice(base + spans[2][0], base + spans[2][1]).trim();
+      if (!(defMasked === "&[]" || /^&\[Value::Str\("\s*"\.into\(\)\)\]$/.test(defMasked)))
+        return null;
+      if (defRaw.length === 0)
+        return null;
+      const nameAt = open - famName.length;
+      return { start: nameAt, end: open, text: twin };
+    };
+    const declEdit = callEdit(fam, callOpen, callClose);
+    if (declEdit === null)
+      continue;
+    const end = braceEnd(masked, stmtEnd2);
+    const body = masked.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
+    const edits = [declEdit];
+    let assigned = 0;
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(body)) !== null) {
+      const at = u.index;
+      const abs = stmtEnd2 + at;
+      const after = body.slice(at + name.length);
+      const before = body.slice(0, at);
+      let g;
+      if ((g = /^\s*=(?!=)\s*/.exec(after)) !== null && /(?:^|[;{}])\s*$/.test(before)) {
+        const rhsStart = abs + name.length + g[0].length;
+        const rhsEnd = stmtEndAt(masked, rhsStart);
+        if (rhsEnd < 0) {
+          ok = false;
+          break;
+        }
+        const rhsMasked = masked.slice(rhsStart, rhsEnd).trim();
+        const rhsRaw = content.slice(rhsStart, rhsEnd).trim();
+        let lit;
+        let call;
+        if (rhsMasked === "Value::Null") {
+          edits.push({ start: rhsStart, end: rhsStart + "Value::Null".length, text: "None" });
+        } else if ((lit = strLitRe.exec(rhsRaw)) !== null) {
+          edits.push({ start: rhsStart, end: rhsStart + rhsRaw.length, text: `Some(${lit[1]}.to_string())` });
+        } else if ((call = /^self\.(safe_string[a-z_0-9]*)\(/.exec(rhsMasked)) !== null) {
+          const open = rhsStart + call[0].length - 1;
+          const close = closeParen2(masked, open);
+          if (close < 0 || masked.slice(close, rhsEnd).trim() !== "") {
+            ok = false;
+            break;
+          }
+          const ce = callEdit(call[1], open, close);
+          if (ce === null) {
+            ok = false;
+            break;
+          }
+          edits.push(ce);
+        } else {
+          ok = false;
+          break;
+        }
+        assigned++;
+        useRe.lastIndex = rhsStart - stmtEnd2;
+        continue;
+      }
+      if ((g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
+      } else if ((g = /^\.as_str\(\)/.exec(after)) !== null) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.as_deref()` });
+      } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
+        const lastUse = !new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`).test(after.slice(g[0].length));
+        const inLoop = /\b(?:loop|while|for)\b/.test(body);
+        const move = lastUse && !inLoop && !/&\s*$/.test(before);
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}${move ? "" : ".clone()"}.map(Value::from).unwrap_or(Value::Null)` });
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok || assigned === 0)
+      continue;
+    const declText = `${m[1]}let mut ${name}: Option<String> = `;
+    const all = [{ start: m.index, end: m.index + m[0].length - `self.${fam}(`.length, text: declText }, ...edits];
+    const lineGrow = /* @__PURE__ */ new Map();
+    for (const e of all) {
+      const ls = content.lastIndexOf("\n", e.start) + 1;
+      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
+    }
+    let longer = false;
+    for (const [ls, grow] of lineGrow) {
+      let le = content.indexOf("\n", ls);
+      if (le < 0)
+        le = content.length;
+      const cur = le - ls + (grown.get(ls) ?? 0);
+      if (cur <= 400 && cur + grow > 400)
+        longer = true;
+    }
+    if (longer)
+      continue;
+    for (const [ls, grow] of lineGrow)
+      grown.set(ls, (grown.get(ls) ?? 0) + grow);
+    groups.push({ decl: { start: m.index, end: stmtEnd2, text: "" }, edits: all });
+  }
+  for (let again = true; again; ) {
+    again = false;
+    for (let a = 0; a < groups.length && !again; a++) {
+      for (let b = 0; b < groups.length; b++) {
+        if (a === b)
+          continue;
+        const bEdits = groups[b].edits;
+        const bs = groups[b].decl.start;
+        const be = groups[b].decl.end;
+        if (groups[a].edits.some((e) => e.start >= bs && e.start < be && e.start !== bs) && bEdits.length > 0) {
+          groups.splice(a, 1);
+          again = true;
+          break;
+        }
+      }
+    }
+  }
+  const rewrites = [];
+  for (const gr of groups)
+    for (const e of gr.edits)
+      rewrites.push(e);
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  out += content.slice(last);
+  return out;
+}
+function hx11w9RustBool2LocalOptionBool(content) {
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_bool2)\(/gm;
+  const maskText2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const closeParen2 = (src, open) => {
+    let depth = 0;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const braceEnd = (src, from) => {
+    let depth = 0;
+    for (let k = from; k < src.length; k++) {
+      const c = src[k];
+      if (c === "{")
+        depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return src.length;
+  };
+  const argSpans2 = (src) => {
+    const out2 = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      else if (c === "," && depth === 0) {
+        out2.push([start, i]);
+        start = i + 1;
+      }
+    }
+    out2.push([start, src.length]);
+    return out2;
+  };
+  const masked = maskText2(content);
+  const grown = /* @__PURE__ */ new Map();
+  const rewrites = [];
+  let m;
+  while ((m = declRe.exec(masked)) !== null) {
+    const name = m[3];
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeParen2(masked, callOpen);
+    if (callClose < 0)
+      continue;
+    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
+    if (tail === null)
+      continue;
+    const stmtEnd2 = callClose + tail[0].length;
+    const base = callOpen + 1;
+    const spans = argSpans2(masked.slice(base, callClose - 1));
+    if (spans.length !== 4)
+      continue;
+    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
+    const key1 = content.slice(base + spans[1][0], base + spans[1][1]).trim();
+    const key2 = content.slice(base + spans[2][0], base + spans[2][1]).trim();
+    const defRaw = content.slice(base + spans[3][0], base + spans[3][1]).trim();
+    if (obj.length === 0 || key1.length === 0 || key2.length === 0)
+      continue;
+    let dflt;
+    const dm = /^&\[Value::Bool\((true|false)\)\]$/.exec(defRaw);
+    if (defRaw === "&[]")
+      dflt = null;
+    else if (dm !== null)
+      dflt = dm[1] === "true";
+    else
+      continue;
+    const isOpt = dflt === null;
+    const end = braceEnd(masked, stmtEnd2);
+    const body = masked.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
+    const edits = [];
+    const cmp = (eq, b) => {
+      if (isOpt)
+        return `${name} ${eq ? "==" : "!="} Some(${b})`;
+      return eq === b ? name : `!${name}`;
+    };
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(body)) !== null) {
+      const at = u.index;
+      const abs = stmtEnd2 + at;
+      const after = body.slice(at + name.length);
+      const before = body.slice(0, at);
+      let g;
+      if ((g = /^\.as_bool\(\) (==|!=) Some\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
+      } else if ((g = /^\.is_truthy\(\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: isOpt ? `${name} == Some(true)` : name });
+      } else if ((g = /^\s*(==|!=)\s*Value::Bool\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
+      } else if (isOpt && (g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
+      } else if ((g = /^\s*=\s*Value::Bool\((true|false)\);/.exec(after)) !== null && /(?:^|[;{}\s])\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name} = ${isOpt ? `Some(${g[1]})` : g[1]};` });
+      } else if (!isOpt && /is_true\(&$/.test(before) && /^\)/.test(after)) {
+        continue;
+      } else if (/\.insert\(\s*"[^"]*"(?:\.to_string\(\)|\.into\(\))?,\s*$/.test(before.slice(-80).replace(/\n/g, " ")) && (g = /^(\.clone\(\))?\)/.exec(after)) !== null) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length - 1, text: isOpt ? `${name}.map(Value::Bool).unwrap_or(Value::Null)` : `Value::Bool(${name})` });
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok || edits.length === 0)
+      continue;
+    const optName = "safe_bool2_opt";
+    const typeStart = m.index + m[1].length + "let ".length + (m[2] ?? "").length + name.length;
+    const declEdits = [
+      { start: typeStart, end: callOpen, text: `: ${isOpt ? "Option<bool>" : "bool"} = self.${optName}` }
+    ];
+    if (!isOpt)
+      declEdits.push({ start: callClose, end: callClose, text: `.unwrap_or(${dflt})` });
+    const all = [...declEdits, ...edits];
+    const lineGrow = /* @__PURE__ */ new Map();
+    for (const e of all) {
+      const ls = content.lastIndexOf("\n", e.start) + 1;
+      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
+    }
+    let longer = false;
+    for (const [ls, grow] of lineGrow) {
+      let le = content.indexOf("\n", ls);
+      if (le < 0)
+        le = content.length;
+      const cur = le - ls + (grown.get(ls) ?? 0);
+      if (cur <= 400 && cur + grow > 400)
+        longer = true;
+    }
+    if (longer)
+      continue;
+    for (const [ls, grow] of lineGrow)
+      grown.set(ls, (grown.get(ls) ?? 0) + grow);
+    for (const e of all)
+      rewrites.push(e);
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  out += content.slice(last);
+  return out;
+}
+function hx11w9RustBoolNLocalOptionBool(content) {
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_bool_n)\(/gm;
+  const keyListRe = /^Value::from\(vec!\[Value::Str\("(?:[^"\\]|\\.)*"\.(?:into|to_string)\(\)\)(?:, Value::Str\("(?:[^"\\]|\\.)*"\.(?:into|to_string)\(\)\))*\]\)$/;
+  const maskText2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const closeParen2 = (src, open) => {
+    let depth = 0;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const braceEnd = (src, from) => {
+    let depth = 0;
+    for (let k = from; k < src.length; k++) {
+      const c = src[k];
+      if (c === "{")
+        depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return src.length;
+  };
+  const argSpans2 = (src) => {
+    const out2 = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      else if (c === "," && depth === 0) {
+        out2.push([start, i]);
+        start = i + 1;
+      }
+    }
+    out2.push([start, src.length]);
+    return out2;
+  };
+  const masked = maskText2(content);
+  const grown = /* @__PURE__ */ new Map();
+  const rewrites = [];
+  let m;
+  while ((m = declRe.exec(masked)) !== null) {
+    const name = m[3];
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeParen2(masked, callOpen);
+    if (callClose < 0)
+      continue;
+    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
+    if (tail === null)
+      continue;
+    const stmtEnd2 = callClose + tail[0].length;
+    const base = callOpen + 1;
+    const spans = argSpans2(masked.slice(base, callClose - 1));
+    if (spans.length !== 3)
+      continue;
+    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
+    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
+    const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
+    if (obj.length === 0 || keyRaw.length === 0)
+      continue;
+    if (!keyListRe.test(keyRaw))
+      continue;
+    let dflt;
+    const dm = /^&\[Value::Bool\((true|false)\)\]$/.exec(defRaw);
+    if (defRaw === "&[]")
+      dflt = null;
+    else if (dm !== null)
+      dflt = dm[1] === "true";
+    else
+      continue;
+    const isOpt = dflt === null;
+    const end = braceEnd(masked, stmtEnd2);
+    const body = masked.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
+    const edits = [];
+    const cmp = (eq, b) => {
+      if (isOpt)
+        return `${name} ${eq ? "==" : "!="} Some(${b})`;
+      return eq === b ? name : `!${name}`;
+    };
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(body)) !== null) {
+      const at = u.index;
+      const abs = stmtEnd2 + at;
+      const after = body.slice(at + name.length);
+      const before = body.slice(0, at);
+      let g;
+      if ((g = /^\.as_bool\(\) (==|!=) Some\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
+      } else if ((g = /^\.is_truthy\(\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: isOpt ? `${name} == Some(true)` : name });
+      } else if ((g = /^\s*(==|!=)\s*Value::Bool\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
+      } else if (isOpt && (g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
+      } else if ((g = /^\s*=\s*Value::Bool\((true|false)\);/.exec(after)) !== null && /(?:^|[;{}\s])\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name} = ${isOpt ? `Some(${g[1]})` : g[1]};` });
+      } else if (!isOpt && /is_true\(&$/.test(before) && /^\)/.test(after)) {
+        continue;
+      } else if (/\.insert\(\s*"[^"]*"(?:\.to_string\(\)|\.into\(\))?,\s*$/.test(before.slice(-80).replace(/\n/g, " ")) && (g = /^(\.clone\(\))?\)/.exec(after)) !== null) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length - 1, text: isOpt ? `${name}.map(Value::Bool).unwrap_or(Value::Null)` : `Value::Bool(${name})` });
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok || edits.length === 0)
+      continue;
+    const optName = "safe_bool_n_opt";
+    const typeStart = m.index + m[1].length + "let ".length + (m[2] ?? "").length + name.length;
+    const declEdits = [
+      { start: typeStart, end: callOpen, text: `: ${isOpt ? "Option<bool>" : "bool"} = self.${optName}` }
+    ];
+    if (!isOpt)
+      declEdits.push({ start: callClose, end: callClose, text: `.unwrap_or(${dflt})` });
+    const all = [...declEdits, ...edits];
+    const lineGrow = /* @__PURE__ */ new Map();
+    for (const e of all) {
+      const ls = content.lastIndexOf("\n", e.start) + 1;
+      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
+    }
+    let longer = false;
+    for (const [ls, grow] of lineGrow) {
+      let le = content.indexOf("\n", ls);
+      if (le < 0)
+        le = content.length;
+      const cur = le - ls + (grown.get(ls) ?? 0);
+      if (cur <= 400 && cur + grow > 400)
+        longer = true;
+    }
+    if (longer)
+      continue;
+    for (const [ls, grow] of lineGrow)
+      grown.set(ls, (grown.get(ls) ?? 0) + grow);
+    for (const e of all)
+      rewrites.push(e);
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  out += content.slice(last);
+  return out;
+}
+function hx11w9RustInt2IntNLocalOptionI64(content) {
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.safe_integer(2|_n)\(/gm;
+  const closeOf2 = (src, open) => {
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    let inLine = false;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (inLine) {
+        if (c === "\n")
+          inLine = false;
+        continue;
+      }
+      if (inStr) {
+        if (esc)
+          esc = false;
+        else if (c === "\\")
+          esc = true;
+        else if (c === '"')
+          inStr = false;
+        continue;
+      }
+      if (c === '"') {
+        inStr = true;
+        continue;
+      }
+      if (c === "/" && src[k + 1] === "/") {
+        inLine = true;
+        continue;
+      }
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const mask2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    const blank = (s) => s.replace(/[^\n]/g, " ");
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === "/" && src[i + 1] === "*") {
+        const e = src.indexOf("*/", i + 2);
+        const stop = e < 0 ? src.length : e + 2;
+        out2 += blank(src.slice(i, stop));
+        i = stop;
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const scopeEnd = (masked, from) => {
+    let depth = 0;
+    for (let k = from; k < masked.length; k++) {
+      if (masked[k] === "{")
+        depth++;
+      else if (masked[k] === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return masked.length;
+  };
+  const splitArgs2 = (src) => {
+    const out2 = [];
+    let cur = "";
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (const c of src) {
+      if (inStr) {
+        cur += c;
+        if (esc)
+          esc = false;
+        else if (c === "\\")
+          esc = true;
+        else if (c === '"')
+          inStr = false;
+        continue;
+      }
+      if (c === '"') {
+        inStr = true;
+        cur += c;
+        continue;
+      }
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      if (c === "," && depth === 0) {
+        out2.push(cur);
+        cur = "";
+        continue;
+      }
+      cur += c;
+    }
+    out2.push(cur);
+    return out2;
+  };
+  const maskedAll = mask2(content);
+  const rewrites = [];
+  let m;
+  while ((m = declRe.exec(content)) !== null) {
+    const name = m[3];
+    const isTwo = m[4] === "2";
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeOf2(content, callOpen);
+    if (callClose < 0)
+      continue;
+    const tail = /^\s*;/.exec(content.slice(callClose, callClose + 3));
+    if (tail === null)
+      continue;
+    const stmtEnd2 = callClose + tail[0].length;
+    const args = splitArgs2(content.slice(callOpen + 1, callClose - 1));
+    if (args.length !== (isTwo ? 4 : 3))
+      continue;
+    if (!/^&\[\s*(?:Value::Null)?\s*\]$/.test(args[args.length - 1].trim()))
+      continue;
+    const end = scopeEnd(maskedAll, stmtEnd2);
+    const masked = maskedAll.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(masked))
+      continue;
+    if (new RegExp(`\\blet\\b[^=;\\n]*\\b${name}\\b`).test(masked))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(masked))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
+    const uses = [];
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(masked)) !== null) {
+      const s = u.index;
+      const e = s + name.length;
+      const after = masked.slice(e);
+      const before = masked.slice(0, s);
+      const abs = (x) => stmtEnd2 + x;
+      let g;
+      if (after.startsWith(".clone()")) {
+        uses.push({ start: abs(s), end: abs(e + 8), text: `Value::from(${name})` });
+        useRe.lastIndex = e + 8;
+      } else if ((g = /^\s*(!=|==)\s*Value::Null\b/.exec(after)) !== null) {
+        uses.push({ start: abs(s), end: abs(e + g[0].length), text: `${name}.${g[1] === "!=" ? "is_some" : "is_none"}()` });
+        useRe.lastIndex = e + g[0].length;
+      } else if ((g = /^\.as_f64\(\)\s*(==|!=)\s*Some\((-?\d+)(?:\.0)?\)/.exec(after)) !== null) {
+        uses.push({ start: abs(s), end: abs(e + g[0].length), text: `${name} ${g[1]} Some(${g[2]})` });
+        useRe.lastIndex = e + g[0].length;
+      } else if (/self\.iso8601\($/.test(before) && after.startsWith(")")) {
+        uses.push({ start: abs(s), end: abs(e), text: `Value::from(${name})` });
+      } else if (/\bm\.insert\("[^"\n]*"\.to_string\(\),\s*$/.test(before) && after.startsWith(");")) {
+        uses.push({ start: abs(s), end: abs(e), text: `Value::from(${name})` });
+      } else if (/(?:^|[;{}])\s*$/.test(before) && (g = /^\s*=(?!=)\s*/.exec(after)) !== null) {
+        const rhsAt = stmtEnd2 + e + g[0].length;
+        const rhs = /^(Value::Null|Value::Int\((-?\d+)\))\s*;/.exec(content.slice(rhsAt, rhsAt + 40));
+        if (rhs !== null) {
+          uses.push({ start: rhsAt, end: rhsAt + rhs[1].length, text: rhs[2] === void 0 ? "None" : `Some(${rhs[2]})` });
+        } else {
+          const call = /^self\.safe_integer(?:_k|2|_n)?\(/.exec(content.slice(rhsAt, rhsAt + 30));
+          if (call === null) {
+            ok = false;
+            break;
+          }
+          const o = rhsAt + call[0].length - 1;
+          const c = closeOf2(content, o);
+          if (c < 0 || !/^\s*;/.test(content.slice(c, c + 3))) {
+            ok = false;
+            break;
+          }
+          const a = splitArgs2(content.slice(o + 1, c - 1));
+          const want = call[0].endsWith("2(") ? 4 : 3;
+          if (a.length !== want || !/^&\[\s*(?:Value::Null|Value::Int\(-?\d+\))?\s*\]$/.test(a[a.length - 1].trim())) {
+            ok = false;
+            break;
+          }
+          uses.push({ start: c, end: c, text: ".as_i64()" });
+        }
+        useRe.lastIndex = e;
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok)
+      continue;
+    rewrites.push({ start: m.index, end: callOpen, text: content.slice(m.index, callOpen).replace(": Value =", ": Option<i64> =") + "_opt" });
+    for (const use of uses)
+      rewrites.push(use);
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  return out + content.slice(last);
+}
+function hx11w9RustIntLocalNullSinkOptionI64(content) {
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.safe_integer(_k|2)?\(/gm;
+  const closeOf2 = (src, open) => {
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    let inLine = false;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (inLine) {
+        if (c === "\n")
+          inLine = false;
+        continue;
+      }
+      if (inStr) {
+        if (esc)
+          esc = false;
+        else if (c === "\\")
+          esc = true;
+        else if (c === '"')
+          inStr = false;
+        continue;
+      }
+      if (c === '"') {
+        inStr = true;
+        continue;
+      }
+      if (c === "/" && src[k + 1] === "/") {
+        inLine = true;
+        continue;
+      }
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const mask2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    const blank = (s) => s.replace(/[^\n]/g, " ");
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === "/" && src[i + 1] === "*") {
+        const e = src.indexOf("*/", i + 2);
+        const stop = e < 0 ? src.length : e + 2;
+        out2 += blank(src.slice(i, stop));
+        i = stop;
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const scopeEnd = (masked, from) => {
+    let depth = 0;
+    for (let k = from; k < masked.length; k++) {
+      if (masked[k] === "{")
+        depth++;
+      else if (masked[k] === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return masked.length;
+  };
+  const splitArgs2 = (src) => {
+    const out2 = [];
+    let cur = "";
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (const c of src) {
+      if (inStr) {
+        cur += c;
+        if (esc)
+          esc = false;
+        else if (c === "\\")
+          esc = true;
+        else if (c === '"')
+          inStr = false;
+        continue;
+      }
+      if (c === '"') {
+        inStr = true;
+        cur += c;
+        continue;
+      }
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      if (c === "," && depth === 0) {
+        out2.push(cur);
+        cur = "";
+        continue;
+      }
+      cur += c;
+    }
+    out2.push(cur);
+    return out2;
+  };
+  const maskedAll = mask2(content);
+  const rewrites = [];
+  let m;
+  while ((m = declRe.exec(content)) !== null) {
+    const name = m[3];
+    const isTwo = m[4] === "2";
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeOf2(content, callOpen);
+    if (callClose < 0)
+      continue;
+    const tail = /^\s*;/.exec(content.slice(callClose, callClose + 3));
+    if (tail === null)
+      continue;
+    const stmtEnd2 = callClose + tail[0].length;
+    const args = splitArgs2(content.slice(callOpen + 1, callClose - 1));
+    if (args.length !== (isTwo ? 4 : 3))
+      continue;
+    if (!/^&\[\s*(?:Value::Null|Value::Int\(-?\d+\))?\s*\]$/.test(args[args.length - 1].trim()))
+      continue;
+    const end = scopeEnd(maskedAll, stmtEnd2);
+    const masked = maskedAll.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(masked))
+      continue;
+    if (new RegExp(`\\blet\\b[^=;\\n]*\\b${name}\\b`).test(masked))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(masked))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
+    const uses = [];
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(masked)) !== null) {
+      const s = u.index;
+      const e = s + name.length;
+      const after = masked.slice(e);
+      const before = masked.slice(0, s);
+      const abs = (x) => stmtEnd2 + x;
+      let g;
+      if (after.startsWith(".clone()")) {
+        uses.push({ start: abs(s), end: abs(e + 8), text: `Value::from(${name})` });
+        useRe.lastIndex = e + 8;
+      } else if ((g = /^\s*(!=|==)\s*Value::Null\b/.exec(after)) !== null) {
+        uses.push({ start: abs(s), end: abs(e + g[0].length), text: `${name}.${g[1] === "!=" ? "is_some" : "is_none"}()` });
+        useRe.lastIndex = e + g[0].length;
+      } else if ((g = /^\.as_f64\(\)\s*(==|!=)\s*Some\((-?\d+)(?:\.0)?\)/.exec(after)) !== null) {
+        uses.push({ start: abs(s), end: abs(e + g[0].length), text: `${name} ${g[1]} Some(${g[2]})` });
+        useRe.lastIndex = e + g[0].length;
+      } else if (/self\.iso8601\($/.test(before) && after.startsWith(")")) {
+        uses.push({ start: abs(s), end: abs(e), text: `Value::from(${name})` });
+      } else if (/\bm\.insert\("[^"\n]*"\.to_string\(\),\s*$/.test(before) && after.startsWith(");")) {
+        uses.push({ start: abs(s), end: abs(e), text: `Value::from(${name})` });
+      } else if (/(?:^|[;{}])\s*$/.test(before) && (g = /^\s*=(?!=)\s*/.exec(after)) !== null) {
+        const rhsAt = stmtEnd2 + e + g[0].length;
+        const rhs = /^(Value::Null|Value::Int\((-?\d+)\))\s*;/.exec(content.slice(rhsAt, rhsAt + 40));
+        if (rhs !== null) {
+          uses.push({ start: rhsAt, end: rhsAt + rhs[1].length, text: rhs[2] === void 0 ? "None" : `Some(${rhs[2]})` });
+        } else {
+          const call = /^self\.safe_integer(?:_k|2)?\(/.exec(content.slice(rhsAt, rhsAt + 30));
+          if (call === null) {
+            ok = false;
+            break;
+          }
+          const o = rhsAt + call[0].length - 1;
+          const c = closeOf2(content, o);
+          if (c < 0 || !/^\s*;/.test(content.slice(c, c + 3))) {
+            ok = false;
+            break;
+          }
+          const a = splitArgs2(content.slice(o + 1, c - 1));
+          const want = call[0].endsWith("2(") ? 4 : 3;
+          if (a.length !== want || !/^&\[\s*(?:Value::Null|Value::Int\(-?\d+\))?\s*\]$/.test(a[a.length - 1].trim())) {
+            ok = false;
+            break;
+          }
+          uses.push({ start: c, end: c, text: ".as_i64()" });
+        }
+        useRe.lastIndex = e;
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok)
+      continue;
+    rewrites.push({ start: m.index, end: callOpen, text: content.slice(m.index, callOpen).replace(": Value =", ": Option<i64> =") });
+    rewrites.push({ start: callClose, end: callClose, text: ".as_i64()" });
+    for (const use of uses)
+      rewrites.push(use);
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  return out + content.slice(last);
+}
+function hx11w9RustNumber2LocalOptionF64(content) {
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.safe_number2\(/gm;
+  const mask2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    const blank = (s) => s.replace(/[^\n]/g, " ");
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === "/" && src[i + 1] === "*") {
+        const e = src.indexOf("*/", i + 2);
+        const stop = e < 0 ? src.length : e + 2;
+        out2 += blank(src.slice(i, stop));
+        i = stop;
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const maskedAll = mask2(content);
+  const closeOf2 = (masked, open) => {
+    let depth = 0;
+    for (let k = open; k < masked.length; k++) {
+      if (masked[k] === "(")
+        depth++;
+      else if (masked[k] === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const scopeEnd = (masked, from) => {
+    let depth = 0;
+    for (let k = from; k < masked.length; k++) {
+      if (masked[k] === "{")
+        depth++;
+      else if (masked[k] === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return masked.length;
+  };
+  const splitArgs2 = (src) => {
+    const out2 = [];
+    let cur = "";
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (const c of src) {
+      if (inStr) {
+        cur += c;
+        if (esc)
+          esc = false;
+        else if (c === "\\")
+          esc = true;
+        else if (c === '"')
+          inStr = false;
+        continue;
+      }
+      if (c === '"') {
+        inStr = true;
+        cur += c;
+        continue;
+      }
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      if (c === "," && depth === 0) {
+        out2.push(cur);
+        cur = "";
+        continue;
+      }
+      cur += c;
+    }
+    out2.push(cur);
+    return out2;
+  };
+  const rewrites = [];
+  let m;
+  while ((m = declRe.exec(content)) !== null) {
+    const name = m[3];
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeOf2(maskedAll, callOpen);
+    if (callClose < 0 || !/^\s*;/.test(content.slice(callClose, callClose + 3)))
+      continue;
+    const stmtEnd2 = callClose + /^\s*;/.exec(content.slice(callClose, callClose + 3))[0].length;
+    const args = splitArgs2(content.slice(callOpen + 1, callClose - 1));
+    if (args.length !== 4 || !/^&\[\s*(?:Value::Null)?\s*\]$/.test(args[3].trim()))
+      continue;
+    const end = scopeEnd(maskedAll, stmtEnd2);
+    const masked = maskedAll.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(masked))
+      continue;
+    if (new RegExp(`\\blet\\b[^=;\\n]*\\b${name}\\b`).test(masked))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(masked))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
+    const uses = [];
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(masked)) !== null) {
+      const s = u.index;
+      const e = s + name.length;
+      const after = masked.slice(e);
+      let g;
+      if ((g = /^\s*(!=|==)\s*Value::Null\b/.exec(after)) !== null) {
+        uses.push({ start: stmtEnd2 + s, end: stmtEnd2 + e + g[0].length, text: `${name}.${g[1] === "!=" ? "is_some" : "is_none"}()` });
+      } else if ((g = /^\.as_f64\(\)\s*(==|!=)\s*Some\((-?\d+\.0)\)/.exec(after)) !== null) {
+        uses.push({ start: stmtEnd2 + s, end: stmtEnd2 + e + g[0].length, text: `${name} ${g[1]} Some(${g[2]})` });
+      } else {
+        ok = false;
+        break;
+      }
+      useRe.lastIndex = e + g[0].length;
+    }
+    if (!ok)
+      continue;
+    rewrites.push({
+      start: m.index,
+      end: callOpen,
+      text: content.slice(m.index, callOpen).replace(": Value =", ": Option<f64> =").replace("safe_number2", "safe_number2_opt")
+    });
+    for (const use of uses)
+      rewrites.push(use);
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  return out + content.slice(last);
+}
+function hx11w9RustNumber2SinkLocalOptionF64R2(content) {
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.safe_number2\(/gm;
+  const mask2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    const blank = (s) => s.replace(/[^\n]/g, " ");
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === "/" && src[i + 1] === "*") {
+        const e = src.indexOf("*/", i + 2);
+        const stop = e < 0 ? src.length : e + 2;
+        out2 += blank(src.slice(i, stop));
+        i = stop;
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const maskedAll = mask2(content);
+  const closeOf2 = (masked, open) => {
+    let depth = 0;
+    for (let k = open; k < masked.length; k++) {
+      if (masked[k] === "(")
+        depth++;
+      else if (masked[k] === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const scopeEnd = (masked, from) => {
+    let depth = 0;
+    for (let k = from; k < masked.length; k++) {
+      if (masked[k] === "{")
+        depth++;
+      else if (masked[k] === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return masked.length;
+  };
+  const splitArgs2 = (src) => {
+    const out2 = [];
+    let cur = "";
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (const c of src) {
+      if (inStr) {
+        cur += c;
+        if (esc)
+          esc = false;
+        else if (c === "\\")
+          esc = true;
+        else if (c === '"')
+          inStr = false;
+        continue;
+      }
+      if (c === '"') {
+        inStr = true;
+        cur += c;
+        continue;
+      }
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      if (c === "," && depth === 0) {
+        out2.push(cur);
+        cur = "";
+        continue;
+      }
+      cur += c;
+    }
+    out2.push(cur);
+    return out2;
+  };
+  const rewrites = [];
+  let m;
+  while ((m = declRe.exec(content)) !== null) {
+    const name = m[3];
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeOf2(maskedAll, callOpen);
+    if (callClose < 0 || !/^\s*;/.test(content.slice(callClose, callClose + 3)))
+      continue;
+    const stmtEnd2 = callClose + /^\s*;/.exec(content.slice(callClose, callClose + 3))[0].length;
+    const args = splitArgs2(content.slice(callOpen + 1, callClose - 1));
+    if (args.length !== 4 || !/^&\[\s*(?:Value::Null)?\s*\]$/.test(args[3].trim()))
+      continue;
+    const end = scopeEnd(maskedAll, stmtEnd2);
+    const masked = maskedAll.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(masked))
+      continue;
+    if (new RegExp(`\\blet\\b[^=;\\n]*\\b${name}\\b`).test(masked))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(masked))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
+    const uses = [];
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(masked)) !== null) {
+      const s = u.index;
+      const e = s + name.length;
+      const after = masked.slice(e);
+      let g;
+      if ((g = /^\s*(!=|==)\s*Value::Null\b/.exec(after)) !== null) {
+        uses.push({ start: stmtEnd2 + s, end: stmtEnd2 + e + g[0].length, text: `${name}.${g[1] === "!=" ? "is_some" : "is_none"}()` });
+      } else if ((g = /^\.as_f64\(\)\s*(==|!=)\s*Some\((-?\d+\.0)\)/.exec(after)) !== null) {
+        uses.push({ start: stmtEnd2 + s, end: stmtEnd2 + e + g[0].length, text: `${name} ${g[1]} Some(${g[2]})` });
+      } else if (after.startsWith(".clone()")) {
+        uses.push({ start: stmtEnd2 + s, end: stmtEnd2 + e + 8, text: `Value::from(${name})` });
+        useRe.lastIndex = e + 8;
+        continue;
+      } else if (/\bm\.insert\("[^"\n]*"\.to_string\(\),\s*$/.test(masked.slice(0, s)) && after.startsWith(");") || /self\.price_to_precision\([^;\n]*,\s*$/.test(masked.slice(0, s)) && after.startsWith(")")) {
+        uses.push({ start: stmtEnd2 + s, end: stmtEnd2 + e, text: `Value::from(${name})` });
+        continue;
+      } else {
+        ok = false;
+        break;
+      }
+      useRe.lastIndex = e + g[0].length;
+    }
+    if (!ok)
+      continue;
+    rewrites.push({
+      start: m.index,
+      end: callOpen,
+      text: content.slice(m.index, callOpen).replace(": Value =", ": Option<f64> =").replace("safe_number2", "safe_number2_opt")
+    });
+    for (const use of uses)
+      rewrites.push(use);
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  return out + content.slice(last);
+}
+function hx11w9RustStr2LocalOptionString(content) {
+  const opt = "safe_string2_opt";
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_string2)\(/gm;
+  const maskText2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const closeParen2 = (src, open) => {
+    let depth = 0;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const braceEnd = (src, from) => {
+    let depth = 0;
+    for (let k = from; k < src.length; k++) {
+      const c = src[k];
+      if (c === "{")
+        depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return src.length;
+  };
+  const argSpans2 = (src) => {
+    const out2 = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      else if (c === "," && depth === 0) {
+        out2.push([start, i]);
+        start = i + 1;
+      }
+    }
+    out2.push([start, src.length]);
+    return out2;
+  };
+  const masked = maskText2(content);
+  const grown = /* @__PURE__ */ new Map();
+  const groups = [];
+  const rewrites = [];
+  let m;
+  while ((m = declRe.exec(masked)) !== null) {
+    const name = m[3];
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeParen2(masked, callOpen);
+    if (callClose < 0)
+      continue;
+    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
+    if (tail === null)
+      continue;
+    const stmtEnd2 = callClose + tail[0].length;
+    const base = callOpen + 1;
+    const spans = argSpans2(masked.slice(base, callClose - 1));
+    if (spans.length !== 4)
+      continue;
+    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
+    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim() + ", " + content.slice(base + spans[2][0], base + spans[2][1]).trim();
+    const defRaw = content.slice(base + spans[3][0], base + spans[3][1]).trim();
+    if (obj.length === 0 || keyRaw.length === 0)
+      continue;
+    if (defRaw !== "&[]" && !/^&\[Value::Str\("(?:[^"\\]|\\.)*"\.into\(\)\)\]$/.test(defRaw))
+      continue;
+    const end = braceEnd(masked, stmtEnd2);
+    const body = masked.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
+    const edits = [];
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(body)) !== null) {
+      const at = u.index;
+      const abs = stmtEnd2 + at;
+      const after = body.slice(at + name.length);
+      const before = body.slice(0, at);
+      let g;
+      if ((g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
+      } else if ((g = /^\.as_str\(\)/.exec(after)) !== null) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.as_deref()` });
+      } else if (/get_value\(&$/.test(before) && (g = /^, &Value::Int\(0\)\)\.as_str\(\) (==|!=) Some\("/.exec(after)) !== null) {
+        const chPos = abs + name.length + g[0].length;
+        const ch = /^([^"\\])"\)/.exec(content.slice(chPos, chPos + 3));
+        if (ch === null) {
+          ok = false;
+          break;
+        }
+        const probe = `${name}.as_deref().unwrap_or("").starts_with("${ch[1]}")`;
+        edits.push({ start: abs - "get_value(&".length, end: chPos + ch[0].length, text: g[1] === "==" ? probe : `!${probe}` });
+      } else if (/crate::runtime::stringify_param\(&$/.test(before) && /^\)/.test(after)) {
+        const from = abs - "crate::runtime::stringify_param(&".length;
+        edits.push({ start: from, end: abs + name.length + 1, text: `${name}.as_deref().unwrap_or("null").to_string()` });
+      } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
+        const lastUse = !new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`).test(after.slice(g[0].length));
+        const inLoop = /\b(?:loop|while|for)\b/.test(body);
+        const move = lastUse && !inLoop && !/&\s*$/.test(before);
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}${move ? "" : ".clone()"}.map(Value::from).unwrap_or(Value::Null)` });
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok || edits.length === 0)
+      continue;
+    const declText = `${m[1]}let ${m[2] ?? ""}${name}: Option<String> = self.${opt}(${obj}, ${keyRaw}, ${defRaw});`;
+    const all = [{ start: m.index, end: stmtEnd2, text: declText }, ...edits];
+    const lineGrow = /* @__PURE__ */ new Map();
+    for (const e of all) {
+      const ls = content.lastIndexOf("\n", e.start) + 1;
+      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
+    }
+    let longer = false;
+    for (const [ls, grow] of lineGrow) {
+      let le = content.indexOf("\n", ls);
+      if (le < 0)
+        le = content.length;
+      const cur = le - ls + (grown.get(ls) ?? 0);
+      if (cur <= 400 && cur + grow > 400)
+        longer = true;
+    }
+    if (longer)
+      continue;
+    for (const [ls, grow] of lineGrow)
+      grown.set(ls, (grown.get(ls) ?? 0) + grow);
+    groups.push({ decl: { start: m.index, end: stmtEnd2, text: declText }, edits });
+  }
+  for (let again = true; again; ) {
+    again = false;
+    for (let a = 0; a < groups.length; a++) {
+      const hit = groups.some((b, bi) => bi !== a && groups[a].edits.some((e) => e.start >= b.decl.start && e.start < b.decl.end));
+      if (hit) {
+        groups.splice(a, 1);
+        again = true;
+        break;
+      }
+    }
+  }
+  for (const gr of groups) {
+    rewrites.push(gr.decl);
+    for (const e of gr.edits)
+      rewrites.push(e);
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  out += content.slice(last);
+  return out;
+}
+function hx11w9RustStrLiteralLocalNativeString(content) {
+  const declRe = /^([ \t]*)let mut ([a-zA-Z_][a-zA-Z0-9_]*): Value = Value::Str\(("(?:[^"\\\n]|\\.)*")\.(?:into|to_string)\(\)\);[ \t]*$/gm;
+  const litWriteRe = /^\s*=\s*Value::Str\(("(?:[^"\\\n]|\\.)*")\.(?:into|to_string)\(\)\);/;
+  const maskText2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const closeParen2 = (src, open) => {
+    let depth = 0;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const braceEnd = (src, from) => {
+    let depth = 0;
+    for (let k = from; k < src.length; k++) {
+      const c = src[k];
+      if (c === "{")
+        depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return src.length;
+  };
+  const argSpans2 = (src) => {
+    const out2 = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      else if (c === "," && depth === 0) {
+        out2.push([start, i]);
+        start = i + 1;
+      }
+    }
+    out2.push([start, src.length]);
+    return out2;
+  };
+  const boxUse = (name, kept, after, used, body) => {
+    const later = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`).test(after.slice(used));
+    const inLoop = /\b(?:loop|while|for)\b/.test(body);
+    const arg = kept === "" && (later || inLoop) ? `${name}.clone()` : `${name}${kept}`;
+    return `Value::from(${arg})`;
+  };
+  const masked = maskText2(content);
+  const groups = [];
+  const grown = /* @__PURE__ */ new Map();
+  let m;
+  while ((m = declRe.exec(masked)) !== null) {
+    const name = m[2];
+    const stmtEnd2 = m.index + m[0].length;
+    const lit = /Value::Str\(("(?:[^"\\\n]|\\.)*")\.(?:into|to_string)\(\)\);/.exec(content.slice(m.index, stmtEnd2));
+    if (lit === null)
+      continue;
+    const end = braceEnd(masked, stmtEnd2);
+    const body = masked.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
+      continue;
+    const fRe = /format!\(/g;
+    const fSpans = [];
+    let f;
+    while ((f = fRe.exec(body)) !== null) {
+      const close = closeParen2(body, f.index + f[0].length - 1);
+      if (close < 0)
+        continue;
+      const fl = /^"(?:[^"\\]|\\.)*"/.exec(body.slice(f.index + f[0].length, close));
+      fSpans.push([f.index, close, fl !== null && /:\?/.test(fl[0])]);
+    }
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
+    const edits = [];
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(body)) !== null) {
+      const at = u.index;
+      const abs = stmtEnd2 + at;
+      const after = body.slice(at + name.length);
+      const before = body.slice(0, at);
+      let g;
+      if ((g = /^\s*=(?!=)/.exec(after)) !== null && !/[!<>=&|]\s*$/.test(before)) {
+        const w = litWriteRe.exec(content.slice(abs + name.length));
+        if (w === null) {
+          ok = false;
+          break;
+        }
+        edits.push({ start: abs + name.length, end: abs + name.length + w[0].length, text: ` = ${w[1]}.to_string();` });
+        continue;
+      }
+      const cand = fSpans.filter(([s, e]) => at > s && at < e);
+      if (cand.length > 0) {
+        const hit = cand.reduce((a, b) => b[0] > a[0] ? b : a);
+        const inner = hit[0] + "format!(".length;
+        const slot = argSpans2(body.slice(inner, hit[1] - 1)).filter(([a, b]) => inner + a <= at && at + name.length <= inner + b);
+        if (slot.length > 0 && body.slice(inner + slot[0][0], inner + slot[0][1]).replace(/\s+/g, "") === name) {
+          if (hit[2]) {
+            ok = false;
+            break;
+          }
+          continue;
+        }
+      }
+      if ((g = /^\.as_str\(\)/.exec(after)) !== null && !/&\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `Some(${name}.as_str())` });
+      } else if (/crate::runtime::stringify_param\(&$/.test(before) && /^\)/.test(after)) {
+        const from = abs - "crate::runtime::stringify_param(&".length;
+        edits.push({ start: from, end: abs + name.length + 1, text: `${name}.clone()` });
+      } else if (/(?:[(,\[]\s*)$/.test(before) && !/&\s*$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: boxUse(name, g[0], after, g[0].length, body) });
+      } else if (/(?<![=!<>])=\s$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[;,)])/.exec(after)) !== null) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: boxUse(name, g[0], after, g[0].length, body) });
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok)
+      continue;
+    const tail = content.slice(m.index + lit.index + lit[0].length, stmtEnd2);
+    const declText = `${m[1]}let mut ${name}: String = ${lit[1]}.to_string();${tail}`;
+    const all = [{ start: m.index, end: stmtEnd2, text: declText }, ...edits];
+    const lineGrow = /* @__PURE__ */ new Map();
+    for (const e of all) {
+      const ls = content.lastIndexOf("\n", e.start) + 1;
+      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
+    }
+    let longer = false;
+    for (const [ls, grow] of lineGrow) {
+      let le = content.indexOf("\n", ls);
+      if (le < 0)
+        le = content.length;
+      const cur = le - ls + (grown.get(ls) ?? 0);
+      if (cur <= 400 && cur + grow > 400)
+        longer = true;
+    }
+    if (longer)
+      continue;
+    for (const [ls, grow] of lineGrow)
+      grown.set(ls, (grown.get(ls) ?? 0) + grow);
+    groups.push(all);
+  }
+  const rewrites = groups.flat();
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  out += content.slice(last);
+  return out;
+}
+function hx11w9RustStrNLocalOptionString(content) {
+  const opt = "safe_string_n_opt";
+  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_string_n)\(/gm;
+  const maskText2 = (src) => {
+    let out2 = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "/" && src[i + 1] === "/") {
+        while (i < src.length && src[i] !== "\n") {
+          out2 += " ";
+          i++;
+        }
+        continue;
+      }
+      if (c === '"') {
+        out2 += '"';
+        i++;
+        while (i < src.length && src[i] !== '"') {
+          if (src[i] === "\\") {
+            out2 += "  ";
+            i += 2;
+            continue;
+          }
+          out2 += src[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < src.length) {
+          out2 += '"';
+          i++;
+        }
+        continue;
+      }
+      out2 += c;
+      i++;
+    }
+    return out2;
+  };
+  const closeParen2 = (src, open) => {
+    let depth = 0;
+    for (let k = open; k < src.length; k++) {
+      const c = src[k];
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0)
+          return k + 1;
+      }
+    }
+    return -1;
+  };
+  const braceEnd = (src, from) => {
+    let depth = 0;
+    for (let k = from; k < src.length; k++) {
+      const c = src[k];
+      if (c === "{")
+        depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth < 0)
+          return k;
+      }
+    }
+    return src.length;
+  };
+  const argSpans2 = (src) => {
+    const out2 = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(" || c === "[" || c === "{")
+        depth++;
+      else if (c === ")" || c === "]" || c === "}")
+        depth--;
+      else if (c === "," && depth === 0) {
+        out2.push([start, i]);
+        start = i + 1;
+      }
+    }
+    out2.push([start, src.length]);
+    return out2;
+  };
+  const masked = maskText2(content);
+  const grown = /* @__PURE__ */ new Map();
+  const groups = [];
+  const rewrites = [];
+  let m;
+  while ((m = declRe.exec(masked)) !== null) {
+    const name = m[3];
+    const callOpen = m.index + m[0].length - 1;
+    const callClose = closeParen2(masked, callOpen);
+    if (callClose < 0)
+      continue;
+    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
+    if (tail === null)
+      continue;
+    const stmtEnd2 = callClose + tail[0].length;
+    const base = callOpen + 1;
+    const spans = argSpans2(masked.slice(base, callClose - 1));
+    if (spans.length !== 3)
+      continue;
+    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
+    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
+    const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
+    if (obj.length === 0 || !/^Value::from\(vec!\[[^\]]*\]\)$/.test(keyRaw))
+      continue;
+    if (defRaw !== "&[]" && !/^&\[Value::Str\("(?:[^"\\]|\\.)*"\.into\(\)\)\]$/.test(defRaw))
+      continue;
+    const end = braceEnd(masked, stmtEnd2);
+    const body = masked.slice(stmtEnd2, end);
+    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
+      continue;
+    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
+      continue;
+    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
+    const edits = [];
+    let ok = true;
+    let u;
+    while ((u = useRe.exec(body)) !== null) {
+      const at = u.index;
+      const abs = stmtEnd2 + at;
+      const after = body.slice(at + name.length);
+      const before = body.slice(0, at);
+      let g;
+      if ((g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
+      } else if ((g = /^\.as_str\(\)/.exec(after)) !== null) {
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.as_deref()` });
+      } else if (/get_value\(&$/.test(before) && (g = /^, &Value::Int\(0\)\)\.as_str\(\) (==|!=) Some\("/.exec(after)) !== null) {
+        const chPos = abs + name.length + g[0].length;
+        const ch = /^([^"\\])"\)/.exec(content.slice(chPos, chPos + 3));
+        if (ch === null) {
+          ok = false;
+          break;
+        }
+        const probe = `${name}.as_deref().unwrap_or("").starts_with("${ch[1]}")`;
+        edits.push({ start: abs - "get_value(&".length, end: chPos + ch[0].length, text: g[1] === "==" ? probe : `!${probe}` });
+      } else if (/crate::runtime::stringify_param\(&$/.test(before) && /^\)/.test(after)) {
+        const from = abs - "crate::runtime::stringify_param(&".length;
+        edits.push({ start: from, end: abs + name.length + 1, text: `${name}.as_deref().unwrap_or("null").to_string()` });
+      } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
+        const lastUse = !new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`).test(after.slice(g[0].length));
+        const inLoop = /\b(?:loop|while|for)\b/.test(body);
+        const move = lastUse && !inLoop && !/&\s*$/.test(before);
+        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}${move ? "" : ".clone()"}.map(Value::from).unwrap_or(Value::Null)` });
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok || edits.length === 0)
+      continue;
+    const declText = `${m[1]}let ${m[2] ?? ""}${name}: Option<String> = self.${opt}(${obj}, ${keyRaw}, ${defRaw});`;
+    const all = [{ start: m.index, end: stmtEnd2, text: declText }, ...edits];
+    const lineGrow = /* @__PURE__ */ new Map();
+    for (const e of all) {
+      const ls = content.lastIndexOf("\n", e.start) + 1;
+      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
+    }
+    let longer = false;
+    for (const [ls, grow] of lineGrow) {
+      let le = content.indexOf("\n", ls);
+      if (le < 0)
+        le = content.length;
+      const cur = le - ls + (grown.get(ls) ?? 0);
+      if (cur <= 400 && cur + grow > 400)
+        longer = true;
+    }
+    if (longer)
+      continue;
+    for (const [ls, grow] of lineGrow)
+      grown.set(ls, (grown.get(ls) ?? 0) + grow);
+    groups.push({ decl: { start: m.index, end: stmtEnd2, text: declText }, edits });
+  }
+  for (let again = true; again; ) {
+    again = false;
+    for (let a = 0; a < groups.length; a++) {
+      const hit = groups.some((b, bi) => bi !== a && groups[a].edits.some((e) => e.start >= b.decl.start && e.start < b.decl.end));
+      if (hit) {
+        groups.splice(a, 1);
+        again = true;
+        break;
+      }
+    }
+  }
+  for (const gr of groups) {
+    rewrites.push(gr.decl);
+    for (const e of gr.edits)
+      rewrites.push(e);
+  }
+  if (rewrites.length === 0)
+    return content;
+  rewrites.sort((a, b) => a.start - b.start);
+  let out = "";
+  let last = 0;
+  for (const r of rewrites) {
+    if (r.start < last)
+      continue;
+    out += content.slice(last, r.start) + r.text;
+    last = r.end;
+  }
+  out += content.slice(last);
+  return out;
+}
 var RUST_PLAIN_PLACE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
-
-// src/rustTranspiler.ts
 var parserConfig6 = {
   "ELSEIF_TOKEN": "else if",
   "OBJECT_OPENING": "{",
@@ -55865,12 +66154,12 @@ ${this.getIden(identation)}}`;
   // also hold in the base tier and pro files, where a tagged handle can only arrive through a
   // parameter: base admits typed plain-dict parameters, pro admits no parameter at all.
   r23Tier(node) {
-    const path10 = this.r05Path(node);
-    if (_RustTranspiler.RUST_R12_REST_FILE.test(path10) && /\/ts\/src\/[^/]+\.ts$/.test(path10))
+    const path4 = this.r05Path(node);
+    if (_RustTranspiler.RUST_R12_REST_FILE.test(path4) && /\/ts\/src\/[^/]+\.ts$/.test(path4))
       return "rest";
-    if (_RustTranspiler.RUST_BASE_TIER_FILE.test(path10) && !/\/base\/ws\//.test(path10))
+    if (_RustTranspiler.RUST_BASE_TIER_FILE.test(path4) && !/\/base\/ws\//.test(path4))
       return "base";
-    if (/\/ts\/src\/pro\/[^/]+\.ts$/.test(path10))
+    if (/\/ts\/src\/pro\/[^/]+\.ts$/.test(path4))
       return "pro";
     return void 0;
   }
@@ -57150,10453 +67439,6 @@ var CppTranspiler = class extends BaseTranspiler {
   }
 };
 
-// src/go/index.ts
-init_esm_shims();
-
-// src/go/hx10w3-G08.ts
-init_esm_shims();
-import fs4 from "fs";
-import os from "os";
-import path4 from "path";
-var G08_WHITELIST = /* @__PURE__ */ new Set(["string", "bool", "map[string]any", "[]any"]);
-function g08UsesNullish(go, body, param) {
-  const SK2 = ts.SyntaxKind;
-  const name = param.name.text;
-  let found = false;
-  const visit = (n) => {
-    if (found || n === void 0) {
-      return;
-    }
-    if (n.kind === SK2.BinaryExpression && (n.operatorToken?.kind === SK2.QuestionQuestionToken || n.operatorToken?.kind === SK2.QuestionQuestionEqualsToken)) {
-      const left = n.left;
-      if (left?.kind === SK2.Identifier && left.text === name && go.goIdentifierRefersToDeclaration(left, param)) {
-        found = true;
-        return;
-      }
-    }
-    n.forEachChild(visit);
-  };
-  body.forEachChild(visit);
-  return found;
-}
-var G08_DYNAMIC_CACHE = /* @__PURE__ */ new WeakMap();
-function g08DynamicCallees(fn) {
-  const file = fn.getSourceFile();
-  let names = G08_DYNAMIC_CACHE.get(file);
-  if (names === void 0) {
-    names = /* @__PURE__ */ new Set();
-    const rx = /\[\s*['"]([A-Za-z_$][\w$]*)['"]\s*\]\s*\(/g;
-    const text = file.getFullText();
-    let m;
-    while ((m = rx.exec(text)) !== null) {
-      names.add(m[1]);
-    }
-    G08_DYNAMIC_CACHE.set(file, names);
-  }
-  return names;
-}
-function g08HasDynamicCall(fn, name) {
-  return g08DynamicCallees(fn).has(name);
-}
-function g08Derived(go, param) {
-  const SK2 = ts.SyntaxKind;
-  if (param?.kind !== SK2.Parameter) {
-    return void 0;
-  }
-  if (param.dotDotDotToken !== void 0 || param.initializer !== void 0) {
-    return void 0;
-  }
-  if (param.name?.kind !== SK2.Identifier) {
-    return void 0;
-  }
-  const fn = param.parent;
-  if (fn?.kind !== SK2.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SK2.Identifier) {
-    return void 0;
-  }
-  const name = param.name.text;
-  if (name === "this" || name === "chan" || name === "optionalArgs") {
-    return void 0;
-  }
-  const file = String(fn.getSourceFile().fileName ?? "");
-  if (!/(^|[\\/])ts[\\/]src[\\/]/.test(file) || /(^|[\\/])ts[\\/]src[\\/]base[\\/]/.test(file)) {
-    return void 0;
-  }
-  const methodName = fn.name.text;
-  if (methodName.startsWith("parse") || methodName.startsWith("handle")) {
-    return void 0;
-  }
-  if (go.isAsyncFunction(fn) || go.goMethodKeepsBaseSignature(fn)) {
-    return void 0;
-  }
-  const checker = go.checkerOrUndefined();
-  if (checker === void 0) {
-    return void 0;
-  }
-  const declared = param.type === void 0 ? void 0 : String(param.type.getText()).trim();
-  if (declared !== void 0 && declared !== "any" && declared !== "unknown") {
-    return void 0;
-  }
-  if (g08HasDynamicCall(fn, methodName)) {
-    return void 0;
-  }
-  const index = fn.parameters.indexOf(param);
-  const sites = go.goSameFileCallsOf(fn, methodName);
-  if (sites.length === 0) {
-    return void 0;
-  }
-  const types = /* @__PURE__ */ new Set();
-  for (const site of sites) {
-    const arg = site.arguments?.[index];
-    if (arg === void 0 || arg.kind === SK2.SpreadElement) {
-      return void 0;
-    }
-    const printed = go.goPrintedArgType(arg);
-    if (printed === void 0 || !G08_WHITELIST.has(printed)) {
-      return void 0;
-    }
-    types.add(printed);
-    if (types.size > 1) {
-      return void 0;
-    }
-  }
-  const candidates = [[...types][0]];
-  for (const goType of candidates) {
-    if (!go.goParameterCallSitesPassType(fn, index, goType)) {
-      continue;
-    }
-    if (!go.goLocalIsSafeToType(fn.body, param, name, goType)) {
-      continue;
-    }
-    if (!go.goParameterKeepsNilCompareNative(fn.body, param, goType)) {
-      continue;
-    }
-    if (g08UsesNullish(go, fn.body, param)) {
-      continue;
-    }
-    return goType;
-  }
-  return void 0;
-}
-function installCcxtGoParamTypes(goTranspiler) {
-  const flag = "hx10G08w3Installed";
-  const current = goTranspiler.goNativeParameterType;
-  if (current?.[flag] === true) {
-    return current;
-  }
-  const original = goTranspiler.goNativeParameterType;
-  const cache = /* @__PURE__ */ new Map();
-  const inProgress = /* @__PURE__ */ new Set();
-  const native = function(param) {
-    const answer = original.call(this, param);
-    if (answer !== void 0) {
-      return answer;
-    }
-    if (cache.has(param)) {
-      return cache.get(param);
-    }
-    if (inProgress.has(param)) {
-      return void 0;
-    }
-    inProgress.add(param);
-    let derived;
-    try {
-      derived = g08Derived(this, param);
-    } finally {
-      inProgress.delete(param);
-    }
-    cache.set(param, derived);
-    return derived;
-  };
-  native[flag] = true;
-  goTranspiler.goNativeParameterType = native;
-  return native;
-}
-var G08_TEST_BASE = `export type Dict = { [key: string]: any };
-export type Str = string | undefined;
-export class Exchange {
-    safeString (o: any, k: any, d: any = undefined): any { return d; }
-    extend (...args: any[]): any { return args[0]; }
-    baseHelper (id: string) { return id; }
-}
-`;
-var G08_TEST_EXCHANGE = `import { Exchange, Dict, Str } from './base/Exchange';
-export class ex extends Exchange {
-    byString (id, options) {
-        if (id === 'ETH') { return options['chain']; }
-        return this.safeString (options, 'x', id);
-    }
-    byInt (count) { return count; }
-    mixedTypes (id) { this.mixedTypes ('a'); return this.mixedTypes (1); }
-    nilCompare (options) { if (options === undefined) { return 0; } return 1; }
-    declaredDict (config: Dict) { return config['a']; }
-    dynamic (id) { return id; }
-    baseHelper (id) { return id; }
-    run (opts) {
-        this.byString ('ETH', { 'chain': 'x' });
-        this.byInt (1);
-        this.mixedTypes ('a');
-        this.nilCompare (undefined);
-        this['dynamic'] ('x');
-        return this.baseHelper ('x');
-    }
-}
-`;
-function g08w3Check() {
-  const problems = [];
-  const ok = (condition, message) => {
-    if (!condition) {
-      problems.push("hx10 G08w3: " + message);
-    }
-  };
-  const tmp = fs4.mkdtempSync(path4.join(os.tmpdir(), "hx10-G08w3-"));
-  try {
-    const src = path4.join(tmp, "ts", "src");
-    fs4.mkdirSync(path4.join(src, "base"), { "recursive": true });
-    fs4.writeFileSync(path4.join(src, "base", "Exchange.ts"), G08_TEST_BASE);
-    fs4.writeFileSync(path4.join(src, "ex.ts"), G08_TEST_EXCHANGE);
-    const print = (install) => {
-      const t = new Transpiler({ "verbose": false, "go": {} });
-      if (install) {
-        installCcxtGoParamTypes(t.goTranspiler);
-      }
-      return t.transpileGoByPath(path4.join(src, "ex.ts")).content;
-    };
-    const body = (go, name) => go.split(/\nfunc /).find((f) => f.startsWith("(this *ex) " + name + "(")) ?? "";
-    const base = print(false);
-    const hooked = print(true);
-    ok(body(base, "ByString").indexOf("(id any, options any)") >= 0, "the base generator prints the parameters as any: " + body(base, "ByString"));
-    ok(body(hooked, "ByString").indexOf("(id string, options map[string]any)") >= 0, "the call-site type prints both parameters: " + body(hooked, "ByString"));
-    ok(body(hooked, "ByString").indexOf('options["chain"]') >= 0, "a typed map parameter reads natively");
-    ok(body(hooked, "ByString").indexOf("GetValue(options") < 0, "the map read keeps no helper call");
-    ok(body(hooked, "ByInt").indexOf("(count any)") >= 0, "a numeric call site keeps the box: " + body(hooked, "ByInt"));
-    ok(body(hooked, "MixedTypes").indexOf("(id any)") >= 0, "call sites of two types keep the box: " + body(hooked, "MixedTypes"));
-    ok(body(hooked, "NilCompare").indexOf("(options any)") >= 0, "a nil-compared parameter keeps the box");
-    ok(body(hooked, "NilCompare").indexOf("IsEqual(options, nil)") >= 0, "the nil compare keeps its helper");
-    ok(body(hooked, "BaseHelper").indexOf("(id any)") >= 0, "a base-member override keeps the base signature");
-    ok(body(hooked, "DeclaredDict").indexOf("(config any)") >= 0, "a declared type stays the printer's own decision: " + body(hooked, "DeclaredDict"));
-    ok(body(hooked, "Dynamic").indexOf("(id any)") >= 0, "a dynamically named call site keeps the box: " + body(hooked, "Dynamic"));
-    ok(body(base, "ByString") !== body(hooked, "ByString"), "the rule changes the base generator output");
-  } catch (e) {
-    problems.push("hx10 G08w3 threw: " + e.message);
-  } finally {
-    fs4.rmSync(tmp, { recursive: true, force: true });
-  }
-  return problems;
-}
-
-// src/go/hx10w2-G08.ts
-init_esm_shims();
-var SK = ts.SyntaxKind;
-var G08_PAIR_MAP_PRODUCERS = ["handleMarketTypeAndParams", "handleSubTypeAndParams"];
-var G08_PAIR_PLAIN_PRODUCERS = [
-  "handleOptionAndParams",
-  "handleOptionAndParams2",
-  "handleOptionStringAndParams",
-  "handleOptionStringAndParams2",
-  "handleMarginModeAndParams",
-  "handleOptionBoolAndParams",
-  "handleOptionBoolAndParams2",
-  "handleOptionIntegerAndParams",
-  "handleOptionIntegerAndParams2",
-  "handleParamString",
-  "handleParamString2",
-  "handleNetworkCodeAndParams",
-  "handleParamBool",
-  "handleParamBool2",
-  "handleParamInteger",
-  "handleParamInteger2"
-];
-var G08_BASE_SLICE_PRODUCERS = [
-  "handleOptionAndParams",
-  "handleOptionAndParams2",
-  "handleWithdrawTagAndParams",
-  "handlePostOnly",
-  "handleTriggerPricesAndParams",
-  "handleTriggerDirectionAndParams"
-];
-var G08_BASE_FILE = /[\/]base[\/]Exchange(\.nooverloads\.\d+)?\.ts$/;
-var FUNCTION_LIKE = [
-  SK.FunctionDeclaration,
-  SK.FunctionExpression,
-  SK.ArrowFunction,
-  SK.MethodDeclaration,
-  SK.Constructor,
-  SK.GetAccessor,
-  SK.SetAccessor,
-  SK.ClassDeclaration,
-  SK.ClassExpression
-];
-function g08Mask(text) {
-  const out = text.split("");
-  const n = text.length;
-  let i = 0;
-  while (i < n) {
-    const c = text[i];
-    if (c === "/" && text[i + 1] === "/") {
-      while (i < n && text[i] !== "\n") {
-        out[i] = " ";
-        i += 1;
-      }
-    } else if (c === '"' || c === "'") {
-      out[i] = " ";
-      i += 1;
-      while (i < n) {
-        if (text[i] === "\\" && i + 1 < n) {
-          out[i] = " ";
-          out[i + 1] = " ";
-          i += 2;
-          continue;
-        }
-        if (text[i] === c) {
-          out[i] = " ";
-          i += 1;
-          break;
-        }
-        if (text[i] !== "\n") {
-          out[i] = " ";
-        }
-        i += 1;
-      }
-    } else if (c === "`") {
-      out[i] = " ";
-      i += 1;
-      while (i < n && text[i] !== "`") {
-        if (text[i] !== "\n") {
-          out[i] = " ";
-        }
-        i += 1;
-      }
-      if (i < n) {
-        out[i] = " ";
-        i += 1;
-      }
-    } else {
-      i += 1;
-    }
-  }
-  return out.join("");
-}
-function g08CallClass(masked) {
-  if (/^(?:ccxt\.)?(?:GetValue|GetArg|ParseToInt|ParseInt|SafeMapToMap)\(/.test(masked)) {
-    return "plain";
-  }
-  if (/^(?:this\.|ccxt\.)?(?:OmitDict|Extend|DeepExtend)\(/.test(masked)) {
-    return "plain:map";
-  }
-  if (/^(?:this\.)?(?:Omit|OmitN|OmitMap)\(/.test(masked)) {
-    return "plain";
-  }
-  if (/^(?:ccxt\.)?(?:MapTyped|SafeMapTyped)\(/.test(masked)) {
-    return "typedmap";
-  }
-  if (/^GetArgMap\(/.test(masked)) {
-    return "typedmap";
-  }
-  if (/^(?:ccxt\.)?ListTyped\(/.test(masked)) {
-    return "typedslice";
-  }
-  if (/^(?:this\.)?SafeDict2?\(/.test(masked)) {
-    return "deref:map";
-  }
-  return void 0;
-}
-function g08Combine(classes) {
-  if (classes.length === 0 || classes.includes("no")) {
-    return "no";
-  }
-  const unique = [...new Set(classes)];
-  if (unique.length === 1) {
-    return unique[0];
-  }
-  const kind = (list) => list.some((c) => c.endsWith("map")) ? "map" : list.some((c) => c.endsWith("slice")) ? "slice" : "";
-  if (unique.every((c) => c.startsWith("plain"))) {
-    return "plain:" + kind(unique);
-  }
-  if (unique.every((c) => c.startsWith("plain") || c === "typedmap" || c === "typedslice")) {
-    return kind(unique) === "slice" ? "typedslice" : "typedmap";
-  }
-  return "deref:" + kind(unique);
-}
-function g08Balanced(masked, start) {
-  let depth = 0;
-  for (let i = start; i < masked.length; i++) {
-    if ("({[".includes(masked[i])) {
-      depth += 1;
-      continue;
-    }
-    if (")}]".includes(masked[i])) {
-      depth -= 1;
-      if (depth === 0) {
-        return i;
-      }
-    }
-  }
-  return -1;
-}
-function g08Unwrap(node) {
-  let current = node;
-  while (current?.kind === SK.ParenthesizedExpression) {
-    current = current.expression;
-  }
-  return current;
-}
-function g08Walk(scope, visit) {
-  const go = (n) => {
-    if (n === void 0) {
-      return;
-    }
-    if (visit(n) === false) {
-      return;
-    }
-    n.forEachChild(go);
-  };
-  scope?.forEachChild(go);
-}
-var TupleSlots = class {
-  constructor(go) {
-    this.producers = /* @__PURE__ */ new WeakMap();
-    this.declLines = /* @__PURE__ */ new WeakMap();
-    this.writeCounts = /* @__PURE__ */ new WeakMap();
-    this.go = go;
-  }
-  resolve(node) {
-    try {
-      return this.go.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
-    } catch (e) {
-      return void 0;
-    }
-  }
-  // the implementation (with a body) of the method `this.m (..)` calls
-  producerDeclaration(call) {
-    const callee = call?.expression;
-    if (call?.kind !== SK.CallExpression || callee?.kind !== SK.PropertyAccessExpression || callee.expression?.kind !== SK.ThisKeyword || call.questionDotToken !== void 0) {
-      return void 0;
-    }
-    let declaration;
-    try {
-      declaration = this.go.getChecker().getResolvedSignature(call)?.declaration?.resolve();
-    } catch (e) {
-      return void 0;
-    }
-    if (declaration?.kind !== SK.MethodDeclaration) {
-      return void 0;
-    }
-    const name = declaration.name?.text;
-    let method = declaration;
-    if (method.body === void 0) {
-      method = (declaration.parent?.members ?? []).find((m) => m.kind === SK.MethodDeclaration && m.name?.text === name && m.body !== void 0);
-    }
-    if (method === void 0 || method.body === void 0 || method.type?.kind !== SK.TupleType) {
-      return void 0;
-    }
-    if ((method.modifiers ?? []).some((m) => m.kind === SK.AsyncKeyword || m.kind === SK.StaticKeyword)) {
-      return void 0;
-    }
-    return this.printsSlice(method) ? method : void 0;
-  }
-  // { arity, slots } of the tuple a producer returns, from every own `return [ .. ]`
-  producerInfo(call) {
-    const callee = call?.expression;
-    if (G08_PAIR_MAP_PRODUCERS.includes(callee?.name?.text) && callee.expression?.kind === SK.ThisKeyword) {
-      return this.go.getChecker() !== void 0 ? { "arity": 2, "slots": { 1: "plain:map" }, "pair": true } : void 0;
-    }
-    if (G08_PAIR_PLAIN_PRODUCERS.includes(callee?.name?.text) && callee.expression?.kind === SK.ThisKeyword) {
-      return this.go.getChecker() !== void 0 ? { "arity": 2, "slots": { 1: "plain" }, "pair": true } : void 0;
-    }
-    const method = this.producerDeclaration(call);
-    if (method === void 0) {
-      return void 0;
-    }
-    if (this.producers.has(method)) {
-      return this.producers.get(method);
-    }
-    this.producers.set(method, void 0);
-    const info = this.analyse(method);
-    this.producers.set(method, info);
-    return info;
-  }
-  analyse(method) {
-    const rows = [];
-    let ok = true;
-    g08Walk(method.body, (n) => {
-      if (!ok || FUNCTION_LIKE.includes(n.kind)) {
-        return false;
-      }
-      if (n.kind !== SK.ReturnStatement) {
-        return true;
-      }
-      const array = n.expression;
-      if (array?.kind !== SK.ArrayLiteralExpression || array.elements.some((e) => e.kind === SK.SpreadElement)) {
-        ok = false;
-        return false;
-      }
-      rows.push(array.elements.slice());
-      return false;
-    });
-    if (!ok || rows.length === 0) {
-      return void 0;
-    }
-    const arity = Math.min(...rows.map((row) => row.length));
-    const slots = {};
-    for (let i = 0; i < arity; i++) {
-      const combined = g08Combine(rows.map((row) => this.classOfNode(method, row[i], 0)));
-      if (combined !== "no") {
-        slots[i] = combined;
-      }
-    }
-    return Object.keys(slots).length > 0 ? { arity, slots } : void 0;
-  }
-  // true when the printed Go method returns `[]any`: a tabled base helper, or an exchange-local
-  // method (no base twin) whose every own return prints as one `return []any{..}` line
-  printsSlice(method) {
-    const name = method.name?.text;
-    if (G08_BASE_SLICE_PRODUCERS.includes(name)) {
-      return true;
-    }
-    if (this.baseDeclares(method)) {
-      return false;
-    }
-    let ok = true;
-    let any = false;
-    g08Walk(method.body, (n) => {
-      if (!ok || FUNCTION_LIKE.includes(n.kind)) {
-        return false;
-      }
-      if (n.kind !== SK.ReturnStatement) {
-        return true;
-      }
-      const text = this.printed(n);
-      any = true;
-      const code = (text ?? "").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
-      ok = text !== void 0 && /^return \[\]any\{.*\}$/.test(code.replace(/\s+\/\/.*$/, "").trim());
-      return false;
-    });
-    return ok && any;
-  }
-  // a method of the same name declared by the Exchange base class in the class chain above
-  baseDeclares(method) {
-    if (G08_BASE_FILE.test(String(method.getSourceFile().fileName ?? ""))) {
-      return true;
-    }
-    const checker = this.go.getChecker();
-    let cls = method.parent;
-    for (let depth = 0; cls !== void 0 && depth < 12; depth++) {
-      const clause = (cls.heritageClauses ?? []).find((c) => c.token === SK.ExtendsKeyword);
-      if (clause === void 0) {
-        return false;
-      }
-      let declaration;
-      try {
-        const symbol = checker.getTypeAtLocation(clause.types?.[0])?.getProperty?.(method.name.text);
-        declaration = symbol?.valueDeclaration?.resolve?.() ?? symbol?.declarations?.map((d) => d.resolve())?.[0];
-      } catch (e) {
-        return false;
-      }
-      if (declaration === void 0) {
-        return false;
-      }
-      if (G08_BASE_FILE.test(String(declaration.getSourceFile().fileName ?? ""))) {
-        return true;
-      }
-      cls = declaration.parent;
-    }
-    return false;
-  }
-  printed(node) {
-    try {
-      const text = this.go.printNode(node, 0);
-      return typeof text === "string" ? text.trim() : void 0;
-    } catch (e) {
-      return void 0;
-    }
-  }
-  classOfNode(fn, node, depth) {
-    if (depth > 4) {
-      return "no";
-    }
-    const raw = this.printed(node);
-    if (raw === void 0 || raw.includes("\n")) {
-      return "no";
-    }
-    return this.classOfText(fn, g08Unwrap(node), g08Mask(raw).trim(), raw, depth);
-  }
-  classOfText(fn, node, m, r, depth) {
-    if (/^(?:true|false)$/.test(m)) {
-      return "plain:bool";
-    }
-    if (/^-?\d+(?:\.\d+)?$/.test(m)) {
-      return "plain:number";
-    }
-    if (m === "" && /^"(?:[^"\\]|\\.)*"$/.test(r)) {
-      return "plain:string";
-    }
-    if (/^map\[string\]any\{/.test(m)) {
-      return "plain:map";
-    }
-    if (/^\[\](?:any|string)\{/.test(m)) {
-      return "plain";
-    }
-    if (/^\[\](?:any|string)$/.test(m)) {
-      return "deref:slice";
-    }
-    if (/^GetArgMap\(\w+, \d+, map\[string\]any\{\}\)$/.test(m)) {
-      return "plain:map";
-    }
-    const call = g08CallClass(m);
-    if (call !== void 0) {
-      if (call === "deref:map" && /^(?:ccxt\.)?MapTyped\(/.test(m)) {
-        const open = m.indexOf("(");
-        const close = g08Balanced(m, open);
-        const arg = g08Unwrap(node)?.arguments?.[0];
-        if (close > 0 && arg !== void 0 && this.classOfNode(fn, arg, depth + 1) === "plain:map") {
-          return "plain:map";
-        }
-      }
-      return call;
-    }
-    if (/^func\s*\(/.test(m)) {
-      return "no";
-    }
-    if (node?.kind === SK.Identifier && /^[A-Za-z_]\w*$/.test(m)) {
-      return this.classOfIdent(fn, node, depth);
-    }
-    return "no";
-  }
-  // writes of the name inside the function: `=`, destructuring targets and compound writes
-  writesOf(fn, name) {
-    let counts = this.writeCounts.get(fn);
-    if (counts === void 0) {
-      counts = /* @__PURE__ */ new Map();
-      this.writeCounts.set(fn, counts);
-      const bump = (id) => counts.set(id, (counts.get(id) ?? 0) + 1);
-      const targets = (t) => {
-        const u = g08Unwrap(t);
-        if (u?.kind === SK.Identifier) {
-          bump(u.text);
-        }
-        if (u?.kind === SK.ArrayLiteralExpression) {
-          u.elements.forEach(targets);
-        }
-      };
-      g08Walk(fn.body, (n) => {
-        if ((n.kind === SK.VariableDeclaration || n.kind === SK.BindingElement) && n.name?.kind === SK.Identifier) {
-          bump(n.name.text);
-        } else if (n.kind === SK.BinaryExpression) {
-          const op = n.operatorToken?.kind;
-          if (op >= SK.FirstAssignment && op <= SK.LastAssignment) {
-            targets(n.left);
-          }
-        } else if ((n.kind === SK.PrefixUnaryExpression || n.kind === SK.PostfixUnaryExpression) && (n.operator === SK.PlusPlusToken || n.operator === SK.MinusMinusToken)) {
-          targets(n.operand);
-        }
-        return true;
-      });
-    }
-    return counts.get(name) ?? 0;
-  }
-  // `var x T = init` / `x := init` / `a, b := call` as the printer wrote the declaration of an identifier
-  declOf(node) {
-    const decl = this.resolve(node);
-    if (decl === void 0) {
-      return void 0;
-    }
-    if (this.declLines.has(decl)) {
-      return this.declLines.get(decl);
-    }
-    this.declLines.set(decl, void 0);
-    let result;
-    if (decl.kind === SK.Parameter) {
-      const bound = decl.initializer !== void 0 || decl.questionToken !== void 0;
-      if (bound && decl.dotDotDotToken === void 0 && decl.parent?.body !== void 0) {
-        const type = this.go.goGetArgParameterType(decl);
-        const emptyMap = decl.initializer?.kind === SK.ObjectLiteralExpression && decl.initializer.properties.length === 0;
-        result = type !== void 0 ? { "kind": "var", "type": type, "init": type === "map[string]any" && emptyMap ? "GetArgMap(optionalArgs, 0, map[string]any{})" : "GetArgX(optionalArgs, 0, nil)", "fn": decl.parent, "param": true } : { "kind": "short", "type": void 0, "init": "GetArg(optionalArgs, 0, nil)", "fn": decl.parent, "param": true };
-      }
-    } else if (decl.kind === SK.VariableDeclaration && decl.name?.kind === SK.Identifier) {
-      result = this.printedDeclaration(decl);
-    } else if (decl.kind === SK.BindingElement && decl.name?.kind === SK.Identifier) {
-      result = this.printedBinding(decl);
-    }
-    this.declLines.set(decl, result);
-    return result;
-  }
-  enclosingFunction(node) {
-    let current = node?.parent;
-    while (current !== void 0 && current.kind !== SK.MethodDeclaration && current.kind !== SK.FunctionDeclaration) {
-      current = current.parent;
-    }
-    return current;
-  }
-  printedDeclaration(decl) {
-    const statement = decl.parent?.parent;
-    if (statement?.kind !== SK.VariableStatement || decl.parent.declarations.length !== 1) {
-      return void 0;
-    }
-    const text = this.printed(statement);
-    if (text === void 0) {
-      return void 0;
-    }
-    const name = decl.name.text;
-    const fn = this.enclosingFunction(decl);
-    for (const line of text.split("\n")) {
-      const typed = new RegExp("^\\s*var " + name + " ([\\w\\[\\].*]+) = (.*)$").exec(line);
-      if (typed !== null) {
-        return { "kind": "var", "type": typed[1], "init": typed[2], fn };
-      }
-      const bare = new RegExp("^\\s*var " + name + " ([\\w\\[\\].*]+)\\s*$").exec(line);
-      if (bare !== null) {
-        return { "kind": "var", "type": bare[1], "init": null, fn };
-      }
-      const short = new RegExp("^\\s*" + name + " := (.*)$").exec(line);
-      if (short !== null) {
-        return { "kind": "short", "type": void 0, "init": short[1], fn };
-      }
-    }
-    return void 0;
-  }
-  // a destructured element: the typed pair `a, b := this.m (..)`, or the holder read it printed
-  printedBinding(element) {
-    const pattern = element.parent;
-    const declaration = pattern?.parent;
-    const statement = declaration?.parent?.parent;
-    if (pattern?.kind !== SK.ArrayBindingPattern || statement?.kind !== SK.VariableStatement) {
-      return void 0;
-    }
-    const text = this.printed(statement);
-    if (text === void 0) {
-      return void 0;
-    }
-    const name = element.name.text;
-    const fn = this.enclosingFunction(element);
-    for (const line of text.split("\n")) {
-      const pair = /^\s*([\w\[\].]*(?:\s*,\s*[\w\[\].]*)+)\s*:=\s*(.*)$/.exec(line);
-      if (pair !== null && pair[1].split(",").some((p) => p.trim() === name)) {
-        return { "kind": "multi", "type": void 0, "init": null, "index": pair[1].split(",").map((p) => p.trim()).indexOf(name), "call": declaration.initializer, fn };
-      }
-      const typed = new RegExp("^\\s*var " + name + " ([\\w\\[\\].*]+) = (.*)$").exec(line);
-      if (typed !== null) {
-        return { "kind": "var", "type": typed[1], "init": typed[2], fn };
-      }
-      const short = new RegExp("^\\s*" + name + " := (.*)$").exec(line);
-      if (short !== null) {
-        return { "kind": "short", "type": void 0, "init": short[1], fn };
-      }
-    }
-    return void 0;
-  }
-  // `this.omit (m, ..)` of a map-typed identifier is a fresh map[string]any (the Go OmitDict twin)
-  omitClass(fn, init, depth) {
-    const call = g08Unwrap(init);
-    const callee = call?.expression;
-    if (call?.kind !== SK.CallExpression || callee?.kind !== SK.PropertyAccessExpression || callee.expression?.kind !== SK.ThisKeyword || callee.name?.text !== "omit" || call.arguments?.length < 2 || call.arguments[0]?.kind !== SK.Identifier) {
-      return "no";
-    }
-    const arg = this.classOfIdent(fn, call.arguments[0], depth + 1);
-    return arg === "typedmap" || arg === "plain:map" ? "plain:map" : "no";
-  }
-  classOfIdent(fn, node, depth) {
-    if (depth > 4) {
-      return "no";
-    }
-    const decl = this.declOf(node);
-    if (decl === void 0 || decl.fn !== fn) {
-      return "no";
-    }
-    const name = node.text;
-    if (decl.kind === "multi") {
-      const info = decl.call === void 0 ? void 0 : this.producerInfo(decl.call);
-      return info?.slots?.[decl.index] ?? "no";
-    }
-    const writes = this.writesOf(fn, name) + (decl.param === true ? 1 : 0);
-    const tsInit = this.resolve(node)?.initializer;
-    const initClass = (init) => {
-      const c = this.classOfText(fn, void 0, g08Mask(init).trim(), init.trim(), depth + 1);
-      if (c.startsWith("plain")) {
-        return c;
-      }
-      const omitted = this.omitClass(fn, tsInit, depth);
-      return omitted === "no" ? c : omitted;
-    };
-    if (decl.kind === "short") {
-      if (writes > 1) {
-        return "no";
-      }
-      if (/^(?:this\.|ccxt\.)\w+\(/.test(g08Mask(decl.init))) {
-        return "no";
-      }
-      return initClass(decl.init);
-    }
-    const type = decl.type ?? "";
-    if (type === "bool") {
-      return "plain:bool";
-    }
-    if (type === "string") {
-      return "plain:string";
-    }
-    if (["int64", "float64", "int", "uint64"].includes(type)) {
-      return "plain:number";
-    }
-    if (type === "any") {
-      if (writes !== 1) {
-        return "no";
-      }
-      if (decl.init === null || decl.init === void 0) {
-        return "no";
-      }
-      if (decl.init.trim() === "nil") {
-        return "deref";
-      }
-      return initClass(decl.init);
-    }
-    if (type === "map[string]any" || type === "[]any" || type === "[]string") {
-      if (decl.init !== null && decl.init !== void 0 && decl.init.trim() !== "nil") {
-        const init = initClass(decl.init);
-        if (init.startsWith("plain") && writes === 1) {
-          return init;
-        }
-      }
-      return type === "map[string]any" ? "typedmap" : "typedslice";
-    }
-    return "no";
-  }
-  // two destructurings of one function that print the same holder name leave both reads boxed
-  holderIsUnique(statement, holder) {
-    const fn = this.enclosingFunction(statement);
-    if (fn === void 0) {
-      return false;
-    }
-    let count = 0;
-    const join3 = (elements, pattern) => elements.map((e) => this.printed(pattern ? e.name : e)).join("") + "Variable";
-    g08Walk(fn.body, (n) => {
-      if (n.kind === SK.VariableDeclaration && n.name?.kind === SK.ArrayBindingPattern) {
-        if (join3(n.name.elements, true) === holder) {
-          count += 1;
-        }
-      } else if (n.kind === SK.BinaryExpression && n.operatorToken?.kind === SK.EqualsToken && n.left?.kind === SK.ArrayLiteralExpression) {
-        if (join3(n.left.elements, false) === holder) {
-          count += 1;
-        }
-      }
-      return true;
-    });
-    return count === 1;
-  }
-  // rewrite the slot reads of one printed destructuring statement
-  rewrite(printed, holder, call, statement) {
-    if (!/GetValue/.test(printed) || call?.kind !== SK.CallExpression) {
-      return printed;
-    }
-    const info = this.producerInfo(call);
-    if (info === void 0) {
-      return printed;
-    }
-    const first = printed.split("\n")[0].trim();
-    const sliceHolder = new RegExp("^(?:var " + holder + " \\[\\]any = |" + holder + " :?= (?:ccxt\\.)?TupleSlice\\()").test(first) || info.pair !== true && new RegExp("^" + holder + " :?= (?:ccxt\\.)?this\\.").test(first);
-    if (!sliceHolder) {
-      return printed;
-    }
-    const classes = info.slots;
-    const slotClass = (text) => {
-      const i = Number(text);
-      return i < info.arity ? classes[i] : void 0;
-    };
-    let changed = false;
-    const h = holder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const lines = printed.split("\n").map((line) => {
-      let m = new RegExp("^(\\s*(?:var \\w+ map\\[string\\]any = |\\w+ = ))(?:ccxt\\.)?MapTyped\\((?:ccxt\\.)?GetValue\\(" + h + ", (\\d+)\\)\\)$").exec(line);
-      if (m !== null) {
-        const cls = slotClass(m[2]);
-        if (cls === "typedmap" || cls === "plain:map") {
-          changed = true;
-          return m[1] + holder + "[" + m[2] + "].(map[string]any)";
-        }
-        if (cls !== void 0) {
-          changed = true;
-          return line.replace(new RegExp("GetValue\\(" + h + ", (\\d+)\\)"), holder + "[$1]");
-        }
-        return line;
-      }
-      m = new RegExp("^(.*?\\b(?:ccxt\\.)?(?:SafeStringPtr|SafeBoolPtr|SafeIntegerPtr)\\()(?:ccxt\\.)?GetValue\\(" + h + ", (\\d+)\\)(\\))$").exec(line);
-      if (m !== null && slotClass(m[2]) !== void 0) {
-        changed = true;
-        return m[1] + holder + "[" + m[2] + "]" + m[3];
-      }
-      m = new RegExp("^(\\s*(?:var \\w+ bool = |\\w+ = ))(?:ccxt\\.)?GetValueBool\\(" + h + ", (\\d+), false\\)$").exec(line);
-      if (m !== null) {
-        if (slotClass(m[2]) === "plain:bool") {
-          changed = true;
-          return m[1] + holder + "[" + m[2] + "].(bool)";
-        }
-        return line;
-      }
-      m = new RegExp("^(\\s*\\w+ :?= )(?:ccxt\\.)?GetValue\\(" + h + ", (\\d+)\\)$").exec(line);
-      if (m !== null) {
-        if (slotClass(m[2])?.startsWith("plain")) {
-          changed = true;
-          return m[1] + holder + "[" + m[2] + "]";
-        }
-      }
-      return line;
-    });
-    return changed ? lines.join("\n") : printed;
-  }
-};
-function installCcxtGoTupleSlotReads(goTranspiler) {
-  if (goTranspiler === void 0 || goTranspiler.__ccxtGoTupleSlotReadsInstalled || typeof goTranspiler.printVariableDeclarationList !== "function") {
-    return;
-  }
-  const slots = new TupleSlots(goTranspiler);
-  const printDeclaration = goTranspiler.printVariableDeclarationList;
-  goTranspiler.printVariableDeclarationList = function(node, identation) {
-    const printed = printDeclaration.call(this, node, identation);
-    const declaration = node?.declarations?.[0];
-    if (typeof printed !== "string" || declaration?.name?.kind !== SK.ArrayBindingPattern || declaration.initializer?.kind !== SK.CallExpression || !printed.includes("GetValue")) {
-      return printed;
-    }
-    const holder = declaration.name.elements.map((e) => this.printNode(e.name, 0)).join("") + "Variable";
-    if (!slots.holderIsUnique(node.parent ?? node, holder)) {
-      return printed;
-    }
-    return slots.rewrite(printed, holder, declaration.initializer, node);
-  };
-  const printBinary = goTranspiler.printCustomBinaryExpressionIfAny;
-  if (typeof printBinary === "function") {
-    goTranspiler.printCustomBinaryExpressionIfAny = function(node, identation) {
-      const printed = printBinary.call(this, node, identation);
-      if (typeof printed !== "string" || node?.operatorToken?.kind !== SK.EqualsToken || node.left?.kind !== SK.ArrayLiteralExpression || node.right?.kind !== SK.CallExpression || !printed.includes("GetValue")) {
-        return printed;
-      }
-      const holder = node.left.elements.map((e) => this.printNode(e, 0)).join("") + "Variable";
-      if (!slots.holderIsUnique(node, holder)) {
-        return printed;
-      }
-      return slots.rewrite(printed, holder, node.right, node);
-    };
-  }
-  goTranspiler.__ccxtGoTupleSlotReadsInstalled = true;
-}
-
-// src/go/hx10w8-GB01.ts
-init_esm_shims();
-import path5 from "path";
-var GB01_DICT_PARAMS = {
-  "safeTrade": [0],
-  "safeLedgerEntry": [0],
-  "safeLiquidation": [0],
-  "safeCurrencyStructure": [0],
-  "mergeBalanceAccount": [0]
-};
-var GB01_TYPE = "map[string]any";
-var GB01_DEBUG = process.env.GB01_DEBUG === "1";
-var GB01_LENIENT = process.env.GB01_LENIENT === "1";
-var GB01_FAILURES = [];
-function gb01Log(message) {
-  GB01_FAILURES.push(message);
-  if (GB01_DEBUG || GB01_LENIENT) {
-    console.error("hx10 GB01: " + message);
-  }
-}
-function gb01IsBaseFile(fn) {
-  return /(^|[\\/])ts[\\/]src[\\/]base[\\/]/.test(String(fn.getSourceFile().fileName ?? ""));
-}
-function gb01UsesNullish(go, body, param) {
-  const SK2 = ts.SyntaxKind;
-  const name = param.name.text;
-  let found = false;
-  const visit = (n) => {
-    if (found || n === void 0) {
-      return;
-    }
-    if (n.kind === SK2.BinaryExpression && (n.operatorToken?.kind === SK2.QuestionQuestionToken || n.operatorToken?.kind === SK2.QuestionQuestionEqualsToken)) {
-      const left = n.left;
-      if (left?.kind === SK2.Identifier && left.text === name && go.goIdentifierRefersToDeclaration(left, param)) {
-        found = true;
-        return;
-      }
-    }
-    n.forEachChild(visit);
-  };
-  body.forEachChild(visit);
-  return found;
-}
-function gb01IsDictMethodCall(tree, text) {
-  const call = /^this\s*\.\s*([A-Za-z_$][\w$]*)\s*\(/.exec(text.trim());
-  if (call === null) {
-    return false;
-  }
-  const declRe = new RegExp("^[ \\t]+(?:async\\s+)?" + call[1] + "\\s*\\([^)]*\\)\\s*(:[^{;\\n]*)?\\{", "gm");
-  let found = 0;
-  for (const fileText of tree.fileText.values()) {
-    let match;
-    declRe.lastIndex = 0;
-    while ((match = declRe.exec(fileText)) !== null) {
-      if (match[1] === void 0 || match[1].replace(/^:\s*/, "").trim() !== "Dict") {
-        return false;
-      }
-      found++;
-    }
-  }
-  return found > 0;
-}
-function gb01CallSitesPassMap(go, fn, index) {
-  const name = fn.name.text;
-  for (const call of go.goSameFileCallsOf(fn, name)) {
-    const arg = call.arguments?.[index];
-    if (arg === void 0 || arg.kind === ts.SyntaxKind.SpreadElement) {
-      return false;
-    }
-    if (go.goPrintedArgType(arg) !== GB01_TYPE) {
-      return false;
-    }
-  }
-  const tree = go.goTsSrcTree(fn.getSourceFile());
-  if (tree === void 0) {
-    return false;
-  }
-  const myClass = go.goEnclosingClassName(fn);
-  const myFile = tree.relativeOf.get(path5.resolve(fn.getSourceFile().fileName));
-  const sites = tree.callIndex.get(name) ?? [];
-  if (sites.length === 0) {
-    return true;
-  }
-  for (const site of sites) {
-    if (site.file === myFile) {
-      continue;
-    }
-    if (!go.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
-      continue;
-    }
-    const arg = String(site.args?.[index] ?? "").trim();
-    if (arg.startsWith("{")) {
-      continue;
-    }
-    if (/^this\s*\.\s*(extend|deepExtend|keysort|indexBy|groupBy)\s*\(/.test(arg)) {
-      continue;
-    }
-    if (gb01IsDictMethodCall(tree, arg)) {
-      continue;
-    }
-    const identifier = /^([A-Za-z_$][\w$]*)$/.exec(arg);
-    if (identifier === null) {
-      return false;
-    }
-    const text = tree.fileText.get(site.file) ?? "";
-    const declRe = new RegExp("(?:const|let|var)\\s+" + identifier[1] + "\\s*(?::[^=]*)?=\\s*([^;\\n]+)", "g");
-    let declaration;
-    let match;
-    while ((match = declRe.exec(text)) !== null) {
-      if (match.index > site.at) {
-        break;
-      }
-      declaration = match;
-    }
-    if (declaration === void 0) {
-      return false;
-    }
-    const initializer = declaration[1].trim();
-    if (initializer.startsWith("{") || /^this\s*\.\s*(extend|deepExtend|safeDict)\s*\(/.test(initializer)) {
-      continue;
-    }
-    if (gb01IsDictMethodCall(tree, initializer)) {
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
-function gb01Rejection(go, fn, param) {
-  const SK2 = ts.SyntaxKind;
-  if (param?.kind !== SK2.Parameter) {
-    return "not a parameter";
-  }
-  if (param.dotDotDotToken !== void 0 || param.initializer !== void 0) {
-    return "optional/variadic parameter";
-  }
-  if (param.name?.kind !== SK2.Identifier) {
-    return "destructured parameter";
-  }
-  if (fn?.kind !== SK2.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SK2.Identifier) {
-    return "not a method with a body";
-  }
-  if (go.isAsyncFunction(fn)) {
-    return "async method";
-  }
-  if (go.goMethodKeepsBaseSignature(fn) && !gb01IsBaseFile(fn)) {
-    const cls = go.goEnclosingClass(fn);
-    if ((cls?.heritageClauses ?? []).some((c) => c.token === SK2.ExtendsKeyword) === false) {
-      return "root class member";
-    }
-  }
-  const index = fn.parameters.indexOf(param);
-  const name = param.name.text;
-  if (!gb01CallSitesPassMap(go, fn, index)) {
-    return "call site passes another type";
-  }
-  if (!go.goLocalIsSafeToType(fn.body, param, name, GB01_TYPE)) {
-    return "body writes another type";
-  }
-  if (!go.goParameterKeepsNilCompareNative(fn.body, param, GB01_TYPE)) {
-    return "body nil-compares the parameter";
-  }
-  if (gb01UsesNullish(go, fn.body, param)) {
-    return "body reads the parameter with ??";
-  }
-  return void 0;
-}
-function gb01Derived(go, param) {
-  if (param?.kind !== ts.SyntaxKind.Parameter) {
-    return void 0;
-  }
-  const fn = param.parent;
-  if (fn?.kind !== ts.SyntaxKind.MethodDeclaration || fn.name?.kind !== ts.SyntaxKind.Identifier) {
-    return void 0;
-  }
-  const method = fn.name.text;
-  const indexes = Object.prototype.hasOwnProperty.call(GB01_DICT_PARAMS, method) ? GB01_DICT_PARAMS[method] : void 0;
-  if (indexes === void 0 || indexes.indexOf(fn.parameters.indexOf(param)) < 0) {
-    return void 0;
-  }
-  const reason = gb01Rejection(go, fn, param);
-  if (reason !== void 0) {
-    const file = String(fn.getSourceFile().fileName ?? "").split(/[\\/]/).slice(-3).join("/");
-    const message = `${file}: ${method}(${param.name?.text}) keeps the box: ${reason}`;
-    if (!GB01_LENIENT) {
-      if (!gb01IsBaseFile(fn) || reason === "not a parameter") {
-        throw new Error("hx10 GB01: " + message + " (the base prints map[string]any, an override must too)");
-      }
-    }
-    gb01Log(message);
-    return void 0;
-  }
-  if (GB01_DEBUG) {
-    gb01Log(`typed ${method}(${param.name.text}) in ${String(fn.getSourceFile().fileName ?? "")}`);
-  }
-  return GB01_TYPE;
-}
-function installCcxtGoDictParams(goTranspiler) {
-  const flag = "hx10GB01w8Installed";
-  const current = goTranspiler.goNativeParameterType;
-  if (current?.[flag] === true) {
-    return current;
-  }
-  const original = goTranspiler.goNativeParameterType;
-  const cache = /* @__PURE__ */ new Map();
-  const inProgress = /* @__PURE__ */ new Set();
-  const native = function(param) {
-    const answer = original.call(this, param);
-    if (answer !== void 0) {
-      return answer;
-    }
-    if (cache.has(param)) {
-      return cache.get(param);
-    }
-    if (inProgress.has(param)) {
-      return void 0;
-    }
-    inProgress.add(param);
-    let derived;
-    try {
-      derived = gb01Derived(this, param);
-    } finally {
-      inProgress.delete(param);
-    }
-    cache.set(param, derived);
-    return derived;
-  };
-  native[flag] = true;
-  goTranspiler.goNativeParameterType = native;
-  return native;
-}
-function hx10w8GB01Check() {
-  const problems = [];
-  const ok = (condition, message) => {
-    if (!condition) {
-      problems.push("hx10 GB01: " + message);
-    }
-  };
-  for (const entry of Object.values(GB01_DICT_PARAMS)) {
-    ok(entry.length > 0, "table entry without an index");
-  }
-  return problems;
-}
-
-// src/go/hx10w8-GB05.ts
-init_esm_shims();
-import fs5 from "fs";
-import os2 from "os";
-import path6 from "path";
-var GB05_METHODS = {
-  "parseBalance": 0,
-  "safeBalance": 0,
-  "safePosition": 0,
-  "safeTicker": 0
-};
-var GB05_NULLISH_CACHE = /* @__PURE__ */ new WeakMap();
-function gb05DynamicCallees(fn) {
-  const file = fn.getSourceFile();
-  let names = GB05_NULLISH_CACHE.get(file);
-  if (names === void 0) {
-    names = /* @__PURE__ */ new Set();
-    const rx = /\[\s*['"]([A-Za-z_$][\w$]*)['"]\s*\]\s*\(/g;
-    const text = file.getFullText();
-    let m;
-    while ((m = rx.exec(text)) !== null) {
-      names.add(m[1]);
-    }
-    GB05_NULLISH_CACHE.set(file, names);
-  }
-  return names;
-}
-function gb05UsesNullish(go, body, param) {
-  const SK2 = ts.SyntaxKind;
-  const name = param.name.text;
-  let found = false;
-  const visit = (n) => {
-    if (found || n === void 0) {
-      return;
-    }
-    if (n.kind === SK2.BinaryExpression && (n.operatorToken?.kind === SK2.QuestionQuestionToken || n.operatorToken?.kind === SK2.QuestionQuestionEqualsToken)) {
-      const left = n.left;
-      if (left?.kind === SK2.Identifier && left.text === name && go.goIdentifierRefersToDeclaration(left, param)) {
-        found = true;
-        return;
-      }
-    }
-    n.forEachChild(visit);
-  };
-  body.forEachChild(visit);
-  return found;
-}
-function gb05Derived(go, param) {
-  const SK2 = ts.SyntaxKind;
-  if (param?.kind !== SK2.Parameter) {
-    return void 0;
-  }
-  if (param.dotDotDotToken !== void 0 || param.initializer !== void 0) {
-    return void 0;
-  }
-  if (param.name?.kind !== SK2.Identifier) {
-    return void 0;
-  }
-  const fn = param.parent;
-  if (fn?.kind !== SK2.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SK2.Identifier) {
-    return void 0;
-  }
-  const name = param.name.text;
-  if (name === "this" || name === "chan" || name === "optionalArgs") {
-    return void 0;
-  }
-  const methodName = fn.name.text;
-  const indexes = Object.prototype.hasOwnProperty.call(GB05_METHODS, methodName) ? GB05_METHODS[methodName] : void 0;
-  if (indexes === void 0) {
-    return void 0;
-  }
-  if (fn.parameters.indexOf(param) !== indexes) {
-    return void 0;
-  }
-  if (go.isAsyncFunction(fn)) {
-    return void 0;
-  }
-  const checker = go.checkerOrUndefined();
-  if (checker === void 0) {
-    return void 0;
-  }
-  const declared = param.type === void 0 ? void 0 : String(param.type.getText()).trim();
-  if (declared !== void 0 && declared !== "any" && declared !== "unknown" && declared !== "Dict") {
-    return void 0;
-  }
-  if (declared !== void 0 && declared !== "any" && declared !== "unknown" && !go.goParameterTypeIsDict(checker.getTypeAtLocation(param))) {
-    return void 0;
-  }
-  if (gb05DynamicCallees(fn).has(methodName)) {
-    return void 0;
-  }
-  if (!go.goHasTreeCallSite(fn)) {
-    return void 0;
-  }
-  if (!go.goParameterCallSitesPassType(fn, indexes, "map[string]any")) {
-    return void 0;
-  }
-  if (!go.goLocalIsSafeToType(fn.body, param, name, "map[string]any")) {
-    return void 0;
-  }
-  if (!go.goParameterKeepsNilCompareNative(fn.body, param, "map[string]any")) {
-    return void 0;
-  }
-  if (gb05UsesNullish(go, fn.body, param)) {
-    return void 0;
-  }
-  return "map[string]any";
-}
-function installCcxtGoGb05ParamTypes(goTranspiler) {
-  const flag = "hx10Gb05w8Installed";
-  const current = goTranspiler.goNativeParameterType;
-  if (current?.[flag] === true) {
-    return current;
-  }
-  const original = goTranspiler.goNativeParameterType;
-  const cache = /* @__PURE__ */ new Map();
-  const inProgress = /* @__PURE__ */ new Set();
-  const native = function(param) {
-    const answer = original.call(this, param);
-    if (answer !== void 0) {
-      return answer;
-    }
-    if (cache.has(param)) {
-      return cache.get(param);
-    }
-    if (inProgress.has(param)) {
-      return void 0;
-    }
-    inProgress.add(param);
-    let derived;
-    try {
-      derived = gb05Derived(this, param);
-    } finally {
-      inProgress.delete(param);
-    }
-    cache.set(param, derived);
-    return derived;
-  };
-  native[flag] = true;
-  goTranspiler.goNativeParameterType = native;
-  return native;
-}
-var GB05_TEST_BASE = `export type Dict = { [key: string]: any };
-export class Exchange {
-    fetchFrame (): any { return {}; }
-    safePosition (position: Dict): any { position['a'] = 1; return position; }
-    safeTicker (ticker: Dict): any { ticker['b'] = 2; return ticker; }
-    safeBalance (balance: Dict): any { return balance; }
-    safeOrder (order: Dict): any { return order; }
-    parseBalance (response): any { return response['total']; }
-    parseTicker (ticker: Dict): any { return ticker['c']; }
-}
-`;
-var GB05_TEST_EXCHANGE = `import { Exchange, Dict } from './base/Exchange';
-export class ex extends Exchange {
-    parseBalance (response) { return response['total']; }
-    run () {
-        this.safePosition ({ 'a': 1 });
-        this.safeTicker ({ 'b': 2 });
-        this.safeBalance ({ 'free': 1 });
-        this.parseBalance ({ 'total': 1 });
-        this.safeOrder ({ 'id': 1 });
-        this.parseTicker ({ 'c': 3 });
-        return 0;
-    }
-}
-`;
-function hx10w8GB05Check() {
-  const problems = [];
-  const ok = (condition, message) => {
-    if (!condition) {
-      problems.push("hx10 w8 GB05: " + message);
-    }
-  };
-  const tmp = fs5.mkdtempSync(path6.join(os2.tmpdir(), "hx10-GB05w8-"));
-  try {
-    const src = path6.join(tmp, "ts", "src");
-    fs5.mkdirSync(path6.join(src, "base"), { recursive: true });
-    fs5.writeFileSync(path6.join(src, "base", "Exchange.ts"), GB05_TEST_BASE);
-    fs5.writeFileSync(path6.join(src, "ex.ts"), GB05_TEST_EXCHANGE);
-    const print = (file, install) => {
-      const t = new Transpiler({ verbose: false, go: {} });
-      if (install) {
-        installCcxtGoGb05ParamTypes(t.goTranspiler);
-      }
-      return t.transpileGoByPath(path6.join(src, file)).content;
-    };
-    const fnBody = (go, name) => go.split(/\nfunc /).find((f) => f.indexOf(" " + name + "(") >= 0) ?? "";
-    const base = print("base/Exchange.ts", false);
-    const baseHooked = print("base/Exchange.ts", true);
-    const exHooked = print("ex.ts", true);
-    const safePosition = fnBody(baseHooked, "SafePosition");
-    ok(safePosition.indexOf("(position map[string]any)") >= 0, "a proven frame parameter prints the map: " + safePosition);
-    ok(safePosition.indexOf('position["a"] = 1') >= 0, "the frame write is native: " + safePosition);
-    ok(safePosition.indexOf("AddElementToObject(position") < 0, "the frame write keeps no helper");
-    ok(fnBody(base, "SafePosition").indexOf("(position any)") >= 0, "the base generator boxes the frame parameter");
-    ok(fnBody(baseHooked, "SafeTicker").indexOf("(ticker map[string]any)") >= 0, "safeTicker types like safePosition");
-    ok(fnBody(baseHooked, "SafeBalance").indexOf("(balance map[string]any)") >= 0, "safeBalance types like safePosition");
-    ok(fnBody(exHooked, "ParseBalance").indexOf("(response map[string]any)") >= 0, "a venue parseBalance override types off its own call sites: " + fnBody(exHooked, "ParseBalance"));
-    ok(fnBody(exHooked, "ParseBalance").indexOf("GetValue(response") < 0, "the override reads the frame natively");
-    ok(fnBody(baseHooked, "ParseTicker").indexOf("(ticker any)") >= 0, "parseTicker keeps the box (IDerivedExchange pins it)");
-    ok(fnBody(baseHooked, "SafeOrder").indexOf("(order any)") >= 0, "a method outside the table keeps the box");
-  } catch (e) {
-    problems.push("hx10 w8 GB05 threw: " + e.message);
-  } finally {
-    fs5.rmSync(tmp, { recursive: true, force: true });
-  }
-  return problems;
-}
-
-// src/go/hx10w9-GB11.ts
-init_esm_shims();
-import fs6 from "fs";
-import os3 from "os";
-import path7 from "path";
-var GB11_METHOD = "handleErrors";
-var GB11_INDEX = 0;
-var GB11_NUMERIC_TYPES = ["int", "number", "Int"];
-var GB11_COMPARISONS = {};
-function gb11ComparisonOperators(SK2) {
-  if (Object.keys(GB11_COMPARISONS).length !== 0) {
-    return GB11_COMPARISONS;
-  }
-  for (const op of [
-    "EqualsEqualsToken",
-    "EqualsEqualsEqualsToken",
-    "ExclamationEqualsToken",
-    "ExclamationEqualsEqualsToken",
-    "LessThanToken",
-    "LessThanEqualsToken",
-    "GreaterThanToken",
-    "GreaterThanEqualsToken"
-  ]) {
-    GB11_COMPARISONS[SK2[op]] = true;
-  }
-  return GB11_COMPARISONS;
-}
-function gb11RefersToParam(go, node, param) {
-  const checker = go.checkerOrUndefined();
-  if (checker === void 0) {
-    return false;
-  }
-  try {
-    const symbol = checker.getSymbolAtLocation(node);
-    return symbol?.valueDeclaration?.resolve() === param;
-  } catch (e) {
-    return false;
-  }
-}
-function gb11UsesAreIntOnly(go, body, param) {
-  const SK2 = ts.SyntaxKind;
-  const comparisons = gb11ComparisonOperators(SK2);
-  const name = param.name.text;
-  let ok = true;
-  const visit = (n) => {
-    if (!ok || n === void 0) {
-      return;
-    }
-    if (n.kind === SK2.Identifier && n.text === name && gb11RefersToParam(go, n, param)) {
-      const parent = n.parent;
-      if (parent?.kind === SK2.PropertyAccessExpression && parent.expression === n && parent.name?.text === "toString") {
-        return;
-      }
-      if (parent?.kind === SK2.BinaryExpression && comparisons[parent.operatorToken?.kind]) {
-        const other = parent.left === n ? parent.right : parent.left;
-        const literal = other?.kind === SK2.NumericLiteral || other?.kind === SK2.PrefixUnaryExpression && other.operator === SK2.MinusToken && other.operand?.kind === SK2.NumericLiteral;
-        if (!literal) {
-          ok = false;
-        }
-        return;
-      }
-      if (parent?.kind === SK2.CallExpression && (parent.arguments ?? []).includes(n)) {
-        const callee = parent.expression;
-        if (callee?.kind === SK2.PropertyAccessExpression && callee.name?.text === "parseToInt") {
-          return;
-        }
-      }
-      ok = false;
-      return;
-    }
-    n.forEachChild(visit);
-  };
-  body.forEachChild(visit);
-  return ok;
-}
-function gb11Derived(go, param) {
-  const SK2 = ts.SyntaxKind;
-  if (param?.kind !== SK2.Parameter) {
-    return void 0;
-  }
-  if (param.dotDotDotToken !== void 0 || param.initializer !== void 0) {
-    return void 0;
-  }
-  if (param.name?.kind !== SK2.Identifier) {
-    return void 0;
-  }
-  const fn = param.parent;
-  if (fn?.kind !== SK2.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SK2.Identifier) {
-    return void 0;
-  }
-  if (fn.name.text !== GB11_METHOD) {
-    return void 0;
-  }
-  if (fn.parameters.indexOf(param) !== GB11_INDEX) {
-    return void 0;
-  }
-  if (go.isAsyncFunction(fn)) {
-    return void 0;
-  }
-  const declared = param.type === void 0 ? void 0 : String(param.type.getText()).trim();
-  if (GB11_NUMERIC_TYPES.indexOf(declared) < 0) {
-    return void 0;
-  }
-  if (!go.goLocalIsSafeToType(fn.body, param, param.name.text, "int64")) {
-    return void 0;
-  }
-  if (!go.goParameterKeepsNilCompareNative(fn.body, param, "int64")) {
-    return void 0;
-  }
-  if (!gb11UsesAreIntOnly(go, fn.body, param)) {
-    return void 0;
-  }
-  return "int64";
-}
-function gb11SplitArgs(text) {
-  const parts = [];
-  let depth = 0;
-  let start = 0;
-  let quote;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (quote !== void 0) {
-      if (c === "\\") {
-        i++;
-        continue;
-      }
-      if (c === quote) {
-        quote = void 0;
-      }
-      continue;
-    }
-    if (c === '"' || c === "`" || c === "'") {
-      quote = c;
-      continue;
-    }
-    if (c === "(" || c === "[" || c === "{") {
-      depth++;
-      continue;
-    }
-    if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      continue;
-    }
-    if (c === "," && depth === 0) {
-      parts.push(text.substring(start, i));
-      start = i + 1;
-    }
-  }
-  if (quote !== void 0 || depth !== 0) {
-    return void 0;
-  }
-  parts.push(text.substring(start));
-  return parts;
-}
-function gb11ArgIsInt64(go, arg) {
-  const SK2 = ts.SyntaxKind;
-  if (arg?.kind === SK2.NumericLiteral) {
-    return true;
-  }
-  if (arg?.kind === SK2.PrefixUnaryExpression && arg.operator === SK2.MinusToken && arg.operand?.kind === SK2.NumericLiteral) {
-    return true;
-  }
-  return go.goPrintedArgType(arg) === "int64";
-}
-function gb11CodeArg(go, node, printed) {
-  const SK2 = ts.SyntaxKind;
-  const callee = node.expression;
-  if (callee?.kind !== SK2.PropertyAccessExpression) {
-    return void 0;
-  }
-  if (callee.name?.text !== GB11_METHOD) {
-    return void 0;
-  }
-  if (callee.expression?.kind !== SK2.ThisKeyword) {
-    return void 0;
-  }
-  const args = node.arguments ?? [];
-  if (args.length === 0 || args.some((a) => a.kind === SK2.SpreadElement)) {
-    return void 0;
-  }
-  if (gb11ArgIsInt64(go, args[0])) {
-    return void 0;
-  }
-  const parts = gb11SplitArgs(printed);
-  if (parts === void 0 || parts.length !== args.length) {
-    return void 0;
-  }
-  parts[0] = "this.ParseToInt(" + parts[0].trim() + ")";
-  return parts.join(",");
-}
-function installCcxtGoGb11HandleErrorsCode(goTranspiler) {
-  const flag = "hx10Gb11w9Installed";
-  const current = goTranspiler.goNativeParameterType;
-  if (current?.[flag] === true) {
-    return current;
-  }
-  const originalArgs = goTranspiler.goUnifiedStringCallArgs;
-  const args = function(node, identation, flat = false) {
-    const printed = originalArgs.call(this, node, identation, flat);
-    if (printed === void 0) {
-      return printed;
-    }
-    const rewritten = gb11CodeArg(this, node, printed);
-    return rewritten !== void 0 ? rewritten : printed;
-  };
-  args[flag] = true;
-  goTranspiler.goUnifiedStringCallArgs = args;
-  const original = goTranspiler.goNativeParameterType;
-  const cache = /* @__PURE__ */ new Map();
-  const inProgress = /* @__PURE__ */ new Set();
-  const native = function(param) {
-    const answer = original.call(this, param);
-    if (answer !== void 0) {
-      return answer;
-    }
-    if (cache.has(param)) {
-      return cache.get(param);
-    }
-    if (inProgress.has(param)) {
-      return void 0;
-    }
-    inProgress.add(param);
-    let derived;
-    try {
-      derived = gb11Derived(this, param);
-    } finally {
-      inProgress.delete(param);
-    }
-    cache.set(param, derived);
-    return derived;
-  };
-  native[flag] = true;
-  goTranspiler.goNativeParameterType = native;
-  return native;
-}
-var GB11_TEST_BASE = `export type Dict = { [key: string]: any };
-export class Exchange {
-    id: string = 'x';
-    safeInteger (o: any, k: string): any { return o[k]; }
-    handleErrors (statusCode: int, statusText: string, url: string, method: string, responseHeaders: Dict, responseBody: string, response: any, requestHeaders: any, requestBody: any) {
-        throw new Error (this.id + ' not implemented');
-    }
-}
-`;
-var GB11_TEST_EXCHANGE = `import { Exchange, Dict } from './base/Exchange';
-export class ex extends Exchange {
-    override handleErrors (code: int, reason: string, url: string, method: string, headers: Dict, body: string, response: any, requestHeaders: any, requestBody: any) {
-        if ((code === 418) || (code === 429)) {
-            throw new Error (this.id + ' ' + code.toString () + ' ' + reason);
-        }
-        if (code >= 400) {
-            throw new Error ('http ' + code.toString ());
-        }
-        return undefined;
-    }
-    handleOther (code: int) { return code === 400; }
-    run (err: any) {
-        const code = this.safeInteger (err, 'code');
-        this.handleErrors (code, '', '', '', {}, '', err, {}, {});
-        this.handleErrors (418, '', '', '', {}, '', err, {}, {});
-    }
-}
-`;
-var GB11_TEST_UNSAFE = `import { Exchange, Dict } from './base/Exchange';
-export class ex extends Exchange {
-    override handleErrors (code: int, reason: string, url: string, method: string, headers: Dict, body: string, response: any, requestHeaders: any, requestBody: any) {
-        if (code === undefined) { return undefined; }
-        return undefined;
-    }
-}
-`;
-var GB11_TEST_NULLABLE = `import { Exchange, Dict } from './base/Exchange';
-export class ex extends Exchange {
-    override handleErrors (code: Int, reason: string, url: string, method: string, headers: Dict, body: string, response: any, requestHeaders: any, requestBody: any) {
-        if (code === 401) { return undefined; }
-        return undefined;
-    }
-}
-`;
-var GB11_TEST_REASSIGNED = `import { Exchange, Dict } from './base/Exchange';
-export class ex extends Exchange {
-    override handleErrors (code: any, reason: string, url: string, method: string, headers: Dict, body: string, response: any, requestHeaders: any, requestBody: any) {
-        code = this.safeString (response, 'code');
-        if (code === 400) { return undefined; }
-        return undefined;
-    }
-}
-`;
-function hx10w9GB11Check() {
-  const problems = [];
-  const ok = (condition, message) => {
-    if (!condition) {
-      problems.push("hx10 w9 GB11: " + message);
-    }
-  };
-  const tmp = fs6.mkdtempSync(path7.join(os3.tmpdir(), "hx10-GB11w9-"));
-  try {
-    const src = path7.join(tmp, "ts", "src");
-    fs6.mkdirSync(path7.join(src, "base"), { recursive: true });
-    fs6.writeFileSync(path7.join(src, "base", "Exchange.ts"), GB11_TEST_BASE);
-    fs6.writeFileSync(path7.join(src, "ex.ts"), GB11_TEST_EXCHANGE);
-    fs6.writeFileSync(path7.join(src, "unsafe.ts"), GB11_TEST_UNSAFE);
-    fs6.writeFileSync(path7.join(src, "reassigned.ts"), GB11_TEST_REASSIGNED);
-    fs6.writeFileSync(path7.join(src, "nullable.ts"), GB11_TEST_NULLABLE);
-    const print = (file, install) => {
-      const t = new Transpiler({ verbose: false, go: { unifiedStringParams: { "handleErrors": [2, 5] } } });
-      if (install) {
-        installCcxtGoGb11HandleErrorsCode(t.goTranspiler);
-      }
-      return t.transpileGoByPath(path7.join(src, file)).content;
-    };
-    const fnBody = (go, name) => go.split(/\nfunc /).find((f) => f.indexOf(" " + name + "(") >= 0) ?? "";
-    const base = print("base/Exchange.ts", false);
-    const baseHooked = print("base/Exchange.ts", true);
-    const exHooked = print("ex.ts", true);
-    const handle = fnBody(exHooked, "HandleErrors");
-    ok(fnBody(base, "HandleErrors").indexOf("(statusCode any,") >= 0, "the base generator boxes the code");
-    ok(fnBody(baseHooked, "HandleErrors").indexOf("(statusCode int64,") >= 0, "the base method types the code: " + fnBody(baseHooked, "HandleErrors"));
-    ok(handle.indexOf("(code int64,") >= 0, "a venue override types the code: " + handle);
-    ok(handle.indexOf("code == 418") >= 0, "a numeric comparison is native: " + handle);
-    ok(handle.indexOf("code >= 400") >= 0, "an ordered comparison is native: " + handle);
-    ok(handle.indexOf("IsEqual(code") < 0 && handle.indexOf("IsGreaterThan") < 0, "no comparison helper survives");
-    ok(handle.indexOf("ToString(code)") < 0, "the string conversion bails out of the helper: " + handle);
-    ok(fnBody(exHooked, "HandleOther").indexOf("(code any)") >= 0, "a method outside the table keeps the box");
-    ok(fnBody(print("unsafe.ts", true), "HandleErrors").indexOf("(code any,") >= 0, "a nil compare keeps the box");
-    ok(fnBody(print("reassigned.ts", true), "HandleErrors").indexOf("(code any,") >= 0, "a written code keeps the box");
-    ok(fnBody(print("nullable.ts", true), "HandleErrors").indexOf("(code int64,") >= 0, "a nullable Int without a nil compare types the code");
-    const run = fnBody(exHooked, "Run");
-    ok(run.indexOf("this.HandleErrors(this.ParseToInt(code),") >= 0, "a boxed call argument converts: " + run);
-    ok(run.indexOf("this.HandleErrors(418,") >= 0, "a numeric literal stays a literal: " + run);
-  } catch (e) {
-    problems.push("hx10 w9 GB11 threw: " + e.message);
-  } finally {
-    fs6.rmSync(tmp, { recursive: true, force: true });
-  }
-  return problems;
-}
-
-// src/go/hx11-sign-typing.ts
-init_esm_shims();
-var SIGN_API_METHODS = { "sign": 1, "fetch2": 1, "request": 1 };
-function signApiParameter(param) {
-  const SK2 = ts.SyntaxKind;
-  const fn = param?.parent;
-  if (param?.kind !== SK2.Parameter || fn?.kind !== SK2.MethodDeclaration || fn.name?.kind !== SK2.Identifier) {
-    return false;
-  }
-  if (SIGN_API_METHODS[fn.name.text] !== fn.parameters.indexOf(param)) {
-    return false;
-  }
-  if (String(param.type?.getText?.() ?? "").replace(/\s+/g, "") !== "string[]") {
-    return false;
-  }
-  const init = param.initializer;
-  return init?.kind === SK2.ArrayLiteralExpression && (init.elements ?? []).every((e) => e.kind === SK2.StringLiteral);
-}
-function signApiElement(go, node) {
-  const SK2 = ts.SyntaxKind;
-  if (node?.kind !== SK2.ElementAccessExpression || node.expression?.kind !== SK2.Identifier || node.argumentExpression?.kind !== SK2.NumericLiteral || !/^\d+$/.test(String(node.argumentExpression.text))) {
-    return false;
-  }
-  const decl = go.checkerOrUndefined()?.getSymbolAtLocation(node.expression)?.valueDeclaration?.resolve();
-  return signApiParameter(decl) && go.goGetArgParameterType(decl) === "[]string";
-}
-function installCcxtGoSignTyping(goTranspiler) {
-  const flag = "hx11SignTypingInstalled";
-  if (goTranspiler[flag] === true) {
-    return;
-  }
-  goTranspiler[flag] = true;
-  const printLiteral = goTranspiler.printArrayLiteralExpression;
-  goTranspiler.printArrayLiteralExpression = function(node, ...rest) {
-    if (signApiParameter(node?.parent)) {
-      this.goSliceLiteralTypes.set(node, "[]string");
-    }
-    return printLiteral.call(this, node, ...rest);
-  };
-  const printElement = goTranspiler.printElementAccessExpression;
-  goTranspiler.printElementAccessExpression = function(node, ...rest) {
-    if (signApiElement(this, node) && !this.isGoElementAccessAssignmentTarget(node)) {
-      return node.expression.text + "[" + node.argumentExpression.text + "]";
-    }
-    return printElement.call(this, node, ...rest);
-  };
-  const initType = goTranspiler.goTypeOfInitializer;
-  goTranspiler.goTypeOfInitializer = function(node, printed) {
-    if (signApiElement(this, node)) {
-      return "string";
-    }
-    return initType.call(this, node, printed);
-  };
-  const original = goTranspiler.goGetArgParameterType;
-  goTranspiler.goGetArgParameterType = function(decl) {
-    const answer = original.call(this, decl);
-    if (answer !== void 0 || !signApiParameter(decl)) {
-      return answer;
-    }
-    if (!this.goLocalIsSafeToType(decl.parent.body, decl, decl.name.text, "[]string")) {
-      return void 0;
-    }
-    return "[]string";
-  };
-}
-
-// src/go/hx11w8-num-param.ts
-init_esm_shims();
-import path8 from "path";
-var NUM_SIGNATURE = /\n {4}(?:(?:override|async|public|private|protected) )*[A-Za-z_$][\w$]* \(([^\n]*)\)(?:: [^\n{]*)? \{/g;
-function hx11w8SiblingNumIdentifier(text, at, arg) {
-  const name = /^([A-Za-z_$][\w$]*)$/.exec((arg ?? "").trim())?.[1];
-  if (name === void 0 || at === void 0) {
-    return false;
-  }
-  const head = text.substring(0, at);
-  let last = null;
-  let m;
-  NUM_SIGNATURE.lastIndex = 0;
-  while ((m = NUM_SIGNATURE.exec(head)) !== null) {
-    last = m;
-  }
-  if (last === null) {
-    return false;
-  }
-  if (!new RegExp("(?:^|[(,]\\s*)" + name + ": Num = undefined(?:,|$)").test(last[1])) {
-    return false;
-  }
-  const body = head.substring(last.index + last[0].length);
-  return !new RegExp("(?<![\\w.$])" + name + "\\s*(?:[-+*/]?=(?!=)|\\+\\+|--)").test(body);
-}
-function installHx11w8NumParams(goTranspiler) {
-  const flag = "hx11w8NumParamsInstalled";
-  if (goTranspiler === void 0 || goTranspiler[flag] === true || typeof goTranspiler.goParameterCallSitesPassType !== "function" || typeof goTranspiler.goSameFileCallsOf !== "function" || typeof goTranspiler.goTsSrcTree !== "function") {
-    return;
-  }
-  goTranspiler[flag] = true;
-  const upstream = goTranspiler.goParameterCallSitesPassType;
-  goTranspiler.goParameterCallSitesPassType = function(fn, index, goType) {
-    if (upstream.call(this, fn, index, goType)) {
-      return true;
-    }
-    if (goType !== "*float64") {
-      return false;
-    }
-    const name = fn.name.text;
-    for (const call of this.goSameFileCallsOf(fn, name)) {
-      const arg = call.arguments?.[index];
-      if (arg === void 0 || arg.kind === ts.SyntaxKind.SpreadElement || this.goPrintedArgType(arg) !== "*float64") {
-        return false;
-      }
-    }
-    const tree = this.goTsSrcTree(fn.getSourceFile());
-    if (tree === void 0) {
-      return true;
-    }
-    const myClass = this.goEnclosingClassName(fn);
-    const myFile = tree.relativeOf.get(path8.resolve(fn.getSourceFile().fileName));
-    for (const site of tree.callIndex.get(name) ?? []) {
-      if (site.file === myFile || !this.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
-        continue;
-      }
-      if (!hx11w8SiblingNumIdentifier(tree.fileText.get(site.file) ?? "", site.at, site.args[index])) {
-        return false;
-      }
-    }
-    return true;
-  };
-}
-
-// src/go/hx11rf-go5.ts
-init_esm_shims();
-var OWNED_TABLES = {
-  "baseCurrencies": { "publish": "PublishBaseCurrencies", "read": "BaseCurrenciesTable" },
-  "quoteCurrencies": { "publish": "PublishQuoteCurrencies", "read": "QuoteCurrenciesTable" },
-  "transactions": { "publish": "PublishTransactions", "read": "TransactionsTable" }
-};
-var OWNER_CLASS2 = "BaseExchange";
-function ownedTable(go, node) {
-  const SK2 = ts.SyntaxKind;
-  if (node?.kind !== SK2.PropertyAccessExpression || !Object.prototype.hasOwnProperty.call(OWNED_TABLES, node.name?.text)) {
-    return void 0;
-  }
-  const checker = go.checkerOrUndefined();
-  const decl = checker?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
-  if (decl?.kind !== SK2.PropertyDeclaration || decl.parent?.name?.text !== OWNER_CLASS2) {
-    return void 0;
-  }
-  return OWNED_TABLES[node.name.text];
-}
-function isWrapperCall(node, name, args) {
-  const SK2 = ts.SyntaxKind;
-  return node?.kind === SK2.CallExpression && node.expression?.kind === SK2.PropertyAccessExpression && node.expression.expression?.kind === SK2.ThisKeyword && node.expression.name?.text === name && (node.arguments?.length ?? 0) <= args;
-}
-function installRfGo5OwnedTables(goTranspiler) {
-  const flag = "rfGo5OwnedTablesInstalled";
-  if (goTranspiler[flag] === true) {
-    return;
-  }
-  goTranspiler[flag] = true;
-  const printAccess = goTranspiler.printPropertyAccessExpression;
-  goTranspiler.printPropertyAccessExpression = function(node, identation) {
-    const table = ownedTable(this, node);
-    if (table !== void 0) {
-      return this.printNode(node.expression, 0) + "." + table.read + "()";
-    }
-    return printAccess.call(this, node, identation);
-  };
-  const printBinary = goTranspiler.printBinaryExpression;
-  goTranspiler.printBinaryExpression = function(node, identation) {
-    const SK2 = ts.SyntaxKind;
-    const table = node.operatorToken?.kind === SK2.EqualsToken ? ownedTable(this, node.left) : void 0;
-    if (table !== void 0 && node.parent?.kind === SK2.ExpressionStatement) {
-      const right = node.right;
-      let value;
-      if (isWrapperCall(right, "createSafeDictionary", 1)) {
-        value = "map[string]any{}";
-      } else if (isWrapperCall(right, "mapToSafeMap", 1) && right.arguments.length === 1) {
-        value = this.printNode(right.arguments[0], 0);
-      } else if (right?.kind === SK2.PropertyAccessExpression && right.name?.text === node.left.name.text) {
-        value = this.printNode(right.expression, 0) + "." + table.read + "()";
-      } else {
-        value = this.printNode(right, 0);
-      }
-      return this.printNode(node.left.expression, 0) + "." + table.publish + "(" + value.trim() + ")";
-    }
-    return printBinary.call(this, node, identation);
-  };
-}
-
-// src/go/hx11fmgo5-G01.ts
-init_esm_shims();
-import { TypeFlags as TypeFlags7 } from "typescript/unstable/sync";
-var SUBSCRIPTIONS_CLASS = "Client";
-function clientSubscriptions(go, node) {
-  const SK2 = ts.SyntaxKind;
-  if (node?.kind !== SK2.PropertyAccessExpression || node.name?.text !== "subscriptions") {
-    return void 0;
-  }
-  const checker = go.checkerOrUndefined();
-  const symbol = checker?.getSymbolAtLocation(node.name);
-  if (symbol === void 0) {
-    const flags = checker?.getTypeAtLocation(node.expression)?.flags ?? 0;
-    return (flags & TypeFlags7.Any) !== 0 ? node : void 0;
-  }
-  const decl = symbol.valueDeclaration?.resolve();
-  if (decl?.kind !== SK2.PropertyDeclaration && decl?.kind !== SK2.PropertySignature) {
-    return void 0;
-  }
-  return decl.parent?.name?.text === SUBSCRIPTIONS_CLASS ? node : void 0;
-}
-function clientIsInterfaceFrame(node) {
-  let current = node;
-  while (current !== void 0 && current.parent !== void 0) {
-    current = current.parent;
-  }
-  const fileName = current !== void 0 && current.fileName !== void 0 ? String(current.fileName) : "";
-  return /(^|[\\/])ts[\\/]src[\\/](pro|prediction)[\\/]/.test(fileName);
-}
-function installFmGo5G01(goTranspiler) {
-  const flag = "fmGo5G01Installed";
-  if (goTranspiler[flag] === true) {
-    return;
-  }
-  goTranspiler[flag] = true;
-  const SK2 = ts.SyntaxKind;
-  const owner = (go, access) => {
-    const printed = go.printNode(access.expression, 0);
-    return clientIsInterfaceFrame(access) ? printed + ".(ClientInterface)" : printed;
-  };
-  const printAccess = goTranspiler.printPropertyAccessExpression;
-  goTranspiler.printPropertyAccessExpression = function(node, identation) {
-    if (clientSubscriptions(this, node) !== void 0) {
-      return owner(this, node) + ".SubscriptionsSnapshot()";
-    }
-    return printAccess.call(this, node, identation);
-  };
-  const printElement = goTranspiler.printElementAccessExpression;
-  goTranspiler.printElementAccessExpression = function(node, ...rest) {
-    if (this.isGoElementAccessAssignmentTarget(node)) {
-      return printElement.call(this, node, ...rest);
-    }
-    const keys = [];
-    let root = node;
-    while (root?.kind === SK2.ElementAccessExpression) {
-      keys.unshift(root.argumentExpression);
-      root = root.expression;
-    }
-    const table = clientSubscriptions(this, root);
-    if (table === void 0) {
-      return printElement.call(this, node, ...rest);
-    }
-    if (keys.length === 1) {
-      const declaration = node.parent;
-      if (declaration?.kind === SK2.VariableDeclaration && declaration.initializer === node && declaration.parent?.parent?.kind === SK2.FirstStatement) {
-        const base = printElement.call(this, node, ...rest);
-        if (this.getGoLocalType(declaration, base) === "any") {
-          return base;
-        }
-      }
-    }
-    let acc = owner(this, table) + ".SubscriptionGet(" + this.printNode(keys[0], 0) + ")";
-    for (let i = 1; i < keys.length; i++) {
-      acc = this.ELEMENT_ACCESS_WRAPPER_OPEN + acc + ", " + this.printNode(keys[i], 0) + this.ELEMENT_ACCESS_WRAPPER_CLOSE;
-    }
-    return acc;
-  };
-  const printDelete = goTranspiler.printDeleteExpression;
-  goTranspiler.printDeleteExpression = function(node, identation) {
-    const target = node.expression;
-    const table = target?.kind === SK2.ElementAccessExpression ? clientSubscriptions(this, target.expression) : void 0;
-    if (table !== void 0) {
-      return owner(this, table) + ".SubscriptionDel(" + this.printNode(target.argumentExpression, 0) + ")";
-    }
-    return printDelete.call(this, node, identation);
-  };
-  const printBinary = goTranspiler.printBinaryExpression;
-  goTranspiler.printBinaryExpression = function(node, identation) {
-    const op = node.operatorToken?.kind;
-    if (op === SK2.InKeyword) {
-      const table = clientSubscriptions(this, node.right);
-      if (table !== void 0) {
-        return owner(this, table) + ".SubscriptionHas(" + this.printNode(node.left, 0) + ")";
-      }
-    } else if (op === SK2.EqualsToken && node.left?.kind === SK2.ElementAccessExpression) {
-      const keys = [];
-      let root = node.left;
-      while (root?.kind === SK2.ElementAccessExpression) {
-        keys.unshift(root.argumentExpression);
-        root = root.expression;
-      }
-      const table = clientSubscriptions(this, root);
-      if (table !== void 0) {
-        const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(node.right, identation)).trimStart();
-        if (keys.length === 1) {
-          return owner(this, table) + ".SubscriptionSet(" + this.printNode(keys[0], 0) + ", " + value + ")";
-        }
-        let acc = owner(this, table) + ".SubscriptionGet(" + this.printNode(keys[0], 0) + ")";
-        for (let i = 1; i < keys.length - 1; i++) {
-          acc = this.ELEMENT_ACCESS_WRAPPER_OPEN + acc + ", " + this.printNode(keys[i], 0) + this.ELEMENT_ACCESS_WRAPPER_CLOSE;
-        }
-        return "AddElementToObject(" + acc + ", " + this.printNode(keys[keys.length - 1], 0) + ", " + value + ")";
-      }
-    }
-    return printBinary.call(this, node, identation);
-  };
-  const tableCall = (original, suffix) => function(node, identation, parsedArg = void 0) {
-    const table = clientSubscriptions(this, node.arguments?.[0]);
-    if (table !== void 0) {
-      return owner(this, table) + "." + suffix + "()";
-    }
-    return original.call(this, node, identation, parsedArg);
-  };
-  goTranspiler.printObjectKeysCall = tableCall(goTranspiler.printObjectKeysCall, "SubscriptionKeys");
-  goTranspiler.printObjectValuesCall = tableCall(goTranspiler.printObjectValuesCall, "SubscriptionValues");
-  const initType = goTranspiler.goTypeOfInitializer;
-  goTranspiler.goTypeOfInitializer = function(node, printed) {
-    if (node?.kind === SK2.BinaryExpression && node.operatorToken?.kind === SK2.InKeyword && clientSubscriptions(this, node.right) !== void 0) {
-      return "bool";
-    }
-    if (node?.kind === SK2.CallExpression && node.arguments?.length === 1 && clientSubscriptions(this, node.arguments[0]) !== void 0) {
-      const callee = node.expression?.getText?.();
-      if (callee === "Object.keys") {
-        return "[]string";
-      }
-      if (callee === "Object.values") {
-        return "[]any";
-      }
-    }
-    return initType.call(this, node, printed);
-  };
-  const dictValue = goTranspiler.goSafeDictUnboxValue;
-  goTranspiler.goSafeDictUnboxValue = function(declaration, identation) {
-    const known = dictValue.call(this, declaration, identation);
-    let initializer = declaration.initializer;
-    while (initializer?.kind === SK2.AsExpression || initializer?.kind === SK2.ParenthesizedExpression || initializer?.kind === SK2.NonNullExpression) {
-      initializer = initializer.expression;
-    }
-    const args = known !== void 0 ? this.goSafeDictLocalArgs(initializer) : void 0;
-    const table = args !== void 0 ? clientSubscriptions(this, args.container) : void 0;
-    if (table !== void 0 && known.startsWith("SafeMapTyped(")) {
-      return owner(this, table) + ".SubscriptionDict(" + this.printNode(args.key, 0) + ")";
-    }
-    return known;
-  };
-}
-
-// src/go/hx11fmgo5-OG02.ts
-init_esm_shims();
-var OWNER_CLASS3 = "BaseExchange";
-function unparen2(node) {
-  while (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
-    node = node.expression;
-  }
-  return node;
-}
-function baseMemberDecl(go, node, name) {
-  const SK2 = ts.SyntaxKind;
-  if (node?.kind !== SK2.PropertyAccessExpression || node.expression?.kind !== SK2.ThisKeyword || node.name?.text !== name) {
-    return void 0;
-  }
-  const decl = go.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
-  if (decl === void 0 || decl.parent?.name?.text !== OWNER_CLASS3) {
-    return void 0;
-  }
-  return decl;
-}
-function isBaseCall(go, node, name, args) {
-  node = unparen2(node);
-  return node?.kind === ts.SyntaxKind.CallExpression && (node.arguments?.length ?? 0) === args && baseMemberDecl(go, node.expression, name) !== void 0;
-}
-function callStatement(go, stmt, name) {
-  return stmt?.kind === ts.SyntaxKind.ExpressionStatement && isBaseCall(go, stmt.expression, name, 0);
-}
-function constDecl(stmt) {
-  const SK2 = ts.SyntaxKind;
-  if (stmt?.kind !== SK2.VariableStatement) {
-    return void 0;
-  }
-  const declarations = stmt.declarationList?.declarations;
-  if (declarations?.length !== 1 || declarations[0].name?.kind !== SK2.Identifier || declarations[0].initializer === void 0) {
-    return void 0;
-  }
-  return declarations[0];
-}
-function stringLiteral(node) {
-  return node?.kind === ts.SyntaxKind.StringLiteral ? node : void 0;
-}
-function optionWrite(go, stmt) {
-  const SK2 = ts.SyntaxKind;
-  const e = stmt?.kind === SK2.ExpressionStatement ? stmt.expression : void 0;
-  if (e?.kind !== SK2.BinaryExpression || e.operatorToken?.kind !== SK2.EqualsToken) {
-    return void 0;
-  }
-  const target = e.left;
-  if (target?.kind !== SK2.ElementAccessExpression || baseMemberDecl(go, target.expression, "options") === void 0 || stringLiteral(target.argumentExpression) === void 0 || e.right?.kind !== SK2.Identifier) {
-    return void 0;
-  }
-  return [target.argumentExpression, e.right.text];
-}
-function counterRead(go, node) {
-  node = unparen2(node);
-  if (!isBaseCall(go, node, "safeInteger", 3)) {
-    return void 0;
-  }
-  const [options, key, dflt] = node.arguments;
-  if (baseMemberDecl(go, options, "options") === void 0 || stringLiteral(key) === void 0 || dflt?.kind !== ts.SyntaxKind.NumericLiteral || dflt.text !== "0") {
-    return void 0;
-  }
-  return key;
-}
-function countIdentifier(root, name) {
-  let n = 0;
-  const visit = (node) => {
-    if (node.kind === ts.SyntaxKind.Identifier && node.text === name) {
-      n++;
-    }
-    node.forEachChild(visit);
-  };
-  visit(root);
-  return n;
-}
-function counterSpan(go, body, fn) {
-  const SK2 = ts.SyntaxKind;
-  const sumOfOne = (call) => {
-    call = unparen2(call);
-    return isBaseCall(go, call, "sum", 2) && call.arguments[1]?.kind === SK2.NumericLiteral && call.arguments[1].text === "1" ? call : void 0;
-  };
-  if (body.length === 2) {
-    const decl = constDecl(body[0]);
-    const write = optionWrite(go, body[1]);
-    const sum = decl !== void 0 ? sumOfOne(decl.initializer) : void 0;
-    const key = sum !== void 0 ? counterRead(go, sum.arguments[0]) : void 0;
-    if (key !== void 0 && write !== void 0 && write[0].text === key.text && write[1] === decl.name.text) {
-      return [decl.name, key];
-    }
-    return void 0;
-  }
-  if (body.length === 3) {
-    const seed = constDecl(body[0]);
-    const next = constDecl(body[1]);
-    const write = optionWrite(go, body[2]);
-    const key = seed !== void 0 ? counterRead(go, seed.initializer) : void 0;
-    const sum = next !== void 0 ? sumOfOne(next.initializer) : void 0;
-    if (key !== void 0 && sum !== void 0 && write !== void 0 && sum.arguments[0]?.kind === SK2.Identifier && sum.arguments[0].text === seed.name.text && write[0].text === key.text && write[1] === next.name.text && countIdentifier(fn, seed.name.text) === 2) {
-      return [next.name, key];
-    }
-  }
-  return void 0;
-}
-function bareStatement(go, stmt) {
-  return go.printLeadingComments(stmt, 0) === "" && go.printTraillingComment(stmt, 0) === "";
-}
-function nonceShape(go, method) {
-  const SK2 = ts.SyntaxKind;
-  if (method?.kind !== SK2.MethodDeclaration || method.name?.text !== "incrementingNonce" || method.parent?.name?.text !== OWNER_CLASS3 || method.parameters?.length !== 0) {
-    return void 0;
-  }
-  const s = method.body?.statements;
-  if (s === void 0 || s.length !== 7) {
-    return void 0;
-  }
-  const current = constDecl(s[0]);
-  const last = constDecl(s[2]);
-  const result = constDecl(s[3]);
-  const write = optionWrite(go, s[4]);
-  if (current === void 0 || last === void 0 || result === void 0 || write === void 0 || !isBaseCall(go, current.initializer, "nonce", 0) || !callStatement(go, s[1], "lockLastNonce") || !callStatement(go, s[5], "unlockLastNonce")) {
-    return void 0;
-  }
-  const key = counterRead(go, last.initializer);
-  const cond = unparen2(result.initializer);
-  if (key?.text !== "lastNonce" || write[0].text !== "lastNonce" || write[1] !== result.name.text || cond?.kind !== SK2.ConditionalExpression) {
-    return void 0;
-  }
-  const compare = unparen2(cond.condition);
-  const plusOne = unparen2(cond.whenFalse);
-  const isId = (n, name) => n?.kind === SK2.Identifier && n.text === name;
-  if (compare?.kind !== SK2.BinaryExpression || compare.operatorToken?.kind !== SK2.GreaterThanToken || !isId(compare.left, current.name.text) || !isId(compare.right, last.name.text) || !isId(cond.whenTrue, current.name.text) || plusOne?.kind !== SK2.BinaryExpression || plusOne.operatorToken?.kind !== SK2.PlusToken || !isId(plusOne.left, last.name.text) || plusOne.right?.kind !== SK2.NumericLiteral || plusOne.right.text !== "1" || s[6].kind !== SK2.ReturnStatement || !isId(s[6].expression, result.name.text)) {
-    return void 0;
-  }
-  for (let i = 0; i < 6; i++) {
-    if (!bareStatement(go, s[i])) {
-      return void 0;
-    }
-  }
-  return { "current": current, "result": result };
-}
-function resetOf(go, stmt, field) {
-  const SK2 = ts.SyntaxKind;
-  const e = stmt?.kind === SK2.ExpressionStatement ? stmt.expression : void 0;
-  return e?.kind === SK2.BinaryExpression && e.operatorToken?.kind === SK2.EqualsToken && e.right?.kind === SK2.Identifier && e.right.text === "undefined" && baseMemberDecl(go, e.left, field) !== void 0;
-}
-var HEADER_FIELDS = ["last_response_headers", "last_request_headers"];
-function blockPlan(go, block) {
-  const stmts = block.statements;
-  if (stmts === void 0 || stmts.length === 0) {
-    return void 0;
-  }
-  let plan;
-  const set = (stmt, value) => {
-    (plan ??= /* @__PURE__ */ new Map()).set(stmt, value);
-  };
-  const fn = block.parent;
-  const nonce = nonceShape(go, fn);
-  if (nonce !== void 0) {
-    const s = stmts;
-    set(s[0], { "nonce": nonce });
-    for (let i = 1; i < 6; i++) {
-      set(s[i], { "drop": true, "silent": true });
-    }
-  }
-  for (let i = 0; i < stmts.length; i++) {
-    if (callStatement(go, stmts[i], "lockId")) {
-      let end = i + 1;
-      while (end < stmts.length && !callStatement(go, stmts[end], "unlockId")) {
-        end++;
-      }
-      if (end >= stmts.length) {
-        continue;
-      }
-      const body = Array.from(stmts).slice(i + 1, end);
-      const found = counterSpan(go, body, fn);
-      if (found !== void 0 && body.every((s) => bareStatement(go, s)) && bareStatement(go, stmts[end])) {
-        set(stmts[i], { "counter": found });
-        for (let k = i + 1; k <= end; k++) {
-          set(stmts[k], { "drop": true, "silent": true });
-        }
-        i = end;
-      }
-    }
-  }
-  const reset = Array.from(stmts).find((s) => resetOf(go, s, "last_http_response"));
-  if (reset !== void 0) {
-    set(reset, { "reset": true });
-    for (const s of stmts) {
-      if (HEADER_FIELDS.some((field) => resetOf(go, s, field))) {
-        set(s, { "drop": true });
-      }
-    }
-  }
-  return plan;
-}
-function installFmGo5OG02(goTranspiler) {
-  const flag = "fmGo5OG02Installed";
-  if (goTranspiler[flag] === true) {
-    return;
-  }
-  goTranspiler[flag] = true;
-  const printBlock = goTranspiler.printBlock;
-  goTranspiler.printBlock = function(node, identation, chainBlock = false) {
-    const plan = blockPlan(this, node);
-    if (plan === void 0) {
-      return printBlock.call(this, node, identation, chainBlock);
-    }
-    const iden = this.getIden(identation + 1);
-    const parts = [];
-    for (const stmt of node.statements) {
-      const step = plan.get(stmt);
-      if (step === void 0) {
-        parts.push(this.printNode(stmt, identation + 1));
-      } else if (step.counter !== void 0) {
-        const [name, key] = step.counter;
-        const line = iden + "var " + this.printNode(name, 0) + " int64 = this.NextRequestId(" + this.printNode(key, 0) + ")";
-        parts.push(this.printNodeCommentsIfAny(stmt, identation + 1, line));
-      } else if (step.nonce !== void 0) {
-        const { current, result } = step.nonce;
-        const cn = this.printNode(current.name, 0);
-        const line = iden + "var " + cn + " int64 = " + this.printNode(current.initializer, 0) + "\n" + iden + "var " + this.printNode(result.name, 0) + " int64 = this.nextNonce(" + cn + ")";
-        parts.push(this.printNodeCommentsIfAny(stmt, identation + 1, line));
-      } else if (step.reset === true) {
-        parts.push(this.printNodeCommentsIfAny(stmt, identation + 1, iden + "this.handOffRequestBook(requestBookOp{kind: requestBookReset})"));
-      } else if (step.silent !== true) {
-        const comments = this.printLeadingComments(stmt, identation + 1);
-        if (comments !== "") {
-          parts.push(comments.replace(/\n$/, ""));
-        }
-      }
-    }
-    return this.getBlockOpen(identation) + parts.join("\n") + this.getBlockClose(identation, chainBlock);
-  };
-  const printFunctionType = goTranspiler.printFunctionType;
-  goTranspiler.printFunctionType = function(node) {
-    if (nonceShape(this, node) !== void 0) {
-      return "int64";
-    }
-    return printFunctionType.call(this, node);
-  };
-  const printAccess = goTranspiler.printPropertyAccessExpression;
-  goTranspiler.printPropertyAccessExpression = function(node, identation) {
-    const SK2 = ts.SyntaxKind;
-    if (node?.name?.text === "last_http_response" && baseMemberDecl(this, node, "last_http_response") !== void 0) {
-      const parent = node.parent;
-      const written = parent?.kind === SK2.BinaryExpression && parent.left === node && parent.operatorToken?.kind === SK2.EqualsToken;
-      if (!written) {
-        return "this.GetLast_http_response()";
-      }
-    }
-    return printAccess.call(this, node, identation);
-  };
-}
-
-// src/go/hx11fmgo5-GP08.ts
-init_esm_shims();
-var SLOT_TYPE = { "SafeStringPtr": "*string", "MapTyped": "map[string]any", "GetValueBool": "bool", "Int64Value": "int64" };
-var POINTER_TWIN = { "bool": "*bool", "int64": "*int64" };
-var OWNER_CLASS4 = "BaseExchange";
-function baseTupleCall(go, node) {
-  if (!ccxtGoTupleResultCall(node)) {
-    return void 0;
-  }
-  try {
-    const declaration = go.checkerOrUndefined()?.getResolvedSignature(node)?.declaration?.resolve();
-    return declaration?.parent?.name?.text === OWNER_CLASS4 ? node : void 0;
-  } catch (e) {
-    return void 0;
-  }
-}
-function isFirstElement(node) {
-  return node?.kind === ts.SyntaxKind.ElementAccessExpression && node.argumentExpression?.kind === ts.SyntaxKind.NumericLiteral && node.argumentExpression.text === "0";
-}
-function firstResultSource(go, declaration) {
-  if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts.SyntaxKind.Identifier || !isFirstElement(declaration.initializer)) {
-    return void 0;
-  }
-  const base = declaration.initializer.expression;
-  const direct = baseTupleCall(go, base);
-  if (direct !== void 0) {
-    return { "call": direct, "held": false };
-  }
-  const holder = heldHolder(go, base);
-  return holder === void 0 ? void 0 : { "call": baseTupleCall(go, holder.initializer), "held": true, "holder": holder };
-}
-function heldHolder(go, identifier) {
-  if (identifier?.kind !== ts.SyntaxKind.Identifier) {
-    return void 0;
-  }
-  let holder;
-  try {
-    holder = go.checkerOrUndefined()?.getSymbolAtLocation(identifier)?.valueDeclaration?.resolve();
-  } catch (e) {
-    return void 0;
-  }
-  const list = holder?.parent;
-  const statement = list?.parent;
-  if (holder?.kind !== ts.SyntaxKind.VariableDeclaration || holder.name?.kind !== ts.SyntaxKind.Identifier || (list.flags & ts.NodeFlags.Const) === 0 || list.declarations.length !== 1 || statement?.kind !== ts.SyntaxKind.FirstStatement || baseTupleCall(go, holder.initializer) === void 0) {
-    return void 0;
-  }
-  const siblings = statement.parent?.statements;
-  const reader = siblings?.[siblings.indexOf(statement) + 1];
-  if (siblings === void 0 || reader?.kind !== ts.SyntaxKind.FirstStatement || reader.declarationList.declarations.length !== 1 || reader.declarationList.declarations[0].initializer?.expression?.text !== holder.name.text) {
-    return void 0;
-  }
-  const scope = go.goEnclosingFunction(holder);
-  let reads = 0;
-  go.hasNodeWhere(scope, (n) => {
-    if (n.kind === ts.SyntaxKind.Identifier && n.text === holder.name.text && n !== holder.name) {
-      reads++;
-    }
-    return false;
-  });
-  return reads === 1 ? holder : void 0;
-}
-var ABSORBED = "FMGO5GP08";
-function readerOf(go, holderDeclaration) {
-  const siblings = holderDeclaration.parent?.parent?.parent?.statements;
-  return siblings?.[siblings.indexOf(holderDeclaration.parent.parent) + 1]?.declarationList?.declarations?.[0];
-}
-function installFmGo5GP08(goTranspiler) {
-  const flag = "fmGo5GP08Installed";
-  if (goTranspiler[flag] === true || typeof goTranspiler.printVariableDeclarationList !== "function") {
-    return;
-  }
-  goTranspiler[flag] = true;
-  const upstream = goTranspiler.printVariableDeclarationList;
-  goTranspiler.printVariableDeclarationList = function(node, identation) {
-    const printed = upstream.call(this, node, identation);
-    const declaration = node?.declarations?.[0];
-    if (typeof printed !== "string" || node.declarations.length !== 1 || node.parent?.kind !== ts.SyntaxKind.FirstStatement) {
-      return printed;
-    }
-    if (declaration.name?.kind === ts.SyntaxKind.Identifier && baseTupleCall(this, declaration.initializer) !== void 0) {
-      const reader = readerOf(this, declaration);
-      const source2 = reader === void 0 ? void 0 : firstResultSource(this, reader);
-      const folded2 = source2 === void 0 || source2.holder !== declaration ? void 0 : this.fmGo5GP08Shape(reader, source2, identation);
-      return folded2 === void 0 ? printed : folded2;
-    }
-    const source = firstResultSource(this, declaration);
-    if (source === void 0) {
-      return printed;
-    }
-    const folded = this.fmGo5GP08Shape(declaration, source, identation);
-    if (folded === void 0) {
-      return printed;
-    }
-    return source.held ? ABSORBED : folded;
-  };
-  const printFile = goTranspiler.printSourceFileStatements;
-  goTranspiler.printSourceFileStatements = function(node, identation) {
-    const out = printFile.call(this, node, identation);
-    return typeof out === "string" && out.includes(ABSORBED) ? out.split(ABSORBED + "\n").join("").split(ABSORBED).join("") : out;
-  };
-  goTranspiler.fmGo5GP08Shape = function(declaration, source, identation) {
-    const slot = SLOT_TYPE[ccxtGoTupleResultFirst(source.call)];
-    const bound = ccxtGoTupleResultUnwrap(this.printNode(source.call, 0));
-    if (slot === void 0 || bound === void 0 || bound.includes("\n")) {
-      return void 0;
-    }
-    const type = this.getGoLocalType(declaration, this.printNode(declaration.initializer, 0));
-    const name = this.printNode(declaration.name, 0);
-    const iden = this.getIden(identation);
-    if (type === slot || slot === "map[string]any" && type === "any" && !source.held) {
-      return source.held && type.charAt(0) === "*" ? iden + "var " + name + " " + type + " = nil\n" + iden + name + ", _ = " + bound : iden + name + ", _ := " + bound;
-    }
-    if (POINTER_TWIN[slot] === type) {
-      const temporary = name + "Value";
-      let clashes = false;
-      this.hasNodeWhere(this.goEnclosingFunction(declaration), (n) => {
-        clashes = clashes || n.kind === ts.SyntaxKind.Identifier && n.text === temporary;
-        return false;
-      });
-      return clashes ? void 0 : iden + temporary + ", _ := " + bound + "\n" + iden + name + " := &" + temporary;
-    }
-    return void 0;
-  };
-}
-
-// src/go/hx11fmgo5-G04.ts
-init_esm_shims();
-var OWNER_CLASSES = ["BaseExchange", "PredictionExchange"];
-var NIL_TESTABLE_FIELDS = /* @__PURE__ */ new Set([
-  "Outcomes",
-  "Outcomes_by_id",
-  "Events_by_slug",
-  "Features",
-  "ProxyUrl",
-  "Proxy",
-  "Proxy_url",
-  "ProxyUrlCallback",
-  "Proxy_url_callback",
-  "Markets",
-  "Markets_by_id",
-  "Currencies",
-  "Currencies_by_id"
-]);
-function isNilLiteral2(node) {
-  return node?.kind === ts.SyntaxKind.NullKeyword || node?.kind === ts.SyntaxKind.Identifier && node.text === "undefined";
-}
-function nilTestableBaseField(go, node) {
-  const SK2 = ts.SyntaxKind;
-  if (node?.kind !== SK2.PropertyAccessExpression || node.expression?.kind !== SK2.ThisKeyword || node.name?.kind !== SK2.Identifier) {
-    return false;
-  }
-  if (!NIL_TESTABLE_FIELDS.has(go.transformPropertyAccessExpressionName(node.name.text, node.name))) {
-    return false;
-  }
-  const decl = go.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
-  return decl?.kind === SK2.PropertyDeclaration && OWNER_CLASSES.includes(decl.parent?.name?.text);
-}
-function negativeIntegerLiteral(node) {
-  const SK2 = ts.SyntaxKind;
-  return node?.kind === SK2.PrefixUnaryExpression && node.operator === SK2.MinusToken && node.operand?.kind === SK2.NumericLiteral && /^\d{1,15}$/.test(node.operand.text) ? node.operand.text : void 0;
-}
-function installFmGo5G04(goTranspiler) {
-  const flag = "fmGo5G04Installed";
-  if (goTranspiler[flag] === true || typeof goTranspiler.printInlineEquality !== "function") {
-    return;
-  }
-  goTranspiler[flag] = true;
-  const upstream = goTranspiler.printInlineEquality;
-  goTranspiler.printInlineEquality = function(left, right, leftText, rightText, isEq) {
-    const SK2 = ts.SyntaxKind;
-    const op = isEq ? ["==", "!="] : ["!=", "=="];
-    if (isNilLiteral2(right) && nilTestableBaseField(this, left)) {
-      return `(${leftText} ${op[0]} nil)`;
-    }
-    if (isNilLiteral2(left) && nilTestableBaseField(this, right)) {
-      return `(${rightText} ${op[0]} nil)`;
-    }
-    for (const [ptr, lit, ptrText, ptrIsLeft] of [[left, right, leftText, true], [right, left, rightText, false]]) {
-      const digits = negativeIntegerLiteral(lit);
-      if (digits === void 0 || ptr?.kind !== SK2.Identifier) {
-        continue;
-      }
-      const declared = this.goDeclaredTypeOfIdentifier(ptr);
-      if (declared !== "*int64" && declared !== "*float64" && declared !== "*int") {
-        continue;
-      }
-      const constant = declared === "*int" ? `-${digits}` : `${declared.substring(1)}(-${digits})`;
-      const value = `*${ptrText}`;
-      const lhs = ptrIsLeft ? value : constant;
-      const rhs = ptrIsLeft ? constant : value;
-      return isEq ? `(${ptrText} != nil && ${lhs} == ${rhs})` : `(${ptrText} == nil || ${lhs} != ${rhs})`;
-    }
-    return upstream.call(this, left, right, leftText, rightText, isEq);
-  };
-}
-
-// src/go/index.ts
-function installCcxtGoHooks(goTranspiler, unifiedInt64Params) {
-  installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params);
-  installCcxtGoIndexableTypes(goTranspiler);
-  installCcxtGoParamTypes(goTranspiler);
-  installCcxtGoDictParams(goTranspiler);
-  installCcxtGoGb05ParamTypes(goTranspiler);
-  installCcxtGoGb11HandleErrorsCode(goTranspiler);
-  installCcxtGoSignTyping(goTranspiler);
-  installHx11w8NumParams(goTranspiler);
-  installRfGo5OwnedTables(goTranspiler);
-  installFmGo5G01(goTranspiler);
-  installFmGo5OG02(goTranspiler);
-  installFmGo5GP08(goTranspiler);
-  installFmGo5G04(goTranspiler);
-  installCcxtGoTupleSlotReads(goTranspiler);
-  installRdGo2WsCache(goTranspiler);
-}
-
-// src/rustPasses/index.ts
-init_esm_shims();
-
-// src/rustPasses/hx10w2-R01.ts
-init_esm_shims();
-var IDENT = "[A-Za-z_][A-Za-z0-9_]*";
-var MARKER_KEYS = ["__book_id", "__cache_id", "__cacheKind", "__sideKind", "__live_id"];
-var ROUTED_KEYS = ["cache", "hashmap", "subscriptions", "futures", "timestamp", "datetime", "nonce", "symbol", "checksum"];
-function maskText(src) {
-  let out = "";
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      while (i < src.length && src[i] !== "\n") {
-        out += " ";
-        i++;
-      }
-      continue;
-    }
-    if (c === '"') {
-      out += " ";
-      i++;
-      while (i < src.length && src[i] !== '"') {
-        if (src[i] === "\\") {
-          out += "  ";
-          i += 2;
-          continue;
-        }
-        out += src[i] === "\n" ? "\n" : " ";
-        i++;
-      }
-      if (i < src.length) {
-        out += " ";
-        i++;
-      }
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-function closeBracket(src, open) {
-  let depth = 0;
-  for (let k = open; k < src.length; k++) {
-    const c = src[k];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0)
-        return k + 1;
-    }
-  }
-  return -1;
-}
-function statementEnd(src, from) {
-  let depth = 0;
-  for (let k = from; k < src.length; k++) {
-    const c = src[k];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      if (depth === 0)
-        return -1;
-      depth--;
-    } else if (c === ";" && depth === 0)
-      return k + 1;
-    else if (c === "\n" && depth === 0)
-      return -1;
-  }
-  return -1;
-}
-var ARRAY_INIT = /^(?:Value::Array\(|Value::from\(\s*vec!\[|Value::from\(\s*std::sync::Arc::new\(\s*vec!\[|split\(|object_keys\(|object_values\(|self\.array_concat\(|self\.safe_list(?:_k|_n)?\()/;
-var DICT_INIT = /^(?:Value::Map\(|Value::Dict\()/;
-var SEQ_TYPE = /^(?:&)?(?:mut )?(?:Vec<(?:crate::)?Value>|\[(?:crate::)?Value\])$/;
-var INDEXED = ".cloned().unwrap_or(Value::Null)";
-function literalIndex(keyText2) {
-  const key = keyText2.trim().replace(/^&/, "").trim();
-  const int = /^Value::Int\(\s*(\d+)\s*\)$/.exec(key);
-  if (int !== null)
-    return Number(int[1]);
-  const str = /^Value::Str\(\s*"(\d+)"\s*(?:\.into\(\)|\.to_string\(\))?\s*\)$/.exec(key);
-  if (str !== null)
-    return Number(str[1]);
-  return -1;
-}
-function literalStrKey(keyText2) {
-  const key = keyText2.trim().replace(/^&/, "").trim();
-  const m = /^Value::Str\(\s*"([^"\\]*)"\s*(?:\.into\(\)|\.to_string\(\))?\s*\)$/.exec(key);
-  return m === null ? void 0 : m[1];
-}
-function identKey(keyText2) {
-  const m = /^&?([A-Za-z_][A-Za-z0-9_]*)$/.exec(keyText2.trim());
-  return m === null ? void 0 : m[1];
-}
-function callArgs(masked, callStart, recv) {
-  const head = "get_value(&" + recv;
-  if (masked.slice(callStart, callStart + head.length) !== head)
-    return void 0;
-  const afterRecv = callStart + head.length;
-  if (masked[afterRecv] !== ",")
-    return void 0;
-  const close = closeBracket(masked, masked.indexOf("(", callStart));
-  if (close < 0)
-    return void 0;
-  return [afterRecv, close];
-}
-function intPinned(region, name) {
-  const declRe = new RegExp("^[ \\t]*let (?:mut )?" + name + ":\\s*(?:crate::)?Value\\s*=\\s*Value::Int\\(\\s*\\d+\\s*\\);", "m");
-  const decl = declRe.exec(region);
-  if (decl === null)
-    return false;
-  const declEnd = decl.index + decl[0].length;
-  const useRe = new RegExp("(?<![A-Za-z0-9_.])" + name + "(?![A-Za-z0-9_])", "g");
-  let um;
-  while ((um = useRe.exec(region)) !== null) {
-    const at = um.index;
-    if (at >= decl.index && at < declEnd)
-      continue;
-    const before = region.slice(Math.max(0, at - 5), at);
-    const after = region.slice(at + name.length);
-    if (before === "&mut " && /^\s*\{\s*\*n \+= 1;\s*\}/.test(after))
-      continue;
-    if (before.endsWith("&"))
-      continue;
-    if (/^\.(?:as_(?:i64|f64)|clone)\(\)/.test(after))
-      continue;
-    return false;
-  }
-  return true;
-}
-function nativeGetValue(content, stats) {
-  const masked = maskText(content);
-  const edits = [];
-  const headers = [];
-  const headerRe = /^[ \t]*(?:pub )?(?:async )?fn /gm;
-  let hm;
-  while ((hm = headerRe.exec(masked)) !== null)
-    headers.push(hm.index);
-  headers.push(content.length);
-  for (let h = 0; h + 1 < headers.length; h++) {
-    const from = headers[h];
-    const to = h + 2 < headers.length ? headers[h + 1] : content.length;
-    const region = masked.slice(from, to);
-    const readText = (recv, seq, keyText2) => {
-      if (seq) {
-        const idx = literalIndex(keyText2);
-        if (idx >= 0)
-          return recv + ".get(" + idx + ")" + INDEXED;
-        const key = identKey(keyText2);
-        if (key !== void 0 && intPinned(region, key)) {
-          return recv + ".get(" + key + ".as_i64().unwrap() as usize)" + INDEXED;
-        }
-        return void 0;
-      }
-      const str = literalStrKey(keyText2);
-      if (str === void 0 || ROUTED_KEYS.indexOf(str) >= 0)
-        return void 0;
-      return recv + '.as_map().unwrap().get("' + str + '").cloned().unwrap_or(Value::Null)';
-    };
-    const rewriteRead = (recv, seq, callStart) => {
-      const args = callArgs(masked, callStart, recv);
-      if (args === void 0)
-        return void 0;
-      const text = readText(recv, seq, content.slice(args[0] + 1, args[1] - 1));
-      return text === void 0 ? void 0 : { start: callStart, end: args[1], text };
-    };
-    const declared = /* @__PURE__ */ new Map();
-    const declType = new RegExp("\\blet (?:mut )?(" + IDENT + ")\\s*:\\s*([^=;]+?)\\s*=", "g");
-    let dm;
-    while ((dm = declType.exec(region)) !== null)
-      declared.set(dm[1], dm[2].trim());
-    const headerEnd = region.indexOf("{");
-    const headerText = headerEnd < 0 ? region : region.slice(0, headerEnd);
-    const paramRe = new RegExp("\\b(?:mut )?(" + IDENT + ")\\s*:\\s*([&\\[A-Za-z_][A-Za-z0-9_:<>,\\s&\\[\\]]*)", "g");
-    while ((dm = paramRe.exec(headerText)) !== null) {
-      if (!declared.has(dm[1]))
-        declared.set(dm[1], dm[2].trim());
-    }
-    for (const [name, type] of declared) {
-      if (!SEQ_TYPE.test(type))
-        continue;
-      const useRe = new RegExp("get_value\\(&" + name + "(?![A-Za-z0-9_])", "g");
-      let um;
-      while ((um = useRe.exec(region)) !== null) {
-        const read = rewriteRead(name, true, from + um.index);
-        if (read === void 0)
-          continue;
-        edits.push(read);
-        if (stats)
-          stats.seqReads++;
-      }
-    }
-    const declRe = new RegExp("^([ \\t]*)let (mut )?(" + IDENT + "):\\s*(?:crate::)?Value\\s*=\\s*", "gm");
-    while ((dm = declRe.exec(region)) !== null) {
-      const name = dm[3];
-      const declAt = from + dm.index;
-      const initStart = declAt + dm[0].length;
-      const stmtEnd3 = statementEnd(masked, initStart);
-      if (stmtEnd3 < 0)
-        continue;
-      const initText = content.slice(initStart, stmtEnd3).trim();
-      const isSeq = ARRAY_INIT.test(initText);
-      const isDict = DICT_INIT.test(initText);
-      if (!isSeq && !isDict)
-        continue;
-      const declCount = (region.match(new RegExp("\\blet (?:mut )?" + name + "\\b", "g")) ?? []).length;
-      if (declCount !== 1)
-        continue;
-      if (new RegExp("(?<![A-Za-z0-9_.])" + name + "\\s*=[^=]").test(region))
-        continue;
-      const dictKeys = [];
-      if (isDict) {
-        const keys = insertedKeys(initText);
-        if (keys === void 0)
-          continue;
-        for (const k of keys)
-          dictKeys.push(k);
-      }
-      const useRe = new RegExp("(?<![A-Za-z0-9_.])" + name + "(?![A-Za-z0-9_])", "g");
-      const reads = [];
-      let ok = true;
-      let um;
-      while ((um = useRe.exec(region)) !== null) {
-        const at2 = um.index;
-        if (at2 >= dm.index && at2 < dm.index + dm[0].length)
-          continue;
-        const gv = region.lastIndexOf("get_value(", at2);
-        if (gv >= 0 && region.slice(gv, at2) === "get_value(&") {
-          const read = rewriteRead(name, isSeq, from + gv);
-          if (read === void 0) {
-            ok = false;
-            break;
-          }
-          reads.push(read);
-          continue;
-        }
-        if (isSeq && /^\.\s*(?:len|is_empty)\s*\(\s*\)/.test(region.slice(at2 + name.length)))
-          continue;
-        if (isSeq) {
-          ok = false;
-          break;
-        }
-        const before = region.slice(Math.max(0, at2 - 24), at2);
-        const writeHead = /(?:add_element_to_object|set_value)\(\s*&mut\s+$/.exec(before);
-        if (writeHead !== null) {
-          const keyStart = at2 + name.length;
-          const key = /^\s*,\s*&?\s*Value::Str\(\s*"([^"\\]*)"\s*(?:\.into\(\)|\.to_string\(\))?\s*\)\s*,/.exec(region.slice(keyStart));
-          if (key === null) {
-            ok = false;
-            break;
-          }
-          if (ROUTED_KEYS.indexOf(key[1]) >= 0 || MARKER_KEYS.indexOf(key[1]) >= 0) {
-            ok = false;
-            break;
-          }
-          dictKeys.push(key[1]);
-          continue;
-        }
-        if (/&mut\s+$/.test(before)) {
-          ok = false;
-          break;
-        }
-      }
-      if (!ok || reads.length === 0)
-        continue;
-      if (dictKeys.some((k) => MARKER_KEYS.indexOf(k) >= 0))
-        continue;
-      if (isSeq) {
-        const typeAt = declAt + dm[0].length - "Value = ".length;
-        edits.push({ start: typeAt, end: typeAt + "Value".length, text: "Vec<Value>" });
-        const initExpr = content.slice(initStart, stmtEnd3 - 1).replace(/\s+$/, "");
-        const inner = arrayPayload(initExpr);
-        edits.push({
-          start: initStart,
-          end: initStart + initExpr.length,
-          text: inner !== void 0 ? inner : initExpr + ".as_array().unwrap().clone()"
-        });
-        if (stats) {
-          stats.seqLocals++;
-          stats.seqReads += reads.length;
-        }
-      } else if (stats) {
-        stats.dictLocals++;
-        stats.dictReads += reads.length;
-      }
-      for (const r of reads)
-        edits.push(r);
-    }
-  }
-  if (edits.length === 0)
-    return content;
-  edits.sort((a, b) => a.start - b.start);
-  let out = "";
-  let at = 0;
-  for (const e of edits) {
-    if (e.start < at)
-      continue;
-    out += content.slice(at, e.start) + e.text;
-    at = e.end;
-  }
-  return out + content.slice(at);
-}
-function arrayPayload(initExpr) {
-  const strip = (text, prefix) => {
-    if (!text.startsWith(prefix) || !text.endsWith(")"))
-      return void 0;
-    return text.slice(prefix.length, -1).trim();
-  };
-  const direct = strip(initExpr, "Value::Array(");
-  if (direct !== void 0 && direct.length > 0)
-    return direct;
-  let inner = strip(initExpr, "Value::from(");
-  if (inner !== void 0)
-    inner = strip(inner, "std::sync::Arc::new(") ?? inner;
-  if (inner === void 0 || !inner.startsWith("vec!["))
-    return void 0;
-  return inner;
-}
-function insertedKeys(initText) {
-  const keys = [];
-  const insertRe = /\.insert\(\s*(?:"([^"\\]*)"\s*(?:\.to_string\(\)|\.into\(\))|([^,]+?))\s*,/g;
-  let im;
-  while ((im = insertRe.exec(initText)) !== null) {
-    if (im[1] === void 0)
-      return void 0;
-    keys.push(im[1]);
-  }
-  return keys;
-}
-var CASES = [
-  {
-    name: "seq: Value::from(vec![..]) local retyped, literal int key",
-    src: [
-      "pub fn demo(&mut self) -> Value {",
-      "    let mut rows: Value = Value::from(vec![Value::Int(1), Value::Int(2)]);",
-      "    let mut first: Value = get_value(&rows, &Value::Int(1));",
-      "    return first;",
-      "}"
-    ].join("\n"),
-    want: ["let mut rows: Vec<Value> =", "rows.get(1).cloned().unwrap_or(Value::Null)"],
-    gone: ["get_value("]
-  },
-  {
-    name: "seq: safe_list_k local, numeric-string key",
-    src: [
-      "pub fn demo(&mut self) -> Value {",
-      '    let mut data: Value = self.safe_list_k(response.clone(), "data", &[Value::from(vec![])]);',
-      '    let mut head: Value = get_value(&data, &Value::Str("0".into()));',
-      "    return head;",
-      "}"
-    ].join("\n"),
-    want: ["let mut data: Vec<Value> =", "data.get(0).cloned().unwrap_or(Value::Null)"],
-    gone: ["get_value("]
-  },
-  {
-    name: "seq: split local read by a Value::Int-pinned counter",
-    src: [
-      "pub fn demo(&mut self) -> Value {",
-      '    let mut parts: Value = split(&raw, &Value::Str("_".into()));',
-      "    let mut i: Value = Value::Int(0);",
-      "    while i.as_f64().unwrap_or(f64::NAN) < 2.0 {",
-      "        let mut part: Value = get_value(&parts, &i);",
-      "        if let Value::Int(n) = &mut i { *n += 1; }",
-      "    }",
-      "    return Value::Null;",
-      "}"
-    ].join("\n"),
-    want: ["let mut parts: Vec<Value> =", "parts.get(i.as_i64().unwrap() as usize).cloned().unwrap_or(Value::Null)"],
-    gone: ["get_value("]
-  },
-  {
-    name: "seq: unpinned dynamic key stays a helper call",
-    src: [
-      "pub fn demo(&mut self, mut key: Value) -> Value {",
-      '    let mut parts: Value = split(&raw, &Value::Str("_".into()));',
-      "    return get_value(&parts, &key);",
-      "}"
-    ].join("\n"),
-    want: ["let mut parts: Value =", "get_value(&parts, &key)"],
-    gone: ["Vec<Value>"]
-  },
-  {
-    name: "seq: a Value sink keeps the box",
-    src: [
-      "pub fn demo(&mut self) -> Value {",
-      '    let mut data: Value = self.safe_list_k(response.clone(), "data", &[Value::from(vec![])]);',
-      "    let mut first: Value = get_value(&data, &Value::Int(0));",
-      "    return self.parse_trades(data, &[]);",
-      "}"
-    ].join("\n"),
-    want: ["let mut data: Value =", "get_value(&data, &Value::Int(0))"],
-    gone: []
-  },
-  {
-    name: "dict: fresh literal with a literal key",
-    src: [
-      "pub fn demo(&mut self) -> Value {",
-      "    let mut request: Value = Value::Map({",
-      "        let mut m = indexmap::IndexMap::new();",
-      '        m.insert("amount".to_string(), amount);',
-      "        m",
-      "    });",
-      '    let mut amount2: Value = get_value(&request, &Value::Str("amount".into()));',
-      "    return amount2;",
-      "}"
-    ].join("\n"),
-    want: ["let mut request: Value =", 'request.as_map().unwrap().get("amount").cloned().unwrap_or(Value::Null)'],
-    gone: ["get_value("]
-  },
-  {
-    name: "dict: a routed key stays a helper call",
-    src: [
-      "pub fn demo(&mut self) -> Value {",
-      "    let mut book: Value = Value::Map({",
-      "        let mut m = indexmap::IndexMap::new();",
-      '        m.insert("bids".to_string(), bids);',
-      "        m",
-      "    });",
-      '    return get_value(&book, &Value::Str("cache".into()));',
-      "}"
-    ].join("\n"),
-    want: ['get_value(&book, &Value::Str("cache".into()))'],
-    gone: []
-  },
-  {
-    name: "dict: a computed insert key makes the key set dynamic",
-    src: [
-      "pub fn demo(&mut self, mut key: Value) -> Value {",
-      "    let mut request: Value = Value::Map({",
-      "        let mut m = indexmap::IndexMap::new();",
-      "        m.insert(crate::runtime::stringify_param(&key), amount);",
-      "        m",
-      "    });",
-      '    return get_value(&request, &Value::Str("amount".into()));',
-      "}"
-    ].join("\n"),
-    want: ['get_value(&request, &Value::Str("amount".into()))'],
-    gone: []
-  },
-  {
-    name: "seq: a reassigned local keeps the box",
-    src: [
-      "pub fn demo(&mut self) -> Value {",
-      "    let mut rows: Value = Value::from(vec![Value::Int(1)]);",
-      "    rows = self.parse_rows();",
-      "    return get_value(&rows, &Value::Int(0));",
-      "}"
-    ].join("\n"),
-    want: ["let mut rows: Value =", "get_value(&rows, &Value::Int(0))"],
-    gone: []
-  },
-  {
-    name: "seq: an already typed receiver goes native as is",
-    src: [
-      "pub fn demo(&mut self, mut rows: &[Value]) -> Value {",
-      "    return get_value(&rows, &Value::Int(2));",
-      "}"
-    ].join("\n"),
-    want: ["rows.get(2).cloned().unwrap_or(Value::Null)"],
-    gone: ["get_value("]
-  }
-];
-
-// src/rustPasses/hx10w2-R02.ts
-init_esm_shims();
-var CALL = "add_element_to_object(";
-var TAGFREE_FIELDS = /* @__PURE__ */ new Set([
-  "balance",
-  "orderbooks",
-  "trades",
-  "tickers",
-  "bidsasks",
-  "ohlcvs",
-  "clients",
-  "transactions",
-  "headers",
-  "currencies",
-  "has",
-  "tokenBucket",
-  "options",
-  "markets",
-  "urls",
-  "positions",
-  "fees",
-  "exceptions",
-  "markets_by_id",
-  "currencies_by_id"
-]);
-var NEST_FIELDS = /* @__PURE__ */ new Set([
-  "options",
-  "urls",
-  "fees",
-  "exceptions",
-  "markets",
-  "currencies",
-  "headers",
-  "has",
-  "tokenBucket",
-  "markets_by_id",
-  "currencies_by_id"
-]);
-var TAG_ACCESS = [
-  "self.orderbooks",
-  "self.balance",
-  "self.ohlcvs",
-  "self.tickers",
-  "self.trades",
-  "self.bidsasks",
-  "self.positions",
-  "self.clients",
-  "self.transactions",
-  '"subscriptions"',
-  '"futures"',
-  '"cache"',
-  ".hashmap",
-  "self.order_book(",
-  "self.order_book_side("
-];
-var BUILDERS = /* @__PURE__ */ new Set(["account", "safe_ledger_entry", "deposit_withdraw_fee"]);
-var EXTENDERS = /* @__PURE__ */ new Set(["extend", "omit", "keysort"]);
-var PARSERS = /* @__PURE__ */ new Set([
-  "parse_order",
-  "parse_ws_order",
-  "parse_trade",
-  "parse_ws_trade",
-  "parse_ticker",
-  "parse_ws_ticker",
-  "parse_position",
-  "parse_ws_position",
-  "parse_balance",
-  "parse_market",
-  "parse_currency",
-  "parse_transaction",
-  "parse_ledger_entry",
-  "parse_deposit_withdraw_fee",
-  "parse_account",
-  "parse_funding_rate",
-  "parse_open_interest",
-  "parse_liquidation",
-  "parse_borrow_rate",
-  "parse_income"
-]);
-var LITERAL_KEY = /^&Value::Str\(("(?:[^"\\]|\\.)*")\.(?:into|to_string)\(\)\)$/;
-var PLACE_KEY = /^&([A-Za-z_][A-Za-z0-9_]*)$/;
-var IDENT2 = /^[A-Za-z_][A-Za-z0-9_]*$/;
-function isWordChar(c) {
-  return c >= "a" && c <= "z" || c >= "A" && c <= "Z" || c >= "0" && c <= "9" || c === "_";
-}
-function splitArgs(text) {
-  const out = [];
-  let depth = 0, inStr = false, esc = false, cur = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inStr) {
-      if (esc)
-        esc = false;
-      else if (c === "\\")
-        esc = true;
-      else if (c === '"')
-        inStr = false;
-      continue;
-    }
-    if (c === '"') {
-      inStr = true;
-      continue;
-    }
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}")
-      depth--;
-    else if (c === "," && depth === 0) {
-      out.push(text.slice(cur, i));
-      cur = i + 1;
-    }
-  }
-  out.push(text.slice(cur));
-  return out.length > 0 ? out : void 0;
-}
-function closeParenAt(content, open) {
-  let depth = 0, inStr = false, esc = false;
-  for (let i = open; i < content.length; i++) {
-    const c = content[i];
-    if (inStr) {
-      if (esc)
-        esc = false;
-      else if (c === "\\")
-        esc = true;
-      else if (c === '"')
-        inStr = false;
-      continue;
-    }
-    if (c === '"') {
-      inStr = true;
-      continue;
-    }
-    if (c === "(")
-      depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0)
-        return i + 1;
-    }
-  }
-  return -1;
-}
-function fnRegions(content) {
-  const headers = [];
-  const rx = /^[ \t]*(?:pub )?(?:async )?fn [A-Za-z0-9_]+/gm;
-  let m;
-  while ((m = rx.exec(content)) !== null)
-    headers.push(m.index);
-  const out = [];
-  for (let i = 0; i < headers.length; i++) {
-    out.push({ start: headers[i], end: i + 1 < headers.length ? headers[i + 1] : content.length });
-  }
-  return out;
-}
-function regionAt(regions, pos) {
-  let lo = 0, hi = regions.length - 1, hit;
-  while (lo <= hi) {
-    const mid = lo + hi >> 1;
-    if (regions[mid].start <= pos) {
-      hit = regions[mid];
-      lo = mid + 1;
-    } else
-      hi = mid - 1;
-  }
-  return hit && pos < hit.end ? hit : void 0;
-}
-function firstArg(text) {
-  const open = text.indexOf("(");
-  if (open < 0)
-    return void 0;
-  let depth = 0, inStr = false, esc = false;
-  for (let i = open; i < text.length; i++) {
-    const c = text[i];
-    if (inStr) {
-      if (esc)
-        esc = false;
-      else if (c === "\\")
-        esc = true;
-      else if (c === '"')
-        inStr = false;
-      continue;
-    }
-    if (c === '"') {
-      inStr = true;
-      continue;
-    }
-    if (c === "(")
-      depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0)
-        return text.slice(open + 1, i);
-    } else if (c === "," && depth === 1)
-      return text.slice(open + 1, i);
-  }
-  return void 0;
-}
-var Proof = class {
-  constructor(content, regions) {
-    this.calls = /* @__PURE__ */ new Map();
-    this.locals = /* @__PURE__ */ new Map();
-    this.content = content;
-    this.regions = regions;
-  }
-  /** A local whose every binding is a fresh tag-free literal. */
-  localTagFree(name, body, region, depth = 0) {
-    if (depth > 2)
-      return false;
-    const key = region.start + ":" + name;
-    if (depth === 0) {
-      const cached = this.locals.get(key);
-      if (cached !== void 0)
-        return cached;
-    }
-    const verdict = this.localTagFreeUncached(name, body, region, depth);
-    if (depth === 0)
-      this.locals.set(key, verdict);
-    return verdict;
-  }
-  localTagFreeUncached(name, body, region, depth) {
-    if (body.includes('"__'))
-      return false;
-    const decl = new RegExp("^[ \\t]*let mut " + name + "[ \\t]*:[ \\t]*Value\\b(.*)$", "gm");
-    const bare = new RegExp("^[ \\t]*let mut " + name + "[ \\t]*=(.*)$", "gm");
-    const bound = new RegExp("(^|[^.\\w])" + name + "[ \\t]*=(?!=)(.*)$", "gm");
-    const sources = [];
-    let sawBind = false;
-    let m;
-    while ((m = bare.exec(body)) !== null) {
-      sawBind = true;
-      sources.push(m[1]);
-    }
-    while ((m = decl.exec(body)) !== null) {
-      sawBind = true;
-      const rest = m[1].trim();
-      if (rest.length > 0) {
-        if (rest[0] !== "=")
-          return false;
-        sources.push(rest.slice(1));
-      }
-    }
-    if (!sawBind)
-      return false;
-    while ((m = bound.exec(body)) !== null)
-      sources.push(m[2]);
-    for (const src of sources) {
-      if (!this.srcTagFree(src, body, region, depth))
-        return false;
-    }
-    return true;
-  }
-  /** A value expression that can only be a fresh plain dict. */
-  srcTagFree(src, body, region, depth = 0) {
-    const t = src.trim();
-    if (depth > 2)
-      return false;
-    if (t.startsWith("Value::Map("))
-      return true;
-    if (t.startsWith("Value::Null"))
-      return true;
-    const callee = t.match(/^self\.([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(/);
-    if (callee === null)
-      return false;
-    const name = callee[1];
-    if (BUILDERS.has(name) || PARSERS.has(name))
-      return true;
-    if (EXTENDERS.has(name)) {
-      const arg = firstArg(t);
-      if (arg === void 0)
-        return false;
-      const head = arg.trim();
-      if (IDENT2.test(head))
-        return this.localTagFree(head, body, region, depth + 1);
-      return this.srcTagFree(head, body, region, depth + 1);
-    }
-    return this.calleePlain(name, region);
-  }
-  /** Same-file method whose only `return` is a proven tag-free local. */
-  calleePlain(name, caller) {
-    const key = caller.start;
-    const cache = this.calls.get(key * 1e5 + (name.charCodeAt(0) || 0));
-    if (cache !== void 0)
-      return cache;
-    let verdict = false;
-    for (const r of this.regions) {
-      const body = this.content.slice(r.start, r.end);
-      const header = body.slice(0, body.indexOf("\n") < 0 ? body.length : body.indexOf("\n"));
-      if (!new RegExp("fn " + name + "\\s*\\(").test(header))
-        continue;
-      if (body.includes('"__'))
-        continue;
-      const ret = body.match(/^[ \t]*return ([A-Za-z_][A-Za-z0-9_]*);/m);
-      if (ret !== null) {
-        if (this.localTagFree(ret[1], body, r)) {
-          verdict = true;
-          break;
-        }
-        continue;
-      }
-      if (new RegExp("\\b[A-Za-z0-9_]+Core::" + name + "\\(").test(body)) {
-        verdict = true;
-        break;
-      }
-    }
-    this.calls.set(key * 1e5 + (name.charCodeAt(0) || 0), verdict);
-    return verdict;
-  }
-};
-function callArgs2(text, name) {
-  if (!text.startsWith(name + "("))
-    return void 0;
-  const after = closeParenAt(text, name.length);
-  if (after !== text.length)
-    return void 0;
-  return splitArgs(text.slice(name.length + 1, after - 1));
-}
-function keyConv(arg, intermediate) {
-  const lit = arg.trim().match(LITERAL_KEY);
-  if (lit !== null)
-    return lit[1] + ".to_string()";
-  if (intermediate)
-    return void 0;
-  const place = arg.trim().match(PLACE_KEY);
-  if (place !== null)
-    return "crate::runtime::stringify_param(&" + place[1] + ")";
-  return void 0;
-}
-function r02NativeInserts(content) {
-  if (!content.includes(CALL))
-    return content;
-  const regions = fnRegions(content);
-  const proof = new Proof(content, regions);
-  const edits = [];
-  let i = 0;
-  while (true) {
-    const at = content.indexOf(CALL, i);
-    if (at < 0)
-      break;
-    i = at + 1;
-    if (at > 0 && isWordChar(content[at - 1]))
-      continue;
-    const open = at + CALL.length - 1;
-    const after = closeParenAt(content, open);
-    if (after < 0)
-      break;
-    const args = splitArgs(content.slice(open + 1, after - 1));
-    if (args === void 0 || args.length !== 3)
-      continue;
-    const region = regionAt(regions, at);
-    if (region === void 0)
-      continue;
-    const body = content.slice(region.start, region.end);
-    const chain = [];
-    let cur = args[0].trim();
-    let ok = true;
-    while (true) {
-      const outer = callArgs2(cur, "get_value_mut");
-      if (outer === void 0 || outer.length !== 2)
-        break;
-      const inner = outer[0].trim();
-      if (!inner.startsWith("&mut "))
-        break;
-      chain.push(outer[1].trim());
-      cur = inner.slice(5).trim();
-    }
-    let base;
-    let place;
-    if (cur.startsWith("&mut ")) {
-      base = cur.slice(5).trim();
-      place = "&mut " + base;
-    } else if (cur.startsWith("unsafe {")) {
-      const coerce = cur.match(/^unsafe \{ (crate::runtime::coerce_value_to_mut\(&self\.[A-Za-z_][A-Za-z0-9_]*\)) \}$/);
-      if (coerce === null)
-        continue;
-      place = cur;
-      base = coerce[1].replace("coerce_value_to_mut(&self.", "self.").replace(/\)$/, "");
-    } else if (/^(?:self\.)?[A-Za-z_][A-Za-z0-9_]*$/.test(cur)) {
-      base = cur;
-      place = "&mut " + cur;
-    } else
-      continue;
-    const field = base.match(/^self\.([A-Za-z_][A-Za-z0-9_]*)$/);
-    const local = base.match(/^([A-Za-z_][A-Za-z0-9_]*)$/);
-    if (field !== null) {
-      const name = field[1];
-      if (!TAGFREE_FIELDS.has(name))
-        continue;
-      if (chain.length > 0 && !NEST_FIELDS.has(name))
-        continue;
-    } else if (local !== null) {
-      if (!proof.localTagFree(local[1], body, region))
-        continue;
-      if (chain.length > 0 && TAG_ACCESS.some((t) => body.includes(t)))
-        continue;
-    } else
-      continue;
-    const keys = [];
-    for (const k of chain.reverse()) {
-      const conv = keyConv(k, true);
-      if (conv === void 0) {
-        ok = false;
-        break;
-      }
-      keys.push(conv);
-    }
-    if (!ok)
-      continue;
-    const last = keyConv(args[1], false);
-    if (last === void 0)
-      continue;
-    const value = args[2].trim();
-    const receiverName = field !== null ? field[1] : local !== null ? local[1] : "";
-    const readsReceiver = field !== null ? /\bself\b/.test(value) : new RegExp("\\b" + receiverName + "\\b").test(value);
-    if (keys.length > 9)
-      continue;
-    const tag = (i2) => "__rd" + "abcdefghij"[i2];
-    let insert = "std::sync::Arc::make_mut(" + tag(keys.length) + ").insert(" + last + ", " + value + ");";
-    for (let d = keys.length - 1; d >= 0; d--) {
-      insert = "if let Value::Dict(" + tag(d + 1) + ") = std::sync::Arc::make_mut(" + tag(d) + ").entry(" + keys[d] + ").or_insert(Value::Null) { " + insert + " }";
-    }
-    let native = "if let Value::Dict(" + tag(0) + ") = " + place + " { " + insert + " }";
-    if (readsReceiver)
-      native = "{ let __rdt = " + value + "; " + native.replace(", " + value + ");", ", __rdt);") + " }";
-    const lineStart = content.lastIndexOf("\n", at) + 1;
-    let lineEnd = content.indexOf("\n", after);
-    if (lineEnd < 0)
-      lineEnd = content.length;
-    const before = content.slice(lineStart, lineEnd);
-    let suffix = content.slice(after, lineEnd);
-    if (suffix.startsWith(";"))
-      suffix = suffix.slice(1);
-    const merged = content.slice(lineStart, at) + native + suffix;
-    if (before.length <= 400 && merged.length > 400)
-      continue;
-    edits.push({ start: at, end: after, text: native });
-  }
-  if (edits.length === 0)
-    return content;
-  let out = "";
-  let pos = 0;
-  for (const e of edits) {
-    out += content.slice(pos, e.start) + e.text;
-    let p = e.end;
-    while (p < content.length && (content[p] === " " || content[p] === "	"))
-      p++;
-    if (p < content.length && content[p] === ";")
-      p++;
-    pos = p;
-  }
-  out += content.slice(pos);
-  return out;
-}
-
-// src/rustPasses/hx10w2-R03.ts
-init_esm_shims();
-var R03_SITE_RX = /(?<![A-Za-z0-9_:.])(in_op|object_keys|object_values|get_array_length)\(/g;
-var R03_LITERAL_KEY = /^&Value::Str\(("(?:[^"\\]|\\.)*")\.(?:to_string|into)\(\)\)$/;
-var R03_IDENT_ARG = /^&([a-z_][A-Za-z0-9_]*)$/;
-var R03_CLIENT_STATE = /^&get_value\(&(client), &Value::Str\("(subscriptions|futures)"\.(?:to_string|into)\(\)\)\)$/;
-var R03_SIDE_WORD = /asks|bids|[Ss]ide|[Bb]ook|entries|__sideKind/;
-var R03_JSON_SOURCE = /^(?:crate::value::)?(?:get_value|get_value_k)\(|^self\.(?:safe_\w+|parse_\w+|fetch\w*|to_array|array_concat|extend|omit)\(|^get_arg\(|^split\(|^Value::(?:Map|List|Array|Str|from)\(/;
-var R03_READS = /* @__PURE__ */ new Set([
-  "clone",
-  "len",
-  "is_empty",
-  "as_map",
-  "as_array",
-  "as_str",
-  "as_i64",
-  "as_f64",
-  "as_bool",
-  "is_truthy",
-  "is_null",
-  "is_str",
-  "is_map",
-  "is_array",
-  "to_string",
-  "to_json"
-]);
-var R03_SHAPE_WRITES = /(?:(?<![A-Za-z0-9_:.])(?:add_element_to_object|set_value|append_to_array|remove)\(|(?:^|[^A-Za-z0-9_:.])if let (?:Value::(?:Dict|Arr)\(__[a-z]+\)|\(Value::(?:Dict|Arr)\(__[a-z]+\), ?(?:&mut )?[a-z_][A-Za-z0-9_]*\)) = )$/;
-function r03Mask(content) {
-  const out = content.split("");
-  let i = 0;
-  while (i < content.length) {
-    const c = content[i];
-    if (c === "/" && content[i + 1] === "/") {
-      while (i < content.length && content[i] !== "\n")
-        out[i++] = " ";
-      continue;
-    }
-    if (c === '"') {
-      out[i++] = " ";
-      while (i < content.length && content[i] !== '"') {
-        if (content[i] === "\\")
-          out[i++] = " ";
-        out[i++] = " ";
-      }
-      if (i < content.length)
-        out[i++] = " ";
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
-}
-function r03Close(content, open) {
-  const pairs = { "(": ")", "[": "]", "{": "}" };
-  const close = pairs[content[open]];
-  if (close === void 0)
-    return -1;
-  let depth = 0;
-  let i = open;
-  while (i < content.length) {
-    const c = content[i];
-    if (c === '"') {
-      i++;
-      while (i < content.length && content[i] !== '"') {
-        if (content[i] === "\\")
-          i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0)
-        return c === close ? i : -1;
-    }
-    i++;
-  }
-  return -1;
-}
-function r03Split(inner) {
-  const parts = [];
-  let depth = 0;
-  let cur = "";
-  let i = 0;
-  while (i < inner.length) {
-    const c = inner[i];
-    if (c === '"') {
-      const start = i;
-      i++;
-      while (i < inner.length && inner[i] !== '"') {
-        if (inner[i] === "\\")
-          i++;
-        i++;
-      }
-      i++;
-      cur += inner.slice(start, i);
-      continue;
-    }
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}")
-      depth--;
-    if (c === "," && depth === 0) {
-      parts.push(cur);
-      cur = "";
-    } else {
-      cur += c;
-    }
-    i++;
-  }
-  parts.push(cur);
-  return parts;
-}
-function r03StmtEnd(content, i) {
-  let depth = 0;
-  while (i < content.length) {
-    const c = content[i];
-    if (c === '"') {
-      i++;
-      while (i < content.length && content[i] !== '"') {
-        if (content[i] === "\\")
-          i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth < 0)
-        return -1;
-    } else if (c === ";" && depth === 0) {
-      return i;
-    }
-    i++;
-  }
-  return -1;
-}
-function r03Parens(e) {
-  let t = e.trim();
-  while (t.startsWith("(") && r03Close(t, 0) === t.length - 1)
-    t = t.slice(1, -1).trim();
-  return t;
-}
-function r03IsCall(e, name) {
-  if (!e.startsWith(name + "("))
-    return false;
-  return r03Close(e, name.length) === e.length - 1;
-}
-var R03Prover = class {
-  constructor(content) {
-    this.headers = [0];
-    this.memo = /* @__PURE__ */ new Map();
-    this.pending = /* @__PURE__ */ new Set();
-    this.content = content;
-    this.masked = r03Mask(content);
-    for (const m of this.masked.matchAll(/\n[ \t]*(?:pub(?:\([a-z]+\))? )?(?:async )?fn /g)) {
-      this.headers.push(m.index + 1);
-    }
-    this.headers.push(content.length);
-  }
-  // Enclosing fn region containing `pos`.
-  region(pos) {
-    let lo = 0;
-    for (let h = 0; h + 1 < this.headers.length; h++)
-      if (this.headers[h] <= pos)
-        lo = h;
-    return lo;
-  }
-  facts(name, pos) {
-    if (!/^[a-z_][A-Za-z0-9_]*$/.test(name))
-      return void 0;
-    const lo = this.region(pos);
-    const key = `${lo}:${name}`;
-    if (this.memo.has(key))
-      return this.memo.get(key);
-    if (this.pending.has(key))
-      return void 0;
-    this.pending.add(key);
-    const result = this.prove(name, this.headers[lo], this.headers[lo + 1], /* @__PURE__ */ new Set());
-    this.pending.delete(key);
-    this.memo.set(key, result);
-    return result;
-  }
-  prove(name, from, to, seen) {
-    const region = this.masked.slice(from, to);
-    const real = this.content.slice(from, to);
-    const header = real.slice(0, Math.max(0, real.indexOf("{")));
-    const isParam = new RegExp(`[^A-Za-z0-9_]${name}\\s*:`).test(header);
-    const rebind = new RegExp(`(?<!\\|)\\|(?!\\|)[^|\\n]*\\b${name}\\b[^|\\n]*(?<!\\|)\\|(?!\\|)|\\bfor [^\\n]*\\b${name}\\b[^\\n]* in |\\blet \\([^)]*\\b${name}\\b|\\b${name}\\s*@|\\b${name}\\s*[-+*/%|&^]=`);
-    if (rebind.test(region) || new RegExp(`\\*\\s*${name}\\b\\s*=(?!=)`).test(region))
-      return void 0;
-    let writes = 0;
-    let proof;
-    let shapeUnknown = false;
-    let lenSafe = !R03_SIDE_WORD.test(name);
-    const writesRe = new RegExp(`(?<![A-Za-z0-9_.*])(let (?:mut )?)?${name}\\b(\\s*:\\s*([A-Za-z_][A-Za-z0-9_<>,:& ]*?))?\\s*=(?!=)`, "g");
-    for (const m of region.matchAll(writesRe)) {
-      const typed = m[3] === void 0 ? "Value" : m[3].replace(/\s+/g, "");
-      if (typed !== "Value")
-        return void 0;
-      const rhsStart = m.index + m[0].length;
-      const end = r03StmtEnd(real, rhsStart);
-      if (end < 0)
-        return void 0;
-      const raw = r03Parens(real.slice(rhsStart, end));
-      const write = this.source(raw, from + m.index, seen);
-      writes++;
-      if (write === void 0) {
-        lenSafe = lenSafe && R03_JSON_SOURCE.test(raw) && !R03_SIDE_WORD.test(raw);
-        shapeUnknown = true;
-        continue;
-      }
-      if (shapeUnknown) {
-        lenSafe = lenSafe && write.markerFree && !R03_SIDE_WORD.test(raw);
-        continue;
-      }
-      if (proof === void 0)
-        proof = { ...write };
-      else if (proof.kind !== write.kind)
-        shapeUnknown = true;
-      else {
-        proof.markerFree = proof.markerFree && write.markerFree;
-        proof.untagged = proof.untagged && write.untagged;
-      }
-      lenSafe = lenSafe && write.markerFree && !R03_SIDE_WORD.test(raw);
-    }
-    if (writes === 0)
-      return void 0;
-    for (const m of region.matchAll(new RegExp(`&mut ${name}\\b`, "g"))) {
-      const before = region.slice(Math.max(0, m.index - 96), m.index);
-      if (!R03_SHAPE_WRITES.test(before))
-        return void 0;
-    }
-    for (const m of region.matchAll(new RegExp(`(?<![A-Za-z0-9_.])${name}\\.([A-Za-z_][A-Za-z0-9_]*)`, "g"))) {
-      if (!R03_READS.has(m[1]))
-        return void 0;
-    }
-    if (isParam)
-      return lenSafe ? { lenSafe } : void 0;
-    return shapeUnknown ? { lenSafe } : { proof, lenSafe };
-  }
-  // Shape and marker safety of one right-hand side.
-  source(raw, absPos, seen) {
-    const e = r03Parens(raw);
-    if (e === "")
-      return void 0;
-    const lit = (kind, untagged = true) => ({ kind, markerFree: true, untagged });
-    const tagged = e.includes("subscriptions") || e.includes("client");
-    if (r03IsCall(e, "Value::Map"))
-      return lit("map", !tagged && !e.includes("__ws_sub"));
-    if (r03IsCall(e, "Value::List") || r03IsCall(e, "Value::Array") || r03IsCall(e, "Value::from")) {
-      return e.includes("vec![") ? lit("arr") : void 0;
-    }
-    if (r03IsCall(e, "Value::Str"))
-      return lit("str");
-    const readers = [
-      [/^self\.safe_dict(?:_k|2|_k2)?\(/, "map"],
-      [/^self\.safe_list(?:_k|2|_k2)?\(/, "arr"],
-      [/^self\.(?:parse_ids|to_array|array_concat)\(/, "arr"],
-      [/^split\(/, "arr"]
-    ];
-    for (const [rx, kind] of readers) {
-      if (rx.test(e) && r03Close(e, e.indexOf("(")) === e.length - 1)
-        return lit(kind, !tagged);
-    }
-    const merge = /^self\.(?:extend|omit)\(/.exec(e);
-    if (merge !== null && r03Close(e, merge[0].length - 1) === e.length - 1) {
-      const args = r03Split(e.slice(merge[0].length, -1));
-      const first = args.length > 0 ? this.source(args[0], absPos, seen) : void 0;
-      if (first === void 0)
-        return void 0;
-      return { kind: first.kind, markerFree: first.markerFree, untagged: first.untagged && !tagged };
-    }
-    const alias = /^([a-z_][A-Za-z0-9_]*)\.clone\(\)$/.exec(e);
-    if (alias !== null) {
-      if (seen.has(alias[1]))
-        return void 0;
-      seen.add(alias[1]);
-      return this.facts(alias[1], absPos)?.proof;
-    }
-    return void 0;
-  }
-};
-function r03KeyText(key) {
-  const lit = R03_LITERAL_KEY.exec(key);
-  if (lit !== null)
-    return lit[1];
-  const ident = R03_IDENT_ARG.exec(key);
-  if (ident !== null)
-    return ident[1];
-  return void 0;
-}
-function hx10w2R03(content) {
-  if (!/\b(?:in_op|object_keys|object_values|get_array_length)\(&/.test(content))
-    return content;
-  const prover = new R03Prover(content);
-  for (let round = 0; round < 6; round++) {
-    const masked = r03Mask(content);
-    const rewrites = [];
-    for (const m of masked.matchAll(R03_SITE_RX)) {
-      const start = m.index;
-      const name = m[1];
-      if (/\bfn\s+$/.test(masked.slice(Math.max(0, start - 8), start)))
-        continue;
-      if (rewrites.some((r) => start >= r.start && start < r.end))
-        continue;
-      const open = start + name.length;
-      const close = r03Close(content, open);
-      if (close < 0)
-        continue;
-      const args = r03Split(content.slice(open + 1, close)).map((s) => s.trim());
-      let expr;
-      let kind;
-      let untagged = false;
-      let lenSafe = false;
-      const recv = R03_IDENT_ARG.exec(args[0] ?? "");
-      const state = R03_CLIENT_STATE.exec(args[0] ?? "");
-      if (recv !== null) {
-        const facts = prover.facts(recv[1], start);
-        if (facts === void 0)
-          continue;
-        expr = recv[1];
-        kind = facts.proof?.kind;
-        untagged = facts.proof?.untagged === true;
-        lenSafe = facts.lenSafe;
-      } else if (state !== null) {
-        expr = (args[0] ?? "").trim().slice(1);
-        kind = "map";
-        untagged = state[2] === "futures";
-        lenSafe = true;
-      } else {
-        continue;
-      }
-      let text;
-      if (name === "get_array_length" && args.length === 1) {
-        if (lenSafe)
-          text = `Value::Int(${expr}.len() as i64)`;
-      } else if (name === "in_op" && args.length === 2 && kind === "map") {
-        const key = r03KeyText(args[1]);
-        if (key !== void 0) {
-          text = key.startsWith('"') ? `matches!(&${expr}, Value::Dict(__d) if __d.contains_key(${key}))` : `matches!((&${expr}, &${key}), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))`;
-        }
-      } else if ((name === "object_keys" || name === "object_values") && args.length === 1 && kind === "map" && untagged) {
-        const body = name === "object_keys" ? "__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()" : "__m.values().cloned().collect()";
-        text = `Value::Array(${expr}.as_map().map(|__m| ${body}).unwrap_or_default())`;
-      }
-      if (text === void 0)
-        continue;
-      rewrites.push({ start, end: close + 1, text });
-    }
-    if (rewrites.length === 0)
-      break;
-    let out = "";
-    let at = 0;
-    for (const r of rewrites) {
-      if (r.start < at)
-        continue;
-      out += content.slice(at, r.start) + r.text;
-      at = r.end;
-    }
-    content = out + content.slice(at);
-  }
-  return content;
-}
-
-// src/rustPasses/hx10w2-R04.ts
-init_esm_shims();
-var BOOL_FNS = /* @__PURE__ */ new Set(["safe_bool", "safe_bool_k", "safe_bool_2", "get_arg_bool"]);
-var INT_FNS = /* @__PURE__ */ new Set(["safe_integer", "safe_integer_k", "safe_integer_2", "safe_int", "safe_timestamp"]);
-var STR_FNS = /* @__PURE__ */ new Set(["safe_string", "safe_string_k", "safe_string_2", "safe_string_lower", "safe_string_upper", "safe_string_lower_k", "safe_string_upper_k"]);
-var FLOAT_FNS = /* @__PURE__ */ new Set(["safe_float", "safe_float_k", "safe_number", "safe_number_k", "safe_number_2"]);
-function mask(content) {
-  const out = content.split("");
-  let i = 0;
-  while (i < out.length) {
-    if (out[i] === '"') {
-      let j = i + 1;
-      while (j < out.length && out[j] !== '"') {
-        if (out[j] === "\\")
-          j++;
-        j++;
-      }
-      for (let k = i + 1; k < j && k < out.length; k++)
-        out[k] = " ";
-      i = j + 1;
-      continue;
-    }
-    if (out[i] === "/" && out[i + 1] === "/") {
-      let j = i;
-      while (j < out.length && out[j] !== "\n") {
-        out[j] = " ";
-        j++;
-      }
-      i = j;
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
-}
-function closeParen(masked, open) {
-  let depth = 0;
-  for (let i = open; i < masked.length; i++) {
-    const c = masked[i];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0)
-        return i;
-    }
-  }
-  return -1;
-}
-function splitTopLevel(src, sep) {
-  const parts = [];
-  let depth = 0;
-  let cur = "";
-  let inStr = false;
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i];
-    if (inStr) {
-      cur += c;
-      if (c === "\\") {
-        cur += src[i + 1] ?? "";
-        i++;
-        continue;
-      }
-      if (c === '"')
-        inStr = false;
-      continue;
-    }
-    if (c === '"') {
-      inStr = true;
-      cur += c;
-      continue;
-    }
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}")
-      depth--;
-    if (c === sep && depth === 0) {
-      parts.push(cur);
-      cur = "";
-      continue;
-    }
-    cur += c;
-  }
-  parts.push(cur);
-  return parts.map((p) => p.trim());
-}
-function stripOuter(src) {
-  let s = src.trim();
-  while (s.startsWith("(") && closeParen(s, 0) === s.length - 1)
-    s = s.slice(1, -1).trim();
-  return s;
-}
-function statementBefore(masked, pos) {
-  let depth = 0;
-  for (let i = pos; i > 0; i--) {
-    const c = masked[i - 1];
-    if (c === ")" || c === "]")
-      depth++;
-    else if (c === "(" || c === "[") {
-      if (depth > 0)
-        depth--;
-    } else if (depth === 0 && (c === ";" || c === "{" || c === "}" || c === "\n"))
-      return masked.slice(i, pos);
-  }
-  return masked.slice(0, pos);
-}
-function fnRegionOf(masked, pos) {
-  const heads = [0];
-  for (const m of masked.matchAll(/\n[ \t]*(?:pub )?(?:async )?fn /g))
-    heads.push(m.index + 1);
-  heads.push(masked.length);
-  let lo = 0;
-  for (let h = 0; h + 1 < heads.length; h++)
-    if (heads[h] <= pos)
-      lo = h;
-  const body = masked.slice(heads[lo], heads[lo + 1]);
-  const brace = body.indexOf("{");
-  return { start: heads[lo], end: heads[lo + 1], header: brace < 0 ? body : body.slice(0, brace) };
-}
-function rhsAfter(masked, from) {
-  let depth = 0;
-  for (let i = from; i < masked.length; i++) {
-    const c = masked[i];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}")
-      depth--;
-    else if (c === ";" && depth === 0)
-      return masked.slice(from, i).trim();
-  }
-  return "";
-}
-function stripTrailingOperand(s) {
-  let depth = 0;
-  for (let i = s.length - 1; i >= 0; i--) {
-    const c = s[i];
-    if (c === ")" || c === "]" || c === "}")
-      depth++;
-    else if (c === "(" || c === "[" || c === "{") {
-      if (depth === 0)
-        return s.slice(0, i);
-      depth--;
-      if (depth === 0 && !/[A-Za-z0-9_.)\]]/.test(s[i - 1] ?? ""))
-        return s.slice(0, i);
-    } else if (depth === 0) {
-      if (c === "&" && s[i - 1] === "&" || c === "|" && s[i - 1] === "|")
-        return s.slice(0, i - 1);
-      if (c === "," || c === ";" || c === "=")
-        return s.slice(0, i + 1);
-      if (/[A-Za-z0-9_.)]/.test(c)) {
-        let k = i;
-        while (k >= 0 && /[A-Za-z0-9_.]/.test(s[k]))
-          k--;
-        return k < 0 ? s : s.slice(0, k + 1);
-      }
-    }
-  }
-  return "";
-}
-function boolSlotAt(masked, start) {
-  let prefix = statementBefore(masked, start);
-  for (let hop = 0; hop < 60; hop++) {
-    prefix = prefix.replace(/[\s!]+$/, "");
-    if (/(?:^|[^\w])(?:if|while|for|assert|assert_eq)$/.test(prefix))
-      return true;
-    if (/Value::Bool\($/.test(prefix))
-      return true;
-    if (/(?:&&|\|\|)$/.test(prefix)) {
-      prefix = stripTrailingOperand(prefix.slice(0, -2));
-      continue;
-    }
-    if (/[^=!<>]=$/.test(prefix))
-      return /:\s*bool\s*=?$/.test(prefix.slice(0, -1));
-    if (/\($/.test(prefix)) {
-      prefix = prefix.slice(0, -1);
-      continue;
-    }
-    return false;
-  }
-  return false;
-}
-var UNION = ["bool", "null"];
-function variantOf(expr, masked, region, depth) {
-  const e = stripOuter(expr);
-  const lit = /^Value::(Bool|Int|Float|Str)\(/.exec(e);
-  if (lit !== null && closeParen(e, "Value::".length + lit[1].length) === e.length - 1) {
-    return /* @__PURE__ */ new Set([lit[1].toLowerCase()]);
-  }
-  if (e === "Value::Null" || e === "crate::Value::Null")
-    return /* @__PURE__ */ new Set(["null"]);
-  const call = /^self\.([a-z_][a-z0-9_]*)\(/.exec(e);
-  if (call !== null && closeParen(e, "self.".length + call[1].length) === e.length - 1) {
-    const name = call[1];
-    if (BOOL_FNS.has(name))
-      return safeBoolVariants(e, masked, region, depth);
-    if (INT_FNS.has(name))
-      return /* @__PURE__ */ new Set(["int", "null"]);
-    if (STR_FNS.has(name))
-      return /* @__PURE__ */ new Set(["str", "null"]);
-    if (FLOAT_FNS.has(name))
-      return /* @__PURE__ */ new Set(["float", "int", "null"]);
-    return void 0;
-  }
-  if (/^\(?if /.test(e) && e.includes("} else {")) {
-    const at = e.indexOf("} else {");
-    const a = variantOf(e.slice(e.indexOf("{") + 1, at), masked, region, depth);
-    const b = variantOf(e.slice(at + "} else {".length, e.lastIndexOf("}")), masked, region, depth);
-    if (a !== void 0 && b !== void 0)
-      return /* @__PURE__ */ new Set([...a, ...b]);
-  }
-  return void 0;
-}
-function safeBoolVariants(call, masked, region, depth) {
-  const open = call.indexOf("(");
-  const args = splitTopLevel(call.slice(open + 1, closeParen(call, open)), ",");
-  const list = /^&\[(.*)\]$/.exec(args[args.length - 1] ?? "");
-  if (list === null)
-    return void 0;
-  const items = list[1].trim();
-  if (items === "")
-    return new Set(UNION);
-  return boolDefault(items, masked, region, depth);
-}
-function boolDefault(expr, masked, region, depth) {
-  const e = stripOuter(expr);
-  if (/^Value::Bool\(/.test(e) || e === "Value::Null")
-    return new Set(UNION);
-  const name = /^([A-Za-z_][A-Za-z0-9_]*)(?:\.clone\(\))?$/.exec(e);
-  if (name === null)
-    return void 0;
-  const proof = proveLocal(masked, name[1], region, depth + 1);
-  if (proof.variants === void 0)
-    return void 0;
-  return [...proof.variants].every((v) => v === "bool" || v === "null") ? new Set(UNION) : void 0;
-}
-function proveLocal(masked, name, region, depth) {
-  if (depth > 3)
-    return { kind: "none" };
-  const body = masked.slice(region.start, region.end);
-  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const shadow = new RegExp(`(?<!\\|)\\|(?!\\|)[^|\\n]*\\b${esc}\\b[^|\\n]*(?<!\\|)\\|(?!\\|)|\\bfor [^\\n]*\\b${esc}\\b[^\\n]* in |\\blet \\([^)]*\\b${esc}\\b`);
-  if (shadow.test(body))
-    return { kind: "none" };
-  const types = /* @__PURE__ */ new Set();
-  const param = new RegExp(`\\b(?:mut )?${esc}\\s*:\\s*([A-Za-z_][A-Za-z0-9_<>]*)`).exec(region.header);
-  if (param !== null)
-    types.add(param[1]);
-  const writes = [];
-  const spans = [];
-  const letRe = new RegExp(`\\blet (?:mut )?${esc}\\b\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_<>]*))?\\s*=`, "g");
-  for (const m of body.matchAll(letRe)) {
-    const at = m.index;
-    const rhs = rhsAfter(masked, region.start + at + m[0].length);
-    spans.push([at, at + m[0].length + rhs.length]);
-    if (m[1] !== void 0)
-      types.add(m[1]);
-    writes.push(rhs);
-  }
-  const assignRe = new RegExp(`(?<![A-Za-z0-9_.])${esc}\\s*=(?!=)`, "g");
-  for (const m of body.matchAll(assignRe)) {
-    const at = m.index;
-    if (spans.some(([s, e]) => at >= s && at < e))
-      continue;
-    writes.push(rhsAfter(masked, region.start + at + m[0].length));
-    types.add("?");
-  }
-  const only = [...types];
-  if (writes.length === 0 || only.some((t) => t !== "Value" && t !== "?"))
-    return { kind: "none" };
-  let acc = void 0;
-  for (const w of writes) {
-    const v = variantOf(w, masked, region, depth);
-    if (v === void 0)
-      return { kind: "none" };
-    acc = acc === void 0 ? v : new Set([...acc].filter((x) => v.has(x)));
-    if (acc.size === 0)
-      return { kind: "none" };
-  }
-  return acc === void 0 ? { kind: "none" } : { kind: "variant", variants: acc };
-}
-var isBoolOnly = (v) => [...v].every((x) => x === "bool" || x === "null");
-function pushEdit(edits, masked, start, close, text) {
-  let k = start - 1;
-  while (k >= 0 && (masked[k] === " " || masked[k] === "	"))
-    k--;
-  if (k >= 0 && masked[k] === "!" && masked[k - 1] !== "=") {
-    edits.push({ start: k, end: close + 1, text: text.replace(" == ", " != ") });
-    return;
-  }
-  edits.push({ start, end: close + 1, text });
-}
-function r04Scalars(content) {
-  if (!content.includes("is_true(&") && !content.includes("is_equal(&"))
-    return content;
-  const masked = mask(content);
-  const edits = [];
-  for (const m of masked.matchAll(/(?<![A-Za-z0-9_:.])(is_true|is_equal)\(&/g)) {
-    const start = m.index;
-    const open = start + m[1].length;
-    const close = closeParen(masked, open);
-    if (close < 0)
-      continue;
-    if (!boolSlotAt(masked, start))
-      continue;
-    const args = splitTopLevel(content.slice(open + 1, close), ",");
-    const region = fnRegionOf(masked, start);
-    const proofOf = (e) => {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(e))
-        return void 0;
-      return proveLocal(masked, e, region, 0).variants;
-    };
-    if (m[1] === "is_true") {
-      if (args.length !== 1)
-        continue;
-      const operand = stripOuter(args[0].replace(/^&/, ""));
-      const variants = proofOf(operand);
-      if (variants === void 0 || !isBoolOnly(variants))
-        continue;
-      pushEdit(edits, masked, start, close, `${operand}.as_bool() == Some(true)`);
-      continue;
-    }
-    if (args.length !== 2)
-      continue;
-    const a = stripOuter(args[0].replace(/^&/, ""));
-    const b = stripOuter(args[1].replace(/^&/, ""));
-    const lit = (e) => e === "Value::Null" || /^Value::Bool\((?:true|false)\)$/.test(e);
-    if (lit(a) && lit(b))
-      continue;
-    const va = lit(a) ? new Set(UNION) : proofOf(a);
-    const vb = lit(b) ? new Set(UNION) : proofOf(b);
-    if (va === void 0 || vb === void 0 || !isBoolOnly(va) || !isBoolOnly(vb))
-      continue;
-    const asOption = (e) => {
-      const box = /^Value::Bool\((true|false)\)$/.exec(e);
-      if (box !== null)
-        return `Some(${box[1]})`;
-      return e === "Value::Null" ? "None" : `${e}.as_bool()`;
-    };
-    pushEdit(edits, masked, start, close, `${asOption(a)} == ${asOption(b)}`);
-  }
-  if (edits.length === 0)
-    return content;
-  let out = "";
-  let at = 0;
-  for (const e of edits) {
-    if (e.start < at)
-      continue;
-    out += content.slice(at, e.start) + e.text;
-    at = e.end;
-  }
-  return out + content.slice(at);
-}
-
-// src/rustPasses/hx10w2-r06.ts
-init_esm_shims();
-var R06_HELPER = "append_to_array";
-var R06_MAX_LINE = 400;
-var R06_CALL_RX = new RegExp("(?<![\\w.:])" + R06_HELPER + "\\(", "g");
-var R06_ARR_INIT = [
-  /^Value::from\(vec!\[/,
-  /^Value::from\(Vec::new\(\)\)$/,
-  /^Value::Null$/,
-  /^\(match [\s\S]*Some\(__v\) if matches!\(__v, Value::Arr\(_\)\) => __v, _ => Value::from\(vec!\[/
-];
-function r06MaskText(src) {
-  const out = [];
-  let i = 0;
-  const n = src.length;
-  while (i < n) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      while (i < n && src[i] !== "\n") {
-        out.push(" ");
-        i++;
-      }
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      out.push("  ");
-      i += 2;
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
-        out.push(src[i] === "\n" ? "\n" : " ");
-        i++;
-      }
-      if (i < n) {
-        out.push("  ");
-        i += 2;
-      }
-      continue;
-    }
-    if (c === '"') {
-      out.push(" ");
-      i++;
-      while (i < n && src[i] !== '"') {
-        if (src[i] === "\\") {
-          out.push("  ");
-          i += 2;
-          continue;
-        }
-        out.push(src[i] === "\n" ? "\n" : " ");
-        i++;
-      }
-      if (i < n) {
-        out.push(" ");
-        i++;
-      }
-      continue;
-    }
-    out.push(c);
-    i++;
-  }
-  return out.join("");
-}
-function r06FnRegions(masked) {
-  const regions = [];
-  const head = /\bfn\s+[A-Za-z0-9_]*\s*[(<]/g;
-  let m;
-  while ((m = head.exec(masked)) !== null) {
-    let i = m.index + m[0].length - 1;
-    let depth = 0;
-    let open = -1;
-    while (i < masked.length) {
-      const c = masked[i];
-      if (c === "(" || c === "[" || c === "<")
-        depth++;
-      else if (c === ")" || c === "]" || c === ">")
-        depth--;
-      else if (c === "{") {
-        if (depth <= 0) {
-          open = i;
-          break;
-        }
-        depth++;
-      } else if (c === ";" && depth <= 0)
-        break;
-      i++;
-    }
-    if (open < 0)
-      continue;
-    let close = -1;
-    let d = 0;
-    for (let j = open; j < masked.length; j++) {
-      if (masked[j] === "{")
-        d++;
-      else if (masked[j] === "}") {
-        d--;
-        if (d === 0) {
-          close = j;
-          break;
-        }
-      }
-    }
-    if (close > open)
-      regions.push([open, close]);
-  }
-  return regions;
-}
-function r06CloseParen(src, open) {
-  let depth = 0;
-  for (let i = open; i < src.length; i++) {
-    const c = src[i];
-    if (c === "(")
-      depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0)
-        return i;
-    }
-  }
-  return -1;
-}
-function r06ExprEnd(masked, from) {
-  let depth = 0;
-  for (let i = from; i < masked.length; i++) {
-    const c = masked[i];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}")
-      depth--;
-    else if (c === ";" && depth <= 0)
-      return i;
-  }
-  return -1;
-}
-function r06IsArrInit(init) {
-  const t = init.trim();
-  return R06_ARR_INIT.some((rx) => rx.test(t));
-}
-function r06Bal(s) {
-  let d = 0;
-  for (const c of s) {
-    if (c === "(" || c === "[" || c === "{")
-      d++;
-    else if (c === ")" || c === "]" || c === "}") {
-      d--;
-      if (d < 0)
-        return false;
-    }
-  }
-  return d === 0;
-}
-function r06GuardClone(masked, rhs, stmtStart, rhsEnd) {
-  const m = /^([A-Za-z_][A-Za-z0-9_]*)\.clone\(\)$/.exec(rhs.trim());
-  if (m === null)
-    return false;
-  const open = masked.lastIndexOf("{", stmtStart);
-  if (open < 0 || masked.slice(open + 1, stmtStart).trim() !== "" || !/^\s*\}/.test(masked.slice(rhsEnd + 1)))
-    return false;
-  const ifStart = masked.lastIndexOf("if", open);
-  if (ifStart < 0 || /[\w.]/.test(masked[ifStart - 1] ?? ""))
-    return false;
-  let cond = masked.slice(ifStart + 2, open).trim();
-  while (cond.startsWith("(") && cond.endsWith(")") && r06Bal(cond.slice(1, -1)))
-    cond = cond.slice(1, -1).trim();
-  const cm = /^matches!\(\s*&\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*Value::Arr\(_\)\s*\)$/.exec(cond);
-  return cm !== null && cm[1] === m[1];
-}
-function r06Push(content) {
-  if (!content.includes(R06_HELPER + "("))
-    return content;
-  const masked = r06MaskText(content);
-  const regions = r06FnRegions(masked);
-  const jobs = [];
-  const rx = new RegExp(R06_CALL_RX.source, "g");
-  let m;
-  while ((m = rx.exec(masked)) !== null) {
-    const start = m.index;
-    const lineStart = masked.lastIndexOf("\n", start) + 1;
-    if (/^\s*(?:pub\s+)?fn /.test(masked.slice(lineStart, start)))
-      continue;
-    const region = regions.find((r) => r[0] < start && start < r[1]);
-    if (region === void 0)
-      continue;
-    const argStart = start + R06_HELPER.length + 1;
-    const recv = /^&mut\s+([A-Za-z_][A-Za-z0-9_]*)\s*,/.exec(content.slice(argStart, argStart + 120));
-    if (recv === null)
-      continue;
-    const name = recv[1];
-    const nameRx = new RegExp("(?<![\\w.])" + name + "(?![\\w])");
-    const headerStart = masked.lastIndexOf("fn ", region[0]);
-    if (new RegExp("(?<![\\w])" + name + "\\s*:").test(masked.slice(headerStart, region[0])))
-      continue;
-    const declRx = new RegExp("let (?:mut )?" + name + "\\s*:\\s*([^=;]+?)\\s*=(?!=)", "g");
-    const decls = [];
-    let d;
-    const head = masked.slice(0, start);
-    while ((d = declRx.exec(head)) !== null) {
-      if (d.index <= region[0])
-        continue;
-      if (d[1].trim() !== "Value") {
-        decls.length = 0;
-        break;
-      }
-      const initStart = d.index + d[0].length;
-      const initEnd = r06ExprEnd(masked, initStart);
-      if (initEnd < 0) {
-        decls.length = 0;
-        break;
-      }
-      decls.push({ start: d.index, initStart, initEnd });
-    }
-    if (decls.length === 0)
-      continue;
-    if (!decls.every((x) => r06IsArrInit(content.slice(x.initStart, x.initEnd))))
-      continue;
-    const useRx = new RegExp(nameRx.source, "g");
-    const body = masked.slice(region[0], region[1]);
-    let u;
-    let ok = true;
-    while ((u = useRx.exec(body)) !== null) {
-      const s = region[0] + u.index;
-      const e = s + name.length;
-      if (decls.some((x) => s >= x.start && s < x.initEnd))
-        continue;
-      const before = masked.slice(Math.max(0, s - 40), s);
-      const after = masked.slice(e, e + 80);
-      if (/&mut\s*$/.test(before)) {
-        if (!(new RegExp(R06_HELPER + "\\(\\s*&mut\\s*$").test(before) && /^\s*,/.test(after))) {
-          ok = false;
-          break;
-        }
-        continue;
-      }
-      const assign = /^\s*=(?!=)/.exec(after);
-      if (assign !== null) {
-        const rhsStart = e + assign[0].length;
-        const rhsEnd = r06ExprEnd(masked, rhsStart);
-        if (rhsEnd < 0) {
-          ok = false;
-          break;
-        }
-        let aStart = masked.lastIndexOf(";", s);
-        aStart = Math.max(aStart, masked.lastIndexOf("{", s), masked.lastIndexOf("}", s)) + 1;
-        const init = content.slice(rhsStart, rhsEnd);
-        if (!r06IsArrInit(init) && !r06GuardClone(masked, init, aStart, rhsEnd)) {
-          ok = false;
-          break;
-        }
-      }
-    }
-    if (!ok)
-      continue;
-    const callEnd2 = r06CloseParen(masked, argStart - 1);
-    if (callEnd2 < 0)
-      continue;
-    const valueStart = argStart + recv[0].length;
-    const value = content.slice(valueStart, callEnd2);
-    if (nameRx.test(value))
-      continue;
-    let stmtStart = masked.lastIndexOf(";", start);
-    stmtStart = Math.max(stmtStart, masked.lastIndexOf("{", start), masked.lastIndexOf("}", start)) + 1;
-    if (masked.slice(stmtStart, start).trim() !== "")
-      continue;
-    if (!/^\)\s*;/.test(masked.slice(callEnd2, callEnd2 + 4)))
-      continue;
-    const text = `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value.trim()}); }`;
-    const lStart = content.lastIndexOf("\n", start) + 1;
-    const lEnd = content.indexOf("\n", callEnd2) < 0 ? content.length : content.indexOf("\n", callEnd2);
-    const lenNow = lEnd - lStart;
-    if (lenNow <= R06_MAX_LINE && lenNow - (callEnd2 + 1 - start) + text.length > R06_MAX_LINE)
-      continue;
-    jobs.push({ start, end: callEnd2 + 1, text });
-  }
-  if (jobs.length === 0)
-    return content;
-  let out = content;
-  for (let i = jobs.length - 1; i >= 0; i--) {
-    const j = jobs[i];
-    out = out.slice(0, j.start) + j.text + out.slice(j.end);
-  }
-  return out;
-}
-
-// src/rustPasses/hx10w3-R01.ts
-init_esm_shims();
-var STR_LIT = String.raw`"(?:[^"\\]|\\.)*"`;
-function maskText2(src) {
-  let out = "";
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      while (i < src.length && src[i] !== "\n") {
-        out += " ";
-        i++;
-      }
-      continue;
-    }
-    if (c === '"') {
-      out += " ";
-      i++;
-      while (i < src.length && src[i] !== '"') {
-        if (src[i] === "\n") {
-          out += "\n";
-          i++;
-          continue;
-        }
-        if (src[i] === "\\") {
-          out += "  ";
-          i += 2;
-          continue;
-        }
-        out += " ";
-        i++;
-      }
-      if (i < src.length) {
-        out += " ";
-        i++;
-      }
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-function closeParen2(masked, open) {
-  let depth = 0;
-  for (let k = open; k < masked.length; k++) {
-    const c = masked[k];
-    if (c === "(")
-      depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0)
-        return k + 1;
-    }
-  }
-  return -1;
-}
-function closeAt(src, open) {
-  const openCh = src[open];
-  const closeCh = openCh === "(" ? ")" : openCh === "[" ? "]" : "}";
-  let depth = 0;
-  for (let k = open; k < src.length; k++) {
-    const c = src[k];
-    if (c === openCh)
-      depth++;
-    else if (c === closeCh) {
-      depth--;
-      if (depth === 0)
-        return k + 1;
-    }
-  }
-  return -1;
-}
-function closeBrace(masked, open) {
-  let depth = 0;
-  for (let k = open; k < masked.length; k++) {
-    const c = masked[k];
-    if (c === "{")
-      depth++;
-    else if (c === "}") {
-      depth--;
-      if (depth === 0)
-        return k + 1;
-    }
-  }
-  return -1;
-}
-function stmtEnd(masked, from) {
-  let depth = 0;
-  for (let k = from; k < masked.length; k++) {
-    const c = masked[k];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth < 0)
-        return -1;
-    } else if (c === ";" && depth === 0)
-      return k;
-  }
-  return -1;
-}
-function splitArgs2(masked, from, to) {
-  const args = [];
-  let depth = 0;
-  let start = from;
-  for (let k = from; k < to; k++) {
-    const c = masked[k];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}")
-      depth--;
-    else if (c === "," && depth === 0) {
-      args.push(masked.slice(start, k));
-      start = k + 1;
-    }
-  }
-  args.push(masked.slice(start, to));
-  return args;
-}
-function openerMap(masked) {
-  const kind = new Uint8Array(masked.length);
-  const at = new Int32Array(masked.length).fill(-1);
-  const stack = [];
-  for (let i = 0; i < masked.length; i++) {
-    const c = masked[i];
-    if (c === "(")
-      stack.push({ kind: 1, at: i });
-    else if (c === "[")
-      stack.push({ kind: masked[i - 1] === "&" ? 3 : 2, at: i });
-    else if (c === "{")
-      stack.push({ kind: 4, at: i });
-    else if (c === ")" || c === "]" || c === "}") {
-      if (stack.length > 0)
-        stack.pop();
-    }
-    const top = stack[stack.length - 1];
-    kind[i] = top === void 0 ? 0 : top.kind;
-    at[i] = top === void 0 ? -1 : top.at;
-  }
-  return { kind, at };
-}
-var KEYWORDS = /* @__PURE__ */ new Set(["if", "while", "match", "return", "for", "in", "else", "loop", "not"]);
-function valueSlot(masked, content, s, name, open) {
-  const kind = open.kind[s];
-  if (kind !== 1 && kind !== 2 && kind !== 3)
-    return 0;
-  if (kind === 1) {
-    const head = masked.slice(Math.max(0, open.at[s] - 40), open.at[s]);
-    const word = /([A-Za-z_][A-Za-z0-9_]*)\s*$/.exec(head);
-    if (word === null || KEYWORDS.has(word[1]))
-      return 0;
-    const ctor = /Value::([A-Za-z_][A-Za-z0-9_]*)\s*$/.exec(head);
-    if (ctor !== null)
-      return 0;
-  }
-  let k = s - 1;
-  while (k >= 0 && /\s/.test(masked[k]))
-    k--;
-  if (masked[k] === "&" || masked[k] === "." || masked[k] === "!")
-    return 0;
-  if (/\bmut\s+$/.test(masked.slice(Math.max(0, s - 8), s)))
-    return 0;
-  const after = content.slice(s + name.length);
-  const m = /^(?:\.clone\(\))?\s*[,)\];]/.exec(after);
-  if (m === null)
-    return 0;
-  return after.startsWith(".clone()") ? 2 : 1;
-}
-var FN_HEADER = /(?:^|\n)[ \t]*(?:pub(?:\([a-z]+\))? )?(?:async )?fn /g;
-function fnRegions2(masked) {
-  const heads = [0];
-  for (const m of masked.matchAll(FN_HEADER))
-    heads.push(m.index + 1);
-  return heads;
-}
-var RUST_TYPE = {
-  "String": "String",
-  "Int": "i64",
-  "Float": "f64",
-  "Bool": "bool",
-  "Vec": "Vec<Value>",
-  "Map": "indexmap::IndexMap<String, Value>"
-};
-function boxed(shape, expr) {
-  switch (shape) {
-    case "String":
-      return `Value::str(${expr})`;
-    case "Int":
-      return `Value::Int(${expr})`;
-    case "Float":
-      return `Value::Float(${expr})`;
-    case "Bool":
-      return `Value::Bool(${expr})`;
-    case "Vec":
-      return `Value::Array(${expr})`;
-    case "Map":
-      return `Value::Map(${expr})`;
-  }
-}
-function initShape(init) {
-  const pinned = (head, shape) => {
-    if (!init.startsWith(head))
-      return void 0;
-    const open = head.length - 1;
-    const close = closeAt(init, open);
-    if (close < 0)
-      return void 0;
-    const inner = init.slice(open + 1, close - 1);
-    if (inner.trim() === "" || inner.trim().startsWith("Value::"))
-      return void 0;
-    return { shape, inner, wrapperEnd: close };
-  };
-  for (const [head, shape] of [
-    ["Value::Str(", "String"],
-    ["Value::Int(", "Int"],
-    ["Value::Float(", "Float"],
-    ["Value::Bool(", "Bool"],
-    ["Value::Map(", "Map"]
-  ]) {
-    const hit = pinned(head, shape);
-    if (hit !== void 0)
-      return hit;
-  }
-  for (const head of ["Value::Array(", "Value::List(", "Value::from("]) {
-    if (!init.startsWith(head))
-      continue;
-    const close = closeAt(init, head.length - 1);
-    if (close < 0)
-      return void 0;
-    const inner = init.slice(head.length, close - 1);
-    if (!inner.startsWith("vec![") || closeAt(inner, 4) !== inner.length)
-      return void 0;
-    return { shape: "Vec", inner, wrapperEnd: close };
-  }
-  if (init.startsWith("vec![")) {
-    const close = closeAt(init, 4);
-    if (close !== init.length)
-      return void 0;
-    return { shape: "Vec", inner: init.slice(5, close - 1), wrapperEnd: close };
-  }
-  return void 0;
-}
-function rebound(region, name) {
-  const n = name;
-  const rx = new RegExp(
-    `\\blet\\s+(?:mut\\s+)?${n}\\b|\\bfor\\s+(?:mut\\s+)?${n}\\b|\\|\\s*(?:mut\\s+)?${n}\\s*[:|,]|\\blet\\s*\\([^)]*\\b${n}\\b|\\b${n}\\s*@|\\b${n}\\b[^;\\n]*=>`
-  );
-  return rx.test(region);
-}
-function classify(shape, ctx, masked, content, where) {
-  const { name, useStart: s, before, after } = ctx;
-  const open = where;
-  const nameEnd = s + name.length;
-  const boxStr = `&Value::Str\\(\\s*(${STR_LIT})\\s*(?:\\.into\\(\\)|\\.to_string\\(\\))?\\s*\\)`;
-  const boxInt = `&Value::Int\\(\\s*(-?\\d+)\\s*\\)`;
-  const boxFlt = `&Value::Float\\(\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\s*\\)`;
-  const boxNum = shape === "Int" ? boxInt : boxFlt;
-  const numeric = shape === "Int" || shape === "Float";
-  const eqOp = (op, lit, len, prefix) => {
-    const start = s - prefix.length;
-    return [{ start, end: nameEnd + len, text: `(${name} ${op} ${lit})` }];
-  };
-  if (shape === "String" && before.endsWith("is_equal(&")) {
-    const m = new RegExp(`^,\\s*${boxStr}\\)`).exec(after);
-    if (m !== null)
-      return eqOp("==", m[1], m[0].length, "is_equal(&");
-  }
-  if (numeric && before.endsWith("is_equal(&")) {
-    const m = new RegExp(`^,\\s*${boxNum}\\)`).exec(after);
-    if (m !== null)
-      return eqOp("==", m[1], m[0].length, "is_equal(&");
-  }
-  if (numeric) {
-    const cmp = [
-      ["is_less_than(&", "<"],
-      ["is_greater_than(&", ">"],
-      ["is_less_than_or_equal(&", "<="],
-      ["is_greater_than_or_equal(&", ">="]
-    ];
-    for (const [prefix, op] of cmp) {
-      if (!before.endsWith(prefix))
-        continue;
-      const m = new RegExp(`^,\\s*${boxNum}\\)`).exec(after);
-      if (m !== null)
-        return eqOp(op, m[1], m[0].length, prefix);
-    }
-  }
-  if (shape === "String" && before.endsWith("to_string_val(&") && after.startsWith(")")) {
-    return [{ start: s - "to_string_val(&".length, end: nameEnd + 1, text: `${name}.clone()` }];
-  }
-  if (shape === "String") {
-    for (const [prefix, method] of [["ends_with(&", "ends_with"], ["starts_with(&", "starts_with"]]) {
-      if (!before.endsWith(prefix))
-        continue;
-      const m = new RegExp(`^,\\s*${boxStr}\\)`).exec(after);
-      if (m !== null) {
-        const start = s - prefix.length;
-        return [{ start, end: nameEnd + m[0].length, text: `${name}.${method}(${m[1]})` }];
-      }
-    }
-  }
-  if (shape === "Bool" && before.endsWith("is_true(&") && after.startsWith(")")) {
-    return [{ start: s - "is_true(&".length, end: nameEnd + 1, text: name }];
-  }
-  if (shape === "Bool") {
-    const m = /^\.as_bool\(\)\s*(==|!=)\s*Some\((true|false)\)/.exec(after);
-    if (m !== null) {
-      const eq = m[1] === "==";
-      const positive = m[2] === "true";
-      return [{ start: s, end: nameEnd + m[0].length, text: eq === positive ? name : `!${name}` }];
-    }
-  }
-  if (shape === "Vec" && before.endsWith("get_array_length(&") && after.startsWith(")")) {
-    return [{ start: s - "get_array_length(&".length, end: nameEnd + 1, text: `Value::Int(${name}.len() as i64)` }];
-  }
-  if (shape === "Vec" && before.endsWith("append_to_array(&mut ") && after.startsWith(",")) {
-    const open2 = s - "(&mut ".length;
-    const close = closeParen2(masked, open2);
-    if (close > 0) {
-      const args = splitArgs2(masked, open2 + 1, close - 1);
-      if (args !== void 0 && args.length === 2) {
-        const val = content.slice(open2 + 1 + args[0].length + 1, close - 1).trim();
-        return [{ start: open2 - "append_to_array".length, end: close, text: `${name}.push(${val})` }];
-      }
-    }
-  }
-  if (shape === "Vec" && before.endsWith("= &mut ")) {
-    const varM = /if let Value::Arr\((\w+)\) = &mut $/.exec(before);
-    if (varM !== null) {
-      const stmtStart = s - varM[0].length;
-      const brace = masked.indexOf("{", nameEnd);
-      const close = brace < 0 ? -1 : closeBrace(masked, brace);
-      const head = `std::sync::Arc::make_mut(${varM[1]}).push(`;
-      if (close > 0) {
-        const rel = masked.slice(brace + 1, close - 1).indexOf(head);
-        if (rel >= 0) {
-          const pushOpen = brace + 1 + rel + head.length - 1;
-          const pushClose = closeParen2(masked, pushOpen);
-          if (pushClose > 0) {
-            const val = content.slice(pushOpen + 1, pushClose - 1).trim();
-            return [{ start: stmtStart, end: close, text: `${name}.push(${val});` }];
-          }
-        }
-      }
-    }
-  }
-  if (shape === "Map" && before.endsWith("get_value(&")) {
-    const m = new RegExp(`^,\\s*${boxStr}\\)`).exec(after);
-    if (m !== null) {
-      const start = s - "get_value(&".length;
-      return [{ start, end: nameEnd + m[0].length, text: `${name}.get(${m[1]}).cloned().unwrap_or(Value::Null)` }];
-    }
-  }
-  if (shape === "Map" && before.endsWith("in_op(&")) {
-    const m = new RegExp(`^,\\s*${boxStr}\\)`).exec(after);
-    if (m !== null) {
-      const start = s - "in_op(&".length;
-      return [{ start, end: nameEnd + m[0].length, text: `${name}.contains_key(${m[1]})` }];
-    }
-  }
-  if (shape === "Map" && before.endsWith("add_element_to_object(&mut ")) {
-    const m = new RegExp(`^,\\s*${boxStr}\\s*,`).exec(after);
-    if (m !== null) {
-      const open2 = s - "(&mut ".length;
-      const close = closeParen2(masked, open2);
-      if (close > 0) {
-        const args = splitArgs2(masked, open2 + 1, close - 1);
-        if (args !== void 0 && args.length === 3) {
-          const val = content.slice(open2 + 1 + args[0].length + 1 + args[1].length + 1, close - 1).trim();
-          return [{ start: open2 - "add_element_to_object".length, end: close, text: `${name}.insert(${m[1]}.to_string(), ${val})` }];
-        }
-      }
-    }
-  }
-  if (shape === "Map" && before.endsWith("= &mut ")) {
-    const varM = /if let Value::Dict\((\w+)\) = &mut $/.exec(before);
-    if (varM !== null && /^\s*\{/.test(after)) {
-      const stmtStart = s - varM[0].length;
-      const brace = nameEnd + after.indexOf("{");
-      const close = closeBrace(masked, brace);
-      const head = `std::sync::Arc::make_mut(${varM[1]}).insert(`;
-      if (close > 0) {
-        const body = content.slice(brace + 1, close - 1).trim();
-        if (body.startsWith(head)) {
-          const pushOpen = brace + 1 + content.slice(brace + 1).indexOf(head) + head.length - 1;
-          const pushClose = closeParen2(masked, pushOpen);
-          if (pushClose > 0 && content.slice(pushClose, close - 1).trim() === ";") {
-            const val = content.slice(pushOpen + 1, pushClose - 1).trim();
-            return [{ start: stmtStart, end: close, text: `${name}.insert(${val});` }];
-          }
-        }
-      }
-    }
-  }
-  if (shape === "Bool" && open.kind[s] === 1 && /matches!$/.test(masked.slice(Math.max(0, open.at[s] - 12), open.at[s]))) {
-    const m = /^,\s*Value::Bool\(\s*(true|false)\s*\)\)/.exec(after);
-    const start = s - "matches!(&".length;
-    if (m !== null) {
-      const positive = m[1] === "true";
-      return [{ start, end: nameEnd + m[0].length, text: positive ? name : `!${name}` }];
-    }
-  }
-  if (shape === "String" && before.endsWith("Value::str(") && (after.startsWith(")") || after.startsWith(".clone())") || after.startsWith(".to_string())")))
-    return [];
-  if (shape === "String" && after.startsWith(".as_str()")) {
-    const m = /^\.as_str\(\)\s*(==|!=)\s*Some\(\s*("(?:[^"\\]|\\.)*")\s*\)/.exec(after);
-    if (m !== null)
-      return [{ start: s, end: nameEnd + m[0].length, text: `(${name} ${m[1]} ${m[2]})` }];
-    const rev = /^\.as_str\(\)\s*(==|!=)\s*Some\(\s*("(?:[^"\\]|\\.)*")\s*\.to_string\(\)\s*\)/.exec(after);
-    if (rev !== null)
-      return [{ start: s, end: nameEnd + rev[0].length, text: `(${name} ${rev[1]} ${rev[2]})` }];
-  }
-  if (numeric && after.startsWith(".as_f64()")) {
-    const plain = shape === "Float" ? name : `(${name} as f64)`;
-    const nan = /^\.as_f64\(\)\.unwrap_or\(f64::NAN\)/.exec(after);
-    if (nan !== null)
-      return [{ start: s, end: nameEnd + nan[0].length, text: plain }];
-    const some = /^\.as_f64\(\)\s*(==|!=)\s*Some\(\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*\)/.exec(after);
-    if (some !== null)
-      return [{ start: s, end: nameEnd + some[0].length, text: `(${plain} ${some[1]} ${some[2]})` }];
-  }
-  if ((shape === "String" || numeric || shape === "Bool") && open.kind[s] === 1) {
-    const macroOpen = open.at[s];
-    const macroHead = /([A-Za-z_][A-Za-z0-9_]*)!$/.exec(masked.slice(Math.max(0, macroOpen - 40), macroOpen));
-    const pre = masked.slice(Math.max(0, s - 12), s);
-    const tail = after.startsWith(".clone()") ? ".clone()" : after.startsWith(".to_string()") ? ".to_string()" : "";
-    const rest = after.slice(tail.length);
-    const closes = rest.startsWith(")") || rest.startsWith(",");
-    if (macroHead !== void 0 && /[(,]\s*$/.test(pre) && closes) {
-      const close = closeParen2(masked, macroOpen);
-      if (close > 0) {
-        const args = splitArgs2(masked, macroOpen + 1, close - 1);
-        const raw = content.slice(macroOpen + 1, close - 1);
-        const tpl = args === void 0 ? void 0 : /^\s*"((?:[^"\\]|\\.)*)"\s*$/.exec(raw.slice(0, args[0].length));
-        const holes = tpl === null || tpl === void 0 ? [] : tpl[1].match(/\{[^}]*\}/g) ?? [];
-        if (args !== void 0 && args.length > 1 && holes.length === args.length - 1 && holes.every((h) => h === "{}"))
-          return [];
-      }
-    }
-  }
-  {
-    const tail = after.startsWith(".clone()") && after.slice(".clone()".length).startsWith(")") ? ".clone()" : after.startsWith(")") ? "" : null;
-    if (tail !== null) {
-      const wide = content.slice(Math.max(0, s - 160), s);
-      const lit = shape === "String" ? /is_equal\(&Value::Str\(\s*("(?:[^"\\]|\\.)*")\s*(?:\.into\(\)|\.to_string\(\))?\s*\)\s*,\s*&$/.exec(wide) : shape === "Bool" ? /is_equal\(&Value::Bool\(\s*(true|false)\s*\)\s*,\s*&$/.exec(wide) : numeric ? /(is_equal|is_less_than|is_greater_than|is_less_than_or_equal|is_greater_than_or_equal)\(&\s*Value::(?:Int|Float)\(\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*\)\s*,\s*&$/.exec(wide) : null;
-      if (lit !== null) {
-        const ops = {
-          "is_equal": "==",
-          "is_less_than": "<",
-          "is_greater_than": ">",
-          "is_less_than_or_equal": "<=",
-          "is_greater_than_or_equal": ">="
-        };
-        const op = shape === "String" || shape === "Bool" ? "==" : ops[lit[1]];
-        const value = shape === "String" || shape === "Bool" ? lit[1] : lit[2];
-        const start = s - lit[0].length;
-        return [{ start, end: nameEnd + tail.length + 1, text: `(${value} ${op} ${name}${tail})` }];
-      }
-    }
-  }
-  if ((shape === "Int" || shape === "Float" || shape === "Bool") && before.endsWith("to_string_val(&") && after.startsWith(")")) {
-    return [{ start: s - "to_string_val(&".length, end: nameEnd + 1, text: `Value::str(${name}.to_string())` }];
-  }
-  if (before.endsWith("Value::Str(") && shape === "String") {
-    if (after.startsWith(")") || after.startsWith(".clone())")) {
-      return [{ start: s - "Value::Str".length, end: s - 1, text: "Value::str" }];
-    }
-  }
-  const nativeMethod = /^\.(?:len|is_empty|push|insert|contains_key|get|keys|values|iter|first|last)\(/.exec(after);
-  if (nativeMethod !== null && (shape === "Vec" || shape === "Map"))
-    return [];
-  if (shape === "Int" && /^\.as_i64\(\)/.test(after))
-    return null;
-  if (before.endsWith("Value::Int(") && shape === "Int" && after.startsWith(")"))
-    return [];
-  if (before.endsWith("Value::Float(") && shape === "Float" && after.startsWith(")"))
-    return [];
-  if (before.endsWith("Value::Bool(") && shape === "Bool" && after.startsWith(")"))
-    return [];
-  if ((before.endsWith("Value::Array(") || before.endsWith("Value::List(")) && shape === "Vec" && after.startsWith(")"))
-    return [];
-  if (before.endsWith("Value::Map(") && shape === "Map" && after.startsWith(")"))
-    return [];
-  if (before.endsWith("Value::from(") && after.startsWith(")"))
-    return [];
-  return null;
-}
-function blockHeader(masked, from, open) {
-  let i = open - 1;
-  let depth = 0;
-  while (i >= from) {
-    const c = masked[i];
-    if (c === ")" || c === "]" || c === "}")
-      depth++;
-    else if (c === "(" || c === "[" || c === "{") {
-      if (depth === 0)
-        break;
-      depth--;
-    } else if (c === ";" && depth === 0)
-      break;
-    i--;
-  }
-  return masked.slice(i + 1, open);
-}
-function inRepeatedBlock(masked, from, pos, declAt = -1) {
-  const stack = [];
-  for (let k = from; k < pos; k++) {
-    const c = masked[k];
-    if (c === "{")
-      stack.push(k);
-    else if (c === "}" && stack.length > 0)
-      stack.pop();
-  }
-  for (const open of stack) {
-    if (open < declAt)
-      continue;
-    const head = blockHeader(masked, from, open);
-    if (/\b(for|while|loop)\b/.test(head))
-      return true;
-    if (/\|[^|]*\|/.test(head))
-      return true;
-    if (/\bmove\s*$/.test(head))
-      return true;
-  }
-  return false;
-}
-function assignRewrite(shape, name, s, after, content, masked) {
-  const m = /^\s*=\s*/.exec(after);
-  if (m === null)
-    return null;
-  const rhsStart = s + name.length + m[0].length;
-  const end = stmtEnd(masked, rhsStart);
-  if (end < 0)
-    return null;
-  const rhs = content.slice(rhsStart, end).trim();
-  if (shape === "Vec" && rhs.startsWith("self.array_concat(")) {
-    const prev = /[^\s]/.exec(content.slice(0, s).split("").reverse().join(""));
-    if (prev === null || ![";", "{", "}"].includes(prev[0]))
-      return null;
-    const open = "self.array_concat".length;
-    if (closeParen2(rhs, open) !== rhs.length)
-      return null;
-    const args = splitArgs2(rhs, open + 1, rhs.length - 1);
-    if (args === void 0 || args.length !== 2)
-      return null;
-    const first = args[0].trim();
-    const second = args[1].trim();
-    if (first !== name && first !== `${name}.clone()`)
-      return null;
-    if (new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`).test(second))
-      return null;
-    return [{ start: s, end, text: `match &${second} { Value::Arr(__b) => ${name}.extend(__b.iter().cloned()), _ => ${name}.clear() }` }];
-  }
-  const heads = {
-    "String": ["Value::Str("],
-    "Int": ["Value::Int("],
-    "Float": ["Value::Float("],
-    "Bool": ["Value::Bool("],
-    "Vec": ["Value::Array(vec![", "Value::List(vec![", "Value::from(vec![", "vec!["],
-    "Map": ["Value::Map("]
-  };
-  const head = heads[shape].find((h) => rhs.startsWith(h));
-  if (head === void 0)
-    return null;
-  const close = closeParen2(rhs, head.length - 1);
-  if (close < 0 || close !== rhs.length)
-    return null;
-  const inner = rhs.slice(head.length, close - 1);
-  if (inner.trim() === "" || inner.trim().startsWith("Value::"))
-    return null;
-  return [{ start: rhsStart, end, text: inner }];
-}
-var r01Rejects = [];
-function r01TypedLocals(content) {
-  r01Rejects = [];
-  if (!content.includes(": Value = "))
-    return content;
-  const masked = maskText2(content);
-  const openers = openerMap(masked);
-  const anyOpen = openers.kind;
-  const atOpen = openers;
-  const heads = fnRegions2(masked);
-  const rewrites = [];
-  let group = 0;
-  const declRe = /^([ \t]*)let (?:mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = /gm;
-  let m;
-  while ((m = declRe.exec(content)) !== null) {
-    const name = m[2];
-    const declStart = m.index;
-    const initStart = declStart + m[0].length;
-    const end = stmtEnd(masked, initStart);
-    if (end < 0)
-      continue;
-    const rawInit = content.slice(initStart, end);
-    const lead = rawInit.length - rawInit.trimStart().length;
-    const init = rawInit.trim();
-    const parsed = initShape(init);
-    if (parsed === void 0) {
-      continue;
-    }
-    const { shape } = parsed;
-    if (parsed.wrapperEnd !== init.length) {
-      continue;
-    }
-    if (shape === "Float" && /^-?\d+$/.test(parsed.inner))
-      continue;
-    let lo = 0;
-    for (let h = 0; h < heads.length; h++)
-      if (heads[h] <= declStart)
-        lo = h;
-    const regionStart = heads[lo];
-    let regionEnd = lo + 1 < heads.length ? heads[lo + 1] : content.length;
-    if (shape === "Map") {
-      let depth = 0;
-      for (let k = end; k < regionEnd; k++) {
-        const c = masked[k];
-        if (c === "{")
-          depth++;
-        else if (c === "}") {
-          if (depth === 0) {
-            regionEnd = k;
-            break;
-          }
-          depth--;
-        }
-      }
-    }
-    const region = masked.slice(end, regionEnd);
-    if (rebound(region, name))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
-    const uses = [];
-    const boxes = [];
-    let ok = true;
-    let gained = 0;
-    let lastUse = -1;
-    let skipUntil = -1;
-    let u;
-    while ((u = useRe.exec(region)) !== null) {
-      const s = end + u.index;
-      const before = content.slice(Math.max(regionStart, s - 60), s);
-      const after = content.slice(s + name.length, s + name.length + 90);
-      if (s < skipUntil)
-        continue;
-      lastUse = s;
-      const slot = valueSlot(masked, content, s, name, atOpen);
-      if (slot > 0) {
-        const dotClone = after.startsWith(".clone()") ? ".clone()".length : 0;
-        boxes.push({ pos: s, tail: dotClone, move: slot === 1 });
-        continue;
-      }
-      const ctx = { name, useStart: s, before, after };
-      const rw = classify(shape, ctx, masked, content, atOpen);
-      if (rw !== null && rw.length > 0)
-        gained++;
-      if (rw === null) {
-        const asg = assignRewrite(shape, name, s, after, content, masked);
-        if (asg === null) {
-          ok = false;
-          const ls = content.lastIndexOf("\n", s) + 1;
-          const le = content.indexOf("\n", s);
-          r01Rejects.push({ shape, name, line: content.slice(0, s).split("\n").length, text: content.slice(ls, le < 0 ? content.length : le).trim() });
-          break;
-        }
-        uses.push(...asg);
-        for (const a of asg)
-          skipUntil = Math.max(skipUntil, a.end);
-        continue;
-      }
-      uses.push(...rw);
-    }
-    if (!ok)
-      continue;
-    if (gained === 0)
-      continue;
-    for (const b of boxes) {
-      const canMove = b.pos === lastUse && !inRepeatedBlock(masked, regionStart, b.pos, shape === "Map" ? declStart : -1);
-      const collection = shape === "Vec" || shape === "Map";
-      if (!canMove && (b.tail === 0 || collection)) {
-        ok = false;
-        break;
-      }
-      const expr = canMove ? name : `${name}.clone()`;
-      uses.push({ start: b.pos, end: b.pos + name.length + b.tail, text: boxed(shape, expr) });
-    }
-    if (!ok)
-      continue;
-    for (const a of uses) {
-      for (const b of uses) {
-        if (a !== b && a.start <= b.start && b.end < a.end) {
-          ok = false;
-          break;
-        }
-      }
-      if (!ok)
-        break;
-    }
-    if (!ok)
-      continue;
-    const growth = /* @__PURE__ */ new Map();
-    const lineOf = (pos) => content.lastIndexOf("\n", pos) + 1;
-    for (const rw of uses) {
-      const lineStart = lineOf(rw.start);
-      if (lineOf(rw.end) !== lineStart)
-        continue;
-      const lineEnd = content.indexOf("\n", lineStart);
-      const len = (lineEnd < 0 ? content.length : lineEnd) - lineStart;
-      const next = (growth.get(lineStart) ?? 0) + rw.text.length - (rw.end - rw.start);
-      growth.set(lineStart, next);
-      if (len + next > 400 && len <= 400) {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok)
-      continue;
-    const typeAt = declStart + m[0].indexOf(": Value") + 2;
-    const exprAt = initStart + lead;
-    const g = group++;
-    rewrites.push({ start: typeAt, end: typeAt + 5, text: RUST_TYPE[shape], g });
-    rewrites.push({ start: exprAt, end: exprAt + parsed.wrapperEnd, text: parsed.inner, g });
-    for (const u2 of uses)
-      rewrites.push({ ...u2, g });
-  }
-  if (rewrites.length === 0)
-    return content;
-  const sorted = [...rewrites].sort((a, b) => a.start - b.start || a.end - b.end);
-  const dirty = /* @__PURE__ */ new Set();
-  const active = [];
-  for (const r of sorted) {
-    for (let i = active.length - 1; i >= 0; i--)
-      if (active[i].end <= r.start)
-        active.splice(i, 1);
-    for (const a of active) {
-      if (a.g !== r.g) {
-        dirty.add(a.g);
-        dirty.add(r.g);
-      }
-    }
-    active.push(r);
-  }
-  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (dirty.has(r.g))
-      continue;
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  out += content.slice(last);
-  return out;
-}
-
-// src/rustPasses/hx10w3-R03.ts
-init_esm_shims();
-import * as fs7 from "fs";
-var R03_ROUTED = /* @__PURE__ */ new Set(["cache", "hashmap", "subscriptions", "futures", "timestamp", "datetime", "nonce", "symbol", "checksum"]);
-var R03_MARKER = ["__book_id", "__cache_id", "__cacheKind", "__sideKind", "__live_id"];
-var R03_BASE_FILE = "rust/ccxt-common/src/exchange_generated.rs";
-var r03BaseShapes = void 0;
-function r03Mask2(src) {
-  let out = "";
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      while (i < src.length && src[i] !== "\n") {
-        out += " ";
-        i++;
-      }
-      continue;
-    }
-    if (c === '"') {
-      out += " ";
-      i++;
-      while (i < src.length && src[i] !== '"') {
-        if (src[i] === "\n") {
-          out += "\n";
-          i++;
-          continue;
-        }
-        if (src[i] === "\\") {
-          out += "  ";
-          i += 2;
-          continue;
-        }
-        out += " ";
-        i++;
-      }
-      if (i < src.length) {
-        out += " ";
-        i++;
-      }
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-function r03Close2(src, open) {
-  const openCh = src[open];
-  const closeCh = openCh === "(" ? ")" : openCh === "[" ? "]" : openCh === "{" ? "}" : "";
-  if (closeCh === "")
-    return -1;
-  let depth = 0;
-  for (let k = open; k < src.length; k++) {
-    const c = src[k];
-    if (c === openCh)
-      depth++;
-    else if (c === closeCh) {
-      depth--;
-      if (depth === 0)
-        return k;
-    }
-  }
-  return -1;
-}
-function r03Args(masked, open, close) {
-  const spans = [];
-  let depth = 0;
-  let start = open + 1;
-  for (let k = open + 1; k < close; k++) {
-    const c = masked[k];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}")
-      depth--;
-    else if (c === "," && depth === 0) {
-      spans.push([start, k]);
-      start = k + 1;
-    }
-  }
-  if (masked.slice(start, close).trim() !== "")
-    spans.push([start, close]);
-  return spans;
-}
-function r03StmtEnd2(masked, from) {
-  let depth = 0;
-  for (let k = from; k < masked.length; k++) {
-    const c = masked[k];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth < 0)
-        return -1;
-    } else if (c === ";" && depth === 0)
-      return k;
-  }
-  return -1;
-}
-function r03Returns(masked) {
-  const out = [];
-  const rx = /(?<![A-Za-z0-9_])return\b/g;
-  let m;
-  while ((m = rx.exec(masked)) !== null) {
-    const end = r03StmtEnd2(masked, m.index + 6);
-    if (end < 0)
-      continue;
-    out.push(masked.slice(m.index + 6, end).trim());
-  }
-  return out;
-}
-function r03Tail(body) {
-  const t = body.replace(/\s+$/, "");
-  if (t === "" || t.endsWith(";"))
-    return void 0;
-  const cut = t.lastIndexOf(";");
-  const tail = (cut < 0 ? t : t.slice(cut + 1)).trim();
-  if (tail === "" || /^(?:if|match|while|for|loop|\{)/.test(tail))
-    return void 0;
-  return tail;
-}
-function r03TailIsDead(body) {
-  const cut = body.replace(/\s+$/, "").lastIndexOf(";");
-  if (cut < 0)
-    return false;
-  let depth = 0;
-  let k = cut - 1;
-  for (; k >= 0; k--) {
-    const c = body[k];
-    if (c === ")" || c === "]" || c === "}")
-      depth++;
-    else if (c === "(" || c === "[" || c === "{") {
-      depth--;
-      if (depth < 0)
-        break;
-    } else if (c === ";" && depth === 0)
-      break;
-  }
-  return /^\s*return\b/.test(body.slice(k + 1, cut));
-}
-function r03FreshShape(t) {
-  const s = t.replace(/^\(+/, "").trim();
-  if (/^Value::(?:Map|Dict)\(/.test(s)) {
-    const open = s.indexOf("(");
-    if (/^Value::(?:Map|Dict)\(\s*(?:\{|indexmap::IndexMap::new\(\)|HashMap::new\(\))/.test(s))
-      return "dict";
-    return void 0;
-  }
-  if (/^Value::(?:Array|List)\(\s*(?:vec!\[|std::sync::Arc::new\(\s*vec!\[)/.test(s))
-    return "arr";
-  if (/^Value::from\(\s*(?:std::sync::Arc::new\(\s*)?vec!\[/.test(s))
-    return "arr";
-  return void 0;
-}
-function r03Decl(region, name) {
-  const rx = new RegExp("\\blet (?:mut )?" + name + "\\s*(?::\\s*[^=;]+)?=\\s*", "g");
-  let hit = null;
-  let count = 0;
-  let m;
-  while ((m = rx.exec(region)) !== null) {
-    hit = m;
-    count++;
-  }
-  if (count !== 1 || hit === null)
-    return void 0;
-  return { init: region.slice(hit.index + hit[0].length, hit.index + hit[0].length + 400) };
-}
-function r03MethodShapes(content, masked, loose = false) {
-  const shapes = /* @__PURE__ */ new Map();
-  const hdr = loose ? /\n    (?:pub )?fn (\w+)\s*\(/g : /\n    pub fn (\w+)\s*\(/g;
-  let hm;
-  while ((hm = hdr.exec(masked)) !== null) {
-    const lineEnd = masked.indexOf("\n", hm.index + 1);
-    const line = masked.slice(hm.index, lineEnd < 0 ? masked.length : lineEnd);
-    if (!/->\s*(?:crate::)?Value\b/.test(line))
-      continue;
-    const open = masked.indexOf("(", hm.index);
-    const close = r03Close2(masked, open);
-    if (close < 0)
-      continue;
-    const braceOpen = masked.indexOf("{", close);
-    if (braceOpen < 0)
-      continue;
-    if (!/^(?:->\s*(?:crate::)?Value)?$/.test(masked.slice(close + 1, braceOpen).trim()))
-      continue;
-    const braceClose = r03Close2(masked, braceOpen);
-    if (braceClose < 0)
-      continue;
-    const body = masked.slice(braceOpen + 1, braceClose);
-    const exprs = r03Returns(body);
-    if (exprs.length === 0)
-      continue;
-    const tail = r03Tail(body);
-    if (tail !== void 0 && !r03TailIsDead(body)) {
-      exprs.push(tail);
-    }
-    const kinds = /* @__PURE__ */ new Set();
-    for (const e of exprs) {
-      if (loose && /^__\w+$/.test(e))
-        continue;
-      kinds.add(r03FreshShape(e) ?? "other");
-    }
-    if (kinds.size !== 1)
-      continue;
-    const only = [...kinds][0];
-    if (only === "other")
-      continue;
-    shapes.set(hm[1], only);
-  }
-  return shapes;
-}
-function r03BaseShapeTable() {
-  if (r03BaseShapes !== void 0)
-    return r03BaseShapes;
-  r03BaseShapes = /* @__PURE__ */ new Map();
-  try {
-    const src = fs7.readFileSync(R03_BASE_FILE, "utf8");
-    r03BaseShapes = r03MethodShapes(src, r03Mask2(src), true);
-  } catch (e) {
-    if (e === void 0 || e.code !== "ENOENT")
-      throw e;
-  }
-  return r03BaseShapes;
-}
-var R03_PASSTHROUGH = /* @__PURE__ */ new Set(["extend", "omit", "keysort", "clone_value"]);
-var R03Prover2 = class {
-  constructor(region, maskedRegion, own, base) {
-    this.visiting = /* @__PURE__ */ new Set();
-    this.region = region;
-    this.masked = maskedRegion;
-    this.own = own;
-    this.base = base;
-  }
-  /** Shape of the local `name` in this region, or undefined when unproven. */
-  shape(name) {
-    if (this.visiting.has(name))
-      return void 0;
-    this.visiting.add(name);
-    const out = this.prove(name);
-    this.visiting.delete(name);
-    return out;
-  }
-  prove(name) {
-    const decl = r03Decl(this.masked, name);
-    if (decl === void 0)
-      return void 0;
-    return this.shapeOfInit(decl.init);
-  }
-  shapeOfInit(init) {
-    const fresh = r03FreshShape(init);
-    if (fresh !== void 0)
-      return fresh;
-    const call = /^self\.(\w+)\s*\(/.exec(init);
-    if (call === null)
-      return void 0;
-    const callee = call[1];
-    const own = this.own.get(callee);
-    if (own !== void 0)
-      return own;
-    const base = this.base.get(callee);
-    if (base !== void 0)
-      return base;
-    if (R03_PASSTHROUGH.has(callee)) {
-      const open = init.indexOf("(");
-      const close = r03Close2(init, open);
-      if (close < 0)
-        return void 0;
-      const args = r03Args(init, open, close);
-      if (args === void 0 || args.length === 0)
-        return void 0;
-      const first = init.slice(args[0][0], args[0][1]).trim();
-      if (!/^[a-z_][A-Za-z0-9_]*$/.test(first))
-        return void 0;
-      return this.shape(first);
-    }
-    return void 0;
-  }
-};
-function r03LiteralKey(arg) {
-  if (arg === void 0)
-    return void 0;
-  const m = /^&\s*Value::Str\(\s*("(?:[^"\\]|\\.)*")\s*(?:\.into\(\)|\.to_string\(\))?\s*\)$/.exec(arg.trim());
-  return m === null ? void 0 : m[1].slice(1, -1);
-}
-function r03PlainReceiver(region, name) {
-  const rx = new RegExp("&mut " + name + "(?![A-Za-z0-9_])", "g");
-  let m;
-  while ((m = rx.exec(region)) !== null) {
-    const before = region.slice(Math.max(0, m.index - 40), m.index);
-    if (/(?:add_element_to_object|get_value_mut|set_value)\($/.test(before))
-      continue;
-    if (/if let Value::(?:Dict|Arr|Map)\(\s*__\w+\s*\)\s*=\s*$/.test(before))
-      continue;
-    return false;
-  }
-  return true;
-}
-function r03SingleWrite(region, name) {
-  const rx = new RegExp("(?<![A-Za-z0-9_.])" + name + "\\s*=\\s*(?!=)", "g");
-  let m;
-  while ((m = rx.exec(region)) !== null) {
-    const before = region.slice(Math.max(0, m.index - 5), m.index);
-    if (/\blet $/.test(before) || /\blet mut $/.test(region.slice(Math.max(0, m.index - 8), m.index)))
-      continue;
-    return false;
-  }
-  return true;
-}
-function hx10w3R03(content, stats) {
-  if (content.indexOf("add_element_to_object(") < 0 && content.indexOf("get_value(&") < 0 && content.indexOf("in_op(") < 0 && content.indexOf("object_keys(") < 0 && content.indexOf("object_values(") < 0 && content.indexOf("get_array_length(") < 0)
-    return content;
-  const masked = r03Mask2(content);
-  const own = r03MethodShapes(content, masked);
-  const base = r03BaseShapeTable();
-  const heads = [];
-  const hdr = /^[ \t]*(?:pub(?:\([a-z]+\))? )?(?:async )?fn /gm;
-  let hm;
-  while ((hm = hdr.exec(masked)) !== null)
-    heads.push(hm.index);
-  heads.push(content.length);
-  const edits = [];
-  const FAM = /(?<![A-Za-z0-9_:.])(add_element_to_object|get_value|in_op|object_keys|object_values|get_array_length)\(/g;
-  for (let h = 0; h + 1 < heads.length; h++) {
-    const from = heads[h];
-    const to = heads[h + 1];
-    const maskedRegion = masked.slice(from, to);
-    const prover = new R03Prover2(content.slice(from, to), maskedRegion, own, base);
-    FAM.lastIndex = 0;
-    let fm;
-    while ((fm = FAM.exec(maskedRegion)) !== null) {
-      const name = fm[1];
-      const open = fm.index + fm[0].length - 1;
-      const close = r03Close2(maskedRegion, open);
-      if (close < 0)
-        continue;
-      const spans = r03Args(maskedRegion, open, close);
-      if (spans === void 0)
-        continue;
-      let recv;
-      let keyArg;
-      let valueStart = -1;
-      if (name === "add_element_to_object") {
-        if (spans.length !== 3)
-          continue;
-        const first = maskedRegion.slice(spans[0][0], spans[0][1]).trim();
-        const head = /^&mut\s+([a-z_][A-Za-z0-9_]*)$/.exec(first);
-        if (head === null)
-          continue;
-        recv = head[1];
-        keyArg = content.slice(from + spans[1][0], from + spans[1][1]);
-        valueStart = spans[2][0];
-      } else if (name === "get_array_length" || name === "object_keys" || name === "object_values") {
-        if (spans.length !== 1)
-          continue;
-        const head = /^&\s*([a-z_][A-Za-z0-9_]*)$/.exec(maskedRegion.slice(spans[0][0], spans[0][1]).trim());
-        if (head === null)
-          continue;
-        recv = head[1];
-      } else {
-        if (spans.length !== 2)
-          continue;
-        const head = /^&\s*([a-z_][A-Za-z0-9_]*)$/.exec(maskedRegion.slice(spans[0][0], spans[0][1]).trim());
-        if (head === null)
-          continue;
-        recv = head[1];
-        keyArg = content.slice(from + spans[1][0], from + spans[1][1]);
-      }
-      const shape = prover.shape(recv);
-      if (shape === void 0)
-        continue;
-      if (name === "get_array_length") {
-        if (shape !== "arr")
-          continue;
-        if (!r03SingleWrite(maskedRegion, recv))
-          continue;
-        edits.push({ start: from + fm.index, end: from + close + 1, text: `Value::Int(${recv}.len() as i64)` });
-        continue;
-      }
-      if (shape !== "dict")
-        continue;
-      if (!r03PlainReceiver(maskedRegion, recv) || !r03SingleWrite(maskedRegion, recv))
-        continue;
-      if (name === "add_element_to_object") {
-        const key2 = r03LiteralKey(keyArg);
-        if (key2 === void 0 || R03_MARKER.indexOf(key2) >= 0)
-          continue;
-        const valueEnd = spans[2][1];
-        const value = content.slice(from + valueStart, from + valueEnd).trim();
-        const stmtEnd3 = maskedRegion[close + 1] === ";" ? close + 2 : close + 1;
-        edits.push({
-          start: from + fm.index,
-          end: from + stmtEnd3,
-          text: `if let Value::Dict(__r03d) = &mut ${recv} { std::sync::Arc::make_mut(__r03d).insert("${key2}".into(), ${value}); }`
-        });
-        continue;
-      }
-      const key = r03LiteralKey(keyArg);
-      if (key === void 0 || R03_ROUTED.has(key) || R03_MARKER.indexOf(key) >= 0)
-        continue;
-      if (name === "get_value") {
-        edits.push({
-          start: from + fm.index,
-          end: from + close + 1,
-          text: `${recv}.as_map().unwrap().get("${key}").cloned().unwrap_or(Value::Null)`
-        });
-      } else if (name === "in_op") {
-        if (!r03BoolPosition(maskedRegion, fm.index))
-          continue;
-        edits.push({
-          start: from + fm.index,
-          end: from + close + 1,
-          text: `matches!(&${recv}, Value::Dict(__r03k) if __r03k.contains_key("${key}"))`
-        });
-      } else {
-        const body = name === "object_keys" ? "__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()" : "__m.values().cloned().collect()";
-        edits.push({
-          start: from + fm.index,
-          end: from + close + 1,
-          text: `Value::Array(${recv}.as_map().map(|__m| ${body}).unwrap_or_default())`
-        });
-      }
-    }
-  }
-  if (edits.length === 0)
-    return content;
-  edits.sort((a, b) => a.start - b.start || b.end - a.end);
-  let out = "";
-  let at = 0;
-  let count = 0;
-  for (const e of edits) {
-    if (e.start < at)
-      continue;
-    out += content.slice(at, e.start) + e.text;
-    at = e.end;
-    count++;
-  }
-  out += content.slice(at);
-  if (stats !== void 0)
-    stats.sites += count;
-  return out;
-}
-function r03BoolPosition(masked, pos) {
-  const lineStart = masked.lastIndexOf("\n", pos) + 1;
-  const pre = masked.slice(lineStart, pos).trim();
-  const headed = /^(?:\}\s*else\s+)?(?:if|while)$/.test(pre);
-  const wrapped = /is_true\(&$/.test(pre);
-  return headed || wrapped;
-}
-
-// src/rustPasses/hx10w3-R04.ts
-init_esm_shims();
-function hx10R04Mask(text) {
-  const out = text.split("");
-  const n = out.length;
-  let i = 0;
-  while (i < n) {
-    const c = out[i];
-    if (c === '"') {
-      let j = i + 1;
-      while (j < n && out[j] !== '"') {
-        if (out[j] === "\\")
-          j += 1;
-        j += 1;
-      }
-      for (let k = i + 1; k < j && k < n; k++)
-        out[k] = " ";
-      i = j + 1;
-      continue;
-    }
-    if (c === "/" && out[i + 1] === "/") {
-      let j = i;
-      while (j < n && out[j] !== "\n") {
-        out[j] = " ";
-        j += 1;
-      }
-      i = j;
-      continue;
-    }
-    i += 1;
-  }
-  return out.join("");
-}
-function hx10R04Close(masked, open) {
-  let depth = 0;
-  for (let i = open; i < masked.length; i++) {
-    const c = masked[i];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0)
-        return i;
-    }
-  }
-  return -1;
-}
-function hx10R04Strip(src) {
-  let s = src.trim();
-  while (s.startsWith("(") && hx10R04Close(s, 0) === s.length - 1)
-    s = s.slice(1, -1).trim();
-  return s;
-}
-var HX10R04_FN = /\n[ \t]*(?:pub )?(?:async )?fn (\w+)/g;
-function hx10R04Regions(masked) {
-  const heads = [0];
-  for (const m of masked.matchAll(HX10R04_FN))
-    heads.push(m.index + 1);
-  heads.push(masked.length);
-  const out = [];
-  for (let h = 0; h + 1 < heads.length; h++) {
-    const seg = masked.slice(heads[h], heads[h + 1]);
-    const head = /^[ \t]*(?:pub )?(?:async )?fn (\w+)\s*(?:<[^>]*>)?\s*\(/.exec(seg);
-    if (head === null)
-      continue;
-    const open = seg.indexOf("(", head[0].length - 1);
-    const close = hx10R04Close(seg, open);
-    if (close < 0)
-      continue;
-    const brace = seg.indexOf("{", close);
-    out.push({ start: heads[h], end: heads[h + 1], name: head[1], ret: brace < 0 ? "" : seg.slice(close + 1, brace), body: brace < 0 ? "" : seg.slice(brace) });
-  }
-  return out;
-}
-function hx10R04RetExprs(region) {
-  if (!/^\s*->\s*(?:crate::)?Value\s*$/.test(region.ret.replace(/\s+/g, " ")))
-    return void 0;
-  const body = region.body;
-  const rets = [];
-  for (const m of body.matchAll(/\breturn\b/g)) {
-    const at = m.index + m[0].length;
-    let depth = 0;
-    let j = at;
-    for (; j < body.length; j++) {
-      const c = body[j];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}") {
-        if (depth === 0)
-          break;
-        depth--;
-      } else if (c === ";" && depth === 0)
-        break;
-    }
-    rets.push(body.slice(at, j));
-  }
-  const close = body.lastIndexOf("}");
-  const tailEnd = body.slice(0, close).replace(/\s+$/, "");
-  const semi = tailEnd.lastIndexOf(";");
-  const braceOpen = tailEnd.lastIndexOf("{");
-  if (semi > braceOpen || semi < 0 && braceOpen < 0) {
-    const tail = tailEnd.slice(semi + 1).trim();
-    if (tail !== "" && !tail.startsWith("}"))
-      rets.push(tail);
-  }
-  if (rets.length === 0)
-    return void 0;
-  return rets;
-}
-function hx10R04SafeBoolDefault(call) {
-  const open = call.indexOf("(");
-  const close = hx10R04Close(call, open);
-  if (close < 0)
-    return void 0;
-  const inner = call.slice(open + 1, close);
-  const listAt = inner.lastIndexOf("&[");
-  if (listAt < 0)
-    return void 0;
-  const list = hx10R04Strip(inner.slice(listAt));
-  if (!list.startsWith("&[") || !list.endsWith("]"))
-    return void 0;
-  const items = list.slice(2, -1).trim();
-  if (items === "")
-    return true;
-  const one = hx10R04Strip(items);
-  if (/^Value::Bool\((?:true|false)\)$/.test(one))
-    return true;
-  if (one === "Value::Null")
-    return true;
-  return void 0;
-}
-var HX10R04_BOOL_BASE = /^(?:in_array|is_json_encoded_object)$/;
-var HX10R04_BOOLISH = (v) => [...v].every((x) => x === "bool" || x === "null");
-function hx10R04Variant(expr, masked, byName, region, depth, visiting) {
-  if (depth > 6)
-    return void 0;
-  let e = hx10R04Strip(expr);
-  while (e.endsWith(".clone()"))
-    e = hx10R04Strip(e.slice(0, -".clone()".length));
-  while (e.endsWith(".await"))
-    e = e.slice(0, -".await".length).trim();
-  const lit = /^Value::(Bool|Int|Float|Str)\(/.exec(e);
-  if (lit !== null && hx10R04Close(e, "Value::".length + lit[1].length) === e.length - 1) {
-    return /* @__PURE__ */ new Set([lit[1].toLowerCase()]);
-  }
-  if (e === "Value::Null" || e === "crate::Value::Null")
-    return /* @__PURE__ */ new Set(["null"]);
-  if (/^\(?if .+\)?$/.test(e) && e.includes("} else {")) {
-    const at = e.indexOf("} else {");
-    const a = hx10R04Variant(e.slice(e.indexOf("{") + 1, at), masked, byName, region, depth, visiting);
-    const b = hx10R04Variant(e.slice(at + "} else {".length, e.lastIndexOf("}")), masked, byName, region, depth, visiting);
-    if (a !== void 0 && b !== void 0)
-      return /* @__PURE__ */ new Set([...a, ...b]);
-    return void 0;
-  }
-  const precise = /^crate::precise::Precise::(\w+)\((?:(?!\()[^()]|\((?!\()(?:[^()]|\([^()]*\))*\))*\)$/.exec(e);
-  if (precise !== null && /^string(?:Eq|Gt|Ge|Lt|Le|Equals)$/.test(precise[1]))
-    return /* @__PURE__ */ new Set(["bool"]);
-  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(e)) {
-    const writes = hx10R04Writes(masked, e, region);
-    if (writes === void 0)
-      return void 0;
-    let acc = void 0;
-    for (const w of writes) {
-      const v = hx10R04Variant(w, masked, byName, region, depth + 1, visiting);
-      if (v === void 0)
-        return void 0;
-      acc = acc === void 0 ? v : new Set([...acc].filter((x) => v.has(x)));
-    }
-    return acc;
-  }
-  const call = /^self\.([a-z_][a-z0-9_]*)\s*\(/.exec(e);
-  if (call !== null && hx10R04Close(e, "self.".length + call[1].length) === e.length - 1) {
-    if (HX10R04_BOOL_BASE.test(call[1]))
-      return /* @__PURE__ */ new Set(["bool"]);
-    if (/^safe_bool(_2|_k)?$/.test(call[1])) {
-      return hx10R04SafeBoolDefault(e) === true ? /* @__PURE__ */ new Set(["bool", "null"]) : void 0;
-    }
-    return hx10R04CalleeVariant(call[1], masked, byName, depth + 1, visiting);
-  }
-  return void 0;
-}
-function hx10R04CalleeVariant(name, masked, byName, depth, visiting) {
-  if (visiting.has(name) || depth > 6)
-    return void 0;
-  const decls = byName.get(name);
-  if (decls === void 0 || decls.length === 0)
-    return void 0;
-  const next = new Set(visiting);
-  next.add(name);
-  let acc = void 0;
-  for (const decl of decls) {
-    const rets = hx10R04RetExprs(decl);
-    if (rets === void 0)
-      return void 0;
-    for (const r of rets) {
-      const v = hx10R04Variant(r, masked, byName, decl, depth + 1, next);
-      if (v === void 0)
-        return void 0;
-      acc = acc === void 0 ? v : /* @__PURE__ */ new Set([...acc, ...v]);
-    }
-  }
-  return acc;
-}
-function hx10R04Writes(masked, ident, region) {
-  const esc = ident.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const body = masked.slice(region.start, region.end);
-  const shadow = new RegExp(`\\|(?!\\|)[^|\\n]*\\b${esc}\\b[^|\\n]*\\|(?!\\|)|\\bfor [^\\n]*\\b${esc}\\b[^\\n]* in |\\blet \\([^)]*\\b${esc}\\b`);
-  if (shadow.test(body))
-    return void 0;
-  const writes = [];
-  const spans = [];
-  const letRe = new RegExp(`\\blet (?:mut )?${esc}\\b\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_<>]*))?\\s*=`, "g");
-  for (const m of body.matchAll(letRe)) {
-    const at = m.index;
-    if (m[1] !== void 0 && m[1] !== "Value")
-      return void 0;
-    let depth = 0;
-    let j = at + m[0].length;
-    for (; j < body.length; j++) {
-      const c = body[j];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}") {
-        if (depth === 0)
-          break;
-        depth--;
-      } else if (c === ";" && depth === 0)
-        break;
-    }
-    writes.push(body.slice(at + m[0].length, j));
-    spans.push([at, j]);
-  }
-  const assignRe = new RegExp(`(?<![A-Za-z0-9_.])${esc}\\s*=(?!=)`, "g");
-  for (const m of body.matchAll(assignRe)) {
-    const at = m.index;
-    if (spans.some(([s, e]) => at >= s && at < e))
-      continue;
-    let depth = 0;
-    let j = at + m[0].length;
-    for (; j < body.length; j++) {
-      const c = body[j];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}") {
-        if (depth === 0)
-          break;
-        depth--;
-      } else if (c === ";" && depth === 0)
-        break;
-    }
-    writes.push(body.slice(at + m[0].length, j));
-  }
-  if (writes.length === 0)
-    return void 0;
-  return writes;
-}
-function r04StmtBefore(masked, pos) {
-  let depth = 0;
-  for (let i = pos; i > 0; i--) {
-    const c = masked[i - 1];
-    if (c === ")" || c === "]")
-      depth++;
-    else if (c === "(" || c === "[") {
-      if (depth > 0)
-        depth--;
-    } else if (depth === 0 && (c === ";" || c === "{" || c === "}" || c === "\n"))
-      return masked.slice(i, pos);
-  }
-  return masked.slice(0, pos);
-}
-function r04DropOperand(s) {
-  let depth = 0;
-  for (let i = s.length - 1; i >= 0; i--) {
-    const c = s[i];
-    if (c === ")" || c === "]" || c === "}")
-      depth++;
-    else if (c === "(" || c === "[" || c === "{") {
-      if (depth === 0)
-        return s.slice(0, i);
-      depth--;
-      if (depth === 0 && !/[A-Za-z0-9_.)\]]/.test(s[i - 1] ?? ""))
-        return s.slice(0, i);
-    } else if (depth === 0) {
-      if (c === "&" && s[i - 1] === "&" || c === "|" && s[i - 1] === "|")
-        return s.slice(0, i - 1);
-      if (c === "," || c === ";" || c === "=")
-        return s.slice(0, i + 1);
-      if (/[A-Za-z0-9_.)\]]/.test(c)) {
-        let k = i;
-        while (k >= 0 && /[A-Za-z0-9_.]/.test(s[k]))
-          k--;
-        return k < 0 ? s : s.slice(0, k + 1);
-      }
-    }
-  }
-  return "";
-}
-function r04BoolSlot(masked, start) {
-  let prefix = r04StmtBefore(masked, start);
-  for (let hop = 0; hop < 60; hop++) {
-    prefix = prefix.replace(/[\s!]+$/, "");
-    if (/(?:^|[^\w])(?:if|while|for|assert)$/.test(prefix))
-      return true;
-    if (/Value::Bool\($/.test(prefix))
-      return true;
-    if (/(?:&&|\|\|)$/.test(prefix)) {
-      prefix = r04DropOperand(prefix.slice(0, -2));
-      continue;
-    }
-    if (/[^=!<>]=$/.test(prefix))
-      return /:\s*bool\s*=?$/.test(prefix.slice(0, -1));
-    if (/\($/.test(prefix)) {
-      prefix = prefix.slice(0, -1);
-      continue;
-    }
-    return false;
-  }
-  return false;
-}
-function r04Callee(content) {
-  if (!content.includes("is_true(&"))
-    return content;
-  const masked = hx10R04Mask(content);
-  const regions = hx10R04Regions(masked);
-  const byName = /* @__PURE__ */ new Map();
-  for (const r of regions) {
-    const list = byName.get(r.name);
-    if (list === void 0)
-      byName.set(r.name, [r]);
-    else
-      list.push(r);
-  }
-  const edits = [];
-  for (const m of masked.matchAll(/(?<![A-Za-z0-9_:.])is_true\(&/g)) {
-    const start = m.index;
-    const open = start + "is_true".length;
-    const close = hx10R04Close(masked, open);
-    if (close < 0)
-      continue;
-    const arg = content.slice(open + 1, close);
-    if (arg.includes("\n"))
-      continue;
-    const expr = hx10R04Strip(arg.replace(/^&/, ""));
-    if (expr === "")
-      continue;
-    const region = regions.find((r) => start >= r.start && start < r.end);
-    if (region === void 0)
-      continue;
-    if (!r04BoolSlot(masked, start))
-      continue;
-    const variants = hx10R04Variant(expr, masked, byName, region, 0, /* @__PURE__ */ new Set());
-    if (variants === void 0 || !HX10R04_BOOLISH(variants))
-      continue;
-    let k = start - 1;
-    while (k >= 0 && (masked[k] === " " || masked[k] === "	"))
-      k--;
-    const negated = k >= 0 && masked[k] === "!" && masked[k - 1] !== "=";
-    edits.push({ start: negated ? k : start, end: close + 1, text: `${expr}.as_bool() == Some(${negated ? "false" : "true"})` });
-  }
-  if (edits.length === 0)
-    return content;
-  let out = "";
-  let at = 0;
-  for (const e of edits) {
-    if (e.start < at)
-      continue;
-    out += content.slice(at, e.start) + e.text;
-    at = e.end;
-  }
-  return out + content.slice(at);
-}
-
-// src/rustPasses/hx10w3-R05.ts
-init_esm_shims();
-var FIELDS_ARR = ["balance", "ohlcvs", "options"];
-var RECV = "self\\.(?:(?:core|parent)\\.)*(" + FIELDS_ARR.join("|") + ")";
-var STR_KEY = '&Value::Str\\("((?:[^"\\\\]|\\\\.)*)"\\.(?:into|to_string)\\(\\)\\)';
-var MAX_LINE = 400;
-function maskSrc(src) {
-  const out = src.split("");
-  const blank = (from, to) => {
-    for (let i2 = from; i2 < to && i2 < out.length; i2++)
-      if (out[i2] !== "\n")
-        out[i2] = " ";
-  };
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      const end = src.indexOf("\n", i);
-      const stop = end < 0 ? src.length : end;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      const end = src.indexOf("*/", i + 2);
-      const stop = end < 0 ? src.length : end + 2;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (c === "'") {
-      const m = /^'(?:\\.|[^\\'])'/.exec(src.slice(i, i + 4));
-      if (m !== null) {
-        i += m[0].length;
-        continue;
-      }
-    }
-    if (c === '"') {
-      let j = i + 1;
-      while (j < src.length) {
-        if (src[j] === "\\") {
-          j += 2;
-          continue;
-        }
-        if (src[j] === '"')
-          break;
-        j++;
-      }
-      blank(i, Math.min(j + 1, src.length));
-      i = j + 1;
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
-}
-function argSpans(masked, open) {
-  let depth = 0;
-  const spans = [];
-  let start = open + 1;
-  for (let j = open; j < masked.length; j++) {
-    const c = masked[j];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0) {
-        spans.push([start, j]);
-        return spans;
-      }
-    } else if (c === "," && depth === 1) {
-      spans.push([start, j]);
-      start = j + 1;
-    }
-  }
-  return void 0;
-}
-function callEnd(masked, open) {
-  let depth = 0;
-  for (let j = open; j < masked.length; j++) {
-    const c = masked[j];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0)
-        return j + 1;
-    }
-  }
-  return -1;
-}
-function isStatement2(masked, from, to) {
-  let k = to;
-  while (k < masked.length && (masked[k] === " " || masked[k] === "	"))
-    k++;
-  if (masked[k] !== ";")
-    return false;
-  let s = from - 1;
-  while (s >= 0 && (masked[s] === " " || masked[s] === "	" || masked[s] === "\n"))
-    s--;
-  return s < 0 || "{};".indexOf(masked[s]) >= 0;
-}
-function firstArg2(expr) {
-  const open = expr.indexOf("(");
-  if (open < 0)
-    return "";
-  let depth = 0;
-  for (let j = open; j < expr.length; j++) {
-    const c = expr[j];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0)
-        return expr.slice(open + 1, j).trim();
-    } else if (c === "," && depth === 1) {
-      return expr.slice(open + 1, j).trim();
-    }
-  }
-  return "";
-}
-function chainField(recv) {
-  const direct = new RegExp("^&mut\\s+" + RECV + "$").exec(recv);
-  if (direct !== null)
-    return direct[1];
-  let expr = recv;
-  for (let hop = 0; hop < 8; hop++) {
-    if (!expr.startsWith("get_value_mut("))
-      return "";
-    const a = firstArg2(expr);
-    const mutRoot = new RegExp("^&mut\\s+" + RECV + "$").exec(a);
-    if (mutRoot !== null)
-      return mutRoot[1];
-    const coerced = new RegExp("^unsafe\\s*\\{\\s*crate::runtime::coerce_value_to_mut\\(&" + RECV + "\\)\\s*\\}$").exec(a);
-    if (coerced !== null)
-      return coerced[1];
-    if (!a.startsWith("get_value_mut("))
-      return "";
-    expr = a;
-  }
-  return "";
-}
-var FN_HEAD = /(?:^|\n)[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+[A-Za-z_][A-Za-z0-9_]*/g;
-function fnSpan(src, at) {
-  FN_HEAD.lastIndex = 0;
-  let start = 0;
-  let m;
-  while ((m = FN_HEAD.exec(src)) !== null) {
-    if (m.index > at)
-      return [start, m.index];
-    start = m.index;
-  }
-  return [start, src.length];
-}
-function identKeyArg(body, ident, header) {
-  const asStr = new RegExp("\\blet\\s+(?:mut\\s+)?" + ident + "\\s*:\\s*String\\s*=");
-  const asVal = new RegExp("\\blet\\s+(?:mut\\s+)?" + ident + "\\s*:\\s*Value\\s*=");
-  if (asStr.test(body))
-    return ident + ".clone()";
-  if (asVal.test(body))
-    return "crate::runtime::stringify_param(&" + ident + ")";
-  const paramVal = new RegExp("(?:^|[(,]\\s*)(?:mut\\s+)?" + ident + "\\s*:\\s*Value\\b");
-  const paramStr = new RegExp("(?:^|[(,]\\s*)(?:mut\\s+)?" + ident + "\\s*:\\s*String\\b");
-  if (paramStr.test(header))
-    return ident + ".clone()";
-  if (paramVal.test(header))
-    return "crate::runtime::stringify_param(&" + ident + ")";
-  return "";
-}
-function runPass(content) {
-  if (!content.includes("add_element_to_object("))
-    return content;
-  const masked = maskSrc(content);
-  const callRe = /(?<![A-Za-z0-9_:.])(add_element_to_object)\(/g;
-  const rws = [];
-  let m;
-  while ((m = callRe.exec(masked)) !== null) {
-    const open = m.index + m[1].length;
-    const spans = argSpans(masked, open);
-    if (spans === void 0 || spans.length !== 3)
-      continue;
-    const end = callEnd(masked, open);
-    if (end < 0)
-      continue;
-    if (!isStatement2(masked, m.index, end))
-      continue;
-    const raw = spans.map((sp) => content.slice(sp[0], sp[1]).trim());
-    if (chainField(raw[0]) === "")
-      continue;
-    const value = raw[2];
-    if (/\bself\b/.test(value))
-      continue;
-    let keyArg = "";
-    const lit = new RegExp("^" + STR_KEY + "$").exec(raw[1]);
-    if (lit !== null) {
-      keyArg = '"' + lit[1] + '".to_string()';
-    } else {
-      const ident = /^&([A-Za-z_][A-Za-z0-9_]*)$/.exec(raw[1]);
-      if (ident === null)
-        continue;
-      const [fnStart, fnEnd] = fnSpan(masked, m.index);
-      const headerEnd = masked.indexOf("\n", fnStart + 1);
-      const header = masked.slice(fnStart, headerEnd < 0 ? fnEnd : headerEnd);
-      keyArg = identKeyArg(masked.slice(fnStart, m.index), ident[1], header);
-      if (keyArg === "")
-        continue;
-    }
-    const text = "if let Value::Dict(__r05d) = " + raw[0] + " { std::sync::Arc::make_mut(__r05d).insert(" + keyArg + ", " + value + "); }";
-    const lineStart = content.lastIndexOf("\n", m.index) + 1;
-    const lineEndIdx = content.indexOf("\n", end);
-    const lineLen = (lineEndIdx < 0 ? content.length : lineEndIdx) - lineStart;
-    if (lineLen > MAX_LINE || lineLen - (end - m.index) + text.length > MAX_LINE)
-      continue;
-    let stop = end;
-    while (stop < content.length && (content[stop] === " " || content[stop] === "	"))
-      stop++;
-    if (content[stop] !== ";")
-      continue;
-    rws.push({ start: m.index, end: stop + 1, text });
-  }
-  if (rws.length === 0)
-    return content;
-  rws.sort((a, b) => a.start - b.start);
-  let out = "";
-  let at = 0;
-  for (const r of rws) {
-    if (r.start < at)
-      continue;
-    out += content.slice(at, r.start) + r.text;
-    at = r.end;
-  }
-  return out + content.slice(at);
-}
-function r05FieldChainInserts(content) {
-  let out = content;
-  for (let i = 0; i < 4; i++) {
-    const next = runPass(out);
-    if (next === out)
-      break;
-    out = next;
-  }
-  return out;
-}
-
-// src/rustPasses/hx10w3-R06.ts
-init_esm_shims();
-var helperName = "append_to_array";
-var lineBudget = 400;
-var plainFields = /* @__PURE__ */ new Set([
-  "orders",
-  "positions",
-  "tickers",
-  "trades",
-  "ohlcvs",
-  "bidsasks",
-  "clients",
-  "balance",
-  "options",
-  "markets",
-  "markets_by_id",
-  "currencies",
-  "events",
-  "outcomes",
-  "outcomes_by_id",
-  "events_by_slug",
-  "symbols",
-  "free",
-  "used",
-  "total"
-]);
-var keeperCalls = ["add_element_to_object", "set_value", "remove"];
-var literalPrefixes = ["Value::Null", "Value::Int(", "Value::Float(", "Value::Bool(", "Value::Str(", "Value::Map({", "Value::Array("];
-function maskText3(src) {
-  const out = [];
-  let i = 0;
-  const n = src.length;
-  while (i < n) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      while (i < n && src[i] !== "\n") {
-        out.push(" ");
-        i++;
-      }
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      out.push("  ");
-      i += 2;
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
-        out.push(src[i] === "\n" ? "\n" : " ");
-        i++;
-      }
-      if (i < n) {
-        out.push("  ");
-        i += 2;
-      }
-      continue;
-    }
-    if (c === '"') {
-      out.push(" ");
-      i++;
-      while (i < n && src[i] !== '"') {
-        if (src[i] === "\\") {
-          out.push("  ");
-          i += 2;
-          continue;
-        }
-        out.push(src[i] === "\n" ? "\n" : " ");
-        i++;
-      }
-      if (i < n) {
-        out.push(" ");
-        i++;
-      }
-      continue;
-    }
-    out.push(c);
-    i++;
-  }
-  return out.join("");
-}
-function fnRegions3(masked) {
-  const regions = [];
-  const head = /\bfn\s+[A-Za-z0-9_]*\s*[(<]/g;
-  let m;
-  while ((m = head.exec(masked)) !== null) {
-    let i = m.index + m[0].length - 1;
-    let depth = 0;
-    let open = -1;
-    while (i < masked.length) {
-      const c = masked[i];
-      if (c === "(" || c === "[" || c === "<")
-        depth++;
-      else if (c === ")" || c === "]" || c === ">")
-        depth--;
-      else if (c === "{") {
-        if (depth <= 0) {
-          open = i;
-          break;
-        }
-        depth++;
-      } else if (c === ";" && depth <= 0)
-        break;
-      i++;
-    }
-    if (open < 0)
-      continue;
-    let close = -1;
-    let d = 0;
-    for (let j = open; j < masked.length; j++) {
-      if (masked[j] === "{")
-        d++;
-      else if (masked[j] === "}") {
-        d--;
-        if (d === 0) {
-          close = j;
-          break;
-        }
-      }
-    }
-    if (close > open)
-      regions.push([open, close]);
-  }
-  return regions;
-}
-function closeParenAt2(src, open) {
-  let depth = 0;
-  for (let i = open; i < src.length; i++) {
-    const c = src[i];
-    if (c === "(")
-      depth++;
-    else if (c === ")") {
-      depth--;
-      if (depth === 0)
-        return i;
-    }
-  }
-  return -1;
-}
-function exprEnd(masked, from) {
-  let depth = 0;
-  for (let i = from; i < masked.length; i++) {
-    const c = masked[i];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}")
-      depth--;
-    else if (c === ";" && depth <= 0)
-      return i;
-  }
-  return -1;
-}
-function r06w3Push(content) {
-  if (!content.includes(helperName + "("))
-    return content;
-  const masked = maskText3(content);
-  const regions = fnRegions3(masked);
-  const callRx = new RegExp("(?<![\\w.:])" + helperName + "\\(", "g");
-  const jobs = [];
-  const memo = /* @__PURE__ */ new Map();
-  const factsOf = (region) => {
-    const key = region[0] + ":" + region[1];
-    let hit = memo.get(key);
-    if (hit === void 0) {
-      hit = /* @__PURE__ */ new Map();
-      memo.set(key, hit);
-    }
-    return hit;
-  };
-  const isPlainField = (expr) => {
-    const f = /^self\.([A-Za-z_][A-Za-z0-9_]*)\b/.exec(expr.trim());
-    return f !== null && plainFields.has(f[1]);
-  };
-  const chainRoot = (expr) => {
-    const m2 = /^([A-Za-z_][A-Za-z0-9_]*)\.(?:as_map|as_array)\(\)/.exec(expr.trim());
-    return m2 === null ? null : m2[1];
-  };
-  const sourceFree = (expr, region, seen) => {
-    const t = expr.trim();
-    if (literalPrefixes.some((p) => t.startsWith(p)))
-      return true;
-    if (/^Value::from\(vec!\[/.test(t) || /^Value::from\(Vec::new\(\)\)$/.test(t))
-      return true;
-    if (t.startsWith("self.safe_list"))
-      return true;
-    if (/^[A-Za-z_][A-Za-z0-9_]*\.as_str\(\)\.map\(/.test(t))
-      return true;
-    if (/^\(if let Some\(__s\) = [A-Za-z_][A-Za-z0-9_.]*\.(?:as_str|as_deref)\(\) \{ Value::Str\(.*\) \} else \{ Value::Null \}\)$/.test(t))
-      return true;
-    if (isPlainField(t))
-      return true;
-    const safeValue = /^self\.safe_value(?:_k)?\(\(?(?:if let \(Some\(__m\), Some\(__k\)\) = \()?self\.([A-Za-z_][A-Za-z0-9_]*)/.exec(t);
-    if (safeValue !== null && plainFields.has(safeValue[1]))
-      return true;
-    const matchRead = /^match\s*&\s*([A-Za-z_][A-Za-z0-9_]*)\s*\{\s*Value::Dict\(__m\d+\)\s*=>\s*__m\d+\.get\("/.exec(t);
-    if (matchRead !== null)
-      return localFree(matchRead[1], region, seen);
-    const read = /^(?:crate::value::)?(?:get_value_k|get_value)\(/.exec(t);
-    if (read !== null) {
-      const open = read[0].length - 1;
-      const close = closeParenAt2(t, open);
-      if (close < 0)
-        return false;
-      const args = t.slice(open + 1, close);
-      const comma = args.indexOf(",");
-      if (comma < 0)
-        return false;
-      const recv = args.slice(0, comma).trim().replace(/^&\s*/, "");
-      if (isPlainField(recv))
-        return true;
-      const root2 = chainRoot(recv);
-      if (root2 !== null)
-        return localFree(root2, region, seen);
-      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(recv))
-        return localFree(recv, region, seen);
-      return false;
-    }
-    const freeRead = /^\(if let \(Some\(__m\), Some\(__k\)\) = \(([A-Za-z_][A-Za-z0-9_.]*)\.as_map\(\), /.exec(t);
-    if (freeRead !== null) {
-      if (isPlainField(freeRead[1]))
-        return true;
-      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(freeRead[1]) && localFree(freeRead[1], region, seen);
-    }
-    const clone = /^([A-Za-z_][A-Za-z0-9_]*)\.clone\(\)$/.exec(t);
-    if (clone !== null)
-      return localFree(clone[1], region, seen);
-    const root = chainRoot(t);
-    if (root !== null)
-      return localFree(root, region, seen);
-    return false;
-  };
-  const localFree = (name, region, seen) => {
-    const facts = factsOf(region);
-    const known = facts.get(name);
-    if (known !== void 0)
-      return known;
-    if (seen.has(name))
-      return false;
-    const body = masked.slice(region[0], region[1]);
-    const declRx = new RegExp("let (?:mut )?" + name + "\\s*:\\s*([^=;]+?)\\s*=(?!=)", "g");
-    const spans = [];
-    let d;
-    while ((d = declRx.exec(body)) !== null) {
-      if (d[1].trim() !== "Value") {
-        facts.set(name, false);
-        return false;
-      }
-      const rhsStart = region[0] + d.index + d[0].length;
-      const rhsEnd = exprEnd(masked, rhsStart);
-      if (rhsEnd < 0) {
-        facts.set(name, false);
-        return false;
-      }
-      spans.push([d.index, rhsEnd - region[0]]);
-    }
-    if (spans.length === 0) {
-      facts.set(name, false);
-      return false;
-    }
-    seen.add(name);
-    let ok = true;
-    for (const [d0, d1] of spans) {
-      const rhsStart = region[0] + d0 + body.slice(d0).indexOf("=") + 1;
-      if (!sourceFree(content.slice(rhsStart, region[0] + d1), region, seen)) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) {
-      const wrx = new RegExp("(?<![\\w.])" + name + "\\s*=(?!=)", "g");
-      let w;
-      while ((w = wrx.exec(body)) !== null) {
-        if (spans.some(([d0, d1]) => w.index >= d0 + body.slice(d0).indexOf("=") && w.index < d1))
-          continue;
-        const rhsStart = region[0] + w.index + w[0].length;
-        const rhsEnd = exprEnd(masked, rhsStart);
-        if (rhsEnd < 0 || !sourceFree(content.slice(rhsStart, rhsEnd), region, seen)) {
-          ok = false;
-          break;
-        }
-      }
-    }
-    seen.delete(name);
-    facts.set(name, ok);
-    return ok;
-  };
-  let m;
-  while ((m = callRx.exec(masked)) !== null) {
-    const start = m.index;
-    const lineStart = masked.lastIndexOf("\n", start) + 1;
-    if (/^\s*(?:pub\s+)?fn /.test(masked.slice(lineStart, start)))
-      continue;
-    const region = regions.find((r) => r[0] < start && start < r[1]);
-    if (region === void 0)
-      continue;
-    const argStart = start + helperName.length + 1;
-    const recv = /^&mut\s+([A-Za-z_][A-Za-z0-9_]*)\s*,/.exec(content.slice(argStart, argStart + 160));
-    if (recv === null)
-      continue;
-    const name = recv[1];
-    const nameRx = new RegExp("(?<![\\w.])" + name + "(?![\\w])");
-    const headerStart = masked.lastIndexOf("fn ", region[0]);
-    if (new RegExp("(?<![\\w])" + name + "\\s*:").test(masked.slice(headerStart, region[0])))
-      continue;
-    if (!localFree(name, region, /* @__PURE__ */ new Set()))
-      continue;
-    const body = masked.slice(region[0], region[1]);
-    const mutRx = new RegExp("&mut\\s+" + name + "(?![\\w])", "g");
-    let ok = true;
-    let mu;
-    while ((mu = mutRx.exec(body)) !== null) {
-      const at = region[0] + mu.index;
-      const before = masked.slice(Math.max(0, at - 60), at);
-      const after = masked.slice(at + mu[0].length, at + mu[0].length + 8);
-      const pushRecv = new RegExp(helperName + "\\(\\s*$").test(before) && /^\s*,/.test(after);
-      const keeper = keeperCalls.some((c) => new RegExp("(?<![\\w.])" + c + "\\(\\s*$").test(before)) && /^\s*,/.test(after);
-      if (!pushRecv && !keeper) {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok)
-      continue;
-    const callEnd2 = closeParenAt2(masked, argStart - 1);
-    if (callEnd2 < 0)
-      continue;
-    const valueStart = argStart + recv[0].length;
-    const value = content.slice(valueStart, callEnd2);
-    if (nameRx.test(value))
-      continue;
-    let stmtStart = masked.lastIndexOf(";", start);
-    stmtStart = Math.max(stmtStart, masked.lastIndexOf("{", start), masked.lastIndexOf("}", start)) + 1;
-    if (masked.slice(stmtStart, start).trim() !== "")
-      continue;
-    if (!/^\)\s*;/.test(masked.slice(callEnd2, callEnd2 + 4)))
-      continue;
-    const text = `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value.trim()}); }`;
-    const lStart = content.lastIndexOf("\n", start) + 1;
-    const lEnd = content.indexOf("\n", callEnd2) < 0 ? content.length : content.indexOf("\n", callEnd2);
-    const lenNow = lEnd - lStart;
-    if (lenNow <= lineBudget && lenNow - (callEnd2 + 1 - start) + text.length > lineBudget)
-      continue;
-    jobs.push({ start, end: callEnd2 + 1, text });
-  }
-  if (jobs.length === 0)
-    return content;
-  let out = content;
-  for (let i = jobs.length - 1; i >= 0; i--) {
-    const j = jobs[i];
-    out = out.slice(0, j.start) + j.text + out.slice(j.end);
-  }
-  return out;
-}
-
-// src/rustPasses/hx10w3-R07.ts
-init_esm_shims();
-var SCALAR = /* @__PURE__ */ new Set(["str", "int", "float", "bool", "null"]);
-var NATIVE_TY = /* @__PURE__ */ new Set(["String", "Vec<String>", "i64", "f64", "bool", "usize", "u32", "isize"]);
-function maskText4(src) {
-  const out = src.split("");
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      while (i < src.length && src[i] !== "\n")
-        out[i++] = " ";
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) {
-        if (src[i] !== "\n")
-          out[i] = " ";
-        i++;
-      }
-      if (i < src.length) {
-        out[i] = " ";
-        out[i + 1] = " ";
-        i += 2;
-      }
-      continue;
-    }
-    if (c === '"') {
-      out[i++] = " ";
-      while (i < src.length && src[i] !== '"') {
-        if (src[i] === "\\")
-          out[i++] = " ";
-        if (i < src.length) {
-          if (src[i] !== "\n")
-            out[i] = " ";
-          i++;
-        }
-      }
-      if (i < src.length)
-        out[i++] = " ";
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
-}
-function closeParen3(masked, open) {
-  const openCh = masked[open];
-  const closeCh = openCh === "(" ? ")" : openCh === "[" ? "]" : "}";
-  let depth = 0;
-  for (let k = open; k < masked.length; k++) {
-    const c = masked[k];
-    if (c === openCh)
-      depth++;
-    else if (c === closeCh) {
-      depth--;
-      if (depth === 0)
-        return k + 1;
-    }
-  }
-  return -1;
-}
-function splitArgs3(masked, from, to) {
-  const args = [];
-  let depth = 0;
-  let start = from;
-  for (let k = from; k < to; k++) {
-    const c = masked[k];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}")
-      depth--;
-    else if (c === "," && depth === 0) {
-      args.push(masked.slice(start, k));
-      start = k + 1;
-    }
-  }
-  args.push(masked.slice(start, to));
-  return args;
-}
-function stmtEnd2(masked, from) {
-  let depth = 0;
-  for (let k = from; k < masked.length; k++) {
-    const c = masked[k];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth < 0)
-        return -1;
-    } else if (c === ";" && depth === 0)
-      return k;
-  }
-  return -1;
-}
-var FN_HEAD2 = /(?:^|\n)[ \t]*(?:pub(?:\([a-z]+\))? )?(?:async )?fn /g;
-function fnBounds(masked, pos) {
-  let start = 0;
-  for (const m of masked.matchAll(FN_HEAD2)) {
-    const at = m.index;
-    if (at <= pos)
-      start = at + 1;
-    else
-      return [start, at + 1];
-  }
-  return [start, masked.length];
-}
-function strBox(arg) {
-  const m = /^&\s*Value::Str\(\s*("(?:[^"\\]|\\.)*")\s*(?:\.into\(\)|\.to_string\(\))?\s*\)$/.exec(arg.trim());
-  return m === null ? void 0 : m[1];
-}
-function intBox(arg) {
-  const m = /^&\s*Value::Int\(\s*(-?\d+)\s*\)$/.exec(arg.trim());
-  return m === null ? void 0 : m[1];
-}
-function elemKind(expr, locals, depth = 0) {
-  const e = expr.trim().replace(/;$/, "").trim();
-  const vec = /^(?:Value::(?:Array|List|from)|vec!)\(?(vec!)?\[/.exec(e) ?? /^vec!\[/.exec(e);
-  if (vec !== null) {
-    const open = e.indexOf("[");
-    const close = closeParen3(e, open);
-    if (close < 0 || !/^\)*$/.test(e.slice(close)))
-      return void 0;
-    const items = splitArgs3(e, open + 1, close - 1);
-    if (items === void 0)
-      return void 0;
-    for (const it of items) {
-      if (it.trim() === "")
-        continue;
-      if (!/^\s*Value::Str\(/.test(it))
-        return void 0;
-    }
-    return "str";
-  }
-  const arr = /^Value::(?:Array|List)\(/.exec(e);
-  if (arr !== null) {
-    const open = arr[0].length - 1;
-    const close = closeParen3(e, open);
-    if (close !== e.length)
-      return void 0;
-    const inner = e.slice(open + 1, close - 1);
-    if (/\.map\(\|__p\| Value::Str\(|\.split\([^()]*\)\.map\(Value::from\)/.test(inner))
-      return "str";
-    return void 0;
-  }
-  if (/^(?:crate::runtime::)?split\(/.test(e))
-    return "str";
-  const slice = /^(?:self\.)?array_slice\(\s*&?([A-Za-z_]\w*)/.exec(e);
-  if (slice !== null && depth === 0) {
-    const src = locals.get(slice[1]);
-    return src === void 0 ? void 0 : src.elems;
-  }
-  return void 0;
-}
-function inferSet(expr, locals) {
-  const e = expr.trim().replace(/;$/, "").trim();
-  for (const [head, variant] of [["Value::Str(", "str"], ["Value::Int(", "int"], ["Value::Float(", "float"], ["Value::Bool(", "bool"]]) {
-    if (e.startsWith(head))
-      return /* @__PURE__ */ new Set([variant]);
-  }
-  if (e === "Value::Null")
-    return /* @__PURE__ */ new Set(["null"]);
-  const copy = /^([A-Za-z_]\w*)(?:\.clone\(\))?$/.exec(e);
-  if (copy !== null) {
-    const src = locals.get(copy[1]);
-    if (src === void 0)
-      return void 0;
-    if (src.ty === "Value")
-      return src.set === void 0 ? void 0 : new Set(src.set);
-    if (src.ty === "String")
-      return /* @__PURE__ */ new Set(["str"]);
-  }
-  const own = /^(?:crate::runtime::)?(to_string_val|replace_str|replace_all_str|join|pad_end|to_fixed)\(/.exec(e);
-  if (own !== null)
-    return own[1] === "pad_end" ? /* @__PURE__ */ new Set(["str", "null"]) : /* @__PURE__ */ new Set(["str"]);
-  if (/^(?:crate::runtime::)?split\(/.test(e))
-    return /* @__PURE__ */ new Set(["arr"]);
-  const call = /^(?:crate::value::)?(?:self\.)?(safe_string(?:_k|_2|_lower|_upper|_lower_k|_upper_k)?|safe_bool(?:_k|_2)?|safe_integer(?:_k|_2)?|safe_int|safe_timestamp|safe_float(?:_k)?|safe_number(?:_k|_2)?|parse_int|parse_float|parse_to_int|number_to_string|decimal_to_precision|sum)\(/.exec(e);
-  if (call !== null) {
-    const name = call[1];
-    const open = call[0].length - 1;
-    if (closeParen3(e, open) !== e.length)
-      return void 0;
-    if (name === "decimal_to_precision")
-      return /* @__PURE__ */ new Set(["str"]);
-    if (name === "number_to_string")
-      return /* @__PURE__ */ new Set(["str", "null"]);
-    if (name === "sum")
-      return /* @__PURE__ */ new Set(["int", "float", "str", "null"]);
-    let own2 = "str";
-    if (name.startsWith("safe_bool"))
-      own2 = "bool";
-    else if (name.startsWith("safe_float") || name.startsWith("safe_number") || name === "parse_float")
-      own2 = "float";
-    else if (!name.startsWith("safe_string") && name !== "parse_to_int")
-      own2 = "int";
-    const out = /* @__PURE__ */ new Set([own2]);
-    if (name.startsWith("safe")) {
-      const args = splitArgs3(e, open + 1, e.length - 1);
-      if (args === void 0)
-        return void 0;
-      const last = args[args.length - 1].trim();
-      if (last === "&[]")
-        out.add("null");
-      else {
-        const inner = /^&\[(.*)\]$/.exec(last);
-        if (inner === null)
-          return void 0;
-        const lit = strBox(`&${inner[1]}`);
-        const num = intBox(`&${inner[1]}`);
-        if (lit !== void 0)
-          out.add("str");
-        else if (num !== void 0)
-          out.add("int");
-        else
-          return void 0;
-      }
-    } else {
-      out.add("null");
-    }
-    return out;
-  }
-  if (/^(?:Value::(?:Array|List)\(|Value::from\(vec!\[|vec!\[)/.test(e))
-    return /* @__PURE__ */ new Set(["arr"]);
-  const slice = /^(?:crate::value::)?(?:self\.)?(?:array_slice|array_concat)\(\s*&?([A-Za-z_]\w*)/.exec(e);
-  if (slice !== null) {
-    const src = locals.get(slice[1]);
-    return src === void 0 || src.set === void 0 ? void 0 : new Set(src.set);
-  }
-  if (/^\(match &\w+ \{ Value::Str\(__parse_s\) => __parse_s\.trim\(\)\.parse::<f64>\(\)\.map\(Value::Float\)/.test(e))
-    return /* @__PURE__ */ new Set(["float", "null"]);
-  if (/^\(match &\w+ \{ Value::Str\(__parse_s\) => __parse_s\.trim\(\)\.parse::<i64>\(\)\.map\(Value::Int\)/.test(e))
-    return /* @__PURE__ */ new Set(["int", "null"]);
-  if (/^\(match \(&\(/.test(e))
-    return /* @__PURE__ */ new Set(["int", "float", "null"]);
-  return void 0;
-}
-function valueSets(region, maskedRegion, sig) {
-  const locals = /* @__PURE__ */ new Map();
-  const declRe = /let\s+(?:mut\s+)?([A-Za-z_]\w*)\s*:\s*([^=;]+?)\s*=/g;
-  const decls = [];
-  let m;
-  while ((m = declRe.exec(maskedRegion)) !== null) {
-    const rel = new RegExp(`\\b${m[1]}\\b`).exec(m[0]);
-    decls.push({ name: m[1], ty: m[2].replace(/\s+/g, ""), at: m.index + (rel === null ? 0 : rel.index), init: m.index + m[0].length });
-  }
-  const multi = /* @__PURE__ */ new Map();
-  for (const d of decls)
-    multi.set(d.name, (multi.get(d.name) ?? 0) + 1);
-  for (const p of sig.matchAll(/\(\s*(?:&?\s*(?:mut\s+)?([A-Za-z_]\w*)\s*:\s*([^,)]+)|&[A-Za-z_]\w*)|,\s*(?:mut\s+)?([A-Za-z_]\w*)\s*:\s*([^,)]+)/g)) {
-    const name = p[1] ?? p[3];
-    const ty = (p[2] ?? p[4] ?? "").replace(/\s+/g, "");
-    if (name !== void 0 && NATIVE_TY.has(ty))
-      locals.set(name, { ty });
-  }
-  for (const d of decls) {
-    if (multi.get(d.name) !== 1)
-      continue;
-    locals.set(d.name, { ty: d.ty });
-    if (d.ty !== "Value")
-      continue;
-    const bind = new RegExp(`(?:[(,|]\\s*(?:mut\\s+)?${d.name}\\s*:|\\bfor\\s+(?:mut\\s+)?${d.name}\\b)`);
-    if (bind.test(sig))
-      continue;
-    const set = /* @__PURE__ */ new Set();
-    let ok = true;
-    let elems = "str";
-    const word = new RegExp(`(?<![A-Za-z0-9_.])${d.name}(?![A-Za-z0-9_])`, "g");
-    for (let k = 0; k < maskedRegion.length; k++) {
-      word.lastIndex = k;
-      const hit = word.exec(maskedRegion);
-      if (hit === null)
-        break;
-      const s = hit.index;
-      k = s;
-      if (/&\s*mut\s*$/.test(maskedRegion.slice(Math.max(0, s - 12), s))) {
-        ok = false;
-        break;
-      }
-      const tail = maskedRegion.slice(s + d.name.length);
-      const rhs = /^\s*=(?!=)/.exec(tail);
-      if (s === d.at) {
-        const end = stmtEnd2(maskedRegion, d.init);
-        const ex = end < 0 ? "" : region.slice(d.init, end);
-        const got = end < 0 ? void 0 : inferSet(ex, locals);
-        if (got === void 0) {
-          ok = false;
-          break;
-        }
-        got.forEach((v) => set.add(v));
-        if (elemKind(ex, locals) !== "str")
-          elems = void 0;
-        k = end < 0 ? s + d.name.length : end;
-        continue;
-      }
-      if (rhs !== null) {
-        const from = s + d.name.length + rhs[0].length;
-        const end = stmtEnd2(maskedRegion, from);
-        const ex = end < 0 ? "" : region.slice(from, end);
-        const got = end < 0 ? void 0 : inferSet(ex, locals);
-        if (got === void 0) {
-          ok = false;
-          break;
-        }
-        got.forEach((v) => set.add(v));
-        if (elemKind(ex, locals) !== "str")
-          elems = void 0;
-        k = end < 0 ? from : end;
-        continue;
-      }
-    }
-    if (ok && set.size > 0)
-      locals.set(d.name, { ty: d.ty, set, elems });
-  }
-  return locals;
-}
-function rewrite(name, args, locals) {
-  const arg0 = (args[0] ?? "").trim();
-  const recv = /^&\s*([A-Za-z_]\w*)$/.exec(arg0);
-  const x = recv === null ? void 0 : recv[1];
-  const local = x === void 0 ? void 0 : locals.get(x);
-  const set = local?.set;
-  const ty = local?.ty;
-  const provenScalar = set !== void 0 && set.size > 0 && [...set].every((v) => SCALAR.has(v));
-  const strTyped = ty === "String";
-  const strProven = strTyped || set !== void 0 && set.size === 1 && set.has("str");
-  const scalarProven = strTyped || provenScalar;
-  const numProven = ty === "i64" || ty === "f64" || set !== void 0 && set.size > 0 && [...set].every((v) => v === "int" || v === "float" || v === "null");
-  if (x === void 0) {
-    if (name !== "to_string_val")
-      return void 0;
-    const held = arg0.replace(/^&/, "").replace(/;$/, "").trim();
-    const got = inferSet(held, locals);
-    if (got === void 0 || [...got].some((v) => !SCALAR.has(v)))
-      return void 0;
-    return `Value::str(${held}.to_string())`;
-  }
-  switch (name) {
-    case "to_string_val": {
-      if (args.length !== 1)
-        return void 0;
-      if (strProven)
-        return `Value::str(${x}.clone())`;
-      if (scalarProven)
-        return `Value::str(${x}.to_string())`;
-      return void 0;
-    }
-    case "replace_str":
-    case "replace_all_str": {
-      if (!strProven || args.length !== 3)
-        return void 0;
-      const a = strBox(args[1]);
-      const b = strBox(args[2]);
-      if (a === void 0 || b === void 0)
-        return void 0;
-      const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
-      return `Value::str(${holder}.replace(${a}, ${b}))`;
-    }
-    case "split": {
-      if (!strProven || args.length !== 2)
-        return void 0;
-      const d = strBox(args[1]);
-      if (d === void 0)
-        return void 0;
-      const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
-      return `Value::Array(${holder}.split(${d}).map(Value::str).collect())`;
-    }
-    case "starts_with":
-    case "ends_with": {
-      if (!strProven || args.length !== 2)
-        return void 0;
-      const s = strBox(args[1]);
-      if (s === void 0)
-        return void 0;
-      const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
-      return `${holder}.${name}(${s})`;
-    }
-    case "to_fixed": {
-      if (!numProven || args.length !== 2)
-        return void 0;
-      const d = intBox(args[1]);
-      if (d === void 0)
-        return void 0;
-      const n = ty === "f64" ? x : ty === "i64" ? `(${x} as f64)` : `${x}.as_f64().unwrap_or(0.0)`;
-      return `Value::str(format!("{:.*}", ${d}, ${n}))`;
-    }
-    case "join": {
-      if (args.length !== 2)
-        return void 0;
-      const s = strBox(args[1]);
-      if (s === void 0)
-        return void 0;
-      if (ty === "Vec<String>")
-        return `Value::str(${x}.join(${s}))`;
-      if (local?.elems === "str" && set !== void 0 && set.size === 1 && set.has("arr")) {
-        return `Value::str(${x}.as_array().cloned().unwrap_or_default().iter().filter_map(Value::as_str).collect::<Vec<_>>().join(${s}))`;
-      }
-      return void 0;
-    }
-    default:
-      return void 0;
-  }
-}
-function r07StringNatives(content) {
-  if (!/to_string_val\(|replace_str\(|replace_all_str\(|split\(|join\(|starts_with\(|ends_with\(|to_fixed\(/.test(content))
-    return content;
-  const masked = maskText4(content);
-  const rx = /(?<![A-Za-z0-9_:.])(to_string_val|replace_str|replace_all_str|split|join|starts_with|ends_with|to_fixed)\(/g;
-  const hits = [];
-  for (const m of masked.matchAll(rx)) {
-    const start = m.index;
-    if (/\bfn\s+$/.test(masked.slice(Math.max(0, start - 8), start)))
-      continue;
-    const open = start + m[1].length;
-    const close = closeParen3(masked, open);
-    if (close < 0)
-      continue;
-    hits.push({ start, end: close, name: m[1] });
-  }
-  if (hits.length === 0)
-    return content;
-  const rewrites = [];
-  const cache = /* @__PURE__ */ new Map();
-  for (const h of hits) {
-    const [lo, hi] = fnBounds(masked, h.start);
-    let locals = cache.get(lo);
-    if (locals === void 0) {
-      const region = content.slice(lo, hi);
-      const head = content.slice(lo, hi).indexOf("{");
-      const sig = head < 0 ? "" : region.slice(0, head);
-      locals = valueSets(region, masked.slice(lo, hi), sig);
-      cache.set(lo, locals);
-    }
-    const args = splitArgs3(content, h.start + h.name.length + 1, h.end - 1);
-    if (args === void 0)
-      continue;
-    const text = rewrite(h.name, args, locals);
-    if (text === void 0)
-      continue;
-    const lineStart = content.lastIndexOf("\n", h.start) + 1;
-    const lineEnd = content.indexOf("\n", h.end);
-    const len = (lineEnd < 0 ? content.length : lineEnd) - lineStart;
-    if (len <= 400 && len - (h.end - h.start) + text.length > 400)
-      continue;
-    rewrites.push({ start: h.start, end: h.end, text });
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start);
-  let out = "";
-  let at = 0;
-  for (const r of rewrites) {
-    if (r.start < at)
-      continue;
-    out += content.slice(at, r.start) + r.text;
-    at = r.end;
-  }
-  return out + content.slice(at);
-}
-
-// src/rustPasses/hx10w4-BF03.ts
-init_esm_shims();
-var FIELDS = ["options", "markets", "balance", "ohlcvs"];
-var RECV2 = "self\\.(?:(?:core|parent)\\.)*(" + FIELDS.join("|") + ")";
-var STR_KEY2 = /^&Value::Str\("((?:[^"\\]|\\.)*)"\.(?:into|to_string)\(\)\)$/;
-var ROOT = new RegExp("^&mut\\s+" + RECV2 + "$");
-var COERCED = new RegExp("^unsafe\\s*\\{\\s*crate::runtime::coerce_value_to_mut\\(&" + RECV2 + "\\)\\s*\\}$");
-var MAX_LINE2 = 400;
-function maskSrc2(src) {
-  const out = src.split("");
-  const blank = (from, to) => {
-    for (let i2 = from; i2 < to && i2 < out.length; i2++)
-      if (out[i2] !== "\n")
-        out[i2] = " ";
-  };
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      const end = src.indexOf("\n", i);
-      const stop = end < 0 ? src.length : end;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      const end = src.indexOf("*/", i + 2);
-      const stop = end < 0 ? src.length : end + 2;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (c === "'") {
-      const m = /^'(?:\\.|[^\\'])'/.exec(src.slice(i, i + 4));
-      if (m !== null) {
-        i += m[0].length;
-        continue;
-      }
-    }
-    if (c === '"') {
-      let j = i + 1;
-      while (j < src.length) {
-        if (src[j] === "\\") {
-          j += 2;
-          continue;
-        }
-        if (src[j] === '"')
-          break;
-        j++;
-      }
-      blank(i, Math.min(j + 1, src.length));
-      i = j + 1;
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
-}
-function argSpans2(masked, open) {
-  let depth = 0;
-  const spans = [];
-  let start = open + 1;
-  for (let j = open; j < masked.length; j++) {
-    const c = masked[j];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0) {
-        spans.push([start, j]);
-        return spans;
-      }
-    } else if (c === "," && depth === 1) {
-      spans.push([start, j]);
-      start = j + 1;
-    }
-  }
-  return void 0;
-}
-function closeOf(masked, open) {
-  let depth = 0;
-  for (let j = open; j < masked.length; j++) {
-    const c = masked[j];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0)
-        return j;
-    }
-  }
-  return -1;
-}
-function hopAt(content, masked, at) {
-  if (!/^get_value_mut\(/.test(masked.slice(at, at + 14)))
-    return void 0;
-  const open = at + "get_value_mut".length;
-  const spans = argSpans2(masked, open);
-  if (spans === void 0 || spans.length !== 2)
-    return void 0;
-  const close = closeOf(masked, open);
-  if (close < 0)
-    return void 0;
-  const key = content.slice(spans[1][0], spans[1][1]).trim();
-  const lit = STR_KEY2.exec(key);
-  return {
-    recv: content.slice(spans[0][0], spans[0][1]).trim(),
-    key,
-    literal: lit === null ? void 0 : lit[1],
-    close
-  };
-}
-function chainAt(content, masked, at) {
-  const hops = [];
-  let cur = at;
-  for (let n = 0; n < 8; n++) {
-    const h = hopAt(content, masked, cur);
-    if (h === void 0)
-      return void 0;
-    hops.push(h);
-    const lead = h.recv.length - h.recv.replace(/^\s+/, "").length;
-    if (!/^get_value_mut\(/.test(h.recv))
-      return { hops, root: h.recv };
-    cur = content.indexOf(h.recv, cur) + lead;
-  }
-  return void 0;
-}
-function valueIdentKey(masked, at, key) {
-  const id = /^&([A-Za-z_][A-Za-z0-9_]*)$/.exec(key);
-  if (id === null)
-    return "";
-  const fnHead = /(?:^|\n)[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+[A-Za-z_][A-Za-z0-9_]*/g;
-  let start = 0;
-  let m;
-  while ((m = fnHead.exec(masked)) !== null) {
-    if (m.index > at)
-      break;
-    start = m.index;
-  }
-  const nl = masked.indexOf("\n", start + 1);
-  const header = masked.slice(start, nl < 0 ? at : nl);
-  const ident = id[1];
-  const local = new RegExp("\\blet\\s+(?:mut\\s+)?" + ident + "\\s*:\\s*Value\\s*=");
-  const other = new RegExp("\\blet\\s+(?:mut\\s+)?" + ident + "\\b(?!\\s*:\\s*Value\\s*=)");
-  const param = new RegExp("(?:^|[(,]\\s*)(?:mut\\s+)?" + ident + "\\s*:\\s*Value\\b");
-  const body = masked.slice(start, at);
-  if (other.test(body))
-    return "";
-  if (local.test(body) || param.test(header))
-    return "crate::runtime::stringify_param(&" + ident + ")";
-  return "";
-}
-function runPass2(content) {
-  if (!content.includes("get_value_mut("))
-    return content;
-  const masked = maskSrc2(content);
-  const headRe = /if let Value::Dict\(\s*(\w+)\s*\)\s*=\s*get_value_mut\(/g;
-  const rws = [];
-  let m;
-  while ((m = headRe.exec(masked)) !== null) {
-    const bind = m[1];
-    const at2 = m.index + m[0].length - "get_value_mut(".length;
-    const chain = chainAt(content, masked, at2);
-    if (chain === void 0)
-      continue;
-    if (!ROOT.test(chain.root) && !COERCED.test(chain.root))
-      continue;
-    const outer = chain.hops[0];
-    const allLiteral = chain.hops.every((h) => h.literal !== void 0);
-    const identKey2 = !allLiteral && chain.hops.length === 1 ? valueIdentKey(masked, m.index, outer.key) : "";
-    if (!allLiteral && outer.literal === void 0 && identKey2 === "")
-      continue;
-    const end = chain.hops[0].close + 1;
-    const braceOpen = masked.indexOf("{", end);
-    if (braceOpen < 0)
-      continue;
-    if (masked.slice(end, braceOpen).trim() !== "")
-      continue;
-    let depth = 0;
-    let braceClose = -1;
-    for (let j = braceOpen; j < masked.length; j++) {
-      const c = masked[j];
-      if (c === "{")
-        depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth === 0) {
-          braceClose = j;
-          break;
-        }
-      }
-    }
-    if (braceClose < 0)
-      continue;
-    const body = content.slice(braceOpen + 1, braceClose);
-    if (body.includes("__bf03"))
-      continue;
-    const lineStart = content.lastIndexOf("\n", m.index) + 1;
-    const pad = /^[ \t]*/.exec(content.slice(lineStart, m.index));
-    const level = (n) => pad[0] + "    ".repeat(n + 1);
-    const keys = identKey2 !== "" ? [identKey2] : allLiteral ? chain.hops.map((h) => '"' + h.literal + '".to_string()').reverse() : ['"' + outer.literal + '".to_string()'];
-    const head = allLiteral || identKey2 !== "" ? chain.root : outer.recv;
-    const lines = ["if let Value::Dict(__bf03d0) = " + head + " {"];
-    const parts = ["if let Value::Dict(__bf03d0) = " + head + " {"];
-    const bodyText = body.replace(/\s+$/, "");
-    let tooLong = false;
-    for (let i = 0; i < keys.length; i++) {
-      const last = i === keys.length - 1;
-      const entry = "let __bf03e" + (i + 1) + " = std::sync::Arc::make_mut(__bf03d" + i + ").entry(" + keys[i] + ").or_insert(Value::Null);";
-      const test = last ? "if let Value::Dict(" + bind + ") = __bf03e" + (i + 1) + " {" : "if let Value::Dict(__bf03d" + (i + 1) + ") = __bf03e" + (i + 1) + " {";
-      if (level(i).length + entry.length > MAX_LINE2) {
-        tooLong = true;
-        break;
-      }
-      lines.push(level(i) + entry);
-      lines.push(level(i) + test);
-      parts.push(entry + " " + test);
-    }
-    if (tooLong)
-      continue;
-    const closers = [];
-    for (let k = keys.length; k >= 0; k--)
-      closers.push(pad[0] + "    ".repeat(k) + "}");
-    const inline = new Array(keys.length + 1).fill("}").join(" ");
-    const compact = parts.join(" ") + " " + bodyText.trim() + " " + inline;
-    const multi = lines.join("\n") + bodyText + "\n" + closers.join("\n");
-    const text = bodyText.indexOf("\n") < 0 && pad[0].length + compact.length <= MAX_LINE2 ? compact : multi;
-    rws.push({ start: m.index, end: braceClose + 1, text });
-    headRe.lastIndex = braceClose + 1;
-  }
-  if (rws.length === 0)
-    return content;
-  rws.sort((a, b) => a.start - b.start);
-  let out = "";
-  let at = 0;
-  for (const r of rws) {
-    if (r.start < at)
-      continue;
-    out += content.slice(at, r.start) + r.text;
-    at = r.end;
-  }
-  return out + content.slice(at);
-}
-function bf03PlainDictChains(content) {
-  return runPass2(content);
-}
-
-// src/rustPasses/hx10w7-R10.ts
-init_esm_shims();
-var R10_KEYS = ["subscriptions", "futures", "rejections", "url"];
-var R10_HANDLE = "crate::pro::ws_client::ClientHandle";
-function r10Mask(src) {
-  let out = "";
-  let i = 0;
-  const n = src.length;
-  while (i < n) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      while (i < n && src[i] !== "\n") {
-        out += " ";
-        i++;
-      }
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      out += "  ";
-      i += 2;
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
-        out += src[i] === "\n" ? "\n" : " ";
-        i++;
-      }
-      if (i < n) {
-        out += "  ";
-        i += 2;
-      }
-      continue;
-    }
-    if (c === '"') {
-      out += '"';
-      i++;
-      while (i < n && src[i] !== '"') {
-        if (src[i] === "\\") {
-          out += "  ";
-          i += 2;
-          continue;
-        }
-        out += src[i] === "\n" ? "\n" : " ";
-        i++;
-      }
-      if (i < n) {
-        out += '"';
-        i++;
-      }
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-function r10ClientHandle(content) {
-  if (!content.includes("&client"))
-    return content;
-  const lines = content.split("\n");
-  const braces = r10BraceDeltas(content).split("\n");
-  const out = [];
-  let depth = 0;
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    const startsMethod = depth === 1 && /^\s*pub\s+(?:async\s+)?fn\s+[A-Za-z_][A-Za-z0-9_]*\s*\(/.test(line);
-    if (!startsMethod) {
-      out.push(line);
-      depth += r10DeltaAt(braces, i);
-      i++;
-      continue;
-    }
-    let j = i;
-    let level = depth;
-    while (j < lines.length) {
-      level += r10DeltaAt(braces, j);
-      if (j > i && level <= depth)
-        break;
-      j++;
-    }
-    if (j >= lines.length) {
-      out.push(line);
-      depth += r10DeltaAt(braces, i);
-      i++;
-      continue;
-    }
-    out.push(...r10Block(lines.slice(i, j + 1)));
-    for (let k = i; k <= j; k++)
-      depth += r10DeltaAt(braces, k);
-    i = j + 1;
-  }
-  return r10TypedReads(r10SubsWrites(out.join("\n")));
-}
-var R10_SUBS_WRITES = [
-  [/(?<![\w:.])remove\(&mut __ch\.subscriptions,\s*/g, "__ch.remove_subscription("],
-  [/(?<![\w:.])add_element_to_object\(&mut __ch\.subscriptions,\s*/g, "__ch.add_subscription("]
-];
-function r10SubsWrites(content) {
-  if (!content.includes("&mut __ch.subscriptions"))
-    return content;
-  let text = content;
-  for (const [rx, repl] of R10_SUBS_WRITES) {
-    const masked = r10Mask(text);
-    const hits = [];
-    rx.lastIndex = 0;
-    let m;
-    while ((m = rx.exec(masked)) !== null)
-      hits.push({ at: m.index, len: m[0].length });
-    for (let n = hits.length - 1; n >= 0; n--) {
-      text = text.slice(0, hits[n].at) + repl + text.slice(hits[n].at + hits[n].len);
-    }
-  }
-  return text;
-}
-var R10_NAMES = { subscriptions: "subscription", futures: "future" };
-function r10TypedReads(content) {
-  if (!content.includes("__ch."))
-    return content;
-  return content.replace(
-    /matches!\(\(&__ch\.(subscriptions|futures)\.clone\(\), (&[^\n]+?)\), \(Value::Dict\(__d\), Value::Str\(__k\)\) if __d\.contains_key\(__k\.as_ref\(\)\)\)/g,
-    (_m, k, key) => "__ch.has_" + R10_NAMES[k] + "(" + key + ")"
-  ).replace(
-    /(?<![\w:.])get_value\(&__ch\.(subscriptions|futures)\.clone\(\), (&[A-Za-z_][A-Za-z0-9_]*)\)/g,
-    (_m, k, key) => "__ch.get_" + R10_NAMES[k] + "(" + key + ")"
-  ).replace(
-    /(?<![\w:.])object_keys\(&__ch\.(subscriptions|futures)\.clone\(\)\)\.as_array\(\)\.cloned\(\)\.unwrap_or_default\(\)/g,
-    (_m, k) => "__ch." + R10_NAMES[k] + "_keys()"
-  );
-}
-function r10BraceDeltas(content) {
-  return r10Mask(content);
-}
-function r10DeltaAt(maskedLines, idx) {
-  const line = maskedLines[idx] ?? "";
-  let d = 0;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === "{")
-      d++;
-    else if (c === "}")
-      d--;
-  }
-  return d;
-}
-var R10_LET_CLIENT = /^ {8}let mut client: Value = /;
-var R10_LET_CLIENT_NESTED = /^ {9,}let mut client: Value = /;
-var R10_REASSIGN = /^\s*client\s*=[^=]/;
-var R10_COMMENT = /^\s*(?:\/\/|\/\*|\*)/;
-function r10Block(block) {
-  const header = block[0];
-  const fromParam = /\bclient\s*:\s*Value\b/.test(header);
-  let anchor;
-  let bodyStart;
-  if (fromParam) {
-    if (/\blet\s+(?:mut\s+)?client\b/.test(block.join("\n")))
-      return block;
-    anchor = 0;
-    bodyStart = 1;
-  } else {
-    const decls = [];
-    for (let k = 1; k < block.length; k++)
-      if (R10_LET_CLIENT.test(block[k]))
-        decls.push(k);
-    if (decls.length === 0) {
-      for (let k = 1; k < block.length; k++)
-        if (R10_LET_CLIENT_NESTED.test(block[k]))
-          decls.push(k);
-      const nestedAt = decls.length;
-      if (nestedAt === 1 && !block[decls[0]].trimEnd().endsWith(";"))
-        return block;
-    }
-    if (decls.length !== 1)
-      return block;
-    anchor = decls[0];
-    bodyStart = anchor + 1;
-  }
-  for (let k = bodyStart; k < block.length; k++)
-    if (R10_REASSIGN.test(block[k]))
-      return block;
-  const rewritten = /* @__PURE__ */ new Map();
-  let needsMut = false;
-  let touched = false;
-  for (const key of R10_KEYS) {
-    const rx = new RegExp('get_value\\(\\s*&client\\s*,\\s*&Value::Str\\("' + key + '"\\.(?:into|to_string)\\(\\)\\)\\s*\\)', "g");
-    const reads = [];
-    const writes = [];
-    for (let k = bodyStart; k < block.length; k++) {
-      const text = block[k];
-      if (R10_COMMENT.test(text))
-        continue;
-      rx.lastIndex = 0;
-      let m;
-      while ((m = rx.exec(text)) !== null) {
-        const before = text.slice(Math.max(0, m.index - 8), m.index);
-        (/(?<![\w.])&mut\s*$/.test(before) ? writes : reads).push({ line: k, col: m.index, len: m[0].length });
-      }
-    }
-    if (reads.length === 0 && writes.length === 0)
-      continue;
-    const firstWriteLine = writes.length > 0 ? writes[0].line : Number.MAX_SAFE_INTEGER;
-    for (const r of reads) {
-      if (r.line >= firstWriteLine)
-        continue;
-      if (!rewritten.has(r.line))
-        rewritten.set(r.line, []);
-      rewritten.get(r.line).push(...r10Span(r.col, r.len, "__ch." + key + ".clone()"));
-      touched = true;
-    }
-    for (const w of writes) {
-      if (!rewritten.has(w.line))
-        rewritten.set(w.line, []);
-      rewritten.get(w.line).push(...r10Span(w.col, w.len, "__ch." + key));
-      needsMut = true;
-      touched = true;
-    }
-  }
-  if (!touched)
-    return block;
-  const bindIndent = fromParam ? "        " : block[anchor].match(/^ */)[0];
-  const binding = bindIndent + "let " + (needsMut ? "mut " : "") + "__ch = " + R10_HANDLE + "::from_value(client.clone());";
-  const result = [];
-  for (let k = 0; k < block.length; k++) {
-    const spans = rewritten.get(k);
-    result.push(spans === void 0 ? block[k] : r10Apply(block[k], spans));
-    if (k === anchor)
-      result.push(binding);
-  }
-  return result;
-}
-function r10Span(col, len, text) {
-  return [col + ":" + len + ":" + text];
-}
-function r10Apply(line, spans) {
-  const parsed = spans.map((s) => {
-    const first = s.indexOf(":");
-    const second = s.indexOf(":", first + 1);
-    return { col: Number(s.slice(0, first)), len: Number(s.slice(first + 1, second)), text: s.slice(second + 1) };
-  }).sort((a, b) => b.col - a.col);
-  let out = line;
-  for (const p of parsed)
-    out = out.slice(0, p.col) + p.text + out.slice(p.col + p.len);
-  return out;
-}
-
-// src/rustPasses/hx10w9-RP02.ts
-init_esm_shims();
-var MAP_PARAM_RE = /:\s*&mut\s+indexmap::IndexMap<String, Value>/;
-function hx10w9Rp02ParamKind(printedParam) {
-  return MAP_PARAM_RE.test(printedParam) ? "map" : void 0;
-}
-function hx10w9Rp02DispatchArg(index) {
-  return `&mut { let mut __m = args.get(${index}).cloned().unwrap_or_default().as_map().cloned().unwrap_or_default();
-                    __m }`;
-}
-function hx10w9Rp02SplitArgs(argList) {
-  return splitArgs4(argList);
-}
-function splitArgs4(argList) {
-  const out = [];
-  let depth = 0;
-  let current = "";
-  for (const char of argList) {
-    if (char === "<" || char === "(" || char === "[") {
-      depth++;
-    } else if (char === ">" || char === ")" || char === "]") {
-      depth--;
-    }
-    if (char === "," && depth === 0) {
-      out.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  out.push(current);
-  return out;
-}
-var REF_MAP_PARAM_RE = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*&mut\s+indexmap::IndexMap<String, Value>/g;
-function hx10w9Rp02RefMapParamNames(content) {
-  const names = /* @__PURE__ */ new Set();
-  REF_MAP_PARAM_RE.lastIndex = 0;
-  let m;
-  while ((m = REF_MAP_PARAM_RE.exec(content)) !== null) {
-    names.add(m[1]);
-  }
-  return names;
-}
-
-// src/rustPasses/hx11-narrow-str.ts
-init_esm_shims();
-function narrowStrSinkLocals(content) {
-  const OPT = {
-    safe_string: "safe_string_opt",
-    safe_string_k: "safe_string_k_opt",
-    safe_string_lower_k: "safe_string_lower_k_opt",
-    safe_string_upper_k: "safe_string_upper_k_opt"
-  };
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_string[a-z_0-9]*)\(/gm;
-  const strKeyRe = /^"(?:[^"\\]|\\.)*"$/;
-  const maskText5 = (src) => {
-    let out2 = "";
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const closeParen4 = (src, open) => {
-    let depth = 0;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const braceEnd = (src, from) => {
-    let depth = 0;
-    for (let k = from; k < src.length; k++) {
-      const c = src[k];
-      if (c === "{")
-        depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return src.length;
-  };
-  const argSpans3 = (src) => {
-    const out2 = [];
-    let depth = 0;
-    let start = 0;
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      else if (c === "," && depth === 0) {
-        out2.push([start, i]);
-        start = i + 1;
-      }
-    }
-    out2.push([start, src.length]);
-    return out2;
-  };
-  const masked = maskText5(content);
-  const rewrites = [];
-  let m;
-  while ((m = declRe.exec(masked)) !== null) {
-    const fam = m[4];
-    const opt = OPT[fam];
-    if (opt === void 0)
-      continue;
-    const name = m[3];
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeParen4(masked, callOpen);
-    if (callClose < 0)
-      continue;
-    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
-    if (tail === null)
-      continue;
-    const stmtEnd3 = callClose + tail[0].length;
-    const base = callOpen + 1;
-    const spans = argSpans3(masked.slice(base, callClose - 1));
-    if (spans.length !== 3)
-      continue;
-    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
-    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
-    const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
-    if (obj.length === 0 || keyRaw.length === 0)
-      continue;
-    if (fam.endsWith("_k") && !strKeyRe.test(keyRaw))
-      continue;
-    if (defRaw !== "&[]" && !/^&\[\s*Value::Str\(/.test(defRaw))
-      continue;
-    const end = braceEnd(masked, stmtEnd3);
-    const body = masked.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
-      continue;
-    const fRe = /format!\(/g;
-    const fSpans = [];
-    let f;
-    while ((f = fRe.exec(body)) !== null) {
-      const close = closeParen4(body, f.index + f[0].length - 1);
-      if (close < 0)
-        continue;
-      const lit = /^"(?:[^"\\]|\\.)*"/.exec(body.slice(f.index + f[0].length, close));
-      fSpans.push([f.index, close, lit !== null && /:\?/.test(lit[0])]);
-    }
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
-    let ok = true;
-    let uses = 0;
-    let u;
-    while ((u = useRe.exec(body)) !== null) {
-      const at = u.index;
-      const cand = fSpans.filter(([s, e]) => at > s && at < e);
-      if (cand.length === 0) {
-        ok = false;
-        break;
-      }
-      const hit = cand.reduce((a, b) => b[0] > a[0] ? b : a);
-      if (hit[2]) {
-        ok = false;
-        break;
-      }
-      const inner = hit[0] + "format!(".length;
-      const slot = argSpans3(body.slice(inner, hit[1] - 1)).filter(([a, b]) => inner + a <= at && at + name.length <= inner + b);
-      if (slot.length === 0) {
-        ok = false;
-        break;
-      }
-      if (body.slice(inner + slot[0][0], inner + slot[0][1]).replace(/\s+/g, "") !== name) {
-        ok = false;
-        break;
-      }
-      uses++;
-    }
-    if (!ok || uses === 0)
-      continue;
-    const indent = m[1];
-    const text = `${indent}let ${name}: String = self.${opt}(${obj}, ${keyRaw}, ${defRaw}).unwrap_or_default();`;
-    if (indent.length + text.length > 400 && stmtEnd3 - m.index <= 400)
-      continue;
-    rewrites.push({ start: m.index, end: stmtEnd3, text });
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  out += content.slice(last);
-  return out;
-}
-function narrowStrNullLocals(content) {
-  const OPT = {
-    safe_string: "safe_string_opt",
-    safe_string_k: "safe_string_k_opt",
-    safe_string_lower_k: "safe_string_lower_k_opt",
-    safe_string_upper_k: "safe_string_upper_k_opt"
-  };
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_string[a-z_0-9]*)\(/gm;
-  const strKeyRe = /^"(?:[^"\\]|\\.)*"$/;
-  const maskText5 = (src) => {
-    let out2 = "";
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const closeParen4 = (src, open) => {
-    let depth = 0;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const braceEnd = (src, from) => {
-    let depth = 0;
-    for (let k = from; k < src.length; k++) {
-      const c = src[k];
-      if (c === "{")
-        depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return src.length;
-  };
-  const argSpans3 = (src) => {
-    const out2 = [];
-    let depth = 0;
-    let start = 0;
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      else if (c === "," && depth === 0) {
-        out2.push([start, i]);
-        start = i + 1;
-      }
-    }
-    out2.push([start, src.length]);
-    return out2;
-  };
-  const masked = maskText5(content);
-  const grown = /* @__PURE__ */ new Map();
-  const groups = [];
-  const rewrites = [];
-  const cands = [];
-  let m;
-  while ((m = declRe.exec(masked)) !== null) {
-    const opt = OPT[m[4]];
-    if (opt === void 0)
-      continue;
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeParen4(masked, callOpen);
-    if (callClose < 0)
-      continue;
-    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
-    if (tail === null)
-      continue;
-    const base = callOpen + 1;
-    const spans = argSpans3(masked.slice(base, callClose - 1));
-    if (spans.length !== 3)
-      continue;
-    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
-    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
-    const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
-    if (obj.length === 0 || keyRaw.length === 0)
-      continue;
-    if (m[4].endsWith("_k") && !strKeyRe.test(keyRaw))
-      continue;
-    if (defRaw !== "&[]")
-      continue;
-    cands.push({
-      index: m.index,
-      stmtEnd: callClose + tail[0].length,
-      name: m[3],
-      declText: `${m[1]}let ${m[2] ?? ""}${m[3]}: Option<String> = self.${opt}(${obj}, ${keyRaw}, ${defRaw});`
-    });
-  }
-  const inlineRe = new RegExp('^([ \\t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = \\(match __pro_message\\.get\\(("(?:[^"\\\\]|\\\\.)*")\\)\\.cloned\\(\\) \\{ Some\\(Value::Str\\(__s\\)\\) if !__s\\.is_empty\\(\\) => Value::Str\\(__s\\), Some\\(Value::Int\\(__n\\)\\) => Value::Str\\(__n\\.to_string\\(\\)\\.into\\(\\)\\), Some\\(Value::Float\\(__f\\)\\) => Value::Str\\(__f\\.to_string\\(\\)\\.into\\(\\)\\), _ => Value::Null \\}\\);', "gm");
-  while ((m = inlineRe.exec(content)) !== null) {
-    cands.push({
-      index: m.index,
-      stmtEnd: m.index + m[0].length,
-      name: m[3],
-      declText: `${m[1]}let ${m[2] ?? ""}${m[3]}: Option<String> = match __pro_message.get(${m[4]}).cloned() { Some(Value::Str(__s)) if !__s.is_empty() => Some(__s.to_string()), Some(Value::Int(__n)) => Some(__n.to_string()), Some(Value::Float(__f)) => Some(__f.to_string()), _ => None };`
-    });
-  }
-  const intRe = new RegExp('^([ \\t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = \\(match __pro_message\\.get\\(("(?:[^"\\\\]|\\\\.)*")\\)\\.cloned\\(\\) \\{ Some\\(Value::Int\\(__n\\)\\) => Value::Int\\(__n\\), Some\\(Value::Float\\(__f\\)\\) => Value::Int\\(__f as i64\\), Some\\(Value::Str\\(__s\\)\\) if !__s\\.is_empty\\(\\) => match __s\\.parse::<i64>\\(\\) \\{ Ok\\(__n\\) => Value::Int\\(__n\\), Err\\(_\\) => match __s\\.parse::<f64>\\(\\) \\{ Ok\\(__f\\) if __f\\.is_finite\\(\\) => Value::Int\\(__f as i64\\), _ => Value::Null \\} \\}, _ => Value::Null \\}\\);', "gm");
-  while ((m = intRe.exec(content)) !== null) {
-    cands.push({
-      index: m.index,
-      stmtEnd: m.index + m[0].length,
-      name: m[3],
-      intOnly: true,
-      declText: `${m[1]}let ${m[2] ?? ""}${m[3]}: Option<i64> = match __pro_message.get(${m[4]}).cloned() { Some(Value::Int(__n)) => Some(__n), Some(Value::Float(__f)) => Some(__f as i64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>() { Ok(__n) => Some(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Some(__f as i64), _ => None } }, _ => None };`
-    });
-  }
-  cands.sort((a, b) => a.index - b.index);
-  for (const cand of cands) {
-    const name = cand.name;
-    const stmtEnd3 = cand.stmtEnd;
-    const end = braceEnd(masked, stmtEnd3);
-    const body = masked.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
-    const edits = [];
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(body)) !== null) {
-      const at = u.index;
-      const abs = stmtEnd3 + at;
-      const after = body.slice(at + name.length);
-      const before = body.slice(0, at);
-      let g;
-      if (cand.intOnly === true && !/^\s*(==|!=)\s*Value::Null\b/.test(after)) {
-        ok = false;
-        break;
-      }
-      if ((g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
-      } else if ((g = /^\.as_str\(\)/.exec(after)) !== null) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.as_deref()` });
-      } else if (/get_value\(&$/.test(before) && (g = /^, &Value::Int\(0\)\)\.as_str\(\) (==|!=) Some\("/.exec(after)) !== null) {
-        const chPos = abs + name.length + g[0].length;
-        const ch = /^([^"\\])"\)/.exec(content.slice(chPos, chPos + 3));
-        if (ch === null) {
-          ok = false;
-          break;
-        }
-        const probe = `${name}.as_deref().unwrap_or("").starts_with("${ch[1]}")`;
-        edits.push({ start: abs - "get_value(&".length, end: chPos + ch[0].length, text: g[1] === "==" ? probe : `!${probe}` });
-      } else if (/crate::runtime::stringify_param\(&$/.test(before) && /^\)/.test(after)) {
-        const from = abs - "crate::runtime::stringify_param(&".length;
-        edits.push({ start: from, end: abs + name.length + 1, text: `${name}.as_deref().unwrap_or("null").to_string()` });
-      } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
-        const lastUse = !new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`).test(after.slice(g[0].length));
-        const inLoop = /\b(?:loop|while|for)\b/.test(body);
-        const move = lastUse && !inLoop && !/&\s*$/.test(before);
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}${move ? "" : ".clone()"}.map(Value::from).unwrap_or(Value::Null)` });
-      } else {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok || edits.length === 0)
-      continue;
-    const declText = cand.declText;
-    const all = [{ start: cand.index, end: stmtEnd3, text: declText }, ...edits];
-    const lineGrow = /* @__PURE__ */ new Map();
-    for (const e of all) {
-      const ls = content.lastIndexOf("\n", e.start) + 1;
-      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
-    }
-    let longer = false;
-    for (const [ls, grow] of lineGrow) {
-      let le = content.indexOf("\n", ls);
-      if (le < 0)
-        le = content.length;
-      const cur = le - ls + (grown.get(ls) ?? 0);
-      if (cur <= 400 && cur + grow > 400)
-        longer = true;
-    }
-    if (longer)
-      continue;
-    for (const [ls, grow] of lineGrow)
-      grown.set(ls, (grown.get(ls) ?? 0) + grow);
-    groups.push({ decl: { start: cand.index, end: stmtEnd3, text: declText }, edits });
-  }
-  for (let again = true; again; ) {
-    again = false;
-    for (let a = 0; a < groups.length; a++) {
-      const hit = groups.some((b, bi) => bi !== a && groups[a].edits.some((e) => e.start >= b.decl.start && e.start < b.decl.end));
-      if (hit) {
-        groups.splice(a, 1);
-        again = true;
-        break;
-      }
-    }
-  }
-  for (const gr of groups) {
-    rewrites.push(gr.decl);
-    for (const e of gr.edits)
-      rewrites.push(e);
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  out += content.slice(last);
-  return out;
-}
-
-// src/rustPasses/hx11-sign-api.ts
-init_esm_shims();
-function hx11RustSignApiStr(content) {
-  content = content.replace(/\b(api|section)\.as_array\(\)\.and_then\(\|__arr\| __arr\.get\((\d+)\)\)/g, "$1.as_array().into_iter().flatten().nth($2)");
-  if (content.indexOf(".get(") < 0) {
-    return content;
-  }
-  const lines = content.split("\n");
-  const decl = /^(\s*)let mut (\w+): Value = (?:api|section)\.get\((\d+)\)\.cloned\(\)\.unwrap_or\(Value::Null\);$/;
-  const fnHead = /^ {4}(?:pub )?(?:async )?fn /;
-  for (let i = 0; i < lines.length; i++) {
-    const m = decl.exec(lines[i]);
-    if (m === null) {
-      continue;
-    }
-    let end = i + 1;
-    while (end < lines.length && !fnHead.test(lines[end])) {
-      end++;
-    }
-    const name = new RegExp("(?<![\\w.])" + m[2] + "(?![\\w])", "g");
-    const use = new RegExp("(?<![\\w.])" + m[2] + '\\.as_str\\(\\) (==|!=) Some\\("', "g");
-    let uses = 0;
-    let others = 0;
-    for (let j = i + 1; j < end; j++) {
-      const masked = lines[j].replace(/"(?:[^"\\]|\\.)*"/g, '""');
-      uses += (lines[j].match(use) ?? []).length;
-      others += (masked.match(name) ?? []).length;
-    }
-    if (uses === 0 || uses !== others) {
-      continue;
-    }
-    lines[i] = m[1] + "let mut " + m[2] + ": Option<String> = " + (m[0].indexOf("section") >= 0 ? "section" : "api") + ".get(" + m[3] + ").and_then(Value::as_str).map(str::to_owned);";
-    for (let j = i + 1; j < end; j++) {
-      lines[j] = lines[j].replace(use, (all, op) => m[2] + ".as_deref() " + op + ' Some("');
-    }
-  }
-  return lines.join("\n");
-}
-
-// src/rustPasses/hx11w9RustIntLocalNullSinkOptionI64.ts
-init_esm_shims();
-function hx11w9RustIntLocalNullSinkOptionI64(content) {
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.safe_integer(_k|2)?\(/gm;
-  const closeOf2 = (src, open) => {
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    let inLine = false;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (inLine) {
-        if (c === "\n")
-          inLine = false;
-        continue;
-      }
-      if (inStr) {
-        if (esc)
-          esc = false;
-        else if (c === "\\")
-          esc = true;
-        else if (c === '"')
-          inStr = false;
-        continue;
-      }
-      if (c === '"') {
-        inStr = true;
-        continue;
-      }
-      if (c === "/" && src[k + 1] === "/") {
-        inLine = true;
-        continue;
-      }
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const mask2 = (src) => {
-    let out2 = "";
-    let i = 0;
-    const blank = (s) => s.replace(/[^\n]/g, " ");
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === "/" && src[i + 1] === "*") {
-        const e = src.indexOf("*/", i + 2);
-        const stop = e < 0 ? src.length : e + 2;
-        out2 += blank(src.slice(i, stop));
-        i = stop;
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const scopeEnd = (masked, from) => {
-    let depth = 0;
-    for (let k = from; k < masked.length; k++) {
-      if (masked[k] === "{")
-        depth++;
-      else if (masked[k] === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return masked.length;
-  };
-  const splitArgs5 = (src) => {
-    const out2 = [];
-    let cur = "";
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    for (const c of src) {
-      if (inStr) {
-        cur += c;
-        if (esc)
-          esc = false;
-        else if (c === "\\")
-          esc = true;
-        else if (c === '"')
-          inStr = false;
-        continue;
-      }
-      if (c === '"') {
-        inStr = true;
-        cur += c;
-        continue;
-      }
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      if (c === "," && depth === 0) {
-        out2.push(cur);
-        cur = "";
-        continue;
-      }
-      cur += c;
-    }
-    out2.push(cur);
-    return out2;
-  };
-  const maskedAll = mask2(content);
-  const rewrites = [];
-  let m;
-  while ((m = declRe.exec(content)) !== null) {
-    const name = m[3];
-    const isTwo = m[4] === "2";
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeOf2(content, callOpen);
-    if (callClose < 0)
-      continue;
-    const tail = /^\s*;/.exec(content.slice(callClose, callClose + 3));
-    if (tail === null)
-      continue;
-    const stmtEnd3 = callClose + tail[0].length;
-    const args = splitArgs5(content.slice(callOpen + 1, callClose - 1));
-    if (args.length !== (isTwo ? 4 : 3))
-      continue;
-    if (!/^&\[\s*(?:Value::Null|Value::Int\(-?\d+\))?\s*\]$/.test(args[args.length - 1].trim()))
-      continue;
-    const end = scopeEnd(maskedAll, stmtEnd3);
-    const masked = maskedAll.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(masked))
-      continue;
-    if (new RegExp(`\\blet\\b[^=;\\n]*\\b${name}\\b`).test(masked))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(masked))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
-    const uses = [];
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(masked)) !== null) {
-      const s = u.index;
-      const e = s + name.length;
-      const after = masked.slice(e);
-      const before = masked.slice(0, s);
-      const abs = (x) => stmtEnd3 + x;
-      let g;
-      if (after.startsWith(".clone()")) {
-        uses.push({ start: abs(s), end: abs(e + 8), text: `Value::from(${name})` });
-        useRe.lastIndex = e + 8;
-      } else if ((g = /^\s*(!=|==)\s*Value::Null\b/.exec(after)) !== null) {
-        uses.push({ start: abs(s), end: abs(e + g[0].length), text: `${name}.${g[1] === "!=" ? "is_some" : "is_none"}()` });
-        useRe.lastIndex = e + g[0].length;
-      } else if ((g = /^\.as_f64\(\)\s*(==|!=)\s*Some\((-?\d+)(?:\.0)?\)/.exec(after)) !== null) {
-        uses.push({ start: abs(s), end: abs(e + g[0].length), text: `${name} ${g[1]} Some(${g[2]})` });
-        useRe.lastIndex = e + g[0].length;
-      } else if (/self\.iso8601\($/.test(before) && after.startsWith(")")) {
-        uses.push({ start: abs(s), end: abs(e), text: `Value::from(${name})` });
-      } else if (/\bm\.insert\("[^"\n]*"\.to_string\(\),\s*$/.test(before) && after.startsWith(");")) {
-        uses.push({ start: abs(s), end: abs(e), text: `Value::from(${name})` });
-      } else if (/(?:^|[;{}])\s*$/.test(before) && (g = /^\s*=(?!=)\s*/.exec(after)) !== null) {
-        const rhsAt = stmtEnd3 + e + g[0].length;
-        const rhs = /^(Value::Null|Value::Int\((-?\d+)\))\s*;/.exec(content.slice(rhsAt, rhsAt + 40));
-        if (rhs !== null) {
-          uses.push({ start: rhsAt, end: rhsAt + rhs[1].length, text: rhs[2] === void 0 ? "None" : `Some(${rhs[2]})` });
-        } else {
-          const call = /^self\.safe_integer(?:_k|2)?\(/.exec(content.slice(rhsAt, rhsAt + 30));
-          if (call === null) {
-            ok = false;
-            break;
-          }
-          const o = rhsAt + call[0].length - 1;
-          const c = closeOf2(content, o);
-          if (c < 0 || !/^\s*;/.test(content.slice(c, c + 3))) {
-            ok = false;
-            break;
-          }
-          const a = splitArgs5(content.slice(o + 1, c - 1));
-          const want = call[0].endsWith("2(") ? 4 : 3;
-          if (a.length !== want || !/^&\[\s*(?:Value::Null|Value::Int\(-?\d+\))?\s*\]$/.test(a[a.length - 1].trim())) {
-            ok = false;
-            break;
-          }
-          uses.push({ start: c, end: c, text: ".as_i64()" });
-        }
-        useRe.lastIndex = e;
-      } else {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok)
-      continue;
-    rewrites.push({ start: m.index, end: callOpen, text: content.slice(m.index, callOpen).replace(": Value =", ": Option<i64> =") });
-    rewrites.push({ start: callClose, end: callClose, text: ".as_i64()" });
-    for (const use of uses)
-      rewrites.push(use);
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  return out + content.slice(last);
-}
-
-// src/rustPasses/hx11w9RustStrLiteralLocalNativeString.ts
-init_esm_shims();
-function hx11w9RustStrLiteralLocalNativeString(content) {
-  const declRe = /^([ \t]*)let mut ([a-zA-Z_][a-zA-Z0-9_]*): Value = Value::Str\(("(?:[^"\\\n]|\\.)*")\.(?:into|to_string)\(\)\);[ \t]*$/gm;
-  const litWriteRe = /^\s*=\s*Value::Str\(("(?:[^"\\\n]|\\.)*")\.(?:into|to_string)\(\)\);/;
-  const maskText5 = (src) => {
-    let out2 = "";
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const closeParen4 = (src, open) => {
-    let depth = 0;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const braceEnd = (src, from) => {
-    let depth = 0;
-    for (let k = from; k < src.length; k++) {
-      const c = src[k];
-      if (c === "{")
-        depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return src.length;
-  };
-  const argSpans3 = (src) => {
-    const out2 = [];
-    let depth = 0;
-    let start = 0;
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      else if (c === "," && depth === 0) {
-        out2.push([start, i]);
-        start = i + 1;
-      }
-    }
-    out2.push([start, src.length]);
-    return out2;
-  };
-  const boxUse = (name, kept, after, used, body) => {
-    const later = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`).test(after.slice(used));
-    const inLoop = /\b(?:loop|while|for)\b/.test(body);
-    const arg = kept === "" && (later || inLoop) ? `${name}.clone()` : `${name}${kept}`;
-    return `Value::from(${arg})`;
-  };
-  const masked = maskText5(content);
-  const groups = [];
-  const grown = /* @__PURE__ */ new Map();
-  let m;
-  while ((m = declRe.exec(masked)) !== null) {
-    const name = m[2];
-    const stmtEnd3 = m.index + m[0].length;
-    const lit = /Value::Str\(("(?:[^"\\\n]|\\.)*")\.(?:into|to_string)\(\)\);/.exec(content.slice(m.index, stmtEnd3));
-    if (lit === null)
-      continue;
-    const end = braceEnd(masked, stmtEnd3);
-    const body = masked.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
-      continue;
-    const fRe = /format!\(/g;
-    const fSpans = [];
-    let f;
-    while ((f = fRe.exec(body)) !== null) {
-      const close = closeParen4(body, f.index + f[0].length - 1);
-      if (close < 0)
-        continue;
-      const fl = /^"(?:[^"\\]|\\.)*"/.exec(body.slice(f.index + f[0].length, close));
-      fSpans.push([f.index, close, fl !== null && /:\?/.test(fl[0])]);
-    }
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
-    const edits = [];
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(body)) !== null) {
-      const at = u.index;
-      const abs = stmtEnd3 + at;
-      const after = body.slice(at + name.length);
-      const before = body.slice(0, at);
-      let g;
-      if ((g = /^\s*=(?!=)/.exec(after)) !== null && !/[!<>=&|]\s*$/.test(before)) {
-        const w = litWriteRe.exec(content.slice(abs + name.length));
-        if (w === null) {
-          ok = false;
-          break;
-        }
-        edits.push({ start: abs + name.length, end: abs + name.length + w[0].length, text: ` = ${w[1]}.to_string();` });
-        continue;
-      }
-      const cand = fSpans.filter(([s, e]) => at > s && at < e);
-      if (cand.length > 0) {
-        const hit = cand.reduce((a, b) => b[0] > a[0] ? b : a);
-        const inner = hit[0] + "format!(".length;
-        const slot = argSpans3(body.slice(inner, hit[1] - 1)).filter(([a, b]) => inner + a <= at && at + name.length <= inner + b);
-        if (slot.length > 0 && body.slice(inner + slot[0][0], inner + slot[0][1]).replace(/\s+/g, "") === name) {
-          if (hit[2]) {
-            ok = false;
-            break;
-          }
-          continue;
-        }
-      }
-      if ((g = /^\.as_str\(\)/.exec(after)) !== null && !/&\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `Some(${name}.as_str())` });
-      } else if (/crate::runtime::stringify_param\(&$/.test(before) && /^\)/.test(after)) {
-        const from = abs - "crate::runtime::stringify_param(&".length;
-        edits.push({ start: from, end: abs + name.length + 1, text: `${name}.clone()` });
-      } else if (/(?:[(,\[]\s*)$/.test(before) && !/&\s*$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: boxUse(name, g[0], after, g[0].length, body) });
-      } else if (/(?<![=!<>])=\s$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[;,)])/.exec(after)) !== null) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: boxUse(name, g[0], after, g[0].length, body) });
-      } else {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok)
-      continue;
-    const tail = content.slice(m.index + lit.index + lit[0].length, stmtEnd3);
-    const declText = `${m[1]}let mut ${name}: String = ${lit[1]}.to_string();${tail}`;
-    const all = [{ start: m.index, end: stmtEnd3, text: declText }, ...edits];
-    const lineGrow = /* @__PURE__ */ new Map();
-    for (const e of all) {
-      const ls = content.lastIndexOf("\n", e.start) + 1;
-      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
-    }
-    let longer = false;
-    for (const [ls, grow] of lineGrow) {
-      let le = content.indexOf("\n", ls);
-      if (le < 0)
-        le = content.length;
-      const cur = le - ls + (grown.get(ls) ?? 0);
-      if (cur <= 400 && cur + grow > 400)
-        longer = true;
-    }
-    if (longer)
-      continue;
-    for (const [ls, grow] of lineGrow)
-      grown.set(ls, (grown.get(ls) ?? 0) + grow);
-    groups.push(all);
-  }
-  const rewrites = groups.flat();
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  out += content.slice(last);
-  return out;
-}
-
-// src/rustPasses/hx11w9-str-local-reassign.ts
-init_esm_shims();
-function hx11w9StrLocalReassign(content) {
-  const OPT = {
-    safe_string: "safe_string_opt",
-    safe_string_k: "safe_string_k_opt",
-    safe_string_lower_k: "safe_string_lower_k_opt",
-    safe_string_upper_k: "safe_string_upper_k_opt"
-  };
-  const declRe = /^([ \t]*)let mut ([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_string[a-z_0-9]*)\(/gm;
-  const strKeyRe = /^"(?:[^"\\]|\\.)*"$/;
-  const strLitRe = /^Value::Str\(("(?:[^"\\]|\\.)*")\.into\(\)\)$/;
-  const maskText5 = (src) => {
-    let out2 = "";
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const closeParen4 = (src, open) => {
-    let depth = 0;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const braceEnd = (src, from) => {
-    let depth = 0;
-    for (let k = from; k < src.length; k++) {
-      const c = src[k];
-      if (c === "{")
-        depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return src.length;
-  };
-  const stmtEndAt = (src, from) => {
-    let depth = 0;
-    for (let k = from; k < src.length; k++) {
-      const c = src[k];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}") {
-        depth--;
-        if (depth < 0)
-          return -1;
-      } else if (c === ";" && depth === 0)
-        return k;
-    }
-    return -1;
-  };
-  const argSpans3 = (src) => {
-    const out2 = [];
-    let depth = 0;
-    let start = 0;
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      else if (c === "," && depth === 0) {
-        out2.push([start, i]);
-        start = i + 1;
-      }
-    }
-    out2.push([start, src.length]);
-    return out2;
-  };
-  const masked = maskText5(content);
-  const grown = /* @__PURE__ */ new Map();
-  const groups = [];
-  let m;
-  while ((m = declRe.exec(masked)) !== null) {
-    const fam = m[3];
-    const opt = OPT[fam];
-    if (opt === void 0)
-      continue;
-    const name = m[2];
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeParen4(masked, callOpen);
-    if (callClose < 0)
-      continue;
-    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
-    if (tail === null)
-      continue;
-    const stmtEnd3 = callClose + tail[0].length;
-    const callEdit = (famName, open, close) => {
-      const twin = OPT[famName];
-      if (twin === void 0)
-        return null;
-      const base = open + 1;
-      const spans = argSpans3(masked.slice(base, close - 1));
-      if (spans.length !== 3)
-        return null;
-      const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
-      if (famName.endsWith("_k") && !strKeyRe.test(keyRaw))
-        return null;
-      if (keyRaw.length === 0)
-        return null;
-      const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
-      const defMasked = masked.slice(base + spans[2][0], base + spans[2][1]).trim();
-      if (!(defMasked === "&[]" || /^&\[Value::Str\("\s*"\.into\(\)\)\]$/.test(defMasked)))
-        return null;
-      if (defRaw.length === 0)
-        return null;
-      const nameAt = open - famName.length;
-      return { start: nameAt, end: open, text: twin };
-    };
-    const declEdit = callEdit(fam, callOpen, callClose);
-    if (declEdit === null)
-      continue;
-    const end = braceEnd(masked, stmtEnd3);
-    const body = masked.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
-    const edits = [declEdit];
-    let assigned = 0;
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(body)) !== null) {
-      const at = u.index;
-      const abs = stmtEnd3 + at;
-      const after = body.slice(at + name.length);
-      const before = body.slice(0, at);
-      let g;
-      if ((g = /^\s*=(?!=)\s*/.exec(after)) !== null && /(?:^|[;{}])\s*$/.test(before)) {
-        const rhsStart = abs + name.length + g[0].length;
-        const rhsEnd = stmtEndAt(masked, rhsStart);
-        if (rhsEnd < 0) {
-          ok = false;
-          break;
-        }
-        const rhsMasked = masked.slice(rhsStart, rhsEnd).trim();
-        const rhsRaw = content.slice(rhsStart, rhsEnd).trim();
-        let lit;
-        let call;
-        if (rhsMasked === "Value::Null") {
-          edits.push({ start: rhsStart, end: rhsStart + "Value::Null".length, text: "None" });
-        } else if ((lit = strLitRe.exec(rhsRaw)) !== null) {
-          edits.push({ start: rhsStart, end: rhsStart + rhsRaw.length, text: `Some(${lit[1]}.to_string())` });
-        } else if ((call = /^self\.(safe_string[a-z_0-9]*)\(/.exec(rhsMasked)) !== null) {
-          const open = rhsStart + call[0].length - 1;
-          const close = closeParen4(masked, open);
-          if (close < 0 || masked.slice(close, rhsEnd).trim() !== "") {
-            ok = false;
-            break;
-          }
-          const ce = callEdit(call[1], open, close);
-          if (ce === null) {
-            ok = false;
-            break;
-          }
-          edits.push(ce);
-        } else {
-          ok = false;
-          break;
-        }
-        assigned++;
-        useRe.lastIndex = rhsStart - stmtEnd3;
-        continue;
-      }
-      if ((g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
-      } else if ((g = /^\.as_str\(\)/.exec(after)) !== null) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.as_deref()` });
-      } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
-        const lastUse = !new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`).test(after.slice(g[0].length));
-        const inLoop = /\b(?:loop|while|for)\b/.test(body);
-        const move = lastUse && !inLoop && !/&\s*$/.test(before);
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}${move ? "" : ".clone()"}.map(Value::from).unwrap_or(Value::Null)` });
-      } else {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok || assigned === 0)
-      continue;
-    const declText = `${m[1]}let mut ${name}: Option<String> = `;
-    const all = [{ start: m.index, end: m.index + m[0].length - `self.${fam}(`.length, text: declText }, ...edits];
-    const lineGrow = /* @__PURE__ */ new Map();
-    for (const e of all) {
-      const ls = content.lastIndexOf("\n", e.start) + 1;
-      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
-    }
-    let longer = false;
-    for (const [ls, grow] of lineGrow) {
-      let le = content.indexOf("\n", ls);
-      if (le < 0)
-        le = content.length;
-      const cur = le - ls + (grown.get(ls) ?? 0);
-      if (cur <= 400 && cur + grow > 400)
-        longer = true;
-    }
-    if (longer)
-      continue;
-    for (const [ls, grow] of lineGrow)
-      grown.set(ls, (grown.get(ls) ?? 0) + grow);
-    groups.push({ decl: { start: m.index, end: stmtEnd3, text: "" }, edits: all });
-  }
-  for (let again = true; again; ) {
-    again = false;
-    for (let a = 0; a < groups.length && !again; a++) {
-      for (let b = 0; b < groups.length; b++) {
-        if (a === b)
-          continue;
-        const bEdits = groups[b].edits;
-        const bs = groups[b].decl.start;
-        const be = groups[b].decl.end;
-        if (groups[a].edits.some((e) => e.start >= bs && e.start < be && e.start !== bs) && bEdits.length > 0) {
-          groups.splice(a, 1);
-          again = true;
-          break;
-        }
-      }
-    }
-  }
-  const rewrites = [];
-  for (const gr of groups)
-    for (const e of gr.edits)
-      rewrites.push(e);
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  out += content.slice(last);
-  return out;
-}
-
-// src/rustPasses/hx11w9-rust-bool-k-local-option-bool.ts
-init_esm_shims();
-function hx11w9RustBoolKLocalOptionBool(content) {
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_bool_k|safe_bool)\(/gm;
-  const strKeyRe = /^"(?:[^"\\]|\\.)*"$/;
-  const maskText5 = (src) => {
-    let out2 = "";
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const closeParen4 = (src, open) => {
-    let depth = 0;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const braceEnd = (src, from) => {
-    let depth = 0;
-    for (let k = from; k < src.length; k++) {
-      const c = src[k];
-      if (c === "{")
-        depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return src.length;
-  };
-  const argSpans3 = (src) => {
-    const out2 = [];
-    let depth = 0;
-    let start = 0;
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      else if (c === "," && depth === 0) {
-        out2.push([start, i]);
-        start = i + 1;
-      }
-    }
-    out2.push([start, src.length]);
-    return out2;
-  };
-  const masked = maskText5(content);
-  const grown = /* @__PURE__ */ new Map();
-  const rewrites = [];
-  let m;
-  while ((m = declRe.exec(masked)) !== null) {
-    const callee = m[4];
-    const name = m[3];
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeParen4(masked, callOpen);
-    if (callClose < 0)
-      continue;
-    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
-    if (tail === null)
-      continue;
-    const stmtEnd3 = callClose + tail[0].length;
-    const base = callOpen + 1;
-    const spans = argSpans3(masked.slice(base, callClose - 1));
-    if (spans.length !== 3)
-      continue;
-    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
-    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
-    const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
-    if (obj.length === 0 || keyRaw.length === 0)
-      continue;
-    if (callee === "safe_bool_k" && !strKeyRe.test(keyRaw))
-      continue;
-    let dflt;
-    const dm = /^&\[Value::Bool\((true|false)\)\]$/.exec(defRaw);
-    if (defRaw === "&[]")
-      dflt = null;
-    else if (dm !== null)
-      dflt = dm[1] === "true";
-    else
-      continue;
-    const isOpt = dflt === null;
-    const end = braceEnd(masked, stmtEnd3);
-    const body = masked.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
-    const edits = [];
-    const cmp = (eq, b) => {
-      if (isOpt)
-        return `${name} ${eq ? "==" : "!="} Some(${b})`;
-      return eq === b ? name : `!${name}`;
-    };
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(body)) !== null) {
-      const at = u.index;
-      const abs = stmtEnd3 + at;
-      const after = body.slice(at + name.length);
-      const before = body.slice(0, at);
-      let g;
-      if ((g = /^\.as_bool\(\) (==|!=) Some\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
-      } else if ((g = /^\.is_truthy\(\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: isOpt ? `${name} == Some(true)` : name });
-      } else if ((g = /^\s*(==|!=)\s*Value::Bool\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
-      } else if (isOpt && (g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
-      } else if ((g = /^\s*=\s*Value::Bool\((true|false)\);/.exec(after)) !== null && /(?:^|[;{}\s])\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name} = ${isOpt ? `Some(${g[1]})` : g[1]};` });
-      } else if (!isOpt && /is_true\(&$/.test(before) && /^\)/.test(after)) {
-        continue;
-      } else if (/\.insert\(\s*"[^"]*"(?:\.to_string\(\)|\.into\(\))?,\s*$/.test(before.slice(-80).replace(/\n/g, " ")) && (g = /^(\.clone\(\))?\)/.exec(after)) !== null) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length - 1, text: isOpt ? `${name}.map(Value::Bool).unwrap_or(Value::Null)` : `Value::Bool(${name})` });
-      } else {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok || edits.length === 0)
-      continue;
-    const optName = callee === "safe_bool_k" ? "safe_bool_k_opt" : "safe_bool_opt";
-    const typeStart = m.index + m[1].length + "let ".length + (m[2] ?? "").length + name.length;
-    const declEdits = [
-      { start: typeStart, end: callOpen, text: `: ${isOpt ? "Option<bool>" : "bool"} = self.${optName}` }
-    ];
-    if (!isOpt)
-      declEdits.push({ start: callClose, end: callClose, text: `.unwrap_or(${dflt})` });
-    const all = [...declEdits, ...edits];
-    const lineGrow = /* @__PURE__ */ new Map();
-    for (const e of all) {
-      const ls = content.lastIndexOf("\n", e.start) + 1;
-      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
-    }
-    let longer = false;
-    for (const [ls, grow] of lineGrow) {
-      let le = content.indexOf("\n", ls);
-      if (le < 0)
-        le = content.length;
-      const cur = le - ls + (grown.get(ls) ?? 0);
-      if (cur <= 400 && cur + grow > 400)
-        longer = true;
-    }
-    if (longer)
-      continue;
-    for (const [ls, grow] of lineGrow)
-      grown.set(ls, (grown.get(ls) ?? 0) + grow);
-    for (const e of all)
-      rewrites.push(e);
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  out += content.slice(last);
-  return out;
-}
-
-// src/rustPasses/hx11w9RustBool2LocalOptionBool.ts
-init_esm_shims();
-function hx11w9RustBool2LocalOptionBool(content) {
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_bool2)\(/gm;
-  const maskText5 = (src) => {
-    let out2 = "";
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const closeParen4 = (src, open) => {
-    let depth = 0;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const braceEnd = (src, from) => {
-    let depth = 0;
-    for (let k = from; k < src.length; k++) {
-      const c = src[k];
-      if (c === "{")
-        depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return src.length;
-  };
-  const argSpans3 = (src) => {
-    const out2 = [];
-    let depth = 0;
-    let start = 0;
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      else if (c === "," && depth === 0) {
-        out2.push([start, i]);
-        start = i + 1;
-      }
-    }
-    out2.push([start, src.length]);
-    return out2;
-  };
-  const masked = maskText5(content);
-  const grown = /* @__PURE__ */ new Map();
-  const rewrites = [];
-  let m;
-  while ((m = declRe.exec(masked)) !== null) {
-    const name = m[3];
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeParen4(masked, callOpen);
-    if (callClose < 0)
-      continue;
-    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
-    if (tail === null)
-      continue;
-    const stmtEnd3 = callClose + tail[0].length;
-    const base = callOpen + 1;
-    const spans = argSpans3(masked.slice(base, callClose - 1));
-    if (spans.length !== 4)
-      continue;
-    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
-    const key1 = content.slice(base + spans[1][0], base + spans[1][1]).trim();
-    const key2 = content.slice(base + spans[2][0], base + spans[2][1]).trim();
-    const defRaw = content.slice(base + spans[3][0], base + spans[3][1]).trim();
-    if (obj.length === 0 || key1.length === 0 || key2.length === 0)
-      continue;
-    let dflt;
-    const dm = /^&\[Value::Bool\((true|false)\)\]$/.exec(defRaw);
-    if (defRaw === "&[]")
-      dflt = null;
-    else if (dm !== null)
-      dflt = dm[1] === "true";
-    else
-      continue;
-    const isOpt = dflt === null;
-    const end = braceEnd(masked, stmtEnd3);
-    const body = masked.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
-    const edits = [];
-    const cmp = (eq, b) => {
-      if (isOpt)
-        return `${name} ${eq ? "==" : "!="} Some(${b})`;
-      return eq === b ? name : `!${name}`;
-    };
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(body)) !== null) {
-      const at = u.index;
-      const abs = stmtEnd3 + at;
-      const after = body.slice(at + name.length);
-      const before = body.slice(0, at);
-      let g;
-      if ((g = /^\.as_bool\(\) (==|!=) Some\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
-      } else if ((g = /^\.is_truthy\(\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: isOpt ? `${name} == Some(true)` : name });
-      } else if ((g = /^\s*(==|!=)\s*Value::Bool\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
-      } else if (isOpt && (g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
-      } else if ((g = /^\s*=\s*Value::Bool\((true|false)\);/.exec(after)) !== null && /(?:^|[;{}\s])\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name} = ${isOpt ? `Some(${g[1]})` : g[1]};` });
-      } else if (!isOpt && /is_true\(&$/.test(before) && /^\)/.test(after)) {
-        continue;
-      } else if (/\.insert\(\s*"[^"]*"(?:\.to_string\(\)|\.into\(\))?,\s*$/.test(before.slice(-80).replace(/\n/g, " ")) && (g = /^(\.clone\(\))?\)/.exec(after)) !== null) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length - 1, text: isOpt ? `${name}.map(Value::Bool).unwrap_or(Value::Null)` : `Value::Bool(${name})` });
-      } else {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok || edits.length === 0)
-      continue;
-    const optName = "safe_bool2_opt";
-    const typeStart = m.index + m[1].length + "let ".length + (m[2] ?? "").length + name.length;
-    const declEdits = [
-      { start: typeStart, end: callOpen, text: `: ${isOpt ? "Option<bool>" : "bool"} = self.${optName}` }
-    ];
-    if (!isOpt)
-      declEdits.push({ start: callClose, end: callClose, text: `.unwrap_or(${dflt})` });
-    const all = [...declEdits, ...edits];
-    const lineGrow = /* @__PURE__ */ new Map();
-    for (const e of all) {
-      const ls = content.lastIndexOf("\n", e.start) + 1;
-      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
-    }
-    let longer = false;
-    for (const [ls, grow] of lineGrow) {
-      let le = content.indexOf("\n", ls);
-      if (le < 0)
-        le = content.length;
-      const cur = le - ls + (grown.get(ls) ?? 0);
-      if (cur <= 400 && cur + grow > 400)
-        longer = true;
-    }
-    if (longer)
-      continue;
-    for (const [ls, grow] of lineGrow)
-      grown.set(ls, (grown.get(ls) ?? 0) + grow);
-    for (const e of all)
-      rewrites.push(e);
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  out += content.slice(last);
-  return out;
-}
-
-// src/rustPasses/hx11w9RustBoolNLocalOptionBool.ts
-init_esm_shims();
-function hx11w9RustBoolNLocalOptionBool(content) {
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_bool_n)\(/gm;
-  const keyListRe = /^Value::from\(vec!\[Value::Str\("(?:[^"\\]|\\.)*"\.(?:into|to_string)\(\)\)(?:, Value::Str\("(?:[^"\\]|\\.)*"\.(?:into|to_string)\(\)\))*\]\)$/;
-  const maskText5 = (src) => {
-    let out2 = "";
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const closeParen4 = (src, open) => {
-    let depth = 0;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const braceEnd = (src, from) => {
-    let depth = 0;
-    for (let k = from; k < src.length; k++) {
-      const c = src[k];
-      if (c === "{")
-        depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return src.length;
-  };
-  const argSpans3 = (src) => {
-    const out2 = [];
-    let depth = 0;
-    let start = 0;
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      else if (c === "," && depth === 0) {
-        out2.push([start, i]);
-        start = i + 1;
-      }
-    }
-    out2.push([start, src.length]);
-    return out2;
-  };
-  const masked = maskText5(content);
-  const grown = /* @__PURE__ */ new Map();
-  const rewrites = [];
-  let m;
-  while ((m = declRe.exec(masked)) !== null) {
-    const name = m[3];
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeParen4(masked, callOpen);
-    if (callClose < 0)
-      continue;
-    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
-    if (tail === null)
-      continue;
-    const stmtEnd3 = callClose + tail[0].length;
-    const base = callOpen + 1;
-    const spans = argSpans3(masked.slice(base, callClose - 1));
-    if (spans.length !== 3)
-      continue;
-    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
-    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
-    const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
-    if (obj.length === 0 || keyRaw.length === 0)
-      continue;
-    if (!keyListRe.test(keyRaw))
-      continue;
-    let dflt;
-    const dm = /^&\[Value::Bool\((true|false)\)\]$/.exec(defRaw);
-    if (defRaw === "&[]")
-      dflt = null;
-    else if (dm !== null)
-      dflt = dm[1] === "true";
-    else
-      continue;
-    const isOpt = dflt === null;
-    const end = braceEnd(masked, stmtEnd3);
-    const body = masked.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
-    const edits = [];
-    const cmp = (eq, b) => {
-      if (isOpt)
-        return `${name} ${eq ? "==" : "!="} Some(${b})`;
-      return eq === b ? name : `!${name}`;
-    };
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(body)) !== null) {
-      const at = u.index;
-      const abs = stmtEnd3 + at;
-      const after = body.slice(at + name.length);
-      const before = body.slice(0, at);
-      let g;
-      if ((g = /^\.as_bool\(\) (==|!=) Some\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
-      } else if ((g = /^\.is_truthy\(\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: isOpt ? `${name} == Some(true)` : name });
-      } else if ((g = /^\s*(==|!=)\s*Value::Bool\((true|false)\)/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: cmp(g[1] === "==", g[2] === "true") });
-      } else if (isOpt && (g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
-      } else if ((g = /^\s*=\s*Value::Bool\((true|false)\);/.exec(after)) !== null && /(?:^|[;{}\s])\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name} = ${isOpt ? `Some(${g[1]})` : g[1]};` });
-      } else if (!isOpt && /is_true\(&$/.test(before) && /^\)/.test(after)) {
-        continue;
-      } else if (/\.insert\(\s*"[^"]*"(?:\.to_string\(\)|\.into\(\))?,\s*$/.test(before.slice(-80).replace(/\n/g, " ")) && (g = /^(\.clone\(\))?\)/.exec(after)) !== null) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length - 1, text: isOpt ? `${name}.map(Value::Bool).unwrap_or(Value::Null)` : `Value::Bool(${name})` });
-      } else {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok || edits.length === 0)
-      continue;
-    const optName = "safe_bool_n_opt";
-    const typeStart = m.index + m[1].length + "let ".length + (m[2] ?? "").length + name.length;
-    const declEdits = [
-      { start: typeStart, end: callOpen, text: `: ${isOpt ? "Option<bool>" : "bool"} = self.${optName}` }
-    ];
-    if (!isOpt)
-      declEdits.push({ start: callClose, end: callClose, text: `.unwrap_or(${dflt})` });
-    const all = [...declEdits, ...edits];
-    const lineGrow = /* @__PURE__ */ new Map();
-    for (const e of all) {
-      const ls = content.lastIndexOf("\n", e.start) + 1;
-      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
-    }
-    let longer = false;
-    for (const [ls, grow] of lineGrow) {
-      let le = content.indexOf("\n", ls);
-      if (le < 0)
-        le = content.length;
-      const cur = le - ls + (grown.get(ls) ?? 0);
-      if (cur <= 400 && cur + grow > 400)
-        longer = true;
-    }
-    if (longer)
-      continue;
-    for (const [ls, grow] of lineGrow)
-      grown.set(ls, (grown.get(ls) ?? 0) + grow);
-    for (const e of all)
-      rewrites.push(e);
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  out += content.slice(last);
-  return out;
-}
-
-// src/rustPasses/hx11w9RustStr2LocalOptionString.ts
-init_esm_shims();
-function hx11w9RustStr2LocalOptionString(content) {
-  const opt = "safe_string2_opt";
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_string2)\(/gm;
-  const maskText5 = (src) => {
-    let out2 = "";
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const closeParen4 = (src, open) => {
-    let depth = 0;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const braceEnd = (src, from) => {
-    let depth = 0;
-    for (let k = from; k < src.length; k++) {
-      const c = src[k];
-      if (c === "{")
-        depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return src.length;
-  };
-  const argSpans3 = (src) => {
-    const out2 = [];
-    let depth = 0;
-    let start = 0;
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      else if (c === "," && depth === 0) {
-        out2.push([start, i]);
-        start = i + 1;
-      }
-    }
-    out2.push([start, src.length]);
-    return out2;
-  };
-  const masked = maskText5(content);
-  const grown = /* @__PURE__ */ new Map();
-  const groups = [];
-  const rewrites = [];
-  let m;
-  while ((m = declRe.exec(masked)) !== null) {
-    const name = m[3];
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeParen4(masked, callOpen);
-    if (callClose < 0)
-      continue;
-    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
-    if (tail === null)
-      continue;
-    const stmtEnd3 = callClose + tail[0].length;
-    const base = callOpen + 1;
-    const spans = argSpans3(masked.slice(base, callClose - 1));
-    if (spans.length !== 4)
-      continue;
-    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
-    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim() + ", " + content.slice(base + spans[2][0], base + spans[2][1]).trim();
-    const defRaw = content.slice(base + spans[3][0], base + spans[3][1]).trim();
-    if (obj.length === 0 || keyRaw.length === 0)
-      continue;
-    if (defRaw !== "&[]" && !/^&\[Value::Str\("(?:[^"\\]|\\.)*"\.into\(\)\)\]$/.test(defRaw))
-      continue;
-    const end = braceEnd(masked, stmtEnd3);
-    const body = masked.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
-    const edits = [];
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(body)) !== null) {
-      const at = u.index;
-      const abs = stmtEnd3 + at;
-      const after = body.slice(at + name.length);
-      const before = body.slice(0, at);
-      let g;
-      if ((g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
-      } else if ((g = /^\.as_str\(\)/.exec(after)) !== null) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.as_deref()` });
-      } else if (/get_value\(&$/.test(before) && (g = /^, &Value::Int\(0\)\)\.as_str\(\) (==|!=) Some\("/.exec(after)) !== null) {
-        const chPos = abs + name.length + g[0].length;
-        const ch = /^([^"\\])"\)/.exec(content.slice(chPos, chPos + 3));
-        if (ch === null) {
-          ok = false;
-          break;
-        }
-        const probe = `${name}.as_deref().unwrap_or("").starts_with("${ch[1]}")`;
-        edits.push({ start: abs - "get_value(&".length, end: chPos + ch[0].length, text: g[1] === "==" ? probe : `!${probe}` });
-      } else if (/crate::runtime::stringify_param\(&$/.test(before) && /^\)/.test(after)) {
-        const from = abs - "crate::runtime::stringify_param(&".length;
-        edits.push({ start: from, end: abs + name.length + 1, text: `${name}.as_deref().unwrap_or("null").to_string()` });
-      } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
-        const lastUse = !new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`).test(after.slice(g[0].length));
-        const inLoop = /\b(?:loop|while|for)\b/.test(body);
-        const move = lastUse && !inLoop && !/&\s*$/.test(before);
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}${move ? "" : ".clone()"}.map(Value::from).unwrap_or(Value::Null)` });
-      } else {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok || edits.length === 0)
-      continue;
-    const declText = `${m[1]}let ${m[2] ?? ""}${name}: Option<String> = self.${opt}(${obj}, ${keyRaw}, ${defRaw});`;
-    const all = [{ start: m.index, end: stmtEnd3, text: declText }, ...edits];
-    const lineGrow = /* @__PURE__ */ new Map();
-    for (const e of all) {
-      const ls = content.lastIndexOf("\n", e.start) + 1;
-      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
-    }
-    let longer = false;
-    for (const [ls, grow] of lineGrow) {
-      let le = content.indexOf("\n", ls);
-      if (le < 0)
-        le = content.length;
-      const cur = le - ls + (grown.get(ls) ?? 0);
-      if (cur <= 400 && cur + grow > 400)
-        longer = true;
-    }
-    if (longer)
-      continue;
-    for (const [ls, grow] of lineGrow)
-      grown.set(ls, (grown.get(ls) ?? 0) + grow);
-    groups.push({ decl: { start: m.index, end: stmtEnd3, text: declText }, edits });
-  }
-  for (let again = true; again; ) {
-    again = false;
-    for (let a = 0; a < groups.length; a++) {
-      const hit = groups.some((b, bi) => bi !== a && groups[a].edits.some((e) => e.start >= b.decl.start && e.start < b.decl.end));
-      if (hit) {
-        groups.splice(a, 1);
-        again = true;
-        break;
-      }
-    }
-  }
-  for (const gr of groups) {
-    rewrites.push(gr.decl);
-    for (const e of gr.edits)
-      rewrites.push(e);
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  out += content.slice(last);
-  return out;
-}
-
-// src/rustPasses/hx11w9RustNumber2LocalOptionF64.ts
-init_esm_shims();
-function hx11w9RustNumber2LocalOptionF64(content) {
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.safe_number2\(/gm;
-  const mask2 = (src) => {
-    let out2 = "";
-    let i = 0;
-    const blank = (s) => s.replace(/[^\n]/g, " ");
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === "/" && src[i + 1] === "*") {
-        const e = src.indexOf("*/", i + 2);
-        const stop = e < 0 ? src.length : e + 2;
-        out2 += blank(src.slice(i, stop));
-        i = stop;
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const maskedAll = mask2(content);
-  const closeOf2 = (masked, open) => {
-    let depth = 0;
-    for (let k = open; k < masked.length; k++) {
-      if (masked[k] === "(")
-        depth++;
-      else if (masked[k] === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const scopeEnd = (masked, from) => {
-    let depth = 0;
-    for (let k = from; k < masked.length; k++) {
-      if (masked[k] === "{")
-        depth++;
-      else if (masked[k] === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return masked.length;
-  };
-  const splitArgs5 = (src) => {
-    const out2 = [];
-    let cur = "";
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    for (const c of src) {
-      if (inStr) {
-        cur += c;
-        if (esc)
-          esc = false;
-        else if (c === "\\")
-          esc = true;
-        else if (c === '"')
-          inStr = false;
-        continue;
-      }
-      if (c === '"') {
-        inStr = true;
-        cur += c;
-        continue;
-      }
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      if (c === "," && depth === 0) {
-        out2.push(cur);
-        cur = "";
-        continue;
-      }
-      cur += c;
-    }
-    out2.push(cur);
-    return out2;
-  };
-  const rewrites = [];
-  let m;
-  while ((m = declRe.exec(content)) !== null) {
-    const name = m[3];
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeOf2(maskedAll, callOpen);
-    if (callClose < 0 || !/^\s*;/.test(content.slice(callClose, callClose + 3)))
-      continue;
-    const stmtEnd3 = callClose + /^\s*;/.exec(content.slice(callClose, callClose + 3))[0].length;
-    const args = splitArgs5(content.slice(callOpen + 1, callClose - 1));
-    if (args.length !== 4 || !/^&\[\s*(?:Value::Null)?\s*\]$/.test(args[3].trim()))
-      continue;
-    const end = scopeEnd(maskedAll, stmtEnd3);
-    const masked = maskedAll.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(masked))
-      continue;
-    if (new RegExp(`\\blet\\b[^=;\\n]*\\b${name}\\b`).test(masked))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(masked))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
-    const uses = [];
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(masked)) !== null) {
-      const s = u.index;
-      const e = s + name.length;
-      const after = masked.slice(e);
-      let g;
-      if ((g = /^\s*(!=|==)\s*Value::Null\b/.exec(after)) !== null) {
-        uses.push({ start: stmtEnd3 + s, end: stmtEnd3 + e + g[0].length, text: `${name}.${g[1] === "!=" ? "is_some" : "is_none"}()` });
-      } else if ((g = /^\.as_f64\(\)\s*(==|!=)\s*Some\((-?\d+\.0)\)/.exec(after)) !== null) {
-        uses.push({ start: stmtEnd3 + s, end: stmtEnd3 + e + g[0].length, text: `${name} ${g[1]} Some(${g[2]})` });
-      } else {
-        ok = false;
-        break;
-      }
-      useRe.lastIndex = e + g[0].length;
-    }
-    if (!ok)
-      continue;
-    rewrites.push({
-      start: m.index,
-      end: callOpen,
-      text: content.slice(m.index, callOpen).replace(": Value =", ": Option<f64> =").replace("safe_number2", "safe_number2_opt")
-    });
-    for (const use of uses)
-      rewrites.push(use);
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  return out + content.slice(last);
-}
-
-// src/rustPasses/hx11w9RustInt2IntNLocalOptionI64.ts
-init_esm_shims();
-function hx11w9RustInt2IntNLocalOptionI64(content) {
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.safe_integer(2|_n)\(/gm;
-  const closeOf2 = (src, open) => {
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    let inLine = false;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (inLine) {
-        if (c === "\n")
-          inLine = false;
-        continue;
-      }
-      if (inStr) {
-        if (esc)
-          esc = false;
-        else if (c === "\\")
-          esc = true;
-        else if (c === '"')
-          inStr = false;
-        continue;
-      }
-      if (c === '"') {
-        inStr = true;
-        continue;
-      }
-      if (c === "/" && src[k + 1] === "/") {
-        inLine = true;
-        continue;
-      }
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const mask2 = (src) => {
-    let out2 = "";
-    let i = 0;
-    const blank = (s) => s.replace(/[^\n]/g, " ");
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === "/" && src[i + 1] === "*") {
-        const e = src.indexOf("*/", i + 2);
-        const stop = e < 0 ? src.length : e + 2;
-        out2 += blank(src.slice(i, stop));
-        i = stop;
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const scopeEnd = (masked, from) => {
-    let depth = 0;
-    for (let k = from; k < masked.length; k++) {
-      if (masked[k] === "{")
-        depth++;
-      else if (masked[k] === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return masked.length;
-  };
-  const splitArgs5 = (src) => {
-    const out2 = [];
-    let cur = "";
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    for (const c of src) {
-      if (inStr) {
-        cur += c;
-        if (esc)
-          esc = false;
-        else if (c === "\\")
-          esc = true;
-        else if (c === '"')
-          inStr = false;
-        continue;
-      }
-      if (c === '"') {
-        inStr = true;
-        cur += c;
-        continue;
-      }
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      if (c === "," && depth === 0) {
-        out2.push(cur);
-        cur = "";
-        continue;
-      }
-      cur += c;
-    }
-    out2.push(cur);
-    return out2;
-  };
-  const maskedAll = mask2(content);
-  const rewrites = [];
-  let m;
-  while ((m = declRe.exec(content)) !== null) {
-    const name = m[3];
-    const isTwo = m[4] === "2";
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeOf2(content, callOpen);
-    if (callClose < 0)
-      continue;
-    const tail = /^\s*;/.exec(content.slice(callClose, callClose + 3));
-    if (tail === null)
-      continue;
-    const stmtEnd3 = callClose + tail[0].length;
-    const args = splitArgs5(content.slice(callOpen + 1, callClose - 1));
-    if (args.length !== (isTwo ? 4 : 3))
-      continue;
-    if (!/^&\[\s*(?:Value::Null)?\s*\]$/.test(args[args.length - 1].trim()))
-      continue;
-    const end = scopeEnd(maskedAll, stmtEnd3);
-    const masked = maskedAll.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(masked))
-      continue;
-    if (new RegExp(`\\blet\\b[^=;\\n]*\\b${name}\\b`).test(masked))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(masked))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
-    const uses = [];
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(masked)) !== null) {
-      const s = u.index;
-      const e = s + name.length;
-      const after = masked.slice(e);
-      const before = masked.slice(0, s);
-      const abs = (x) => stmtEnd3 + x;
-      let g;
-      if (after.startsWith(".clone()")) {
-        uses.push({ start: abs(s), end: abs(e + 8), text: `Value::from(${name})` });
-        useRe.lastIndex = e + 8;
-      } else if ((g = /^\s*(!=|==)\s*Value::Null\b/.exec(after)) !== null) {
-        uses.push({ start: abs(s), end: abs(e + g[0].length), text: `${name}.${g[1] === "!=" ? "is_some" : "is_none"}()` });
-        useRe.lastIndex = e + g[0].length;
-      } else if ((g = /^\.as_f64\(\)\s*(==|!=)\s*Some\((-?\d+)(?:\.0)?\)/.exec(after)) !== null) {
-        uses.push({ start: abs(s), end: abs(e + g[0].length), text: `${name} ${g[1]} Some(${g[2]})` });
-        useRe.lastIndex = e + g[0].length;
-      } else if (/self\.iso8601\($/.test(before) && after.startsWith(")")) {
-        uses.push({ start: abs(s), end: abs(e), text: `Value::from(${name})` });
-      } else if (/\bm\.insert\("[^"\n]*"\.to_string\(\),\s*$/.test(before) && after.startsWith(");")) {
-        uses.push({ start: abs(s), end: abs(e), text: `Value::from(${name})` });
-      } else if (/(?:^|[;{}])\s*$/.test(before) && (g = /^\s*=(?!=)\s*/.exec(after)) !== null) {
-        const rhsAt = stmtEnd3 + e + g[0].length;
-        const rhs = /^(Value::Null|Value::Int\((-?\d+)\))\s*;/.exec(content.slice(rhsAt, rhsAt + 40));
-        if (rhs !== null) {
-          uses.push({ start: rhsAt, end: rhsAt + rhs[1].length, text: rhs[2] === void 0 ? "None" : `Some(${rhs[2]})` });
-        } else {
-          const call = /^self\.safe_integer(?:_k|2|_n)?\(/.exec(content.slice(rhsAt, rhsAt + 30));
-          if (call === null) {
-            ok = false;
-            break;
-          }
-          const o = rhsAt + call[0].length - 1;
-          const c = closeOf2(content, o);
-          if (c < 0 || !/^\s*;/.test(content.slice(c, c + 3))) {
-            ok = false;
-            break;
-          }
-          const a = splitArgs5(content.slice(o + 1, c - 1));
-          const want = call[0].endsWith("2(") ? 4 : 3;
-          if (a.length !== want || !/^&\[\s*(?:Value::Null|Value::Int\(-?\d+\))?\s*\]$/.test(a[a.length - 1].trim())) {
-            ok = false;
-            break;
-          }
-          uses.push({ start: c, end: c, text: ".as_i64()" });
-        }
-        useRe.lastIndex = e;
-      } else {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok)
-      continue;
-    rewrites.push({ start: m.index, end: callOpen, text: content.slice(m.index, callOpen).replace(": Value =", ": Option<i64> =") + "_opt" });
-    for (const use of uses)
-      rewrites.push(use);
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  return out + content.slice(last);
-}
-
-// src/rustPasses/hx11w9RustStrNLocalOptionString.ts
-init_esm_shims();
-function hx11w9RustStrNLocalOptionString(content) {
-  const opt = "safe_string_n_opt";
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.(safe_string_n)\(/gm;
-  const maskText5 = (src) => {
-    let out2 = "";
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const closeParen4 = (src, open) => {
-    let depth = 0;
-    for (let k = open; k < src.length; k++) {
-      const c = src[k];
-      if (c === "(")
-        depth++;
-      else if (c === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const braceEnd = (src, from) => {
-    let depth = 0;
-    for (let k = from; k < src.length; k++) {
-      const c = src[k];
-      if (c === "{")
-        depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return src.length;
-  };
-  const argSpans3 = (src) => {
-    const out2 = [];
-    let depth = 0;
-    let start = 0;
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      else if (c === "," && depth === 0) {
-        out2.push([start, i]);
-        start = i + 1;
-      }
-    }
-    out2.push([start, src.length]);
-    return out2;
-  };
-  const masked = maskText5(content);
-  const grown = /* @__PURE__ */ new Map();
-  const groups = [];
-  const rewrites = [];
-  let m;
-  while ((m = declRe.exec(masked)) !== null) {
-    const name = m[3];
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeParen4(masked, callOpen);
-    if (callClose < 0)
-      continue;
-    const tail = /^\s*;/.exec(masked.slice(callClose, callClose + 3));
-    if (tail === null)
-      continue;
-    const stmtEnd3 = callClose + tail[0].length;
-    const base = callOpen + 1;
-    const spans = argSpans3(masked.slice(base, callClose - 1));
-    if (spans.length !== 3)
-      continue;
-    const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
-    const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
-    const defRaw = content.slice(base + spans[2][0], base + spans[2][1]).trim();
-    if (obj.length === 0 || !/^Value::from\(vec!\[[^\]]*\]\)$/.test(keyRaw))
-      continue;
-    if (defRaw !== "&[]" && !/^&\[Value::Str\("(?:[^"\\]|\\.)*"\.into\(\)\)\]$/.test(defRaw))
-      continue;
-    const end = braceEnd(masked, stmtEnd3);
-    const body = masked.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(body))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(body))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`, "g");
-    const edits = [];
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(body)) !== null) {
-      const at = u.index;
-      const abs = stmtEnd3 + at;
-      const after = body.slice(at + name.length);
-      const before = body.slice(0, at);
-      let g;
-      if ((g = /^\s*(==|!=)\s*Value::Null\b/.exec(after)) !== null && !/[&*]\s*$/.test(before)) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === "==" ? "is_none" : "is_some"}()` });
-      } else if ((g = /^\.as_str\(\)/.exec(after)) !== null) {
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.as_deref()` });
-      } else if (/get_value\(&$/.test(before) && (g = /^, &Value::Int\(0\)\)\.as_str\(\) (==|!=) Some\("/.exec(after)) !== null) {
-        const chPos = abs + name.length + g[0].length;
-        const ch = /^([^"\\])"\)/.exec(content.slice(chPos, chPos + 3));
-        if (ch === null) {
-          ok = false;
-          break;
-        }
-        const probe = `${name}.as_deref().unwrap_or("").starts_with("${ch[1]}")`;
-        edits.push({ start: abs - "get_value(&".length, end: chPos + ch[0].length, text: g[1] === "==" ? probe : `!${probe}` });
-      } else if (/crate::runtime::stringify_param\(&$/.test(before) && /^\)/.test(after)) {
-        const from = abs - "crate::runtime::stringify_param(&".length;
-        edits.push({ start: from, end: abs + name.length + 1, text: `${name}.as_deref().unwrap_or("null").to_string()` });
-      } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before) && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
-        const lastUse = !new RegExp(`(?<![A-Za-z0-9_.:])${name}(?![A-Za-z0-9_])`).test(after.slice(g[0].length));
-        const inLoop = /\b(?:loop|while|for)\b/.test(body);
-        const move = lastUse && !inLoop && !/&\s*$/.test(before);
-        edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}${move ? "" : ".clone()"}.map(Value::from).unwrap_or(Value::Null)` });
-      } else {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok || edits.length === 0)
-      continue;
-    const declText = `${m[1]}let ${m[2] ?? ""}${name}: Option<String> = self.${opt}(${obj}, ${keyRaw}, ${defRaw});`;
-    const all = [{ start: m.index, end: stmtEnd3, text: declText }, ...edits];
-    const lineGrow = /* @__PURE__ */ new Map();
-    for (const e of all) {
-      const ls = content.lastIndexOf("\n", e.start) + 1;
-      lineGrow.set(ls, (lineGrow.get(ls) ?? 0) + e.text.length - (e.end - e.start));
-    }
-    let longer = false;
-    for (const [ls, grow] of lineGrow) {
-      let le = content.indexOf("\n", ls);
-      if (le < 0)
-        le = content.length;
-      const cur = le - ls + (grown.get(ls) ?? 0);
-      if (cur <= 400 && cur + grow > 400)
-        longer = true;
-    }
-    if (longer)
-      continue;
-    for (const [ls, grow] of lineGrow)
-      grown.set(ls, (grown.get(ls) ?? 0) + grow);
-    groups.push({ decl: { start: m.index, end: stmtEnd3, text: declText }, edits });
-  }
-  for (let again = true; again; ) {
-    again = false;
-    for (let a = 0; a < groups.length; a++) {
-      const hit = groups.some((b, bi) => bi !== a && groups[a].edits.some((e) => e.start >= b.decl.start && e.start < b.decl.end));
-      if (hit) {
-        groups.splice(a, 1);
-        again = true;
-        break;
-      }
-    }
-  }
-  for (const gr of groups) {
-    rewrites.push(gr.decl);
-    for (const e of gr.edits)
-      rewrites.push(e);
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  out += content.slice(last);
-  return out;
-}
-
-// src/rustPasses/hx11w9RustNumber2SinkLocalOptionF64R2.ts
-init_esm_shims();
-function hx11w9RustNumber2SinkLocalOptionF64R2(content) {
-  const declRe = /^([ \t]*)let (mut )?([a-zA-Z_][a-zA-Z0-9_]*): Value = self\.safe_number2\(/gm;
-  const mask2 = (src) => {
-    let out2 = "";
-    let i = 0;
-    const blank = (s) => s.replace(/[^\n]/g, " ");
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "/" && src[i + 1] === "/") {
-        while (i < src.length && src[i] !== "\n") {
-          out2 += " ";
-          i++;
-        }
-        continue;
-      }
-      if (c === "/" && src[i + 1] === "*") {
-        const e = src.indexOf("*/", i + 2);
-        const stop = e < 0 ? src.length : e + 2;
-        out2 += blank(src.slice(i, stop));
-        i = stop;
-        continue;
-      }
-      if (c === '"') {
-        out2 += '"';
-        i++;
-        while (i < src.length && src[i] !== '"') {
-          if (src[i] === "\\") {
-            out2 += "  ";
-            i += 2;
-            continue;
-          }
-          out2 += src[i] === "\n" ? "\n" : " ";
-          i++;
-        }
-        if (i < src.length) {
-          out2 += '"';
-          i++;
-        }
-        continue;
-      }
-      out2 += c;
-      i++;
-    }
-    return out2;
-  };
-  const maskedAll = mask2(content);
-  const closeOf2 = (masked, open) => {
-    let depth = 0;
-    for (let k = open; k < masked.length; k++) {
-      if (masked[k] === "(")
-        depth++;
-      else if (masked[k] === ")") {
-        depth--;
-        if (depth === 0)
-          return k + 1;
-      }
-    }
-    return -1;
-  };
-  const scopeEnd = (masked, from) => {
-    let depth = 0;
-    for (let k = from; k < masked.length; k++) {
-      if (masked[k] === "{")
-        depth++;
-      else if (masked[k] === "}") {
-        depth--;
-        if (depth < 0)
-          return k;
-      }
-    }
-    return masked.length;
-  };
-  const splitArgs5 = (src) => {
-    const out2 = [];
-    let cur = "";
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    for (const c of src) {
-      if (inStr) {
-        cur += c;
-        if (esc)
-          esc = false;
-        else if (c === "\\")
-          esc = true;
-        else if (c === '"')
-          inStr = false;
-        continue;
-      }
-      if (c === '"') {
-        inStr = true;
-        cur += c;
-        continue;
-      }
-      if (c === "(" || c === "[" || c === "{")
-        depth++;
-      else if (c === ")" || c === "]" || c === "}")
-        depth--;
-      if (c === "," && depth === 0) {
-        out2.push(cur);
-        cur = "";
-        continue;
-      }
-      cur += c;
-    }
-    out2.push(cur);
-    return out2;
-  };
-  const rewrites = [];
-  let m;
-  while ((m = declRe.exec(content)) !== null) {
-    const name = m[3];
-    const callOpen = m.index + m[0].length - 1;
-    const callClose = closeOf2(maskedAll, callOpen);
-    if (callClose < 0 || !/^\s*;/.test(content.slice(callClose, callClose + 3)))
-      continue;
-    const stmtEnd3 = callClose + /^\s*;/.exec(content.slice(callClose, callClose + 3))[0].length;
-    const args = splitArgs5(content.slice(callOpen + 1, callClose - 1));
-    if (args.length !== 4 || !/^&\[\s*(?:Value::Null)?\s*\]$/.test(args[3].trim()))
-      continue;
-    const end = scopeEnd(maskedAll, stmtEnd3);
-    const masked = maskedAll.slice(stmtEnd3, end);
-    if (new RegExp(`\\b(?:let|for|fn)\\s+(?:mut\\s+)?${name}\\b`).test(masked))
-      continue;
-    if (new RegExp(`\\blet\\b[^=;\\n]*\\b${name}\\b`).test(masked))
-      continue;
-    if (new RegExp(`\\|[^|\\n]*\\b${name}\\b[^|\\n]*\\|`).test(masked))
-      continue;
-    const useRe = new RegExp(`(?<![A-Za-z0-9_.])${name}(?![A-Za-z0-9_])`, "g");
-    const uses = [];
-    let ok = true;
-    let u;
-    while ((u = useRe.exec(masked)) !== null) {
-      const s = u.index;
-      const e = s + name.length;
-      const after = masked.slice(e);
-      let g;
-      if ((g = /^\s*(!=|==)\s*Value::Null\b/.exec(after)) !== null) {
-        uses.push({ start: stmtEnd3 + s, end: stmtEnd3 + e + g[0].length, text: `${name}.${g[1] === "!=" ? "is_some" : "is_none"}()` });
-      } else if ((g = /^\.as_f64\(\)\s*(==|!=)\s*Some\((-?\d+\.0)\)/.exec(after)) !== null) {
-        uses.push({ start: stmtEnd3 + s, end: stmtEnd3 + e + g[0].length, text: `${name} ${g[1]} Some(${g[2]})` });
-      } else if (after.startsWith(".clone()")) {
-        uses.push({ start: stmtEnd3 + s, end: stmtEnd3 + e + 8, text: `Value::from(${name})` });
-        useRe.lastIndex = e + 8;
-        continue;
-      } else if (/\bm\.insert\("[^"\n]*"\.to_string\(\),\s*$/.test(masked.slice(0, s)) && after.startsWith(");") || /self\.price_to_precision\([^;\n]*,\s*$/.test(masked.slice(0, s)) && after.startsWith(")")) {
-        uses.push({ start: stmtEnd3 + s, end: stmtEnd3 + e, text: `Value::from(${name})` });
-        continue;
-      } else {
-        ok = false;
-        break;
-      }
-      useRe.lastIndex = e + g[0].length;
-    }
-    if (!ok)
-      continue;
-    rewrites.push({
-      start: m.index,
-      end: callOpen,
-      text: content.slice(m.index, callOpen).replace(": Value =", ": Option<f64> =").replace("safe_number2", "safe_number2_opt")
-    });
-    for (const use of uses)
-      rewrites.push(use);
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start || a.end - b.end);
-  let out = "";
-  let last = 0;
-  for (const r of rewrites) {
-    if (r.start < last)
-      continue;
-    out += content.slice(last, r.start) + r.text;
-    last = r.end;
-  }
-  return out + content.slice(last);
-}
-
 // src/transpiler.ts
 var __dirname_mock = import_dirname.default;
 var fastCompilerOptions = {
@@ -67630,7 +67472,7 @@ declare var WebSocket: any;
 declare var atob: any;
 declare var btoa: any;
 `;
-var globalsShimPath = path9.resolve(path9.join(__dirname_mock, "__globals-shim.d.ts"));
+var globalsShimPath = path3.resolve(path3.join(__dirname_mock, "__globals-shim.d.ts"));
 var UNDEFINED_SENTINEL = Symbol("undefined");
 var MEMOIZED_UNARY_CHECKER_METHODS = [
   "getTypeAtLocation",
@@ -67885,7 +67727,7 @@ function getApi(cache) {
 function createSnapshotProgram(cache, rootFiles, files) {
   const snapshot = getApi(cache).createSnapshot({
     fileSystem: { kind: "layer", files },
-    createPrograms: [{ rootFiles: rootFiles.map((f) => path9.resolve(f)), compilerOptions: fastCompilerOptions }]
+    createPrograms: [{ rootFiles: rootFiles.map((f) => path3.resolve(f)), compilerOptions: fastCompilerOptions }]
   });
   const program = snapshot.operation.createdPrograms[0];
   const checker = snapshot.getProjects().find((p) => p.program === program).checker;
@@ -67947,14 +67789,14 @@ var Transpiler = class _Transpiler {
   }
   // single-file snapshots are released when the next one replaces them; batches own theirs
   setSnapshotContext(snapshot, program, checker, fileName) {
-    const src = program.getSourceFile(fileName) ?? program.getSourceFile(path9.resolve(fileName));
+    const src = program.getSourceFile(fileName) ?? program.getSourceFile(path3.resolve(fileName));
     const previous = this.snapshot;
     this.snapshot = snapshot;
     previous?.dispose();
     return this.setContext({ src, checker, program });
   }
   createProgramInMemoryAndSetContext(content) {
-    const inMemoryFilePath = path9.resolve(path9.join(__dirname_mock, "__dummy-file.ts"));
+    const inMemoryFilePath = path3.resolve(path3.join(__dirname_mock, "__dummy-file.ts"));
     const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [inMemoryFilePath, globalsShimPath], {
       [inMemoryFilePath]: content,
       [globalsShimPath]: globalsShim
@@ -67987,8 +67829,8 @@ var Transpiler = class _Transpiler {
     if (shared === void 0) {
       return void 0;
     }
-    const src = shared.program.getSourceFile(path9.resolve(filePath));
-    if (src === void 0 || !fs8.existsSync(filePath) || fs8.readFileSync(filePath, "utf8") !== src.text) {
+    const src = shared.program.getSourceFile(path3.resolve(filePath));
+    if (src === void 0 || !fs4.existsSync(filePath) || fs4.readFileSync(filePath, "utf8") !== src.text) {
       return void 0;
     }
     return { src, checker: shared.checker, program: shared.program };
@@ -68019,8 +67861,8 @@ var Transpiler = class _Transpiler {
     return this.createProgramInMemoryAndSetContext(content);
   }
   /** @deprecated renamed to createProgramByPathAndSetContext */
-  createProgramByPathAndSetGlobals(path10) {
-    return this.createProgramByPathAndSetContext(path10);
+  createProgramByPathAndSetGlobals(path4) {
+    return this.createProgramByPathAndSetContext(path4);
   }
   checkFileDiagnostics(context = this.context) {
     if (!Logger.verbose) {
@@ -68154,29 +67996,29 @@ var Transpiler = class _Transpiler {
   transpilePython(content) {
     return this.transpile(0 /* Python */, 1 /* ByContent */, content, !this.pythonTranspiler.asyncTranspiling);
   }
-  transpilePythonByPath(path10) {
-    return this.transpile(0 /* Python */, 0 /* ByPath */, path10, !this.pythonTranspiler.asyncTranspiling);
+  transpilePythonByPath(path4) {
+    return this.transpile(0 /* Python */, 0 /* ByPath */, path4, !this.pythonTranspiler.asyncTranspiling);
   }
   transpilePhp(content) {
     return this.transpile(1 /* Php */, 1 /* ByContent */, content, !this.phpTranspiler.asyncTranspiling);
   }
-  transpilePhpByPath(path10) {
-    return this.transpile(1 /* Php */, 0 /* ByPath */, path10, !this.phpTranspiler.asyncTranspiling);
+  transpilePhpByPath(path4) {
+    return this.transpile(1 /* Php */, 0 /* ByPath */, path4, !this.phpTranspiler.asyncTranspiling);
   }
   transpileCSharp(content) {
     return this.transpile(2 /* CSharp */, 1 /* ByContent */, content);
   }
-  transpileCSharpByPath(path10) {
-    return this.transpile(2 /* CSharp */, 0 /* ByPath */, path10);
+  transpileCSharpByPath(path4) {
+    return this.transpile(2 /* CSharp */, 0 /* ByPath */, path4);
   }
   transpileJava(content) {
     return this.transpile(4 /* Java */, 1 /* ByContent */, content);
   }
-  transpileJavaByPath(path10) {
-    return this.transpile(4 /* Java */, 0 /* ByPath */, path10);
+  transpileJavaByPath(path4) {
+    return this.transpile(4 /* Java */, 0 /* ByPath */, path4);
   }
-  transpileGoByPath(path10) {
-    return this.transpile(3 /* Go */, 0 /* ByPath */, path10);
+  transpileGoByPath(path4) {
+    return this.transpile(3 /* Go */, 0 /* ByPath */, path4);
   }
   transpileGo(content) {
     return this.transpile(3 /* Go */, 1 /* ByContent */, content);
@@ -68184,14 +68026,14 @@ var Transpiler = class _Transpiler {
   transpileRust(content) {
     return this.transpile(5 /* Rust */, 1 /* ByContent */, content);
   }
-  transpileRustByPath(path10) {
-    return this.transpile(5 /* Rust */, 0 /* ByPath */, path10);
+  transpileRustByPath(path4) {
+    return this.transpile(5 /* Rust */, 0 /* ByPath */, path4);
   }
   transpileCpp(content) {
     return this.transpile(6 /* Cpp */, 1 /* ByContent */, content);
   }
-  transpileCppByPath(path10) {
-    return this.transpile(6 /* Cpp */, 0 /* ByPath */, path10);
+  transpileCppByPath(path4) {
+    return this.transpile(6 /* Cpp */, 0 /* ByPath */, path4);
   }
   getFileImports(content) {
     const context = this.createProgramInMemoryAndSetContext(content);
@@ -68255,7 +68097,7 @@ var TranspileProgramBatch = class {
   // point the owning Transpiler at one file of this batch, then run the same
   // diagnostics pass the single-file path runs
   setContextForPath(filePath) {
-    const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path9.resolve(filePath));
+    const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path3.resolve(filePath));
     if (src === void 0) {
       throw new Error(`ast-transpiler: "${filePath}" is not a file of this program batch`);
     }
@@ -68303,7 +68145,7 @@ export {
   SyntaxKind9 as SyntaxKind,
   TranspileProgramBatch,
   Transpiler,
-  TypeFlags8 as TypeFlags,
+  TypeFlags7 as TypeFlags,
   TypeFormatFlags,
   alignGoTrailingComments,
   bf03PlainDictChains,

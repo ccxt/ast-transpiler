@@ -8814,3 +8814,1305 @@ describe('rfm-j2d: objectValues copy, catch isInstance, awaited / tuple box loca
         expect(method('readTupleMixed')).toContain('var request2 = ((java.util.List<Object>) request2query2Variable).get(0);');
     });
 });
+
+describe ('hx11BF02FileBuiltMapFields', () => {
+    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
+
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } });
+    });
+
+    // `this.markets` / `this.positions` are Object/Map base fields: the read is the helper's Map branch and
+    // a put is the same write only where the file never stores anything but a plain map in the field.
+    const wrap = (fields: string, body: string) =>
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    markets: D | undefined = undefined;\n" +
+        "    positions: any = undefined;\n" +
+        "    createSafeDictionary (): D { return {}; }\n" + fields +
+        "    test(type: string, v: any): any {\n" + body + "\n    }\n}";
+    const java = (src: string) => transpiler.transpileJava(src).content;
+
+    describe('hx11 BF02: file-built map fields', () => {
+        test('a plain-map file reads and puts natively', () => {
+            const out = java(wrap(
+                "    init (): void {\n        this.positions = {};\n    }\n",
+                "        this.positions[type] = v;\n        return this.positions[type];"));
+            expect(out).toContain('((java.util.Map<Object, Object>) (java.util.Map<?, ?>) this.positions).put(type, v)');
+            expect(out).toContain('(type == null || this.positions == null ? null : ((java.util.Map<?, ?>)this.positions).get(type))');
+            expect(out).not.toContain('Helpers.addElementToObject(this.positions');
+            expect(out).not.toContain('Helpers.GetValue(this.positions');
+        });
+
+        test('a field that also holds a cache object keeps the helpers', () => {
+            const out = java(wrap(
+                "    init (): void {\n        this.positions = {};\n    }\n    other (): void {\n        this.positions = new Cache ();\n    }\n",
+                "        this.positions[type] = v;\n        return this.positions[type];") + "\nclass Cache {}\n");
+            expect(out).toContain('Helpers.addElementToObject(this.positions, type, v)');
+            expect(out).toContain('Helpers.GetValue(this.positions, type)');
+        });
+
+        test('a field with no plain build in the file reads but never puts natively', () => {
+            const out = java(wrap("", "        this.markets[type] = v;\n        return this.markets[type];"));
+            expect(out).toContain('Helpers.addElementToObject(this.markets, type, v)');
+        });
+
+        test('a literal and a local holding one count as plain builds; a non-base createSafeDictionary does not', () => {
+            const out = java(wrap(
+                "    init (): void {\n        this.markets = {};\n        const empty: D = {};\n        this.positions = empty;\n    }\n",
+                "        this.markets[type] = v;\n        this.positions[type] = v;\n        return 1;"));
+            expect(out).toContain('(java.util.Map<?, ?>) this.markets).put(type, v)');
+            expect(out).toContain('(java.util.Map<?, ?>) this.positions).put(type, v)');
+            const own = java(wrap(
+                "    init (): void {\n        this.markets = this.createSafeDictionary ();\n    }\n",
+                "        this.markets[type] = v;\n        return 1;"));
+            expect(own).toContain('Helpers.addElementToObject(this.markets, type, v)');
+        });
+
+        test('a compound or foreign assignment keeps the helpers', () => {
+            const out = java(wrap(
+                "    init (): void {\n        this.markets = this.createSafeDictionary ();\n        this.markets = this.other;\n    }\n    other: any = {};\n",
+                "        this.markets[type] = v;\n        return 1;"));
+            expect(out).toContain('Helpers.addElementToObject(this.markets, type, v)');
+        });
+    });
+});
+
+describe ('hx11J12FailedFuture', () => {
+    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
+
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } });
+    });
+
+    const java = (body: string, extra = ''): string => transpiler.transpileJava(
+        `class NotSupported {}\nclass T {\n${extra}    async m(code: string): Promise<any> {\n${body}\n    }\n}`
+    ).content;
+
+    describe('java async body that only throws', () => {
+        test('prints CompletableFuture.failedFuture, no supplier lambda', () => {
+            const out = java('        throw new NotSupported("m is not supported yet");');
+            expect(out).toContain('return java.util.concurrent.CompletableFuture.failedFuture(new NotSupported(');
+            expect(out).not.toContain('supplyAsync');
+            expect(out).not.toContain('throw new');
+        });
+
+        test('a body with another statement keeps the supplier lambda', () => {
+            const out = java('        if (code === undefined) {\n            throw new NotSupported("x");\n        }\n        return code;');
+            expect(out).toContain('supplyAsync(() -> {');
+            expect(out).not.toContain('failedFuture');
+        });
+
+        test('a rethrown identifier keeps the supplier lambda', () => {
+            const out = transpiler.transpileJava('class T {\n    async m(e: any): Promise<any> {\n        throw e;\n    }\n}').content;
+            expect(out).toContain('supplyAsync(() -> {');
+            expect(out).not.toContain('failedFuture');
+        });
+
+        test('a sync method keeps the plain throw', () => {
+            const out = transpiler.transpileJava('class NotSupported {}\nclass T {\n    m(): any {\n        throw new NotSupported("x");\n    }\n}').content;
+            expect(out).toContain('throw new NotSupported');
+            expect(out).not.toContain('failedFuture');
+        });
+    });
+});
+
+describe ('hx11fold1FJ01FreshMapWrite', () => {
+    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
+
+    let transpiler: Transpiler;
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    const run = (body: string) => transpiler.transpileJava(`class T {\n    test(other: any): void {\n${body}\n    }\n}`).content;
+
+    describe('java element write of a fresh-map local into a base map field', () => {
+        test('any-typed local bound once to an object literal puts natively', () => {
+            const out = run("        const seeded: any = { 'a': 1 };\n        this.balance['k'] = seeded;");
+            expect(out).toContain('this.balance.put("k", seeded)');
+            expect(out).not.toContain('addElementToObject');
+        });
+
+        test('a local reassigned from an unproven value keeps the helper', () => {
+            const out = run("        let seeded: any = { 'a': 1 };\n        seeded = other;\n        this.balance['k'] = seeded;");
+            expect(out).toContain('Helpers.addElementToObject(this.balance, "k", seeded)');
+        });
+
+        test('a parameter keeps the helper', () => {
+            const out = run("        this.balance['k'] = other;");
+            expect(out).toContain('Helpers.addElementToObject(this.balance, "k", other)');
+        });
+    });
+});
+
+describe ('hx11fold1FJ06PlainCaches', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // hx11 fold 1F (hx10w2 J06): a base cache the hand-written BaseExchange.java declares as a plain
+    // `Map<String, Object> = new HashMap<>()` takes the native put / guarded get on a String key.
+    describe('java plain base caches', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-hx11-fold-1f-j06');
+        const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+        const VENUE = path.join(TMP, 'ts', 'src', 'pro', 'fake.ts');
+        const body =
+            "export class fake extends Exchange {\n" +
+            "    w1 (v: any, k: string) {\n" +
+            "        const sym = this.safeString (v, 'symbol');\n" +
+            "        this.tickers['a'] = v;\n" +
+            "        this.tickers[sym as string] = v;\n" +
+            "        this.tickers[sym as string] = undefined;\n" +
+            "        this.bag[sym as string] = v;\n" +
+            "        this.other[sym as string] = v;\n" +
+            "        this.tickers[this.hash (k)] = v;\n" +
+            "    }\n" +
+            "    r1 (v: any) {\n" +
+            "        const sym = this.safeString (v, 'symbol');\n" +
+            "        const a = this.tickers[sym as string];\n" +
+            "        const b = this.bag[sym as string];\n" +
+            "        const c = this.other[sym as string];\n" +
+            "        const d = this.tickers[this.hash (sym)];\n" +
+            "        return [ a, b, c, d ];\n" +
+            "    }\n" +
+            "    hash (s: string): string { return s; }\n" +
+            "}\n";
+        let out: string;
+        let bare: string;
+
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(BASE), { recursive: true });
+            fs.mkdirSync(path.dirname(VENUE), { recursive: true });
+            fs.writeFileSync(BASE,
+                "type Dictionary<T> = { [key: string]: T };\n" +
+                "export class Exchange {\n" +
+                "    tickers: Dictionary<number> = {};\n" +
+                "    bag: Dictionary<any> = {};\n" +
+                "    other: Dictionary<number> = {};\n" +
+                "    safeString (d: any, k: any): string | undefined { return d; }\n" +
+                "}\n");
+            fs.writeFileSync(VENUE, "import { Exchange } from '../base/Exchange.js';\n" + body);
+            const make = (caches: string[]) => {
+                const t: any = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+                const printer: any = t.javaTranspiler;
+                printer.javaPlainCacheFields = new Set(caches);
+                // the build layer's local-type pass publishes `String sym` for the safeString local
+                printer.javaDeclaredLocalTypeResolver = (declaration: any) => declaration.name?.text === 'sym' ? 'String' : undefined;
+                return t.transpileJavaByPath(VENUE).content;
+            };
+            out = make(['tickers', 'bag']);
+            bare = make([]);
+        });
+
+        afterAll(() => {
+            fs.rmSync(TMP, { recursive: true, force: true });
+        });
+
+        const method = (text: string, name: string) => {
+            const start = text.indexOf(' ' + name + '(');
+            return text.slice(start, text.indexOf('\n    }', start));
+        };
+
+        test('a String key writes natively, null value included', () => {
+            const w1 = method(out, 'w1');
+            expect(w1).toContain('this.tickers.put("a", v);');
+            expect(w1).toContain('this.tickers.put(((String)sym), v);');
+            expect(w1).toContain('this.tickers.put(((String)sym), null);');
+        });
+
+        test('an any-valued bag, an unnamed field and an unproven key keep the helper', () => {
+            const w1 = method(out, 'w1');
+            expect(w1).toContain('Helpers.addElementToObject(this.bag, ((String)sym), v)');
+            expect(w1).toContain('Helpers.addElementToObject(this.other, ((String)sym), v)');
+            expect(w1).toContain('Helpers.addElementToObject(this.tickers, this.hash((String) (k)), v)');
+        });
+
+        test('a String-declared key reads through the guarded get', () => {
+            const r1 = method(out, 'r1');
+            expect(r1).toContain('Object a = (this.tickers == null || sym == null ? null : this.tickers.get(sym));');
+            expect(r1).toContain('Helpers.GetValue(this.bag, ((String)sym))');
+            expect(r1).toContain('Helpers.GetValue(this.other, ((String)sym))');
+            expect(r1).toContain('Helpers.GetValue(this.tickers, this.hash((String) (sym)))');
+        });
+
+        test('without a declared plain cache every site keeps the helper', () => {
+            expect(method(bare, 'w1')).toContain('Helpers.addElementToObject(this.tickers, "a", v)');
+            expect(method(bare, 'r1')).toContain('Helpers.GetValue(this.tickers, ((String)sym))');
+        });
+    });
+});
+
+describe ('hx11fold1FJ09JavaBoxedNative', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // hx11 fold 1F hx10w6-J09: two native forms the switch-blob pass used to collapse after printing.
+    //  * `Object.keys (this.<f>)` for a BaseExchange Map field is a null-guarded key copy;
+    //  * `x + <int literal>` on a local the build layer reports as the nullable `Long` box is a null-propagating add.
+    describe('java boxed native forms', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-hx11-j09');
+        const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+        const VENUE = path.join(TMP, 'ts', 'src', 'fake.ts');
+        const body =
+            "export class fake extends Exchange {\n" +
+            "    k1 () {\n" +
+            "        const a = Object.keys (this.tickers);\n" +
+            "        const e = Object.keys (this.tickers);\n" +
+            "        for (let i = 0; i < e.length; i++) { this.pair (e[i]); }\n" +
+            "        const b = Object.keys (this.options);\n" +
+            "        const c = Object.keys (this.currencies);\n" +
+            "        const d = Object.keys (this.own);\n" +
+            "        return [ a, b, c, d ];\n" +
+            "    }\n" +
+            "    a1 (n: number, o: any) {\n" +
+            "        let m = n;\n" +
+            "        const [ r, p ] = this.pair (o);\n" +
+            "        const x = r + 1;\n" +
+            "        for (let j = 0; j < r + 1; j++) { this.pair (j); }\n" +
+            "        const y = m + 1;\n" +
+            "        const z = o + 1;\n" +
+            "        return [ x, y, z ];\n" +
+            "    }\n" +
+            "}\n";
+        let out: string;
+        let bare: string;
+
+        const run = (withResolver: boolean) => {
+            const t = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const printer: any = (t as any).javaTranspiler;
+            printer.javaOwnerStoreFields = new Set(['options']);
+            if (withResolver) {
+                printer.javaBoxedLongResolver = (node: any) => node.text === 'r';
+            }
+            return t.transpileJavaByPath(VENUE).content;
+        };
+
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(BASE), { recursive: true });
+            fs.writeFileSync(BASE,
+                "type Dictionary<T> = { [key: string]: T };\n" +
+                "export class Exchange {\n" +
+                "    tickers: Dictionary<any> = {};\n" +
+                "    options: Dictionary<any> = {};\n" +
+                "    currencies: Dictionary<any> = {};\n" +
+                "    pair (o: any): [ number, any ] { return [ 1, o ]; }\n" +
+                "}\n");
+            fs.writeFileSync(VENUE,
+                "import { Exchange } from './base/Exchange.js';\n" +
+                body.replace('k1 () {', 'own: Record<string, any> = {};\n    k1 () {'));
+            out = run(true);
+            bare = run(false);
+        });
+
+        afterAll(() => {
+            fs.rmSync(TMP, { recursive: true, force: true });
+        });
+
+        const method = (text: string, name: string) => {
+            const start = text.indexOf(' ' + name + '(');
+            return text.slice(start, text.indexOf('\n    }', start));
+        };
+
+        test('Object.keys on a base Map field is the null-guarded key copy', () => {
+            const k1 = method(out, 'k1');
+            expect(k1).toContain('(this.tickers == null ? new java.util.ArrayList<Object>() : new java.util.ArrayList<Object>(this.tickers.keySet()))');
+        });
+
+        test('a local fed by it declares the List<Object> its copy is', () => {
+            expect(method(out, 'k1')).toContain('List<Object> e = (this.tickers == null');
+        });
+
+        test('an owner store, an unlisted field and a venue field keep the helper', () => {
+            const k1 = method(out, 'k1');
+            expect(k1).toContain('Helpers.objectKeys(this.options)');
+            expect(k1).toContain('Helpers.objectKeys(this.currencies)');
+            expect(k1).toContain('Helpers.objectKeys(this.own)');
+        });
+
+        test('a nullable Long local plus an int literal is a null-propagating add', () => {
+            const a1 = method(out, 'a1');
+            expect(a1).toContain('(r == null ? null : (Object) (r + 1L))');
+        });
+
+        test('an unreported local and an untyped operand keep Helpers.add', () => {
+            const a1 = method(out, 'a1');
+            expect(a1).toContain('Helpers.add(o, 1)');
+            expect(a1).not.toContain('(m == null ? null');
+            expect(method(bare, 'a1')).not.toContain('r == null ? null');
+        });
+    });
+});
+
+describe ('hx11rdJava3DescribedDictChains', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // hx11 RD-JAVA-3 (folds hx10w3 J05): nested reads of the hand-written Map<String, Object>
+    // header fields (urls / fees / limits) that the class's own describe () literal holds as objects.
+
+    describe('java described dict chains', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-hx11rd-java3');
+        const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+        const VENUE = path.join(TMP, 'ts', 'src', 'pro', 'fake.ts');
+        const body =
+            "export class fake extends Exchange {\n" +
+            "    describe (): Dict {\n" +
+            "        return this.deepExtend (super.describe (), {\n" +
+            "            'urls': { 'api': { 'ws': { 'public': 'wss://a', 'private': 'wss://b' }, 'rest': 'https://c' }, 'doc': 'd' },\n" +
+            "            'fees': { 'trading': { 'taker': 0.1 } },\n" +
+            "            'limits': { 'amount': { 'min': 1 } },\n" +
+            "        });\n" +
+            "    }\n" +
+            "    r1 (t: string) {\n" +
+            "        const a = this.urls['api']['ws']['public'];\n" +
+            "        const b = this.urls['api']['ws'][t];\n" +
+            "        const c = this.fees['trading']['taker'];\n" +
+            "        const d = this.limits['amount']['min'];\n" +
+            "        return [ a, b, c, d ];\n" +
+            "    }\n" +
+            "    r2 (t: string) {\n" +
+            "        const a = this.urls['api']['rest']['x'];\n" +
+            "        const b = this.urls['doc']['x'];\n" +
+            "        const c = this.urls['api']['nope']['x'];\n" +
+            "        const d = this.markets['a']['b'];\n" +
+            "        return [ a, b, c, d ];\n" +
+            "    }\n" +
+            "}\n";
+        let out: string;
+        let bare: string;
+
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(BASE), { recursive: true });
+            fs.mkdirSync(path.dirname(VENUE), { recursive: true });
+            fs.writeFileSync(BASE,
+                "type Dictionary<T> = { [key: string]: T };\n" +
+                "export type Dict = Dictionary<any>;\n" +
+                "export class Exchange {\n" +
+                "    urls: any;\n    fees: any;\n    limits: any;\n    markets: any;\n" +
+                "    describe (): Dict { return {}; }\n" +
+                "    deepExtend (...args: any[]): any { return args[0]; }\n" +
+                "    extend (...args: any[]): any { return args[0]; }\n" +
+                "}\n");
+            fs.writeFileSync(VENUE, "import { Exchange, Dict } from '../base/Exchange.js';\n" + body);
+            const make = (fields: string[]) => {
+                const t: any = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+                t.javaTranspiler.javaHeaderMapFields = new Set(fields);
+                return t.transpileJavaByPath(VENUE).content as string;
+            };
+            out = make(['urls']);
+            bare = make([]);
+        });
+
+        afterAll(() => {
+            fs.rmSync(TMP, { recursive: true, force: true });
+        });
+
+        const method = (text: string, name: string) => {
+            const start = text.indexOf(' ' + name + '(');
+            return text.slice(start, text.indexOf('\n    }', start));
+        };
+
+        test('a literal path the describe literal holds as objects reads natively', () => {
+            const r1 = method(out, 'r1');
+            expect(r1).toContain('Object a = ((java.util.Map<String, Object>)((java.util.Map<String, Object>)');
+            expect(r1).toContain('.get("ws")).get("public");');
+            expect(r1).not.toContain('Helpers.GetValue(this.urls');
+        });
+
+        test('a name key is null-guarded', () => {
+            expect(method(out, 'r1')).toContain('Object b = (t == null ? null : ((java.util.Map<String, Object>)');
+            expect(method(out, 'r1')).toContain('.get("ws")).get(t));');
+        });
+
+        test('a field the header does not declare Map<String, Object> keeps the helper', () => {
+            expect(method(out, 'r1')).toContain('Object d = Helpers.GetValue(Helpers.GetValue(this.limits, "amount"), "min");');
+            expect(method(out, 'r1')).toContain('Object c = Helpers.GetValue((this.fees == null');
+        });
+
+        test('scalar, missing and foreign paths keep the helper', () => {
+            const r2 = method(out, 'r2');
+            expect(r2.match(/Helpers\.GetValue\(/g)?.length).toBe(4);
+            expect(r2).toContain('Helpers.GetValue((this.markets == null');
+        });
+
+        test('without header map fields every site keeps the helper', () => {
+            expect(method(bare, 'r1')).toContain('Helpers.GetValue(');
+            expect(method(bare, 'r1')).not.toContain('.get("ws"))).get("public")');
+        });
+    });
+});
+
+describe ('hx11rfmJ2CDeclaredBox', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // hx11 RFM-J2 leaf C: the Helpers.isTrue / add / subtract / multiply / divide family from the DECLARED
+    // Java type of the operands (ccxt's build/hx10w2-J03.js text pass folded into the printer).
+    describe('java declared-box operands: native arithmetic and boolean parameter conditions', () => {
+        const DECLARED: { [name: string]: string } = {
+            a: 'Long', b: 'Long', n: 'Integer', i: 'int', d: 'Double', e: 'Double', p: 'long', f: 'double', g: 'double', s: 'String',
+        };
+        let printer: any;
+        let transpiler: Transpiler;
+
+        beforeAll(() => {
+            transpiler = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            printer = (transpiler as any).javaTranspiler;
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => DECLARED[declaration?.name?.text];
+        });
+
+        // the checker must see plain numbers: the resolver names the Java type, the TS type gates the family
+        const numeric = (body: string) => transpiler.transpileJava(
+            'type Int = number | undefined;\n' +
+            'class T {\n' +
+            '    m (q: any): any {\n' +
+            '        const a: Int = q; const b: Int = q; const n: Int = q; const i: Int = q;\n' +
+            '        const d: Int = q; const e: Int = q; const p: Int = q; const f: Int = q; const g: Int = q;\n' +
+            body +
+            '    }\n' +
+            '}\n').content;
+
+        test('Long x Long multiply / add / subtract carry the helper null arm as a ternary', () => {
+            const out = numeric('        return [ a * b, a + b, a - b ];\n');
+            expect(out).toContain('((a == null || b == null) ? null : (a * b))');
+            expect(out).toContain('((a == null || b == null) ? null : (a + b))');
+            expect(out).toContain('((a == null || b == null) ? null : (a - b))');
+            expect(out).not.toContain('Helpers.multiply');
+            expect(out).not.toContain('Helpers.add');
+            expect(out).not.toContain('Helpers.subtract');
+        });
+
+        test('Long x int literal widens the literal, Integer widens the box', () => {
+            const out = numeric('        return [ a * 20, n * 16 ];\n');
+            expect(out).toContain('((a == null) ? null : (a * 20L))');
+            expect(out).toContain('((n == null) ? null : (((long) n) * 16L))');
+        });
+
+        test('primitive long / int operands need no null arm', () => {
+            const out = numeric('        return [ p * 2, i + 1 ];\n');
+            expect(out).toContain('(p * 2L)');
+            expect(out).toContain('(((long) i) + 1L)');
+        });
+
+        test('divide keeps the helper (the old text pass had no residual site the later passes did not own)', () => {
+            const out = numeric('        return a / b;\n');
+            expect(out).toContain('Helpers.divide(a, b)');
+        });
+
+        test('primitive double operands are native; Double boxes and Double multiply keep the helper', () => {
+            // Helpers.add/subtract answer toDouble (null) = 0.0 against a Double partner, so one ternary arm
+            // would diverge: a boxed operand of a double + / - keeps the helper, as does multiply (re-boxes Long)
+            const out = numeric('        return [ f - g, f / g, d - e, d * e, d + e, a + f, f * g ];\n');
+            expect(out).toContain('(f - g)');
+            expect(out).toContain('Helpers.divide(f, g)');
+            expect(out).toContain('Helpers.subtract(d, e)');
+            expect(out).toContain('Helpers.multiply(d, e)');
+            expect(out).toContain('Helpers.add(d, e)');
+            expect(out).toContain('Helpers.add(a, f)');
+            expect(out).toContain('Helpers.multiply(f, g)');
+        });
+
+        test('an Object / undeclared operand keeps the helper', () => {
+            const out = transpiler.transpileJava(
+                'class T {\n    m (q: any, r: number): any {\n        const a: number = q;\n        return a * r;\n    }\n}\n').content;
+            expect(out).toContain('Helpers.multiply(a, r)');
+        });
+
+        test('a result read as a ternary arm keeps the helper (the arm would be binary-promoted)', () => {
+            const out = numeric('        return q ? (a * b) : 1.5;\n');
+            expect(out).toContain('Helpers.multiply(a, b)');
+        });
+
+        test('boolean / Bool method parameter conditions are the null-safe TRUE test', () => {
+            const out = transpiler.transpileJava(
+                'class T {\n' +
+                '    m (flag: boolean = false, opt: boolean | undefined, raw: any, written: boolean = false): any {\n' +
+                '        let r = 0;\n' +
+                '        if (flag) { r = 1; }\n' +
+                '        if (opt) { r = 2; }\n' +
+                '        if (raw) { r = 3; }\n' +
+                '        written = this.safeBool ({}, "k", false);\n' +
+                '        if (written) { r = 4; }\n' +
+                '        return r;\n' +
+                '    }\n' +
+                '    safeBool (o: any, k: string, d: boolean): boolean { return d; }\n' +
+                '}\n').content;
+            expect(out).toContain('Boolean.TRUE.equals(java.util.Objects.requireNonNullElse(flag, false))');
+            expect(out).toContain('Boolean.TRUE.equals(opt)');
+            expect(out).toContain('Helpers.isTrue(raw)');
+            expect(out).not.toContain('Boolean.TRUE.equals(written)');
+            expect(out).not.toContain('Boolean.TRUE.equals(java.util.Objects.requireNonNullElse(written');
+        });
+    });
+});
+
+describe ('hx11rfmJ2EJavaWsClientMaps', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // hx11 RFM-J2 E (folds ccxt hx10w3-J01): the ws Client's futures / subscriptions / rejections are
+    // `public final Map<String, V>` fields of the hand-written WsClient.java (ts/src/base/ws/Client.ts),
+    // declared `Dictionary<any>` in TS. On the `client` the generated handlers receive, and on a local
+    // bound to one of them, every Map operation binds on the field's own type: no receiver cast, native
+    // keySet / values, `put` for a String key (OwnerMap.put(k, null) is the helper's removal), `remove`.
+    describe('java ws client map operations', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-hx11rfm-j2e');
+        const CLIENT = path.join(TMP, 'ts', 'src', 'base', 'ws', 'Client.ts');
+        const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+        const VENUE = path.join(TMP, 'ts', 'src', 'pro', 'fake.ts');
+        const OTHER = path.join(TMP, 'ts', 'src', 'pro', 'other.ts');
+        const body =
+            "export class fake extends Exchange {\n" +
+            "    d1 (client: Client, messageHash: string, other: Client) {\n" +
+            "        if (messageHash in client.subscriptions) {\n" +
+            "            delete client.subscriptions[messageHash];\n" +
+            "        }\n" +
+            "        if (messageHash in client.futures) {\n" +
+            "            delete client.futures[messageHash];\n" +
+            "        }\n" +
+            "        if (messageHash in other.subscriptions) {\n" +
+            "            delete other.subscriptions[messageHash];\n" +
+            "        }\n" +
+            "    }\n" +
+            "    k1 (client: Client) {\n" +
+            "        const keys = Object.keys (client.subscriptions);\n" +
+            "        const futures = Object.keys (client.futures);\n" +
+            "        const values = Object.values (client.rejections);\n" +
+            "        return [ keys, futures, values ];\n" +
+            "    }\n" +
+            "    p1 (client: Client, messageHash: string, v: any) {\n" +
+            "        client.subscriptions[messageHash] = v;\n" +
+            "        client.subscriptions['authenticated'] = v;\n" +
+            "        client.futures[messageHash] = v;\n" +
+            "    }\n" +
+            "    a1 (client: Client, messageHash: string) {\n" +
+            "        const subs = client.subscriptions;\n" +
+            "        const keys = Object.keys (subs);\n" +
+            "        const values = Object.values (subs);\n" +
+            "        if (messageHash in subs) {\n" +
+            "            delete subs[messageHash];\n" +
+            "        }\n" +
+            "        const futs = client.futures;\n" +
+            "        return [ keys, values, futs ];\n" +
+            "    }\n" +
+            "    u1 (client: any, messageHash: string) {\n" +
+            "        const keys = Object.keys (client.futures);\n" +
+            "        if (messageHash in client.subscriptions) {\n" +
+            "            delete client.subscriptions[messageHash];\n" +
+            "        }\n" +
+            "        return keys;\n" +
+            "    }\n" +
+            "    l1 (client: Client) {\n" +
+            "        const promise = client.futures['authenticated'];\n" +
+            "        promise.resolve (1);\n" +
+            "    }\n" +
+            "    a2 (client: Client, messageHash: string) {\n" +
+            "        let subs = client.subscriptions;\n" +
+            "        subs = {};\n" +
+            "        const keys = Object.keys (subs);\n" +
+            "        return keys;\n" +
+            "    }\n" +
+            "}\n";
+        let out: string;
+        let outOther: string;
+
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(CLIENT), { recursive: true });
+            fs.mkdirSync(path.dirname(VENUE), { recursive: true });
+            fs.writeFileSync(CLIENT, "type Dictionary<T> = { [key: string]: T };\nexport default class Client {\n    futures: Dictionary<any>;\n    subscriptions: Dictionary<any>;\n    rejections: Dictionary<any>;\n}\n");
+            fs.writeFileSync(BASE, "export class Exchange {\n}\n");
+            fs.writeFileSync(VENUE, "import { Exchange } from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\n" + body);
+            // a client-shaped class that is NOT the ws Client
+            fs.writeFileSync(OTHER, "import { Exchange } from '../base/Exchange.js';\n" +
+                "type Dictionary<T> = { [key: string]: T };\nclass Client {\n    futures: Dictionary<any>;\n    subscriptions: Dictionary<any>;\n    rejections: Dictionary<any>;\n}\n" +
+                body.replace('export class fake extends Exchange {', 'export class other extends Exchange {'));
+            const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            out = byPath.transpileJavaByPath(VENUE).content;
+            outOther = byPath.transpileJavaByPath(OTHER).content;
+        });
+
+        afterAll(() => {
+            fs.rmSync(TMP, { recursive: true, force: true });
+        });
+
+        const method = (text: string, name: string) => {
+            const start = text.indexOf(' ' + name + '(');
+            return text.slice(start, text.indexOf('\n    }', start));
+        };
+
+        test('in / delete on the first-parameter client bind on the field type with no receiver cast', () => {
+            const d1 = method(out, 'd1');
+            expect(d1).toContain('client.subscriptions.containsKey(messageHash)');
+            expect(d1).toContain('client.subscriptions.remove((String)messageHash)');
+            expect(d1).toContain('client.futures.containsKey(messageHash)');
+            expect(d1).toContain('client.futures.remove((String)messageHash)');
+            expect(d1).not.toContain('((java.util.Map<?, ?>)client');
+            expect(d1).not.toContain('((java.util.Map<String,Object>)client');
+        });
+
+        test('a client that is not the first parameter keeps the receiver cast', () => {
+            const d1 = method(out, 'd1');
+            expect(d1).toContain('((java.util.Map<?, ?>)other.subscriptions).containsKey(messageHash)');
+            expect(d1).toContain('((java.util.Map<String,Object>)other.subscriptions).remove((String)messageHash)');
+        });
+
+        test('a class that is not the ws Client keeps the receiver cast', () => {
+            const d1 = method(outOther, 'd1');
+            expect(d1).toContain('((java.util.Map<String,Object>)client.subscriptions).remove((String)messageHash)');
+            expect(d1).not.toContain('client.subscriptions.remove(');
+        });
+
+        test('Object.keys / Object.values on a ws map print the native copy', () => {
+            const k1 = method(out, 'k1');
+            expect(k1).toContain('new java.util.ArrayList<Object>(client.subscriptions.keySet())');
+            expect(k1).toContain('new java.util.ArrayList<Object>(client.futures.keySet())');
+            expect(k1).toContain('new java.util.ArrayList<Object>(client.rejections.values())');
+            expect(k1).not.toContain('Helpers.objectKeys');
+            expect(k1).not.toContain('Helpers.objectValues');
+            expect(method(outOther, 'k1')).toContain('Helpers.objectKeys(client.subscriptions)');
+        });
+
+        test('a String-key write on a Map<String, Object> field is the native put; the Future map keeps the helper', () => {
+            const p1 = method(out, 'p1');
+            expect(p1).toContain('client.subscriptions.put(messageHash, v);');
+            expect(p1).toContain('client.subscriptions.put(\"authenticated\", v);');
+            expect(p1).toContain('Helpers.addElementToObject(client.futures, messageHash, v)');
+            expect(method(outOther, 'p1')).toContain('Helpers.addElementToObject(client.subscriptions, messageHash, v)');
+        });
+
+        test('a local bound to a ws map holds the field type and its operations need no cast', () => {
+            const a1 = method(out, 'a1');
+            expect(a1).toContain('java.util.Map<String, Object> subs = client.subscriptions;');
+            expect(a1).toContain('new java.util.ArrayList<Object>(subs.keySet())');
+            expect(a1).toContain('new java.util.ArrayList<Object>(subs.values())');
+            expect(a1).toContain('subs.containsKey(messageHash)');
+            expect(a1).toContain('subs.remove((String)messageHash)');
+            expect(a1).toContain('java.util.Map<String, io.github.ccxt.ws.Future> futs = client.futures;');
+        });
+
+        test('an any-typed first-parameter client (the base tier) binds the same way', () => {
+            const u1 = method(out, 'u1');
+            expect(u1).toContain('new java.util.ArrayList<Object>(client.futures.keySet())');
+            // the `any` receiver keeps the null test on a key it cannot check
+            expect(u1).toContain('(messageHash != null && client.subscriptions.containsKey(messageHash))');
+            expect(u1).toContain('client.subscriptions.remove((String)messageHash)');
+        });
+
+        test('a literal-key read out of client.futures declares the Future type', () => {
+            expect(method(out, 'l1')).toContain('io.github.ccxt.ws.Future promise = client.futures.get(\"authenticated\");');
+        });
+
+        test('a rewritten alias local stays an Object box', () => {
+            const a2 = method(out, 'a2');
+            expect(a2).toContain('Object subs = client.subscriptions;');
+            expect(a2).not.toContain('java.util.Map<String, Object> subs');
+        });
+    });
+});
+
+describe ('hx11rfmX2JavaOwnerMaps', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // hx11 rfm X2 (folds hx10w4 OJ01 + hx10w7 OJ06): hand-written single-owner maps print native ops.
+    //  * `this.options` (BaseExchange.java: `options = new SynchronizedOptions ()`, put(k, null) removes)
+    //    takes a literal-key element write as `put`, and the loadMarkets currency hand-off key reads
+    //    through its owner-field accessor;
+    //  * `client.futures|subscriptions|rejections` (ts/src/base/ws/Client.ts = WsClient.java OwnerMap views)
+    //    read as a null-guarded `get`.
+    describe('java owner-store maps', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-hx11rfm-x2');
+        const CLIENT = path.join(TMP, 'ts', 'src', 'base', 'ws', 'Client.ts');
+        const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+        const VENUE = path.join(TMP, 'ts', 'src', 'pro', 'fake.ts');
+        const OTHER = path.join(TMP, 'ts', 'src', 'pro', 'other.ts');
+        const body =
+            "export class fake extends Exchange {\n" +
+            "    w1 (v: any, k: string) {\n" +
+            "        this.options['sandbox'] = v;\n" +
+            "        this.options[k] = v;\n" +
+            "        this.options['gone'] = undefined;\n" +
+            "        this.markets['sandbox'] = v;\n" +
+            "    }\n" +
+            "    r1 () {\n" +
+            "        const a = this.safeDict (this.options, 'cachedCurrencies');\n" +
+            "        const b = this.safeDict (this.options, 'cachedCurrencies', {});\n" +
+            "        const c = this.safeDict (this.options, 'cachedCurrenciesById', {});\n" +
+            "        const d = this.safeDict (this.options, 'cachedCurrencies', { 'x': 1 });\n" +
+            "        return [ a, b, c, d ];\n" +
+            "    }\n" +
+            "    c1 (client: Client, messageHash: string) {\n" +
+            "        const sub = client.subscriptions[messageHash];\n" +
+            "        const rej = client.rejections[messageHash];\n" +
+            "        const other = client.other[messageHash];\n" +
+            "        const call = client.subscriptions[this.hash (messageHash)];\n" +
+            "        const future = client.futures[messageHash];\n" +
+            "        return [ sub, rej, other, call, future ];\n" +
+            "    }\n" +
+            "    c2 (client: Client, messageHash: string) {\n" +
+            "        const future = client.futures[messageHash];\n" +
+            "        future.resolve (1);\n" +
+            "        client.subscriptions[messageHash]['checksum'] = true;\n" +
+            "        client.subscriptions['authenticated']['expires'] = 1;\n" +
+            "    }\n" +
+            "    hash (s: string): string { return s; }\n" +
+            "}\n";
+        let out: string;
+        let outOther: string;
+        let outBare: string;
+
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(CLIENT), { recursive: true });
+            fs.mkdirSync(path.dirname(VENUE), { recursive: true });
+            fs.writeFileSync(CLIENT, "type Dictionary<T> = { [key: string]: T };\nexport default class Client {\n    futures: Dictionary<any>;\n    subscriptions: Dictionary<any>;\n    rejections: Dictionary<any>;\n    other: Dictionary<any>;\n}\n");
+            fs.writeFileSync(BASE,
+                "export class Exchange {\n" +
+                "    options: any;\n" +
+                "    markets: any;\n" +
+                "    safeDict (d: any, k: any, def: any = undefined): any { return d; }\n" +
+                "}\n");
+            fs.writeFileSync(VENUE, "import { Exchange } from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\n" + body);
+            // a client-shaped class that is NOT the ws Client, and a venue that overrides safeDict
+            fs.writeFileSync(OTHER, "import { Exchange } from '../base/Exchange.js';\n" +
+                "type Dictionary<T> = { [key: string]: T };\nclass Client {\n    futures: Dictionary<any>;\n    subscriptions: Dictionary<any>;\n    rejections: Dictionary<any>;\n    other: Dictionary<any>;\n}\n" +
+                body.replace('export class fake extends Exchange {', 'export class other extends Exchange {\n    safeDict (d: any, k: any, def: any = undefined): any { return def; }'));
+            const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            // the build layer names the header's owner stores and hand-off accessors (installJavaOwnerStores)
+            const printer: any = (byPath as any).javaTranspiler;
+            printer.javaOwnerStoreFields = new Set(['options']);
+            printer.javaOwnerStoreHandoffs = { 'cachedCurrencies': ['cachedCurrenciesForLoad', 'cachedCurrenciesForLoadOrEmpty'] };
+            out = byPath.transpileJavaByPath(VENUE).content;
+            outOther = byPath.transpileJavaByPath(OTHER).content;
+            // no owner store named: every options site keeps the helper
+            const bare = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            outBare = bare.transpileJavaByPath(VENUE).content;
+        });
+
+        afterAll(() => {
+            fs.rmSync(TMP, { recursive: true, force: true });
+        });
+
+        const method = (text: string, name: string) => {
+            const start = text.indexOf(' ' + name + '(');
+            return text.slice(start, text.indexOf('\n    }', start));
+        };
+
+        test('a literal-key write on the owner store options is the native put', () => {
+            const w1 = method(out, 'w1');
+            expect(w1).toContain('this.options.put("sandbox", v);');
+            expect(w1).not.toContain('addElementToObject(this.options, "sandbox"');
+        });
+
+        test('a nullish literal on the owner store prints remove; a computed key and another field keep the helper', () => {
+            const w1 = method(out, 'w1');
+            expect(w1).toContain('Helpers.addElementToObject(this.options, k, v)');
+            expect(w1).toContain('this.options.remove("gone");');
+            expect(w1).not.toContain('this.options.put("gone"');
+            expect(w1).toContain('Helpers.addElementToObject(this.markets, "sandbox", v)');
+        });
+
+        test('the cachedCurrencies hand-off reads the owner field accessor', () => {
+            const r1 = method(out, 'r1');
+            expect(r1).toContain('this.cachedCurrenciesForLoad()');
+            expect(r1).toContain('this.cachedCurrenciesForLoadOrEmpty()');
+            // another key and a non-empty default keep the options read
+            expect(r1).toContain('this.safeDict(this.options, "cachedCurrenciesById"');
+            expect(r1).toContain('this.safeDict(this.options, "cachedCurrencies", new');
+        });
+
+        test('without a declared owner store every options site keeps the helper', () => {
+            const w1 = method(outBare, 'w1');
+            expect(w1).toContain('Helpers.addElementToObject(this.options, "sandbox", v)');
+            expect(method(outBare, 'r1')).not.toContain('cachedCurrenciesForLoad');
+        });
+
+        test('a venue-overridden safeDict keeps the options read', () => {
+            const r1 = method(outOther, 'r1');
+            expect(r1).not.toContain('cachedCurrenciesForLoad');
+            expect(r1).toContain('this.safeDict(this.options, "cachedCurrencies"');
+        });
+
+        test('ws client map reads are the guarded native get', () => {
+            const c1 = method(out, 'c1');
+            expect(c1).toContain('(client.subscriptions == null || messageHash == null ? null : client.subscriptions.get(messageHash))');
+            expect(c1).toContain('(client.rejections == null || messageHash == null ? null : client.rejections.get(messageHash))');
+            expect(c1).not.toContain('Helpers.GetValue(client.subscriptions, messageHash)');
+            expect(c1).not.toContain('Helpers.GetValue(client.rejections');
+        });
+
+        test('a computed key and a non-ws-client receiver keep the helper', () => {
+            const c1 = method(out, 'c1');
+            expect(c1).toContain('Helpers.GetValue(client.subscriptions, this.hash((String) (messageHash)))');
+            expect(c1).toContain('Helpers.GetValue(client.other, messageHash)');
+            const o1 = method(outOther, 'c1');
+            expect(o1).toContain('Helpers.GetValue(client.subscriptions, messageHash)');
+            expect(o1).not.toContain('client.subscriptions == null');
+        });
+
+        test('a local read from client.futures prints the Future type and the chained write reads natively', () => {
+            const c2 = method(out, 'c2');
+            expect(c2).toContain('io.github.ccxt.ws.Future future = (client.futures == null || messageHash == null ? null : client.futures.get(messageHash));');
+            expect(c2).toContain('(client.subscriptions == null || messageHash == null ? null : client.subscriptions.get(messageHash))');
+            expect(c2).toContain('(client.subscriptions == null ? null : client.subscriptions.get("authenticated"))');
+            expect(c2).not.toContain('Helpers.GetValue(client.subscriptions');
+        });
+    });
+});
+
+describe ('hx11w8JavaCrc32Equality', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // hx11 w8: crc32 checksum compares. BaseExchange.crc32 hands back a Long box on every path, so
+    // against a local the build layer declares Long, Objects.equals is isEqual's integral branch.
+    describe('java crc32 checksum equality', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-hx11w8-crc32');
+        const CRYPTO = path.join(TMP, 'ts', 'src', 'base', 'functions', 'crypto.ts');
+        const VENUE = path.join(TMP, 'ts', 'src', 'pro', 'fake.ts');
+        const OTHER = path.join(TMP, 'ts', 'src', 'pro', 'other.ts');
+        const body =
+            "export class fake {\n" +
+            "    crc32 = crc32;\n" +
+            "    safeInteger (o: any, k: any): number { return 1; }\n" +
+            "    f1 (m: any): boolean {\n" +
+            "        const local = this.crc32 ('a', true);\n" +
+            "        const resp = this.safeInteger (m, 'k');\n" +
+            "        if (local !== resp) { return true; }\n" +
+            "        return resp === local;\n" +
+            "    }\n" +
+            "    f2 (m: any): boolean {\n" +
+            "        let local = this.crc32 ('a', true);\n" +
+            "        local = this.safeInteger (m, 'z');\n" +
+            "        const resp = this.safeInteger (m, 'k');\n" +
+            "        return local !== resp;\n" +
+            "    }\n" +
+            "    f3 (m: any): boolean {\n" +
+            "        const local = this.safeInteger (m, 'q');\n" +
+            "        const resp = this.safeInteger (m, 'k');\n" +
+            "        return local !== resp;\n" +
+            "    }\n" +
+            "    f4 (m: any): boolean {\n" +
+            "        const local = this.crc32 ('a', true);\n" +
+            "        const raw: any = m['k'];\n" +
+            "        return local !== raw;\n" +
+            "    }\n" +
+            "}\n";
+        let out: string;
+        let outOther: string;
+
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(CRYPTO), { recursive: true });
+            fs.mkdirSync(path.dirname(VENUE), { recursive: true });
+            fs.writeFileSync(CRYPTO, "export function crc32 (str: string, signed = false) { return 1; }\n");
+            fs.writeFileSync(VENUE, "import { crc32 } from '../base/functions/crypto.js';\n" + body);
+            // a venue-local crc32 is not the base function: it must keep the helper
+            fs.writeFileSync(OTHER, body.replace('crc32 = crc32;', 'crc32 (s: string, g: boolean): number { return 2; }'));
+            const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const printer: any = (byPath as any).javaTranspiler;
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => {
+                const name = declaration?.name?.text;
+                return name === 'resp' ? 'Long' : undefined;
+            };
+            out = byPath.transpileJavaByPath(VENUE).content;
+            outOther = byPath.transpileJavaByPath(OTHER).content;
+        });
+
+        afterAll(() => {
+            fs.rmSync(TMP, { recursive: true, force: true });
+        });
+
+        const method = (text: string, name: string) => {
+            const start = text.indexOf(' ' + name + '(');
+            return text.slice(start, text.indexOf('\n    }', start));
+        };
+
+        test('a never-rewritten crc32 const against a Long local compares natively', () => {
+            const f1 = method(out, 'f1');
+            expect(f1).toContain('!java.util.Objects.equals(local, resp)');
+            expect(f1).toContain('java.util.Objects.equals(resp, local)');
+            expect(f1).not.toContain('Helpers.isEqual');
+        });
+
+        test('a rewritten crc32 local, a non-crc32 local and an Object operand keep the helper', () => {
+            expect(method(out, 'f2')).toContain('Helpers.isEqual(local, resp)');
+            expect(method(out, 'f3')).not.toContain('Objects.equals(local, resp)');
+            expect(method(out, 'f4')).toContain('Helpers.isEqual(local, raw)');
+        });
+
+        test('a venue-declared crc32 keeps the helper', () => {
+            expect(method(outOther, 'f1')).toContain('Helpers.isEqual(');
+        });
+    });
+});
+
+describe ('jp01MapFieldWrite', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } });
+    });
+
+    const java = (body: string, members = ''): string => {
+        const input = 'class T {\n' + members + '    test (): void {\n' + body + '    }\n}\n';
+        return transpiler.transpileJava(input).content;
+    };
+
+    describe('hx10w9 JP01: element writes into the base header map fields', () => {
+
+        test('options takes the native put on a non-null value', () => {
+            const output = java('        this.options["sandboxMode"] = true;\n');
+            expect(output).toContain('this.options.put("sandboxMode", true);');
+            expect(output).not.toContain('addElementToObject');
+        });
+
+        test('every header map field is covered, not just options', () => {
+            for (const field of [ 'balance', 'tickers', 'orderbooks', 'urls', 'has', 'features', 'headers', 'trades', 'ohlcvs', 'markets', 'markets_by_id', 'commonCurrencies', 'exceptions', 'api', 'baseCurrencies', 'quoteCurrencies', 'transformedApi', 'userAgents', 'bidsasks', 'fundingRates' ]) {
+                const output = java(`        this.${field}["x"] = 1;\n`);
+                expect(output).toContain(`this.${field}.put("x", 1);`);
+            }
+        });
+
+        test('a non-null dict parameter keeps the put', () => {
+            const input = 'class T {\n'
+                + '    test (parameters: { [key: string]: any }): void {\n'
+                + '        this.balance["info"] = parameters;\n'
+                + '    }\n'
+                + '}\n';
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('this.balance.put("info", parameters);');
+            expect(output).not.toContain('addElementToObject');
+        });
+
+        test('a nullable value keeps the helper (its ConcurrentHashMap null branch removes)', () => {
+            const output = java(
+                '        const value: { [key: string]: any } | undefined = undefined;\n' +
+                '        this.tickers["x"] = value;\n');
+            expect(output).toContain('Helpers.addElementToObject(this.tickers, "x", value)');
+        });
+
+        test('the null literal keeps the helper', () => {
+            const output = java('        this.tickers["x"] = null;\n');
+            expect(output).toContain('Helpers.addElementToObject(this.tickers, "x", null)');
+        });
+
+        test('a numeric key keeps the helper (put takes the String key)', () => {
+            const output = java('        this.tickers[0] = 1;\n');
+            expect(output).toContain('Helpers.addElementToObject(this.tickers, 0, 1)');
+        });
+
+        test('a nested write keeps the helper (the inner map is a read result)', () => {
+            const output = java('        this.tickers[symbol]["x"] = 1;\n', '    symbol (): string { return "s"; }\n');
+            expect(output).toContain('Helpers.addElementToObject');
+        });
+
+        test('a field the base does not declare a map keeps the helper', () => {
+            const output = java('        this.notAHeaderField["x"] = 1;\n');
+            expect(output).toContain('Helpers.addElementToObject(this.notAHeaderField, "x", 1)');
+        });
+
+        test('the value position keeps the helper (the write is a statement, not an expression)', () => {
+            const output = java('        const x = this.tickers[this.symbol()] = 1;\n', '    symbol (): string { return "s"; }\n');
+            expect(output).toContain('Helpers.addElementToObject');
+        });
+    });
+});
+
+describe ('pj04-orderbook-params', () => {
+    // PJ04: a WsOrderBook-typed parameter prints the ws order book class, its literal-key reads go
+    // native, and an Object argument at the call site carries the checkcast.
+    describe('WsOrderBook parameters (hx10w4 PJ04)', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-pj04-orderbook');
+        const BOOK_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'ws', 'OrderBook.ts');
+        const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
+        let venueOutput: string;
+        let baseOutput: string;
+
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(BOOK_FIXTURE), { recursive: true });
+            fs.writeFileSync(BOOK_FIXTURE,
+                "export class OrderBook {\n" +
+                "    symbol: string = undefined;\n" +
+                "    asks: any = undefined;\n" +
+                "    bids: any = undefined;\n" +
+                "    get (key: string): any { return undefined; }\n" +
+                "    put (key: string, value: any): void {}\n" +
+                "}\n" +
+                "export { OrderBook as WsOrderBook };\n");
+            fs.writeFileSync(VENUE_FIXTURE,
+                "import { WsOrderBook } from './base/ws/OrderBook';\n" +
+                "class Venue {\n" +
+                "    handleBookDelta (orderbook: WsOrderBook, delta: any): void {\n" +
+                "        const asks = orderbook['asks'];\n" +
+                "        orderbook['nonce'] = delta;\n" +
+                "        const other = orderbook['symbol'];\n" +
+                "    }\n" +
+                "    untyped (orderbook: any): void {\n" +
+                "        const asks = orderbook['asks'];\n" +
+                "    }\n" +
+                "    caller (box: any): void {\n" +
+                "        const book: WsOrderBook = box;\n" +
+                "        this.handleBookDelta(book, 1);\n" +
+                "        this.handleBookDelta(box, 1);\n" +
+                "    }\n" +
+                "    pass (orderbook: WsOrderBook, delta: any): void {\n" +
+                "        this.handleBookDelta(orderbook, delta);\n" +
+                "    }\n" +
+                "}\n");
+            const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+            baseOutput = '';
+        });
+
+        afterAll(() => {
+            fs.rmSync(TMP, { recursive: true, force: true });
+        });
+
+        test('the annotated parameter prints the order book class', () => {
+            expect(venueOutput).toContain('public void handleBookDelta(io.github.ccxt.ws.WsOrderBook orderbook, Object delta)');
+        });
+
+        test('an any-annotated parameter keeps Object', () => {
+            expect(venueOutput).toContain('public void untyped(Object orderbook)');
+        });
+
+        test('a literal read of a known key binds the class getter with the null guard', () => {
+            expect(venueOutput).toContain('(orderbook == null ? null : orderbook.get("asks"))');
+        });
+
+        test('a key the class does not declare keeps the helper', () => {
+            expect(venueOutput).toContain('Helpers.GetValue(orderbook, "symbol")');
+        });
+
+        test('an Object argument gets the checkcast, a same-typed parameter does not', () => {
+            expect(venueOutput).toContain('this.handleBookDelta((io.github.ccxt.ws.WsOrderBook) (box), 1)');
+            // a local whose declaration still prints Object keeps its checkcast
+            expect(venueOutput).toContain('this.handleBookDelta((io.github.ccxt.ws.WsOrderBook) (book), 1)');
+            expect(venueOutput).toContain('this.handleBookDelta(orderbook, delta)');
+        });
+    });
+});
+
+describe ('rdJava1OwnerCountersValues', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // RD-JAVA-1: owner-store counters (lockId/unlockId, incrementingNonce), Object.values on a declared Map local and
+    // catch-variable instanceof are printer rules keyed on checker-resolved declarations.
+    const mk = () => new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const BASE = [
+        'class BaseExchange {',
+        '    options: any = {};',
+        '    sum (a: any, b: any) { return a + b; }',
+        '    safeInteger (d: any, k: string, dflt: any = undefined) { return d[k] ?? dflt; }',
+        '    lockId () { return undefined; }',
+        '    unlockId () { return undefined; }',
+        '    lockLastNonce () { return undefined; }',
+        '    unlockLastNonce () { return undefined; }',
+        '    nonce (): number { return 1; }',
+        '    incrementingNonce (): number {',
+        '        const currentNonce = this.nonce ();',
+        '        this.lockLastNonce ();',
+        '        const lastNonce = this.safeInteger (this.options, \'lastNonce\', 0);',
+        '        const result = (currentNonce > lastNonce) ? currentNonce : lastNonce + 1;',
+        '        this.options[\'lastNonce\'] = result;',
+        '        this.unlockLastNonce ();',
+        '        return result;',
+        '    }',
+        '}',
+        '',
+    ].join ('\n');
+    const venue = (body: string) => BASE + 'class venue extends BaseExchange {\n' + body + '}\n';
+    const DIRECT = '    requestId (): number {\n        this.lockId ();\n        const requestId = this.sum (this.safeInteger (this.options, \'requestId\', 0), 1);\n        this.options[\'requestId\'] = requestId;\n        this.unlockId ();\n        return requestId;\n    }\n';
+    const CHAINED = '    requestId (): number {\n        this.lockId ();\n        const previous = this.safeInteger (this.options, \'reqid\', 0);\n        const next = this.sum (previous, 1);\n        this.options[\'reqid\'] = next;\n        this.unlockId ();\n        return next;\n    }\n';
+
+    describe('RD-JAVA-1 owner-store counters', () => {
+        test('a direct counter span is one owner hand-off', () => {
+            const out = mk ().transpileJava (venue (DIRECT)).content;
+            expect (out).toContain ('Long requestId = this.nextCounter("requestId", 1L);');
+            expect (out).not.toContain ('synchronized');
+            expect (out).not.toContain ('this.lockId(');
+            expect (out).not.toContain ('this.options.put');
+        });
+        test('a seeded counter span drops the seed local', () => {
+            const out = mk ().transpileJava (venue (CHAINED)).content;
+            expect (out).toContain ('Long next = this.nextCounter("reqid", 1L);');
+            expect (out).not.toContain ('previous');
+        });
+        test('a seed read elsewhere keeps the lock pair', () => {
+            const out = mk ().transpileJava (venue (CHAINED.replace ('return next;', 'return previous + next;'))).content;
+            expect (out).not.toContain ('this.nextCounter(');
+        });
+        test('a different step keeps the lock pair', () => {
+            const out = mk ().transpileJava (venue (DIRECT.replace (', 1);', ', 2);'))).content;
+            expect (out).not.toContain ('this.nextCounter(');
+        });
+        test('a read key that differs from the written key keeps the lock pair', () => {
+            const out = mk ().transpileJava (venue (DIRECT.replace ('this.options[\'requestId\'] =', 'this.options[\'other\'] ='))).content;
+            expect (out).not.toContain ('this.nextCounter(');
+        });
+        test('a lock pair on a foreign class is untouched', () => {
+            const src = 'class Other {\n    options: any = {};\n    lockId () {}\n    unlockId () {}\n    sum (a: any, b: any) { return a + b; }\n    safeInteger (d: any, k: string, f: any) { return f; }\n' + DIRECT + '}\n';
+            const out = mk ().transpileJava (src).content;
+            expect (out).not.toContain ('this.nextCounter(');
+        });
+        test('a commented span keeps the lock pair', () => {
+            const out = mk ().transpileJava (venue (DIRECT.replace ('        const requestId', '        // why\n        const requestId'))).content;
+            expect (out).not.toContain ('this.nextCounter(');
+        });
+        test('the base incrementingNonce is one owner hand-off above the clock floor', () => {
+            const out = mk ().transpileJava (BASE).content;
+            expect (out).toContain ('Long result = this.nextCounterAbove("lastNonce", 1L, currentNonce);');
+            expect (out).not.toContain ('lockLastNonce();');
+            expect (out).not.toContain ('this.options.put');
+        });
+    });
+
+    describe('RD-JAVA-1 Object.values and catch instanceof', () => {
+        const TMP = path.join (__dirname, 'files', 'tmp-rd-java-1');
+        const BASE_FILE = path.join (TMP, 'ts', 'src', 'base', 'Exchange.ts');
+        const ERRORS = path.join (TMP, 'ts', 'src', 'base', 'errors.ts');
+        const TYPES = path.join (TMP, 'ts', 'src', 'base', 'types.ts');
+        const VENUE = path.join (TMP, 'ts', 'src', 'venuerd.ts');
+        const body =
+            'import { Exchange } from \'./base/Exchange.js\';\n' +
+            'import { AuthenticationError } from \'./base/errors.js\';\n' +
+            'import type { Dict } from \'./base/types.js\';\n' +
+            'export class venuerd extends Exchange {\n' +
+            '    v1 (response: any) {\n' +
+            '        const data: Dict = this.safeDict (response, \'a\', {});\n' +
+            '        return Object.values (data);\n' +
+            '    }\n' +
+            '    v2 (response: any) {\n' +
+            '        let data: Dict = this.safeDict (response, \'a\', {});\n' +
+            '        data = this.safeDict (response, \'b\', {});\n' +
+            '        return Object.values (data);\n' +
+            '    }\n' +
+            '    v3 (data: Dict) {\n' +
+            '        return Object.values (data);\n' +
+            '    }\n' +
+            '    e1 (message: any): boolean {\n' +
+            '        try {\n' +
+            '            this.throwExactlyMatchedException (this.exceptions, this.safeString (message, \'code\'), this.json (message));\n' +
+            '        } catch (e) {\n' +
+            '            if (e instanceof AuthenticationError) {\n' +
+            '                return false;\n' +
+            '            }\n' +
+            '        }\n' +
+            '        return true;\n' +
+            '    }\n' +
+            '    e2 (message: any): boolean {\n' +
+            '        try {\n' +
+            '            this.throwExactlyMatchedException (this.exceptions, this.safeString (message, \'code\'), this.reflect (message));\n' +
+            '        } catch (e) {\n' +
+            '            if (e instanceof AuthenticationError) {\n' +
+            '                return false;\n' +
+            '            }\n' +
+            '        }\n' +
+            '        return true;\n' +
+            '    }\n' +
+            '    reflect (message: any) { return message; }\n' +
+            '}\n';
+        let out: string;
+        let outBare: string;
+
+        beforeAll (() => {
+            fs.mkdirSync (path.dirname (BASE_FILE), { recursive: true });
+            fs.writeFileSync (TYPES, 'export interface Dictionary<T> {\n    [key: string]: T;\n}\nexport type Dict = Dictionary<any>;\n');
+            fs.writeFileSync (ERRORS, 'class BaseError extends Error {\n}\nexport class AuthenticationError extends BaseError {\n}\n');
+            fs.writeFileSync (BASE_FILE,
+                'import type { Dict } from \'./types.js\';\n' +
+                'export class Exchange {\n' +
+                '    exceptions: Dict = {};\n' +
+                '    safeDict (d: any, k: any, f: Dict = undefined): Dict { return f; }\n' +
+                '    safeString (d: any, k: any): string | undefined { return undefined; }\n' +
+                '    json (d: any): string { return \'\'; }\n' +
+                '    throwExactlyMatchedException (a: Dict, s: string | undefined, m: string | undefined) {}\n' +
+                '}\n');
+            fs.writeFileSync (VENUE, body);
+            const make = (declare: boolean) => {
+                const t: any = mk ();
+                if (declare) {
+                    t.javaTranspiler.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'data' ? 'Map<String, Object>' : undefined);
+                }
+                return t.transpileJavaByPath (VENUE).content;
+            };
+            out = make (true);
+            outBare = make (false);
+        });
+
+        afterAll (() => {
+            fs.rmSync (TMP, { recursive: true, force: true });
+        });
+
+        test('Object.values on a never-rewritten declared Map local is the value copy', () => {
+            expect (out).toContain ('return new java.util.ArrayList<Object>(data.values());');
+        });
+        test('a rewritten local, a parameter and an undeclared local keep the helper', () => {
+            expect (out.match (/Helpers\.objectValues\(data\)/g)?.length).toBe (2);
+            expect (outBare).not.toContain ('data.values()');
+        });
+        test('instanceof on a catch variable whose try is only sync base calls is native', () => {
+            expect (out).toContain ('(e instanceof AuthenticationError)');
+        });
+        test('a try that calls a venue method keeps Helpers.isInstance', () => {
+            expect (out.match (/Helpers\.isInstance\(e, AuthenticationError\.class\)/g)?.length).toBe (1);
+        });
+    });
+});
+
+describe ('rfJava3StringTypedParse', () => {
+    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
+
+    // RF-java-3: parseInt/parseFloat on an operand that prints as java.lang.String call the String-typed twin.
+    describe('java string-typed parse', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-rfjava3-parse');
+        const VENUE = path.join(TMP, 'ts', 'src', 'fake.ts');
+        const body =
+            "export class fake {\n" +
+            "    a (p: any): any { return parseInt (p as string); }\n" +
+            "    b (p: any): any { return parseFloat (p); }\n" +
+            "    c (p: any): any { const s = 'x'; return parseFloat (s as string); }\n" +
+            "}\n";
+        let out: string;
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(VENUE), { recursive: true });
+            fs.writeFileSync(VENUE, body);
+            const t = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            out = t.transpileJavaByPath(VENUE).content;
+        });
+        afterAll(() => { fs.rmSync(TMP, { recursive: true, force: true }); });
+
+        test('a string-cast operand calls the typed twin', () => {
+            expect(out).toContain('io.github.ccxt.base.JsParse.parseInt(');
+            expect(out).toContain('io.github.ccxt.base.JsParse.parseFloat(');
+        });
+        test('an any operand keeps the helper', () => {
+            expect(out).toContain('Helpers.parseFloat(p)');
+        });
+    });
+});

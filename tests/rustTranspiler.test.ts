@@ -1,6 +1,46 @@
 import { Transpiler } from '../src/transpiler';
 import { isElementAccessExpression, isIdentifier } from "typescript/unstable/ast/is";
 import { RUST_DECLARED_DICT_LOCALS } from '../src/rustTranspiler';
+import * as os from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as passes from '../src/rustTranspiler';
+import { hx10w2R03SelfTest } from '../src/rustTranspiler';
+import { r04SelfTest } from '../src/rustTranspiler';
+import { r06SelfTest } from '../src/rustTranspiler';
+import { r01SelfTest } from '../src/rustTranspiler';
+import { hx10R03SelfTest } from '../src/rustTranspiler';
+import { r04CalleeSelfTest } from '../src/rustTranspiler';
+import { r06w3SelfTest } from '../src/rustTranspiler';
+import { r07StringSelfTest } from '../src/rustTranspiler';
+import { r10SelfTest } from '../src/rustTranspiler';
+import { r01W2SelfTest } from '../src/rustTranspiler';
+import { rp02SelfTest } from '../src/rustTranspiler';
+
+// fixture trees used above are written to a temp dir so the suite carries no fixture files
+const rustInlineFixtures: Record<string, Record<string, string>> = {
+ "hx10w4pr02": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['sandbox'] = true;\n        }\n    }\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n    hold (f: any): any {\n        return f;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required `boolean` read only in condition slots -> native `bool`\n    settlementData (isBuy: boolean, amount: any) {\n        if (isBuy) {\n            return -amount;\n        }\n        return amount;\n    }\n    // optional `boolean`: bound with the truthiness the use sites applied\n    starkAmount (amount: any, roundUp: boolean = false) {\n        if (roundUp) {\n            return amount + 1;\n        }\n        return amount;\n    }\n    // a bool parameter forwarded into a native-`bool` slot\n    forwarded (on: boolean) {\n        return this.settlementData (on, 1);\n    }\n    // a `Value` argument coerces at the call site\n    fromValue (raw: any) {\n        return this.settlementData (raw, 2);\n    }\n    // a bool parameter read outside a bool sink keeps the box\n    boxed (flag: boolean) {\n        const held = flag;\n        return held;\n    }\n    // an override keeps the base `Value` signature\n    override setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['demo'] = true;\n        }\n    }\n    // a method reference handed to another call keeps the `Value` signature\n    channelB (flag: boolean) {\n        if (flag) {\n            return 1;\n        }\n        return 2;\n    }\n    holdRef () {\n        return this.hold (this.channelB);\n    }\n}\n"
+ },
+ "hx10w5r09": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required bool parameter: the native-`bool` slot a local may flow into\n    settle (isMarket: boolean, amount: any) {\n        if (isMarket) {\n            return -amount;\n        }\n        return amount;\n    }\n    // a bool local from a comparison, read in condition slots AND a native-`bool` slot\n    localIntoBoolSlot (type: string) {\n        const isMarket = (type === 'market');\n        if (!isMarket) {\n            return 0;\n        }\n        if (isMarket && (type === 'x')) {\n            return 1;\n        }\n        return this.settle (isMarket, 2);\n    }\n    // a comparison local read only in conditions stays typed (no regression)\n    localConditionsOnly (type: string) {\n        const isSpot = (type === 'spot');\n        if (isSpot) {\n            return 1;\n        }\n        return 0;\n    }\n    // negative: a Value slot keeps the box\n    localIntoValueSlot (type: string) {\n        const isWide = (type === 'spot');\n        const held = [ isWide ];\n        return held;\n    }\n    // negative: a `Value` read into the bool slot still coerces\n    valueIntoBoolSlot (raw: any) {\n        return this.settle (raw, 3);\n    }\n}\n"
+ },
+ "a15dstrvec": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    options: Dict = {};\n    omit = omit;\n    extend = extend;\n    safeValue (d: any, k: any, dflt: any = undefined): any {\n        return d === undefined ? dflt : d[k];\n    }\n    safeDict (d: any, k: any, dflt: Dict = undefined): Dict {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'object') ? v : dflt;\n    }\n    safeBool (d: any, k: any, dflt: Bool = undefined): Bool {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'boolean') ? v : dflt;\n    }\n    checkOptionBool (methodName: string, optionName: string, value: any): Bool {\n        if (value === undefined) {\n            return undefined;\n        }\n        return value === true;\n    }\n    handleOptionBoolAndParams (params: Dict, methodName: string, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const value = this.safeValue (params, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), params ];\n    }\n    handleTriggerAndParams (params: any): any[] {\n        const isTrigger = this.safeBool (params, 'trigger');\n        return [ isTrigger, params ];\n    }\n    handleOptionAndParams (params: Dict, methodName: string, optionName: string, defaultValue: any = undefined): [any, Dict] {\n        return [ this.safeValue (params, optionName, defaultValue), params ];\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchByIds (ids: string[], symbol: string = undefined, params: Dict = {}) {\n        const request: Dict = { 'txid': ids.join (',') };\n        return request;\n    }\n    async fetchOne (id: string, params: Dict = {}) {\n        return await this.fetchByIds ([ id ], undefined, params);\n    }\n    async fetchIndexed (ids: string[], params: Dict = {}) {\n        const first = ids[0];\n        return ids.join (',') + first;\n    }\n    async fetchOneIndexed (id: string, params: Dict = {}) {\n        return await this.fetchIndexed ([ id ], params);\n    }\n    async fetchComputed (ids: string[], params: Dict = {}) {\n        return ids.join (',');\n    }\n    async fetchComputedCaller (params: Dict = {}) {\n        return await this.fetchComputed (params['ids'], params);\n    }\n    async fetchNoCaller (ids: string[], symbol: string = undefined, params: Dict = {}) {\n        const request: Dict = { 'txid': ids.join (',') };\n        return request;\n    }\n    async fetchChunked (hashes: string[], params: Dict = {}) {\n        const rows = [];\n        const chunk = this.arraySlice (hashes, 0, 2);\n        rows.push (await this.fetchByIds (chunk, undefined, params));\n        return rows;\n    }\n}\n"
+ }
+};
+const rustFixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-'));
+for (const [dir, files] of Object.entries (rustInlineFixtures)) {
+    for (const [rel, text] of Object.entries (files)) {
+        const out = path.join (rustFixtureRoot, dir, rel);
+        fs.mkdirSync (path.dirname (out), { recursive: true });
+        fs.writeFileSync (out, text);
+    }
+}
+afterAll (() => fs.rmSync (rustFixtureRoot, { recursive: true, force: true }));
 
 jest.mock('module',()=>({
     __esModule: true,
@@ -4853,8 +4893,8 @@ describe('hx10 PR02 native `bool` parameters', () => {
             'verbose': false,
             'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } }
         } as any);
-        base = fresh.transpileRustByPath('./tests/files/input/hx10w4pr02/ts/src/base/Exchange.ts').content;
-        venue = fresh.transpileRustByPath('./tests/files/input/hx10w4pr02/ts/src/venue.ts').content;
+        base = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'hx10w4pr02', 'ts/src/base/Exchange.ts')).content;
+        venue = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'hx10w4pr02', 'ts/src/venue.ts')).content;
     });
 
     test('a required `boolean` read only in condition slots prints `bool`', () => {
@@ -4963,7 +5003,7 @@ describe('hx10w5 R09 bool locals into native-`bool` slots', () => {
             'verbose': false,
             'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } }
         } as any);
-        venue = fresh.transpileRustByPath('./tests/files/input/hx10w5r09/ts/src/venue.ts').content;
+        venue = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'hx10w5r09', 'ts/src/venue.ts')).content;
     });
 
     test('a comparison local read in a native-`bool` slot is declared `bool`', () => {
@@ -5323,7 +5363,7 @@ describe('rust order-book field read', () => {
 describe('rust string[] parameter used only by join', () => {
     let output = '';
     beforeAll(() => {
-        output = transpiler.transpileRustByPath('./tests/files/input/a15dstrvec/ts/src/venue.ts').content;
+        output = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'a15dstrvec', 'ts/src/venue.ts')).content;
     });
 
     test('a joined-only string[] param is a Vec<String> with the std join and no closure', () => {
@@ -5460,5 +5500,865 @@ describe('FM-RS1 L2 integer for-loop counters', () => {
         expect(o).toContain('let mut j: i64 = 0;');
         expect((o.match(/let mut __for_first_\d+: bool/g) ?? []).length).toBe(2);
         expect(new Set(o.match(/__for_first_\d+/g)).size).toBe(2);
+    });
+});
+
+describe ('hx10w10RP06', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    const PRELUDE = 'interface Dictionary<T> { [key: string]: T }\n' +
+        'type Dict = Dictionary<any>;\n' +
+        'type Str = string | undefined;\n' +
+        'interface MarketInterface { id?: string, symbol?: string }\n' +
+        'type Market = MarketInterface | undefined;\n' +
+        'class Base {\n' +
+        '    market (symbol: Str): Market { return undefined; }\n' +
+        '    safeString (o: any, k: any, def: any = undefined): any { return undefined; }\n' +
+        '    safeDict (o: any, k: any, def: any = undefined): Dict { return o[k]; }\n' +
+        '    safeList (o: any, k: any, def: any = undefined): any[] { return []; }\n' +
+        '    extend (a: any, b: any): any { return a; }\n' +
+        '    parseOrderBook (o: any, s: Str): Dict { return { "symbol": s }; }\n' +
+        '    use (x: any): any { return x; }\n' +
+        '}\n' +
+        'class Venue extends Base {\n';
+
+    function rust(body: string): string {
+        return transpiler.transpileRust(PRELUDE + body + '}\n').content;
+    }
+
+    // hx10w10 RP06: a local initialised from `this.<m>(…)` is typed as the container
+    // the callee's own returns build, so its reads and writes print the native op.
+    describe('hx10w10 RP06 call-init container locals', () => {
+        test('a base method that returns a literal map types the local and its write', () => {
+            const out = rust('    depth (response: any, symbol: Str) {\n'
+                + '        const orderbook = this.parseOrderBook (response, symbol);\n'
+                + "        orderbook['nonce'] = 1;\n"
+                + '        return orderbook;\n'
+                + '    }\n');
+            expect(out).toContain('let mut orderbook: indexmap::IndexMap<String, Value> = self.parseOrderBook(response, symbol).as_map().cloned().unwrap_or_default();');
+            expect(out).toContain('orderbook.insert("nonce".into(), Value::Int(1));');
+            expect(out).not.toContain('add_element_to_object(&mut orderbook');
+            expect(out).not.toContain('if let Value::Dict(__d) = &mut orderbook');
+        });
+
+        test('a literal-key read on the typed local prints the map lookup', () => {
+            const out = rust('    depthNonce (response: any, symbol: Str) {\n'
+                + '        const orderbook = this.parseOrderBook (response, symbol);\n'
+                + "        return orderbook['nonce'];\n"
+                + '    }\n');
+            expect(out).toContain('let mut orderbook: indexmap::IndexMap<String, Value>');
+            expect(out).toContain('orderbook.get("nonce").cloned().unwrap_or(Value::Null)');
+            expect(out).not.toContain('get_value(&orderbook');
+        });
+
+        test('a request builder local rebuilt from its own literal local types too', () => {
+            const out = rust('    orderRequest (symbol: Str, params: Dict) {\n'
+                + '        const request = this.createOrderRequest (symbol, params);\n'
+                + "        request['limit'] = 10;\n"
+                + '        return request;\n'
+                + '    }\n'
+                + '\n'
+                + '    createOrderRequest (symbol: Str, params: Dict): Dict {\n'
+                + "        const request: Dict = { 'symbol': symbol };\n"
+                + "        request['amount'] = 1;\n"
+                + '        return this.extend (request, params);\n'
+                + '    }\n');
+            expect(out).toContain('let mut request: indexmap::IndexMap<String, Value> = self.createOrderRequest(symbol, params).as_map().cloned().unwrap_or_default();');
+            expect(out).toContain('request.insert("limit".into(), Value::Int(10));');
+            expect(out).not.toContain('add_element_to_object(&mut request');
+        });
+
+        test('a pass-through builder of a literal argument types the local', () => {
+            const out = rust('    parsedTicker (t: Dict, m: Market) {\n'
+                + '        const ticker = this.safeTicker ({}, m);\n'
+                + "        ticker['symbol'] = 'BTC/USDT';\n"
+                + '        return ticker;\n'
+                + '    }\n'
+                + '\n'
+                + '    safeTicker (ticker: Dict, market: Market = undefined): Dict {\n'
+                + '        return ticker;\n'
+                + '    }\n');
+            expect(out).toContain('let mut ticker: indexmap::IndexMap<String, Value>');
+            expect(out).toContain('ticker.insert("symbol".into(), Value::Str("BTC/USDT".into()));');
+            expect(out).not.toContain('add_element_to_object(&mut ticker');
+        });
+
+        test('a callee returning a boxed reader keeps the helper', () => {
+            const out = rust('    boxed (response: any) {\n'
+                + '        const orderbook = this.parseOrderBook (response, "BTC/USDT");\n'
+                + '        return orderbook;\n'
+                + '    }\n'
+                + '\n'
+                + '    parseOrderBook (o: any, s: Str): Dict {\n'
+                + "        const data = this.safeDict (o, 'data');\n"
+                + '        return data;\n'
+                + '    }\n');
+            expect(out).toContain('let mut orderbook: Value = self.parseOrderBook(response, Value::Str("BTC/USDT".into()));');
+        });
+
+        test('a callee that also returns an element read keeps the helper', () => {
+            const out = rust('    mixed (rows: any[]) {\n'
+                + '        const first = this.pick (rows);\n'
+                + "        first['seen'] = true;\n"
+                + '        return first;\n'
+                + '    }\n'
+                + '\n'
+                + '    pick (rows: any[]): Dict {\n'
+                + "        if (rows.length > 0) { return rows[0]; }\n"
+                + "        return { 'seen': false };\n"
+                + '    }\n');
+            expect(out).toContain('add_element_to_object(&mut first');
+            expect(out).toContain('let mut first: Value = self.pick(rows)');
+        });
+
+        test('a callee that reassigns its built local keeps the box', () => {
+            const out = rust('    reassigned (symbol: Str) {\n'
+                + '        const request = this.build (symbol);\n'
+                + "        request['limit'] = 5;\n"
+                + '        return request;\n'
+                + '    }\n'
+                + '\n'
+                + '    build (symbol: Str): Dict {\n'
+                + "        let request: Dict = { 'symbol': symbol };\n"
+                + '        request = [ request ] as any;\n'
+                + '        return request;\n'
+                + '    }\n');
+            expect(out).toContain('add_element_to_object(&mut request');
+        });
+
+        test('a produced local that escapes boxes once at the escape, write folded', () => {
+            const out = rust('    escaped (response: any) {\n'
+                + '        const orderbook = this.parseOrderBook (response, "BTC/USDT");\n'
+                + "        orderbook['nonce'] = 1;\n"
+                + '        return this.use (orderbook);\n'
+                + '    }\n');
+            expect(out).toContain('let mut orderbook: indexmap::IndexMap<String, Value>');
+            expect(out).toContain('orderbook.insert("nonce".into(), Value::Int(1));');
+            expect(out).toContain('self.use(Value::Map(orderbook))');
+            expect(out).not.toContain('add_element_to_object(&mut orderbook');
+        });
+
+        test('a produced local that only escapes keeps the box (no helper folds)', () => {
+            const out = rust('    onlyEscaped (response: any) {\n'
+                + '        const orderbook = this.parseOrderBook (response, "BTC/USDT");\n'
+                + '        return this.use (orderbook);\n'
+                + '    }\n');
+            expect(out).toContain('let mut orderbook: Value = self.parseOrderBook(response, Value::Str("BTC/USDT".into()));');
+        });
+
+        test('a local read out of the live ws order cache keeps the helper', () => {
+            const out = rust('    cachedOrders (cached: any, orderId: Str) {\n'
+                + '        const orders = this.safeDict (cached.hashmap (), "BTC/USDT", {});\n'
+                + '        orders[orderId] = 1;\n'
+                + '        return orders;\n'
+                + '    }\n');
+            expect(out).toContain('let mut orders: Value = self.safeDict(cached.hashmap(), Value::Str("BTC/USDT".into())');
+            expect(out).not.toContain('let mut orders: indexmap::IndexMap');
+        });
+
+        test('a callee that stores the container it returns keeps the box', () => {
+            const out = rust('    stored (response: any) {\n'
+                + '        const book = this.seed (response);\n'
+                + "        book['nonce'] = 1;\n"
+                + '        return book;\n'
+                + '    }\n'
+                + '\n'
+                + '    seed (response: any): Dict {\n'
+                + '        const book: Dict = {};\n'
+                + '        this.orderbooks["BTC/USDT"] = book;\n'
+                + '        return book;\n'
+                + '    }\n');
+            expect(out).toContain('add_element_to_object(&mut book');
+        });
+    });
+});
+
+describe ('hx10w9-RP03', () => {
+    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
+
+    let transpiler: Transpiler;
+    beforeAll(() => {
+        transpiler = new Transpiler({ verbose: false, rust: { parser: { NUM_LINES_END_FILE: 0 } } });
+    });
+
+    // The ws order book is a `Value::Dict` in the rust port even though ts/src declares it
+    // as a class: `order_book()` builds the map and every element read is a plain map read.
+    const HEAD = 'type Dict = { [key: string]: any };\n' +
+        'type Dictionary<T> = { [key: string]: T };\n' +
+        'class OrderBook { bids: any; asks: any; nonce: any; constructor(o: any = undefined) {} }\n' +
+        'class A {\n' +
+        '    orderbooks: Dictionary<OrderBook> = {};\n';
+
+    const rs = (body: string): string => transpiler.transpileRust(HEAD + body + '}\n').content;
+
+    const MAP_READ = (name: string, key: string) => `${name}.get("${key}").cloned().unwrap_or(Value::Null)`;
+    const SHADOW = 'let orderbook = orderbook.as_map().unwrap_or(&__orderbook_empty);';
+
+    describe('hx10w9 RP03: get_value on proven map locals (ws order book)', () => {
+        test('an OrderBook parameter is shadowed as a map; literal reads are lookups', () => {
+            const out = rs('    handleBookDelta(orderbook: OrderBook, delta: Dict) {\n' +
+                "        const bids = orderbook['bids'];\n" +
+                "        const asks = orderbook['asks'];\n" +
+                '        return bids;\n' +
+                '    }\n');
+            expect(out).toContain('pub fn handleBookDelta(&self, orderbook: Value, delta: Value)');
+            expect(out).toContain(SHADOW);
+            expect(out).toContain(`let mut bids: Value = ${MAP_READ('orderbook', 'bids')};`);
+            expect(out).toContain(`let mut asks: Value = ${MAP_READ('orderbook', 'asks')};`);
+            expect(out).not.toContain('get_value(&orderbook');
+            expect(out).not.toContain('as_map().and_then');
+        });
+
+        test('a dynamic key keeps the helper (and the box)', () => {
+            const out = rs('    h(orderbook: OrderBook, k: string) {\n        return orderbook[k];\n    }\n');
+            expect(out).not.toContain('__orderbook_empty');
+            expect(out).toContain('get_value(&orderbook, &k)');
+        });
+
+        test('an escaped OrderBook parameter keeps the box', () => {
+            const out = rs('    i(orderbook: OrderBook) {\n        return orderbook;\n    }\n');
+            expect(out).not.toContain('__orderbook_empty');
+            expect(out).toContain('return orderbook;');
+        });
+
+        test('a marker-routed key keeps the helper', () => {
+            const out = rs('    j(orderbook: OrderBook) {\n        return orderbook[\'nonce\'];\n    }\n');
+            expect(out).not.toContain('__orderbook_empty');
+            expect(out).toContain('get_value(&orderbook, &Value::Str("nonce".into()))');
+        });
+
+        test('a read-only local from this.orderbooks[sym] is a bare IndexMap', () => {
+            const out = rs('    k(sym: string) {\n' +
+                "        const ob = this.orderbooks[sym];\n" +
+                "        const bids = ob['bids'];\n" +
+                '        return bids;\n' +
+                '    }\n');
+            expect(out).toContain('let mut ob: indexmap::IndexMap<String, Value> = (if let (Some(__m), Some(__k)) = (self.orderbooks.as_map(), sym.as_str())');
+            expect(out).toContain(`let mut bids: Value = ${MAP_READ('ob', 'bids')};`);
+            expect(out).not.toContain('get_value(&ob');
+        });
+
+        test('a read-only local from safeValue(container, key) is a bare IndexMap', () => {
+            const out = rs('    l(sym: string) {\n' +
+                '        const ob = this.safeValue (this.orderbooks, sym);\n' +
+                "        const bids = ob['bids'];\n" +
+                '        return bids;\n' +
+                '    }\n');
+            expect(out).toContain('let mut ob: indexmap::IndexMap<String, Value> = self.safeValue(self.orderbooks, sym)');
+            expect(out).toContain(`let mut bids: Value = ${MAP_READ('ob', 'bids')};`);
+            expect(out).not.toContain('get_value(&ob');
+        });
+
+        test('written and escaped locals keep the box and the helper', () => {
+            const written = rs('    m(sym: string, ts: any) {\n' +
+                "        const ob = this.orderbooks[sym];\n" +
+                "        const bids = ob['bids'];\n" +
+                "        ob['nonce'] = ts;\n" +
+                '        return bids;\n' +
+                '    }\n');
+            expect(written).toContain('get_value(&ob, &Value::Str("bids".into()))');
+            const escaped = rs('    n(sym: string) {\n' +
+                "        const ob = this.orderbooks[sym];\n" +
+                "        const bids = ob['bids'];\n" +
+                '        return ob;\n' +
+                '    }\n');
+            expect(escaped).toContain('let mut ob: Value = self.orderbooks');
+            expect(escaped).toContain('get_value(&ob, &Value::Str("bids".into()))');
+        });
+    });
+});
+
+describe ('hx10w9RP02', () => {
+        // fixture trees are written to a temp dir so the suite carries no fixture files
+        const inlineFixtures: Record<string, Record<string, string>> = {
+     "hx10w9rp02": {
+      "ts/src/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    omit (a: any, b: any): any {\n        return a;\n    }\n\n    watch (a: any, b: any, c: any): any {\n        return a;\n    }\n\n    // hx10w9 RP02: a `Dict` parameter written by literal key, called only with a\n    // typed dict bearer -> `&mut IndexMap` and a bare `.insert`.\n    orderRequest (method: string, request: Dict, orderParams: Dict, params: Dict = {}): [Dict, Dict] {\n        if (method === 'create') {\n            orderParams['limit_price'] = this.omit (params, []);\n        }\n        orderParams['order_type'] = method;\n        request['params'] = orderParams;\n        const omitted: Dict = this.omit (params, []);\n        return [ request, omitted ];\n    }\n\n    createOrder (type: string, params: Dict = {}) {\n        const orderParams: Dict = {\n            'order_type': type,\n            'order_qty': 1,\n        };\n        const request: Dict = {\n            'method': 'add_order',\n            'params': orderParams,\n        };\n        const [ requestValue, paramsValue ] = this.orderRequest ('create', request, orderParams, params);\n        return this.watch ('url', 'hash', this.omit (requestValue, paramsValue));\n    }\n\n    // A caller that passes a non-bearer keeps the boxed parameter.\n    plainCreate (params: Dict = {}) {\n        const request: Dict = { 'method': 'add_order' };\n        return this.plainOrder ('create', request, params, params);\n    }\n\n    plainOrder (method: string, request: Dict, orderParams: Dict, params: Dict = {}): [Dict, Dict] {\n        orderParams['order_type'] = method;\n        request['params'] = orderParams;\n        return [ request, params ];\n    }\n\n    // A read-only `Dict` parameter keeps the D-25 borrowed shadow.\n    readOnly (orderParams: Dict): any {\n        return orderParams['order_type'];\n    }\n}\n\nclass second {\n    extend (a: any, b: any = undefined): any {\n        return a;\n    }\n\n    safeInteger (a: any, b: any): any {\n        return 1;\n    }\n\n    postAction (operationType: string, sigPayload: Dict, params: Dict): Dict {\n        sigPayload['builder_code'] = operationType;\n        const finalHeaders: Dict = { };\n        finalHeaders['account'] = operationType;\n        const request = this.extend (finalHeaders, sigPayload);\n        return request;\n    }\n\n    caller (type: string, params: Dict = {}) {\n        const sigPayload: Dict = { 'amount': 1 };\n        sigPayload['exclude'] = type;\n        return this.postAction ('op', sigPayload, params);\n    }\n}\n\nclass nested {\n    omit (a: any, b: any): any {\n        return a;\n    }\n\n    build (orderParams: Dict, params: Dict): Dict {\n        orderParams['type'] = 'market';\n        const triggers: Dict = {};\n        triggers['price'] = '1';\n        triggers['price_type'] = 'quote';\n        orderParams['triggers'] = triggers;\n        return this.omit (orderParams, params);\n    }\n\n    caller (params: Dict = {}) {\n        const orderParams: Dict = { 'qty': 1 };\n        const request: Dict = { 'params': orderParams };\n        const [ value, rest ] = [ this.build (orderParams, params), params ];\n        return this.omit (request, rest);\n    }\n}\n"
+     },
+     "hx10w9rp02chain": {
+      "ts/src/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    // a key-chain write has no native print on a map parameter, so the parameter stays boxed\n    watchMany (request: Dict, ids: string[]) {\n        request['type'] = 'SUBSCRIBE';\n        request['channels'][0]['codes'] = ids;\n        return request;\n    }\n\n    watch (ids: string[]) {\n        const request: Dict = {\n            'channels': [ {} ],\n        };\n        return this.watchMany (request, ids);\n    }\n}\n\nexport default venue;\n"
+     }
+    };
+        const fixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-'));
+        for (const [dir, files] of Object.entries (inlineFixtures)) {
+            for (const [rel, text] of Object.entries (files)) {
+                const out = path.join (fixtureRoot, dir, rel);
+                fs.mkdirSync (path.dirname (out), { recursive: true });
+                fs.writeFileSync (out, text);
+            }
+        }
+        afterAll (() => fs.rmSync (fixtureRoot, { recursive: true, force: true }));
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    // hx10w9 RP02: a `Dict` parameter that only takes map operations and whose every
+    // call site passes a typed dict bearer prints `&mut IndexMap`, so its writes are
+    // plain `.insert` instead of a per-site `Arc::make_mut` guard.
+    describe('owned map parameters', () => {
+        let rust = '';
+
+        beforeAll(() => {
+            rust = transpiler.transpileRustByPath(path.join (fixtureRoot, 'hx10w9rp02', 'ts/src/venue.ts')).content;
+        });
+
+        test('the proven parameter prints a mutable map reference', () => {
+            expect(rust).toContain('orderParams: &mut indexmap::IndexMap<String, Value>');
+        });
+
+        test('its writes are plain inserts, with no COW guard', () => {
+            expect(rust).toContain('orderParams.insert("limit_price".into(), self.omit(params, Value::from(vec![])))');
+            expect(rust).toContain('orderParams.insert("order_type".into(), method.clone())');
+            const body = rust.slice(rust.indexOf('pub fn orderRequest('), rust.indexOf('pub fn createOrder('));
+            expect(body).not.toContain('= &mut orderParams');
+            expect(body).not.toContain('add_element_to_object');
+        });
+
+        test('the caller passes the bearer by reference', () => {
+            expect(rust).toContain('self.orderRequest(Value::Str("create".into()), Value::Map(request), &mut orderParams, &[params])');
+            expect(rust).toContain('let mut orderParams: indexmap::IndexMap<String, Value> = (');
+        });
+
+        test('publishing the map boxes a clone', () => {
+            expect(rust).toContain('insert("params".into(), Value::Map(orderParams.clone()))');
+        });
+
+        test('a parameter called with a plain `Value` keeps the box and the guard', () => {
+            expect(rust).toContain('pub fn plainOrder(&self, method: Value, request: Value, orderParams: Value');
+            expect(rust).toContain('if let Value::Dict(__d) = &mut orderParams');
+        });
+
+        test('a read-only parameter keeps its borrowed shadow', () => {
+            expect(rust).toContain('let orderParams = orderParams.as_map().unwrap_or(&__orderParams_empty);');
+        });
+    });
+
+    describe('owned map parameters: chained writes', () => {
+        test('a parameter written through a key chain stays boxed', () => {
+            const rust = transpiler.transpileRustByPath(path.join (fixtureRoot, 'hx10w9rp02chain', 'ts/src/venue.ts')).content;
+            expect(rust).toContain('pub fn watchMany(&self, request: Value, ids: Value)');
+            expect(rust).not.toContain('request: &mut indexmap::IndexMap<String, Value>');
+        });
+    });
+});
+
+describe ('hx10w9RP04', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    const PRELUDE = 'interface Dictionary<T> { [key: string]: T }\n' +
+        'type Dict = Dictionary<any>;\n' +
+        'type Str = string | undefined;\n' +
+        'interface MarketInterface { id?: string, symbol?: string }\n' +
+        'type Market = MarketInterface | undefined;\n' +
+        'class Base {\n' +
+        '    market (symbol: Str): Market { return undefined; }\n' +
+        '    safeString (o: any, k: any, def: any = undefined): any { return undefined; }\n' +
+        '    safeDict (o: any, k: any, def: any = undefined): Dict { return {}; }\n' +
+        '    parseOrderBook (o: any, s: Str): Dict { return {}; }\n' +
+        '    use (x: any): any { return x; }\n' +
+        '}\n' +
+        'class Venue extends Base {\n';
+
+    function rust(body: string): string {
+        return transpiler.transpileRust(PRELUDE + body + '}\n').content;
+    }
+
+    // hx10w9 RP04: `x[k] = v` / `k in x` on a typed dict bearer whose key is not a
+    // checker-proven `string`. The helper stores a non-`Str` key through
+    // `stringify_simple` — `stringify_param` is that function — and `in_op` only ever
+    // matches a `Str` key, so both stay exact on the bare `IndexMap`.
+    describe('hx10w9 RP04 bearer writes with a boxed key', () => {
+        test('a computed key writes through stringify_param, no helper, no cow guard', () => {
+            const out = rust('    build (values: any[]) {\n'
+                + '        const result: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + '            result[value["id"]] = [ value ];\n'
+                + '        }\n'
+                + '        return result;\n'
+                + '    }\n');
+            expect(out).toContain('let mut result: indexmap::IndexMap<String, Value> = (');
+            expect(out).toContain('result.insert(crate::runtime::stringify_param(&(crate::value::get_value_k(&value, "id"))), Value::from(vec![value]));');
+            expect(out).not.toContain('add_element_to_object(&mut result');
+            expect(out).not.toContain('if let Value::Dict(__d) = &mut result');
+        });
+
+        test('`k in x` on a bearer prints the map lookup behind the helper Str test', () => {
+            const out = rust('    has (values: any[]) {\n'
+                + '        const result: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + "            if (value['id'] in result) {\n"
+                + "                result[value['id']] = value;\n"
+                + '            }\n'
+                + '        }\n'
+                + '        return result;\n'
+                + '    }\n');
+            expect(out).toContain('let mut result: indexmap::IndexMap<String, Value> = (');
+            expect(out).toContain('if (matches!(&crate::value::get_value_k(&value, "id"), Value::Str(__k) if result.contains_key(__k.as_ref()))) {');
+            expect(out).toContain('result.insert(crate::runtime::stringify_param(&(crate::value::get_value_k(&value, "id"))), value.clone());');
+            expect(out).not.toContain('in_op(&result');
+            expect(out).not.toContain('add_element_to_object(&mut result');
+        });
+
+        test('a market member key writes natively and numeric keys stringify like the helper', () => {
+            const out = rust('    byMarket (parsedOrders: any[]) {\n'
+                + '        const marketIds: Dict = {};\n'
+                + '        for (let i = 0; i < parsedOrders.length; i++) {\n'
+                + '            const parsed = parsedOrders[i];\n'
+                + "            const market = this.market (parsed['symbol']);\n"
+                + "            if (market['id'] !== undefined) {\n"
+                + "                marketIds[market['id']] = true;\n"
+                + '            }\n'
+                + '        }\n'
+                + '        return Object.keys (marketIds);\n'
+                + '    }\n');
+            expect(out).toContain('let mut marketIds: indexmap::IndexMap<String, Value> = (');
+            expect(out).toContain('marketIds.insert(crate::runtime::stringify_param(&(market.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null))), Value::Bool(true));');
+            expect(out).toContain('Value::Array(marketIds.keys().map(|__k| Value::Str(__k.clone().into())).collect())');
+            expect(out).not.toContain('add_element_to_object(&mut marketIds');
+        });
+
+        test('a numeric key stringifies exactly like the helper', () => {
+            const out = rust('    indexed (v: any) {\n'
+                + '        const d: Dict = {};\n'
+                + '        d[0] = v;\n'
+                + '        return d;\n'
+                + '    }\n');
+            expect(out).toContain('d.insert(crate::runtime::stringify_param(&(Value::Int(0))), v.clone());');
+            expect(out).not.toContain('add_element_to_object(&mut d');
+        });
+
+        test('Object.keys on a bearer prints the iterators and unlocks the write', () => {
+            const out = rust('    keysOf (values: any[]) {\n'
+                + '        const seen: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + '            seen[value["id"]] = value;\n'
+                + '        }\n'
+                + '        return Object.keys (seen);\n'
+                + '    }\n');
+            expect(out).toContain('let mut seen: indexmap::IndexMap<String, Value> = (');
+            expect(out).toContain('seen.insert(crate::runtime::stringify_param(&(crate::value::get_value_k(&value, "id"))), value.clone());');
+            expect(out).toContain('Value::Array(seen.keys().map(|__k| Value::Str(__k.clone().into())).collect())');
+            expect(out).not.toContain('add_element_to_object(&mut seen');
+            expect(out).not.toContain('object_keys(&seen');
+        });
+
+        test('a proven-string key keeps the shipped key spelling', () => {
+            const out = rust('    keyed (values: any[], key: string) {\n'
+                + '        const result: Dict = {};\n'
+                + '        result[key] = values;\n'
+                + '        return result;\n'
+                + '    }\n');
+            expect(out).toContain('result.insert(crate::runtime::stringify_param(&key), values.clone());');
+        });
+
+        test('a value that reads the receiver still binds first', () => {
+            const out = rust('    self (values: any[]) {\n'
+                + '        const result: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + '            result[value["id"]] = this.use (result);\n'
+                + '        }\n'
+                + '        return result;\n'
+                + '    }\n');
+            expect(out).toContain('{ let __be_tmp = self.use(Value::Map(result.clone())); result.insert(');
+            expect(out).not.toContain('add_element_to_object(&mut result');
+        });
+
+        test('a receiver whose value can be anything keeps the helper', () => {
+            const out = rust('    plain (data: any) {\n'
+                + '        let order: any = this.safeDict (data, "order");\n'
+                + '        order["id"] = 1;\n'
+                + '        return order;\n'
+                + '    }\n');
+            expect(out).toContain('add_element_to_object(&mut order, &Value::Str("id".into()), Value::Int(1));');
+        });
+
+        test('a key with an assignment keeps the helper', () => {
+            const out = rust('    assigned (values: any[]) {\n'
+                + '        const result: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + '            result[(value["id"] = 1)] = value;\n'
+                + '        }\n'
+                + '        return result;\n'
+                + '    }\n');
+            expect(out).toContain('add_element_to_object(&mut result');
+        });
+
+        test('a read with a boxed key keeps the boxed local', () => {
+            const out = rust('    reader (values: any[]) {\n'
+                + '        const result: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + '            result[value["id"]] = value;\n'
+                + '        }\n'
+                + '        return result[values[0]["id"]];\n'
+                + '    }\n');
+            expect(out).toContain('let mut result: Value = Value::Map({');
+            expect(out).toContain('add_element_to_object(&mut result');
+        });
+    });
+});
+
+describe ('hx11w9RustStringMethodLocal', () => {
+    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
+
+    const transpiler = new Transpiler({ verbose: false, rust: { parser: { NUM_LINES_END_FILE: 0 } } });
+    const rust = (ts: string) => transpiler.transpileRust(ts).content;
+
+    describe('rust string-method locals print a native String', () => {
+        const cls = (body: string) => `class A extends Exchange { f(params: Dict, side: string): any { ${body} } }`;
+        test('capitalize local boxed only at its object-literal move', () => {
+            const out = rust(cls("const low = this.safeStringLower (params, 'k', 'd'); const tif: string = this.capitalize (low); return { 'tif': tif };"));
+            expect(out).toContain('let mut tif: String = self.capitalize(low');
+            expect(out).toContain('Value::from(tif)');
+        });
+        test('toUpperCase local on a string param, boxed at a request write', () => {
+            const out = rust(cls("const request: Dict = {}; const up: string = side.toUpperCase (); request['s'] = up; return request;"));
+            expect(out).toContain('let mut up: String = side.as_str().map(str::to_uppercase).unwrap_or_default();');
+        });
+        test('another use of the local keeps the Value box', () => {
+            const out = rust(cls("const up: string = side.toLowerCase (); if (up === 'a') { return 1; } return up;"));
+            expect(out).not.toContain('let mut up: String');
+        });
+    });
+});
+
+describe ('r05RemoveNative', () => {
+        // fixture trees are written to a temp dir so the suite carries no fixture files
+        const inlineFixtures: Record<string, Record<string, string>> = {
+     "r05": {
+      "ts/src/pro/venue.ts": "interface Dictionary<T> { [key: string]: T }\ntype Dict = Dictionary<any>;\n\nclass Client { subscriptions: Dictionary<any> = {}; futures: Dictionary<any> = {}; }\n\nexport default class venuews {\n    tickers: Dictionary<any> = {};\n    bidsasks: Dictionary<any> = {};\n    orders: Dictionary<any> = {};\n    options: Dict = {};\n\n    safeDict (obj, key: string, def: any = undefined) { return obj[key] || def; }\n    parsePosition (x) { return { 'a': x }; }\n\n    handle (client: Client, symbol: string, messageHash: string, total: Dict) {\n        delete this.tickers[symbol];\n        delete client.subscriptions[messageHash];\n        const subs = client.subscriptions;\n        delete subs[messageHash];\n        delete total[messageHash];\n        return 1;\n    }\n\n    purge (symbols: Value[], i: number, key: string, params: Dict) {\n        delete this.tickers[symbols[i]];\n        delete this.bidsasks[symbols[i]];\n        const stored = this.safeDict (this.options, 'symbolsByOrderId', {});\n        delete stored[key];\n        const balance: Dict = this.parsePosition (1);\n        delete balance[key];\n        const cache = this.orders;\n        delete cache[key];\n        delete this.tickers[this.options['x']];\n        delete this.tickers[params['x']];\n        return 1;\n    }\n}\n",
+      "ts/src/venue.ts": "interface Dictionary<T> { [key: string]: T }\ntype Dict = Dictionary<any>;\n\nexport default class venue {\n    tickers: Dictionary<any> = {};\n    options: Dict = {};\n\n    safeDict (obj, key: string, def: any = undefined) { return obj[key] || def; }\n\n    purge (symbols: Value[], i: number, key: string) {\n        delete this.tickers[symbols[i]];\n        const stored = this.safeDict (this.options, 'rows', {});\n        delete stored[key];\n        return 1;\n    }\n}\n"
+     }
+    };
+        const fixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-'));
+        for (const [dir, files] of Object.entries (inlineFixtures)) {
+            for (const [rel, text] of Object.entries (files)) {
+                const out = path.join (fixtureRoot, dir, rel);
+                fs.mkdirSync (path.dirname (out), { recursive: true });
+                fs.writeFileSync (out, text);
+            }
+        }
+        afterAll (() => fs.rmSync (fixtureRoot, { recursive: true, force: true }));
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    describe('hx10 R05 native `delete` with a computed key on a proven dict receiver', () => {
+        let rest = '';
+        let ws = '';
+        beforeAll(() => {
+            rest = transpiler.transpileRustByPath(path.join (fixtureRoot, 'r05', 'ts/src/venue.ts')).content;
+            ws = transpiler.transpileRustByPath(path.join (fixtureRoot, 'r05', 'ts/src/pro/venue.ts')).content;
+        });
+
+        test('an element-read key borrows beside the field', () => {
+            expect(rest).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut self.tickers, &get_value(&symbols, &i)) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
+            expect(ws).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut self.bidsasks, &get_value(&symbols, &i)) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
+        });
+
+        test('a declared-Dict local is admitted in a ws-capable tier too', () => {
+            expect(ws).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut stored, &key) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
+            expect(rest).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut stored, &key) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
+        });
+
+        test('a key that reads the receiver or a non-proven receiver keeps the helper', () => {
+            expect(ws).toContain('remove(&mut self.tickers, &self.options.as_map().and_then(|__m| __m.get("x")).cloned().unwrap_or(Value::Null))');
+            expect(ws).toContain('remove(&mut client.subscriptions, &messageHash)');
+            expect(ws).toContain('remove(&mut subs, &messageHash)');
+            expect(ws).toContain('remove(&mut total, &messageHash)');
+            expect(ws).toContain('remove(&mut balance, &key)');
+            expect(ws).toContain('remove(&mut cache, &key)');
+        });
+    });
+});
+
+describe ('rp05NestedDictWrite', () => {
+        // fixture trees are written to a temp dir so the suite carries no fixture files
+        const inlineFixtures: Record<string, Record<string, string>> = {
+     "rp05": {
+      "ts/src/venue.ts": "interface Dictionary<T> { [key: string]: T }\ntype Dict = Dictionary<any>;\n\nexport default class venue {\n    balance: Dict = {};\n    ohlcvs: Dict = {};\n    orderbook: any = {};\n    cache: any = {};\n    tickers: Dict = {};\n\n    omit (x, k) { return x; }\n\n    sign (path: string, params: Dict = {}) {\n        const marks = Object.keys (this.tickers);\n        params['x']['y'] = 5;\n        params['a']['b']['c'] = 8;\n        const code = 'USDT';\n        params[code]['free'] = 4;\n        const request: Dict = { 'a': 1 };\n        request['a']['b'] = 2;\n        const response: Dict = this.omit (params, 'x');\n        response['a']['b'] = 5;\n        this.orderbook['a']['b'] = 6;\n        return [ request, response, code, marks ];\n    }\n\n    dynamic (key: any, params: Dict = {}) {\n        const marks = Object.keys (this.tickers);\n        params[key]['b'] = 1;\n        params['a']['b'] = 2;\n        return [ params, marks ];\n    }\n}\n"
+     }
+    };
+        const fixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-'));
+        for (const [dir, files] of Object.entries (inlineFixtures)) {
+            for (const [rel, text] of Object.entries (files)) {
+                const out = path.join (fixtureRoot, dir, rel);
+                fs.mkdirSync (path.dirname (out), { recursive: true });
+                fs.writeFileSync (out, text);
+            }
+        }
+        afterAll (() => fs.rmSync (fixtureRoot, { recursive: true, force: true }));
+    jest.mock('module',()=>({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    describe('rp05 native nested dict writes on proven Dict parameters', () => {
+        let out = '';
+        beforeAll(() => {
+            const config = { 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+            out = new Transpiler(config).transpileRustByPath(path.join (fixtureRoot, 'rp05', 'ts/src/venue.ts')).content;
+        });
+
+        test('a Dict parameter takes the native get_mut hop and insert', () => {
+            expect(out).toContain('if let Value::Dict(__h0) = &mut params { if let Some(Value::Dict(__h1)) = std::sync::Arc::make_mut(__h0).get_mut("x") { std::sync::Arc::make_mut(__h1).insert("y".to_string(), Value::Int(5)); } }');
+        });
+
+        test('one get_mut hop per key, three levels deep', () => {
+            expect(out).toContain('if let Value::Dict(__h0) = &mut params { if let Some(Value::Dict(__h1)) = std::sync::Arc::make_mut(__h0).get_mut("a") { if let Some(Value::Dict(__h2)) = std::sync::Arc::make_mut(__h1).get_mut("b") { std::sync::Arc::make_mut(__h2).insert("c".to_string(), Value::Int(8)); } } }');
+        });
+
+        test('a checker-proven string hop key is stringified', () => {
+            expect(out).toContain('get_mut(&crate::runtime::stringify_param(&code))');
+        });
+
+        test('locals are left to the wave-2 text pass (no churn on its output)', () => {
+            expect(out).toContain('add_element_to_object(get_value_mut(&mut request, &Value::Str("a".into())), &Value::Str("b".into()), Value::Int(2));');
+        });
+
+        test('unproven receivers keep the helpers', () => {
+            // `omit` returns its argument: no plain-build proof, so the hop stays.
+            expect(out).toContain('add_element_to_object(get_value_mut(&mut response, &Value::Str("a".into())), &Value::Str("b".into()), Value::Int(5));');
+            // an `any` key proves no string
+            expect(out).toContain('add_element_to_object(get_value_mut(&mut params, &key), &Value::Str("b".into()), Value::Int(1));');
+        });
+
+        test('tagged handle fields keep the helpers', () => {
+            expect(out).toContain('add_element_to_object(get_value_mut(&mut self.orderbook, &Value::Str("a".into())), &Value::Str("b".into()), Value::Int(6));');
+        });
+    });
+});
+
+describe ('rustDictRead', () => {
+        // fixture trees are written to a temp dir so the suite carries no fixture files
+        const inlineFixtures: Record<string, Record<string, string>> = {
+     "rsdictread": {
+      "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport interface BalanceAccount { free: string | undefined, used: string | undefined, total: string | undefined }\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    options: Dict = {};\n    omit = omit;\n    extend = extend;\n    account (): BalanceAccount {\n        return { 'free': undefined, 'used': undefined, 'total': undefined };\n    }\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        return [ request, params ];\n    }\n    parseOrder (order: Dict): Dict {\n        return order;\n    }\n}\n",
+      "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    plainLocal (code) {\n        let result = undefined;\n        result = { 'a': 1 };\n        const viaCode = result[code];\n        const viaCore = result['core'];\n        const viaMarker = result['symbol'];\n        const has = code in result;\n        return [ viaCode, viaCore, viaMarker, has ];\n    }\n    dictyLocal (code) {\n        const merged = this.extend ({ 'a': 1 }, {});\n        const viaLit = merged['core'];\n        const viaCode = merged[code];\n        const hasCode = code in merged;\n        const hasLit = 'core' in merged;\n        return [ viaLit, viaCode, hasCode, hasLit ];\n    }\n    optionsField (code) {\n        const viaCode = this.options[code];\n        const viaLit = this.options['defaultType'];\n        const has = code in this.options;\n        return [ viaCode, viaLit, has ];\n    }\n    unprovenLocal (a, code) {\n        let x = a;\n        const viaLit = x['core'];\n        return [ viaLit, x[code] ];\n    }\n}\n"
+     }
+    };
+        const fixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-'));
+        for (const [dir, files] of Object.entries (inlineFixtures)) {
+            for (const [rel, text] of Object.entries (files)) {
+                const out = path.join (fixtureRoot, dir, rel);
+                fs.mkdirSync (path.dirname (out), { recursive: true });
+                fs.writeFileSync (out, text);
+            }
+        }
+        afterAll (() => fs.rmSync (fixtureRoot, { recursive: true, force: true }));
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn(),
+    }));
+
+    let output = '';
+
+    beforeAll(() => {
+        const transpiler = new Transpiler({ verbose: false, rust: { parser: { NUM_LINES_END_FILE: 0 } } } as any);
+        output = transpiler.transpileRustByPath(path.join (fixtureRoot, 'rsdictread', 'ts/src/venue.ts')).content;
+    });
+
+    const free = (recv: string, key: string) =>
+        `(if let (Some(__m), Some(__k)) = (${recv}.as_map(), ${key}.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
+
+    describe('rust closure-free dict reads (FM-RS1 L1)', () => {
+        test('a Str-place key into a fresh-literal local prints the closure-free read', () => {
+            expect(output).toContain(`let mut viaCode: Value = ${free('result', 'code')};`);
+            expect(output).not.toContain('get_value(&result, &code)');
+        });
+
+        test('a literal key into a proven local prints the native read', () => {
+            expect(output).toContain('let mut viaCore: Value = result.as_map().and_then(|__m| __m.get("core")).cloned().unwrap_or(Value::Null);');
+            expect(output).toContain('let mut viaLit: Value = merged.as_map().and_then(|__m| __m.get("core")).cloned().unwrap_or(Value::Null);');
+        });
+
+        test('a dict-only callee local reads a Str-place key closure-free', () => {
+            expect(output).toContain(`let mut viaCode: Value = ${free('merged', 'code')};`);
+        });
+
+        test('membership: a computed key on a dict-callee local keeps in_op (content unproven)', () => {
+            expect(output).toContain('Value::Bool(in_op(&merged, &code))');
+            expect(output).not.toContain('merged.as_map().is_some_and');
+        });
+
+        test('a base runtime-state field reads and tests membership natively', () => {
+            expect(output).toContain(`let mut viaCode: Value = ${free('self.options', 'code')};`);
+        });
+
+        test('an unproven local keeps the helper', () => {
+            expect(output).not.toContain('x.as_map()');
+            expect(output).toContain('get_value(&x, &code)');
+        });
+    });
+});
+
+describe ('rustPasses', () => {
+    describe('rust final-text passes (moved from ccxt build/)', () => {
+        test('every pass is exported from the package entry', () => {
+            for (const name of ['nativeGetValue', 'r02NativeInserts', 'hx10w2R03', 'r04Scalars', 'r06Push', 'r01TypedLocals',
+                'hx10w3R03', 'r04Callee', 'r05FieldChainInserts', 'r06w3Push', 'r07StringNatives', 'bf03PlainDictChains',
+                'r10ClientHandle', 'narrowStrSinkLocals', 'narrowStrNullLocals', 'hx11RustSignApiStr']) {
+                expect(typeof (passes as any)[name]).toBe('function');
+            }
+        });
+        const selfTests: { [k: string]: () => string[] | number } = {
+            hx10w2R03SelfTest, r04SelfTest, r06SelfTest, r01SelfTest, hx10R03SelfTest, r04CalleeSelfTest, r06w3SelfTest, r07StringSelfTest, r10SelfTest,
+        };
+        for (const [name, fn] of Object.entries(selfTests)) {
+            test(`${name} passes`, () => { expect(fn()).toEqual([]); });
+        }
+        test('r01W2 and RP02 self-tests pass', () => {
+            const log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+            try { expect(r01W2SelfTest()).toBe(0); expect(rp02SelfTest()).toBe(0); } finally { log.mockRestore(); }
+        });
+        test('narrowStrSinkLocals types a format!-only safe_string local', () => {
+            const src = 'pub fn f(&mut self) -> Value {\n    let mut s: Value = self.safe_string_k(x.clone(), "id", &[]);\n    let t: String = format!("a{}", s);\n    return Value::Null;\n}\n';
+            expect(passes.narrowStrSinkLocals(src)).toContain('safe_string_k_opt');
+        });
+        test('hx11RustSignApiStr is idempotent on unrelated text', () => {
+            const src = 'fn f() { let x = 1; }\n';
+            expect(passes.hx11RustSignApiStr(src)).toBe(src);
+        });
+        test('bf03PlainDictChains lowers a Value-ident key on balance/ohlcvs without get_value_mut', () => {
+            const src = 'pub fn f(&mut self, symbol: Value) {\n    let mut tf: Value = Value::Null;\n    if let Value::Dict(__r05d) = get_value_mut(&mut self.ohlcvs, &symbol) { std::sync::Arc::make_mut(__r05d).insert(crate::runtime::stringify_param(&tf), tf.clone()); }\n}\n';
+            const out = passes.bf03PlainDictChains(src);
+            expect(out).not.toContain('get_value_mut');
+            expect(out).toContain('.entry(crate::runtime::stringify_param(&symbol)).or_insert(Value::Null)');
+            const unknown = src.replace('symbol: Value', 'symbol: &str');
+            expect(passes.bf03PlainDictChains(unknown)).toContain('get_value_mut');
+        });
+    });
+
+    describe('narrowStrNullLocals inlined __pro_message read', () => {
+        const read = (name: string, key: string, dflt = 'Value::Null'): string => 'let mut ' + name + ': Value = (match __pro_message.get("' + key + '").cloned() { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s), '
+            + 'Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => ' + dflt + ' });';
+        test('narrows an inlined read used by a null test and an as_str compare', () => {
+            const src = 'fn f() {\n    ' + read('topic', 'topic') + '\n    if (topic != Value::Null) {\n        let ok = topic.as_str() == Some("a");\n    }\n}\n';
+            const out = passes.narrowStrNullLocals(src);
+            expect(out).toContain('let mut topic: Option<String> = match __pro_message.get("topic").cloned()');
+            expect(out).toContain('topic.is_some()');
+            expect(out).toContain('topic.as_deref() == Some("a")');
+        });
+        test('keeps Value when a use cannot be rewritten', () => {
+            const src = 'fn f() {\n    ' + read('topic', 'topic') + '\n    self.go(&mut topic);\n}\n';
+            expect(passes.narrowStrNullLocals(src)).toBe(src);
+        });
+        test('keeps a read with a non-Null default', () => {
+            const src = 'fn f() {\n    ' + read('topic', 'topic', 'Value::Str("".into())') + '\n    let a = topic.as_str();\n}\n';
+            expect(passes.narrowStrNullLocals(src)).toBe(src);
+        });
+    });
+
+    describe('narrowStrNullLocals inlined integer read', () => {
+        const intRead = 'let mut pong: Value = (match __pro_message.get("pong").cloned() { Some(Value::Int(__n)) => Value::Int(__n), Some(Value::Float(__f)) => Value::Int(__f as i64), '
+            + 'Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>() { Ok(__n) => Value::Int(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Value::Int(__f as i64), _ => Value::Null } }, _ => Value::Null });';
+        test('narrows to Option<i64> for a null test only', () => {
+            const out = passes.narrowStrNullLocals('fn f() {\n    ' + intRead + '\n    if (pong != Value::Null) { return; }\n}\n');
+            expect(out).toContain('let mut pong: Option<i64> = match __pro_message.get("pong").cloned()');
+            expect(out).toContain('pong.is_some()');
+        });
+        test('keeps Value when the integer is used otherwise', () => {
+            const src = 'fn f() {\n    ' + intRead + '\n    self.go(pong);\n}\n';
+            expect(passes.narrowStrNullLocals(src)).toBe(src);
+        });
+    });
+});
+
+describe ('rustPredictionBearers', () => {
+        // fixture trees are written to a temp dir so the suite carries no fixture files
+        const inlineFixtures: Record<string, Record<string, string>> = {
+     "hx10w6r12": {
+      "ts/src/prediction/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    extend (a: any, b: any): any {\n        return a;\n    }\n\n    use (a: any): any {\n        return a;\n    }\n\n    parseNestedAction (params: Dict = {}, vault: any = undefined) {\n        const orderAction: Dict = { 'type': 'order' };\n        orderAction['orders'] = [ this.use (params) ];\n        if (vault !== undefined) {\n            orderAction['vault'] = vault;\n        }\n        const signature = this.use (orderAction);\n        return { 'action': orderAction, 'signature': signature };\n    }\n\n    parseSingleMove (params: Dict = {}) {\n        const request: Dict = { 'limit': 10 };\n        request['type'] = 'limit';\n        return this.use (request);\n    }\n\n    parseReassigned (params: Dict = {}) {\n        let query: Dict = { 'limit': 10 };\n        query = this.extend (query, params);\n        return this.use (query);\n    }\n\n    parseCaptured (params: Dict = {}) {\n        const seen: Dict = {};\n        seen['a'] = true;\n        return [ 1, 2 ].map ((x) => this.use (seen) as any);\n    }\n\n    parseShorthand (params: Dict = {}) {\n        const inner: Dict = { 'a': 1 };\n        return { inner };\n    }\n}\n",
+      "ts/src/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    extend (a: any, b: any): any {\n        return a;\n    }\n\n    use (a: any): any {\n        return a;\n    }\n\n    parseNestedAction (params: Dict = {}, vault: any = undefined) {\n        const orderAction: Dict = { 'type': 'order' };\n        orderAction['orders'] = [ this.use (params) ];\n        if (vault !== undefined) {\n            orderAction['vault'] = vault;\n        }\n        const signature = this.use (orderAction);\n        return { 'action': orderAction, 'signature': signature };\n    }\n}\n"
+     }
+    };
+        const fixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-'));
+        for (const [dir, files] of Object.entries (inlineFixtures)) {
+            for (const [rel, text] of Object.entries (files)) {
+                const out = path.join (fixtureRoot, dir, rel);
+                fs.mkdirSync (path.dirname (out), { recursive: true });
+                fs.writeFileSync (out, text);
+            }
+        }
+        afterAll (() => fs.rmSync (fixtureRoot, { recursive: true, force: true }));
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    // hx10w6 R12: a prediction venue nests one request map inside another (`{ action: obj }`,
+    // `this.use (obj, …)`), so the typed-bearer proof admits several escapes there, each boxed
+    // as a clone; every other tier keeps the single-final-move rule.
+    describe('prediction-tier multi-escape dict bearers', () => {
+        let prediction = '';
+        let rest = '';
+
+        beforeAll(() => {
+            prediction = transpiler.transpileRustByPath(path.join (fixtureRoot, 'hx10w6r12', 'ts/src/prediction/venue.ts')).content;
+            rest = transpiler.transpileRustByPath(path.join (fixtureRoot, 'hx10w6r12', 'ts/src/venue.ts')).content;
+        });
+
+        test('a nested builder writes natively and boxes a clone per escape', () => {
+            expect(prediction).toContain('let mut orderAction: indexmap::IndexMap<String, Value> = (');
+            expect(prediction).toContain('orderAction.insert("orders".into(), Value::from(vec![self.use(params)]));');
+            expect(prediction).toContain('self.use(Value::Map(orderAction.clone()))');
+            expect(prediction).toContain('m.insert("action".to_string(), Value::Map(orderAction.clone()));');
+            expect(prediction).not.toContain('add_element_to_object(&mut orderAction');
+            expect(prediction).not.toContain('if let Value::Dict(__d) = &mut orderAction');
+        });
+
+        test('a single final move still moves the map', () => {
+            expect(prediction).toContain('let mut request: indexmap::IndexMap<String, Value> = (');
+            expect(prediction).toContain('request.insert("type".into(), Value::Str("limit".into()));');
+            expect(prediction).toContain('return self.use(Value::Map(request));');
+        });
+
+        test('a reassigned local keeps the box', () => {
+            expect(prediction).toContain('let mut query: Value = Value::Map({');
+            expect(prediction).toContain('query = self.extend(query, params);');
+        });
+
+        test('a closure capture keeps the box', () => {
+            expect(prediction).toContain('let mut seen: Value = Value::Map({');
+            expect(prediction).toContain('if let Value::Dict(__d) = &mut seen { std::sync::Arc::make_mut(__d).insert("a".into(), Value::Bool(true)); }');
+        });
+
+        test('a shorthand property keeps the box', () => {
+            expect(prediction).toContain('let mut inner: Value = Value::Map({');
+            expect(prediction).toContain('m.insert("inner".to_string(), inner.clone());');
+        });
+
+        test('outside the prediction tier the R01 rule types it: clone before the last use, move at it', () => {
+            expect(rest).toContain('let mut orderAction: indexmap::IndexMap<String, Value> = (');
+            expect(rest).toContain('self.use(Value::Map(orderAction.clone()))');
+            expect(rest).toContain('Value::Map(orderAction));');
+        });
     });
 });

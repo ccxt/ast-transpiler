@@ -3,6 +3,13 @@ import { readFileSync } from 'fs';
 // the test bodies name their TS source snippets `ts`, so the compiler API gets its own name
 import { SyntaxKind } from 'typescript/unstable/ast';
 import { isStringLiteralLikeNode } from 'typescript/unstable/ast/is';
+import { describe } from '@jest/globals';
+import { test } from '@jest/globals';
+import { expect } from '@jest/globals';
+import * as fs from 'fs';
+import * as path from 'path';
+import fs__hx11FoldC01BaseListParams from 'fs';
+import path__hx11FoldC01BaseListParams from 'path';
 jest.mock('module',()=>({
     __esModule: true,                 // this makes it work
     default: jest.fn()
@@ -6637,5 +6644,2076 @@ describe('csharp native Promise.all keeps the helper for typed map aliases (hx10
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toContain('promiseAll(');
         expect(output).not.toContain('Task.WhenAll');
+    });
+});
+
+describe ('c07inop-equality', () => {
+    const transpiler = new Transpiler();
+    const printer = () => (transpiler as any).csharpTranspiler;
+    // the embedding build layer (ccxt: build/csharp-local-types.js) answers csharpExpressionTypeResolver
+    // for the locals it prints with its own C# type: the reads are then already those types
+    const cs = (input: string, types: { [name: string]: string } = {}) => {
+        const target = printer();
+        target.csharpExpressionTypeResolver = (node) => types[node?.text];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            target.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const DICT = 'type Dict = { [key: string]: any };\n';
+
+    describe('csharp isEqual over printed numeric arithmetic and hand-written number fields', () => {
+        test('an integer modulo an integer literal prints the operator', () => {
+            const output = cs(
+            "class A {\n" +
+            "    run (params: Dict) {\n" +
+            "        const i = this.safeInteger(params, 'i');\n" +
+            "        if ((i % 2) === 0) { return 1; }\n" +
+            "        if ((i % 2) !== 0) { return 2; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n", { i: 'int' });
+            expect(output).toContain('((Int64)i % 2L == 0)');
+            expect(output).toContain('((Int64)i % 2L != 0)');
+            expect(output).not.toContain('isEqual(');
+        });
+        test('a modulo that still prints the mod helper keeps isEqual', () => {
+            const output = cs(
+            "class A {\n" +
+            "    run (params: Dict) {\n" +
+            "        const msInt = this.safeInteger(params, 'ms');\n" +
+            "        const week = this.safeInteger(params, 'w');\n" +
+            "        if ((msInt % week) === 0) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n", { msInt: 'Int64', week: 'Int64' });
+            expect(output).toContain('isEqual((mod(msInt, week)), 0)');
+        });
+        test('a literal the integer kind cannot hold keeps the helper', () => {
+            const output = cs(
+            "class A {\n" +
+            "    run (params: Dict) {\n" +
+            "        const i = this.safeInteger(params, 'i');\n" +
+            "        if ((i % 2) === 0.5) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n", { i: 'int' });
+            expect(output).toContain('isEqual(');
+        });
+        test('a hand-written double field against a literal prints the operator', () => {
+            const output = cs(
+            "class A {\n" +
+            "    rateLimit: number = 2000;\n" +
+            "    rollingWindowSize: number = 0;\n" +
+            "    run () {\n" +
+            "        if (this.rateLimit === -1) { return 1; }\n" +
+            "        if (this.rollingWindowSize === 0) { return 2; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n");
+            expect(output).toContain('(this.rateLimit == -1)');
+            expect(output).toContain('(this.rollingWindowSize == 0)');
+            expect(output).not.toContain('isEqual(');
+        });
+        test('an object-boxed field keeps the helper', () => {
+            const output = cs(
+            "class A {\n" +
+            "    precisionMode: any = 2;\n" +
+            "    run () {\n" +
+            "        if (this.precisionMode === 2) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n");
+            expect(output).toContain('isEqual(');
+        });
+        test('an object-typed local keeps the helper', () => {
+            const output = cs(
+            "class A {\n" +
+            "    run (x: any) {\n" +
+            "        if ((x % 2) === 0) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n");
+            expect(output).toContain('isEqual(');
+        });
+    });
+
+    describe('csharp inOp on `this.headers`', () => {
+        test('the printer leaves the site to the build layer (which emits the null guard)', () => {
+            // the embedding build layer prints this site natively WITH the helper's null test (inOp
+            // answers false for a null receiver); a printer-table entry would drop that guard
+            const output = cs(DICT +
+            "class A {\n" +
+            "    headers: Dict = {};\n" +
+            "    run () {\n" +
+            "        if ('x-simulated-trading' in this.headers) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n");
+            expect(output).toContain('inOp(this.headers, "x-simulated-trading")');
+        });
+    });
+
+    // the build layer types a numeric declaration (`Int64 week = (7 * day)`) without answering for the
+    // later read, so the equality rule asks the declaration itself: getCSharpLocalType is the function
+    // that printed the `<type> <name> =` prefix
+    const csDeclared = (input: string, types: { [name: string]: string }, declared: { [name: string]: string }) => {
+        const target = printer();
+        target.csharpExpressionTypeResolver = (node) => types[node?.text];
+        const original = target.getCSharpLocalType;
+        target.getCSharpLocalType = (declaration) => declared[declaration?.name?.text] ?? original.call(target, declaration);
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            target.csharpExpressionTypeResolver = undefined;
+            target.getCSharpLocalType = original;
+        }
+    };
+
+    describe('csharp isEqual over printed arithmetic against a declaration-typed number', () => {
+        test('an Int64 remainder against a declared int local prints the operator', () => {
+            const output = csDeclared(
+            DICT +
+            "class A {\n" +
+            "    run (params: Dict) {\n" +
+            "        const i = this.safeInteger(params, 'i');\n" +
+            "        const n = this.safeInteger(params, 'n');\n" +
+            "        if (i % 2 === n) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n", { i: 'int' }, { n: 'int' });
+            expect(output).toContain('== n)');
+            expect(output).not.toContain('isEqual(');
+        });
+        test('an Int64 remainder against a declared Int64 local prints the operator', () => {
+            const output = csDeclared(
+            DICT +
+            "class A {\n" +
+            "    run (params: Dict) {\n" +
+            "        const i = this.safeInteger(params, 'i');\n" +
+            "        const n = this.safeInteger(params, 'n');\n" +
+            "        if (i % 2 !== n) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n", { i: 'int' }, { n: 'Int64?' });
+            expect(output).toContain('!= n)');
+            expect(output).not.toContain('isEqual(');
+        });
+        test('a declared double local keeps the helper (isEqual truncates, the operator does not)', () => {
+            const output = csDeclared(
+            DICT +
+            "class A {\n" +
+            "    run (params: Dict) {\n" +
+            "        const i = this.safeInteger(params, 'i');\n" +
+            "        const n = this.safeNumber(params, 'n');\n" +
+            "        if (i % 2 === n) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n", { i: 'int' }, { n: 'double' });
+            expect(output).toContain('isEqual(');
+        });
+        test('an object-declared local keeps the helper', () => {
+            const output = csDeclared(
+            DICT +
+            "class A {\n" +
+            "    run (params: Dict) {\n" +
+            "        const i = this.safeInteger(params, 'i');\n" +
+            "        const n = this.safeValue(params, 'n');\n" +
+            "        if (i % 2 === n) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n", { i: 'int' }, {});
+            expect(output).toContain('isEqual(');
+        });
+    });
+});
+
+describe ('csharpBaseDictionaryViews', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const config = {
+        'verbose': false,
+        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+    };
+
+    // a class declaring the hand-written base members the way ts/src/base/Exchange.ts does
+    const klass = (body: string, params = 'code: string') => [
+        'class Exchange {',
+        '    urls: any;',
+        '    requiredCredentials: any;',
+        '    currencies: any;',
+        '    positions: any;',
+        '    other: any;',
+        `    f (${params}) {`,
+        body,
+        '    }',
+        '}',
+    ].join('\n');
+
+    const printed = (body: string, params?: string): string => new Transpiler(config).transpileCSharp(klass(body, params)).content;
+
+    const API_WS = '(this.urlsApi != null && this.urlsApi.ContainsKey("ws") ? this.urlsApi["ws"] : null)';
+
+    describe('csharp typed views of the hand-written base dictionaries', () => {
+        test('urls[\'api\'][literal] reads the urlsApi view instead of getValue', () => {
+            const out = printed('        const a = this.urls[\'api\'][\'ws\'];\n        return a;');
+            expect(out).toContain(`object a = ${API_WS};`);
+            expect(out).not.toContain('getValue(');
+        });
+
+        test('an `as` assertion and parentheses around urls[\'api\'] print as the operand', () => {
+            const out = printed('        const a = (this.urls[\'api\'] as any)[\'ws\'];\n        return a;');
+            expect(out).toContain(`object a = ${API_WS};`);
+        });
+
+        test('a string-declared key keeps the helper\'s key test, an untyped key casts like GetValue', () => {
+            const local = printed('        const key = \'k\' + \'1\';\n        return this.urls[\'api\'][key];');
+            expect(local).toContain('(this.urlsApi != null && key != null && this.urlsApi.ContainsKey(key) ? this.urlsApi[key] : null)');
+            const param = printed('        return this.currencies[code];');
+            expect(param).toContain('(this.currenciesDict != null && code != null && this.currenciesDict.ContainsKey((string)code) ? this.currenciesDict[(string)code] : null)');
+        });
+
+        test('currencies and requiredCredentials: Object.keys and `in` use the typed member', () => {
+            const out = printed('        const keys = Object.keys (this.currencies);\n        const names = Object.keys (this.requiredCredentials);\n        return [ keys, names, \'x\' in this.currencies, \'y\' in this.requiredCredentials ];');
+            expect(out).toContain('new List<object>(this.currenciesDict.Keys)');
+            expect(out).toContain('new List<object>(this.requiredCredentials.Keys)');
+            expect(out).toContain('(this.currenciesDict != null && this.currenciesDict.ContainsKey("x"))');
+            expect(out).toContain('(this.requiredCredentials != null && this.requiredCredentials.ContainsKey("y"))');
+            expect(out).not.toContain('(IDictionary<string,object>)this.');
+            expect(out).not.toContain('inOp(');
+        });
+
+        test('a declared IDictionary member is its own receiver for writes (no identity cast)', () => {
+            const out = printed('        this.requiredCredentials[\'apiKey\'] = code;');
+            expect(out).toContain('this.requiredCredentials["apiKey"] = ');
+            expect(out).not.toContain('(IDictionary<string,object>)this.requiredCredentials');
+        });
+
+        test('members without a declared dictionary view keep the helper and the cast', () => {
+            const positions = printed('        return this.positions[code];');
+            expect(positions).toContain('getValue(this.positions, code)');
+            expect(positions).not.toContain('IDictionary');
+            const other = printed('        return this.urls[\'test\'][\'ws\'];');
+            expect(other).not.toContain('urlsApi');
+            const nonLiteralSection = printed('        return this.urls[code][\'ws\'];');
+            expect(nonLiteralSection).not.toContain('urlsApi');
+            const numeric = printed('        return this.currencies[code];', 'code: number');
+            expect(numeric).toContain('getValue(this.currencies, code)');
+        });
+
+        test('a write target and a delete are never rewritten to the view', () => {
+            const out = printed('        this.currencies[\'BTC\'] = code;\n        delete this.currencies[\'ETH\'];');
+            expect(out).not.toContain('currenciesDict');
+        });
+    });
+});
+
+describe ('csharpDeclaredStringIndexRead', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const config = {
+        'verbose': false,
+        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+    };
+
+    // `declared` answers csharpStringReceiverType, the hook the embedding build layer fills with the
+    // type its retyped declaration carries
+    function printed(source: string, declared?: string): string {
+        const transpiler = new Transpiler(config);
+        if (declared !== undefined) {
+            (transpiler as any).csharpTranspiler.csharpStringReceiverType = (receiver: any) => (receiver?.text === 'id' ? declared : undefined);
+        }
+        return transpiler.transpileCSharp(source).content;
+    }
+
+    const body = (lines: string) => 'class T {\n    f (id: string, rows: any, i: number) {\n' + lines + '\n    }\n}';
+
+    describe('csharp literal-index read on a declared string local', () => {
+        test('a string? receiver reads through the indexer with the helper null and range tests', () => {
+            const out = printed(body('        return id[0];'), 'string?');
+            expect(out).toContain('(id != null && 0 < id.Length ? id[0].ToString () : null)');
+            expect(out).not.toContain('getValue(id, 0)');
+        });
+
+        test('a string receiver and a larger literal index', () => {
+            expect(printed(body('        return id[3];'), 'string')).toContain('(id != null && 3 < id.Length ? id[3].ToString () : null)');
+        });
+
+        test('an object-declared or unknown receiver keeps the helper', () => {
+            expect(printed(body('        return id[0];'))).toContain('getValue(id, 0)');
+            expect(printed(body('        return id[0];'), 'object')).toContain('getValue(id, 0)');
+            expect(printed(body('        return id[0];'), 'List<object>')).not.toContain('.ToString ()');
+        });
+
+        test('a non-literal index, a string key and a foreign receiver keep the helper', () => {
+            expect(printed(body('        return id[i];'), 'string?')).not.toContain('.ToString ()');
+            expect(printed(body('        return id[\'a\'];'), 'string?')).not.toContain('.Length');
+            expect(printed(body('        return rows[0];'), 'string?')).not.toContain('.Length');
+        });
+
+        test('a write target keeps its printed form', () => {
+            const out = printed(body('        id[0] = \'x\';'), 'string?');
+            expect(out).not.toContain('.Length');
+        });
+    });
+});
+
+describe ('csharpElementRowLocal', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const config = {
+        'verbose': false,
+        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+    };
+
+    function printed(source: string, enabled: boolean): string {
+        const transpiler = new Transpiler(config);
+        if (enabled) {
+            (transpiler as any).csharpTranspiler.csharpElementRowLocalSource = () => true;
+        }
+        return transpiler.transpileCSharp(source).content;
+    }
+
+    const HEAD = 'IDictionary<string, object> row = ((IDictionary<string, object>)getValue(list, i));';
+
+    const body = (lines: string) => 'class T {\n    f (list, i) {\n' + lines + '\n    }\n}';
+
+    describe('csharp element-row locals', () => {
+        test('a row read only through string keys declares the dictionary', () => {
+            const ts = body('        const row = list[i];\n        const a = row[\'a\'];\n        row[\'b\'] = 1;\n        return a;');
+            expect(printed(ts, true)).toContain(HEAD);
+            expect(printed(ts, false)).toContain('object row = getValue(list, i);');
+        });
+
+        test('a safe* reader and a null test count as dictionary uses', () => {
+            const ts = body('        const row = list[i];\n        if (row !== undefined) {\n            return this.safeString (row, \'a\');\n        }\n        return row[\'b\'];');
+            expect(printed(ts, true)).toContain(HEAD);
+        });
+
+        test('a use that is not a dictionary read keeps object', () => {
+            for (const use of [ 'return row;', 'return row[0];', 'return this.foo (row);', 'return row + 1;', 'row = list[0];' ]) {
+                const ts = body('        let row = list[i];\n        const a = row[\'a\'];\n        ' + use);
+                expect(printed(ts, true)).not.toContain('IDictionary<string, object> row');
+            }
+        });
+
+        test('a string-keyed initializer, a non-read local and the market names keep object', () => {
+            expect(printed(body('        const row = list[\'k\'];\n        return row[\'a\'];'), true)).not.toContain('IDictionary<string, object> row');
+            expect(printed(body('        const row = list[i];\n        return 1;'), true)).not.toContain('IDictionary<string, object> row');
+            expect(printed(body('        const market = list[i];\n        return market[\'a\'];'), true)).not.toContain('IDictionary<string, object> market');
+        });
+
+        test('a member-cache element read (this.orderbooks[sym]) is left to the host families', () => {
+            const ts = body('        const row = this.orderbooks[i];\n        return row[\'a\'];');
+            expect(printed(ts, true)).not.toContain('IDictionary<string, object> row');
+        });
+
+        test('a second binding of the name keeps object', () => {
+            const ts = body('        const row = list[i];\n        const a = row[\'a\'];\n        if (a) {\n            const row = list[0];\n            return row[\'c\'];\n        }\n        return a;');
+            expect(printed(ts, true)).not.toContain('IDictionary<string, object> row');
+        });
+
+        test('the source predicate decides per file', () => {
+            const transpiler = new Transpiler(config);
+            (transpiler as any).csharpTranspiler.csharpElementRowLocalSource = () => false;
+            const ts = body('        const row = list[i];\n        return row[\'a\'];');
+            expect(transpiler.transpileCSharp(ts).content).toContain('object row = getValue(list, i);');
+        });
+
+        test('without a host hook the default source rule keeps virtual (non ts/src) files on object', () => {
+            const transpiler = new Transpiler(config);
+            const ts = body('        const row = list[i];\n        return row[\'a\'];');
+            expect(transpiler.transpileCSharp(ts).content).toContain('object row = getValue(list, i);');
+        });
+    });
+});
+
+describe ('csharpNullableStateFields', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // Hand-written BaseExchange fields declared in cs/ccxt/base/Exchange.Options.cs as
+    // `IDictionary<string, object> fees|requiredCredentials` and `List<object> accounts` stay null until
+    // initializeProperties stores the describe() row, so a native read carries the helper's null test.
+    const config = {
+        'verbose': false,
+        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+    };
+
+    // the build layer (build/csharp-local-types.js) answers the declared C# type of a local through
+    // csharpLocalTypeOf; this stands in for it: the loop counter `i` is an int, `key` a string?
+    const DECLARED: { [name: string]: any } = {
+        'fees': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
+        'requiredCredentials': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
+        'accounts': { type: 'List<object>', initializer: 'new List<object>()' },
+    };
+    function printed(lines: string): string {
+        const source = 'class BaseExchange {\n    fees: any; requiredCredentials: any; accounts: any[];\n    f (key: string | undefined) {\n' + lines + '\n    }\n}';
+        const transpiler = new Transpiler(config);
+        (transpiler as any).csharpTranspiler.csharpLocalTypeOf = (node: any) => ({ 'i': 'int', 'key': 'string?' } as any)[node.text];
+        // hx11 RF-cs-2: the member rules read the declared C# type of the hand-written members (Exchange.Options.cs);
+        // the fixture declares the same three members, the expectations below are unchanged
+        (transpiler as any).csharpTranspiler.csharpDeclaredMemberType = (owner: string, name: string) => (owner === 'this' ? DECLARED : {} as any)[name];
+        return transpiler.transpileCSharp(source).content;
+    }
+
+    describe('csharp nullable hand-written state fields', () => {
+        test('a literal key on a dictionary field is a guarded ContainsKey read', () => {
+            const out = printed('        const a = this.fees[\'trading\'];\n        const b = this.requiredCredentials[\'apiKey\'];\n        return [ a, b ];');
+            expect(out).toContain('(this.fees != null && this.fees.ContainsKey(\"trading\") ? this.fees[\"trading\"] : null)');
+            expect(out).toContain('(this.requiredCredentials != null && this.requiredCredentials.ContainsKey(\"apiKey\") ? this.requiredCredentials[\"apiKey\"] : null)');
+        });
+
+        test('a literal index on the list field is a guarded Count read', () => {
+            const out = printed('        return this.accounts[0];');
+            expect(out).toContain('(this.accounts != null && 0 < this.accounts.Count ? this.accounts[0] : null)');
+        });
+
+        test('an int loop counter indexes the list field, the length is the null-conditional count', () => {
+            const out = printed('        for (let i = 0; i < this.accounts.length; i++) {\n            const account = this.accounts[i];\n        }');
+            expect(out).toContain('(this.accounts?.Count ?? 0)');
+            expect(out).toContain('(this.accounts != null && i < this.accounts.Count ? this.accounts[i] : null)');
+        });
+
+        test('a string-typed key on the dictionary field carries the key null test', () => {
+            const out = printed('        const key = this.safeString ({}, \'k\');\n        return this.requiredCredentials[key];');
+            expect(out).toContain('this.requiredCredentials != null && key != null && this.requiredCredentials.ContainsKey(key) ? this.requiredCredentials[key] : null');
+        });
+
+        test('`in` on a dictionary field tests the receiver for null', () => {
+            const out = printed('        return \'BTC\' in this.requiredCredentials;');
+            expect(out).toContain('(this.requiredCredentials != null && this.requiredCredentials.ContainsKey(\"BTC\"))');
+        });
+
+        test('shapes with no native twin keep the helper', () => {
+            const out = printed('        const a = this.accounts[\'x\'];\n        const b = this.fees[0];\n        const c = this.positions[\'x\'];\n        return [ a, b, c ];');
+            expect(out).toContain('getValue(this.accounts, \"x\")');
+            expect(out).toContain('getValue(this.fees, 0)');
+            expect(out).not.toContain('this.accounts.ContainsKey');
+            expect(out).not.toContain('this.fees.Count');
+        });
+    });
+});
+
+describe ('csharpPromiseAllImplicitApi', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // RF-cs-2 a: `await Promise.all (list)` whose every element is the Task<T> of an implicit-API endpoint
+    // (a method of the generated ts/src/abstract/<ex>.ts class) with ONE plain T prints a List<Task<T>> and
+    // awaits it with Task.WhenAll; T comes from the endpoint's declared Promise<...> type.
+    describe('csharp promiseAll over implicit-API tasks -> Task.WhenAll (RF-cs-2 a)', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-rfcs2a-promiseall');
+        const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+        const ABSTRACT = path.join(TMP, 'ts', 'src', 'abstract', 'x.ts');
+        const VENUE = path.join(TMP, 'ts', 'src', 'v.ts');
+        let out: string;
+
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(BASE), { recursive: true });
+            fs.mkdirSync(path.dirname(ABSTRACT), { recursive: true });
+            fs.writeFileSync(BASE,
+                "export type Dict = { [key: string]: any };\n" +
+                "export type List = any[];\n" +
+                "export class T {\n" +
+                "    request(path: any, api: any, method: any, params: any, config: any): Promise<any> { return undefined as any; }\n" +
+                "    extend(...args: any[]): any { return {}; }\n" +
+                "}\n");
+            fs.writeFileSync(ABSTRACT,
+                "import { T, Dict, List } from '../base/Exchange.js';\n" +
+                "export abstract class X extends T {\n" +
+                "    publicGetA (params = {}): Promise<Dict> { return this.request ('a', 'public', 'GET', params, {}); }\n" +
+                "    publicGetB (params = {}): Promise<Dict> { return this.request ('b', 'public', 'GET', params, {}); }\n" +
+                "    publicGetL (params = {}): Promise<List> { return this.request ('l', 'public', 'GET', params, {}); }\n" +
+                "    publicGetU (params = {}): Promise<Dict | List> { return this.request ('u', 'public', 'GET', params, {}); }\n" +
+                "}\n");
+            fs.writeFileSync(VENUE,
+                "import { X } from './abstract/x.js';\n" +
+                "import { List } from './base/Exchange.js';\n" +
+                "export class V extends X {\n" +
+                "    async own (params = {}): Promise<List> { return []; }\n" +
+                // 1: a literal of two dict endpoints
+                "    async literal (params = {}): Promise<any> {\n" +
+                "        const r = await Promise.all ([ this.publicGetL (params), this.publicGetL (params) ]);\n" +
+                "        return r;\n" +
+                "    }\n" +
+                // 2: a list filled by push in a loop
+                "    async pushed (params = {}): Promise<any> {\n" +
+                "        const promises = [];\n" +
+                "        for (let i = 0; i < 2; i++) {\n" +
+                "            promises.push (this.publicGetL (params));\n" +
+                "        }\n" +
+                "        const responses = await Promise.all (promises);\n" +
+                "        for (let i = 0; i < responses.length; i++) {\n" +
+                "            this.extend (responses[i], {});\n" +
+                "        }\n" +
+                "        return responses;\n" +
+                "    }\n" +
+                // 3: task locals read nowhere else, destructured result
+                "    async locals (params = {}): Promise<any> {\n" +
+                "        const a = this.publicGetL (params);\n" +
+                "        const b = this.publicGetL (params);\n" +
+                "        const [ first, second ] = await Promise.all ([ a, b ]);\n" +
+                "        return [ first, second ];\n" +
+                "    }\n" +
+                // 4: a union endpoint keeps the widest T, the way the generated api spells it
+                "    async union (params = {}): Promise<any> {\n" +
+                "        const r = await Promise.all ([ this.publicGetU (params), this.publicGetU (params) ]);\n" +
+                "        return r;\n" +
+                "    }\n" +
+                "    async dictAu03 (params = {}): Promise<any> {\n" +
+                "        const r = await Promise.all ([ this.publicGetA (params), this.publicGetB (params) ]);\n" +
+                "        return r;\n" +
+                "    }\n" +
+                // negatives
+                "    async mixed (params = {}): Promise<any> {\n" +
+                "        const r = await Promise.all ([ this.publicGetL (params), this.publicGetU (params) ]);\n" +
+                "        return r;\n" +
+                "    }\n" +
+                "    async ownMethod (params = {}): Promise<any> {\n" +
+                "        const r = await Promise.all ([ this.own (params), this.own (params) ]);\n" +
+                "        return r;\n" +
+                "    }\n" +
+                "    async escapes (params = {}): Promise<any> {\n" +
+                "        const promises = [];\n" +
+                "        promises.push (this.publicGetL (params));\n" +
+                "        this.extend (promises, {});\n" +
+                "        const r = await Promise.all (promises);\n" +
+                "        return r;\n" +
+                "    }\n" +
+                "    async localReadTwice (params = {}): Promise<any> {\n" +
+                "        const a = this.publicGetL (params);\n" +
+                "        this.extend (a, {});\n" +
+                "        const r = await Promise.all ([ a, this.publicGetL (params) ]);\n" +
+                "        return r;\n" +
+                "    }\n" +
+                "    async letResult (params = {}): Promise<any> {\n" +
+                "        let r = await Promise.all ([ this.publicGetL (params), this.publicGetL (params) ]);\n" +
+                "        r = [];\n" +
+                "        return r;\n" +
+                "    }\n" +
+                "    async notAList (promises: any, params = {}): Promise<any> {\n" +
+                "        const r = await Promise.all (promises);\n" +
+                "        return r;\n" +
+                "    }\n" +
+                "}\n");
+            const byPath = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            out = byPath.transpileCSharpByPath(VENUE).content;
+        });
+
+        afterAll(() => {
+            fs.rmSync(TMP, { recursive: true, force: true });
+        });
+
+        // the text of one printed method
+        const method = (name: string): string => {
+            const start = out.indexOf(' ' + name + '(');
+            expect(start).toBeGreaterThan(-1);
+            const next = out.indexOf('\n    public ', start + 1);
+            return out.substring(start, next < 0 ? out.length : next);
+        };
+
+        test('a literal of list endpoints awaits through a typed List<Task<T>>', () => {
+            const body = method('literal');
+            expect(body).toContain('List<object> r = new List<object>(await Task.WhenAll(new List<Task<List<object>>> {this.publicGetL(parameters), this.publicGetL(parameters)}));');
+            expect(body).not.toContain('promiseAll(');
+        });
+
+        test('a list filled by push is declared with the task type and awaited natively', () => {
+            const body = method('pushed');
+            expect(body).toContain('List<Task<List<object>>> promises = new List<Task<List<object>>>() {};');
+            expect(body).toContain('promises.Add(this.publicGetL(parameters));');
+            expect(body).toContain('new List<object>(await Task.WhenAll(promises))');
+            expect(body).not.toContain('promiseAll(');
+            expect(body).not.toContain('((IList<object>)promises)');
+        });
+
+        test('task locals feeding the list are declared as their Task<T>', () => {
+            const body = method('locals');
+            expect(body).toContain('Task<List<object>> a = this.publicGetL(parameters);');
+            expect(body).toContain('Task<List<object>> b = this.publicGetL(parameters);');
+            expect(body).toContain('new List<object>(await Task.WhenAll(new List<Task<List<object>>>() {a, b}))');
+            expect(body).not.toContain('promiseAll(');
+        });
+
+        test('a dict endpoint stays with the AU03 task-local plan', () => {
+            const body = method('dictAu03');
+            expect(body).toMatch(/await Task\.WhenAll\(hxauTask\d+_\d+, hxauTask\d+_\d+\);/);
+            expect(body).not.toContain('List<Task<');
+        });
+
+        test('a union endpoint keeps the widest task type', () => {
+            const body = method('union');
+            expect(body).toContain('new List<object>(await Task.WhenAll(new List<Task<object>> {this.publicGetU(parameters), this.publicGetU(parameters)}))');
+        });
+
+        test.each([ 'mixed', 'ownMethod', 'escapes', 'localReadTwice', 'letResult', 'notAList' ])('%s keeps the helper', (name) => {
+            const body = method(name);
+            expect(body).toContain('promiseAll(');
+            expect(body).not.toContain('Task.WhenAll');
+        });
+    });
+});
+
+describe ('fold2C05CounterAndShadow', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const config: any = {
+        'verbose': false,
+        'csharp': {
+            'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' },
+            'numericArgTypes': { 'fetchOHLCV': { 2: 'Int64?', 3: 'Int64?' } },
+            'coreArgShadowCallees': [ 'fetchPaginatedCallDeterministic', 'parseOHLCVs' ]
+        }
+    };
+
+    const printer = (source: string, resolver: boolean): string => {
+        const transpiler: any = new Transpiler(config);
+        if (resolver) {
+            // the build layer's declared-kind answers: `maxLimit` is an int local
+            const kinds: any = { 'maxLimit': 'int' };
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node: any) => (node.kind === SyntaxKind.Identifier) ? kinds[node.text] : undefined;
+        }
+        return transpiler.transpileCSharp(source).content;
+    };
+
+    const counters =
+        'class Exchange {\n' +
+        '    strip (text: string, xs: any, d: any) {\n' +
+        '        const chars = this.stringToCharsArray (text);\n' +
+        '        for (let i = 0; i < chars.length; i++) {\n' +
+        '            const ch = chars[i];\n' +
+        '            const prev = (i > 0) && chars[i - 1];\n' +
+        '        }\n' +
+        '        for (let j = 1; j < 3; j++) {\n' +
+        '            const key = String (j);\n' +
+        '        }\n' +
+        '        for (let k = 0; k < 3; k++) {\n' +
+        '            const v = this.safeString (d, k);\n' +
+        '        }\n' +
+        '        for (let z = 0; z < 3; z++) {\n' +
+        '            const w = this.safeString (d, \'a\', z);\n' +
+        '        }\n' +
+        '        for (let m = 0; m < 3; m++) {\n' +
+        '            xs[m] = 1;\n' +
+        '        }\n' +
+        '        for (let n = 0; n < 3; n += 2) {\n' +
+        '            const a = chars[n];\n' +
+        '        }\n' +
+        '        for (let q = 0; q < 3; q++) {\n' +
+        '            q = q + 1;\n' +
+        '        }\n' +
+        '    }\n' +
+        '}';
+
+    describe('FOLD2 C05: Int64 for-counter in the printer', () => {
+        test('a literal counter whose reads normalise the box is declared Int64 with a native increment', () => {
+            const out = printer(counters, false);
+            expect(out).toContain('for (Int64 i = 0; ');
+            expect(out).toContain('; i++)');
+            expect(out).not.toContain('postFixIncrement(ref i)');
+            expect(out).toContain('for (Int64 k = 0;');
+        });
+
+        test('a counter read as a string key, a compound step, an element write or a rewrite keeps the object helper form', () => {
+            const out = printer(counters, false);
+            expect(out).toContain('for (object j = 1; ');
+            expect(out).toContain('postFixIncrement(ref j)');
+            expect(out).toContain('postFixIncrement(ref m)');
+            expect(out).toContain('for (object q = 0;');
+            expect(out).not.toContain('for (Int64 n');
+            expect(out).toContain('postFixIncrement(ref z)');
+        });
+    });
+
+    const shadow =
+        'class Exchange {\n' +
+        '    fetchOHLCV (symbol: string, timeframe: string = \'1m\', since: number = undefined, limit: number = 100, params = {}) {\n' +
+        '        const maxLimit = 1000;\n' +
+        '        const r = (limit === undefined) ? 10000 : Math.min (limit, 10000);\n' +
+        '        const p = this.parseOHLCVs ([], symbol, timeframe, since, limit);\n' +
+        '        return r;\n' +
+        '    }\n' +
+        '    fetchOHLCV2 (symbol: string, since: number = undefined, limit: number = 100, params = {}) {\n' +
+        '        const r = (limit === undefined) ? 10000 : Math.min (limit, 10000);\n' +
+        '        return r;\n' +
+        '    }\n' +
+        '    fetchTicker (symbol: string, since: number = undefined, limit: number = 100, params = {}) {\n' +
+        '        const r = (limit === undefined) ? 10000 : Math.min (limit, 10000);\n' +
+        '        return r;\n' +
+        '    }\n' +
+        '    fetchOrders (symbol: string, since: number = undefined, limit: number = 100, params = {}) {\n' +
+        '        const r = (limit === undefined) ? 10000 : Math.min (limit, 10000) + this.foo (limit);\n' +
+        '        return r;\n' +
+        '    }\n' +
+        '}';
+
+    describe('FOLD2 C05: literal-default limit shadow proven on the AST', () => {
+        test('without the build layer tables the helper stays', () => {
+            const transpiler: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const out = transpiler.transpileCSharp(shadow).content;
+            expect(out).toContain('mathMin(limit, 10000)');
+        });
+
+        test('a narrowed Int64? limit position whose every use is an identity read unboxes under its null test', () => {
+            const out = printer(shadow, true);
+            expect(out).toContain('Math.Min(limit.Value, 10000)');
+        });
+
+        test('a position the table does not narrow, or a use outside the allowlist, keeps the helper', () => {
+            const out = printer(shadow, true);
+            const lines = out.split('\n').filter((l) => l.includes('mathMin') || l.includes('Math.Min'));
+            expect(lines.length).toBe(4);
+            expect(lines.filter((l) => l.includes('mathMin(limit, 10000)')).length).toBe(3);
+            expect(lines.filter((l) => l.includes('Math.Min(limit.Value, 10000)')).length).toBe(1);
+        });
+    });
+});
+
+describe ('hx10w10CP05', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } };
+
+    const transpile = (ts: string): string => new Transpiler(config).transpileCSharp(ts).content;
+
+    describe('hx10w10 CP05: C# nullable scalar locals', () => {
+        test('safeNumber / safeNumber2 name the base signature `double?`', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeNumber(o, k, d?) { return o; }\n" +
+                "    safeNumber2(o, k1, k2, d?) { return o; }\n" +
+                "    run (item) {\n" +
+                "        let cost = this.safeNumber(item, 'cost');\n" +
+                "        return cost;\n" +
+                "    }\n" +
+                "    other (item) {\n" +
+                "        let rate = this.safeNumber2(item, 'a', 'b');\n" +
+                "        return rate;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('double? cost = this.safeNumber(item, "cost");');
+            expect(output).toContain('double? rate = this.safeNumber2(item, "a", "b");');
+        });
+
+        test('a later write of the non-null twin keeps the nullable scalar type', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeString(o, k, d?) { return o; }\n" +
+                "    run (item) {\n" +
+                "        let tag = this.safeString(item, 'tag');\n" +
+                "        if (tag === undefined) {\n" +
+                "            tag = 'default';\n" +
+                "        }\n" +
+                "        return tag;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('string? tag = this.safeString(item, "tag");');
+            expect(output).toContain('tag = "default";');
+        });
+
+        test('a null write and a widened numeric literal keep the nullable scalar type', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeInteger(o, k, d?) { return o; }\n" +
+                "    run (item) {\n" +
+                "        let n = this.safeInteger(item, 'n');\n" +
+                "        n = null;\n" +
+                "        n = 0;\n" +
+                "        return n;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('Int64? n = this.safeInteger(item, "n");');
+            expect(output).toContain('n = null;');
+            expect(output).toContain('n = 0;');
+        });
+
+        test('a copy from a local the printer already declares that type is a keep', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeString(o, k, d?) { return o; }\n" +
+                "    run (item) {\n" +
+                "        let first = this.safeString(item, 'a');\n" +
+                "        let second = this.safeString(item, 'b');\n" +
+                "        second = first;\n" +
+                "        return second;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('string? first = this.safeString(item, "a");');
+            expect(output).toContain('string? second = this.safeString(item, "b");');
+            expect(output).toContain('second = first;');
+        });
+
+        test('a write of an unproven box still blocks the declaration', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeString(o, k, d?) { return o; }\n" +
+                "    safeValue(o, k, d?) { return o; }\n" +
+                "    run (item) {\n" +
+                "        let tag = this.safeString(item, 'tag');\n" +
+                "        tag = this.safeValue(item, 'other');\n" +
+                "        return tag;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('object tag = this.safeString(item, "tag");');
+        });
+
+        test('a null-guarded `+` left read of a string? local folds to native concatenation', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeString(o, k, d?) { return o; }\n" +
+                "    run (item) {\n" +
+                "        let apiUrl = this.safeString(item, 'url');\n" +
+                "        if (apiUrl === undefined) {\n" +
+                "            throw new ExchangeError('no url');\n" +
+                "        }\n" +
+                "        return apiUrl + '/ticker';\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('string? apiUrl = this.safeString(item, "url");');
+            expect(output).toContain('return (apiUrl + "/ticker");');
+            expect(output).not.toContain('add(apiUrl');
+        });
+
+        test('the same read inside a `x !== undefined && …` conjunction folds too', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeString(o, k, d?) { return o; }\n" +
+                "    run (item, flag) {\n" +
+                "        let host = this.safeString(item, 'host');\n" +
+                "        if (host !== undefined && flag) {\n" +
+                "            return host + '/x';\n" +
+                "        }\n" +
+                "        return undefined;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('string? host = this.safeString(item, "host");');
+            expect(output).toContain('return (host + "/x");');
+        });
+
+        test('a ternary arm guarded by a null test folds too', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeString(o, k, d?) { return o; }\n" +
+                "    run (item) {\n" +
+                "        let baseId = this.safeString(item, 'baseId');\n" +
+                "        return baseId === undefined ? undefined : baseId + 'SUSDT';\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('string? baseId = this.safeString(item, "baseId");');
+            expect(output).toContain('(baseId + "SUSDT")');
+        });
+
+        test('an unguarded `+` left read stays object', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeString(o, k, d?) { return o; }\n" +
+                "    run (item) {\n" +
+                "        let part = this.safeString(item, 'part');\n" +
+                "        return part + '/';\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('object part = this.safeString(item, "part");');
+            expect(output).toContain('add(part, "/")');
+        });
+
+        test('a guarded read whose right operand is not a printed string stays object', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeString(o, k, d?) { return o; }\n" +
+                "    run (item, rest) {\n" +
+                "        let head = this.safeString(item, 'head');\n" +
+                "        if (head === null) {\n" +
+                "            return undefined;\n" +
+                "        }\n" +
+                "        return head + rest;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('object head = this.safeString(item, "head");');
+            expect(output).toContain('add(head, rest)');
+        });
+
+        test('a null write never claims a non-null string declaration (the ccxt layer promotes it)', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    run (value) {\n" +
+                "        let side = 'long';\n" +
+                "        if (value) {\n" +
+                "            side = 'short';\n" +
+                "        }\n" +
+                "        side = undefined;\n" +
+                "        return side;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('object side = "long";');
+            expect(output).toContain('side = null;');
+        });
+
+        test('a guarded numeric local stays a nullable scalar (no concat)', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeInteger(o, k, d?) { return o; }\n" +
+                "    run (item) {\n" +
+                "        let n = this.safeInteger(item, 'n');\n" +
+                "        if (n === undefined) {\n" +
+                "            return 0;\n" +
+                "        }\n" +
+                "        return n;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('Int64? n = this.safeInteger(item, "n");');
+        });
+    });
+});
+
+describe ('hx10w9CP02', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } };
+
+    const transpile = (ts: string): string => new Transpiler(config).transpileCSharp(ts).content;
+
+    describe('hx10w9 CP02: `add` on a proven non-null string operand', () => {
+        test('a local held a non-null string keeps its type across self-concat writes', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    build (underlying, targetPrice) {\n" +
+                "        let bs = underlying.toUpperCase();\n" +
+                "        if (targetPrice) {\n" +
+                "            bs = bs + '_ABOVE_' + targetPrice;\n" +
+                "        }\n" +
+                "        return bs + ':';\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('string bs = ((string)underlying).ToUpper();');
+            expect(output).toContain('bs = ((bs + "_ABOVE_") + targetPrice);');
+            expect(output).toContain('return (bs + ":");');
+            expect(output).not.toContain('add(bs');
+        });
+
+        test('`+=` on that local prints the native concat too', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    build (expiry) {\n" +
+                "        let tag = 'x';\n" +
+                "        tag += '_' + expiry;\n" +
+                "        return tag;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('string tag = "x";');
+            expect(output).toContain('tag = (tag + (("_" + expiry)));');
+            expect(output).not.toContain('add(tag');
+        });
+
+        test('a nullable string local stays object and keeps the helper', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    safeString(a, b) { return a; }\n" +
+                "    build (item, other) {\n" +
+                "        let tag = this.safeString(item, 'tag');\n" +
+                "        tag = tag + '_x';\n" +
+                "        return tag + other;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain("object tag = this.safeString(item, \"tag\");");
+            expect(output).toContain('tag = add(tag, "_x");');
+            expect(output).toContain("return add(tag, other);");
+        });
+
+        test('a local written from an unproven operand stays object', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    build (value, other) {\n" +
+                "        let tag = 'x';\n" +
+                "        tag = value;\n" +
+                "        return tag + other;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('object tag = "x";');
+            expect(output).toContain('add(tag, other)');
+        });
+
+        test('a literal and a string-returning call are non-null string operands on either side', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    json(a) { return a; }\n" +
+                "    build (item, count) {\n" +
+                "        return 'id:' + count + this.json(item) + '!';\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('return ((("id:" + count) + this.json(item)) + "!");');
+            expect(output).not.toContain('add(');
+        });
+
+        test('a conditional whose arms are both non-null strings is one too', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    build (flag, value) {\n" +
+                "        let label = flag ? 'YES' : 'NO';\n" +
+                "        label += value;\n" +
+                "        return label;\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('string label = isTrue(flag) ? "YES" : "NO";');
+            expect(output).toContain('label = (label + (value));');
+        });
+
+        test('an unproven left keeps the helper even with a string right', () => {
+            const output = transpile(
+                "class Exchange {\n" +
+                "    build (a, b) {\n" +
+                "        return a + b + 'suffix';\n" +
+                "    }\n" +
+                "}");
+            expect(output).toContain('add(add(a, b), "suffix")');
+        });
+    });
+});
+
+describe ('hx11FoldC01BaseListParams', () => {
+    const fs = fs__hx11FoldC01BaseListParams;
+    const path = path__hx11FoldC01BaseListParams;
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // A base-tier method (ts/src/base/*.ts, printed alone) types its array parameter from the
+    // declared TS type; its overrides and in-program calls follow it.
+    describe('csharp base-tier array parameters (fold of ccxt hx10w3-C01)', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-fold-c01');
+        const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+        const VENUE = path.join(TMP, 'ts', 'src', 'venue.ts');
+        let base: string;
+        let venue: string;
+
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(BASE), { recursive: true });
+            fs.writeFileSync(BASE,
+                'export class Exchange {\n' +
+                '    arraysConcat (arraysOfArrays: any[]): any[] {\n' +
+                '        let result: any[] = [];\n' +
+                '        for (let i = 0; i < arraysOfArrays.length; i++) {\n' +
+                '            result = this.arrayConcat (result, arraysOfArrays[i]);\n' +
+                '        }\n' +
+                '        return result;\n' +
+                '    }\n' +
+                '    arrayConcat (a: any[], b: any[]): any[] { return a; }\n' +
+                '    ids (symbols: string[]): number { return symbols.length; }\n' +
+                '    rewrites (items: any[]): any[] {\n' +
+                '        items = [];\n' +
+                '        return items;\n' +
+                '    }\n' +
+                '    marketsForSymbols (symbols: string[] = undefined): any[] { return []; }\n' +
+                '    fetchThing (x: any): any { return x; }\n' +
+                '}\n');
+            fs.writeFileSync(VENUE,
+                "import { Exchange } from './base/Exchange';\n" +
+                'export class Venue extends Exchange {\n' +
+                '    override marketsForSymbols (symbols: any = undefined): any[] { return []; }\n' +
+                '    caller (box: any): any {\n' +
+                '        return this.ids (box);\n' +
+                '    }\n' +
+                '}\n');
+            const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } });
+            base = (transpiler as any).transpileCSharpByPath(BASE).content;
+            venue = (transpiler as any).transpileCSharpByPath(VENUE).content;
+        });
+
+        afterAll(() => {
+            fs.rmSync(TMP, { recursive: true, force: true });
+        });
+
+        test('an array-annotated base parameter prints IList<object> and its reads go native', () => {
+            expect(base).toContain('arraysConcat(IList<object> arraysOfArrays)');
+            expect(base).toContain('(arraysOfArrays?.Count ?? 0)');
+            expect(base).not.toContain('getArrayLength(arraysOfArrays)');
+        });
+
+        test('a string[] base parameter prints IList<object> too', () => {
+            expect(base).toContain('ids(IList<object> symbols)');
+        });
+
+        test('a parameter the body rebinds keeps object', () => {
+            expect(base).toContain('rewrites(object items)');
+        });
+
+        test('a non-array parameter keeps object', () => {
+            expect(base).toContain('fetchThing(object x)');
+        });
+
+        test('an override with a looser annotation follows the base spelling', () => {
+            expect(venue).toContain('marketsForSymbols(IList<object> symbols = null)');
+        });
+
+        test('an object argument to a base-typed parameter is converted at the call', () => {
+            expect(venue).toContain('this.ids(this.toArray(box))');
+        });
+    });
+});
+
+describe ('hx11RFcs2DeclaredMembers', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // hx11 RF-cs-2: the native dictionary / list operations on the hand-written base members and the ws
+    // client maps are keyed on the member's DECLARED C# type (csharpDeclaredMemberType), which the embedding
+    // build layer reads from cs/ccxt/base/Exchange.Options.cs and cs/ccxt/ws/Client.cs. The fixture below
+    // declares the same members; the baseline run installs no hook and keeps every helper call.
+
+    const config = {
+        'verbose': false,
+        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+    };
+
+    const THIS: { [name: string]: any } = {
+        'urls': { type: 'IDictionary<string, object>', initializer: 'new dict()', views: { api: { view: 'urlsApi', sections: 'urlsApiSections' } }, refresh: 'RefreshUrlsViews' },
+        'headers': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
+        'fees': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
+        'accounts': { type: 'List<object>', initializer: 'new List<object>()' },
+        'positions': { type: 'object' },
+        'currencies': { type: 'object', initializer: 'new dict()' },
+    };
+    const CLIENT: { [name: string]: any } = {
+        'subscriptions': { type: 'OwnedTable<object>' },
+    };
+
+    function printed(source: string, hooked: boolean, members: any = THIS): string {
+        const transpiler = new Transpiler(config);
+        const csharp: any = (transpiler as any).csharpTranspiler;
+        if (hooked) {
+            csharp.csharpDeclaredMemberType = (owner: string, name: string) => (owner === 'this' ? members : CLIENT)[name];
+            csharp.csharpDeclaredMethodReturnType = (name: string) => (name === 'isDictionary' ? 'bool' : undefined);
+        }
+        return transpiler.transpileCSharp(source).content;
+    }
+
+    const BASE = 'class BaseExchange {\n'
+        + '    urls!: { api: any, [key: string]: any };\n'
+        + '    headers: any; fees: any; accounts!: any[]; positions: any; currencies: any;\n'
+        + '    isDictionary (value: any): boolean { return true; }\n';
+    const CLIENT_CLASS = 'class Client { subscriptions: any; }\n';
+
+    describe('csharp declared hand-written members (RF-cs-2)', () => {
+        test('a dictionary member reads, tests and sizes through its own declared type', () => {
+            const ts = BASE + '    f (k: string) { const a = this.urls["x"]; if ("test" in this.headers) { return 1; } const b = this.fees[k]; return [a, b]; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('object a = (this.urls != null && this.urls.ContainsKey("x") ? this.urls["x"] : null);');
+            expect(out).toContain('if ((this.headers != null && this.headers.ContainsKey("test")))');
+            expect(out).toContain('this.fees.ContainsKey((string)k) ? this.fees[(string)k] : null);');
+            expect(printed(ts, false)).toContain('getValue(this.fees, k)');
+        });
+
+        test('a list member reads by index and length with the helper null branches', () => {
+            const ts = BASE + '    f () { for (let i = 0; i < this.accounts.length; i++) { const a = this.accounts[i]; } return this.accounts[0]; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('(this.accounts?.Count ?? 0)');
+            expect(out).toContain('(this.accounts != null && 0 < this.accounts.Count ? this.accounts[0] : null)');
+            expect(printed(ts, false)).toContain('getArrayLength(this.accounts)');
+            expect(printed(ts, false)).toContain('getValue(this.accounts, 0)');
+        });
+
+        test('an object member whose every write stores a dictionary takes the dictionary form behind one cast', () => {
+            const ts = BASE + '    f (type: string) { if (this.positions === undefined) { this.positions = {}; } if (type in this.positions) { return 1; } return 0; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('(((IDictionary<string,object>)this.positions) != null && type is string inOpKey0 && ((IDictionary<string,object>)this.positions).ContainsKey(inOpKey0))');
+            expect(printed(ts, false)).toContain('inOp(this.positions, type)');
+        });
+
+        test('an object member written with a non-dictionary box keeps the helper', () => {
+            const ts = BASE + '    f (type: string) { this.currencies = new ArrayCache (); if (type in this.currencies) { return 1; } return 0; }\n}\nclass ArrayCache {}';
+            expect(printed(ts, true)).toContain('inOp(this.currencies, type)');
+        });
+
+        test('the cast around a member declared as the dictionary interface is an identity and is not printed', () => {
+            const ts = BASE + '    f () { const a = this.urls["x"]; this.urls["y"] = a; delete this.urls["z"]; }\n}';
+            const out = printed(ts, true);
+            expect(out).not.toContain('(IDictionary<string,object>)this.urls');
+            expect(out).toContain('this.urls["y"] = a;');
+            expect(printed(ts, false)).toContain('((IDictionary<string,object>)this.urls)["y"] = a;');
+        });
+
+        test('a ws client map read goes through the declared map type', () => {
+            const ts = CLIENT_CLASS + BASE + '    f (client: Client, hash: string) { if (hash in client.subscriptions) { return 1; } return 0; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('(client.subscriptions != null && hash is string inOpKey0 && client.subscriptions.ContainsKey(inOpKey0))');
+            expect(printed(ts, false)).toContain('inOp(client.subscriptions, hash)');
+        });
+
+        test('a call to a hand-written bool callee loses the isTrue wrapper only when the declared return is bool', () => {
+            const ts = BASE + '    f (v: any) { if (this.isDictionary(v)) { return 1; } return 0; }\n}';
+            expect(printed(ts, true)).toContain('if (this.isDictionary(v))');
+            const transpiler = new Transpiler(config);
+            const csharp: any = (transpiler as any).csharpTranspiler;
+            csharp.csharpDeclaredMethodReturnType = (name: string) => (name === 'isDictionary' ? 'object' : undefined);
+            expect(transpiler.transpileCSharp(ts).content).toContain('if (isTrue(this.isDictionary(v)))');
+        });
+
+        test('a section read through the declared views uses the typed sections and a write refreshes them', () => {
+            const ts = BASE + '    f (type: string) { const u = this.urls["api"]["ws"]["public"]; this.urls["api"] = u; return u; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('(this.urlsApiSections.ContainsKey("ws") && this.urlsApiSections["ws"].ContainsKey("public") ? this.urlsApiSections["ws"]["public"] : null)');
+            expect(out).toContain('this.urls["api"] = u;\n        this.RefreshUrlsViews();');
+            const base = printed(ts, false);
+            expect(base).not.toContain('urlsApiSections');
+            expect(base).not.toContain('RefreshUrlsViews');
+            const noViews = printed(ts, true, { ...THIS, urls: { type: 'IDictionary<string, object>', initializer: 'new dict()' } });
+            expect(noViews).not.toContain('urlsApiSections');
+            expect(noViews).not.toContain('RefreshUrlsViews');
+        });
+
+        test('a nested write below an entry owes no refresh and a comparison is no write', () => {
+            const ts = BASE + '    f () { this.urls["api"]["ws"] = 1; if (this.urls === undefined) { return 1; } return 0; }\n}';
+            const out = printed(ts, true);
+            expect(out).not.toContain('RefreshUrlsViews');
+        });
+        test('a const omit of a declared dictionary member names the dictionary and a nullable-string key is tested', () => {
+            const ts = BASE + '    f (k: string | undefined) { const rest = this.omit (this.urls, \'x\'); this.urls = rest; if (k in this.headers) { return 1; } return 0; }\n    omit (a: any, b: any): any { return a; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('Dictionary<string, object> rest = this.omit(this.urls, "x");');
+            expect(printed(ts, false)).toContain('object rest = this.omit(this.urls, "x");');
+            const noHook = printed(ts, true, { ...THIS, urls: { type: 'object', initializer: 'new dict()' } });
+            expect(noHook).toContain('object rest = this.omit(this.urls, "x");');
+        });
+    });
+});
+
+describe ('hx11RFcs3JsonParse', () => {
+    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
+
+    const config = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+    const print = (src: string) => new Transpiler(config).transpileCSharp(src).content;
+
+    describe('csharp JSON.parse on a string-declared read', () => {
+        test('a string local calls the deserializer directly', () => {
+            const out = print('class T {\n    f () {\n        const s = \'{}\';\n        return JSON.parse (s);\n    }\n}');
+            expect(out).toContain('JsonHelper.Deserialize(s)');
+        });
+        test('an untyped parameter keeps the helper', () => {
+            const out = print('class T {\n    f (s) {\n        return JSON.parse (s);\n    }\n}');
+            expect(out).toContain('parseJson(s)');
+            expect(out).not.toContain('JsonHelper');
+        });
+    });
+});
+
+describe ('hx11RdCs1', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // hx11 RD-CS-1 (folds ccxt hx10w3-C02 and hx10w4-BF01): a declared typed view of a hand-written base member
+    // answers the member's reads natively, and a string-typed `object` local concatenates natively.
+
+    const config = {
+        'verbose': false,
+        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+    };
+
+    const THIS: { [name: string]: any } = {
+        'urls': { type: 'IDictionary<string, object>', initializer: 'new dict()', views: { api: { view: 'urlsApi' } } },
+        'urlsApi': { type: 'IDictionary<string, object>' },
+        'currencies': { type: 'object', initializer: 'new dict()', dictView: 'currenciesDict' },
+        'currenciesDict': { type: 'IDictionary<string, object>' },
+        'currencies_by_id': { type: 'IDictionary<string, object>' },
+    };
+
+    function printed(source: string, hooked: boolean, members: any = THIS): string {
+        const transpiler = new Transpiler(config);
+        const csharp: any = (transpiler as any).csharpTranspiler;
+        if (hooked) {
+            csharp.csharpDeclaredMemberType = (owner: string, name: string) => (owner === 'this' ? members[name] : undefined);
+        }
+        return transpiler.transpileCSharp(source).content;
+    }
+
+    const BASE = 'class BaseExchange {\n'
+        + '    urls!: { api: any, [key: string]: any };\n'
+        + '    currencies: any;\n'
+        + '    currencies_by_id: any;\n'
+        + '    safeString (a: any, b: any): string | undefined { return undefined; }\n';
+
+    describe('RD-CS-1: declared member views and string-typed object concatenation', () => {
+        test('urls["api"][key] reads through the declared urlsApi view', () => {
+            const ts = BASE + '    f (type: string, other: any) { const a = this.urls["api"]["ws"]; const b = this.urls["api"][type]; const k = this.safeString (other, "k"); const d = this.urls["api"][k]; const c = this.urls["api"][other]; return [a, b, c, d]; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('(this.urlsApi != null && this.urlsApi.ContainsKey("ws") ? this.urlsApi["ws"] : null)');
+            expect(out).toContain('(this.urlsApi != null && type != null && this.urlsApi.ContainsKey((string)type) ? this.urlsApi[(string)type] : null)');
+            expect(out).toContain('(this.urlsApi != null && k != null && this.urlsApi.ContainsKey(k) ? this.urlsApi[k] : null)');
+            expect(out).toContain('getValue((this.urls != null && this.urls.ContainsKey("api") ? this.urls["api"] : null), other)');
+            expect(printed(ts, false)).not.toContain('urlsApi');
+        });
+
+        test('an object member with a declared dictionary view reads and tests through the view', () => {
+            const ts = BASE + '    f (code: string) { const a = this.currencies[code]; if (code in this.currencies) { return Object.keys (this.currencies); } return a; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('(this.currenciesDict != null && code != null && this.currenciesDict.ContainsKey((string)code) ? this.currenciesDict[(string)code] : null)');
+            expect(out).toMatch(/\(this\.currenciesDict != null && code is string inOpKey\d+ && this\.currenciesDict\.ContainsKey\(inOpKey\d+\)\)/);
+            expect(out).toContain('this.currenciesDict.Keys');
+            const bare = printed(ts, true, { ...THIS, currencies: { type: 'object', initializer: 'new dict()' } });
+            expect(bare).not.toContain('currenciesDict');
+        });
+
+        test('a const alias of a member declared the dictionary interface is declared with it', () => {
+            const ts = BASE + '    f (code: string) { const byId = this.currencies_by_id; if (code in byId) { return byId[code]; } return undefined; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('IDictionary<string, object> byId = this.currencies_by_id;');
+            expect(printed(ts, false)).toContain('object byId = this.currencies_by_id;');
+        });
+
+        test('a string-typed object local concatenates with the null test and an object right casts like the helper', () => {
+            const ts = BASE + '    f (a: any, b: any) { const id = this.safeString (a, "id"); const key = id + "-" + b; let auth = this.safeString (a, "x"); auth += "?"; return [key, auth]; }\n}';
+            const out = printed(ts, false);
+            expect(out).toContain('((object)(id == null ? null : id + "-" + (string)(object)(b)))');
+            expect(out).toContain('auth = ((object)(auth == null ? null : auth + "?"))');
+        });
+
+        test('a copy of a destructured string slot keeps the helper', () => {
+            const ts = BASE + '    f (a: any) { const [ s, p ] = this.pair (a); let m = s; m = m + "x"; return [ m, p ]; }\n    pair (a: any): [ string | undefined, any ] { return [ undefined, a ]; }\n}';
+            expect(printed(ts, false)).not.toContain('m == null');
+        });
+
+        test('a right operand with effects and a non-string left keep the helper', () => {
+            const ts = BASE + '    f (a: any, n: number, m: any) { const id = this.safeString (a, "id"); const x = id + (n++); const y = n + 1; const z = m + "s"; return [x, y, z]; }\n}';
+            const out = printed(ts, false);
+            expect(out).toContain('add(id, ');
+            expect(out).not.toContain('id == null');
+            expect(out).toContain('add(m, "s")');
+        });
+    });
+});
+
+describe ('hx11RfmC2C', () => {
+    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
+
+    const config = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+    const print = (src: string) => new Transpiler(config).transpileCSharp(src).content;
+
+    describe('csharp boolean parameter census (hx11 RFM-C2-C)', () => {
+        test('an un-annotated `= false` parameter every caller feeds a bool prints bool?', () => {
+            const out = print('class T {\n    f (flag = false) {\n        if (flag) { return 1; }\n        return 0;\n    }\n    g () {\n        return this.f (true);\n    }\n}');
+            expect(out).toContain('f(bool? flag = null)');
+            expect(out).toContain('if (flag == true)');
+            expect(out).not.toContain('isTrue(flag)');
+        });
+        test('an un-annotated default fed by an object keeps the parameter object', () => {
+            const out = print('class T {\n    f (flag = false) {\n        if (flag) { return 1; }\n        return 0;\n    }\n    g (x: any) {\n        const box = x[\'k\'];\n        return this.f (box);\n    }\n}');
+            expect(out).toContain('f(object flag = null)');
+            expect(out).toContain('isTrue(flag)');
+        });
+        test('this.spawn (this.method, args) counts as a call of the method', () => {
+            const out = print('class T {\n    spawn (f, ...args) { return 1; }\n    load (client: any, flag: boolean) {\n        if (flag) { return 1; }\n        return 0;\n    }\n    g () {\n        return this.spawn (this.load, 1, true);\n    }\n}');
+            expect(out).toContain('load(object client, bool? flag)');
+        });
+        test('a spawned argument the census cannot prove keeps the parameter object', () => {
+            const out = print('class T {\n    spawn (f, ...args) { return 1; }\n    load (client: any, flag: boolean) {\n        if (flag) { return 1; }\n        return 0;\n    }\n    g (x: any) {\n        const box = x[\'k\'];\n        return this.spawn (this.load, 1, box);\n    }\n}');
+            expect(out).toContain('load(object client, object flag)');
+        });
+        test('a local the build layer declares bool? is a proven argument', () => {
+            const transpiler = new Transpiler(config);
+            (transpiler as any).csharpTranspiler.csharpExpressionTypeResolver = (node) => ((node?.text === 'flag') && (node.parent?.kind !== undefined) && (node.parent.kind === 214 || true)) ? 'bool?' : undefined;
+            const out = transpiler.transpileCSharp('class T {\n    f (flag: boolean) {\n        if (flag) { return 1; }\n        return 0;\n    }\n    g (params: any) {\n        const [ flag, rest ] = this.h (params);\n        return this.f (flag);\n    }\n    h (params: any): [boolean | undefined, any] {\n        return [ undefined, params ];\n    }\n}').content;
+            expect(out).toContain('f(bool? flag)');
+        });
+    });
+
+    describe('csharp bool-declared call typed in a subclass (hx11 RFM-C2-C)', () => {
+        test('a local fed by an inherited bool-returning method is bool', () => {
+            const out = print('class R {\n}\nclass A extends R {\n    isOk (): boolean {\n        return true;\n    }\n}\nclass B extends A {\n    f () {\n        const ok = this.isOk ();\n        if (ok) { return 1; }\n        return 0;\n    }\n}');
+            expect(out).toContain('bool ok = this.isOk()');
+            expect(out).toContain('if (ok)');
+        });
+    });
+
+    describe('csharp bool-declared call on a root class (hx11 RFM-C2-C)', () => {
+        test('a method inherited from a class with no parent keeps the object box', () => {
+            const out = print('class A {\n    isOk (): boolean {\n        return true;\n    }\n}\nclass B extends A {\n    f () {\n        const ok = this.isOk ();\n        if (ok) { return 1; }\n        return 0;\n    }\n}');
+            expect(out).toContain('object ok = this.isOk()');
+        });
+    });
+});
+
+describe ('rdcs3InferredReturnBox', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const unique = [ 'pairOf', 'rowOf', 'chained', 'mixed', 'dictLiteral', 'asyncPair', 'overridden', 'noReturn', 'scalar' ];
+    const makeConfig = (table: boolean): any => ({ 'verbose': false, 'csharp': { ...(table ? { 'uniqueMethodNames': unique } : {}), 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } });
+
+    // RD-CS-3 (relocates RFM-C1 w3C06): a venue-local method declared once, annotated with a collection
+    const source =
+        "type Dict = { [key: string]: any };\n" +
+        "type List = any[];\n" +
+        "interface MarketInterface { id: string }\n" +
+        "class Base {\n" +
+        "    markets: any;\n" +
+        "    safeDict (d: any, k: string, def: any = undefined): Dict { return d[k]; }\n" +
+        "    safeString (d: any, k: string): string { return d[k]; }\n" +
+        "    overridden (a: any): List { throw new Error ('x'); }\n" +
+        "}\n" +
+        "class Venue extends Base {\n" +
+        "    pairOf (a: any, b: any): List {\n" +
+        "        return [ a, b ];\n" +
+        "    }\n" +
+        "    rowOf (symbol: string): MarketInterface {\n" +
+        "        const market = this.safeDict (this.markets, symbol);\n" +
+        "        return market as MarketInterface;\n" +
+        "    }\n" +
+        "    chained (a: any): List {\n" +
+        "        if (a) {\n" +
+        "            return this.pairOf (a, a);\n" +
+        "        }\n" +
+        "        return [ a ];\n" +
+        "    }\n" +
+        "    mixed (a: any): List {\n" +
+        "        if (a) {\n" +
+        "            return [ a ];\n" +
+        "        }\n" +
+        "        return this.safeString (a, 'k') as any;\n" +
+        "    }\n" +
+        "    dictLiteral (a: any): Dict {\n" +
+        "        return { 'a': a };\n" +
+        "    }\n" +
+        "    async asyncPair (a: any): Promise<List> {\n" +
+        "        return [ a ];\n" +
+        "    }\n" +
+        "    override overridden (a: any): List {\n" +
+        "        return [ a ];\n" +
+        "    }\n" +
+        "    twoDecls (a: any): List {\n" +
+        "        return [ a ];\n" +
+        "    }\n" +
+        "    noReturn (a: any): List {\n" +
+        "        throw new Error ('x');\n" +
+        "    }\n" +
+        "    scalar (a: any): string {\n" +
+        "        return 'x';\n" +
+        "    }\n" +
+        "    user (symbol: string) {\n" +
+        "        const p = this.pairOf (1, 2);\n" +
+        "        const n = p.length;\n" +
+        "        const m = this.rowOf (symbol);\n" +
+        "        const z = this.mixed (1);\n" +
+        "        return [ p, n, m, z ];\n" +
+        "    }\n" +
+        "}\n" +
+        "class Other {\n" +
+        "    twoDecls (a: any): List {\n" +
+        "        return [ a ];\n" +
+        "    }\n" +
+        "}";
+
+    const printed = (table: boolean): string => (new Transpiler(makeConfig(table)) as any).transpileCSharp(source).content;
+
+    describe('RD-CS-3: inferred collection return box', () => {
+        test('without the table every signature and local keeps the printer box', () => {
+            const out = printed(false);
+            expect(out).toContain('public virtual object pairOf(object a, object b)');
+            expect(out).toContain('public virtual object rowOf(object symbol)');
+            expect(out).toContain('object p = this.pairOf(1, 2);');
+        });
+
+        test('a method whose every return proves the box prints it, callers type their locals', () => {
+            const out = printed(true);
+            expect(out).toContain('public virtual List<object> pairOf(object a, object b)');
+            expect(out).toContain('return new List<object>() {a, b};');
+            expect(out).toContain('public virtual IDictionary<string, object> rowOf(object symbol)');
+            expect(out).toContain('return market;');
+            expect(out).toContain('public virtual List<object> chained(object a)');
+            expect(out).toContain('List<object> p = this.pairOf(1, 2);');
+            expect(out).toContain('IDictionary<string, object> m = this.rowOf(symbol);');
+            expect(out).toContain('int n = getArrayLength(p);');
+            expect(out).not.toContain('((List<object>)((object)(');
+        });
+
+        test('an unproven return path, async, override, unlisted name and missing return keep object', () => {
+            const out = printed(true);
+            expect(out).toContain('public virtual object mixed(object a)');
+            expect(out).toContain('object z = this.mixed(1);');
+            expect(out).toContain('public virtual object dictLiteral(object a)');
+            expect(out).toMatch(/public (async )?virtual Task<object> asyncPair/);
+            expect(out).toContain('public override object overridden(object a)');
+            expect(out).toMatch(/public virtual object twoDecls\(object a\)/);
+            expect(out).toContain('public virtual object noReturn(object a)');
+            expect(out).toContain('public virtual string? scalar(object a)');
+        });
+    });
+});
+
+describe ('rdcs3NativeMinMaxMod', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } };
+
+    // declared C# kinds the consumer's resolver answers for identifier reads
+    const kinds: any = { 'x': 'Int64', 'y': 'Int64', 'n': 'Int64?', 'k': 'int', 'm': 'int', 'd': 'double', 'o': 'object', 'i': 'Int64' };
+
+    const source =
+        "class Exchange {\n" +
+        "    mods (x: number, y: number, n: number, o: any, d: number) {\n" +
+        "        const a = x % y;\n" +
+        "        const b = 1000 % x;\n" +
+        "        const c = n % y;\n" +
+        "        const e = x % 0;\n" +
+        "        const f = 5 % 3;\n" +
+        "        const g = x % 7;\n" +
+        "        const h = o % y;\n" +
+        "        const j = d % y;\n" +
+        "    }\n" +
+        "    minmax (x: number, y: number, k: number, m: number, n: number, d: number, o: any) {\n" +
+        "        const a = Math.min (x, y);\n" +
+        "        const b = Math.max (x, 100);\n" +
+        "        const c = Math.min (100, k);\n" +
+        "        const e = Math.min (d, 100);\n" +
+        "        const f = Math.min (o, 100);\n" +
+        "        const g = Math.min (3, 100);\n" +
+        "        const h = Math.min (n, 100);\n" +
+        "        const p = (n === undefined) ? 100 : Math.min (n, 100);\n" +
+        "        const q = (n !== undefined) && Math.max (n, 1);\n" +
+        "        if (n !== undefined) {\n" +
+        "            const r = Math.min (n, 100);\n" +
+        "        }\n" +
+        "        const s = Math.min (x, y).toString ();\n" +
+        "        const t = Math.min (x, k);\n" +
+        "        const u = Math.min (k, 3000000000);\n" +
+        "    }\n" +
+        "    rebound (n: number) {\n" +
+        "        if (n !== undefined) {\n" +
+        "            n = undefined;\n" +
+        "            const r = Math.min (n, 100);\n" +
+        "        }\n" +
+        "    }\n" +
+        "}";
+
+    const printer = (hook: boolean): string => {
+        const transpiler: any = new Transpiler(config);
+        if (hook) {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node: any) => (node.kind === SyntaxKind.Identifier) ? kinds[node.text] : undefined;
+        }
+        return transpiler.transpileCSharp(source).content;
+    };
+
+    describe('RD-CS-3: native mod / Math.Min / Math.Max on declared integral operands', () => {
+        test('without declared kinds every call keeps the helper', () => {
+            const out = printer(false);
+            expect(out).toContain('mod(x, y)');
+            expect(out).toContain('mathMin(x, y)');
+            expect(out).toContain('mathMax(x, 100)');
+            expect(out).toContain('mathMin(100, k)');
+        });
+
+        test('mod over Int64 / Int64? / literal operands prints the lifted remainder', () => {
+            const out = printer(true);
+            expect(out).toContain('(x % y)');
+            expect(out).toContain('(1000 % x)');
+            expect(out).toContain('(n % y)');
+        });
+
+        test('mod keeps the helper for a zero divisor, two literals, a small literal divisor and non-Int64 operands', () => {
+            const out = printer(true);
+            expect(out).toContain('mod(x, 0)');
+            expect(out).toContain('mod(5, 3)');
+            expect(out).toContain('mod(x, 7)');
+            expect(out).toContain('mod(o, y)');
+            expect(out).toContain('mod(d, y)');
+        });
+
+        test('Math.min / Math.max over int / Int64 operands print Math.Min / Math.Max', () => {
+            const out = printer(true);
+            expect(out).toContain('Math.Min(x, y)');
+            expect(out).toContain('Math.Max(x, 100)');
+            expect(out).toContain('Math.Min(100, k)');
+        });
+
+        test('double, object, a receiver position and a long literal against an int keep the helper', () => {
+            const out = printer(true);
+            expect(out).toContain('mathMin(d, 100)');
+            expect(out).toContain('mathMin(o, 100)');
+            expect(out).toContain('((object)mathMin(x, y)).ToString()');
+            expect(out).toContain('mathMin(k, 3000000000)');
+        });
+
+        test('an Int64? operand unboxes only under a dominating null test', () => {
+            const out = printer(true);
+            expect(out).toContain('mathMin(n, 100)'); // untested
+            expect(out).toContain('? 100 : Math.Min(n.Value, 100)');
+            expect(out).toContain('Math.Max(n.Value, 1)');
+            expect(out).toContain('Math.Min(n.Value, 100);');
+        });
+
+        test('a null test does not dominate a read after the binding is rewritten', () => {
+            const out = printer(true);
+            const body = out.slice(out.indexOf('rebound'));
+            expect(body).toContain('mathMin(n, 100)');
+            expect(body).not.toContain('.Value');
+        });
+    });
+});
+
+describe ('rdcs3ParseJsonStringCall', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // RD-CS-3 (relocates hx10w3-C06 parseJson): a callee whose emitted signature already returns a string
+    // makes parseJson's `(string)` unbox an identity, so the deserializer is called on the call itself.
+    describe('parseJson on a string-returning this-call', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-rdcs3-parsejson');
+        const VENUE = path.join(TMP, 'ts', 'src', 'v.ts');
+        let out: string;
+
+        beforeAll(() => {
+            fs.mkdirSync(path.dirname(VENUE), { recursive: true });
+            fs.writeFileSync(VENUE,
+                "export class V {\n" +
+                "    parseJson (x: any): any { return x; }\n" +
+                "    sign (h: string): string { return h; }\n" +
+                "    other (h: string): any { return h; }\n" +
+                "    f (h: string) {\n" +
+                "        const a = JSON.parse (this.sign (h));\n" +
+                "        const b = this.parseJson (this.sign (h));\n" +
+                "        const c = JSON.parse (this.other (h));\n" +
+                "        const d = this.parseJson (this.other (h));\n" +
+                "        return [ a, b, c, d ];\n" +
+                "    }\n" +
+                "}\n");
+            out = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileCSharpByPath(VENUE).content;
+        });
+
+        afterAll(() => {
+            fs.rmSync(TMP, { recursive: true, force: true });
+        });
+
+        test('JSON.parse and this.parseJson of a string-typed call deserialize the call directly', () => {
+            expect(out).toContain('object a = JsonHelper.Deserialize((string)this.sign(h));');
+            expect(out).toContain('object b = JsonHelper.Deserialize((string)this.sign(h));');
+        });
+
+        test('an object-returning callee keeps the helper', () => {
+            expect(out).toContain('parseJson(this.other(h))');
+            expect(out).not.toContain('(string)this.other(h)');
+        });
+    });
+});
+
+describe ('rdcs3TupleBoolSlot', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } };
+
+    const source =
+        "class Exchange {\n" +
+        "    handleOptionAndParams (params: any, methodName: string, optionName: string, defaultValue: any = undefined): any[] { return [ params, params ]; }\n" +
+        "    handleOptionAndParams2 (params: any, methodName: string, optionName1: string, optionName2: string, defaultValue: any = undefined): any[] { return [ params, params ]; }\n" +
+        "    use (x: any) { return x; }\n" +
+        "    write (params: any) {\n" +
+        "        let warn = true;\n" +
+        "        let paramsValue = params;\n" +
+        "        [ warn, paramsValue ] = this.handleOptionAndParams (paramsValue, 'cancelAllOrders', 'warnOnCancelAllOrdersWithOutcome', warn);\n" +
+        "        if (warn) {\n" +
+        "            throw new Error ('x');\n" +
+        "        }\n" +
+        "    }\n" +
+        "    writeUsed (params: any) {\n" +
+        "        let paginate = false;\n" +
+        "        let paramsValue = params;\n" +
+        "        [ paginate, paramsValue ] = this.handleOptionAndParams (paramsValue, 'fetchMyTrades', 'paginate', paginate);\n" +
+        "        this.use (paginate);\n" +
+        "        paginate = !paginate;\n" +
+        "    }\n" +
+        "    writeOtherKey (params: any) {\n" +
+        "        let flag = true;\n" +
+        "        let paramsValue = params;\n" +
+        "        [ flag, paramsValue ] = this.handleOptionAndParams (paramsValue, 'm', 'someOption', flag);\n" +
+        "        if (flag) {\n" +
+        "            return 1;\n" +
+        "        }\n" +
+        "    }\n" +
+        "    writeNoDefault (params: any) {\n" +
+        "        let paginate = false;\n" +
+        "        let paramsValue = params;\n" +
+        "        [ paginate, paramsValue ] = this.handleOptionAndParams (paramsValue, 'm', 'paginate');\n" +
+        "        if (paginate) {\n" +
+        "            return 1;\n" +
+        "        }\n" +
+        "    }\n" +
+        "    writeOtherWrite (params: any, other: any) {\n" +
+        "        let paginate = false;\n" +
+        "        let paramsValue = params;\n" +
+        "        [ paginate, paramsValue ] = this.handleOptionAndParams (paramsValue, 'm', 'paginate', paginate);\n" +
+        "        paginate = other;\n" +
+        "        if (paginate) {\n" +
+        "            return 1;\n" +
+        "        }\n" +
+        "    }\n" +
+        "    declLiteral (params: any) {\n" +
+        "        const [ useDepthEndpoint, rest ] = this.handleOptionAndParams (params, 'm', 'useDepthEndpoint', false);\n" +
+        "        if (useDepthEndpoint) {\n" +
+        "            return rest;\n" +
+        "        }\n" +
+        "    }\n" +
+        "    declLiteral2 (params: any) {\n" +
+        "        const [ paginate, rest ] = this.handleOptionAndParams2 (params, 'm', 'paginate', 'removeRepeated', true);\n" +
+        "        const [ paginateOther, rest2 ] = this.handleOptionAndParams2 (params, 'm', 'paginate', 'other', true);\n" +
+        "        if (paginate) {\n" +
+        "            return rest;\n" +
+        "        }\n" +
+        "    }\n" +
+        "    declParameter (params: any, removeRepeated = true) {\n" +
+        "        const [ removeRepeatedOption, rest ] = this.handleOptionAndParams (params, 'm', 'removeRepeated', removeRepeated);\n" +
+        "        if (removeRepeatedOption) {\n" +
+        "            return rest;\n" +
+        "        }\n" +
+        "    }\n" +
+        "    declParameterWritten (params: any, removeRepeated = true) {\n" +
+        "        removeRepeated = this.use (removeRepeated);\n" +
+        "        const [ removeRepeatedOption, rest ] = this.handleOptionAndParams (params, 'm', 'removeRepeated', removeRepeated);\n" +
+        "        if (removeRepeatedOption) {\n" +
+        "            return rest;\n" +
+        "        }\n" +
+        "    }\n" +
+        "    declParameterNoDefault (params: any, removeRepeated: any) {\n" +
+        "        const [ removeRepeatedOption, rest ] = this.handleOptionAndParams (params, 'm', 'removeRepeated', removeRepeated);\n" +
+        "        if (removeRepeatedOption) {\n" +
+        "            return rest;\n" +
+        "        }\n" +
+        "    }\n" +
+        "    declOtherKey (params: any) {\n" +
+        "        const [ interval, rest ] = this.handleOptionAndParams (params, 'm', 'interval', false);\n" +
+        "        if (interval) {\n" +
+        "            return rest;\n" +
+        "        }\n" +
+        "    }\n" +
+        "    declNoDefault (params: any) {\n" +
+        "        const [ paginate, rest ] = this.handleOptionAndParams (params, 'm', 'paginate');\n" +
+        "        if (paginate) {\n" +
+        "            return rest;\n" +
+        "        }\n" +
+        "    }\n" +
+        "    declIncremented (params: any) {\n" +
+        "        const [ paginate, rest ] = this.handleOptionAndParams (params, 'm', 'paginate', false);\n" +
+        "        paginate++;\n" +
+        "        return rest;\n" +
+        "    }\n" +
+        "    declOtherCallee (params: any) {\n" +
+        "        const [ paginate, rest ] = this.unresolved.handleOptionAndParams (params, 'm', 'paginate', false);\n" +
+        "        return rest;\n" +
+        "    }\n" +
+        "}";
+
+    const printer = (typedHolder: boolean): string => {
+        const transpiler: any = new Transpiler(config);
+        if (typedHolder) {
+            transpiler.csharpTranspiler.csharpDestructuringTempType = () => 'IList<object>';
+        }
+        return transpiler.transpileCSharp(source).content;
+    };
+
+    const method = (out: string, name: string): string => {
+        const start = out.indexOf(' ' + name + '(');
+        expect(start).toBeGreaterThan(-1);
+        const end = out.indexOf('\n    }\n', start);
+        return out.slice(start, end);
+    };
+
+    describe('RD-CS-3: bool slot of a destructured handleOptionAndParams', () => {
+        test('an assignment destructuring types the bool local and casts the slot', () => {
+            const body = method(printer(true), 'write');
+            expect(body).toContain('bool warn = true;');
+            expect(body).toContain('warn = (bool)warnparamsValueVariable[0];');
+            expect(body).toContain('if (warn)');
+            const untypedHolder = method(printer(false), 'write');
+            expect(untypedHolder).toContain('bool warn = true;');
+            expect(untypedHolder).toContain('warn = (bool)((IList<object>)warnparamsValueVariable)[0];');
+        });
+
+        test('a local read outside a condition is still typed bool', () => {
+            const body = method(printer(true), 'writeUsed');
+            expect(body).toContain('bool paginate = false;');
+            expect(body).toContain('paginate = (bool)paginateparamsValueVariable[0];');
+        });
+
+        test('a variable destructuring on a bool literal default declares a bool', () => {
+            const out = printer(true);
+            expect(method(out, 'declLiteral')).toContain('bool useDepthEndpoint = (bool)useDepthEndpointrestVariable[0];');
+            expect(method(out, 'declLiteral')).toContain('if (useDepthEndpoint)');
+            expect(method(out, 'declLiteral2')).toContain('bool paginate = (bool)paginaterestVariable[0];');
+            expect(method(out, 'declLiteral2')).toContain('var paginateOther = paginateOtherrest2Variable[0];');
+        });
+
+        test('a bool parameter default proven by its ??= prologue declares a bool', () => {
+            const body = method(printer(true), 'declParameter');
+            expect(body).toContain('removeRepeated ??= true;');
+            expect(body).toContain('bool removeRepeatedOption = (bool)removeRepeatedOptionrestVariable[0];');
+            expect(body).toContain('if (removeRepeatedOption)');
+        });
+
+        test('anything the proof does not cover keeps the object emission', () => {
+            const out = printer(true);
+            expect(method(out, 'writeOtherKey')).toContain('object flag = true;');
+            expect(method(out, 'writeOtherKey')).toContain('flag = flagparamsValueVariable[0];');
+            expect(method(out, 'writeNoDefault')).toContain('object paginate = false;');
+            expect(method(out, 'writeOtherWrite')).toContain('object paginate = false;');
+            expect(method(out, 'declParameterWritten')).toContain('var removeRepeatedOption = ');
+            expect(method(out, 'declParameterNoDefault')).toContain('var removeRepeatedOption = ');
+            expect(method(out, 'declOtherKey')).toContain('var interval = ');
+            expect(method(out, 'declNoDefault')).toContain('var paginate = ');
+            expect(method(out, 'declIncremented')).toContain('var paginate = ');
+            expect(method(out, 'declOtherCallee')).toContain('var paginate = ');
+            expect(out).not.toContain('(bool)paginateOther');
+            expect(out).not.toContain('(bool)interval');
+        });
+    });
+});
+
+describe ('rfcs1DeclaredDictMember', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'INFER_ARG_TYPE': true, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } };
+
+    const source =
+        "class Client {\n" +
+        "    futures: Dictionary<any>;\n" +
+        "    subscriptions: Dictionary<any>;\n" +
+        "}\n" +
+        "class Exchange {\n" +
+        "    f (client: Client, messageHash: string, other: any) {\n" +
+        "        const a = client.futures[messageHash];\n" +
+        "        const b = this.safeValue (client.subscriptions, messageHash);\n" +
+        "        const c = client.subscriptions['authenticated'];\n" +
+        "        const d = client.subscriptions[other];\n" +
+        "        const e = this.safeValue (client.subscriptions, messageHash, {});\n" +
+        "        client.subscriptions[messageHash] = 1;\n" +
+        "    }\n" +
+        "}";
+
+    const printer = (hook: boolean): string => {
+        const transpiler: any = new Transpiler(config);
+        if (hook) {
+            // the consumer hook: members declared by `Client` answer, everything else does not
+            transpiler.csharpTranspiler.csharpDeclaredDictMember = (node: any) => {
+                const getters: any = { 'futures': 'getFuture', 'subscriptions': 'getSubscription' };
+                return getters[node.name.text] ? { getter: getters[node.name.text] } : undefined;
+            };
+        }
+        return transpiler.transpileCSharp(source).content;
+    };
+
+    describe('RF-cs-1 c03: declared dictionary member reads', () => {
+        test('without the consumer hook the helper emission is unchanged', () => {
+            const out = printer(false);
+            expect(out).toContain('getValue(client.futures, messageHash)');
+            expect(out).toContain('callDynamically(this, "safeValue", new object[] { client.subscriptions, messageHash })');
+        });
+
+        test('a member read through a string key prints the key-tested indexer', () => {
+            const out = printer(true);
+            expect(out).toContain('object a = (client.futures != null && messageHash != null && client.futures.ContainsKey(messageHash) ? client.futures[messageHash] : null);');
+            expect(out).toContain('object c = (client.subscriptions != null && client.subscriptions.ContainsKey("authenticated") ? client.subscriptions["authenticated"] : null);');
+        });
+
+        test('safeValue on the member prints the typed accessor', () => {
+            expect(printer(true)).toContain('object b = client.getSubscription(messageHash);');
+        });
+
+        test('a non-string key, a safeValue default and a write keep the helper', () => {
+            const out = printer(true);
+            expect(out).toContain('getValue(client.subscriptions, other)');
+            expect(out).toContain('"safeValue", new object[] { client.subscriptions, messageHash');
+            expect(out).not.toContain('ContainsKey(other)');
+        });
+    });
+});
+
+describe ('rfmC2AX3ObjectKeyWsCache', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    // ws cache properties of the hand-written base are owner-routed IDictionary<string, object> members;
+    // an object-keyed read of a declared dictionary local carries the helper's (string) cast
+    const DECLARED: { [name: string]: any } = {
+        'ohlcvs': { type: 'IDictionary<string, object>', initializer: 'null', routed: true },
+        'orderbooks': { type: 'IDictionary<string, object>', initializer: 'null', routed: true },
+        'currencies_by_id': { type: 'IDictionary<string, object>', initializer: 'null', routed: false },
+    };
+    const config = {
+        'verbose': false,
+        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+    };
+
+    function printed(lines: string, keyType: string, params = 'symbol: string'): string {
+        const source = 'class BaseExchange {\n    ohlcvs: any; orderbooks: any; currencies_by_id: any;\n    f (' + params + ') {\n' + lines + '\n    }\n}';
+        const transpiler = new Transpiler(config);
+        (transpiler as any).csharpTranspiler.csharpLocalTypeOf = (node: any) => (node.text === 'symbol' ? keyType : undefined);
+        (transpiler as any).csharpTranspiler.csharpPrintedLocalType = (node: any) => (node.text === 'balances' ? 'Dictionary<string, object>' : undefined);
+        (transpiler as any).csharpTranspiler.csharpDeclaredMemberType = (owner: string, name: string) => (owner === 'this' ? DECLARED : {} as any)[name];
+        return transpiler.transpileCSharp(source).content;
+    }
+
+    describe('csharp routed ws cache and object-key dictionary reads (RFM-C2-A / 1F-hx10w2-C01 / RFM-X3-cs)', () => {
+        test('a string? key on a routed ws cache is a guarded ContainsKey read', () => {
+            const out = printed('        return this.ohlcvs[symbol];', 'string?');
+            expect(out).toContain('(this.ohlcvs != null && symbol != null && this.ohlcvs.ContainsKey(symbol) ? this.ohlcvs[symbol] : null)');
+            expect(out).not.toContain('getValue(this.ohlcvs');
+        });
+        test('orderbooks keeps the helper the ws transpile maps to getOrderBook', () => {
+            expect(printed('        return this.orderbooks[symbol];', 'string?')).toContain('getValue(this.orderbooks, symbol)');
+        });
+        test('a key of another type keeps the helper', () => {
+            expect(printed('        return this.ohlcvs[symbol];', 'int')).toContain('getValue(this.ohlcvs, symbol)');
+        });
+        test('an object key on a declared dictionary local carries the helper cast', () => {
+            const out = printed('        const balances = {};\n        return balances[symbol];', 'object');
+            expect(out).toContain('(balances != null && symbol != null && balances.ContainsKey((string)symbol) ? balances[(string)symbol] : null)');
+        });
+        test('an object key parameter the body writes keeps the helper (a retyped shadow local)', () => {
+            const out = printed('        symbol = symbol + "x";\n        const balances = {};\n        return balances[symbol];', 'object');
+            expect(out).toContain('getValue(balances, symbol)');
+        });
+        test('a local copy of currencies_by_id names the declared dictionary type', () => {
+            const out = printed('        const byId = this.currencies_by_id;\n        return byId.length;', 'string');
+            expect(out).toContain('IDictionary<string, object> byId = this.currencies_by_id;');
+        });
+    });
+});
+
+describe ('rfmC2BDeclaredBaseField', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    const declared = { 'urls': 'IDictionary<string, object>', 'positions': 'object' };
+    const makeConfig = (hook: boolean): any => ({ 'verbose': false, 'csharp': { ...(hook ? { 'declaredBaseFieldTypes': declared } : {}), 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } });
+
+    // RFM-C2-B: reads of a hand-written base field the consumer declares (config.csharp.declaredBaseFieldTypes)
+    const source =
+        "class Exchange {\n" +
+        "    urls: any;\n" +
+        "    positions: any;\n" +
+        "    limits: any;\n" +
+        "    f (type: string, other: any) {\n" +
+        "        const a = this.urls['api'];\n" +
+        "        const b = this.urls[type];\n" +
+        "        const c = 'x' in this.urls;\n" +
+        "        const d = this.positions[type];\n" +
+        "        const e = type in this.positions;\n" +
+        "        const f = other in this.positions;\n" +
+        "        const g = this.urls[other];\n" +
+        "        const h = this.limits[type];\n" +
+        "        this.positions = {};\n" +
+        "        this.urls['k'] = 1;\n" +
+        "    }\n" +
+        "    g (a: number, b: number) {\n" +
+        "        const x = this.parseToInt (a);\n" +
+        "        const y = this.parseToInt (b);\n" +
+        "        const p = x % y === 0;\n" +
+        "        const q = x % 7 === 0;\n" +
+        "        const r = x % y !== 3;\n" +
+        "        const s = x % this.foo === 0;\n" +
+        "    }\n" +
+        "    parseToInt (x: any): number { return 1 }\n" +
+        "}";
+
+    const printer = (hook: boolean): string => {
+        const transpiler: any = new Transpiler(makeConfig(hook));
+        if (hook) {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node: any) => (node.kind === SyntaxKind.Identifier && [ 'x', 'y' ].includes(node.text)) ? 'Int64' : undefined;
+        }
+        return transpiler.transpileCSharp(source).content;
+    };
+
+    describe('RFM-C2-B: declared base-field dictionary reads', () => {
+        test('without the consumer hook the helper emission is unchanged', () => {
+            const out = printer(false);
+            expect(out).toContain('getValue(this.positions, type)');
+            expect(out).toContain('inOp(this.positions, type)');
+            expect(out).toContain('isEqual(mod(x, y), 0)');
+        });
+
+        test('a member declared a dictionary reads through its own indexer and ContainsKey', () => {
+            const out = printer(true);
+            expect(out).toContain('bool c = this.urls.ContainsKey("x");');
+        });
+
+        test('an object member whose every write stores a dictionary keeps the helper cast and tests the key type', () => {
+            const out = printer(true);
+            expect(out).toContain('(((IDictionary<string,object>)this.positions) != null && type != null && ((IDictionary<string,object>)this.positions).ContainsKey((string)type) ? ((IDictionary<string,object>)this.positions)[(string)type] : null)');
+            expect(out).toMatch(/type is string hx10w3Key\d+ && \(\(IDictionary<string,object>\)this\.positions\)\.ContainsKey\(hx10w3Key\d+\)/);
+            expect(out).toContain('inOp(this.positions, other)');
+        });
+
+        test('an undeclared member, a non-string key and a write keep the helper', () => {
+            const out = printer(true);
+            expect(out).toContain('getValue(this.limits, type)');
+            expect(out).toContain('getValue(this.urls, other)');
+            expect(out).toContain('["k"] = 1');
+        });
+
+        test('isEqual over an Int64 remainder and an integer literal prints the operator', () => {
+            const out = printer(true);
+            expect(out).toContain('((x % y) == 0)');
+            expect(out).toContain('((x % y) != 3)');
+            // RF-cs-2 c (folds ccxt build/hx10w2-C04 nestedEqualText): a literal divisor of an Int64 identifier prints the
+            // same remainder the host's mod pass would (`(Int64)((double)x % 7)`) behind the operator, so isEqual(mod (x, 7), 0)
+            // no longer reaches that pass. The non-Int64 and non-literal-divisor shapes below keep the helper.
+            expect(out).toContain('(((Int64)((double)x % 7)) == 0)');
+            expect(out).not.toContain('isEqual(mod(x, y)');
+            expect(out).toContain('mod(x, this.foo)');
+        });
+    });
+
+    describe('RFM-C2-B: omit of a declared dictionary member', () => {
+        const omitSource = "class Exchange {\n    urls: any;\n    positions: any;\n    f () {\n        const a = this.omit (this.urls, 'x');\n        const b = this.omit (this.positions, 'x');\n        const c = this.omit (this.urls, 'x', 'y');\n        this.urls = a;\n    }\n    omit (a: any, ...k: any[]) { return a }\n}";
+        const run = (hook: boolean): string => (new Transpiler(makeConfig(hook)) as any).transpileCSharp(omitSource).content;
+        test('without the table the local keeps the printer box', () => {
+            expect(run(false)).not.toContain('Dictionary<string, object> a = ');
+        });
+        test('with the table the 2-argument omit of a dictionary member names its result', () => {
+            const out = run(true);
+            expect(out).toContain('Dictionary<string, object> a = this.omit(this.urls, "x");');
+            expect(out).not.toContain('Dictionary<string, object> b = ');
+            expect(out).not.toContain('Dictionary<string, object> c = ');
+        });
     });
 });

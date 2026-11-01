@@ -1,6 +1,193 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { type Block, type CallExpression, type Declaration, type Identifier, type Node, type ParameterDeclaration, type VariableDeclaration } from "typescript/unstable/ast";
 import { type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
+export type Hx10R01Stats = {
+    seqLocals: number;
+    seqReads: number;
+    dictLocals: number;
+    dictReads: number;
+};
+/**
+ * Native `get_value` on statically pinned receivers. `stats` is filled in for
+ * the campaign census.
+ */
+export declare function nativeGetValue(content: string, stats?: Hx10R01Stats): string;
+export declare function r01W2SelfTest(): number;
+/**
+ * Rewrite `x[k] = v` / nested `x[a][b] = v` writes on a proven tag-free
+ * receiver into the native `insert` the helper performs on one.
+ */
+export declare function r02NativeInserts(content: string): string;
+export declare function hx10w2R03(content: string): string;
+export declare function hx10w2R03SelfTest(): string[];
+export declare function r04Scalars(content: string): string;
+/** Each case: the native text must appear, and the helper must be gone unless the case keeps it. */
+export declare function r04SelfTest(): string[];
+export declare function r06Push(content: string): string;
+export declare function r06SelfTest(): string[];
+type Shape = 'String' | 'Int' | 'Float' | 'Bool' | 'Vec' | 'Map';
+export type R01Reject = {
+    shape: Shape;
+    name: string;
+    line: number;
+    text: string;
+};
+/** Blocking uses from the last run (diagnostics only). */
+export declare let r01Rejects: R01Reject[];
+/** Type the `Value` locals whose initializer pins the variant and whose every use is native. */
+export declare function r01TypedLocals(content: string): string;
+/** One case per rule; each one fails on the base generator (no such pass). */
+export declare function r01SelfTest(): string[];
+export interface Hx10R03Stats {
+    sites: number;
+}
+/** Rewrite helper calls on a proven callee-shaped local to the native op. */
+export declare function hx10w3R03(content: string, stats?: Hx10R03Stats): string;
+/** Self-test: the rule fires on a proven callee and leaves an unproven one alone. */
+export declare function hx10R03SelfTest(): string[];
+export declare function r04Callee(content: string): string;
+export declare function r04CalleeSelfTest(): string[];
+export declare function r05FieldChainInserts(content: string): string;
+export declare function r06w3Push(content: string): string;
+export declare function r06w3SelfTest(): string[];
+/** Rewrite the family where the operand type is proven; leave every other site as printed. */
+export declare function r07StringNatives(content: string): string;
+/** One case per rule; each fails on the base generator (no such pass). */
+export declare function r07StringSelfTest(): string[];
+export declare function bf03PlainDictChains(content: string): string;
+/** Blank out comments and string bodies, keeping every index in place. */
+export declare function r10Mask(src: string): string;
+/** `[start, end)` of every top-level `pub fn` body plus its header text. */
+export declare function r10FnBodies(masked: string): Array<{
+    fnStart: number;
+    open: number;
+    close: number;
+    header: string;
+}>;
+export declare function r10ClientHandleMasked(content: string): string;
+/**
+ * Same rewrite, driven by line structure instead of a masked character walk.
+ * A method starts on a `pub fn …(` line that sits directly inside an `impl`
+ * block, and ends where the brace depth returns to that level; brace counting
+ * skips comment and string spans per line.
+ */
+export declare function r10ClientHandle(content: string): string;
+export declare function r10SelfTest(): string[];
+/** `'map'` for a printed native-map parameter, undefined for any other shape. */
+export declare function hx10w9Rp02ParamKind(printedParam: string): 'map' | undefined;
+/** Dispatch argument for a native-map parameter (position `index` in `args`).
+ *  The temp is built on the arm's own line: the whole expression on one line
+ *  pushes a generated dispatch arm past the 400-char census limit. */
+export declare function hx10w9Rp02DispatchArg(index: number): string;
+/** Split a printed parameter list on top-level commas: a generic argument list
+ *  (`IndexMap<String, Value>`) carries its own. */
+export declare function hx10w9Rp02SplitArgs(argList: string): string[];
+/** Names a file prints as `&mut IndexMap` parameters. Copying one is the only
+ *  way to box it, so a dead-clone pass must not turn that copy into a move. */
+export declare function hx10w9Rp02RefMapParamNames(content: string): Set<string>;
+export declare function rp02SelfTest(): number;
+/**
+ * `let X: Value = self.safe_string*(obj, key, &[default])` whose every later use is its own
+ * slot of a `format!` becomes a native `String` through the family's `_opt` twin, which has
+ * the same lookup and default rules. Any other use, a `{:?}` sink or a non-`Str` default
+ * keeps `Value`.
+ */
+export declare function narrowStrSinkLocals(content: string): string;
+/**
+ * `let X: Value = self.safe_string*(obj, key, &[])` whose uses are all null tests,
+ * `as_str()` compares, `stringify_param` calls or plain `Value` operands becomes
+ * `Option<String>` through the `_opt` twin (same lookup and default rules, `None` where
+ * the boxed helper yields `Null`). Null tests print `is_none()`/`is_some()`, compares
+ * `as_deref()`, `get_value(&X, &Value::Int(0)).as_str() == Some("c")` the `starts_with("c")`
+ * of the same first character, `stringify_param(&X)` the text it prints, and a `Value`
+ * operand re-boxes through
+ * `Value::from`, which builds the `Value::Str` the helper returned. Any other use, a
+ * `&mut`, an assignment or a closure keeps `Value`.
+ */
+export declare function narrowStrNullLocals(content: string): string;
+export declare function hx11RustSignApiStr(content: string): string;
+/**
+ * hx11 W9 `rust-bool-k-local-option-bool`: `let mut X: Value = self.safe_bool_k(obj, "k", &[..])`
+ * (and `self.safe_bool(obj, key, &[..])`) whose every later use is a native-able bool read.
+ *
+ * Default `&[]` -> `Option<bool>` (`safe_bool_k_opt`); default `&[Value::Bool(b)]` -> `bool`
+ * (`safe_bool_k_opt(..).unwrap_or(b)`). Accepted uses: `X.as_bool() ==/!= Some(b)`,
+ * `X.is_truthy()`, `X ==/!= Value::Bool(b)`, `X ==/!= Value::Null` (Option only),
+ * `X = Value::Bool(b)`, `is_true(&X)` (bool only) and `.insert("k".., X[.clone()])` sinks.
+ * Any other use, a shadowing binding or a closure keeps `Value`.
+ */
+export declare function hx11w9RustBoolKLocalOptionBool(content: string): string;
+/**
+ * `let mut X: Value = self.safe_string*(obj, key, &[])` that is assigned again, where every
+ * assignment is `X = self.safe_string*(..)` (same family, becomes its `_opt` twin),
+ * `X = Value::Str("lit".into())` (becomes `Some("lit".to_string())`) or `X = Value::Null`
+ * (becomes `None`), and every other use is a null test, an `as_str()` compare or a `Value`
+ * operand (re-boxed with `Value::from`). Any other use keeps `Value`.
+ */
+export declare function hx11w9StrLocalReassign(content: string): string;
+/**
+ * hx11 W9 `rust-bool2-local-option-bool`: `let mut X: Value = self.safe_bool2(obj, k1, k2, &[..])`
+ * whose every later use is a native-able bool read. Default `&[]` -> `Option<bool>`
+ * (`safe_bool2_opt`); default `&[Value::Bool(b)]` -> `bool` (`.unwrap_or(b)`). Same accepted uses
+ * as the bool_k pass; a non-literal default, shadowing binding or closure keeps `Value`.
+ */
+export declare function hx11w9RustBool2LocalOptionBool(content: string): string;
+/**
+ * hx11 W9 `rust-bool-n-local-option-bool`: `let mut X: Value = self.safe_bool_n(obj, Value::from(vec![Value::Str(..), ..]), &[..])`
+ * whose every later use is a native-able bool read.
+ *
+ * Default `&[]` -> `Option<bool>` (`safe_bool_n_opt`); default `&[Value::Bool(b)]` -> `bool`
+ * (`safe_bool_n_opt(..).unwrap_or(b)`). Accepted uses: `X.as_bool() ==/!= Some(b)`,
+ * `X.is_truthy()`, `X ==/!= Value::Bool(b)`, `X ==/!= Value::Null` (Option only),
+ * `X = Value::Bool(b)`, `is_true(&X)` (bool only) and `.insert("k".., X[.clone()])` sinks.
+ * Any other use, a shadowing binding or a closure keeps `Value`.
+ */
+export declare function hx11w9RustBoolNLocalOptionBool(content: string): string;
+/**
+ * `let [mut] X: Value = self.safe_integer2|safe_integer_n(.., &[] | &[Value::Null])` becomes
+ * `Option<i64>` (`safe_integer2_opt` / `safe_integer_n_opt`) when every later use of `X` is one of:
+ *   `X.clone()` -> `Value::from(X)`           `self.iso8601(X)` / `m.insert("k".to_string(), X);` sinks
+ *   `X != / == Value::Null` -> `is_some()` / `is_none()`
+ *   `X.as_f64() == / != Some(<n>[.0])` -> `X == / != Some(<n>)`
+ *   `X = Value::Null | Value::Int(n) | self.safe_integer*(..);` -> `None` / `Some(n)` / `.as_i64()`
+ * Any other use, or a second binding of the name, keeps `Value`.
+ */
+export declare function hx11w9RustInt2IntNLocalOptionI64(content: string): string;
+/**
+ * `let mut X: Value = self.safe_integer[_k|2](.., &[] | &[Value::Null] | &[Value::Int(n)])` becomes
+ * `Option<i64>` (`.as_i64()`: the reader yields `Int` or its default, so the Option is exact) when
+ * every later use of `X` in the block is one of:
+ *   `X.clone()` -> `Value::from(X)`           `self.iso8601(X)` / `m.insert("k".to_string(), X);` sinks
+ *   `X != / == Value::Null` -> `is_some()` / `is_none()`
+ *   `X.as_f64() == / != Some(<n>[.0])` -> `X == / != Some(<n>)`
+ *   `X = Value::Null | Value::Int(n) | self.safe_integer*(..);` -> `None` / `Some(n)` / `.as_i64()`
+ * Any other use, or a second binding of the name, keeps `Value`.
+ */
+export declare function hx11w9RustIntLocalNullSinkOptionI64(content: string): string;
+/**
+ * `let [mut] X: Value = self.safe_number2(o, k1, k2, &[] | &[Value::Null])` becomes
+ * `Option<f64>` when every later use of `X` in the fn is `X != / == Value::Null`
+ * (-> `is_some()` / `is_none()`) or `X.as_f64() == / != Some(<n>.0)` (-> `X == / != Some(<n>.0)`).
+ * Any other use, or a second binding of the name, keeps `Value`.
+ */
+export declare function hx11w9RustNumber2LocalOptionF64(content: string): string;
+/**
+ * `let [mut] X: Value = self.safe_number2(o, k1, k2, &[] | &[Value::Null])` becomes `Option<f64>` when each use is
+ * `X != / == Value::Null`, `X.as_f64() == / != Some(<n>.0)`, `X.clone()` (-> `Value::from(X)`), or a bare `X`
+ * as the last arg of `m.insert("k".to_string(), X);` or `self.price_to_precision(<arg>, X)`.
+ */
+export declare function hx11w9RustNumber2SinkLocalOptionF64R2(content: string): string;
+export declare function hx11w9RustStr2LocalOptionString(content: string): string;
+/**
+ * A literal-backed local whose every write is `Value::Str("lit".into())` and whose every later
+ * use is a `format!` slot, `X.as_str()`, `stringify_param(&X)` or a by-value operand becomes a
+ * `String`. A by-value operand re-boxes through `Value::from`, which builds the `Value::Str`
+ * the literal was. Any other use (`&X`, `&mut`, a closure, a second binding, a write from
+ * another expression) keeps `Value`.
+ */
+export declare function hx11w9RustStrLiteralLocalNativeString(content: string): string;
+export declare function hx11w9RustStrNLocalOptionString(content: string): string;
+export declare const RUST_PLAIN_PLACE: RegExp;
 /** Answer of `RustTranspiler.rustDeclaredLocalTypeResolver` for a local whose
  *  value provably holds a `Value::Dict` at every use. */
 export type RustDeclaredLocalKind = 'dict';
@@ -798,7 +985,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): any;
+    printLogicalInBooleanContext(node: any): string;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;

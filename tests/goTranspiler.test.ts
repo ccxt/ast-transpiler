@@ -6,6 +6,44 @@ import { readFileSync } from 'fs';
 import * as nodefs from 'fs';
 import * as nodepath from 'path';
 import * as nodeos from 'os';
+import { installFmGo5G01 } from '../src/transpiler';
+import { installCcxtGoLocalTypes } from '../src/transpiler';
+import { installFmGo5GP08 } from '../src/transpiler';
+import { installFmGo5OG02 } from '../src/transpiler';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { installCcxtGoHooks as installCcxtGoHooks__fold3G03PrintedMapLocals } from '../src/goTranspiler';
+import fs__hx10w10GP24 from 'fs';
+import os__hx10w10GP24 from 'os';
+import path__hx10w10GP24 from 'path';
+import fs__hx10w9GP13 from 'fs';
+import os__hx10w9GP13 from 'os';
+import path__hx10w9GP13 from 'path';
+import { installCcxtGoSignTyping } from '../src/transpiler';
+import { g08w3Check } from '../src/transpiler';
+import { hx10w8GB01Check } from '../src/transpiler';
+import { hx10w8GB05Check } from '../src/transpiler';
+import { hx10w9GB11Check } from '../src/transpiler';
+import { hx10G06Check } from '../src/transpiler';
+import fs__hx11foldBGAnySliceToList from 'fs';
+import os__hx11foldBGAnySliceToList from 'os';
+import path__hx11foldBGAnySliceToList from 'path';
+import fs__hx11rfmG1GP18 from 'fs';
+import os__hx11rfmG1GP18 from 'os';
+import path__hx11rfmG1GP18 from 'path';
+import fs__hx11rfmX2BaseMapLocals from 'fs';
+import os__hx11rfmX2BaseMapLocals from 'os';
+import path__hx11rfmX2BaseMapLocals from 'path';
+import { installCcxtGoDictParams } from '../src/transpiler';
+import { installRdGo2WsCache } from '../src/transpiler';
+import { installRfGo5OwnedTables } from '../src/transpiler';
+import fs__rfmG4G21 from 'fs';
+import os__rfmG4G21 from 'os';
+import path__rfmG4G21 from 'path';
+import fs__rfmG4GB08 from 'fs';
+import os__rfmG4GB08 from 'os';
+import path__rfmG4GB08 from 'path';
 
 jest.mock('module',()=>({
     __esModule: true,                 // this makes it work
@@ -8538,5 +8576,5488 @@ describe('FOLD3 B02+GP17: the base pair twins bind natively at every call site',
         expect(output).toContain('paramsCallerMethodName := params');
         expect(output).toContain('paramsCallerMethodName = this.Omit(params, "callerMethodName")');
         expect(output).not.toContain('this.HandleParamString(params, "callerMethodName"');
+    });
+});
+
+describe ('a9jMarketsAccessorInOp', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    const PRELUDE = 'type Str = string | undefined;\n' +
+        'type Dict = {[key: string]: any};\n' +
+        'class Base {\n' +
+        '    markets: Dict = undefined;\n' +
+        '    markets_by_id: Dict = undefined;\n' +
+        '    currencies: Dict = undefined;\n' +
+        '    safeString (a: any, b: any, c?: string): Str { return undefined; }\n' +
+        '}\n';
+
+    function go(body: string): string {
+        return transpiler.transpileGo(PRELUDE + 'class Test extends Base {\n' + body + '}\n').content;
+    }
+
+    describe('a9j InOp on the market and currency book accessors', () => {
+        test('a string-typed key reads the accessor map with comma-ok', () => {
+            const out = go('    main () {\n' +
+                '        const id = "BTC/USDT";\n' +
+                '        if (id in this.markets_by_id) {\n' +
+                '            return 1;\n' +
+                '        }\n' +
+                '        return 0;\n' +
+                '    }\n');
+            expect(out).toContain('_, ok := this.Markets_by_id[');
+            expect(out).not.toContain('InOp(');
+        });
+        test('an any key keeps the helper', () => {
+            const out = go('    main (key: any) {\n' +
+                '        if (key in this.markets) {\n' +
+                '            return 1;\n' +
+                '        }\n' +
+                '        return 0;\n' +
+                '    }\n');
+            expect(out).toContain('InOp(');
+        });
+    });
+});
+
+describe ('fmCache', () => {
+    // FM-CACHE: the ws list caches. A BaseExchange field declared `ArrayCache` is the Go WsArrayCache field and
+    // `Dictionary<ArrayCache>` the TradesCache; locals, closures and parameters that provably hold them are typed
+    // WsArrayCache, `.append` on such a receiver is the plain interface method (the Appender assertion otherwise),
+    // and the cache's own Get / Has / Store and nil compares print instead of the dictionary helpers.
+    const BASE_FIXTURE = [
+        'export class ArrayCache { append (x: any) {} }',
+        'export class ArrayCacheBySymbolById extends ArrayCache {}',
+        'export class ArrayCacheByTimestamp { append (x: any) {} }',
+        'export class Exchange {',
+        '    orders: ArrayCache | undefined = undefined;',
+        '    triggerOrders!: ArrayCache;',
+        '    liquidations: ArrayCache | undefined = undefined;',
+        '    myLiquidations: ArrayCache | undefined = undefined;',
+        '    myTrades: ArrayCache | undefined;',
+        '    positions: any;',
+        '    trades: Dictionary<ArrayCache>;',
+        '    ohlcvs: Dictionary<Dictionary<ArrayCacheByTimestamp>>;',
+        '    safeValue (a, b, c?) { return undefined; }',
+        '    getValue (a, b) { return undefined; }',
+        '    safeInteger (a, b, c) { return 1; }',
+        '    safeString (a, b, c?) { return \'\'; }',
+        '    safeSymbol (a) { return \'\'; }',
+        '    createSafeDictionary () { return {}; }',
+        '    parseTrade (a) { return {}; }',
+        '    toArray (a) { return []; }',
+        '    options: Dict = {};',
+        '    handleMessage (client, message) {}',
+        '}',
+        '',
+    ].join ('\n');
+    const HEADER = [
+        'import { Exchange, ArrayCache, ArrayCacheBySymbolById, ArrayCacheByTimestamp } from \'../base/Exchange\';',
+        'type Dict = {[key: string]: any};',
+        'type Dictionary<T> = {[key: string]: T};',
+        '',
+    ].join ('\n');
+
+    function print (name: string, pro: string): string {
+        const src = nodepath.join (__dirname, 'files', name, 'ts', 'src');
+        nodefs.mkdirSync (nodepath.join (src, 'base'), { recursive: true });
+        nodefs.mkdirSync (nodepath.join (src, 'pro'), { recursive: true });
+        nodefs.writeFileSync (nodepath.join (src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        nodefs.writeFileSync (nodepath.join (src, 'pro', 'ex.ts'), HEADER + pro);
+        const t = new Transpiler ({ verbose: false, go: {} });
+        installCcxtGoHooks (t.goTranspiler);
+        return t.transpileGoByPath (nodepath.join (src, 'pro', 'ex.ts')).content;
+    }
+
+    afterAll (() => {
+        const dir = nodepath.join (__dirname, 'files');
+        for (const entry of nodefs.readdirSync (dir)) {
+            if (entry.startsWith ('tmp-fmcache-')) {
+                nodefs.rmSync (nodepath.join (dir, entry), { recursive: true, force: true });
+            }
+        }
+    });
+
+    const TRADES_AND_ORDERS = [
+        "export class ex extends Exchange {",
+        "    handleTrades (client: any, message: any) {",
+        "        const symbol = this.safeSymbol (this.safeString (message, 'S'));",
+        "        let stored = this.safeValue (this.trades, symbol);",
+        "        if (stored === undefined) {",
+        "            const limit = this.safeInteger (this.options, 'tradesLimit', 1000);",
+        "            stored = new ArrayCache (limit);",
+        "            this.trades[symbol] = stored;",
+        "        }",
+        "        const parsed = this.parseTrade (message);",
+        "        stored.append (parsed);",
+        "        client.resolve (stored, 'x');",
+        "    }",
+        "    handleTrades2 (client: any, message: any, symbol: string) {",
+        "        if (!(symbol in this.trades)) {",
+        "            const cache = new ArrayCache (10);",
+        "            this.trades[symbol] = cache;",
+        "        }",
+        "        let trades;",
+        "        if (symbol !== undefined) {",
+        "            trades = this.trades[symbol];",
+        "        }",
+        "        trades.append (message);",
+        "        const t2 = this.trades[symbol];",
+        "        t2.append (message);",
+        "        const k = new ArrayCacheBySymbolById (5);",
+        "        k.append (message);",
+        "        const z = this.safeValue (this.trades, symbol);",
+        "        if (z === undefined) {",
+        "            this.trades[symbol] = new ArrayCache (3);",
+        "        }",
+        "        delete this.trades[symbol];",
+        "        return this.safeValue (this.trades, symbol);",
+        "    }",
+        "    initT () {",
+        "        if (this.trades === undefined) {",
+        "            this.trades = {};",
+        "        }",
+        "        this.trades = this.createSafeDictionary ();",
+        "        if (this.safeValue (this.trades, 'a') === undefined) {",
+        "            this.trades['a'] = new ArrayCache (3);",
+        "        }",
+        "    }",
+        "    handleOrder (client: any, order: any, isTrigger: boolean) {",
+        "        if (this.orders === undefined) {",
+        "            this.orders = new ArrayCacheBySymbolById (10);",
+        "        }",
+        "        const orders = this.orders;",
+        "        orders.append (order);",
+        "        this.orders.append (order);",
+        "        let myTrades = this.myTrades;",
+        "        if (myTrades === undefined) {",
+        "            myTrades = new ArrayCacheBySymbolById (10);",
+        "        }",
+        "        myTrades.append (order);",
+        "        this.myTrades.append (order);",
+        "        const stored = isTrigger ? this.triggerOrders : this.orders;",
+        "        stored.append (order);",
+        "        const liq = this.liquidations;",
+        "        if (liq === undefined) {",
+        "            return;",
+        "        }",
+        "        this.liquidations.append (order);",
+        "        this.positions.append (order);",
+        "        const cache: ArrayCache = this.positions;",
+        "        cache.append (order);",
+        "        const ohlcv = this.safeValue (this.ohlcvs, 'x');",
+        "        ohlcv.append (order);",
+        "        const ob = new ArrayCacheByTimestamp (3);",
+        "        ob.append (order);",
+        "        this.myLiquidations = undefined;",
+        "    }",
+        "    pruneCachedBySymbols (newCache: ArrayCacheBySymbolById, cache: ArrayCache, symbols: string[]): ArrayCache {",
+        "        const entries = this.toArray (cache);",
+        "        newCache.append (entries[0]);",
+        "        return newCache;",
+        "    }",
+        "}",
+    ].join("\n");
+
+    const PRUNE_AND_NILS = [
+        "export class ex extends Exchange {",
+        "    cleanIt (topic: string, symbols: string[]) {",
+        "        if (topic === 'orders' && this.orders !== undefined) {",
+        "            const freshOrdersCache = new ArrayCacheBySymbolById (10);",
+        "            this.orders = this.pruneCachedBySymbols (freshOrdersCache, this.orders, symbols);",
+        "        } else if (topic === 'myTrades' && this.myTrades !== undefined) {",
+        "            const freshTradesCache = new ArrayCacheBySymbolById (10);",
+        "            this.myTrades = this.pruneCachedBySymbols (freshTradesCache, this.myTrades, symbols);",
+        "        }",
+        "    }",
+        "    pruneCachedBySymbols (newCache: ArrayCacheBySymbolById, cache: ArrayCache, symbols: string[]): ArrayCache {",
+        "        const entries = this.toArray (cache);",
+        "        for (let i = 0; i < entries.length; i++) {",
+        "            const entry = entries[i];",
+        "            newCache.append (entry);",
+        "        }",
+        "        return newCache;",
+        "    }",
+        "    handleTradesNilOnly (message: any, symbol: string) {",
+        "        let trades;",
+        "        if (symbol !== undefined) {",
+        "            trades = this.trades[symbol];",
+        "        }",
+        "        trades.append (message);",
+        "        let other;",
+        "        other = message;",
+        "        other = this.trades[symbol];",
+        "        other.append (message);",
+        "        const asMap = this.trades;",
+        "        asMap[symbol] = other;",
+        "    }",
+        "    handleRef (message: any, symbol: string) {",
+        "        let weird;",
+        "        weird = this.trades[symbol];",
+        "        weird = message;",
+        "        weird.append (message);",
+        "    }",
+        "}",
+    ].join("\n");
+
+    const NIL_ARM_TERNARY = [
+        "export class ex extends Exchange {",
+        "    handleP (client: any, message: any) {",
+        "        const symbol = this.safeSymbol (this.safeString (message, 'S'));",
+        "        let tradesArray = (symbol === undefined) ? undefined : this.safeValue (this.trades, symbol);",
+        "        if (tradesArray === undefined) {",
+        "            const tradesLimit = this.safeInteger (this.options, 'tradesLimit', 1000);",
+        "            tradesArray = new ArrayCache (tradesLimit);",
+        "            if (symbol !== undefined) {",
+        "                this.trades[symbol] = tradesArray;",
+        "            }",
+        "        }",
+        "        tradesArray.append (message);",
+        "        client.resolve (tradesArray, 'x');",
+        "    }",
+        "}",
+    ].join("\n");
+
+    const CAST_AND_FIELD_NIL = [
+        "export class ex extends Exchange {",
+        "    handleU (messageHash: string, isSnapshot: boolean) {",
+        "        const cache = this.orders as Dict;",
+        "        if (this.orders !== undefined) {",
+        "            const keys = Object.keys (cache);",
+        "            delete cache[keys[0]];",
+        "        }",
+        "        if (isSnapshot || (this.myLiquidations === undefined)) {",
+        "            this.myLiquidations = new ArrayCache (5);",
+        "        }",
+        "    }",
+        "}",
+    ].join ("\n");
+
+    describe ('go ws list caches (FM-CACHE)', () => {
+        const out = print ('tmp-fmcache-a', TRADES_AND_ORDERS);
+        const pruned = print ('tmp-fmcache-b', PRUNE_AND_NILS);
+        test ('base cache fields type their locals and nil compares are plain', () => {
+            for (const want of [
+                'var orders WsArrayCache = this.Orders', 'var myTrades WsArrayCache = this.MyTrades', 'if myTrades == nil {',
+                'var liq WsArrayCache = this.Liquidations', 'if liq == nil {',
+                'var stored WsArrayCache = func() WsArrayCache {',
+            ]) {
+                expect (out).toContain (want);
+            }
+            expect (out).not.toContain ('IsEqual(liq, nil)');
+            expect (out).not.toContain ('IsEqual(myTrades, nil)');
+        });
+        test ('append is the plain method on a cache, the assertion elsewhere', () => {
+            for (const want of [ '\torders.Append(order)', '\tthis.Orders.Append(order)', '\tthis.Liquidations.Append(order)', '\tk.Append(message)', '\tstored.Append(parsed)' ]) {
+                expect (out).toContain (want);
+            }
+            for (const want of [ 'this.Positions.(Appender).Append(order)', 'cache.(Appender).Append(order)', 'ohlcv.(Appender).Append(order)' ]) {
+                expect (out).toContain (want);
+            }
+        });
+        test ('the trades cache prints its own Get / Has / Store and the typed locals', () => {
+            for (const want of [
+                'var stored WsArrayCache = this.Trades.Get(symbol)', 'this.Trades.Store(symbol, stored)', 'if !(this.Trades.Has(symbol)) {',
+                'var trades WsArrayCache\n', 'trades = this.Trades.Get(symbol)', 'var t2 WsArrayCache = this.Trades.Get(symbol)',
+                'if z == nil {', 'this.Trades = TradesCache{}', 'if this.Trades == nil {', 'if this.Trades.Get("a") == nil {',
+            ]) {
+                expect (out).toContain (want);
+            }
+            expect (out).not.toContain ('GetValue(this.Trades');
+            expect (out).not.toContain ('InOp(this.Trades');
+            expect (out).not.toContain ('AddElementToObject(this.Trades');
+            expect (out).not.toContain ('map[string]any{}');
+        });
+        test ('a method returning only caches takes and answers WsArrayCache', () => {
+            expect (pruned).toContain ('PruneCachedBySymbols(newCache WsArrayCache, cache WsArrayCache, symbols []string) WsArrayCache {');
+            expect (pruned).toContain ('\tnewCache.Append(entry)');
+        });
+        test ('a local that is rebound to a foreign value keeps the box and the assertion', () => {
+            expect (pruned).toContain ('var weird any = nil');
+            expect (pruned).toContain ('weird.(Appender).Append(message)');
+            expect (pruned).toContain ('var other any = nil');
+            expect (pruned).toContain ('other.(Appender).Append(message)');
+            expect (pruned).toContain ('var asMap any = this.Trades');
+        });
+        test ('a nil arm joins a cache arm of a ternary', () => {
+            const nil = print ('tmp-fmcache-c', NIL_ARM_TERNARY);
+            expect (nil).toContain ('var tradesArray WsArrayCache = func() WsArrayCache {');
+            expect (nil).toContain ('\ttradesArray.Append(message)');
+            expect (nil).toContain ('this.Trades.Store(symbol, tradesArray)');
+        });
+        test ('a cast of a cache field keeps the cache type and a field nil test is plain', () => {
+            const cast = print ('tmp-fmcache-d', CAST_AND_FIELD_NIL);
+            expect (cast).toContain ('var cache WsArrayCache = this.Orders');
+            expect (cast).toContain ('(this.MyLiquidations == nil)');
+            expect (cast).not.toContain ('IsEqual(this.MyLiquidations, nil)');
+        });
+    });
+});
+
+describe ('fmGo43MapRange', () => {
+    // FM-GO4-3: `const xs = Object.keys/values(m)` on a declared map[string]any prints the nil-preserving
+    // range collection (what ccxt's hx10w2-G06 text pass rewrote the helper call into).
+
+    let transpiler: Transpiler;
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    const go = (body: string) => transpiler.transpileGo(
+        'class E {\n    groupBy(a, b): any { return a; }\n    safeDict(a, b): any { return a; }\n    keep(a): any { return a; }\n'
+        + '    m(symbol: string, params = {}) {\n' + body + '\n    }\n}').content;
+
+    describe('go Object.keys / Object.values on a declared map', () => {
+        test('values on a map local collect by range', () => {
+            const out = go("const g = this.groupBy(params, 'x'); const vs = Object.values (g); return this.keep (vs);");
+            expect(out).toContain('var vs []any = nil\n');
+            expect(out).toContain('if g != nil {');
+            expect(out).toContain('vs = make([]any, 0, len(g))');
+            expect(out).toContain('for _, objectValue := range g {');
+            expect(out).toContain('vs = append(vs, objectValue)');
+            expect(out).not.toContain('ObjectValues(');
+        });
+        test('keys on a map local collect by range', () => {
+            const out = go("const g = {}; const ks = Object.keys (g); return this.keep (ks);");
+            expect(out).toContain('var ks []string = nil\n');
+            expect(out).toContain('ks = make([]string, 0, len(g))');
+            expect(out).toContain('for objectKey := range g {');
+            expect(out).not.toContain('ObjectKeys(');
+        });
+        test('the GetArg params bag is a declared map too', () => {
+            const out = go('const ks = Object.keys (params); return this.keep (ks);');
+            expect(out).toContain('for objectKey := range params {');
+        });
+        test('an any-boxed receiver keeps the helper', () => {
+            const out = go("const g = this.safeDict(params, 'x'); const vs = Object.values (g); const ks = Object.keys (g); return [vs, ks];");
+            expect(out).toContain('ObjectValues(g)');
+            expect(out).toContain('ObjectKeys(g)');
+            expect(out).not.toContain('range g');
+        });
+        test('a receiver that is rebound keeps the helper', () => {
+            const out = go("let g = {}; g = this.groupBy(params, 'x'); const vs = Object.values (g); return this.keep (vs);");
+            expect(out).toContain('ObjectValues(g)');
+        });
+        test('a values local the body nil-tests keeps the helper (the box is never nil)', () => {
+            const out = go("const g = {}; const vs = Object.values (g); if (vs === undefined) { return 1; } return this.keep (vs);");
+            expect(out).toContain('ObjectValues(g)');
+        });
+        test('a second collection reusing the loop variable name keeps the helper', () => {
+            const out = go("const g = {}; const ks = Object.keys (g); const objectKey = 1; return [ks, objectKey];");
+            expect(out).toContain('ObjectKeys(g)');
+        });
+        test('a call-expression receiver keeps the helper', () => {
+            const out = go("const ks = Object.keys (this.groupBy(params, 'x')); return this.keep (ks);");
+            expect(out).toContain('ObjectKeys(this.GroupBy(');
+        });
+    });
+
+    describe('go Object.keys range keeps the loop-bounded element read native', () => {
+        const loop = (body: string) => transpiler.transpileGo(
+            'class E {\n    groupBy(a, b): any { return a; }\n    keep(a): any { return a; }\n'
+            + '    m(symbol: string, params = {}) {\n' + body + '\n    }\n}').content;
+        test('a string element of the collected keys reads as the slice index', () => {
+            const out = loop("const g = {}; const ks = Object.keys (g); const out = {}; for (let i = 0; i < ks.length; i++) { const k = ks[i]; out[k] = this.keep (k); } return out;");
+            expect(out).toContain('for objectKey := range g {');
+            expect(out).toContain('var k string = ks[i]');
+            expect(out).not.toContain('GetValue(ks, i)');
+        });
+    });
+});
+
+describe ('fmGo5G01', () => {
+    // FM-GO5 G01: the ws client's subscriptions table (a map owned by one goroutine) hands every operation to
+    // the owner, keyed on the checker-resolved `Client.subscriptions` declaration (no regex over printed Go).
+    const t = (install = true) => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        if (install) { installFmGo5G01 (x.goTranspiler); }
+        return x;
+    };
+    const SRC = [
+        'type Dict = { [key: string]: any };',
+        'class Client {',
+        '    subscriptions: Record<string, any> = {};',
+        '}',
+        'class Other {',
+        '    subscriptions: Record<string, any> = {};',
+        '}',
+        'class Ex {',
+        '    safeString (a: any, b: any, c: any = undefined) { return undefined; }',
+        '    safeValue (a: any, b: any, c: any = undefined) { return undefined; }',
+        '    safeDict (a: any, b: any, c: any = undefined) { return undefined; }',
+        '    m (client: Client, other: Other, h: string, v: any) {',
+        '        if (h in client.subscriptions) {',
+        '            delete client.subscriptions[h];',
+        '        }',
+        '        client.subscriptions[h] = v;',
+        '        const keys = Object.keys (client.subscriptions);',
+        '        const values = Object.values (client.subscriptions);',
+        '        const s = this.safeString (client.subscriptions[h], \'id\');',
+        '        const snap = this.safeString (client.subscriptions, h);',
+        '        const nested = client.subscriptions[h][\'x\'];',
+        '        const known = client.subscriptions[h];',
+        '        const d = this.safeDict (client.subscriptions, h);',
+        '        if (d === undefined) { return undefined; }',
+        '        client.subscriptions[h][\'checksum\'] = true;',
+        '        const typed = this.safeDict (client.subscriptions, h, {}) as Dict;',
+        '        const u = other.subscriptions[h];',
+        '        delete other.subscriptions[h];',
+        '        return [ keys, values, s, snap, nested, known, u ];',
+        '    }',
+        '}',
+        '',
+    ].join ('\n');
+
+    describe('FM-GO5 G01 client subscriptions hand-off', () => {
+        test('every access on Client.subscriptions calls the owner', () => {
+            const out = t ().transpileGo (SRC).content;
+            expect (out).toContain ('client.SubscriptionHas(h)');
+            expect (out).toContain ('client.SubscriptionDel(h)');
+            expect (out).toContain ('client.SubscriptionSet(h, v)');
+            expect (out).toContain ('var keys []string = client.SubscriptionKeys()');
+            expect (out).toContain ('var values []any = client.SubscriptionValues()');
+            expect (out).toContain ('this.SafeString(client.SubscriptionGet(h), "id")');
+            expect (out).toContain ('this.SafeString(client.SubscriptionsSnapshot(), h)');
+            expect (out).toContain ('GetValue(client.SubscriptionGet(h), "x")');
+            expect (out).toContain ('AddElementToObject(client.SubscriptionGet(h), "checksum", true)');
+            expect (out).toContain ('var typed map[string]any = client.SubscriptionDict(h)');
+        });
+        test('an any-typed local keeps the dereferencing base read of the snapshot', () => {
+            const out = t ().transpileGo (SRC).content;
+            expect (out).toContain ('var known any = GetValue(client.SubscriptionsSnapshot(), h)');
+        });
+        test('fails without the hook (base printer keeps the helpers)', () => {
+            const out = t (false).transpileGo (SRC).content;
+            expect (out).not.toContain ('SubscriptionHas');
+            expect (out).toContain ('InOp(client.Subscriptions, h)');
+        });
+        test('the same field name on another class is untouched', () => {
+            const out = t ().transpileGo (SRC).content;
+            expect (out).toContain ('GetValue(other.Subscriptions, h)');
+            expect (out).toContain ('Remove(other.Subscriptions, h)');
+        });
+    });
+});
+
+describe ('fmGo5G04', () => {
+    // FM-GO5 G04: nil tests of base fields and pointer-vs-negative-literal compares print native Go, keyed on the
+    // checker-resolved declaration (no printed-text pass in ccxt).
+    const t = (install = true) => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        if (install) { installFmGo5G04 (x.goTranspiler); }
+        return x;
+    };
+    const SRC = [
+        'class BaseExchange {',
+        '    features: any = undefined;',
+        '    proxyUrl: any = undefined;',
+        '    other: any = undefined;',
+        '    safeInteger (o: any, k: string): number | undefined { return undefined; }',
+        '    m (x: any) {',
+        '        if (this.features === undefined) { return 1; }',
+        '        if (this.proxyUrl !== undefined) { return 2; }',
+        '        if (this.other === undefined) { return 3; }',
+        '        const maker = this.safeInteger (x, "m");',
+        '        if (maker === -1) { return 4; }',
+        '        if (maker !== -1) { return 5; }',
+        '        return 0;',
+        '    }',
+        '}',
+        '',
+    ].join ('\n');
+
+    describe('FM-GO5 G04 typed IsEqual nil / negative literal', () => {
+        test('base fields and *int64 locals compare natively', () => {
+            const out = t ().transpileGo (SRC).content;
+            expect (out).toContain ('if this.Features == nil {');
+            expect (out).toContain ('if this.ProxyUrl != nil {');
+            expect (out).toContain ('IsEqual(this.Other, nil)');
+            expect (out).toContain ('maker != nil && *maker == int64(-1)');
+            expect (out).toContain ('maker == nil || *maker != int64(-1)');
+        });
+        test('fails without the hook', () => {
+            const out = t (false).transpileGo (SRC).content;
+            expect (out).toContain ('IsEqual(this.Features, nil)');
+            expect (out).not.toContain ('*maker == int64(-1)');
+        });
+        test('same field names on an unrelated class are untouched', () => {
+            const src = 'class Other {\n    features: any;\n    m () {\n        if (this.features === undefined) { return 1; }\n        return 0;\n    }\n}\n';
+            const out = t ().transpileGo (src).content;
+            expect (out).not.toContain ('this.Features == nil');
+        });
+    });
+});
+
+describe ('fmGo5GP08', () => {
+    // FM-GO5 GP08: a first-result read of the base-class `(T, map[string]any)` tuple helpers binds natively; keyed on the
+    // checker-resolved declaring class (an override keeps the boxed read), no per-exchange name list in ccxt.
+    const BASE = [
+        'type Dict = { [key: string]: any };',
+        'type Str = string | undefined;',
+        'type Bool = boolean | undefined;',
+        'class BaseExchange {',
+        '    options: Dict = {};',
+        '    handleMarketTypeAndParams (methodName: string, market: any = undefined, params: Dict = {}, defaultValue: Str = undefined): [Str, Dict] { return [ undefined, params ]; }',
+        '    handleOptionBoolAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] { return [ true, params ]; }',
+        '    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] { return [ request, params ]; }',
+        '}',
+    ].join ('\n');
+    const SRC = BASE + '\n' + [
+        'class Ex extends BaseExchange {',
+        '    f (params: Dict, market: any) {',
+        '        const typeVar = this.handleMarketTypeAndParams ("fetchX", market, params)[0];',
+        '        const filterClosed = this.handleOptionBoolAndParams (params, "fetchX", "filterClosed", false)[0];',
+        '        const values = this.handleOptionBoolAndParams (params, "watchX", "uta", false);',
+        '        const uta: Bool = values[0];',
+        '        const requestUntil = this.handleUntilOption ("end", {}, params)[0];',
+        '        return [ typeVar, filterClosed, uta, requestUntil ];',
+        '    }',
+        '}',
+        '',
+    ].join ('\n');
+    const OVERRIDE = BASE + '\n' + [
+        'class Ex extends BaseExchange {',
+        '    handleMarketTypeAndParams (methodName: string, market: any = undefined, params: Dict = {}, defaultValue: Str = undefined): [Str, Dict] { return [ "x", params ]; }',
+        '    f (params: Dict, market: any) {',
+        '        const typeVar = this.handleMarketTypeAndParams ("fetchX", market, params)[0];',
+        '        return typeVar;',
+        '    }',
+        '}',
+        '',
+    ].join ('\n');
+    const STP = BASE + '\n' + [
+        'class Ex extends BaseExchange {',
+        '    handleOptionStringAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Str = undefined): [Str, Dict] { return [ undefined, params ]; }',
+        '    f (params: Dict) {',
+        '        let stp: Str = undefined;',
+        '        [ stp, params ] = this.handleOptionStringAndParams (params, "createOrder", "stp");',
+        '        if (stp !== undefined) {',
+        '            this.options["k"] = stp.toUpperCase () + stp.toLowerCase ();',
+        '        }',
+        '        return params;',
+        '    }',
+        '}',
+        '',
+    ].join ('\n');
+    const print = (src: string, install = true): string => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        if (install) { installFmGo5GP08 (x.goTranspiler); }
+        const out = x.transpileGo (src).content;
+        return out.slice (out.indexOf ('func (this *Ex)'));
+    };
+
+    describe ('FM-GO5 GP08 tuple first-result binds', () => {
+        test('direct and held first-result reads bind natively', () => {
+            const out = print (SRC);
+            expect (out).toContain ('typeVar, _ := this.HandleMarketTypeAndParams("fetchX", market, params)');
+            expect (out).toContain ('filterClosedValue, _ := this.HandleOptionBoolAndParams(params, "fetchX", "filterClosed", false)');
+            expect (out).toContain ('filterClosed := &filterClosedValue');
+            expect (out).toContain ('utaValue, _ := this.HandleOptionBoolAndParams(params, "watchX", "uta", false)');
+            expect (out).toContain ('requestUntil, _ := this.HandleUntilOption("end", map[string]any{}, params)');
+            expect (out).not.toContain ('TupleSlice');
+            expect (out).not.toContain ('values');
+        });
+        test('fails without the hook (base printer keeps TupleSlice)', () => {
+            expect (print (SRC, false)).toContain ('TupleSlice(this.HandleMarketTypeAndParams(');
+        });
+        test('an override of the helper keeps the boxed read', () => {
+            const out = print (OVERRIDE);
+            expect (out).toContain ('TupleSlice(this.HandleMarketTypeAndParams(');
+            expect (out).not.toContain ('typeVar, _ :=');
+        });
+        test('a nil-declared local read through toUpperCase/toLowerCase is the pair\'s *string', () => {
+            const out = print (STP);
+            expect (out).toContain ('var stp *string = nil');
+            expect (out).toContain ('stp, params = this.HandleOptionStringAndParams(params, "createOrder", "stp")');
+            expect (out).not.toContain ('TupleSlice');
+        });
+    });
+});
+
+describe ('fmGo5OG02', () => {
+    // FM-GO5 OG02: request id / nonce counters and the last-response fields are owned by the request book; every rule is
+    // keyed on the checker-resolved declaration (a member of the base `BaseExchange` class), not on printed text.
+    const t = (install = true) => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        if (install) { installFmGo5OG02 (x.goTranspiler); }
+        return x;
+    };
+    const BASE = [
+        'class BaseExchange {',
+        '    options: any = {};',
+        '    last_http_response: string | undefined = undefined;',
+        '    last_response_headers: any = undefined;',
+        '    last_request_headers: any = undefined;',
+        '    sum (a: any, b: any) { return a + b; }',
+        '    safeInteger (d: any, k: string, dflt: any = undefined) { return d[k] ?? dflt; }',
+        '    lockId () { return undefined; }',
+        '    unlockId () { return undefined; }',
+        '    lockLastNonce () { return undefined; }',
+        '    unlockLastNonce () { return undefined; }',
+        '    nonce (): number { return 1; }',
+        '    cleanRestData () {',
+        '        this.last_http_response = undefined;',
+        '        // this.last_json_response = undefined; // not unified prop',
+        '        this.last_response_headers = undefined;',
+        '        this.last_request_headers = undefined;',
+        '    }',
+        '    incrementingNonce (): number {',
+        '        const currentNonce = this.nonce ();',
+        '        this.lockLastNonce ();',
+        '        const lastNonce = this.safeInteger (this.options, \'lastNonce\', 0);',
+        '        const result = (currentNonce > lastNonce) ? currentNonce : lastNonce + 1;',
+        '        this.options[\'lastNonce\'] = result;',
+        '        this.unlockLastNonce ();',
+        '        return result;',
+        '    }',
+        '}',
+        '',
+    ].join ('\n');
+    const venue = (body: string, other = '') => BASE + 'class venue extends BaseExchange {\n' + body + other + '}\n';
+    const DIRECT = '    requestId (): number {\n        this.lockId ();\n        const requestId = this.sum (this.safeInteger (this.options, \'requestId\', 0), 1);\n        this.options[\'requestId\'] = requestId;\n        this.unlockId ();\n        return requestId;\n    }\n';
+    const CHAINED = '    requestId (): number {\n        this.lockId ();\n        const previous = this.safeInteger (this.options, \'reqid\', 0);\n        const next = this.sum (previous, 1);\n        this.options[\'reqid\'] = next;\n        this.unlockId ();\n        return next;\n    }\n';
+
+    describe('FM-GO5 OG02 request book', () => {
+        test('a direct counter span hands the increment to the owner', () => {
+            const out = t ().transpileGo (venue (DIRECT)).content;
+            expect (out).toContain ('var requestId int64 = this.NextRequestId("requestId")');
+            expect (out).not.toContain ('this.LockId()');
+            expect (out).not.toContain ('this.UnlockId()');
+            expect (out).not.toContain ('this.Options["requestId"] =');
+        });
+        test('a seeded counter span drops the seed local', () => {
+            const out = t ().transpileGo (venue (CHAINED)).content;
+            expect (out).toContain ('var next int64 = this.NextRequestId("reqid")');
+            expect (out).not.toContain ('previous');
+            expect (out).not.toContain ('this.LockId()');
+        });
+        test('an unproven span keeps its lock pair', () => {
+            const out = t ().transpileGo (venue ('    other (): number {\n        this.lockId ();\n        const x = this.sum (1, 2);\n        this.unlockId ();\n        return x;\n    }\n')).content;
+            expect (out).toContain ('this.LockId()');
+            expect (out).not.toContain ('NextRequestId');
+        });
+        test('a lock pair on a foreign class is untouched', () => {
+            const src = 'class Other {\n    options: any = {};\n    lockId () {}\n    unlockId () {}\n    sum (a: any, b: any) { return a + b; }\n    safeInteger (d: any, k: string, f: any) { return f; }\n' + DIRECT + '}\n';
+            const out = t ().transpileGo (src).content;
+            expect (out).toContain ('this.LockId()');
+            expect (out).not.toContain ('NextRequestId');
+        });
+        test('the base incrementingNonce hands its compare to the owner as int64', () => {
+            const out = t ().transpileGo (BASE).content;
+            expect (out).toContain ('func (this *BaseExchange) IncrementingNonce() int64 {\n\tvar currentNonce int64 = this.Nonce()\n\tvar result int64 = this.nextNonce(currentNonce)\n\treturn result\n}');
+            expect (out).not.toContain ('this.LockLastNonce()');
+            expect (out).not.toContain ('"lastNonce"');
+        });
+        test('cleanRestData resets the last-response fields through the owner', () => {
+            const out = t ().transpileGo (BASE).content;
+            expect (out).toContain ('\tthis.handOffRequestBook(requestBookOp{kind: requestBookReset})\n\t// this.last_json_response = undefined; // not unified prop\n}');
+            expect (out).not.toContain ('this.Last_response_headers = nil');
+            expect (out).not.toContain ('this.Last_request_headers = nil');
+            expect (out).not.toContain ('this.Last_http_response = nil');
+        });
+        test('a read of last_http_response through this is the snapshot accessor', () => {
+            const out = t ().transpileGo (venue ('    m (): any {\n        if ((this.last_http_response !== undefined) && (this.last_http_response !== \'\')) {\n            return this.last_http_response.indexOf (\'x\');\n        }\n        return undefined;\n    }\n')).content;
+            expect (out).toContain ('this.GetLast_http_response()');
+            expect (out).not.toContain ('this.Last_http_response');
+        });
+        test('the same field name on an unrelated class is untouched', () => {
+            const out = t ().transpileGo ('class Other {\n    last_http_response: any = undefined;\n    m () {\n        return this.last_http_response;\n    }\n}\n').content;
+            expect (out).toContain ('this.Last_http_response');
+            expect (out).not.toContain ('GetLast_http_response');
+        });
+        test('fails without the hook (the printer keeps the lock pair and the field writes)', () => {
+            const out = t (false).transpileGo (venue (DIRECT)).content;
+            expect (out).toContain ('this.LockId()');
+            expect (out).not.toContain ('NextRequestId');
+            const base = t (false).transpileGo (BASE).content;
+            expect (base).toContain ('this.Last_http_response = nil');
+            expect (base).toContain ('this.LockLastNonce()');
+        });
+    });
+});
+
+describe ('fmgo4NonceInt64', () => {
+    // FM-GO4-1: Nonce () / IncrementingNonce () are int64 end to end (was ccxt build/hx11w8-nonce-int64.ts).
+    // The rule is keyed on the checker: a method named nonce () of a class chain ending in BaseExchange.nonce
+    // prints int64 when every return is a provable int64 operand; a local fed by nonce () is an int64.
+
+    let transpiler: Transpiler;
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    const BASE = 'type int = number;\ntype Int = number | undefined;\ntype Str = string | undefined;\n'
+        + 'class BaseExchange {\n'
+        + '    options: any;\n'
+        + '    sum = sum;\n'
+        + '    milliseconds (): int { return 1; }\n'
+        + '    seconds (): int { return 1; }\n'
+        + '    microseconds (): int { return 1; }\n'
+        + '    safeInteger (o: any, k: string, d?: int): Int { return 1; }\n'
+        + '    safeString (o: any, k: string, d?: string): Str { return d; }\n'
+        + '    nonce (): int { return this.seconds (); }\n'
+        + '    incrementingNonce (): int { return this.nonce (); }\n'
+        + '}\n'
+        + 'function sum (...xs: any[]): any { return 1; }\n';
+
+    const go = (derived: string) => transpiler.transpileGo(BASE + 'class Venue extends BaseExchange {\n' + derived + '\n}\n').content;
+    const venueNonce = (out: string) => out.substring(out.indexOf('func (this *Venue) Nonce()'));
+
+    describe('FM-GO4-1 nonce is int64', () => {
+        test('base nonce () prints int64', () => {
+            expect(go('')).toContain('func (this *BaseExchange) Nonce() int64 {');
+        });
+        test('a clock override prints int64', () => {
+            expect(go('override nonce (): int { return this.milliseconds (); }')).toContain('func (this *Venue) Nonce() int64 {');
+        });
+        test('a literal-default safeInteger difference prints int64', () => {
+            const out = go("override nonce (): int { return this.milliseconds () - this.safeInteger (this.options, 'timeDifference', 0); }");
+            expect(out).toContain('func (this *Venue) Nonce() int64 {');
+            expect(out).toContain('return this.Milliseconds() - *this.SafeInteger(this.Options, "timeDifference", 0)');
+        });
+        test('a narrowed *int64 local difference prints int64', () => {
+            const out = go("override nonce (): int { const d = this.safeInteger (this.options, 'td'); if (d === undefined) { throw new Error ('x'); } return this.milliseconds () - d; }");
+            expect(out).toContain('func (this *Venue) Nonce() int64 {');
+            expect(out).toContain('return this.Milliseconds() - *d');
+        });
+        test('two arms returning clocks print int64', () => {
+            const out = go("override nonce (): int { const m = this.safeString (this.options, 'n', 'milliseconds'); if (m === 'milliseconds') { return this.milliseconds (); } return this.seconds (); }");
+            expect(out).toContain('func (this *Venue) Nonce() int64 {');
+        });
+        test('this.sum of two int64 operands prints the native +', () => {
+            const out = go('override nonce (): int { const t = this.seconds (); return this.sum (this.microseconds () * 1000, t); }');
+            expect(out).toContain('func (this *Venue) Nonce() int64 {');
+            expect(out).toContain('return this.Microseconds()*1000 + t');
+            expect(venueNonce(out)).not.toContain('this.Sum(');
+        });
+        test('negative: this.sum with an unproven operand throws', () => {
+            expect(() => go('override nonce (): int { const d: any = 1; return this.sum (this.seconds (), d); }')).toThrow(/nonce returns unproven/);
+        });
+        test('a local fed by nonce () / incrementingNonce () is an int64', () => {
+            const out = go('f (): any { const n = this.nonce (); const m = this.incrementingNonce (); return [ n, m ]; }');
+            expect(out).toContain('var n int64 = this.Nonce()');
+            expect(out).toContain('var m int64 = this.IncrementingNonce()');
+        });
+        test('negative: a local rewritten with another value keeps its box', () => {
+            const out = go('f (): any { let n = this.nonce (); n = this.safeString ({}, "k"); return n; }');
+            expect(out).not.toContain('var n int64 = this.Nonce()');
+        });
+        test('negative: an unproven return throws instead of printing a wrong signature', () => {
+            expect(() => go('override nonce (): int { const d: any = 1; return d; }')).toThrow(/nonce returns unproven/);
+            expect(() => go('override nonce (): int { return this.milliseconds () - this.safeInteger (this.options, "k"); }')).toThrow(/nonce returns unproven/);
+            expect(() => go('override nonce (): int { return this.milliseconds () / 2; }')).toThrow(/nonce returns unproven/);
+        });
+        test('negative: a nonce method of a class that is not a BaseExchange descendant is untouched', () => {
+            const out = transpiler.transpileGo('class Other {\n    nonce (): any { return 1; }\n}\n').content;
+            expect(out).toContain('func (this *Other) Nonce() any {');
+        });
+        test('negative: another method of a venue is untouched', () => {
+            const out = go('override nonce (): int { return this.milliseconds (); }\n    other (): any { return 1; }');
+            expect(out).toContain('func (this *Venue) Other() any {');
+        });
+    });
+});
+
+describe ('fold1FG01OwnedBalance', () => {
+    // FOLD-1F hx10w6-G01: BaseExchange.balance, the map owned by the ws dispatch loop (config ownedBalance)
+    const OWNED = {
+        'field': 'balance',
+        'declaredIn': 'BaseExchange',
+        'entryRead': 'WsBalanceEntry',
+        'entryWrite': 'WsBalanceEntryForWrite',
+        'replace': 'WsBalanceReplace',
+        'userPath': '^(?:setBalanceCache|cleanWsData)$',
+        'asyncUserPath': '^(?:(?:watch|fetch|seed)\\w*|loadBalanceSnapshot)$',
+        'boxedKeys': [ 'info', 'timestamp', 'datetime', 'free', 'used', 'total' ],
+    };
+    const HEAD = 'type Dict = { [key: string]: any };\n'
+        + 'class BaseExchange {\n'
+        + '    balance: Dict = {};\n'
+        + '    safeString (d: any, k: any, def: any = undefined): string | undefined { return d; }\n'
+        + '    safeDict (d: any, k: any, def: any = undefined): Dict | undefined { return d; }\n'
+        + '    safeBalance (b: any): Dict { return b; }\n'
+        + '    iso8601 (x: any): string | undefined { return undefined; }\n'
+        + '    account (): Dict { return {}; }\n';
+    const print = (body: string, config: any = OWNED, method = 'handleBalance (message: Dict)', modifier = ''): string => {
+        const t = new Transpiler ({ 'verbose': false, 'go': { 'ownedBalance': config ?? undefined, 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileGo (HEAD + '    ' + modifier + method + ' {\n' + body + '\n    }\n}\n').content;
+    };
+
+    describe('FOLD-1F owned balance map', () => {
+        test('loop-side reads, writes, membership-free deletes and whole-map replaces are native (fail on the base printer: no config)', () => {
+            const out = print ("const type = 'spot'; this.balance[type] = this.safeBalance (this.balance[type]); delete this.balance['swap']; this.balance = this.safeBalance (this.balance);");
+            expect (out).toContain ('this.Balance[typeVar] = this.SafeBalance(this.Balance[typeVar])');
+            expect (out).toContain ('delete(this.Balance, "swap")');
+            expect (out).toContain ('this.WsBalanceReplace(this.SafeBalance(this.Balance))');
+            const base = print ("const type = 'spot'; this.balance[type] = this.safeBalance (this.balance[type]);", null);
+            expect (base).toContain ('AddElementToObject(this.Balance, typeVar');
+        });
+        test('entry stores and entry reads go through the owner views', () => {
+            const out = print ("const type = 'spot'; const code = this.safeString (message, 'c'); const account = {}; this.balance[type]['info'] = this.safeDict (message, 'i', {}); if (code !== undefined) { this.balance[type][code] = account; const old = this.safeString (this.balance[type][code], 'free'); }");
+            expect (out).toContain ('this.WsBalanceEntryForWrite(typeVar)["info"] = this.SafeDict(message, "i", map[string]any{})');
+            expect (out).toContain ('this.WsBalanceEntryForWrite(typeVar)[*code] = account');
+            expect (out).toContain ('this.WsBalanceEntry(typeVar)[*code]');
+        });
+        test('a bookkeeping key read, an unguarded pointer key, a scalar into a bookkeeping slot and an any value keep the helper', () => {
+            expect (print ("const t = this.balance['timestamp'];")).toContain ('GetValue(this.Balance, "timestamp")');
+            expect (print ("const code = this.safeString (message, 'c'); this.balance[code] = {};")).toContain ('AddElementToObject(this.Balance, code');
+            expect (print ("const type = 'spot'; this.balance[type]['timestamp'] = this.safeString (message, 'c');")).toContain ('AddElementToObject(');
+            expect (print ("const type = 'spot'; this.balance[type]['free'] = message['x'];")).toContain ('AddElementToObject(');
+        });
+        test('user-path methods keep the helper calls', () => {
+            expect (print ("const type = 'spot'; this.balance[type] = {};", OWNED, 'setBalanceCache (client: any, type: string)')).toContain ('AddElementToObject(this.Balance');
+            expect (print ("const type = 'spot'; const x = this.balance[type];", OWNED, 'watchBalance (params: Dict)', 'async ')).toContain ('GetValue(this.Balance');
+        });
+    });
+});
+
+describe ('fold1GoWsCacheFields', () => {
+    // FOLD1 GOCACHE: element write, delete and `in` over the symbol-keyed ws map fields of BaseExchange
+    const HEAD = 'type Dict = { [key: string]: any };\n'
+        + 'class Exchange {\n'
+        + '    ohlcvs: Dict = {};\n'
+        + '    fundingRates: Dict = {};\n'
+        + '    trades: Dict = {};\n'
+        + '    safeString (d: any, k: any, def: any = undefined): string | undefined { return d; }\n'
+        + '    safeSymbol (m: any): string | undefined { return m; }\n';
+    const print = (body: string): string => {
+        const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileGo (HEAD + '    handle (message: Dict) {\n' + body + '\n    }\n}\n').content;
+    };
+
+    describe('FOLD1 ws cache fields', () => {
+        test('a map literal store behind a nil test is a native store (fails on the base printer)', () => {
+            const out = print ("const symbol = this.safeString (message, 's'); this.ohlcvs[symbol] = {};");
+            expect (out).toContain ('if symbol != nil {\n\t\tthis.Ohlcvs[*symbol] = map[string]any{}\n\t}');
+            expect (out).not.toContain ('AddElementToObject(this.Ohlcvs');
+        });
+        test('an enclosing nil guard stores through the deref without a second guard', () => {
+            const out = print ("const symbol = this.safeString (message, 's'); if (symbol !== undefined) { this.ohlcvs[symbol] = {}; }");
+            expect (out).toContain ('this.Ohlcvs[*symbol] = map[string]any{}');
+            expect (out).not.toContain ('if symbol != nil {\n\t\tif symbol != nil');
+        });
+        test('a pointer value keeps the helper', () => {
+            const out = print ("const symbol = this.safeString (message, 's'); const rate = this.safeString (message, 'r'); this.fundingRates[symbol] = rate;");
+            expect (out).toContain ('AddElementToObject(this.FundingRates');
+        });
+        test('an any-typed key keeps the helper', () => {
+            const out = print ("this.ohlcvs[message['s']] = {};");
+            expect (out).toContain ('AddElementToObject(this.Ohlcvs');
+        });
+        test('delete over a map field is native, behind the nil test of a pointer key', () => {
+            const out = print ("const symbol = this.safeString (message, 's'); delete this.fundingRates[symbol];");
+            expect (out).toContain ('if symbol != nil {\n\t\tdelete(this.FundingRates, *symbol)\n\t}');
+            expect (out).not.toContain ('Remove(this.FundingRates');
+        });
+        test('delete over the trades cache goes through its own Delete', () => {
+            const out = print ("const symbol = this.safeString (message, 's'); delete this.trades[symbol];");
+            expect (out).toContain ('this.Trades.Delete(symbol)');
+            expect (out).not.toContain ('Remove(this.Trades');
+        });
+        test('a delete used as an expression keeps the helper', () => {
+            const out = print ("const symbol = this.safeString (message, 's'); const gone = delete this.fundingRates[symbol];");
+            expect (out).not.toContain ('delete(this.FundingRates');
+        });
+        test('`in` over a ws map field with a guarded pointer key reads the comma-ok', () => {
+            const out = print ("const symbol = this.safeString (message, 's'); if (symbol !== undefined) { if (symbol in this.fundingRates) { this.fundingRates[symbol] = {}; } }");
+            expect (out).toContain ('_, ok := this.FundingRates[*symbol]; ok');
+        });
+    });
+});
+
+describe ('fold3G03PrintedMapLocals', () => {
+    const installCcxtGoHooks = installCcxtGoHooks__fold3G03PrintedMapLocals;
+    // FOLD3 G03 (build/hx10w2-G03.ts folded): a native `m[k] = v` store on a map local the printer declares itself,
+    // behind the nil test the helper applied; `(k as string)` keys; Trade / TransferEntry rows boxed to their map;
+    // the params slot of a base tuple helper.
+    const BASE =
+        'export type Dict = { [key: string]: any };\n' +
+        'type NullableDict = Dict | undefined;\n' +
+        'type Str = string | undefined;\n' +
+        'export interface Trade { id: string }\n' +
+        'export interface TransferEntry { id: string }\n' +
+        'export default class Exchange {\n' +
+        '    safeDict (a: any, k: any, d: any = undefined): Dict { return a; }\n' +
+        '    safeString (a: any, k: any, d: any = undefined): Str { return a; }\n' +
+        '    parseTrade (t: any): Trade { return t; }\n' +
+        '    parseTransfer (t: any): TransferEntry { return t; }\n' +
+        '    handlePostOnly (a: any, b: any, p: Dict = {}): [ boolean, Dict ] { return [ false, p ]; }\n' +
+        '    omit (a: any, b: any): Dict { return a; }\n';
+
+    const run = (members: string, dir = 'ts/src', derived = false): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'f3g03-'));
+        try {
+            const src = path.join(tmp, dir);
+            fs.mkdirSync(path.join(tmp, 'ts/src/base'), { recursive: true });
+            fs.mkdirSync(src, { recursive: true });
+            fs.writeFileSync(path.join(tmp, 'ts/src/base/Exchange.ts'), BASE + '}\n');
+            const file = path.join(src, 'x.ts');
+            fs.writeFileSync(file, (derived ? "import Exchange, { Dict, Trade, TransferEntry } from './base/Exchange.js';\nclass X extends Exchange {\n" : BASE) + members + '}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoHooks(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    const flat = (s: string) => s.replace(/\s+/g, ' ');
+
+    describe('FOLD3 G03: native stores on printed map locals', () => {
+        test('a no-default safeDict local: the store sits behind the nil test the helper applied', () => {
+            const out = run(
+                '    f (orders: Dict, id: string, fee: Dict): any {\n' +
+                '        const order = this.safeDict (orders, id);\n' +
+                '        if (order !== undefined) {\n' +
+                "            order['fee'] = fee;\n" +
+                '            order[\'n\'] = 1;\n' +
+                '        }\n' +
+                '        return this.safeString (order, \'x\');\n' +
+                '    }\n');
+            expect(out).toContain('var order map[string]any = this.SafeDictMap(orders, id)');
+            expect(flat(out)).toContain('if order != nil { order["n"] = 1 }');
+            expect(out).not.toContain('AddElementToObject(order, "n"');
+        });
+        test('a never-nil safeDict default needs no nil test, and a pointer value keeps the helper', () => {
+            const out = run(
+                '    f (o: Dict, id: string): any {\n' +
+                "        const d = this.safeDict (o, id, {});\n" +
+                "        d['a'] = 1;\n" +
+                "        d['b'] = this.safeString (o, 'b');\n" +
+                '        return d;\n' +
+                '    }\n');
+            expect(out).toContain('d["a"] = 1');
+        });
+        test('an `as string` key is read through to the *string local it asserts', () => {
+            const out = run(
+                '    f (entries: any[]): any {\n' +
+                '        const result: Dict = {};\n' +
+                '        for (let i = 0; i < entries.length; i++) {\n' +
+                "            const code = this.safeString (entries[i], 'c');\n" +
+                "            result[code as string] = { 'a': 1 };\n" +
+                '        }\n' +
+                '        return result;\n' +
+                '    }\n');
+            expect(flat(out)).toContain('if code != nil { result[*code] = map[string]any{ "a": 1, } }');
+            expect(out).not.toContain('AddElementToObject(result, code');
+        });
+        test('a nil-initialised NullableDict: the store keeps the nil test, the returned literal keeps the local typed', () => {
+            const out = run(
+                '    sign (hasKey: boolean): any {\n' +
+                '        let requestHeaders: NullableDict = undefined;\n' +
+                '        if (hasKey) {\n' +
+                "            requestHeaders = { 'K': 'v' };\n" +
+                "            requestHeaders['Content-Type'] = 'application/json';\n" +
+                '        }\n' +
+                "        return { 'headers': requestHeaders };\n" +
+                '    }\n');
+            expect(out).toContain('var requestHeaders map[string]any = nil');
+            expect(flat(out)).toContain('if requestHeaders != nil { requestHeaders["Content-Type"] = "application/json" }');
+        });
+        test('a parsed Trade row is boxed where it is declared, and its stores are native', () => {
+            const out = run(
+                '    parseTrade (t: any): Trade {\n' +
+                '        const parsed = super.parseTrade (t);\n' +
+                "        parsed['takerOrMaker'] = 'maker';\n" +
+                '        return parsed;\n' +
+                '    }\n', 'ts/src/pro', true);
+            expect(out).toContain('var parsed map[string]any = TradeToMap(base.ParseTrade(t))');
+            expect(flat(out)).toContain('if parsed != nil { parsed["takerOrMaker"] = "maker" }');
+        });
+        test('a nil-initialised TransferEntry local boxes its writes and takes native stores', () => {
+            const out = run(
+                '    f (t: any, from: string): any {\n' +
+                '        let transfer: TransferEntry | undefined = undefined;\n' +
+                '        transfer = this.parseTransfer (t);\n' +
+                "        if (this.safeString (transfer, 'from') === undefined) {\n" +
+                "            transfer['from'] = 'spot';\n" +
+                '        }\n' +
+                '        return transfer;\n' +
+                '    }\n', 'ts/src', true);
+            expect(out).toContain('var transfer map[string]any = nil');
+            expect(out).toContain('transfer = TransferEntryToMap(this.ParseTransfer(t))');
+            expect(out).not.toContain('AddElementToObject(transfer,');
+        });
+        test('the params slot of a base tuple helper takes the guarded native store', () => {
+            const out = run(
+                '    f (p: Dict = {}): any {\n' +
+                '        const [ postOnly, paramsPostOnly ] = this.handlePostOnly (false, false, p);\n' +
+                "        paramsPostOnly['postOnly'] = true;\n" +
+                '        return paramsPostOnly;\n' +
+                '    }\n', 'ts/src', true);
+            expect(flat(out)).toContain('if paramsPostOnly != nil { paramsPostOnly["postOnly"] = true }');
+        });
+        test('a receiver the printer does not type keeps the helper', () => {
+            const out = run(
+                '    f (o: any, id: string): any {\n' +
+                "        o[id] = 1;\n" +
+                '        const q = this.parseTrade (o);\n' +
+                "        q['a'] = 1;\n" +
+                '        return q;\n' +
+                '    }\n', 'ts/src', true);
+            expect(out).toContain('AddElementToObject(o, id, 1)');
+        });
+    });
+});
+
+describe ('fold3OrderbooksCache', () => {
+    // FOLD3 hx11w9: BaseExchange.orderbooks is the typed OrderBookCache. Its reads, stores, membership tests and deletes
+    // print the cache's own methods, book locals are typed OrderBookInterface, and the member assertion is only printed on a box.
+
+    const BOOK = {
+        'classes': [ 'OrderBook', 'WsOrderBook' ],
+        'constructors': [ 'orderBook', 'indexedOrderBook', 'countedOrderBook' ],
+        'cacheReaders': [ 'safeValue' ],
+        'type': 'OrderBookInterface',
+        'sideType': 'IOrderBookSide',
+        'unbox': 'OrderBookTyped',
+        'sides': { 'asks': 'GetAsks', 'bids': 'GetBids' },
+        'setters': {
+            'timestamp': { 'method': 'SetTimestamp', 'value': '^this\\.(?:Parse8601|SafeInteger)\\(', 'type': '*int64' },
+        },
+    };
+
+    const HEAD = 'type Dict = { [key: string]: any };\n'
+        + 'class Side { store (p: number, a: number) { return p + a; } }\n'
+        + 'class WsOrderBook { asks: Side; bids: Side; cache: any[]; timestamp: number; reset (x: Dict = {}) { return x; } limit () { return this; } }\n'
+        + 'class Exchange {\n'
+        + '    orderbooks: Dictionary<WsOrderBook> = {};\n'
+        + '    orderBook (snapshot = {}): WsOrderBook { return new WsOrderBook (); }\n'
+        + '    safeValue (o: any, k: string, d: any = undefined): any { return o[k]; }\n'
+        + '    safeDict (o: any, k: string, d: any = undefined): any { return o[k]; }\n'
+        + '    safeInteger (o: any, k: string): number | undefined { return o[k]; }\n';
+
+    const print = (body: string, book: any = BOOK): string => {
+        const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'fold3ob-'));
+        try {
+            fs.mkdirSync (path.join (dir, 'ts', 'src', 'base'), { 'recursive': true });
+            fs.mkdirSync (path.join (dir, 'ts', 'src', 'pro'), { 'recursive': true });
+            const file = path.join (dir, 'ts', 'src', 'pro', 'x.ts');
+            const base = path.join (dir, 'ts', 'src', 'base', 'Exchange.ts');
+            fs.writeFileSync (base, 'type Dictionary<T> = { [key: string]: T };\n' + HEAD + '}\nexport default Exchange;\n');
+            fs.writeFileSync (file, 'import Exchange from \'../base/Exchange.js\';\n' + body);
+            const config: any = { 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+            if (book !== null) {
+                config.go.orderBook = book;
+            }
+            return new Transpiler (config).transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (dir, { 'recursive': true, 'force': true });
+        }
+    };
+
+    const HANDLER = 'class x extends Exchange {\n'
+        + '    handle (symbol: string, snapshot: Dict) {\n'
+        + '        if (!(symbol in this.orderbooks)) {\n'
+        + '            this.orderbooks[symbol] = this.orderBook ();\n'
+        + '        }\n'
+        + '        const orderbook = this.orderbooks[symbol];\n'
+        + '        orderbook.reset (snapshot);\n'
+        + '        orderbook.cache.push (snapshot);\n'
+        + '        orderbook.cache = [];\n'
+        + '        const stored = this.safeValue (this.orderbooks, symbol, this.orderBook ());\n'
+        + '        stored.limit ();\n'
+        + '        delete this.orderbooks[symbol];\n'
+        + '    }\n'
+        + '}\n';
+
+    describe('FOLD3 hx11w9 order book cache', () => {
+        test('cache reads, stores, membership and deletes print the cache methods (fails on the base printer)', () => {
+            const out = print (HANDLER);
+            expect (out).toContain ('this.Orderbooks.Has(symbol)');
+            expect (out).toContain ('this.Orderbooks.Store(symbol, this.OrderBook())');
+            expect (out).toContain ('this.Orderbooks.Get(symbol)');
+            expect (out).toContain ('this.Orderbooks.GetOr(symbol, this.OrderBook())');
+            expect (out).toContain ('this.Orderbooks.Delete(symbol)');
+            expect (out).not.toContain ('InOp(this.Orderbooks');
+            expect (out).not.toContain ('AddElementToObject(this.Orderbooks');
+            const base = print (HANDLER, null);
+            expect (base).toContain ('InOp(this.Orderbooks');
+            expect (base).not.toContain ('this.Orderbooks.Has(');
+        });
+        test('a local whose writes are cache reads is the interface and its members need no assertion', () => {
+            const out = print (HANDLER);
+            expect (out).toContain ('var orderbook OrderBookInterface = this.Orderbooks.Get(symbol)');
+            expect (out).toContain ('orderbook.Reset(snapshot)');
+            expect (out).toContain ('orderbook.SetCache([]any{})');
+            expect (out).not.toContain ('.(OrderBookInterface)');
+        });
+        test('a box local keeps the assertion at the member access', () => {
+            const out = print ('class x extends Exchange {\n    handle (symbol: string, box: any) {\n        box.reset ({});\n        box.limit ();\n    }\n}\n');
+            expect (out).toContain ('box.(OrderBookInterface).Reset(');
+            expect (out).toContain ('box.(OrderBookInterface).Limit()');
+        });
+        test('a nil-declared book local written by a constructor and a cache read is typed', () => {
+            const out = print ('class x extends Exchange {\n    handle (symbol: string) {\n        let orderbook: WsOrderBook | undefined = undefined;\n'
+                + '        if (symbol === \'a\') {\n            orderbook = this.orderBook ();\n        } else {\n            orderbook = this.orderbooks[symbol];\n        }\n        orderbook.limit ();\n    }\n}\n');
+            expect (out).toContain ('var orderbook OrderBookInterface');
+            expect (out).not.toContain ('var orderbook any');
+        });
+        test('the setter prints on a constructor-built book and keeps the helper on a box', () => {
+            const out = print ('class x extends Exchange {\n    handle (symbol: string, data: Dict, box: any) {\n        const orderbook = this.orderBook ();\n'
+                + '        orderbook.limit ();\n        orderbook[\'timestamp\'] = this.safeInteger (data, \'ts\');\n        box[\'timestamp\'] = this.safeInteger (data, \'ts\');\n    }\n}\n');
+            expect (out).toContain ('orderbook.SetTimestamp(this.SafeInteger(data, "ts"))');
+            expect (out).toContain ('AddElementToObject(box, "timestamp"');
+        });
+        test('negative: a local also written with a foreign value stays a box', () => {
+            const out = print ('class x extends Exchange {\n    handle (symbol: string, other: any) {\n        let orderbook: any = this.orderbooks[symbol];\n        orderbook = other;\n        orderbook.limit ();\n    }\n}\n');
+            expect (out).not.toContain ('var orderbook OrderBookInterface');
+        });
+        test('negative: without the config nothing changes', () => {
+            expect (print (HANDLER, null)).not.toContain ('Orderbooks.Get(');
+        });
+    });
+});
+
+describe ('fold4Go05OhlcvsBook', () => {
+    // FOLD3 G05: the ws ohlcv book. `this.ohlcvs` is BaseExchange's Dictionary<Dictionary<ArrayCacheByTimestamp>> (Go: one
+    // map[string]map[string]any), so every helper call around a book is the native map operation behind the nil tests the helper applied.
+    const HEAD = 'type Dict = { [key: string]: any };\ntype Str = string | undefined;\n'
+        + 'class ArrayCacheByTimestamp { constructor (limit: any) {} append (x: any) {} }\n'
+        + 'class BaseExchange {\n'
+        + '    ohlcvs: { [key: string]: { [key: string]: ArrayCacheByTimestamp } } = {};\n'
+        + '    options: Dict = {};\n'
+        + '    safeString (d: any, k: any, def: any = undefined): Str { return d; }\n'
+        + '    safeValue (d: any, k: any, def: any = undefined): any { return d; }\n'
+        + '    safeDict (d: any, k: any, def: any = undefined): Dict { return d; }\n'
+        + '    safeInteger (d: any, k: any, def: any = undefined): any { return d; }\n';
+    const print = (body: string, head = HEAD): string => {
+        const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (t.goTranspiler);
+        return t.transpileGo (head + '    handle (message: Dict) {\n' + body + '\n    }\n}\n').content;
+    };
+    // the book-local rule keys on the source tree (rf6aSourceKind: ts/src/pro), so it reads a real file
+    const printPro = (body: string): string => {
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'fold3-G05-'));
+        try {
+            const dir = path.join (tmp, 'ts', 'src', 'pro');
+            fs.mkdirSync (dir, { recursive: true });
+            const file = path.join (dir, 'venue.ts');
+            fs.writeFileSync (file, HEAD + '    handle (message: Dict) {\n' + body + '\n    }\n}\n');
+            const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            installCcxtGoLocalTypes (t.goTranspiler);
+            return t.transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (tmp, { recursive: true, force: true });
+        }
+    };
+    const HANDLER = [
+        "const symbol = this.safeString (message, 's');",
+        "const timeframe = this.safeString (message, 't');",
+        'this.ohlcvs[symbol] = this.safeDict (this.ohlcvs, symbol, {});',
+        'let stored = this.safeValue (this.safeDict (this.ohlcvs, symbol), timeframe);',
+        'if (stored === undefined) {',
+        '    stored = new ArrayCacheByTimestamp (10);',
+        '    this.ohlcvs[symbol][timeframe] = stored;',
+        '}',
+    ].join ('\n');
+
+    describe('FOLD3 G05 ohlcv book', () => {
+        test('ensure, entry read and entry write are native behind the nil tests (fail on the base printer)', () => {
+            const out = print (HANDLER);  // plain `*string` keys, so every test is spelled out
+            expect (out).toContain ('if symbol != nil && this.Ohlcvs[*symbol] == nil {\n\t\tthis.Ohlcvs[*symbol] = map[string]any{}\n\t}');
+            expect (out).toContain ('var stored any\n\tif symbol != nil && timeframe != nil {\n\t\tstored = this.Ohlcvs[*symbol][*timeframe]\n\t}');
+            expect (out).toContain ('if symbol != nil && timeframe != nil && this.Ohlcvs[*symbol] != nil {\n\t\t\tthis.Ohlcvs[*symbol][*timeframe] = stored\n\t\t}');
+            expect (out).not.toContain ('AddElementToObject');
+            expect (out).not.toContain ('GetValue(');
+            expect (out).not.toContain ('SafeValue(this.SafeDict(this.Ohlcvs');
+        });
+        test('a key under an enclosing nil guard needs no extra test', () => {
+            const out = print ("const symbol = this.safeString (message, 's'); if (symbol !== undefined) { this.ohlcvs[symbol] = this.safeDict (this.ohlcvs, symbol, {}); }");
+            expect (out).toContain ('if this.Ohlcvs[*symbol] == nil {\n\t\t\tthis.Ohlcvs[*symbol] = map[string]any{}\n\t\t}');
+        });
+        test('an entry-level `in` is the comma-ok read', () => {
+            const out = print ("const symbol = this.safeString (message, 's', ''); const timeframe = this.safeString (message, 't', ''); if (!(timeframe in this.ohlcvs[symbol])) { delete this.ohlcvs[symbol][timeframe]; }");
+            expect (out).toContain ('_, ok := this.Ohlcvs[symbol][timeframe]; !ok');
+            expect (out).not.toContain ('InOp(');
+        });
+        test('an `in` over a key that may be nil keeps the helper', () => {
+            const out = print ("const symbol = this.safeString (message, 's', ''); const timeframe = this.safeString (message, 't'); if (timeframe in this.ohlcvs[symbol]) { delete this.ohlcvs[symbol][timeframe]; }");
+            expect (out).toContain ('InOp(');
+        });
+        test('a book local is a map[string]any stored back, written into and read', () => {
+            const out = printPro ([
+                "const symbol = this.safeString (message, 's', '');",
+                "const timeframe = this.safeString (message, 't');",
+                'const book = this.safeDict (this.ohlcvs, symbol, {});',
+                'this.ohlcvs[symbol] = book;',
+                'let stored = this.safeValue (book, timeframe);',
+                'if (stored === undefined) {',
+                '    stored = new ArrayCacheByTimestamp (10);',
+                '    book[timeframe] = stored;',
+                '}',
+            ].join ('\n'));
+            expect (out).toContain ('var book map[string]any = this.SafeDictMap(this.Ohlcvs, symbol, map[string]any{})');
+            expect (out).toContain ('this.Ohlcvs[symbol] = book');
+            expect (out).toContain ('stored = book[*timeframe]');
+            expect (out).toContain ('book[*timeframe] = stored');
+            expect (out).not.toContain ('AddElementToObject');
+        });
+        test('a flat cache (no timeframe level) lives under the one timeframe key', () => {
+            const out = print ([
+                "const symbol = this.safeString (message, 's');",
+                'let stored = this.safeValue (this.ohlcvs, symbol);',
+                'if (stored === undefined) {',
+                '    stored = new ArrayCacheByTimestamp (10);',
+                '    this.ohlcvs[symbol] = stored;',
+                '}',
+            ].join ('\n'));
+            expect (out).toContain ('stored = this.Ohlcvs[*symbol]["1m"]');
+            expect (out).toContain ('this.Ohlcvs[*symbol]["1m"] = stored');
+            expect (out).not.toContain ('AddElementToObject');
+        });
+        test('a value that is not a cache keeps the helper', () => {
+            const out = print ("const symbol = this.safeString (message, 's'); const timeframe = this.safeString (message, 't'); this.ohlcvs[symbol][timeframe] = message['x'];");
+            expect (out).toContain ('AddElementToObject(');
+        });
+        test('an any-typed key keeps the helper', () => {
+            const out = print ("this.ohlcvs[message['s']][message['t']] = new ArrayCacheByTimestamp (10);");
+            expect (out).toContain ('AddElementToObject(');
+        });
+        test('FOLD4: an any-typed cache key stores through the typed book slot, not GetValue of the field', () => {
+            const out = print ([
+                "const symbol = this.safeString (message, 's');",
+                "const timeframe = this.safeString (message, 't', '');",
+                "let cacheKey: Str = undefined;",
+                "if (timeframe === 'x') { cacheKey = timeframe; } else { cacheKey = timeframe + ':y'; }",
+                "this.ohlcvs[symbol as string] = this.safeDict (this.ohlcvs, symbol, {});",
+                "let stored = this.safeValue (this.ohlcvs[symbol as string], cacheKey);",
+                'if (stored === undefined) {',
+                '    stored = new ArrayCacheByTimestamp (10);',
+                '    this.ohlcvs[symbol as string][cacheKey as string] = stored;',
+                '}',
+            ].join ('\n'));
+            expect (out).toContain ('AddElementToObject(this.Ohlcvs[*symbol], cacheKey, stored)');
+            expect (out).not.toContain ('GetValue(');
+        });
+        test('FOLD4: a nil symbol key keeps the no-op behind a nil test', () => {
+            const out = print ("const symbol = this.safeString (message, 's'); const key: any = message['k']; this.ohlcvs[symbol][key] = new ArrayCacheByTimestamp (10);");
+            expect (out).toContain ('if symbol != nil {');
+            expect (out).not.toContain ('GetValue(this.Ohlcvs');
+        });
+        test('FOLD4: delete of an entry whose key is asserted a string is the native delete', () => {
+            const out = print ("const symbol = this.safeString (message, 's', ''); const timeframe = this.safeString (message, 't'); if (symbol in this.ohlcvs) { delete this.ohlcvs[symbol][(timeframe as string)]; }");
+            expect (out).toContain ('delete(this.Ohlcvs[symbol], *timeframe)');
+            expect (out).not.toContain ('Remove(');
+        });
+        test('FOLD4: delete of an entry whose key may be nil keeps the helper', () => {
+            const out = print ("const symbol = this.safeString (message, 's', ''); const timeframe = this.safeString (message, 't'); delete this.ohlcvs[symbol][timeframe];");
+            expect (out).toContain ('Remove(');
+        });
+        test('a `ohlcvs` field of another class is not the book', () => {
+            const other = HEAD.replace ('class BaseExchange {', 'class Other {');
+            const out = print ("const symbol = this.safeString (message, 's'); this.ohlcvs[symbol] = this.safeDict (this.ohlcvs, symbol, {});", other);
+            expect (out).not.toContain ('this.Ohlcvs[*symbol] = map[string]any{}');
+        });
+    });
+});
+
+describe ('g02MarketParams', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        const config = { 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+        transpiler = new Transpiler(config);
+    });
+
+    function go(ts: string): string {
+        return transpiler.transpileGo(ts).content;
+    }
+
+    const PRELUDE = 'interface MarketInterface { id: string; symbol: string; url: string; }\n' +
+        'type Market = MarketInterface | undefined;\n' +
+        'type Dict = { [key: string]: any };\n' +
+        'type Str = string | undefined;\n' +
+        'class Base {}\n';
+
+    describe('hx10 G02 required market parameters', () => {
+        test('an untyped market parameter whose callers all pass the accessor row prints the map', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    market (symbol: Str): Market { return undefined; }\n' +
+                '    requestBody (market: any): any {\n' +
+                '        return market[\'id\'];\n' +
+                '    }\n' +
+                '    main (symbol: string): any {\n' +
+                '        const market = this.market (symbol);\n' +
+                '        return this.requestBody (market);\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) RequestBody(market map[string]any) any {');
+            expect(out).toContain('return market["id"]');
+        });
+
+        test('one caller passing an absent value keeps the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    market (symbol: Str): Market { return undefined; }\n' +
+                '    requestBody (market: any): any {\n' +
+                '        return market[\'id\'];\n' +
+                '    }\n' +
+                '    main (symbol: string): any {\n' +
+                '        const market = this.market (symbol);\n' +
+                '        return [ this.requestBody (market), this.requestBody (undefined) ];\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) RequestBody(market any) any {');
+            expect(out).toContain('GetValue(market, "id")');
+        });
+
+        test('a body that nil-tests a map parameter compares it natively', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    market (symbol: Str): Market { return undefined; }\n' +
+                '    requestBody (market: any): any {\n' +
+                '        if (market === undefined) { return undefined; }\n' +
+                '        return market[\'id\'];\n' +
+                '    }\n' +
+                '    main (symbol: string): any {\n' +
+                '        const market = this.market (symbol);\n' +
+                '        return this.requestBody (market);\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) RequestBody(market map[string]any) any {');
+            expect(out).toContain('if market == nil {');
+            expect(out).not.toContain('IsEqual(market, nil)');
+        });
+
+        test('a parameter the caller does not prove stays the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    requestBody (market: any): any {\n' +
+                '        return market[\'id\'];\n' +
+                '    }\n' +
+                '    main (raw: any): any {\n' +
+                '        return this.requestBody (raw);\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) RequestBody(market any) any {');
+        });
+
+        test('a Market-typed required parameter still takes the map', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    market (symbol: Str): Market { return undefined; }\n' +
+                '    requestBody (market: Market): any {\n' +
+                '        return market[\'id\'];\n' +
+                '    }\n' +
+                '    main (symbol: string): any {\n' +
+                '        const market = this.market (symbol);\n' +
+                '        return this.requestBody (market);\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) RequestBody(market map[string]any) any {');
+            expect(out).toContain('return market["id"]');
+        });
+    });
+});
+
+describe ('goArrayLengthLocalSinks', () => {
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        const config = {
+            'verbose': false,
+            'go': {
+                'parser': {
+                    'NUM_LINES_END_FILE': 0,
+                }
+            }
+        }
+        transpiler = new Transpiler(config);
+    })
+
+    const transpile = (ts: string) => transpiler.transpileGo(ts).content;
+
+    // hx10w6 G08: GetArrayLength(x) -> len(x) on a local the printer itself declares as a slice.
+    // The declaration only takes []any when every later use reads the list the member already was;
+    // a nil test, an any-parameter helper and a copy into another any/[]any local all qualify.
+    describe('go .length on a list local from safeList', () => {
+        test('a nil test on a defaultless read does not keep the box', () => {
+            const ts =
+            "class Test {\n" +
+            "    safeList (a: any, b: any, c: any) { return a; }\n" +
+            "    safeValue (a: any, b: any) { return a; }\n" +
+            "    parseTrades (a: any, b: any, c: any, d: any) { return a; }\n" +
+            "    f (response: any) {\n" +
+            "        const rows = this.safeList(response, 'rows')\n" +
+            "        if (rows !== undefined) {\n" +
+            "            const n = rows.length\n" +
+            "            return n\n" +
+            "        }\n" +
+            "        return 0\n" +
+            "    }\n" +
+            "}";
+            const output = transpile(ts);
+            expect(output).toContain('var rows []any = SafeListTyped(response, "rows")');
+            expect(output).toContain('len(rows)');
+            expect(output).not.toContain('GetArrayLength(rows)');
+        });
+
+        test('a copy into another local does not keep the box', () => {
+            const ts =
+            "class Test {\n" +
+            "    safeList (a: any, b: any, c: any) { return a; }\n" +
+            "    safeValue (a: any, b: any) { return a; }\n" +
+            "    parseTrades (a: any, b: any, c: any, d: any) { return a; }\n" +
+            "    f (response: any) {\n" +
+            "        let assets: any = []\n" +
+            "        const src = this.safeList(response, 'assets')\n" +
+            "        assets = src\n" +
+            "        const n = src.length\n" +
+            "        return [assets, n]\n" +
+            "    }\n" +
+            "}";
+            const output = transpile(ts);
+            expect(output).toContain('var src []any = SafeListTyped(response, "assets")');
+            expect(output).toContain('assets = src');
+            expect(output).toContain('len(src)');
+            expect(output).not.toContain('GetArrayLength(src)');
+        });
+
+        test('a read carrying a default keeps the box', () => {
+            const ts =
+            "class Test {\n" +
+            "    safeList (a: any, b: any, c: any) { return a; }\n" +
+            "    f (response: any) {\n" +
+            "        const rows = this.safeList(response, 'rows', [])\n" +
+            "        if (rows !== undefined) {\n" +
+            "            return rows.length\n" +
+            "        }\n" +
+            "        return 0\n" +
+            "    }\n" +
+            "}";
+            const output = transpile(ts);
+            expect(output).toContain('var rows any = this.SafeList(response, "rows", []any{})');
+            expect(output).toContain('GetArrayLength(rows)');
+        });
+
+        test('a hand-written any sink reads the list', () => {
+            const ts =
+            "class Test {\n" +
+            "    safeList (a: any, b: any, c: any) { return a; }\n" +
+            "    safeValue (a: any, b: any) { return a; }\n" +
+            "    parseTrades (a: any, b: any, c: any, d: any) { return a; }\n" +
+            "    f (response: any) {\n" +
+            "        const rows = this.safeList(response, 'rows', [])\n" +
+            "        const first = this.safeValue(rows, 0)\n" +
+            "        const n = rows.length\n" +
+            "        return n\n" +
+            "    }\n" +
+            "}";
+            const output = transpile(ts);
+            expect(output).toContain('var rows []any = SafeListTyped(response, "rows")');
+            expect(output).toContain('len(rows)');
+        });
+
+        test('a generated callee keeps the box', () => {
+            const ts =
+            "class Test {\n" +
+            "    safeList (a: any, b: any, c: any) { return a; }\n" +
+            "    safeValue (a: any, b: any) { return a; }\n" +
+            "    parseTrades (a: any, b: any, c: any, d: any) { return a; }\n" +
+            "    f (response: any) {\n" +
+            "        const rows = this.safeList(response, 'rows', [])\n" +
+            "        const parsed = this.parseTrades(rows, undefined, undefined, undefined)\n" +
+            "        const n = rows.length\n" +
+            "        return parsed\n" +
+            "    }\n" +
+            "}";
+            const output = transpile(ts);
+            expect(output).toContain('var rows any = this.SafeList(response, "rows", []any{})');
+            expect(output).toContain('GetArrayLength(rows)');
+        });
+    });
+});
+
+describe ('goMarketTableFields', () => {
+    // The four market/currency tables of BaseExchange are plain map fields in Go: reads are native
+    // field reads, a write assigns a whole map or goes through the copy-on-write Add*Entry method.
+    const t = () => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installFmGo5G04 (x.goTranspiler);
+        return x;
+    };
+    const PRELUDE = [
+        'type Dict = {[key: string]: any};',
+        'class BaseExchange {',
+        '    markets: Dict | undefined = undefined;',
+        '    markets_by_id: Dict | undefined = undefined;',
+        '    currencies: Dict = {};',
+        '    currencies_by_id: Dict | undefined = undefined;',
+        '    createSafeDictionary (): Dict { return {}; }',
+        '    mapToSafeMap (d: Dict): Dict { return d; }',
+        '    indexBySafe (a: any, k: string): Dict { return {}; }',
+        '    indexBy (a: any, k: string): Dict { return {}; }',
+        '}',
+        '',
+    ].join ('\n');
+    const go = (body: string) => t ().transpileGo (PRELUDE + 'class venue extends BaseExchange {\n' + body + '}\n').content;
+
+    describe ('go market tables are plain map fields', () => {
+        test ('whole-map writes assign the field', () => {
+            const out = go ([
+                '    reset () {',
+                '        this.markets = undefined;',
+                '        this.markets_by_id = this.mapToSafeMap (this.indexBy ([], \'id\'));',
+                '        this.currencies = this.createSafeDictionary ();',
+                '        this.currencies_by_id = this.indexBySafe (this.currencies, \'id\');',
+                '    }',
+            ].join ('\n') + '\n');
+            expect (out).toContain ('this.Markets = nil');
+            expect (out).toContain ('this.Markets_by_id = this.IndexBy([]any{}, "id")');
+            expect (out).toContain ('this.Currencies = map[string]any{}');
+            expect (out).toContain ('this.Currencies_by_id = this.IndexBy(this.Currencies, "id")');
+            expect (out).not.toMatch (/= .*MapToSafeMap\(/);
+            expect (out).not.toMatch (/= .*IndexBySafe\(/);
+            expect (out).not.toContain ('Publish');
+        });
+        test ('an element write copies instead of mutating the published map', () => {
+            const out = go ('    add (k: string, m: any) {\n        this.markets[k] = m;\n        this.markets_by_id[k] = [ m ];\n    }\n');
+            expect (out).toContain ('this.AddMarketsEntry(k, m)');
+            expect (out).toContain ('this.AddMarketsByIdEntry(k, []any{m})');
+            expect (out).not.toContain ('this.Markets[k] =');
+            expect (out).not.toContain ('AddElementToObject');
+        });
+        test ('a compound write also copies', () => {
+            const out = go ('    bump (k: string) {\n        this.markets[k] += 1;\n    }\n');
+            expect (out).toContain ('this.AddMarketsEntry(k, Add(GetValue(this.Markets, k), 1))');
+            expect (out).not.toContain ('AddElementToObject');
+        });
+        test ('reads are native field reads', () => {
+            const out = go ('    read () {\n        const k = \'BTC/USDT\';\n        if (this.markets === undefined) {\n            return undefined;\n        }\n        if (k in this.markets_by_id) {\n            return this.markets[k];\n        }\n        return 1;\n    }\n');
+            expect (out).toContain ('this.Markets == nil');
+            expect (out).toContain ('_, ok := this.Markets_by_id[k]');
+            expect (out).toContain ('return this.Markets[k]');
+            expect (out).not.toMatch (/\b(Markets|Markets_by_id|Currencies|Currencies_by_id)\(\)/);
+        });
+        test ('sharing another exchange\'s table assigns the field without a conversion', () => {
+            const out = go ('    share (source: any) {\n        this.markets = source.markets;\n        this.currencies = source.currencies;\n    }\n');
+            expect (out).toContain ('this.Markets = source.Markets');
+            expect (out).toContain ('this.Currencies = source.Currencies');
+            expect (out).not.toContain ('MapTyped');
+        });
+        test ('a slice element key printed as GetValue keeps the helper read', () => {
+            const out = go ('    pick () {\n        const keys: string[] = Object.keys (this.markets);\n        return this.markets[keys[0]];\n    }\n');
+            expect (out).toContain ('GetValue(this.Markets, ');
+            expect (out).not.toMatch (/this\.Markets\[GetValue/);
+        });
+        test ('a write through a const local aliasing this.markets copies like the field write', () => {
+            const out = go ('    add (k: string, m: any) {\n        const markets = this.markets;\n        markets[k] = m;\n        const byId = this.markets_by_id;\n        byId[k] = [ m ];\n    }\n');
+            expect (out).toContain ('this.AddMarketsEntry(k, m)');
+            expect (out).toContain ('this.AddMarketsByIdEntry(k, []any{m})');
+            expect (out).not.toMatch (/\b(markets|byId)\[k\] =/);
+            expect (out).not.toContain ('AddElementToObject');
+        });
+        test ('a compound write through the alias copies too', () => {
+            const out = go ('    bump (k: string) {\n        const markets = this.markets;\n        markets[k] += 1;\n    }\n');
+            expect (out).toContain ('this.AddMarketsEntry(k, Add(GetValue(markets, k), 1))');
+        });
+        test ('a local that is not an alias of a market table keeps its own write', () => {
+            const out = go ('    other (k: string, m: any) {\n        const local = this.createSafeDictionary ();\n        local[k] = m;\n        let moved = this.markets;\n        moved = {};\n        moved[k] = m;\n    }\n');
+            expect (out).not.toContain ('AddMarketsEntry');
+        });
+        test ('a same-named member of another class is not a market table', () => {
+            const out = t ().transpileGo ('class Other {\n    markets: any = {};\n    f (k: string) {\n        this.markets[k] = 1;\n    }\n}\n').content;
+            expect (out).not.toContain ('AddMarketsEntry');
+        });
+    });
+});
+
+describe ('gp01MapWriteOnProvenLocal', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        const config = { 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+        transpiler = new Transpiler(config);
+    });
+
+    function go(ts: string): string {
+        return transpiler.transpileGo(ts).content;
+    }
+
+    const PRELUDE = 'type Dict = { [key: string]: any };\n' +
+        'type Strings = string[] | undefined;\n' +
+        'class Base {}\n';
+
+    function flat(output: string): string {
+        return output.replace(/\s+/g, ' ');
+    }
+
+    function cls(body: string): string {
+        return PRELUDE + 'class Test extends Base {\n' + body + '}\n';
+    }
+
+    const SAFE = '    safeString (a: any, b: any): string { return ""; }\n' +
+        '    safeDict (a: any, b: any): any { return a; }\n';
+
+    describe('hx10 GP01 native map writes on proven locals', () => {
+        test('a Dict parameter with a {} default is the GetArgMap map: a literal key is a plain store', () => {
+            const out = go(cls('    make (symbol: string, cost: number, params: Dict = {}): any {\n' +
+                "        params['quoteOrderQty'] = cost;\n" +
+                '        return params;\n' +
+                '    }\n'));
+            expect(out).toContain('var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})');
+            expect(out).toContain('params["quoteOrderQty"] = cost');
+            expect(out).not.toContain('AddElementToObject(params,');
+        });
+
+        test('a nullable *string key gets the helper guard and a dereferenced store', () => {
+            const out = go(cls('    make (symbols: Strings): any {\n' +
+                '        const result: Dict = {};\n' +
+                '        for (let i = 0; i < symbols.length; i++) {\n' +
+                '            const symbol = this.safeString (symbols, i);\n' +
+                '            result[symbol] = 1;\n' +
+                '        }\n' +
+                '        return result;\n' +
+                '    }\n' + SAFE));
+            expect(out).toContain('var symbol *string = this.SafeString(symbols, i)');
+            expect(flat(out)).toContain('if symbol != nil { result[*symbol] = 1 }');
+            expect(out).not.toContain('AddElementToObject(result, symbol,');
+        });
+
+        test('a boolean literal value takes the same guard store', () => {
+            const out = go(cls('    make (symbols: Strings): any {\n' +
+                '        const result: Dict = {};\n' +
+                '        const symbol = this.safeString (symbols, 0);\n' +
+                '        result[symbol] = true;\n' +
+                '        return result;\n' +
+                '    }\n' + SAFE));
+            expect(flat(out)).toContain('if symbol != nil { result[*symbol] = true }');
+        });
+
+        test('a shared map local keeps the helper: another holder could write it', () => {
+            const out = go(cls('    make (symbols: Strings, shared: Dict): any {\n' +
+                '        const result = shared;\n' +
+                '        const symbol = this.safeString (symbols, 0);\n' +
+                '        result[symbol] = 1;\n' +
+                '        return result;\n' +
+                '    }\n' + SAFE));
+            expect(out).toContain('AddElementToObject(result, symbol, 1)');
+        });
+
+        test('a nullable *string key on the GetArgMap local takes the same guard', () => {
+            const out = go(cls('    make (params: Dict = {}): any {\n' +
+                '        const code = this.safeString (params, "code");\n' +
+                '        params[code] = true;\n' +
+                '        return params;\n' +
+                '    }\n' + SAFE));
+            expect(flat(out)).toContain('if code != nil { params[*code] = true }');
+        });
+
+        test('a pointer value keeps the helper: its deref is what the helper stores', () => {
+            const out = go(cls('    make (symbols: Strings, params: Dict = {}): any {\n' +
+                '        const result: Dict = {};\n' +
+                '        const symbol = this.safeString (symbols, 0);\n' +
+                "        result[symbol] = this.safeString (params, 'value');\n" +
+                '        return result;\n' +
+                '    }\n' + SAFE));
+            expect(out).toContain('AddElementToObject(result, symbol,');
+        });
+
+        test('an any-boxed value keeps the helper: the box may hold a pointer', () => {
+            const out = go(cls('    make (tickers: Dict, symbols: Strings): any {\n' +
+                '        const result: Dict = {};\n' +
+                '        for (let i = 0; i < symbols.length; i++) {\n' +
+                '            const symbol = this.safeString (symbols, i);\n' +
+                '            const ticker = this.safeDict (tickers, symbol);\n' +
+                '            result[symbol] = ticker;\n' +
+                '        }\n' +
+                '        return result;\n' +
+                '    }\n' + SAFE));
+            expect(out).toContain('AddElementToObject(result, symbol, ticker)');
+        });
+
+        test('element writes on the parameter do not block the store', () => {
+            const out = go(cls('    make (other: Dict, params: Dict = {}): any {\n' +
+                '        let request = params;\n' +
+                "        request['a'] = 1;\n" +
+                "        params['b'] = 2;\n" +
+                '        return params;\n' +
+                '    }\n'));
+            expect(out).toContain('AddElementToObject(request, "a", 1)');
+            expect(out).toContain('params["b"] = 2');
+        });
+
+        test('a rebound parameter keeps the helper', () => {
+            const out = go(cls('    make (other: Dict, params: Dict = {}): any {\n' +
+                "        params['a'] = 1;\n" +
+                '        params = other;\n' +
+                "        params['b'] = 2;\n" +
+                '        return params;\n' +
+                '    }\n'));
+            expect(out).toContain('AddElementToObject(params, "a", 1)');
+            expect(out).toContain('AddElementToObject(params, "b", 2)');
+        });
+
+        test('a parameter without a map default stays the box', () => {
+            const out = go(cls('    make (params: any): any {\n' +
+                "        params['a'] = 1;\n" +
+                '        return params;\n' +
+                '    }\n'));
+            expect(out).toContain('AddElementToObject(params, "a", 1)');
+        });
+
+        test('a multi-line object literal value sits one level deeper inside the nil-key guard', () => {
+            const out = go(cls('    make (symbols: Strings): any {\n' +
+                '        const result: Dict = {};\n' +
+                '        const symbol = this.safeString (symbols, 0);\n' +
+                "        result[symbol] = { 'min': 1, 'max': 2 };\n" +
+                '        return result;\n' +
+                '    }\n' + SAFE));
+            expect(out).toContain('\tif symbol != nil {\n\t\tresult[*symbol] = map[string]any{\n\t\t\t"min": 1,\n\t\t\t"max": 2,\n\t\t}\n\t}');
+            expect(out).not.toContain('AddElementToObject(result, symbol,');
+        });
+
+        test('a numeric literal under a *string key is a guarded store; an `in` read of the map does not share it', () => {
+            const out = go(cls('    make (entries: any): any {\n' +
+                '        const seen: Dict = {};\n' +
+                '        const id = this.safeString (entries, 0);\n' +
+                '        if (!(id in seen)) {\n' +
+                '            seen[id] = 1;\n' +
+                '        }\n' +
+                '        return seen;\n' +
+                '    }\n' + SAFE));
+            expect(flat(out)).toContain('if id != nil { seen[*id] = 1 }');
+            expect(out).not.toContain('AddElementToObject(seen, id,');
+        });
+
+        test('a map handed to a call before the write keeps the helper', () => {
+            const out = go(cls('    make (entries: any): any {\n' +
+                '        const seen: Dict = {};\n' +
+                '        const id = this.safeString (entries, 0);\n' +
+                '        this.keep (seen);\n' +
+                "        seen[id] = { 'a': 1, 'b': 2 };\n" +
+                '        return seen;\n' +
+                '    }\n' + SAFE + '    keep (a: any): void {}\n'));
+            expect(out).toContain('AddElementToObject(seen, id,');
+        });
+    });
+});
+
+describe ('gp07NilInitPointer', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        const config = { 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+        transpiler = new Transpiler(config);
+    });
+
+    function go(ts: string): string {
+        return transpiler.transpileGo(ts).content;
+    }
+
+    const PRELUDE = 'type Dict = { [key: string]: any };\n' +
+        'type Str = string | undefined;\n' +
+        'type Int = number | undefined;\n' +
+        'type Bool = boolean | undefined;\n' +
+        'class Base {}\n';
+
+    describe('hx10w8 GP07 nil-initialised locals', () => {
+        test('a Str local the body only writes one accessor into holds that pointer', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    safeString (d: any, k: any): string { return \'\'; }\n' +
+                '    main (m: any): any {\n' +
+                '        let currentType: Str = undefined;\n' +
+                '        currentType = this.safeString (m, \'type\');\n' +
+                '        if (currentType === undefined) { return \'a\'; }\n' +
+                '        if (currentType !== \'spot\') { return \'b\'; }\n' +
+                '        return \'d\';\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var currentType *string = nil');
+            expect(out).toContain('if currentType == nil {');
+            expect(out).not.toContain('IsEqual(currentType');
+        });
+
+        test('an Int local the body only writes one accessor into holds that pointer', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    safeInteger (d: any, k: any): number { return 0; }\n' +
+                '    main (m: any): any {\n' +
+                '        let limit: Int = undefined;\n' +
+                '        limit = this.safeInteger (m, \'limit\');\n' +
+                '        if (limit === undefined) { return 0; }\n' +
+                '        if (limit > 10) { return 1; }\n' +
+                '        return 2;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var limit *int64 = nil');
+            expect(out).toContain('if limit == nil {');
+            expect(out).not.toContain('IsEqual(limit');
+        });
+
+        test('a literal write keeps the box (a pointer literal would need a wrapping call)', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    safeString (d: any, k: any): string { return \'\'; }\n' +
+                '    main (m: any): any {\n' +
+                '        let type: Str = undefined;\n' +
+                '        if (m[\'a\'] === 1) { type = \'spot\'; } else { type = this.safeString (m, \'type\'); }\n' +
+                '        if (type === undefined) { return \'none\'; }\n' +
+                '        return \'some\';\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var typeVar any = nil');
+            expect(out).not.toContain('SafeStringPtr("spot")');
+        });
+
+        test('a helper-call argument keeps the pointer (every runtime accessor derefs)', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    safeInteger (d: any, k: any): number { return 0; }\n' +
+                '    iso8601 (t: any): string { return \'\'; }\n' +
+                '    main (m: any): any {\n' +
+                '        let ts: Int = undefined;\n' +
+                '        ts = this.safeInteger (m, \'ts\');\n' +
+                '        if (ts === undefined) { return undefined; }\n' +
+                '        return this.iso8601 (ts);\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var ts *int64 = nil');
+            expect(out).toContain('if ts == nil {');
+        });
+
+        test('a read as a value keeps the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    safeString (d: any, k: any): string { return \'\'; }\n' +
+                '    sink (x: string): any { return x; }\n' +
+                '    main (m: any): any {\n' +
+                '        let currentType: Str = undefined;\n' +
+                '        currentType = this.safeString (m, \'type\');\n' +
+                '        if (currentType === undefined) { return undefined; }\n' +
+                '        return this.sink (currentType);\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var currentType any = nil');
+            expect(out).toContain('IsEqual(currentType, nil)');
+        });
+
+        test('a returned local keeps the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    safeString (d: any, k: any): string { return \'\'; }\n' +
+                '    main (m: any): any {\n' +
+                '        let currentType: Str = undefined;\n' +
+                '        currentType = this.safeString (m, \'type\');\n' +
+                '        return currentType;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var currentType any = nil');
+        });
+
+        test('two written types keep the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    safeString (d: any, k: any): string { return \'\'; }\n' +
+                '    main (m: any): any {\n' +
+                '        let v: Str = undefined;\n' +
+                '        if (m[\'a\'] === 1) { v = this.safeString (m, \'x\'); } else { v = 5; }\n' +
+                '        return v === undefined;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var v any = nil');
+            expect(out).toContain('IsEqual(v, nil)');
+        });
+
+        test('a local never written keeps the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    main (m: any): any {\n' +
+                '        let v: Str = undefined;\n' +
+                '        if (v === undefined) { return 1; }\n' +
+                '        return 0;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var v any = nil');
+        });
+    });
+});
+
+describe ('gp12wsframe', () => {
+    // hx10 GP12: the ws frame parameter of `override handleMessage (client, message: Dict)`.
+    // The frame is only provable with the real ts/src tree: the Go ws dispatch asserts the decoded
+    // object once, and a handler the frame is passed to inherits the type through its call site.
+    const BASE_FIXTURE =
+        "export class Exchange {\n" +
+        "    safeDict (a, b, c?) { return undefined; }\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "    handleMessage (client, message) {}\n" +
+        "}\n";
+    const CLIENT_FIXTURE =
+        "export class Client { receive () { return undefined; } }\n";
+    const TYPES_FIXTURE =
+        "export type Dict = {[key: string]: any};\n";
+    const PRO_HEADER =
+        "import { Exchange } from '../base/Exchange';\n" +
+        "import { Client } from '../base/ws/Client';\n" +
+        "import type { Dict } from '../base/types';\n";
+
+    function treeFor (name: string, pro: string): string {
+        const src = nodepath.join (__dirname, 'files', name, 'ts', 'src');
+        nodefs.mkdirSync (nodepath.join (src, 'base', 'ws'), { recursive: true });
+        nodefs.mkdirSync (nodepath.join (src, 'pro'), { recursive: true });
+        nodefs.writeFileSync (nodepath.join (src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        nodefs.writeFileSync (nodepath.join (src, 'base', 'ws', 'Client.ts'), CLIENT_FIXTURE);
+        nodefs.writeFileSync (nodepath.join (src, 'base', 'types.ts'), TYPES_FIXTURE);
+        nodefs.writeFileSync (nodepath.join (src, 'pro', 'ex.ts'), PRO_HEADER + pro);
+        return nodepath.join (src, 'pro', 'ex.ts');
+    }
+
+    function goPath (name: string, pro: string): string {
+        return new Transpiler ({ verbose: false, go: {} }).transpileGoByPath (treeFor (name, pro)).content;
+    }
+
+    afterAll (() => {
+        const dir = nodepath.join (__dirname, 'files');
+        for (const entry of nodefs.readdirSync (dir)) {
+            if (entry.startsWith ('tmp-gp12-')) {
+                nodefs.rmSync (nodepath.join (dir, entry), { recursive: true, force: true });
+            }
+        }
+    });
+
+    describe ('hx10 GP12 ws frame parameter', () => {
+        test ('a Dict-annotated override frame prints map[string]any and its reads go native', () => {
+            const output = goPath ('tmp-gp12-frame',
+                "export class ex extends Exchange {\n" +
+                "    override handleMessage (client: Client, message: Dict) {\n" +
+                "        const event = message['e'];\n" +
+                "        return event;\n" +
+                "    }\n" +
+                "}\n");
+            expect (output).toContain ('func (this *ex) HandleMessage(client any, message map[string]any) any {');
+            expect (output).toContain ('var event any = message["e"]');
+            expect (output).not.toContain ('GetValue(message, "e")');
+        });
+
+        test ('a handler the frame is passed to inherits the map type', () => {
+            const output = goPath ('tmp-gp12-chain',
+                "export class ex extends Exchange {\n" +
+                "    handleOrderBook (client: Client, message: Dict) {\n" +
+                "        return message['asks'];\n" +
+                "    }\n" +
+                "    override handleMessage (client: Client, message: Dict) {\n" +
+                "        this.handleOrderBook (client, message);\n" +
+                "        return undefined;\n" +
+                "    }\n" +
+                "}\n");
+            expect (output).toContain ('func (this *ex) HandleMessage(client any, message map[string]any) any {');
+            expect (output).toContain ('func (this *ex) HandleOrderBook(client any, message map[string]any) any {');
+            expect (output).toContain ('return message["asks"]');
+            expect (output).not.toContain ('GetValue(message, "asks")');
+        });
+
+        test ('an any-annotated override frame keeps the box', () => {
+            const output = goPath ('tmp-gp12-any',
+                "export class ex extends Exchange {\n" +
+                "    override handleMessage (client: Client, message: any) {\n" +
+                "        return this.safeValue (message, 'event');\n" +
+                "    }\n" +
+                "}\n");
+            expect (output).toContain ('func (this *ex) HandleMessage(client any, message any) any {');
+            expect (output).toContain ('this.SafeValue(message, "event")');
+        });
+
+        test ('an array-framed venue keeps the box even with the Dict annotation', () => {
+            const output = goPath ('tmp-gp12-array',
+                "export class Phemex extends Exchange {\n" +
+                "    override handleMessage (client: Client, message: Dict) {\n" +
+                "        return this.safeValue (message, 'event');\n" +
+                "    }\n" +
+                "}\n");
+            expect (output).toContain ('func (this *Phemex) HandleMessage(client any, message any) any {');
+            expect (output).toContain ('this.SafeValue(message, "event")');
+        });
+
+        test ('a frame the body reassigns to another type keeps the box', () => {
+            const output = goPath ('tmp-gp12-write',
+                "export class ex extends Exchange {\n" +
+                "    override handleMessage (client: Client, message: Dict) {\n" +
+                "        message = 'text';\n" +
+                "        return this.safeValue (message, 'event');\n" +
+                "    }\n" +
+                "}\n");
+            expect (output).toContain ('func (this *ex) HandleMessage(client any, message any) any {');
+        });
+
+        test ('a nil test on the frame compares the map natively', () => {
+            const output = goPath ('tmp-gp12-nil',
+                "export class ex extends Exchange {\n" +
+                "    override handleMessage (client: Client, message: Dict) {\n" +
+                "        if (message === undefined) {\n" +
+                "            return undefined;\n" +
+                "        }\n" +
+                "        return this.safeValue (message, 'event');\n" +
+                "    }\n" +
+                "}\n");
+            expect (output).toContain ('func (this *ex) HandleMessage(client any, message map[string]any) any {');
+            expect (output).toContain ('if message == nil {');
+        });
+
+        test ('an in-read inside an if condition prints the native init clause', () => {
+            const output = goPath ('tmp-gp12-inop-if',
+                "export class ex extends Exchange {\n" +
+                "    override handleMessage (client: Client, message: Dict) {\n" +
+                "        if (('result' in message) && (message['id'] !== undefined)) {\n" +
+                "            return message;\n" +
+                "        }\n" +
+                "        return undefined;\n" +
+                "    }\n" +
+                "}\n");
+            expect (output).toContain ('if _, ok := message["result"];');
+            expect (output).not.toContain ('func() bool');
+        });
+
+        test ('an in-read outside an if condition keeps the box (no closure body)', () => {
+            const output = goPath ('tmp-gp12-inop-value',
+                "export class ex extends Exchange {\n" +
+                "    override handleMessage (client: Client, message: Dict) {\n" +
+                "        const hasResult = 'result' in message;\n" +
+                "        return hasResult;\n" +
+                "    }\n" +
+                "}\n");
+            expect (output).toContain ('func (this *ex) HandleMessage(client any, message any) any {');
+        });
+
+        test ('a non-handleMessage override keeps the box', () => {
+            const output = goPath ('tmp-gp12-other',
+                "export class ex extends Exchange {\n" +
+                "    override onMessage (client: Client, message: Dict) {\n" +
+                "        return this.safeValue (message, 'event');\n" +
+                "    }\n" +
+                "    override handleMessage (client: Client, message: any) {\n" +
+                "        this.onMessage (client, message);\n" +
+                "        return undefined;\n" +
+                "    }\n" +
+                "}\n");
+            expect (output).toContain ('func (this *ex) OnMessage(client any, message any) any {');
+        });
+    });
+});
+
+describe ('gp15NilProvenStringArg', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    function go(ts: string): string {
+        return transpiler.transpileGo(ts).content;
+    }
+
+    const PRELUDE = 'type Str = string | undefined;\n' +
+        'type Dict = {[key: string]: any};\n' +
+        'class Base {\n' +
+        '    safeString (a: any, b: any, c?: string): Str { return undefined; }\n' +
+        '}\n';
+
+    describe('hx10 GP15 *string argument into a venue string parameter', () => {
+        test('a dominating guard dereferences the pointer and the parameter prints string', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    main (message: Dict) {\n' +
+                '        const messageHash = this.safeString (message, \'messageHash\');\n' +
+                '        if (messageHash !== undefined) {\n' +
+                '            this.cleanFlag (messageHash);\n' +
+                '        }\n' +
+                '    }\n' +
+                '    cleanFlag (hash: string) {\n' +
+                '        return hash.indexOf (\'trade:\') === 0;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) CleanFlag(hash string) any {');
+            expect(out).toContain('this.CleanFlag(*messageHash)');
+            expect(out).toContain('strings.Index(hash, "trade:")');
+        });
+
+        test('an unguarded nullable call site keeps the pointer on both sides', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    main (message: Dict) {\n' +
+                '        const messageHash = this.safeString (message, \'messageHash\');\n' +
+                '        this.cleanFlag (messageHash);\n' +
+                '    }\n' +
+                '    cleanFlag (hash: string) {\n' +
+                '        return hash.indexOf (\'trade:\') === 0;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) CleanFlag(hash *string) any {');
+            expect(out).not.toContain('this.CleanFlag(*');
+        });
+
+        test('every pointer-shaped argument of one call keeps its own dereference', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    main (message: Dict) {\n' +
+                '        const symbol = this.safeString (message, \'symbol\');\n' +
+                '        const type = this.safeStringUpper (message, \'type\');\n' +
+                '        if ((symbol !== undefined) && (type !== undefined)) {\n' +
+                '            return this.build (symbol, type);\n' +
+                '        }\n' +
+                '    }\n' +
+                '    safeStringUpper (a: any, b: any): Str { return undefined; }\n' +
+                '    build (symbol: string, type: Str) {\n' +
+                '        return symbol.indexOf (\'/\') === 0;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) Build(symbol string, typeVar string) any {');
+            expect(out).toContain('return this.Build(*symbol, *typeVar)');
+        });
+
+        test('a trailing default parameter does not hide the dereference', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    main (message: Dict) {\n' +
+                '        const amountString = this.safeString (message, \'amount\');\n' +
+                '        if (amountString !== undefined) {\n' +
+                '            return this.toUnits (amountString);\n' +
+                '        }\n' +
+                '    }\n' +
+                '    toUnits (num: string, dec: string = \'1000000000000000000\') {\n' +
+                '        return num.indexOf (dec) === 0;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) ToUnits(num string, optionalArgs ...any) any {');
+            expect(out).toContain('return this.ToUnits(*amountString)');
+        });
+
+        test('an exiting nil guard earlier in the block proves the pointer', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    main (message: Dict) {\n' +
+                '        const amountString = this.safeString (message, \'amount\');\n' +
+                '        if (amountString === undefined) {\n' +
+                '            throw new Error (\'amount required\');\n' +
+                '        }\n' +
+                '        return this.toUnits (amountString);\n' +
+                '    }\n' +
+                '    toUnits (num: string) {\n' +
+                '        return num.indexOf (\'/\') === 0;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) ToUnits(num string) any {');
+            expect(out).toContain('return this.ToUnits(*amountString)');
+        });
+
+        test('an exiting guard on another local proves nothing', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    main (message: Dict) {\n' +
+                '        const amountString = this.safeString (message, \'amount\');\n' +
+                '        const other = this.safeString (message, \'other\');\n' +
+                '        if (other === undefined) {\n' +
+                '            return;\n' +
+                '        }\n' +
+                '        return this.toUnits (amountString);\n' +
+                '    }\n' +
+                '    toUnits (num: string) {\n' +
+                '        return num.indexOf (\'/\') === 0;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) ToUnits(num *string) any {');
+            expect(out).not.toContain('this.ToUnits(*');
+        });
+
+        test('a pointer argument into a pointer parameter keeps the pointer', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    main (message: Dict) {\n' +
+                '        const messageHash = this.safeString (message, \'messageHash\');\n' +
+                '        if (messageHash !== undefined) {\n' +
+                '            this.cleanFlag (messageHash);\n' +
+                '        }\n' +
+                '    }\n' +
+                '    cleanFlag (hash: Str) {\n' +
+                '        if (hash === undefined) {\n' +
+                '            return;\n' +
+                '        }\n' +
+                '        return hash;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Test) CleanFlag(hash *string) any {');
+            expect(out).toContain('this.CleanFlag(messageHash)');
+            expect(out).not.toContain('this.CleanFlag(*');
+        });
+
+        // the base file is a dependency, never transpiled: its accessor overloads can declare the
+        // three-argument form as a non-nilable `string`, the way ts/src/base/Exchange.ts does
+        const BASE_FIXTURE = 'type Str = string | undefined;\n' +
+        'export class Exchange {\n' +
+        '    safeDict (a, b) { return undefined; }\n' +
+        '    safeString (a, b): Str;\n' +
+        '    safeString (a, b, c: string): string;\n' +
+        '    safeString (a, b, c?) { return undefined; }\n' +
+        '    handleMessage (client, message) {}\n' +
+        '}\n';
+        const PRO_HEADER = "import { Exchange } from '../base/Exchange';\n" +
+            "import { Client } from '../base/ws/Client';\n" +
+            "import type { Dict } from '../base/types';\n";
+
+        const treeFor = (name: string, pro: string) => {
+            const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
+            nodefs.mkdirSync(nodepath.join(src, 'base', 'ws'), { recursive: true });
+            nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
+            nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+            nodefs.writeFileSync(nodepath.join(src, 'base', 'ws', 'Client.ts'), 'export class Client { receive () { return undefined; } }\n');
+            nodefs.writeFileSync(nodepath.join(src, 'base', 'types.ts'), 'export type Dict = {[key: string]: any};\n');
+            nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'), PRO_HEADER + pro);
+            return nodepath.join(src, 'pro', 'ex.ts');
+        };
+
+        afterAll(() => {
+            for (const entry of nodefs.readdirSync(nodepath.join(__dirname, 'files'))) {
+                if (entry.startsWith('tmp-gp15-')) {
+                    nodefs.rmSync(nodepath.join(__dirname, 'files', entry), { recursive: true, force: true });
+                }
+            }
+        });
+
+        test('a Safe* accessor with a non-nil default dereferences in place', () => {
+            const file = treeFor('tmp-gp15-default',
+                "export class ex extends Exchange {\n" +
+                "    main (message: Dict) {\n" +
+                "        this.cleanFlag (this.safeString (message, 'id', ''));\n" +
+                "    }\n" +
+                "    cleanFlag (hash: string) {\n" +
+                "        return hash.indexOf ('trade:') === 0;\n" +
+                "    }\n" +
+                "}\n");
+            const out = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+            expect(out).toContain('func (this *ex) CleanFlag(hash string) any {');
+            expect(out).toContain('this.CleanFlag(*this.SafeString(message, "id", ""))');
+        });
+
+        test('a pro handle* method types its string parameter, the frame keeps its box', () => {
+            const file = treeFor('tmp-gp15-pro',
+                "export class ex extends Exchange {\n" +
+                "    handleUnsubscription (client: Client, message: Dict) {\n" +
+                "        const messageHash = this.safeString (message, 'messageHash');\n" +
+                "        if (messageHash !== undefined) {\n" +
+                "            this.handleUnsubscriptionCache (messageHash);\n" +
+                "        }\n" +
+                "    }\n" +
+                "    handleUnsubscriptionCache (messageHash: string) {\n" +
+                "        return messageHash.indexOf ('trade:') === 0;\n" +
+                "    }\n" +
+                "}\n");
+            const out = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+            expect(out).toContain('func (this *ex) HandleUnsubscriptionCache(messageHash string) any {');
+            expect(out).toContain('this.HandleUnsubscriptionCache(*messageHash)');
+            expect(out).toContain('func (this *ex) HandleUnsubscription(client any, message map[string]any) {');
+        });
+
+        test('a pro handle* Str parameter takes the pointer when the body nil-tests it', () => {
+            const file = treeFor('tmp-gp15-pro-str',
+                "type Str = string | undefined;\n" +
+                "export class ex extends Exchange {\n" +
+                "    handleUnsubscription (client: Client, message: Dict) {\n" +
+                "        const messageHash = this.safeString (message, 'messageHash');\n" +
+                "        if (messageHash !== undefined) {\n" +
+                "            this.handleUnsubscriptionCache (messageHash);\n" +
+                "        }\n" +
+                "    }\n" +
+                "    handleUnsubscriptionCache (messageHash: Str) {\n" +
+                "        if (messageHash === undefined) {\n" +
+                "            return;\n" +
+                "        }\n" +
+                "        return messageHash.indexOf ('trade:') === 0;\n" +
+                "    }\n" +
+                "}\n");
+            const out = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+            expect(out).toContain('func (this *ex) HandleUnsubscriptionCache(messageHash *string) any {');
+            expect(out).toContain('if messageHash == nil {');
+            expect(out).toContain('strings.Index(*messageHash, "trade:")');
+        });
+
+        test('a pro handle* string parameter the body never nil-tests keeps the box', () => {
+            const file = treeFor('tmp-gp15-pro-unguarded',
+                "export class ex extends Exchange {\n" +
+                "    handleUnsubscription (client: Client, message: Dict) {\n" +
+                "        this.handleUnsubscriptionCache (this.safeString (message, 'symbol'));\n" +
+                "    }\n" +
+                "    handleUnsubscriptionCache (symbol: string) {\n" +
+                "        return symbol.indexOf ('trade:') === 0;\n" +
+                "    }\n" +
+                "}\n");
+            const out = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+            expect(out).toContain('func (this *ex) HandleUnsubscriptionCache(symbol any) any {');
+            expect(out).toContain('GetIndexOf(symbol, "trade:")');
+        });
+    });
+});
+
+describe ('hx10w10GP24', () => {
+    const fs = fs__hx10w10GP24;
+    const os = os__hx10w10GP24;
+    const path = path__hx10w10GP24;
+    // hx10w10 GP24: `x.toString()` prints the native op when the receiver's Go type is one the
+    // helper reproduces exactly — int (Itoa), int64 and a non-nil `*int64` (FormatInt), bool
+    // (FormatBool), []string (bracket-join) — and the helper call otherwise. The generated
+    // base-class files take the same arms only once a writer installs the stdlib import seam.
+
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'type Int = number | undefined;\n' +
+        'class Exchange {\n' +
+        '    take (x: any): any { return x; }\n' +
+        '    safeInteger (o: Dict, k: string, d: Int = undefined): Int { return undefined; }\n' +
+        '}\n';
+
+    const config = () => ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+
+    function go (body: string): string {
+        const ts = PRELUDE + 'class ex extends Exchange {\n' + body + '}\n';
+        return new Transpiler(config()).transpileGo(ts).content;
+    }
+
+    describe('hx10w10 GP24 printToStringCall native arms', () => {
+        test('an int local prints strconv.Itoa', () => {
+            const out = go(
+                '    run (a: any): string {\n' +
+                '        const keys = Object.keys (a);\n' +
+                '        const n = keys.length;\n' +
+                '        return n.toString ();\n' +
+                '    }\n');
+            expect(out).toContain('var n int = len(keys)');
+            expect(out).toContain('return strconv.Itoa(n)');
+            expect(out).toContain('import "strconv"');
+        });
+
+        test('a nil-guarded *int64 local prints FormatInt of the pointee', () => {
+            const out = go(
+                '    run (o: Dict): string {\n' +
+                '        const id = this.safeInteger (o, "id");\n' +
+                '        if (id !== undefined) {\n' +
+                '            return id.toString ();\n' +
+                '        }\n' +
+                '        return "";\n' +
+                '    }\n');
+            expect(out).toContain('var id *int64 = this.SafeInteger(o, "id")');
+            expect(out).toContain('return strconv.FormatInt(*id, 10)');
+        });
+
+        test('an unguarded *int64 keeps the helper', () => {
+            const out = go(
+                '    run (o: Dict): string {\n' +
+                '        const id = this.safeInteger (o, "id");\n' +
+                '        return id.toString ();\n' +
+                '    }\n');
+            expect(out).toContain('return ToString(id)');
+            expect(out).not.toContain('FormatInt');
+        });
+
+        test('a bool local prints FormatBool', () => {
+            const ts =
+                'function f (x: string): string {\n' +
+                '    const b = x === "y";\n' +
+                '    return b.toString ();\n' +
+                '}\n';
+            const out = new Transpiler(config()).transpileGo(ts).content;
+            expect(out).toContain('var b bool = (x == "y")');
+            expect(out).toContain('return strconv.FormatBool(b)');
+        });
+
+        test('a []string local prints the bracket-join form', () => {
+            const out = go(
+                '    run (a: any): string {\n' +
+                '        const s: string = "a-b";\n' +
+                '        const parts = s.split ("-");\n' +
+                '        return parts.toString ();\n' +
+                '    }\n');
+            expect(out).toContain('var parts []string = strings.Split(s, "-")');
+            expect(out).toContain('return "[" + strings.Join(parts, ", ") + "]"');
+            expect(out).toContain('import "strings"');
+        });
+
+        test('an any or float64 receiver keeps the helper', () => {
+            const anyOut = go(
+                '    run (o: Dict): string {\n' +
+                '        const x = this.take (o);\n' +
+                '        return x.toString ();\n' +
+                '    }\n');
+            expect(anyOut).toContain('ToString(x)');
+            const floatOut = go(
+                '    run (a: any): string {\n' +
+                '        const x = Math.floor (a);\n' +
+                '        return x.toString ();\n' +
+                '    }\n');
+            expect(floatOut).toContain('ToString(x)');
+        });
+
+        test('a string receiver stays the identity and a proven *string derefs', () => {
+            const out = go(
+                '    run (a: any): string {\n' +
+                '        const s = "x";\n' +
+                '        const t = this.take (a);\n' +
+                '        const x = s.toString ();\n' +
+                '        return x;\n' +
+                '    }\n');
+            expect(out).toContain('var x string = s');
+            expect(out).not.toContain('ToString(');
+        });
+
+        // The base-class writers splice the transpiled body into a file they assemble themselves,
+        // so the printer may only emit a stdlib call there once that writer declares the import.
+        test('a generated base file emits the native arm only under the import seam', () => {
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10w10-GP24-'));
+            try {
+                const src = path.join(tmp, 'ts', 'src');
+                fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+                const file = path.join(src, 'base', 'Exchange.ts');
+                fs.writeFileSync(file,
+                    'type Dict = { [key: string]: any };\n' +
+                    'export class Exchange {\n' +
+                    '    total (xs: any[]): string {\n' +
+                    '        const n = xs.length;\n' +
+                    '        return n.toString ();\n' +
+                    '    }\n' +
+                    '}\n');
+                const plain = new Transpiler(config()).transpileGoByPath(file).content;
+                expect(plain).toContain('ToString(n)');
+                expect(plain).not.toContain('import "strconv"');
+                const seamed = new Transpiler(config());
+                seamed.goTranspiler.goBaseFileStdlibImportSeamPaths = /base\/Exchange\.ts$/;
+                const out = seamed.transpileGoByPath(file).content;
+                expect(out).toContain('return strconv.Itoa(n)');
+                expect(out).toContain('import "strconv"');
+            } finally {
+                fs.rmSync(tmp, { recursive: true, force: true });
+            }
+        });
+
+        // the seam is a path predicate: a sliced writer's source (the ws cache tests) keeps the helper
+        test('a source outside the seam paths keeps the helper', () => {
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10w10-GP24-cache-'));
+            try {
+                const src = path.join(tmp, 'ts', 'src');
+                fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+                const file = path.join(src, 'base', 'test.cache.ts');
+                fs.writeFileSync(file,
+                    'type Dict = { [key: string]: any };\n' +
+                    'export class TestCache {\n' +
+                    '    total (xs: any[]): string {\n' +
+                    '        const n = xs.length;\n' +
+                    '        return n.toString ();\n' +
+                    '    }\n' +
+                    '}\n');
+                const seamed = new Transpiler(config());
+                seamed.goTranspiler.goBaseFileStdlibImportSeamPaths = /base\/Exchange\.ts$/;
+                const out = seamed.transpileGoByPath(file).content;
+                expect(out).toContain('ToString(n)');
+                expect(out).not.toContain('strconv.Itoa');
+            } finally {
+                fs.rmSync(tmp, { recursive: true, force: true });
+            }
+        });
+    });
+
+    // hx11 RFM-G1 GP24: the printer answers which stdlib packages a file's native emissions call, so a
+    // writer that splices the printed body into a file it assembles declares exactly those
+    // (ITranspiledFile.stdlibImports), and a span the writer cuts out never records an import.
+    describe('hx11 GP24 stdlib imports the printer recorded', () => {
+        const SRC =
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    total (xs: any[]): string {\n' +
+            '        const n = xs.length;\n' +
+            '        const s: string = \'a-b\';\n' +
+            '        const ids = s.split (\'-\');\n' +
+            '        const text = ids.join (\',\');\n' +
+            '        // @SKIP_START_GO\n' +
+            '        const m = xs.length;\n' +
+            '        const skipped = m.toString ();\n' +
+            '        // @SKIP_END_GO\n' +
+            '        const rest = xs.length;\n' +
+            '        return n.toString () + text + rest.toString ();\n' +
+            '    }\n' +
+            '}\n';
+        const run = (config: any) => {
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx11-GP24-'));
+            try {
+                const src = path.join(tmp, 'ts', 'src', 'base');
+                fs.mkdirSync(src, { recursive: true });
+                const file = path.join(src, 'Exchange.ts');
+                fs.writeFileSync(file, SRC);
+                return new Transpiler({ 'verbose': false, 'go': Object.assign({ 'parser': { 'NUM_LINES_END_FILE': 0 } }, config) }).transpileGoByPath(file);
+            } finally {
+                fs.rmSync(tmp, { recursive: true, force: true });
+            }
+        };
+
+        test('the transpiled file lists the packages its native calls need, sorted', () => {
+            const res = run({ 'baseFileStdlibImportSeamPaths': 'base/Exchange\\.ts$' });
+            expect(res.stdlibImports).toEqual(['strconv', 'strings']);
+            expect(res.content).toContain('strconv.Itoa(n)');
+            expect(res.content).toContain('strings.Join(ids, ",")');
+        });
+
+        test('a file the writer does not declare imports for lists none and keeps the helper', () => {
+            const res = run({});
+            expect(res.stdlibImports).toEqual([]);
+            expect(res.content).toContain('ToString(n)');
+        });
+
+        test('a statement inside a cut span keeps the helper call and records no import for it', () => {
+            const markers = run({ 'baseFileStdlibImportSeamPaths': 'base/Exchange\\.ts$', 'excisedSpanMarkers': ['@SKIP_START_GO', '@SKIP_END_GO'] });
+            expect(markers.content).toContain('ToString(m)');
+            expect(markers.content).not.toContain('strconv.Itoa(m)');
+            expect(markers.content).toContain('strconv.Itoa(rest)');
+            const plain = run({ 'baseFileStdlibImportSeamPaths': 'base/Exchange\\.ts$' });
+            expect(plain.content).toContain('strconv.Itoa(m)');
+        });
+    });
+});
+
+describe ('hx10w2G08TupleSlots', () => {
+    // hx10w2 G08 (was ccxt build/hx10w2-G08.js): a destructured tuple slot reads natively when the
+    // producer's own `return [ .. ]` paths prove what the slot holds.
+
+    const BASE = 'type Dict = any; type Bool = boolean | undefined;\n'
+        + 'class Exchange {\n'
+        + '    omit (o: any, k: any): any { return o; }\n'
+        + '    safeDict (o: any, k: string): any { return undefined; }\n'
+        + '    popOnly (isMarket: boolean, params: Dict = {}): [any, Dict] {\n'
+        + '        if (isMarket) { return [ true, this.omit (params, [ \'k\' ]) ]; }\n'
+        + '        return [ false, params ];\n'
+        + '    }\n'
+        + '    nilable (params: Dict = {}): [any, Dict] {\n'
+        + '        return [ true, this.safeDict (params, \'k\') ];\n'
+        + '    }\n'
+        + '    flag (params: Dict = {}): [any, Dict] {\n'
+        + '        let f: any = undefined;\n'
+        + '        return [ f, params ];\n'
+        + '    }\n'
+        + '    twice (params: Dict = {}): [any, Dict] {\n'
+        + '        return [ true, params ];\n'
+        + '    }\n';
+
+    const go = (body: string, hooked = true): string => {
+        const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        if (hooked) { installCcxtGoHooks ((t as any).goTranspiler); }
+        return t.transpileGo (BASE + body + '}\n').content;
+    };
+
+    const USE = '    use (params = {}) {\n'
+        + '        const [ po, paramsPo ] = this.popOnly (false, params);\n'
+        + '        return [ po, paramsPo ];\n'
+        + '    }\n';
+
+    describe('hx10w2 G08 tuple slot reads', () => {
+        test('a plain bool slot and a map slot read natively', () => {
+            const out = go (USE);
+            expect (out).toContain ('po := poparamsPoVariable[0]');
+            expect (out).toContain ('paramsPo := poparamsPoVariable[1]');
+        });
+        test('the base printer keeps GetValue for the same source', () => {
+            const base = go (USE, false);
+            expect (base).toContain ('po := GetValue(poparamsPoVariable, 0)');
+            expect (base).toContain ('paramsPo := GetValue(poparamsPoVariable, 1)');
+        });
+        test('a producer slot that may hold a typed nil keeps the helper', () => {
+            const out = go ('    use (params = {}) {\n        const [ a, p ] = this.nilable (params);\n        return [ a, p ];\n    }\n');
+            expect (out).toContain ('a := apVariable[0]');
+            expect (out).toContain ('p := GetValue(apVariable, 1)');
+        });
+        test('a slot the producer leaves undefined keeps the helper', () => {
+            const out = go ('    use (params = {}) {\n        const [ f, p ] = this.flag (params);\n        return [ f, p ];\n    }\n');
+            expect (out).toContain ('f := GetValue(fpVariable, 0)');
+        });
+        test('a holder name printed by two destructurings keeps the helper', () => {
+            const out = go ('    use (params = {}) {\n        const [ a, p ] = this.twice (params);\n        if (a) {\n            const [ a1, p1 ] = this.twice (params);\n        }\n        [ a, p ] = this.twice (params);\n        return [ a, p ];\n    }\n');
+            expect (out).toContain ('GetValue(apVariable, 1)');
+        });
+    });
+});
+
+describe ('hx10w4OG03OwnedCaches', () => {
+    // hx10w4 OG03: ws caches of BaseExchange owned by the dispatch loop. Keyed on the checker declaration
+    // (BaseExchange property), the method kind (async watch/load/subscribe vs handlers) and the access shape.
+    const owned = {
+        'declaredIn': 'BaseExchange', 'maps': { 'tickers': 'Tickers', 'bidsasks': 'Bidsasks' }, 'objects': { 'positions': 'Positions' },
+        'mapLiteral': 'TickerCache{}', 'asyncUserPath': '^(?:watch|load|subscribe)', 'syncUserPath': '^(?:setPositionsCache|cleanWsData)$',
+        'ops': { 'set': 'WsCacheSet', 'get': 'WsCacheGet', 'has': 'WsCacheHas', 'delete': 'WsCacheDelete', 'keys': 'WsCacheKeys', 'reset': 'WsCacheReset',
+            'snapshot': 'WsCacheSnapshot', 'objGet': 'WsCacheObjGet', 'objSet': 'WsCacheObjSet' },
+    };
+    const HEAD = 'type Dictionary<T> = { [key: string]: T };\ntype Ticker = { symbol: string };\ntype Tickers = Dictionary<Ticker>;\n' +
+        'class BaseExchange {\n    tickers: Dictionary<Ticker> = {};\n    bidsasks: Dictionary<Ticker> = {};\n    positions: any = undefined;\n' +
+        '    createSafeDictionary (a: boolean = false): any { return {}; }\n    safeValue (d: any, k: any): any { return d[k]; }\n' +
+        '    filterByArray (d: any, k: string, v: any): any { return d; }\n}\n';
+    const run = (body: string, config: any = owned, head = HEAD) => new Transpiler({ 'verbose': false, 'go': { ...((config === null) ? {} : { 'ownedCaches': config }), 'parser': { 'NUM_LINES_END_FILE': 0 } } })
+        .transpileGo(head + 'class Ex extends BaseExchange {\n' + body + '}\n').content;
+
+    describe('hx10w4 OG03: ws caches owned by the dispatch loop', () => {
+        test('an async watch body hands every map operation to the owner', () => {
+            const out = run("    async watchTicker (symbol: string, t: Ticker): Promise<any> {\n        this.tickers[symbol] = t;\n        const a = this.tickers[symbol];\n" +
+                "        const b = this.safeValue (this.bidsasks, symbol);\n        if (symbol in this.tickers) {\n            delete this.tickers[symbol];\n        }\n" +
+                "        const ks = Object.keys (this.bidsasks);\n        return this.filterByArray (this.tickers, 'symbol', [ a, b, ks ]);\n    }\n");
+            expect(out).toContain('this.WsCacheSet("Tickers", symbol, t)');
+            expect(out).toContain('this.WsCacheGet("Tickers", symbol)');
+            expect(out).toContain('this.WsCacheGet("Bidsasks", symbol)');
+            expect(out).toContain('this.WsCacheHas("Tickers", symbol)');
+            expect(out).toContain('this.WsCacheDelete("Tickers", symbol)');
+            expect(out).toContain('this.WsCacheKeys("Bidsasks")');
+            expect(out).toContain('this.FilterByArray(this.WsCacheSnapshot("Tickers"), "symbol"');
+            expect(out).not.toContain('this.Tickers');
+        });
+        test('a watch body returning Tickers sends the snapshot boxed', () => {
+            const out = run("    async watchTickers (): Promise<Tickers> {\n        return this.tickers;\n    }\n");
+            expect(out).toContain('any(this.WsCacheSnapshot("Tickers"))');
+        });
+        test('the positions object goes through objGet / objSet', () => {
+            const out = run("    async loadPositionsSnapshot (): Promise<any> {\n        if (this.positions === undefined) {\n            this.positions = {};\n        }\n        return this.positions;\n    }\n");
+            expect(out).toContain('this.WsCacheObjSet("Positions", map[string]any{})');
+            expect(out).toContain('this.WsCacheObjGet("Positions")');
+            expect(out).not.toContain('this.Positions');
+        });
+        test('a listed sync method resets the map through the owner', () => {
+            const out = run("    cleanWsData () {\n        this.tickers = this.createSafeDictionary (true);\n        this.positions = undefined;\n    }\n");
+            expect(out).toContain('this.WsCacheReset("Tickers")');
+            expect(out).toContain('this.WsCacheObjSet("Positions", nil)');
+        });
+        test('handlers and unlisted sync methods keep the field', () => {
+            const out = run("    handleTicker (symbol: string, t: Ticker): any {\n        this.tickers[symbol] = t;\n        delete this.tickers[symbol];\n        return this.positions;\n    }\n" +
+                "    other (symbol: string): any {\n        return this.tickers[symbol];\n    }\n");
+            expect(out).toContain('this.Positions');
+            expect(out).toContain('Remove(this.Tickers, symbol)');
+            expect(out).not.toContain('WsCache');
+        });
+        test('the literal assigned on a handler path names the type through its package', () => {
+            const out = run("    handleTicker (): any {\n        this.tickers = this.createSafeDictionary (true);\n    }\n");
+            expect(out).toContain('this.Tickers = ccxt.TickerCache{}');
+        });
+        test('a same-named field of another class is not the cache', () => {
+            const head = 'class Other {\n    tickers: any = {};\n    positions: any = undefined;\n}\n';
+            const out = new Transpiler({ 'verbose': false, 'go': { 'ownedCaches': owned, 'parser': { 'NUM_LINES_END_FILE': 0 } } })
+                .transpileGo(head + 'class BaseExchange {}\nclass Ex extends Other {\n    async watchX (s: string): Promise<any> {\n        this.tickers[s] = 1;\n        return this.positions;\n    }\n}\n').content;
+            expect(out).not.toContain('WsCache');
+        });
+        test('no ownedCaches config = unchanged output', () => {
+            const out = run("    async watchTicker (symbol: string, t: Ticker): Promise<any> {\n        this.tickers[symbol] = t;\n        return this.positions;\n    }\n", null);
+            expect(out).not.toContain('WsCache');
+        });
+    });
+});
+
+describe ('hx10w8GP09', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        const config = { 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+        transpiler = new Transpiler(config);
+    });
+
+    function go(ts: string): string {
+        return transpiler.transpileGo(ts).content;
+    }
+
+    // `getMarketFromSymbols` is declared as an overload pair in ts/src/base/Exchange.ts, so the body
+    // proof cannot resolve its body-carrying declaration from a venue call site while the base-file
+    // print still proves it (exchange_generated.go declares `map[string]any`). The snippet models the
+    // caller's side: a producer whose body the proof cannot resolve.
+    const PRELUDE = 'interface MarketInterface { id: string; symbol: string; }\n' +
+        'type Market = MarketInterface | undefined;\n' +
+        'type Strings = string[] | undefined;\n' +
+        'type Str = string | undefined;\n' +
+        'class Base {\n' +
+        '    market (symbol: Str): Market { return undefined; }\n' +
+        '    raw (x: any): any { return x; }\n' +
+        '    getMarketFromSymbols (symbols: Strings): MarketInterface {\n' +
+        '        return this.raw (symbols);\n' +
+        '    }\n' +
+        '}\n';
+
+    describe('hx10w8 GP09 redundant MapTyped on an overloaded base producer', () => {
+        test('a table-named base producer types the caller local without MapTyped', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    main (symbols: string[]): any {\n' +
+                '        const market = this.getMarketFromSymbols (symbols);\n' +
+                '        return market[\'id\'];\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var market map[string]any = this.GetMarketFromSymbols(symbols)');
+            expect(out).toContain('return market["id"]');
+            expect(out).not.toContain('MapTyped(this.GetMarketFromSymbols');
+        });
+
+        test('a producer outside the table keeps the conversion', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    buildRow (symbols: Strings): MarketInterface { return this.raw (symbols); }\n' +
+                '    main (symbols: string[]): any {\n' +
+                '        const market = this.buildRow (symbols);\n' +
+                '        return market[\'id\'];\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('MapTyped(this.BuildRow(symbols))');
+        });
+
+        test('a local written as a map is typed (the callee prints the map); a literal store is native', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    main (symbols: string[]): any {\n' +
+                '        const market = this.getMarketFromSymbols (symbols);\n' +
+                '        market[\'id\'] = \'x\';\n' +
+                '        return market;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var market map[string]any = this.GetMarketFromSymbols(symbols)');
+            expect(out).toContain('market["id"] = "x"');
+        });
+
+        test('a pointer value stored into the typed local keeps the deref helper', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    safeInteger (o: any, k: string): number | undefined { return undefined; }\n' +
+                '    main (symbols: string[], o: any): any {\n' +
+                '        const market = this.getMarketFromSymbols (symbols);\n' +
+                '        market[\'ts\'] = this.safeInteger (o, \'ts\');\n' +
+                '        return market;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('var market map[string]any = this.GetMarketFromSymbols(symbols)');
+            expect(out).toContain('AddElementToObject(market, "ts", this.SafeInteger(o, "ts"))');
+        });
+    });
+});
+
+describe ('hx10w9GP13', () => {
+    const fs = fs__hx10w9GP13;
+    const os = os__hx10w9GP13;
+    const path = path__hx10w9GP13;
+    // hx10w9 GP13: typed array-literal call arguments plus the slice mirror of the string table.
+    // `[ sym ]` at a `string[]` slot must print `[]string{sym}` (and `len(symbols)` for its length)
+    // instead of a `[]any{...}` box, and the table may only type a method whose declarations and
+    // call sites all agree — every other shape keeps the box.
+
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'type Int = number | undefined;\n' +
+        'type Str = string | undefined;\n' +
+        'class Exchange {\n' +
+        '    async unWatchTradesForSymbols (symbols: string[], params: Dict = {}): Promise<any> {\n' +
+        '        return symbols.length;\n' +
+        '    }\n' +
+        '    async watchOHLCVForSymbols (symbolsAndTimeframes: string[][], since: Int = undefined, params: Dict = {}): Promise<any> {\n' +
+        '        return symbolsAndTimeframes.length;\n' +
+        '    }\n' +
+        '    async unWatchOrderBookForSymbols (symbols: string[], params: Dict = {}): Promise<any> {\n' +
+        '        return symbols.length;\n' +
+        '    }\n' +
+        '}\n';
+
+    const TABLE = {
+        'unWatchTradesForSymbols': { 0: '[]string' },
+        'watchOHLCVForSymbols': { 0: '[][]string' },
+    };
+
+    const config = (sliceTable: any = {}, stringTable: any = {}) => ({
+        'verbose': false,
+        'go': {
+            'parser': { 'NUM_LINES_END_FILE': 0 },
+            'unifiedSliceParams': sliceTable,
+            'unifiedStringParams': stringTable,
+        },
+    });
+
+    function go (ts: string, sliceTable: any = TABLE): string {
+        const transpiler = new Transpiler(config(sliceTable));
+        return transpiler.transpileGo(ts).content;
+    }
+
+    describe('hx10w9 GP13 typed slice arguments and the slice table', () => {
+        test('a proven literal at a table slot prints the slice and the native length', () => {
+            const ts = PRELUDE +
+                'class ex extends Exchange {\n' +
+                '    wrapper () {\n' +
+                "        const s = 'BTC/USDT';\n" +
+                '        return this.unWatchTradesForSymbols ([ s ], {});\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('func (this *Exchange) UnWatchTradesForSymbols(symbols []string');
+            expect(out).toContain('unWatchTradesForSymbolsBody(ch chan any, symbols []string');
+            expect(out).toContain('ch <- len(symbols)');
+            expect(out).not.toContain('unWatchTradesForSymbolsBody(ch chan any, symbols any');
+            expect(out).toContain('[]string{s}');
+            expect(out).not.toContain('[]any{s}');
+        });
+
+        test('a two-dimensional slot prints the nested slice', () => {
+            const ts = PRELUDE +
+                'class ex extends Exchange {\n' +
+                '    wrapper () {\n' +
+                "        return this.watchOHLCVForSymbols ([ [ 'BTC/USDT', '1m' ] ], undefined, {});\n" +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('symbolsAndTimeframes [][]string');
+            expect(out).toContain('ch <- len(symbolsAndTimeframes)');
+            expect(out).toContain('[][]string{[]string{"BTC/USDT", "1m"}}');
+        });
+
+        test('a method outside the table keeps the box and the helper', () => {
+            const ts = PRELUDE +
+                'class ex extends Exchange {\n' +
+                '    wrapper () {\n' +
+                "        const s = 'BTC/USDT';\n" +
+                '        return this.unWatchOrderBookForSymbols ([ s ], {});\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('UnWatchOrderBookForSymbols(symbols any');
+            expect(out).toContain('GetArrayLength(symbols)');
+            expect(out).not.toContain('[]string{s}');
+        });
+
+        test('an unproven literal keeps the whole method boxed', () => {
+            const ts = PRELUDE +
+                'class ex extends Exchange {\n' +
+                '    wrapper (symbol: Str) {\n' +
+                '        return this.unWatchTradesForSymbols ([ symbol ], {});\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('UnWatchTradesForSymbols(symbols any');
+            expect(out).toContain('[]any{symbol}');
+        });
+
+        test('a body that writes another type keeps the box', () => {
+            const ts =
+                'type Dict = { [key: string]: any };\n' +
+                'class Exchange {\n' +
+                '    async unWatchTradesForSymbols (symbols: string[], params: Dict = {}): Promise<any> {\n' +
+                "        symbols = params['symbols'];\n" +
+                '        return symbols.length;\n' +
+                '    }\n' +
+                '}\n' +
+                'class ex extends Exchange {\n' +
+                '    wrapper () {\n' +
+                "        const s = 'BTC/USDT';\n" +
+                '        return this.unWatchTradesForSymbols ([ s ], {});\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('UnWatchTradesForSymbols(symbols any');
+            expect(out).toContain('[]any{s}');
+        });
+
+        // The literal rule is scoped to the table's slots: a venue-local `string[]` parameter keeps
+        // the printer's own proof (slice-typed call-site values), so no existing `[]any` slot changes
+        // shape and the woo `[]string`-into-`[]any` static response tests keep their box.
+        test('a venue-local string[] parameter keeps the printer own proof', () => {
+            const ts =
+                'type Dict = { [key: string]: any };\n' +
+                'class Base {\n' +
+                '    raw (x: any): any { return x; }\n' +
+                '}\n' +
+                'class Test extends Base {\n' +
+                '    takeSymbols (symbols: string[]): string[] {\n' +
+                '        return symbols;\n' +
+                '    }\n' +
+                '    run () {\n' +
+                "        const s = 'BTC/USDT';\n" +
+                '        return this.takeSymbols ([ s ]).length;\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts, {});
+            expect(out).toContain('TakeSymbols(symbols any)');
+            expect(out).toContain('[]any{s}');
+        });
+
+        test('the sibling-file proof types the base and prints the caller literal', () => {
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10-GP13-'));
+            try {
+                const src = path.join(tmp, 'ts', 'src');
+                fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+                fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'),
+                    'type Dict = { [key: string]: any };\n' +
+                    'export class Exchange {\n' +
+                    '    async unWatchTradesForSymbols (symbols: string[], params: Dict = {}): Promise<any> {\n' +
+                    '        return symbols.length;\n' +
+                    '    }\n' +
+                    '}\n');
+                fs.writeFileSync(path.join(src, 'ex.ts'),
+                    "import { Exchange, Dict } from './base/Exchange';\n" +
+                    'export class ex extends Exchange {\n' +
+                    '    async unWatchTrades (symbol: string, params: Dict = {}) {\n' +
+                    '        return await this.unWatchTradesForSymbols ([ symbol ], params);\n' +
+                    '    }\n' +
+                    '}\n');
+                const transpiler = new Transpiler(config(TABLE, { 'unWatchTrades': [ 0 ] }));
+                const base = transpiler.transpileGoByPath(path.join(src, 'base', 'Exchange.ts')).content;
+                const venue = transpiler.transpileGoByPath(path.join(src, 'ex.ts')).content;
+                expect(base).toContain('UnWatchTradesForSymbols(symbols []string');
+                expect(base).toContain('ch <- len(symbols)');
+                expect(venue).toContain('[]string{symbol}');
+            } finally {
+                fs.rmSync(tmp, { recursive: true, force: true });
+            }
+        });
+
+        test('a Str argument keeps the base boxed even when the file names a string parameter', () => {
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10-GP13-str-'));
+            try {
+                const src = path.join(tmp, 'ts', 'src');
+                fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+                fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'),
+                    'type Dict = { [key: string]: any };\n' +
+                    'type Str = string | undefined;\n' +
+                    'export class Exchange {\n' +
+                    '    async unWatchTradesForSymbols (symbols: string[], params: Dict = {}): Promise<any> {\n' +
+                    '        return symbols.length;\n' +
+                    '    }\n' +
+                    '}\n');
+                // `symbol` is a nullable parameter here; the same file also carries an unrelated
+                // `symbol: string` parameter, which must not prove this argument
+                fs.writeFileSync(path.join(src, 'ex.ts'),
+                    "import { Exchange, Dict } from './base/Exchange';\n" +
+                    'export class ex extends Exchange {\n' +
+                    '    async other (symbol: string, params: Dict = {}) {\n' +
+                    '        return symbol;\n' +
+                    '    }\n' +
+                    '    async unWatchTrades (symbol: Str, params: Dict = {}) {\n' +
+                    '        return await this.unWatchTradesForSymbols ([ symbol ], params);\n' +
+                    '    }\n' +
+                    '}\n');
+                const transpiler = new Transpiler(config(TABLE));
+                const base = transpiler.transpileGoByPath(path.join(src, 'base', 'Exchange.ts')).content;
+                const venue = transpiler.transpileGoByPath(path.join(src, 'ex.ts')).content;
+                expect(base).toContain('UnWatchTradesForSymbols(symbols any');
+                expect(venue).toContain('[]any{symbol}');
+            } finally {
+                fs.rmSync(tmp, { recursive: true, force: true });
+            }
+        });
+
+        test('a defaulted string parameter proves its element', () => {
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10-GP13-def-'));
+            try {
+                const src = path.join(tmp, 'ts', 'src');
+                fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+                fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'),
+                    'type Dict = { [key: string]: any };\n' +
+                    'export class Exchange {\n' +
+                    '    async watchOHLCVForSymbols (symbolsAndTimeframes: string[][], params: Dict = {}): Promise<any> {\n' +
+                    '        return symbolsAndTimeframes.length;\n' +
+                    '    }\n' +
+                    '}\n');
+                fs.writeFileSync(path.join(src, 'ex.ts'),
+                    "import { Exchange, Dict } from './base/Exchange';\n" +
+                    'export class ex extends Exchange {\n' +
+                    '    async watchOHLCV (symbol: string, timeframe = \'1m\', params: Dict = {}) {\n' +
+                    '        return await this.watchOHLCVForSymbols ([ [ symbol, timeframe ] ], params);\n' +
+                    '    }\n' +
+                    '}\n');
+                const transpiler = new Transpiler(config(TABLE, { 'watchOHLCV': [ 0 ] }));
+                const base = transpiler.transpileGoByPath(path.join(src, 'base', 'Exchange.ts')).content;
+                const venue = transpiler.transpileGoByPath(path.join(src, 'ex.ts')).content;
+                expect(base).toContain('symbolsAndTimeframes [][]string');
+                expect(base).toContain('ch <- len(symbolsAndTimeframes)');
+                expect(venue).toContain('[][]string{[]string{symbol, timeframe}}');
+            } finally {
+                fs.rmSync(tmp, { recursive: true, force: true });
+            }
+        });
+    });
+});
+
+describe ('hx10w9GP14', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        const config = { 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+        transpiler = new Transpiler(config);
+    });
+
+    function go(ts: string): string {
+        return transpiler.transpileGo(ts).content;
+    }
+
+    // the trampoline and its Body half both have to carry the parameter type
+    function signature(out: string, name: string): string {
+        return out.split('\nfunc ').find((f) => f.startsWith('(this *Test) ' + name + '(')) ?? '';
+    }
+
+    const PRELUDE = 'interface MarketInterface { id: string; symbol: string; url: string; }\n' +
+        'type Market = MarketInterface | undefined;\n' +
+        'type Dict = { [key: string]: any };\n' +
+        'type Str = string | undefined;\n' +
+        'class Base {}\n';
+
+    describe('hx10 GP14 async venue-only parameters', () => {
+        test('an untyped parameter whose every caller passes the market row prints the map in both halves', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    market (symbol: Str): Market { return undefined; }\n' +
+                '    async watchPublic (body: any): Promise<any> {\n' +
+                '        return body[\'id\'];\n' +
+                '    }\n' +
+                '    main (symbol: string): any {\n' +
+                '        const body = this.market (symbol);\n' +
+                '        return this.watchPublic (body);\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(signature(out, 'WatchPublic')).toContain('(body map[string]any)');
+            expect(signature(out, 'watchPublicBody')).toContain(', body map[string]any)');
+            expect(out).toContain('ch <- body["id"]');
+            expect(out).not.toContain('GetValue(body');
+        });
+
+        test('an untyped parameter whose every caller passes one string prints the string', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    async watchCrumb (topicID: any): Promise<any> {\n' +
+                '        return topicID;\n' +
+                '    }\n' +
+                '    main (): any {\n' +
+                '        this.watchCrumb (\'7\');\n' +
+                '        return this.watchCrumb (\'11\');\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(signature(out, 'WatchCrumb')).toContain('(topicID string)');
+            expect(signature(out, 'watchCrumbBody')).toContain(', topicID string)');
+        });
+
+        test('one caller passing an absent value keeps the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    async watchPublic (body: any): Promise<any> {\n' +
+                '        return body[\'id\'];\n' +
+                '    }\n' +
+                '    main (): any {\n' +
+                '        this.watchPublic ({ \'id\': 1 });\n' +
+                '        return this.watchPublic (undefined);\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(signature(out, 'WatchPublic')).toContain('(body any)');
+            expect(out).toContain('GetValue(body, "id")');
+        });
+
+        test('a body that nil-tests a map parameter compares it natively', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    async watchPublic (body: any): Promise<any> {\n' +
+                '        if (body === undefined) { return 0; }\n' +
+                '        return body[\'id\'];\n' +
+                '    }\n' +
+                '    main (): any {\n' +
+                '        return this.watchPublic ({ \'id\': 1 });\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(signature(out, 'WatchPublic')).toContain('(body map[string]any)');
+            expect(out).not.toContain('IsEqual(body, nil)');
+        });
+
+        test('a body that writes another type keeps the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    async watchPublic (body: any): Promise<any> {\n' +
+                '        body = 1;\n' +
+                '        return body;\n' +
+                '    }\n' +
+                '    main (): any {\n' +
+                '        return this.watchPublic ({ \'id\': 1 });\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(signature(out, 'WatchPublic')).toContain('(body any)');
+        });
+
+        test('a dynamically named call site keeps the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    async watchPublic (body: any): Promise<any> {\n' +
+                '        return body[\'id\'];\n' +
+                '    }\n' +
+                '    main (raw: any): any {\n' +
+                '        this.watchPublic ({ \'id\': 1 });\n' +
+                '        return this[\'watchPublic\'](raw);\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(signature(out, 'WatchPublic')).toContain('(body any)');
+            expect(out).toContain('GetValue(body, "id")');
+        });
+
+        test('a pointer-typed call site keeps the box, so the call site needs no conversion', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    str (): Str { return undefined; }\n' +
+                '    async watchCrumb (code: any): Promise<any> {\n' +
+                '        return code;\n' +
+                '    }\n' +
+                '    main (): any {\n' +
+                '        const code = this.str ();\n' +
+                '        return this.watchCrumb (code);\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(signature(out, 'WatchCrumb')).toContain('(code any)');
+        });
+
+        // a `string` body value handed to a `Str`-annotated parameter is re-wrapped there (SafeStringPtr)
+        test('a string parameter the body feeds into a nullable slot keeps the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    inner (code: Str): any { return code; }\n' +
+                '    async watchCrumb (topicID: any): Promise<any> {\n' +
+                '        return this.inner (topicID);\n' +
+                '    }\n' +
+                '    main (): any {\n' +
+                '        return this.watchCrumb (\'7\');\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(signature(out, 'WatchCrumb')).toContain('(topicID any)');
+        });
+
+        test('a `??` default keeps the box', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    async watchCrumb (topicID: any): Promise<any> {\n' +
+                '        return topicID ?? \'1\';\n' +
+                '    }\n' +
+                '    main (): any {\n' +
+                '        return this.watchCrumb (\'7\');\n' +
+                '    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(signature(out, 'WatchCrumb')).toContain('(topicID any)');
+        });
+    });
+
+    describe('hx10 GP14 wrapper records', () => {
+        // the generated public wrapper is built from these records (ccxt createWrapper), so a
+        // positional parameter has to carry the type its core prints
+        const record = (out: any, name: string): any => (out.methodsTypes ?? []).find((m: any) => m.name === name);
+
+        test('an async positional parameter carries the printed Go type', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    market (symbol: Str): Market { return undefined; }\n' +
+                '    async fetchBody (body: any): Promise<any> {\n' +
+                '        return body[\'id\'];\n' +
+                '    }\n' +
+                '    main (symbol: string): any {\n' +
+                '        const body = this.market (symbol);\n' +
+                '        return this.fetchBody (body);\n' +
+                '    }\n' +
+                '}\n';
+            const out = transpiler.transpileGo(ts);
+            expect(record(out, 'fetchBody').parameters[0].goType).toBe('map[string]any');
+        });
+
+        test('an optional parameter or a sync method carries no Go type', () => {
+            const ts = PRELUDE +
+                'class Test extends Base {\n' +
+                '    market (symbol: Str): Market { return undefined; }\n' +
+                '    async fetchBody (body?: any): Promise<any> {\n' +
+                '        return body[\'id\'];\n' +
+                '    }\n' +
+                '    syncBody (body: any): any {\n' +
+                '        return body[\'id\'];\n' +
+                '    }\n' +
+                '    main (symbol: string): any {\n' +
+                '        const body = this.market (symbol);\n' +
+                '        this.syncBody (body);\n' +
+                '        return this.fetchBody (body);\n' +
+                '    }\n' +
+                '}\n';
+            const out = transpiler.transpileGo(ts);
+            expect(record(out, 'fetchBody').parameters[0].goType).toBeUndefined();
+            expect(record(out, 'syncBody').parameters[0].goType).toBeUndefined();
+        });
+    });
+});
+
+describe ('hx11GoHooks', () => {
+    // hx11 ast-move (Go): ccxt's Go printer hooks now live in src/go and are installed from the package entry.
+
+    const SIGN = 'type Dict = { [key: string]: any };\n'
+        + 'class Exchange {\n'
+        + '    sign (path: string, api: string[] = [ \'public\', \'private\' ], method = \'GET\', params = {}): any {\n'
+        + '        const apiName = api[0];\n'
+        + '        if (apiName === \'public\') { return api[1]; }\n'
+        + '        return undefined;\n'
+        + '    }\n'
+        + '    other (path: string, api: string[] = [ \'public\' ]): any {\n'
+        + '        return api[0];\n'
+        + '    }\n'
+        + '}\n';
+
+    const print = (install: boolean, source = SIGN): string => {
+        const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        if (install) { installCcxtGoSignTyping (t.goTranspiler); }
+        return t.transpileGo (source).content;
+    };
+
+    describe('hx11 go hooks (moved from ccxt build/)', () => {
+        test('sign typing: api binds as []string and api[0] indexes natively (fails on the base printer)', () => {
+            const base = print (false);
+            const hooked = print (true);
+            expect (base).not.toContain ('api[0]');
+            expect (hooked).toContain ('api[0]');
+            expect (hooked).toContain ('[]string');
+        });
+        test('sign typing negative: a method that is not sign/fetch2/request stays untouched', () => {
+            const hooked = print (true);
+            const other = hooked.split (/\nfunc /).find ((f) => f.indexOf ('Other(') >= 0) ?? '';
+            expect (other).not.toContain ('api[0]');
+        });
+        test('installCcxtGoHooks installs every hook once (idempotent)', () => {
+            const t = new Transpiler ({ 'verbose': false, 'go': {} });
+            installCcxtGoHooks (t.goTranspiler);
+            const once = t.goTranspiler.goNativeParameterType;
+            installCcxtGoHooks (t.goTranspiler);
+            expect (typeof once).toBe ('function');
+            expect (t.transpileGo (SIGN).content).toContain ('api[0]');
+        });
+        test.each ([
+            [ 'G06', hx10G06Check ], [ 'G08', g08w3Check ], [ 'GB01', hx10w8GB01Check ],
+            [ 'GB05', hx10w8GB05Check ], [ 'GB11', hx10w9GB11Check ],
+        ])('%s self-check (base vs hooked printer) reports no problems', (_name, check) => {
+            expect ((check as () => string[]) ()).toEqual ([]);
+        });
+    });
+
+    describe('hx11 w8 unifiedBoolParams', () => {
+        const SRC = 'class Exchange {\n    setMode (hedged: boolean, symbol: string = undefined): any {\n        if (hedged) { return 1; }\n        return 2;\n    }\n}\n';
+        const print = (table: any): string => new Transpiler ({ 'verbose': false, 'go': { 'unifiedBoolParams': table, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo (SRC).content;
+        test('a tabled required boolean param prints bool and a native if', () => {
+            const out = print ({ 'setMode': [ 0 ] });
+            expect (out).toContain ('hedged bool');
+            expect (out).not.toContain ('EvalTruthy');
+        });
+        test('an absent table keeps the boxed any param', () => {
+            expect (print ({})).toContain ('hedged any');
+        });
+    });
+});
+
+describe ('hx11RFgo7', () => {
+    // hx11 RF-go-7: createOrders `[]any` slot, Client.url / bound-parameter call-site proofs, uncalled-method table.
+
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'interface OrderRequest { symbol: string }\n' +
+        'class Client { url: string; }\n' +
+        'class Exchange {\n' +
+        '    async createOrders (orders: OrderRequest[], params = {}): Promise<any> {\n' +
+        '        return orders.length;\n' +
+        '    }\n' +
+        '    createOrder (symbol: string, type: string, side: string): any {\n' +
+        '        return symbol;\n' +
+        '    }\n' +
+        '}\n';
+
+    const config = (go: any) => ({ 'verbose': false, 'go': Object.assign({ 'parser': { 'NUM_LINES_END_FILE': 0 } }, go) });
+    const go = (ts: string, extra: any = {}) => new Transpiler(config(extra)).transpileGo(ts).content;
+
+    describe('hx11 RF-go-7 general parameter rules', () => {
+        test('a table-listed []any slot prints orders []any and the native length', () => {
+            const out = go(PRELUDE, { 'unifiedSliceParams': { 'createOrders': { 0: '[]any' } } });
+            expect(out).toContain('orders []any');
+            expect(out).toContain('len(orders)');
+        });
+        test('without the table slot orders stays boxed', () => {
+            const out = go(PRELUDE);
+            expect(out).not.toContain('orders []any');
+        });
+        test('an element read of the slot keeps GetValue', () => {
+            const ts = PRELUDE.replace('return orders.length;', 'return orders[0];');
+            const out = go(ts, { 'unifiedSliceParams': { 'createOrders': { 0: '[]any' } } });
+            expect(out).toContain('GetValue(orders, 0)');
+        });
+        test('a Client.url call site proves a string parameter', () => {
+            const ts = 'class Client { url: string; }\n' +
+                'class Exchange {}\n' +
+                'class ex extends Exchange {\n' +
+                '    getType (url: string): string {\n        return url.toUpperCase ();\n    }\n' +
+                '    run (client: Client): string {\n        return this.getType (client.url);\n    }\n' +
+                '}\n';
+            const out = go(ts);
+            expect(out).toContain('GetType(url string)');
+        });
+        test('a sibling passthrough of a unified-string parameter proves a builder parameter only when the pattern names it', () => {
+            const dir = nodepath.join(__dirname, 'files', 'tmp-rf-go-7', 'ts', 'src');
+            nodefs.mkdirSync(nodepath.join(dir, 'pro'), { recursive: true });
+            nodefs.writeFileSync(nodepath.join(dir, 'ex.ts'),
+                'class Exchange {}\nexport class ex extends Exchange {\n    buildRequest (symbol: string): string {\n        return symbol.toUpperCase ();\n    }\n    plain (symbol: string): string {\n        return symbol.toUpperCase ();\n    }\n}\n');
+            nodefs.writeFileSync(nodepath.join(dir, 'pro', 'ex.ts'),
+                "import ex from '../ex.js';\nexport default class exs extends ex {\n    async createOrderWs (symbol: string, type: string) {\n        const a = this.buildRequest (symbol);\n        const b = this.plain (symbol);\n        return [ a, b ];\n    }\n}\n");
+            const run = (extra: any) => new Transpiler(config(Object.assign({ 'unifiedStringParams': { 'createOrderWs': [ 0, 1 ] } }, extra))).transpileGoByPath(nodepath.join(dir, 'ex.ts')).content;
+            const on = run({ 'siblingStringPassthroughPattern': '^build\\w*Request$' });
+            expect(on).toContain('BuildRequest(symbol string)');
+            expect(on).toContain('Plain(symbol any)');
+            expect(run({})).toContain('BuildRequest(symbol any)');
+        });
+        afterAll(() => nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-rf-go-7'), { recursive: true, force: true }));
+        test('an uncalled table method types its required string params; a stranger stays boxed', () => {
+            const ts = 'class Exchange {}\n' +
+                'class ex extends Exchange {\n' +
+                '    convertIt (code: string, fromNetwork: string): string {\n        return fromNetwork.toUpperCase ();\n    }\n' +
+                '    other (code: string, fromNetwork: string): string {\n        return fromNetwork.toUpperCase ();\n    }\n' +
+                '}\n';
+            const out = go(ts, { 'uncalledStringParams': { 'ex.convertIt': [ 1 ] } });
+            expect(out).toContain('ConvertIt(code any, fromNetwork string)');
+            expect(out).toContain('Other(code any, fromNetwork any)');
+        });
+    });
+});
+
+describe ('hx11StringCallPointerLocal', () => {
+    // hx11 RFM-X4 JSONSTR (moved from ccxt build/hx11w8-json-string.ts): a `this.<m>(..)` call whose checker
+    // type is exactly TS `string` and whose Go signature returns `string` is not boxed with SafeStringPtr
+    // when it is stored in a *string slot; its value is kept in a typed local and the pointer takes the
+    // local's address (`jsonText := this.Json(x)` + `name = &jsonText`).
+
+    const PRELUDE = 'type Dict = { [key: string]: any };\n'
+        + 'type Str = string | undefined;\n'
+        + 'class Exchange {\n'
+        + '    json (data: any, params = {}): string { return \'\'; }\n'
+        + '    hmac (data: any): string { return \'\'; }\n'
+        + '    safeString (o: any, k: string): string | undefined { return undefined; }\n'
+        + '}\n';
+
+    const print = (body: string, hooks = true): string => {
+        const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        if (hooks) { installCcxtGoHooks (t.goTranspiler); }
+        return t.transpileGo (PRELUDE + 'class Foo extends Exchange {\n' + body + '}\n').content;
+    };
+
+    describe('hx11 string-returning call stored in a *string slot', () => {
+        test('statement assignment keeps the string in a typed local (fails on the boxed form)', () => {
+            const out = print (
+                '    sign (params: Dict, method: string): any {\n'
+                + '        let bodyJson = undefined;\n'
+                + '        if (method !== \'GET\') {\n'
+                + '            bodyJson = this.json (params);\n'
+                + '        }\n'
+                + '        return { \'b\': bodyJson };\n'
+                + '    }\n');
+            expect (out).toContain ('var bodyJson *string = nil');
+            expect (out).toContain ('\t\tjsonText := this.Json(params)\n\t\tbodyJson = &jsonText\n');
+            expect (out).not.toContain ('SafeStringPtr(this.Json');
+        });
+        test('ternary arm returns the address of a numbered local; names count in source order per function', () => {
+            const out = print (
+                '    sign (params: Dict, query: Dict, method: string): any {\n'
+                + '        let a = undefined;\n'
+                + '        if (method !== \'GET\') {\n'
+                + '            a = this.json (params);\n'
+                + '        }\n'
+                + '        const b = (method === \'POST\') ? this.json (query) : undefined;\n'
+                + '        return { \'a\': a, \'b\': b };\n'
+                + '    }\n');
+            expect (out).toContain ('\t\tjsonText := this.Json(params)\n\t\ta = &jsonText\n');
+            expect (out).toContain ('\t\t\tjsonText2 := this.Json(query)\n\t\t\treturn &jsonText2\n');
+            expect (out).not.toContain ('SafeStringPtr(this.Json');
+        });
+        test('keyed on the callee type, not the name: hmac gets its own hmacText local', () => {
+            const out = print (
+                '    sign (params: Dict): any {\n'
+                + '        let h = undefined;\n'
+                + '        if (params) {\n'
+                + '            h = this.json (params);\n'
+                + '        }\n'
+                + '        return { \'h\': h };\n'
+                + '    }\n'
+                + '    other (data: any): any {\n'
+                + '        let s = undefined;\n'
+                + '        if (data) {\n'
+                + '            s = this.hmac (data);\n'
+                + '        }\n'
+                + '        return { \'s\': s };\n'
+                + '    }\n');
+            expect (out).toContain ('\t\tjsonText := this.Json(params)\n\t\th = &jsonText\n');
+            expect (out).toContain ('\t\thmacText := this.Hmac(data)\n\t\ts = &hmacText\n');
+            expect (out).not.toContain ('SafeStringPtr(');
+        });
+        test('a call typed string | undefined keeps the SafeStringPtr box', () => {
+            const out = print (
+                '    sign (o: Dict): any {\n'
+                + '        let s = undefined;\n'
+                + '        if (o) {\n'
+                + '            s = this.safeString (o, \'k\');\n'
+                + '        }\n'
+                + '        return { \'s\': s };\n'
+                + '    }\n');
+            expect (out).not.toContain ('Text :=');
+        });
+        test('a local already spelled jsonText keeps the box', () => {
+            const out = print (
+                '    sign (params: Dict): any {\n'
+                + '        const jsonText = 1;\n'
+                + '        let b = undefined;\n'
+                + '        if (params) {\n'
+                + '            b = this.json (params);\n'
+                + '        }\n'
+                + '        return { \'b\': b, \'t\': jsonText };\n'
+                + '    }\n');
+            expect (out).not.toContain ('jsonText := this.Json');
+            expect (out).not.toContain ('&jsonText');
+        });
+        test('a wider expression around the call keeps the box', () => {
+            const out = print (
+                '    sign (params: Dict): any {\n'
+                + '        let b = undefined;\n'
+                + '        if (params) {\n'
+                + '            b = this.json (params) + \'x\';\n'
+                + '        }\n'
+                + '        return { \'b\': b };\n'
+                + '    }\n');
+            expect (out).not.toContain ('jsonText');
+        });
+    });
+});
+
+describe ('hx11fold1FG07', () => {
+    const PRELUDE = 'type Dict = { [key: string]: any };\n'
+        + 'type Str = string | undefined;\ntype Int = number | undefined;\ntype Bool = boolean | undefined;\n'
+        + 'class Base {\n'
+        + '    handleParamString (params: Dict, name: string, d?: string): [Str, Dict] { return [ undefined, params ]; }\n'
+        + '    handleParamBool (params: Dict, name: string, d?: boolean): [Bool, Dict] { return [ undefined, params ]; }\n'
+        + '    handleParamInteger (params: Dict, name: string, d?: number): [Int, Dict] { return [ undefined, params ]; }\n'
+        + '    handleOptionBoolAndParams (params: Dict, m: string, o: string, d?: boolean): [Bool, Dict] { return [ undefined, params ]; }\n'
+        + '    handleOptionIntegerAndParams (params: Dict, m: string, o: string, d?: number): [Int, Dict] { return [ undefined, params ]; }\n'
+        + '    checkAddress (a: any, c?: any, t?: any): any { return a; }\n'
+        + '    other (a: any): any { return a; }\n'
+        + '}\n';
+
+    const TABLED = { 'goTupleSlotTypes': { 'HandleOptionIntegerAndParams': [ '*int64' ] } };
+
+    const go = (body: string, tables: object = {}): string => new Transpiler({ 'verbose': false, 'go': Object.assign({ 'parser': { 'NUM_LINES_END_FILE': 0 } }, tables) })
+        .transpileGo(PRELUDE + 'class V extends Base {\n' + body + '}\n').content;
+
+    const fn = (decl: string, uses: string, tables: object = {}): string => go('    f (address: string, params: Dict = {}): any {\n        const request: Dict = {};\n'
+        + decl + uses + '        return request;\n    }\n', tables);
+
+    const TAG = "        const [ tag, paramsTag ] = this.handleParamString (params, 'tag');\n";
+
+    describe('hx11 fold 1F G07: tuple slot 0 of the pointer helpers is the typed pointer', () => {
+        test('nil test, guarded map store, literal compare and a deref-ing callee keep the pointer', () => {
+            const out = fn(TAG, "        this.checkAddress (address, 'c', tag);\n        if (tag !== undefined) {\n            request['memo'] = tag;\n        }\n        if (tag === 'x') {\n            request['y'] = 1;\n        }\n");
+            expect(out).toContain('var tag *string = SafeStringPtr(tagparamsTagVariable[0])');
+            expect(out).toContain('request["memo"] = *tag');
+            expect(out).toContain('tag != nil && *tag == "x"');
+            expect(out).not.toContain('tag := GetValue(');
+        });
+        test('an exiting nil guard proves the store', () => {
+            const out = fn(TAG, "        if (tag === undefined) {\n            return undefined;\n        }\n        request['memo'] = tag;\n");
+            expect(out).toContain('request["memo"] = *tag');
+        });
+        test('an int64 pair slot is the pointer', () => {
+            const out = fn("        const [ limit, paramsLimit ] = this.handleParamInteger (params, 'limit');\n",
+                "        if (limit !== undefined) {\n            request['n'] = limit;\n        }\n");
+            expect(out).toContain('var limit *int64 = nil');
+            expect(out).toContain('.(*int64); ok { limit = p }');
+            expect(out).toContain('request["n"] = *limit');
+        });
+        test('the assignment form of a nil-initialised bool local is the pointer', () => {
+            const out = fn("        let hedged: Bool = undefined;\n        [ hedged, params ] = this.handleParamBool (params, 'hedged', false);\n",
+                "        if ((hedged === true) || request['a']) {\n            request['h'] = 1;\n        }\n");
+            expect(out).toContain('var hedged *bool = nil');
+            expect(out).toContain('hedged = SafeBoolPtr(hedgedparamsVariable[0])');
+            expect(out).toContain('hedged != nil && *hedged == true');
+            expect(out).not.toContain('hedged = GetValue(');
+        });
+        test('a local initialised to a value (not nil) keeps the pair assignment', () => {
+            const out = fn("        let hedged: Bool = false;\n        [ hedged, params ] = this.handleParamBool (params, 'hedged', false);\n",
+                "        if (hedged === true) {\n            request['h'] = 1;\n        }\n");
+            expect(out).not.toContain('var hedged *bool');
+            expect(out).not.toContain('SafeBoolPtr(hedgedparamsVariable[0])');
+        });
+        test('a nil-initialised local stores through its nil guard', () => {
+            const out = fn("        let flag: Bool = undefined;\n        [ flag, params ] = this.handleParamBool (params, 'flag');\n",
+                "        if (flag !== undefined) {\n            request['f'] = flag;\n        }\n");
+            expect(out).toContain('var flag *bool = nil');
+            expect(out).toContain('request["f"] = *flag');
+        });
+        test('a store without a nil proof keeps the box', () => {
+            const out = fn(TAG, "        request['memo'] = tag;\n");
+            expect(out).toContain('tag := GetValue(tagparamsTagVariable, 0)');
+            expect(out).not.toContain('var tag *string');
+        });
+        test('an object literal value, a return and a foreign callee keep the box', () => {
+            for (const use of [ "        request['o'] = { 'k': tag };\n", '        return tag;\n', '        this.other (tag);\n' ]) {
+                const out = fn(TAG, use);
+                expect(out).toContain('tag := GetValue(tagparamsTagVariable, 0)');
+            }
+        });
+        test('a later write keeps the box', () => {
+            const out = fn(TAG, "        tag = 'z';\n        this.checkAddress (address, 'c', tag);\n");
+            expect(out).not.toContain('var tag *string');
+        });
+        test('a literal default selects the native pair twin: no pointer slot', () => {
+            const out = fn("        const [ flag, paramsFlag ] = this.handleOptionBoolAndParams (params, 'f', 'flag', false);\n",
+                "        if (flag === true) {\n            request['x'] = 1;\n        }\n");
+            expect(out).not.toContain('var flag *bool');
+        });
+    });
+
+    describe('hx11 fold 1F G07: option helpers keep the typed assertion read', () => {
+        test('a variable default selects the Nullable twin: the slot reads through the typed assertion', () => {
+            const out = fn("        const dflt = true;\n        const [ stock, paramsStock ] = this.handleOptionBoolAndParams (params, 'f', 'stock', dflt);\n",
+                "        if (stock === true) {\n            request['s'] = 1;\n        }\n");
+            expect(out).toContain('var stock *bool = nil');
+            expect(out).toContain('.(*bool); ok { stock = p }');
+        });
+    });
+
+    describe('hx11 fold 1F G07: tabled integer option slots', () => {
+        const decl = "        const [ calls, paramsCalls ] = this.handleOptionIntegerAndParams (params, 'f', 'calls', address);\n";
+        const uses = "        const n = this.other (calls);\n        request['n'] = this.checkAddress (calls);\n";
+        test('a slot the embedder tables as *int64 is the pointer when a deref-ing callee reads it', () => {
+            const out = fn(decl, "        request['n'] = this.checkAddress (address, 'c', calls);\n", TABLED);
+            expect(out).toContain('var calls *int64 = nil');
+            expect(out).toContain('.(*int64); ok { calls = p }');
+        });
+        test('without the table nothing changes', () => {
+            const out = fn(decl, "        request['n'] = this.checkAddress (address, 'c', calls);\n");
+            expect(out).not.toContain('var calls *int64');
+        });
+        test('a foreign callee keeps the box even when tabled', () => {
+            expect(fn(decl, uses, TABLED)).not.toContain('var calls *int64');
+        });
+    });
+});
+
+describe ('hx11fold1FG15OptionDicts', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    function go(ts: string): string {
+        return transpiler.transpileGo(ts).content;
+    }
+
+    const PRELUDE = 'type Dict = { [key: string]: any };\nclass Base {\n    options: Dict;\n    has: Dict;\n    fees: Dict;\n    limits: Dict;\n' +
+        '    extend (...a: any[]): any { return a; }\n    safeString (a: any, b: any, c: any = undefined): string { return ""; }\n' +
+        '    safeInteger (a: any, b: any, c: any = undefined): number { return 0; }\n    safeDict (a: any, b: any, c: any = undefined): any { return a; }\n' +
+        '    getMarketType (a: any, b: any): any { return a; }\n}\n';
+
+    function cls(body: string): string {
+        return PRELUDE + 'class Test extends Base {\n' + body + '}\n';
+    }
+
+    function flat(output: string): string {
+        return output.replace(/\s+/g, ' ');
+    }
+
+    describe('hx11 fold 1F G15: option dict field receivers', () => {
+        test('a string-typed key stores natively behind the nil-map guard', () => {
+            const out = go(cls('    a (marketType: string = "margin") {\n' +
+                '        const options = this.safeDict (this.options, marketType, {});\n' +
+                '        this.options[marketType] = this.extend (options, { "x": 1 });\n' +
+                '    }\n'));
+            expect(flat(out)).toContain('if this.Options != nil { this.Options[marketType] = this.Extend(options, map[string]any{ "x": 1, }) }');
+            expect(out).not.toContain('AddElementToObject(this.Options');
+        });
+
+        test('a *string key adds its nil guard and a *string value stores dereferenced', () => {
+            const out = go(cls('    a (params: Dict = {}) {\n' +
+                '        const typeVar = this.safeString (params, "type", "margin");\n' +
+                '        const id = this.safeString (params, "id");\n' +
+                '        this.fees[typeVar] = id;\n' +
+                '    }\n'));
+            expect(flat(out)).toContain('if this.Fees != nil && typeVar != nil { this.Fees[*typeVar] = DerefScalar(id) }');
+        });
+
+        test('an any-typed key or value keeps the helper', () => {
+            const out = go(cls('    a (params: Dict = {}) {\n' +
+                '        const typeVar = this.getMarketType ("a", params);\n' +
+                '        this.options[typeVar] = this.extend ({}, {});\n' +
+                '        this.fees["k"] = this.safeInteger (params, "v");\n' +
+                '    }\n'));
+            expect(out).toContain('AddElementToObject(this.Options, typeVar,');
+            expect(out).toContain('this.Fees["k"] = this.SafeInteger(params, "v")');
+        });
+
+        test('key in an option dict binds the comma-ok read in the if init clause', () => {
+            const out = go(cls('    a (reload = false) {\n' +
+                '        if (reload || !(\'k\' in this.options)) {\n' +
+                '            this.options["k"] = 1;\n' +
+                '        }\n' +
+                '        if (!(\'k\' in this.fees)) {\n' +
+                '            this.limits["k"] = 1;\n' +
+                '        }\n' +
+                '    }\n'));
+            expect(out).toContain('if _, ok := this.Options["k"]; (reload == true) || !ok {');
+            expect(out).toContain('if _, ok := this.Fees["k"]; !ok {');
+            expect(out).not.toContain('InOp(this.');
+        });
+    });
+});
+
+describe ('hx11fold2WT01TickerRow', () => {
+    // hx11 FOLD2 WT01 (folded from ccxt build/hx11w8-WT01.ts): `const tickers = await this.watchTickers ([ k ]); return tickers[k]`
+    // in an async method answering Promise<Ticker> reads one row of the typed `map[string]Ticker`, keyed on the checker
+    // (the awaited method is tabled as a ticker-map channel; no printed-text pass in ccxt).
+    const SRC = (body: string, params = 'symbol: string, params = {}') => [
+        'interface Ticker { symbol: string }',
+        'type Tickers = { [key: string]: Ticker };',
+        'class Exchange {',
+        '    safeSymbol (s: string): string { return s; }',
+        '    async watchTickers (symbols: string[] = undefined, params = {}): Promise<Tickers> { return {}; }',
+        '    async watchTicker (' + params + '): Promise<Ticker> {',
+        body,
+        '    }',
+        '}',
+        '',
+    ].join ('\n');
+    const print = (body: string, tabled = true, params?: string, hooks = false) => {
+        const t = new Transpiler ({ 'verbose': false, 'go': { 'asyncMethodSuffix': 'Async', 'unifiedStringParams': (params === undefined) ? { 'watchTicker': [ 0 ] } : {},
+            'asyncTickerMapCallees': tabled ? [ 'WatchTickers' ] : [], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        if (hooks) { installCcxtGoLocalTypes (t.goTranspiler); }
+        return t.transpileGo (SRC (body, params)).content;
+    };
+    const STRING_KEY = '        const tickers = await this.watchTickers ([ symbol ], params);\n        return tickers[symbol];';
+
+    describe('hx11 FOLD2 WT01 typed ticker row', () => {
+        test('a string key indexes the typed ticker map (fails without the table)', () => {
+            const out = print (STRING_KEY);
+            expect (out).toContain ('var tickers map[string]Ticker = PanicOnError(');
+            expect (out).toContain ('ch <- TickerToMap(tickers[symbol])');
+            expect (out).not.toContain ('GetValue(tickers');
+            const base = print (STRING_KEY, false);
+            expect (base).toContain ('GetValue(tickers, symbol)');
+            expect (base).not.toContain ('map[string]Ticker');
+        });
+        test('a non-string key keeps GetValue', () => {
+            const out = print ('        const tickers = await this.watchTickers ([ symbol ], params);\n        return tickers[symbol];', true, 'symbol: any, params = {}');
+            expect (out).not.toContain ('map[string]Ticker');
+        });
+        test('a map read twice or rebound keeps GetValue', () => {
+            const twice = print ('        const tickers = await this.watchTickers ([ symbol ], params);\n        const other = tickers[symbol];\n        return tickers[symbol];');
+            expect (twice).not.toContain ('map[string]Ticker');
+            const rebound = print ('        let key = symbol;\n        const tickers = await this.watchTickers ([ key ], params);\n        key = \'x\';\n        return tickers[key];');
+            expect (rebound).not.toContain ('map[string]Ticker');
+        });
+        test('another awaited method keeps GetValue', () => {
+            expect (print (STRING_KEY.replace ('watchTickers', 'watchOther'))).not.toContain ('map[string]Ticker');
+        });
+        test('a *string key is guarded (a nil key reads the zero Ticker)', () => {
+            const body = '        const key = this.safeSymbol (symbol);\n        const tickers = await this.watchTickers ([ key ], params);\n        return tickers[key];';
+            const out = print (body, true, undefined, true);
+            if (out.includes ('var key *string')) {
+                expect (out).toContain ('var tickerRow Ticker\n\tif key != nil {\n\t\ttickerRow = tickers[*key]\n\t}');
+                expect (out).toContain ('ch <- TickerToMap(tickerRow)');
+            } else {
+                expect (out).not.toContain ('tickers[key]');
+            }
+            expect (print (body, false, undefined, true)).not.toContain ('map[string]Ticker');
+        });
+    });
+});
+
+describe ('hx11foldBGAnySliceToList', () => {
+    const fs = fs__hx11foldBGAnySliceToList;
+    const os = os__hx11foldBGAnySliceToList;
+    const path = path__hx11foldBGAnySliceToList;
+    // An awaited list local that the printer declares `[]any` (goAwaitReceiveUnbox) reads its rows as xs[i]:
+    // a `this.xs` field or `{ xs: v }` key of the same name is not a use of the local, and a callee whose
+    // channel carries `[]map[string]any` has map rows, never a scalar box.
+
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'interface Position { symbol: string }\n' +
+        'class Exchange {\n' +
+        '    positions: any = undefined;\n' +
+        '    parseRow (row: any): any { return row; }\n' +
+        '    async fetchPositions (symbols: string[] = undefined, params: Dict = {}): Promise<Position[]> { return []; }\n' +
+        '    async fetchRawMarketsPaged (extra: Dict = {}): Promise<any[]> { return []; }\n' +
+        '}\n';
+
+    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'bg-anyslice-'));
+
+    function go (body: string, callees: string[] = []): string {
+        const dir = path.join (tmp, 'ts', 'src', 'pro');
+        fs.mkdirSync (dir, { 'recursive': true });
+        const file = path.join (dir, 'venue.ts');
+        fs.writeFileSync (file, PRELUDE + 'class venue extends Exchange {\n    async run (type: string) {\n' + body + '\n    }\n}\n');
+        const transpiler: any = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 }, 'asyncMethodSuffix': 'Async', 'asyncMapRowListCallees': callees } });
+        installCcxtGoLocalTypes (transpiler.goTranspiler);
+        return transpiler.transpileGoByPath (file).content;
+    }
+
+    describe('awaited list locals read natively', () => {
+        afterAll(() => {
+            fs.rmSync (tmp, { 'recursive': true, 'force': true });
+        });
+
+        test('a same-named this.field does not keep the local boxed', () => {
+            const out = go (
+                '        const positions = await this.fetchPositions (undefined, { type });\n' +
+                '        this.positions = new Array ();\n' +
+                '        for (let i = 0; i < positions.length; i++) {\n' +
+                '            const position = positions[i];\n' +
+                '            this.parseRow (position);\n' +
+                '        }');
+            expect (out).toContain ('var positions []any = ListTyped(');
+            expect (out).toContain ('var position any = positions[i]');
+            expect (out).not.toContain ('GetValue(positions, i)');
+        });
+
+        test('an object-literal key of the same name does not keep the local boxed', () => {
+            const out = go (
+                '        const positions = await this.fetchPositions ();\n' +
+                '        const request = { \'positions\': 1 };\n' +
+                '        for (let i = 0; i < positions.length; i++) {\n' +
+                '            this.parseRow (positions[i]);\n' +
+                '        }');
+            expect (out).toContain ('var positions []any = ListTyped(');
+            expect (out).not.toContain ('GetValue(positions, i)');
+        });
+
+        test('a read of the local that is not a list read keeps the box', () => {
+            const out = go (
+                '        const positions = await this.fetchPositions ();\n' +
+                '        const other = positions;\n' +
+                '        this.parseRow (other);\n' +
+                '        for (let i = 0; i < positions.length; i++) {\n' +
+                '            this.parseRow (positions[i]);\n' +
+                '        }');
+            expect (out).not.toContain ('var positions []any');
+            expect (out).toContain ('GetValue(positions, i)');
+        });
+
+        test('a callee the host tables as []map[string]any has map rows', () => {
+            const body =
+                '        const rows = await this.fetchRawMarketsPaged ({});\n' +
+                '        const n = rows.length;\n' +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            this.parseRow (rows[i]);\n' +
+                '        }';
+            const tabled = go (body, [ 'FetchRawMarketsPaged' ]);
+            expect (tabled).toContain ('var rows []any = ListTyped(');
+            expect (tabled).toContain ('this.ParseRow(rows[i])');
+            expect (tabled).not.toContain ('GetValue(rows, i)');
+            const untabled = go (body);
+            expect (untabled).toContain ('GetValue(rows, i)');
+        });
+
+        test('a loop not bounded by the list keeps GetValue', () => {
+            const out = go (
+                '        const positions = await this.fetchPositions ();\n' +
+                '        this.positions = 1;\n' +
+                '        for (let i = 0; i < 3; i++) {\n' +
+                '            this.parseRow (positions[i]);\n' +
+                '        }');
+            expect (out).toContain ('GetValue(positions, i)');
+        });
+    });
+});
+
+describe ('hx11rfGo3', () => {
+    // hx11 RF-go-3: rules folded from ccxt build/ post-print passes into the Go printer.
+    let transpiler: Transpiler;
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+    const go = (ts: string): string => transpiler.transpileGo(ts).content;
+    const signature = (out: string, name: string): string => out.split('\nfunc ').find((f) => f.startsWith('(this *Test) ' + name + '(')) ?? '';
+
+    describe('RF-go-3 async boolean parameter (was hx11w8-async-bool)', () => {
+        const body = (call: string, use = 'if (flag) { return 1; } return 2;') => 'class Base {}\nclass Test extends Base {\n'
+            + '    async load (flag: boolean): Promise<any> { ' + use + ' }\n'
+            + '    async main (): Promise<any> { ' + call + ' }\n}\n';
+        test('every call site passes a bool literal: the parameter prints bool', () => {
+            const out = go(body('await this.load (true); return await this.load (false);'));
+            expect(signature(out, 'Load')).toContain('(flag bool)');
+        });
+        test('a call site passing a non-literal keeps any', () => {
+            const out = go(body('const x: any = 1; return await this.load (x);'));
+            expect(signature(out, 'Load')).not.toContain('flag bool');
+        });
+        test('a body that nil-tests the parameter keeps any', () => {
+            const out = go(body('return await this.load (true);', 'if (flag === undefined) { return 1; } return 2;'));
+            expect(signature(out, 'Load')).not.toContain('flag bool');
+        });
+    });
+
+    const OPTIONS = 'type Dict = { [key: string]: any };\nclass Base { options: Dict = {}; safeString (d: Dict, k: string): string | undefined { return undefined; } safeDict (d: Dict, k: string): Dict { return {}; } }\n';
+    describe('RF-go-3 Options is a plain map[string]any field (was hx10w2-G09)', () => {
+        const run = (stmts: string, params = '') => go(OPTIONS + 'class Test extends Base {\n    f (' + params + '): any { ' + stmts + ' }\n}\n');
+        test('literal-key store and read are native', () => {
+            const out = run("this.options['k'] = 1; return this.options['k'];");
+            expect(out).toContain('this.Options["k"] = 1');
+            expect(out).not.toContain('AddElementToObject(this.Options');
+            expect(out).not.toContain('Options.Store');
+        });
+        test('string-typed key is native, any key keeps the helper', () => {
+            const typed = run("const k: string = 'a'; this.options[k] = 1;");
+            expect(typed).toContain('this.Options[k] = 1');
+            const boxed = run("this.options[k] = 1;", 'k: any');
+            expect(boxed).toContain('AddElementToObject(this.Options, k, 1)');
+        });
+        test('a safeString (typed pointer) value is stored through DerefScalar', () => {
+            const out = run("this.options['k'] = this.safeString ({}, 'a');");
+            expect(out).toMatch(/this\.Options\["k"\] = DerefScalar\(this\.SafeString\(/);
+        });
+        test('a pointer value stored into another map field is not wrapped (only the plain-valued Options field is)', () => {
+            const out = go(OPTIONS + "class Test extends Base {\n    features: Dict = {};\n    f (): any { this.features['k'] = this.safeString ({}, 'a'); return 1; }\n}\n");
+            expect(out).toMatch(/this\.Features\["k"\] = this\.SafeString\(/);
+            expect(out).not.toContain('DerefScalar(this.SafeString');
+        });
+    });
+});
+
+describe ('hx11rfmG1GP18', () => {
+    const fs = fs__hx11rfmG1GP18;
+    const os = os__hx11rfmG1GP18;
+    const path = path__hx11rfmG1GP18;
+    // RFM-G1 GP18: a receive from an implicit endpoint whose declared type is the stub's EndpointResult
+    // element reads the carrier's typed view (`.Checked()`, hoisted by ccxt's go-err pass to `rN.Value`)
+    // instead of converting `.Raw` through MapTyped/ListTyped. The element comes from the receiver's own
+    // generated `<id>_api.go`; another receiver's stub of the same name, or a stub of the other shape,
+    // keeps the conversion.
+
+    const ABSTRACT =
+        "import { Dict, List } from '../base/types.js';\n" +
+        "import { Exchange as _Exchange } from '../base/Exchange.js';\n" +
+        'abstract class Exchange extends _Exchange {\n' +
+        '    privateGetOrdersId (params = {}): Promise<Dict> {\n        return this.request ("orders", [ "private" ], "GET", params);\n    }\n\n' +
+        '    privateGetRows (params = {}): Promise<List> {\n        return this.request ("rows", [ "private" ], "GET", params);\n    }\n}\n' +
+        'export default Exchange;\n';
+
+    const TYPES = 'export type Dict = { [key: string]: any };\nexport type List = any[];\n';
+    const BASE =
+        "import { Dict } from './types.js';\n" +
+        'export class Exchange {\n    request (path: string, api: string[], method: string, params: Dict = {}): Promise<any> {\n        return undefined;\n    }\n' +
+        '    extend (a: Dict, b: Dict): Dict {\n        return a;\n    }\n' +
+        '    safeString (o: any, k: string): string {\n        return k;\n    }\n' +
+        '    indexBy (o: any, k: string): Dict {\n        return {};\n    }\n}\n';
+
+    const VENUE =
+        "import Exchange from './abstract/ex.js';\n" +
+        "import { Dict } from './base/types.js';\n" +
+        'export default class ex extends Exchange {\n' +
+        '    async fetchThing (params = {}) {\n' +
+        '        const response = await this.privateGetOrdersId (params);\n' +
+        "        return this.safeString (response, 'id');\n" +
+        '    }\n' +
+        '    async fetchRows (params = {}) {\n' +
+        '        const rows = await this.privateGetRows (this.extend ({\n' +
+        "            'a': 1,\n" +
+        "            'b': 2,\n" +
+        '        }, params));\n' +
+        "        return this.indexBy (rows, 'id');\n" +
+        '    }\n' +
+        '}\n';
+
+    function stubs (mapElement: string, listElement: string): string {
+        return 'package ccxt\n\n' +
+            '// PrivateGetOrdersId returns a channel that yields a JSON object.\n' +
+            'func (this *Ex) PrivateGetOrdersId(args ...any) <-chan EndpointResult[' + mapElement + '] {\n\treturn nil\n}\n' +
+            '// PrivateGetRows returns a channel that yields a JSON array.\n' +
+            'func (this *Ex) PrivateGetRows(args ...any) <-chan EndpointResult[' + listElement + '] {\n\treturn nil\n}\n';
+    }
+
+    function print (apiGo: string | undefined, install = true): string {
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'rfm-g1-gp18-'));
+        try {
+            const src = path.join (tmp, 'ts', 'src');
+            fs.mkdirSync (path.join (src, 'base'), { 'recursive': true });
+            fs.mkdirSync (path.join (src, 'abstract'), { 'recursive': true });
+            fs.writeFileSync (path.join (src, 'base', 'types.ts'), TYPES);
+            fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), BASE);
+            fs.writeFileSync (path.join (src, 'abstract', 'ex.ts'), ABSTRACT);
+            fs.writeFileSync (path.join (src, 'ex.ts'), VENUE);
+            if (apiGo !== undefined) {
+                fs.mkdirSync (path.join (tmp, 'go', 'v4'), { 'recursive': true });
+                fs.writeFileSync (path.join (tmp, 'go', 'v4', 'ex_api.go'), apiGo);
+            }
+            const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 }, 'asyncMethodSuffix': 'Async', 'asyncSuffixExemptPaths': [ '(^|/)ts/src/abstract/' ] } });
+            if (install) {
+                installCcxtGoHooks (t.goTranspiler);
+            }
+            return t.transpileGoByPath (path.join (src, 'ex.ts')).content;
+        } finally {
+            fs.rmSync (tmp, { 'recursive': true, 'force': true });
+        }
+    }
+
+    describe('RFM-G1 GP18 endpoint receive reads the typed view', () => {
+        test('a map stub receive prints the checked typed view, not MapTyped(Raw)', () => {
+            const out = print (stubs ('map[string]any', '[]any'));
+            expect (out).toContain ('var response map[string]any = (<-this.PrivateGetOrdersId(params)).Checked()');
+            expect (out).not.toContain ('MapTyped(PanicOnError((<-this.PrivateGetOrdersId');
+        });
+        test('a multi-line []any stub receive prints the checked typed view', () => {
+            const out = print (stubs ('map[string]any', '[]any'));
+            expect (out).toContain ('var rows []any = (<-this.PrivateGetRows(');
+            expect (out).toContain ('.Checked()');
+            expect (out).not.toContain ('ListTyped(PanicOnError((<-this.PrivateGetRows');
+        });
+        test('without the receiver stub table the shipped conversion stays', () => {
+            const out = print (undefined);
+            expect (out).not.toContain ('.Checked()');
+        });
+        test('a stub whose element disagrees with the declared Promise<T> is refused, never retyped', () => {
+            expect (() => print (stubs ('string', '[]any'))).toThrow ();
+        });
+    });
+});
+
+describe ('hx11rfmX2BaseMapLocals', () => {
+    const fs = fs__hx11rfmX2BaseMapLocals;
+    const os = os__hx11rfmX2BaseMapLocals;
+    const path = path__hx11rfmX2BaseMapLocals;
+    // hx11 RFM-X2 (GO-A): `var x any = this.<M>(..)` where <M> is a BaseExchange method whose Go signature
+    // (base, every override, IDerivedExchange) is `map[string]any` prints `var x map[string]any`. The callee
+    // already hands back that map boxed into `any` (a nil map stays a typed nil in the box), so only the
+    // static type narrows: nil compares (`IsEqual(x, nil)` -> `x == nil`) and pushing the local into a list
+    // keep their meaning. The prediction tree keeps its box.
+
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'type MarketInterface = { id: string };\n' +
+        'type Market = MarketInterface | undefined;\n' +
+        'class Exchange {\n' +
+        '    parseMarket (market: Dict): Market { return undefined; }\n' +
+        '    parseBalance (response: Dict): Dict { return {}; }\n' +
+        '    parseWsTrade (trade: Dict, market: Market = undefined): Dict { return {}; }\n' +
+        '    parseTicker (ticker: Dict): Dict { return {}; }\n' +
+        '    parseOther (ticker: Dict): Dict { return {}; }\n' +
+        '    describe (): Dict { return {}; }\n' +
+        '    parseTickers (r: Dict): Dict { return {}; }\n' +
+        '    parseFundingRates (r: Dict): Dict { return {}; }\n' +
+        '    sign (path: string): Dict { return {}; }\n' +
+        '    handleRouteAndParams (name: string, params: Dict): Dict { return {}; }\n' +
+        '    getMarketFromSymbols (symbols: string[]): Market { return undefined; }\n' +
+        '    markets: Dict = undefined;\n' +
+        '    %BODY%\n' +
+        '}\n';
+
+    const config = () => ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+
+    function go (body: string, hooks = true): string {
+        const t = new Transpiler (config ());
+        if (hooks) {
+            installCcxtGoHooks (t.goTranspiler);
+        }
+        return t.transpileGo (PRELUDE.replace ('%BODY%', body)).content;
+    }
+
+    function goAt (relative: string, body: string): string {
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'hx11rfm-x2-'));
+        try {
+            const file = path.join (tmp, relative);
+            fs.mkdirSync (path.dirname (file), { recursive: true });
+            fs.writeFileSync (file, PRELUDE.replace ('%BODY%', body).replace ('class Exchange', 'export class Exchange'));
+            const t = new Transpiler (config ());
+            installCcxtGoHooks (t.goTranspiler);
+            return t.transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (tmp, { recursive: true, force: true });
+        }
+    }
+
+    const NIL_AND_PUSH =
+        '    run (rows: Dict[]): any {\n' +
+        '        const result = [];\n' +
+        '        for (let i = 0; i < rows.length; i++) {\n' +
+        '            const parsed = this.parseMarket (rows[i]);\n' +
+        '            if (parsed !== undefined) {\n' +
+        '                result.push (parsed);\n' +
+        '            }\n' +
+        '        }\n' +
+        '        return result;\n' +
+        '    }\n';
+
+    describe ('hx11 RFM-X2 base map-returning callee locals', () => {
+        test ('a nil-tested local that is pushed into a list is typed and the nil test goes native', () => {
+            const out = go (NIL_AND_PUSH);
+            expect (out).toContain ('var parsed map[string]any = this.ParseMarket(');
+            expect (out).toContain ('if parsed != nil {');
+            expect (out).not.toContain ('IsEqual(parsed, nil)');
+            expect (out).toContain ('append(result, parsed)');
+        });
+
+        test ('the typed local reads natively', () => {
+            const out = go (
+                '    run (m: Dict): any {\n' +
+                '        const parsed = this.parseMarket (m);\n' +
+                '        if (parsed === undefined) { return undefined; }\n' +
+                '        return parsed[\'id\'];\n' +
+                '    }\n');
+            expect (out).toContain ('var parsed map[string]any = this.ParseMarket(');
+            expect (out).toContain ('parsed["id"]');
+        });
+
+        test ('getMarketFromSymbols, parseBalance, parseWsTrade and describe are in the family', () => {
+            const out = go (
+                '    run (symbols: string[], m: Dict): any {\n' +
+                '        const first = this.getMarketFromSymbols (symbols);\n' +
+                '        const balance = this.parseBalance (m);\n' +
+                '        const trade = this.parseWsTrade (m);\n' +
+                '        const description = this.describe ();\n' +
+                '        return [ first, balance, trade, description ];\n' +
+                '    }\n');
+            expect (out).toContain ('var first map[string]any = this.GetMarketFromSymbols(symbols)');
+            expect (out).toContain ('var balance map[string]any = this.ParseBalance(m)');
+            expect (out).toMatch (/var trade map\[string\]any = (MapTyped\()?this\.ParseWsTrade\(m\)/);
+            expect (out).toContain ('var description map[string]any = this.Describe()');
+        });
+
+        test ('generated dict producers (tickers, sign, route params, rates) type their local', () => {
+            const out = go (
+                '    run (m: Dict): any {\n' +
+                '        const tickers = this.parseTickers (m);\n' +
+                '        const rates = this.parseFundingRates (m);\n' +
+                '        const request = this.sign (\'p\');\n' +
+                '        const routed = this.handleRouteAndParams (\'watch\', m);\n' +
+                '        return [ tickers[\'a\'], rates[\'a\'], request[\'url\'], routed[\'a\'] ];\n' +
+                '    }\n');
+            expect (out).toContain ('var tickers map[string]any = this.ParseTickers(m)');
+            expect (out).toContain ('var rates map[string]any = this.ParseFundingRates(m)');
+            expect (out).toContain ('var request map[string]any = this.Sign(');
+            expect (out).toContain ('var routed map[string]any = this.HandleRouteAndParams(');
+        });
+
+        test ('a base book accessor local (this.markets) is typed and its nil test goes native', () => {
+            const body =
+                '    run (): any {\n' +
+                '        const markets = this.markets;\n' +
+                '        if (markets === undefined) { return 1; }\n' +
+                '        return 0;\n' +
+                '    }\n';
+            const out = goAt ('ts/src/base/Exchange.ts', body);
+            expect (out).toContain ('var markets map[string]any = this.Markets');
+            expect (out).toContain ('if markets == nil {');
+            // a same-named member outside the base Exchange is not the book getter
+            expect (go (body)).toContain ('var markets any = this.Markets');
+        });
+
+        test ('a callee outside the family keeps the box', () => {
+            const out = go (
+                '    run (m: Dict): any {\n' +
+                '        const t = this.parseOther (m);\n' +
+                '        return t;\n' +
+                '    }\n');
+            expect (out).not.toContain ('var t map[string]any = this.ParseOther(');
+        });
+
+        test ('a local rebound to another type keeps the box', () => {
+            const out = go (
+                '    run (m: Dict): any {\n' +
+                '        let parsed: any = this.parseMarket (m);\n' +
+                '        parsed = 5;\n' +
+                '        return parsed;\n' +
+                '    }\n');
+            expect (out).not.toContain ('var parsed map[string]any');
+        });
+
+        test ('a local that is the receiver of push keeps the box', () => {
+            const out = go (
+                '    run (m: Dict): any {\n' +
+                '        const parsed: any = this.parseMarket (m);\n' +
+                '        parsed.push (1);\n' +
+                '        return parsed;\n' +
+                '    }\n');
+            expect (out).not.toContain ('var parsed map[string]any');
+        });
+
+        test ('the prediction tree keeps its box, the REST tree does not', () => {
+            const body = NIL_AND_PUSH;
+            expect (goAt ('ts/src/prediction/kalshi.ts', body)).toContain ('var parsed any = this.ParseMarket(');
+            expect (goAt ('ts/src/kalshi.ts', body)).toContain ('var parsed map[string]any = this.ParseMarket(');
+        });
+    });
+});
+
+describe ('hx11w8GoNativeDelete', () => {
+    let transpiler: Transpiler;
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    const go = (body: string) => transpiler.transpileGo(
+        'class E {\n    ohlcvs: any;\n    safeString(a, b, c?): string | undefined { return a; }\n    m(symbol: string, id: string | undefined) {\n' + body + '\n    }\n}').content;
+
+    describe('go delete statement', () => {
+        test('a map local with a string key and an ohlcvs book delete natively', () => {
+            const out = go("const s = 'BTC'; const m = {}; delete m[s]; delete this.ohlcvs[s]['1m'];");
+            expect(out).toContain('delete(m, s)');
+            expect(out).toContain('delete(this.Ohlcvs[s], "1m")');
+            expect(out).not.toContain('Remove(');
+        });
+        test('a narrowed *string key derefs, an unproven one keeps the helper', () => {
+            const narrowed = go("const k = this.safeString({}, 'k'); const m = {}; if (k !== undefined) { delete m[k]; }");
+            expect(narrowed).toContain('delete(m, *k)');
+            const unproven = go("const k = this.safeString({}, 'k'); const m = {}; delete m[k];");
+            expect(unproven).toContain('Remove(m, k)');
+        });
+        test('any receivers, any keys and delete in expression position keep the helper', () => {
+            expect(go('delete this.ohlcvs[id];')).toContain('Remove(');
+            expect(go('const m = this.safeString({}, "x"); delete m[symbol];')).toContain('Remove(m, symbol)');
+            expect(go('const m = {}; delete m[symbol + "x"];')).toContain('Remove(');
+            expect(go('const m = {}; const ok = delete m[symbol];')).toContain('Remove(m, symbol)');
+        });
+    });
+});
+
+describe ('hx11w9BookDeltaParam', () => {
+    // handleBookDelta / handleBookDeltas declare `orderbook: WsOrderBook`: the base and every override print the book
+    // interface, and the side reads on that parameter print its accessors. A forwarding pro handler follows its callee.
+
+    const BOOK = {
+        'classes': [ 'OrderBook' ],
+        'constructors': [ 'orderBook' ],
+        'cacheReaders': [ 'safeValue' ],
+        'type': 'OrderBookInterface',
+        'sideType': 'IOrderBookSide',
+        'unbox': 'OrderBookTyped',
+        'sides': { 'asks': 'GetAsks', 'bids': 'GetBids' },
+    };
+
+    const HEAD = 'type Dict = { [key: string]: any };\n'
+        + 'class Side { store (p: number, a: number) { return p + a; } }\n'
+        + 'class OrderBook { asks: Side; bids: Side; reset (x: Dict) { return x; } }\n'
+        + 'type WsOrderBook = OrderBook;\n';
+
+    const BASE = HEAD
+        + 'class Exchange {\n'
+        + '    orderBook (snapshot = {}): OrderBook { return new OrderBook (); }\n'
+        + '    safeValue (o: any, k: string): any { return o[k]; }\n'
+        + '    handleBookDeltas (orderbook: WsOrderBook, deltas: any[]) {\n'
+        + '        for (let i = 0; i < deltas.length; i++) {\n'
+        + '            this.handleBookDelta (orderbook, this.safeValue (deltas, String (i)));\n'
+        + '        }\n'
+        + '    }\n'
+        + '    handleBookDelta (orderbook: WsOrderBook, delta: any) {\n'
+        + '        throw new Error (\'not supported\');\n'
+        + '    }\n'
+        + '}\n';
+
+    const print = (relative: string, source: string, book: any = BOOK): string => {
+        const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'bookdelta-'));
+        try {
+            const file = path.join (dir, 'ts', 'src', relative);
+            fs.mkdirSync (path.dirname (file), { 'recursive': true });
+            fs.writeFileSync (file, source);
+            const config: any = { 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+            if (book !== null) {
+                config.go.orderBook = book;
+            }
+            return new Transpiler (config).transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (dir, { 'recursive': true, 'force': true });
+        }
+    };
+
+    const PRO = HEAD
+        + 'class Exchange {\n'
+        + '    orderbooks: { [key: string]: OrderBook } = {};\n'
+        + '    orderBook (snapshot = {}): OrderBook { return new OrderBook (); }\n'
+        + '    safeValue (o: any, k: string): any { return o[k]; }\n'
+        + '    handleBookDelta (orderbook: WsOrderBook, delta: any) {}\n'
+        + '}\n'
+        + 'class ex extends Exchange {\n'
+        + '    override handleBookDelta (orderbook: WsOrderBook, delta: any) {\n'
+        + '        const bids = orderbook[\'bids\'];\n'
+        + '        const asks = orderbook[\'asks\'];\n'
+        + '        bids.store (1, 2);\n'
+        + '        asks.store (1, 2);\n'
+        + '    }\n'
+        + '    handleOrderBookMessage (client: any, message: Dict, orderbook: WsOrderBook) {\n'
+        + '        this.handleBookDelta (orderbook, message);\n'
+        + '    }\n'
+        + '    fromCache (symbol: string) {\n'
+        + '        const book: WsOrderBook = this.safeValue (this.orderbooks, symbol);\n'
+        + '        this.handleBookDelta (book, 1);\n'
+        + '    }\n'
+        + '    handleTyped (client: any, message: Dict) {\n'
+        + '        const book = this.orderBook ();\n'
+        + '        this.handleOrderBookMessage (client, message, book);\n'
+        + '    }\n'
+        + '}\n';
+
+    describe('handleBookDelta book parameter', () => {
+        test('the base methods print the book interface (fails on the base printer)', () => {
+            const out = print ('base/Exchange.ts', BASE);
+            expect (out).toContain ('HandleBookDeltas(orderbook OrderBookInterface, deltas any)');
+            expect (out).toContain ('HandleBookDelta(orderbook OrderBookInterface, delta any)');
+        });
+
+        test('an override prints the book interface and its side reads the accessors (fails on the base printer)', () => {
+            const out = print ('pro/ex.ts', PRO);
+            expect (out).toContain ('HandleBookDelta(orderbook OrderBookInterface, delta any)');
+            expect (out).toContain ('orderbook.GetBids()');
+            expect (out).toContain ('orderbook.GetAsks()');
+            expect (out).not.toContain ('GetValue(orderbook, "bids")');
+        });
+
+        test('a handler that forwards its book follows the callee when every caller passes a book', () => {
+            const out = print ('pro/ex.ts', PRO);
+            expect (out).toContain ('HandleOrderBookMessage(client any, message map[string]any, orderbook OrderBookInterface)');
+        });
+
+        test('a handler with a caller that does not pass a book keeps the box', () => {
+            const out = print ('pro/ex.ts', PRO.replace ('this.handleOrderBookMessage (client, message, book);', 'this.handleOrderBookMessage (client, message, message);'));
+            expect (out).toContain ('HandleOrderBookMessage(client any, message map[string]any, orderbook any)');
+            expect (out).toContain ('HandleBookDelta(orderbook OrderBookInterface, delta any)');
+        });
+
+        test('a book parameter written with a foreign value keeps the box', () => {
+            const out = print ('pro/ex.ts', PRO.replace ('const bids = orderbook[\'bids\'];', 'orderbook = undefined;\n        const bids = orderbook[\'bids\'];'));
+            expect (out).toContain ('func (this *ex) HandleBookDelta(orderbook any, delta any)');
+            expect (out).toContain ('GetValue(orderbook, "bids")');
+        });
+
+        test('without the book config nothing changes', () => {
+            const out = print ('base/Exchange.ts', BASE, null);
+            expect (out).toContain ('HandleBookDelta(orderbook any, delta any)');
+            expect (out).not.toContain ('OrderBookInterface');
+        });
+    });
+});
+
+describe ('hx11w9D1NilProvenStringArg', () => {
+    let transpiler: Transpiler;
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    const go = (body: string) => transpiler.transpileGo(
+        'class B {\n    safeString(a, b, c?): string | undefined { return a; }\n}\nclass E extends B {\n    take(s: string): string { return s; }\n    m(x: string | undefined) {\n' + body + '\n    }\n}').content;
+
+    describe('go *string local passed to a string parameter', () => {
+        test('a checker-narrowed local derefs at the call', () => {
+            const out = go("const k = this.safeString({}, 'k'); if (k !== undefined) { this.take(k); }");
+            expect(out).toContain('this.Take(*k)');
+        });
+        test('an unnarrowed local keeps the pointer', () => {
+            const out = go("const k = this.safeString({}, 'k'); this.take(k);");
+            expect(out).not.toContain('this.Take(*k)');
+        });
+    });
+});
+
+describe ('hx11w9GB01DictCalls', () => {
+    const BASE =
+        'type Dict = { [key: string]: any };\n' +
+        'export class Exchange {\n' +
+        '    safeDict (a, b, c?) { return undefined; }\n' +
+        '    mergeBalanceAccount (result: Dict, code: string, account: Dict): Dict {\n' +
+        '        result[code] = account;\n' +
+        '        return result;\n' +
+        '    }\n' +
+        '}\n';
+
+    const venue = (helperSignature: string) =>
+        "import { Exchange } from './base/Exchange';\n" +
+        'type Dict = { [key: string]: any };\n' +
+        'export class ex extends Exchange {\n' +
+        '    ' + helperSignature + ' {\n' +
+        '        return entry;\n' +
+        '    }\n' +
+        '    run (base: Dict) {\n' +
+        '        let result: Dict = {};\n' +
+        "        result = this.mergeBalanceAccount (result, 'BTC', this.parseBalanceHelper (base));\n" +
+        '        return result;\n' +
+        '    }\n' +
+        '}\n';
+
+    const baseSignature = (name: string): string => {
+        const dir = nodepath.join(__dirname, 'files', name, 'ts', 'src');
+        nodefs.mkdirSync(nodepath.join(dir, 'base'), { recursive: true });
+        nodefs.writeFileSync(nodepath.join(dir, 'base', 'Exchange.ts'), BASE);
+        return dir;
+    };
+
+    const printBase = (name: string, helperSignature: string): string => {
+        const dir = baseSignature(name);
+        nodefs.writeFileSync(nodepath.join(dir, 'ex.ts'), venue(helperSignature));
+        const t = new Transpiler({ verbose: false, go: {} });
+        installCcxtGoDictParams(t.goTranspiler);
+        return t.transpileGoByPath(nodepath.join(dir, 'base', 'Exchange.ts')).content;
+    };
+
+    describe('hx11 w9 GB01: calls to same-tree methods declared : Dict', () => {
+        afterAll(() => {
+            nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-gb01-dict'), { recursive: true, force: true });
+            nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-gb01-any'), { recursive: true, force: true });
+        });
+
+        test('a call to a method declared : Dict proves the tabled map parameters', () => {
+            const out = printBase('tmp-gb01-dict', 'parseBalanceHelper (entry: Dict): Dict');
+            expect(out).toContain('MergeBalanceAccount(result map[string]any, code any, account any)');
+        });
+
+        test('a call to a method without a Dict return type keeps the box', () => {
+            const out = printBase('tmp-gb01-any', 'parseBalanceHelper (entry: Dict)');
+            expect(out).toContain('MergeBalanceAccount(result map[string]any, code any, account any)');
+        });
+    });
+});
+
+describe ('rdGo2WsCache', () => {
+    // RD-GO-2: the base ws caches belong to the dispatch loop; code that runs off it asks the owner. Every rule is keyed on
+    // the checker-resolved BaseExchange field and on the kind of the enclosing method, not on printed text.
+    const t = (install = true) => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        if (install) { installRdGo2WsCache (x.goTranspiler); }
+        return x;
+    };
+    const BASE = [
+        'class BaseExchange {',
+        '    orderbooks: any = {};',
+        '    balance: any = {};',
+        '    fundingRates: any = {};',
+        '    safeValue (d: any, k: string) { return d[k]; }',
+        '    safeDict (d: any, k: string) { return d[k]; }',
+        '    filterByArray (d: any, k: string, v: any) { return d; }',
+        '    extend (a: any, b: any) { return a; }',
+        '    createSafeDictionary (x: boolean = false): any { return {}; }',
+        '    cleanWsData () {',
+        '        this.balance = this.createSafeDictionary (true);',
+        '        this.orderbooks = this.createSafeDictionary (true);',
+        '    }',
+        '}',
+        '',
+    ].join ('\n');
+    const venue = (body: string) => BASE + 'class venue extends BaseExchange {\n' + body + '}\n';
+    const go = (body: string, install = true) => t (install).transpileGo (venue (body)).content;
+
+    describe('RD-GO-2 ws cache ownership', () => {
+        test('an async body asks the owner for membership, reads and writes', () => {
+            const out = go ('    async watchOrderBook (symbol: string): Promise<any> {\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = {};\n        }\n        return this.orderbooks[symbol];\n    }\n');
+            expect (out).toContain ('if !this.WsCacheHas("Orderbooks", symbol) {');
+            expect (out).toContain ('this.WsCacheSet("Orderbooks", symbol, ');
+            expect (out).toContain ('this.WsCacheGet("Orderbooks", symbol)');
+            expect (out).not.toContain ('InOp(this.Orderbooks');
+        });
+        test('a sync handler keeps the plain map', () => {
+            const out = go ('    handleOrderBook (symbol: string) {\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = {};\n        }\n    }\n');
+            const handler = out.substring (out.indexOf ('HandleOrderBook'));
+            expect (handler).not.toContain ('WsCache');
+            expect (handler).toContain ('InOp(this.Orderbooks, symbol)');
+            expect (handler).toContain ('AddElementToObject(this.Orderbooks, symbol');
+        });
+        test('safeValue and safeDict over a cache read through the owner', () => {
+            const out = go ('    async fetchOrderBookSnapshot (symbol: string): Promise<any> {\n        const a = this.safeValue (this.orderbooks, symbol);\n        const b = this.safeDict (this.orderbooks, symbol);\n        return [ a, b ];\n    }\n');
+            expect (out).toContain ('this.WsCacheGet("Orderbooks", symbol)');
+            expect (out).not.toContain ('this.SafeValue(this.WsCache');
+        });
+        test('walking a whole cache reads a snapshot', () => {
+            const out = go ('    async watchFundingRates (symbols: string): Promise<any> {\n        return this.filterByArray (this.fundingRates, \'symbol\', symbols);\n    }\n');
+            expect (out).toContain ('this.FilterByArray(this.WsCacheSnapshot("FundingRates"), "symbol", symbols)');
+        });
+        test('balance entries go through the scalar twins and a whole-map write replaces the contents', () => {
+            const out = go ('    setBalanceCache (type: string) {\n        if (!(type in this.balance)) {\n            this.balance[type] = {};\n        }\n    }\n    async loadBalanceSnapshot (type: string, response: any) {\n        this.balance[type] = this.extend (response, this.safeDict (this.balance, type));\n        this.balance = this.extend (response, this.balance);\n        return this.balance[type];\n    }\n');
+            expect (out).toContain ('this.WsCacheSetScalar("Balance", typeVar, map[string]any{})');
+            expect (out).toContain ('this.WsCacheSetScalar("Balance", typeVar, this.Extend(response, this.SafeDict(this.WsCacheSnapshot("Balance"), typeVar');
+            expect (out).toContain ('this.WsCacheReplace("Balance", this.Extend(response, this.WsCacheSnapshot("Balance")))');
+            expect (out).toContain ('this.WsCacheGetScalar("Balance", typeVar)');
+        });
+        test('cleanWsData resets each cache through the owner', () => {
+            const out = t ().transpileGo (BASE).content;
+            expect (out).toContain ('\tthis.WsCacheReset("Balance")\n\tthis.WsCacheReset("Orderbooks")');
+            expect (out).not.toContain ('this.CreateSafeDictionary(true)');
+        });
+        test('the same field name on an unrelated class is untouched', () => {
+            const src = 'class Other {\n    orderbooks: any = {};\n    async watchX (s: string) {\n        return s in this.orderbooks;\n    }\n}\n';
+            const out = t ().transpileGo (src).content;
+            expect (out).not.toContain ('WsCache');
+        });
+        test('fails without the hook (the printer keeps the plain map operations)', () => {
+            const body = '    async watchOrderBook (symbol: string): Promise<any> {\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = {};\n        }\n        return this.orderbooks[symbol];\n    }\n';
+            const out = go (body, false);
+            expect (out).not.toContain ('WsCacheHas');
+            expect (out).not.toContain ('WsCacheSet');
+            expect (t (false).transpileGo (BASE).content).not.toContain ('WsCacheReset');
+        });
+    });
+});
+
+describe ('rdGo3MapTypedIdentity', () => {
+    // RD-GO-3: a MapTyped wrap around an operand that is already map[string]any by declaration is the identity,
+    // so the printer does not emit it (was the ccxt build passes hx10w6-G11 / hx10w7-G14).
+    const BASE = [
+        'type Dict = { [key: string]: any };',
+        'type Str = string | undefined;',
+        'class BaseExchange {',
+        '    parsePosition (position: Dict, market: any = undefined): Dict { return position; }',
+        '    handleMarginModeAndParams (methodName: string, params: Dict = {}, defaultValue: Str = undefined): [Str, Dict] { return [ defaultValue, params ]; }',
+        '}',
+    ].join ('\n');
+    const print = (body: string, install = true): string => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        if (install) { installCcxtGoLocalTypes (x.goTranspiler); }
+        const out = x.transpileGo (BASE + '\n' + body).content;
+        return out.slice (out.indexOf ('func (this *Ex)'));
+    };
+
+    describe ('RD-GO-3 MapTyped identity wraps are not printed', () => {
+        test('a local from a callee that prints map[string]any is declared without the wrap', () => {
+            const out = print ([
+                'class Ex extends BaseExchange {',
+                '    f (first: Dict, market: any) {',
+                '        const position = this.parsePosition (first, market);',
+                '        position[\'timestamp\'] = 1;',
+                '        return position;',
+                '    }',
+                '}',
+            ].join ('\n'));
+            expect (out).toContain ('var position map[string]any = this.ParsePosition(first, market)');
+            expect (out).not.toContain ('MapTyped(');
+        });
+        test('the params element of a joined pair returns as the map it is', () => {
+            const out = print ([
+                'class Ex extends BaseExchange {',
+                '    handleMarginModeAndParams (methodName: string, params: Dict = {}, defaultValue: Str = undefined) {',
+                '        const [ marginMode, paramsMarginMode ] = super.handleMarginModeAndParams (methodName, params, defaultValue);',
+                '        if (marginMode === undefined) {',
+                '            return [ \'cross\', paramsMarginMode ];',
+                '        }',
+                '        return [ marginMode, paramsMarginMode ];',
+                '    }',
+                '}',
+            ].join ('\n'));
+            expect (out).toContain ('return SafeStringPtr(marginMode), paramsMarginMode');
+            expect (out).not.toContain ('MapTyped(');
+        });
+        test('a params element that is rebound keeps the wrap', () => {
+            const out = print ([
+                'class Ex extends BaseExchange {',
+                '    handleMarginModeAndParams (methodName: string, params: Dict = {}, defaultValue: Str = undefined) {',
+                '        let [ marginMode, paramsMarginMode ] = super.handleMarginModeAndParams (methodName, params, defaultValue);',
+                '        paramsMarginMode = params;',
+                '        return [ marginMode, paramsMarginMode ];',
+                '    }',
+                '}',
+            ].join ('\n'));
+            expect (out).not.toContain ('return SafeStringPtr(marginMode), paramsMarginMode');
+        });
+    });
+});
+
+describe ('rf6aMapLocals', () => {
+    // RF-go-6-A: type-keyed Go map-local rules (a Dict local seeded from safeDict is a map[string]any read with the
+    // typed twin; an element read on a map[string]any receiver with a Go string key is the native index).
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'type Str = string | undefined;\n' +
+        'export class Exchange {\n' +
+        '    options: Dict;\n' +
+        '    fees: Dict;\n' +
+        '    markets: Dict;\n' +
+        '    safeDict (a: any, k: any, d: any = undefined): Dict { return a; }\n' +
+        '    safeDict2 (a: any, k: any, k2: any, d: any = undefined): Dict { return a; }\n' +
+        '    safeString (a: any, k: any, d: any = undefined): Str { return a; }\n' +
+        '    safeValue (a: any, k: any, d: any = undefined): any { return a; }\n' +
+        '    extend (a: any, b: any): Dict { return a; }\n';
+
+    const run = (members: string, dir = 'ts/src'): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rf6a-'));
+        try {
+            const src = path.join(tmp, dir);
+            fs.mkdirSync(src, { recursive: true });
+            const file = path.join(src, 'x.ts');
+            fs.writeFileSync(file, PRELUDE + members + '}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+
+    describe('RF-go-6-A: safeDict-seeded Dict locals', () => {
+        test('a never-nil default types the local and reads through SafeDictMap', () => {
+            const out = run(
+                '    f (p: Dict): any {\n' +
+                '        const d = this.safeDict (p, "data", {});\n' +
+                '        d["a"] = 1;\n' +
+                '        const x = this.safeString (d, "k");\n' +
+                '        return this.extend (d, {});\n' +
+                '    }\n');
+            expect(out).toContain('var d map[string]any = this.SafeDictMap(p, "data", map[string]any{})');
+        });
+        test('safeDict2 and a nested never-nil default', () => {
+            const out = run(
+                '    f (p: Dict): any {\n' +
+                '        const a = this.safeDict2 (p, "a", "b", {});\n' +
+                '        const b = this.safeDict (p, "data", this.safeDict (p, 0, {}));\n' +
+                '        return [ a, b ];\n' +
+                '    }\n');
+            expect(out).toContain('var a map[string]any = this.SafeDict2Map(p, "a", "b", map[string]any{})');
+            expect(out).toContain('var b map[string]any = this.SafeDictMap(p, "data", this.SafeDict(p, 0, map[string]any{}))');
+        });
+        test('a rebinding to another never-nil safeDict keeps one map type', () => {
+            const out = run(
+                '    f (p: Dict, c: boolean): any {\n' +
+                '        let d = this.safeDict (this.fees, "a", {});\n' +
+                '        if (c) {\n' +
+                '            d = this.safeDict (this.fees, "b", {});\n' +
+                '        }\n' +
+                '        return this.safeString (d, "k");\n' +
+                '    }\n');
+            expect(out).toContain('var d map[string]any = this.SafeDictMap(this.Fees, "a", map[string]any{})');
+            expect(out).toContain('d = this.SafeDictMap(this.Fees, "b", map[string]any{})');
+        });
+        test('a rebinding to anything else, an assertion-like use, an address or a non-nil compare keep the box', () => {
+            for (const body of [
+                'd = this.extend (d, {});\n return 1;',
+                'const q = d.foo; return q;',
+                'if (d === p) { return 1; }\n return 2;',
+                'const q = typeof d; return q;',
+                'return Array.isArray (d);',
+            ]) {
+                const out = run('    f (p: Dict): any {\n        let d = this.safeDict (p, "data", {});\n ' + body + '\n    }\n');
+                expect(out).not.toContain('SafeDictMap');
+            }
+        });
+        test('a computed default or a non-Dict-field container keeps the box', () => {
+            expect(run('    f (p: Dict): any {\n        const d = this.safeDict (p, "data", this.fees);\n        return d;\n    }\n')).not.toContain('SafeDictMap');
+            expect(run('    f (p: Dict): any {\n        const d = this.safeDict (this.markets, "data", {});\n        return d;\n    }\n')).not.toContain('SafeDictMap');
+        });
+        test('no default: a nil test, a safe read and a guarded block type the local, a bare use does not', () => {
+            const typed = run(
+                '    f (p: Dict): any {\n' +
+                '        const d = this.safeDict (p, "data");\n' +
+                '        if (d !== undefined) {\n' +
+                '            d["a"] = 1;\n' +
+                '            return this.safeString (d, "k");\n' +
+                '        }\n' +
+                '        return undefined;\n' +
+                '    }\n');
+            expect(typed).toContain('var d map[string]any = this.SafeDictMap(p, "data")');
+            const bare = run('    f (p: Dict): any {\n        const d = this.safeDict (p, "data");\n        return d;\n    }\n');
+            expect(bare).not.toContain('SafeDictMap');
+            const write = run('    f (p: Dict): any {\n        const d = this.safeDict (p, "data");\n        d["a"] = 1;\n        return 1;\n    }\n');
+            expect(write).not.toContain('SafeDictMap');
+        });
+        test('ws sources type a Dict field of this and a decoded-message receiver, and a .length read keeps the map', () => {
+            const body = '    f (message: Dict): any {\n        const o = this.safeDict (this.options, "ws", {});\n        const d = this.safeDict (message, "data", {});\n        return [ o, d["x"], d.length ];\n    }\n';
+            const out = run(body, 'ts/src/pro');
+            expect(out).toContain('var o map[string]any = this.SafeDictMap(this.Options, "ws", map[string]any{})');
+            expect(out).toContain('var d map[string]any = this.SafeDictMap(message, "data", map[string]any{})');
+            const member = run('    f (message: Dict): any {\n        const d = this.safeDict (message, "data", {});\n        return d.foo;\n    }\n', 'ts/src/pro');
+            expect(member).not.toContain('SafeDictMap');
+        });
+        test('prediction and base sources keep the box', () => {
+            const body = '    f (p: Dict): any {\n        const d = this.safeDict (p, "data", {});\n        return this.extend (d, {});\n    }\n';
+            expect(run(body, 'ts/src/prediction')).not.toContain('SafeDictMap');
+            expect(run(body, 'ts/src')).toContain('SafeDictMap');
+        });
+    });
+
+    describe('RF-go-6-A: element reads on map[string]any receivers', () => {
+        test('a defaulted Dict parameter read with a literal key is the native index', () => {
+            const out = run(
+                '    f (symbol: string, config: Dict = {}): any {\n' +
+                '        return config["noCoin"];\n' +
+                '    }\n');
+            expect(out).toContain('return config["noCoin"]');
+            expect(out).not.toContain('GetValue(config');
+        });
+        test('a map local with only pointer-free writes reads natively with a string-typed key', () => {
+            const out = run(
+                '    f (response: Dict): any {\n' +
+                '        const balances = {};\n' +
+                '        const id = "a";\n' +
+                '        balances[id] = 1;\n' +
+                '        return balances[id];\n' +
+                '    }\n');
+            expect(out).toContain('return balances[id]');
+        });
+        test('a pointer-valued write, a rebinding or a delete keeps the helper', () => {
+            const ptr = run('    f (p: Dict, m: Dict = {}): any {\n        m["a"] = this.safeString (p, "a");\n        return m["b"];\n    }\n');
+            expect(ptr).toContain('GetValue(m, "b")');
+            const rebind = run('    f (p: Dict, m: Dict = {}): any {\n        m = this.extend (p, {});\n        return m["b"];\n    }\n');
+            expect(rebind).toContain('GetValue(m, "b")');
+            const del = run('    f (p: Dict, m: Dict = {}): any {\n        delete m["a"];\n        return m["b"];\n    }\n');
+            expect(del).toContain('GetValue(m, "b")');
+            const plain = run('    f (p: Dict, m: Dict = {}): any {\n        m["a"] = 1;\n        return m["b"];\n    }\n');
+            expect(plain).toContain('return m["b"]');
+        });
+        test('a compared element, an untyped key and a non-map receiver keep the helper', () => {
+            const compared = run('    f (c: Dict = {}): any {\n        if (c["a"] === true) {\n            return 1;\n        }\n        return 2;\n    }\n');
+            expect(compared).toContain('GetValue(c, "a")');
+            const anyKey = run('    f (k: any, c: Dict = {}): any {\n        return c[k];\n    }\n');
+            expect(anyKey).toContain('GetValue(c, k)');
+            const list = run('    f (p: Dict): any {\n        const l = [ 1, 2 ];\n        return l[0];\n    }\n');
+            expect(list).not.toContain('l["0"]');
+        });
+    });
+});
+
+describe ('rfGo5OwnedTables', () => {
+    // RF-go-5: base-class tables owned by one goroutine print publisher/accessor calls, keyed on the checker-resolved
+    // declaring class (no per-exchange name list in ccxt).
+    const t = (install = true) => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        if (install) { installRfGo5OwnedTables (x.goTranspiler); }
+        return x;
+    };
+    const SRC = [
+        'class BaseExchange {',
+        '    baseCurrencies: any = undefined;',
+        '    transactions: any = {};',
+        '    other: any = undefined;',
+        '    mapToSafeMap (d: any) { return d; }',
+        '    createSafeDictionary () { return {}; }',
+        '    m (x: any, src: BaseExchange, anyOther: any) {',
+        '        this.baseCurrencies = this.mapToSafeMap (x);',
+        '        this.transactions = this.createSafeDictionary ();',
+        '        this.baseCurrencies = src.baseCurrencies;',
+        '        this.baseCurrencies = anyOther.baseCurrencies;',
+        '        this.other = src.other;',
+        '        const y = this.baseCurrencies;',
+        '        return y;',
+        '    }',
+        '}',
+        '',
+    ].join ('\n');
+
+    describe('RF-go-5 owned base tables', () => {
+        test('writes publish, reads use the accessor; other fields untouched', () => {
+            const out = t ().transpileGo (SRC).content;
+            expect (out).toContain ('this.PublishBaseCurrencies(x)');
+            expect (out).toContain ('this.PublishTransactions(map[string]any{})');
+            expect (out).toContain ('this.PublishBaseCurrencies(src.BaseCurrenciesTable())');
+            expect (out).toContain ('this.PublishBaseCurrencies(anyOther.BaseCurrenciesTable())');
+            expect (out).toContain ('var y any = this.BaseCurrenciesTable()');
+            expect (out).toContain ('this.Other = src.Other');
+        });
+        test('fails without the hook (base printer keeps the field writes)', () => {
+            const out = t (false).transpileGo (SRC).content;
+            expect (out).not.toContain ('Publish');
+            expect (out).toContain ('this.BaseCurrencies = this.MapToSafeMap(x)');
+        });
+        test('same field name on an unrelated class is untouched', () => {
+            const src = 'class Other {\n    baseCurrencies: any;\n    m (x: any) {\n        this.baseCurrencies = x;\n    }\n}\n';
+            const out = t ().transpileGo (src).content;
+            expect (out).toContain ('this.BaseCurrencies = x');
+            expect (out).not.toContain ('Publish');
+        });
+    });
+});
+
+describe ('rfGo6bNativeStoreFields', () => {
+    // RF-go-6-B: element write on a hand-written BaseExchange map field (type table passed by the embedder)
+    const TABLE = {
+        'balance': {
+            'type': 'map[string]any',
+            'freshMapCalls': [ 'extend', 'createSafeDictionary' ],
+            'selfCalls': [ 'safeBalance' ],
+            'plainCalls': [ 'iso8601' ],
+            'emptyDefaultCalls': [ 'safeDict', 'safeList' ],
+            'userPathMethods': '^(?:setBalanceCache|cleanWsData)$',
+        },
+    };
+    const HEAD = 'type Dict = { [key: string]: any };\n'
+        + 'class Exchange {\n'
+        + '    balance: Dict = {};\n'
+        + '    iso8601 (x: any): string | undefined { return undefined; }\n'
+        + '    safeString (d: any, k: any, def: any = undefined): string | undefined { return d; }\n'
+        + '    safeCurrencyCode (c: any): string | undefined { return c; }\n'
+        + '    safeDict (d: any, k: any, def: any = undefined): Dict | undefined { return d; }\n'
+        + '    safeList (d: any, k: any, def: any = undefined): any[] | undefined { return d; }\n'
+        + '    safeBalance (b: any): any { return b; }\n'
+        + '    extend (a: any, b: any): Dict { return a; }\n'
+        + '    spawn (f: any, ...a: any[]): void {}\n'
+        + '    async fetchSomething (): Promise<any> { return {}; }\n'
+        + '    reset (): void { this.balance = {}; this.balance = this.safeBalance (this.balance); }\n';
+    const print = (body: string, table: any = TABLE, extra = ''): string => {
+        const t = new Transpiler ({ 'verbose': false, 'go': { 'nativeStoreFields': table, 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileGo (HEAD + extra + '    handle (message: Dict, timestamp: number) {\n' + body + '\n    }\n}\n').content;
+    };
+
+    describe('RF-go-6-B native store on a tabled map field', () => {
+        test('a literal key and a plain value store natively (fails on the base printer: no table)', () => {
+            const withTable = print ("this.balance['info'] = { 'a': 1 }; this.balance['datetime'] = 'x';");
+            expect (withTable).toContain ('this.Balance["datetime"] = "x"');
+            expect (print ("this.balance['datetime'] = 'x';", {})).toContain ('AddElementToObject(this.Balance, "datetime", "x")');
+        });
+        test('a pointer value and an unproven any value keep the helper', () => {
+            expect (print ("this.balance['datetime'] = this.safeString (message, 'd');")).toContain ('AddElementToObject(this.Balance, "datetime"');
+            expect (print ("const ts = this.safeString (message, 'd'); this.balance['datetime'] = ts;")).toContain ('AddElementToObject(this.Balance, "datetime"');
+        });
+        test('an empty-default accessor call is a plain value', () => {
+            expect (print ("this.balance['info'] = this.safeList (message, 'data', []);")).toContain ('this.Balance["info"] = this.SafeList(message, "data", []any{})');
+            expect (print ("this.balance['info'] = this.safeList (message, 'data');")).toContain ('AddElementToObject(this.Balance, "info"');
+        });
+        test('a *string key writes [*k] behind its nil guard, born expanded when unguarded', () => {
+            const guarded = print ("const code = this.safeString (message, 'c'); if (code !== undefined) { this.balance[code] = {}; }");
+            expect (guarded).toContain ('this.Balance[*code] = map[string]any{}');
+            expect (guarded).not.toContain ('if code != nil {\n\t\tif code != nil');
+            const open = print ("const code = this.safeString (message, 'c'); this.balance[code] = {};");
+            expect (open).toContain ('if code != nil {\n\t\tthis.Balance[*code] = map[string]any{}\n\t}');
+        });
+        test('a field written with a non-fresh value anywhere in the file keeps the helper', () => {
+            const out = print ("this.balance['info'] = message;", TABLE, '    other (b: any) { this.balance = b; }\n');
+            expect (out).toContain ('AddElementToObject(this.Balance, "info", message)');
+        });
+        test('user-path methods, spawners and async bodies keep the helper', () => {
+            const user = print ('', TABLE, "    setBalanceCache (message: Dict) { this.balance['info'] = message; }\n");
+            expect (user).toContain ('AddElementToObject(this.Balance, "info", message)');
+            const spawner = print ('', TABLE, "    loader (message: Dict) { this.balance['info'] = message; this.spawn (this.fetchSomething); }\n");
+            expect (spawner).toContain ('AddElementToObject(this.Balance, "info", message)');
+            const asyncBody = print ('', TABLE, "    async loadIt (message: Dict) { this.balance['info'] = message; }\n");
+            expect (asyncBody).toContain ('AddElementToObject(this.Balance, "info", message)');
+        });
+        test('an untabled field and an entry store keep the helper', () => {
+            const other = print ("this.balance['info'] = message;", { 'positions': TABLE['balance'] });
+            expect (other).toContain ('AddElementToObject(this.Balance, "info", message)');
+            const entry = print ("this.balance['spot']['info'] = message;");
+            expect (entry).not.toContain ('this.Balance["spot"]["info"] =');
+        });
+    });
+});
+
+describe ('rfgo6cListReads', () => {
+    // RF-go-6-C: Go native reads on proven list receivers (moved from ccxt build/hx10w2-G02.ts)
+    const SRC = 'type Trade = { id: string };\n'
+        + 'class Exchange {\n'
+        + '    parseTrades (trades: any[], market: any = undefined): Trade[] { return []; }\n'
+        + '    parseThing (x: any): any { return x; }\n'
+        + '    safeList (o: any, k: any, d: any = undefined): any[] { return d; }\n'
+        + '    f (p: any): any {\n'
+        + '        const trades = this.parseTrades (p);\n'
+        + '        const n = trades.length;\n'
+        + '        const thing = this.parseThing (p);\n'
+        + '        const m = thing.length;\n'
+        + '        return n + m;\n'
+        + '    }\n'
+        + '    g (p: any): any {\n'
+        + '        const keys: string[] = Object.keys (p);\n'
+        + '        let out = \'\';\n'
+        + '        for (let i = 0; i < keys.length; i++) {\n'
+        + '            out = keys[i];\n'
+        + '        }\n'
+        + '        return out;\n'
+        + '    }\n'
+        + '    h (p: any): any {\n'
+        + '        const keys: string[] = Object.keys (p);\n'
+        + '        let out = \'\';\n'
+        + '        for (let i = 0; i < keys.length; i++) {\n'
+        + '            i = i + 1;\n'
+        + '            out = keys[i];\n'
+        + '        }\n'
+        + '        for (let j = 0; j < keys.length; j++) {\n'
+        + '            keys.push (\'x\');\n'
+        + '            out = keys[j];\n'
+        + '        }\n'
+        + '        for (let k = 0; k < 10; k++) {\n'
+        + '            out = keys[k];\n'
+        + '        }\n'
+        + '        return out;\n'
+        + '    }\n'
+        + '    k (p: any): any {\n'
+        + '        const syms = Object.keys (p) as string[];\n'
+        + '        const n = syms.length;\n'
+        + '        let out = \'\';\n'
+        + '        for (let i = 0; i < n; i++) {\n'
+        + '            out = syms[i];\n'
+        + '        }\n'
+        + '        return out;\n'
+        + '    }\n'
+        + '    m (p: any): any {\n'
+        + '        let symbols: string[] = undefined;\n'
+        + '        if (p !== undefined) {\n'
+        + '            symbols = [ p ];\n'
+        + '        }\n'
+        + '        return this.parseThing (symbols);\n'
+        + '    }\n'
+        + '    n (p: any): any {\n'
+        + '        let symbols: string[] = undefined;\n'
+        + '        if (p !== undefined) {\n'
+        + '            symbols = [ p ];\n'
+        + '        }\n'
+        + '        if (symbols === undefined) {\n'
+        + '            return 0;\n'
+        + '        }\n'
+        + '        return this.parseThing (symbols);\n'
+        + '    }\n'
+        + '    q (p: any): any {\n'
+        + '        let a: any[] = undefined;\n'
+        + '        a = [ p ];\n'
+        + '        if (a === undefined) {\n'
+        + '            return 0;\n'
+        + '        }\n'
+        + '        const b = a;\n'
+        + '        return b.length;\n'
+        + '    }\n'
+        + '    r1 (p: any): any {\n'
+        + '        const trades = this.parseTrades (p);\n'
+        + '        let out: any = undefined;\n'
+        + '        for (let i = 0; i < trades.length; i++) {\n'
+        + '            const trade = trades[i];\n'
+        + '            out = trade;\n'
+        + '        }\n'
+        + '        return out;\n'
+        + '    }\n'
+        + '    r2 (p: any): any {\n'
+        + '        const rows = this.safeList (p, \'rows\', []);\n'
+        + '        let out: any = undefined;\n'
+        + '        for (let i = 0; i < rows.length; i++) {\n'
+        + '            out = rows[i];\n'
+        + '        }\n'
+        + '        return out;\n'
+        + '    }\n'
+        + '    r3 (p: any): any {\n'
+        + '        const trades = this.parseTrades (p);\n'
+        + '        let out: any = undefined;\n'
+        + '        for (let i = 0; i < trades.length; i++) {\n'
+        + '            trades.push (p);\n'
+        + '            out = trades[i];\n'
+        + '        }\n'
+        + '        return out;\n'
+        + '    }\n'
+        + '}\n';
+
+    const print = (callees: string[]): string => new Transpiler ({ 'verbose': false, 'go': { 'generatedListCallees': callees, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo (SRC).content;
+    const fn = (out: string, name: string): string => out.split (/\nfunc /).find ((f) => f.indexOf (name + '(') >= 0) ?? '';
+
+    describe('RF-go-6-C list reads', () => {
+        test('a tabled callee whose TS result is an array types its local []any and .length goes native (fails on the base printer)', () => {
+            const withTable = fn (print ([ 'ParseTrades' ]), 'F');
+            expect (withTable).toContain ('var trades []any = this.ParseTrades(');
+            expect (withTable).toContain ('len(trades)');
+            const base = fn (print ([]), 'F');
+            expect (base).not.toContain ('var trades []any');
+        });
+        test('a tabled callee whose TS result is not an array type stays boxed', () => {
+            const out = fn (print ([ 'ParseThing' ]), 'F');
+            expect (out).not.toContain ('var thing []any');
+        });
+        test('a loop-bounded read of a []string local is the slice index (fails on the base printer)', () => {
+            expect (fn (print ([]), 'G')).toContain ('out = keys[i]');
+        });
+        test('negatives: counter written, receiver mutated, unbounded counter keep the helper', () => {
+            const h = fn (print ([]), 'H');
+            expect (h).toContain ('GetValue(keys, i)');
+            expect (h).toContain ('GetValue(keys, j)');
+            expect (h).toContain ('GetValue(keys, k)');
+            expect (h).not.toContain ('keys[i]');
+        });
+        test('a const length local and an `as string[]` cast keep the proof', () => {
+            expect (fn (print ([]), 'K')).toContain ('out = syms[i]');
+        });
+        test('a nil-initialised local whose every write is a list prints []any; a nil compare keeps the box', () => {
+            expect (fn (print ([]), 'M')).toContain ('var symbols []any = nil');
+            expect (fn (print ([]), 'N')).not.toContain ('var symbols []any');
+        });
+        test('a loop-bounded read of an object-element []any local is the slice index, no guard closure, no DerefScalar', () => {
+            const r1 = fn (print ([ 'ParseTrades' ]), 'R1');
+            expect (r1).toContain ('var trade any = trades[i]');
+            expect (r1).not.toContain ('DerefScalar');
+            expect (r1).not.toContain ('func() any');
+        });
+        test('an object-element read keeps the guard when the element type is not provably an object, or the list is mutated', () => {
+            // hx11 FOLD2 (hx10w9-GP19): a safeList of a parameter is a decoded-JSON list, so its bounded read is the bare index
+            const r2 = fn (print ([ 'SafeList' ]), 'R2');
+            expect (r2).toContain ('out = rows[i]');
+            const r3 = fn (print ([ 'ParseTrades' ]), 'R3');
+            expect (r3).toContain ('return DerefScalar(trades[i])');
+        });
+        test('an alias of a nil-join list local carries its slice type', () => {
+            const t: any = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            installCcxtGoLocalTypes (t.goTranspiler);
+            const q = fn (t.transpileGo (SRC).content, 'Q');
+            expect (q).toContain ('var a []any = nil');
+            expect (q).toContain ('var b []any = a');
+        });
+    });
+});
+
+describe ('rfgo6dOrderBook', () => {
+    // RF-go-6-D: an order-book side read `book['asks']` prints as the port's accessor when the checker type of the
+    // receiver is the book class and the Go local is retyped at its declaration (no nil can reach the read).
+
+    const BOOK = {
+        'classes': [ 'OrderBook' ],
+        'constructors': [ 'orderBook' ],
+        'cacheReaders': [ 'safeValue' ],
+        'type': 'OrderBookInterface',
+        'sideType': 'IOrderBookSide',
+        'unbox': 'OrderBookTyped',
+        'sides': { 'asks': 'GetAsks', 'bids': 'GetBids' },
+    };
+
+    const HEAD = 'type Dict = { [key: string]: any };\n'
+        + 'class Side { store (p: number, a: number) { return p + a; } }\n'
+        + 'class OrderBook { asks: Side; bids: Side; reset (x: Dict) { return x; } }\n'
+        + 'class Exchange {\n'
+        + '    orderbooks: { [key: string]: OrderBook } = {};\n'
+        + '    orderBook (snapshot = {}): OrderBook { return new OrderBook (); }\n'
+        + '    safeValue (o: any, k: string): any { return o[k]; }\n'
+        + '    handleDeltas (side: any, deltas: any) { return side; }\n';
+
+    const print = (body: string, book: any = BOOK): string => {
+        const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'rfgo6d-'));
+        try {
+            fs.mkdirSync (path.join (dir, 'ts', 'src', 'pro'), { 'recursive': true });
+            const file = path.join (dir, 'ts', 'src', 'pro', 'x.ts');
+            fs.writeFileSync (file, HEAD + body + '}\n');
+            const config: any = { 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+            if (book !== null) {
+                config.go.orderBook = book;
+            }
+            return new Transpiler (config).transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (dir, { 'recursive': true, 'force': true });
+        }
+    };
+
+    const GUARDED = '    handle (symbol: string) {\n'
+        + '        if (!(symbol in this.orderbooks)) {\n'
+        + '            this.orderbooks[symbol] = this.orderBook ();\n'
+        + '        }\n'
+        + '        const orderbook = this.orderbooks[symbol];\n'
+        + '        this.handleDeltas (orderbook[\'asks\'], []);\n'
+        + '        this.handleDeltas (orderbook[\'bids\'], []);\n'
+        + '    }\n';
+
+    describe('RF-go-6-D order book side reads', () => {
+        test('a cache read behind its create-if-absent guard is typed and its sides print the accessors (fails on the base printer)', () => {
+            const out = print (GUARDED);
+            expect (out).toContain ('var orderbook OrderBookInterface = ');
+            expect (out).toContain ('orderbook.GetAsks()');
+            expect (out).toContain ('orderbook.GetBids()');
+            expect (out).not.toContain ('GetValue(orderbook, "asks")');
+            const base = print (GUARDED, null);
+            expect (base).toContain ('GetValue(orderbook, "asks")');
+            expect (base).not.toContain ('GetAsks()');
+        });
+        test('the proven entry unboxes with Go\'s own assertion, the nil-tolerant unboxer is kept when a repair guard follows', () => {
+            expect (print (GUARDED)).toContain ('.(OrderBookInterface)');
+            const repaired = print ('    handle (symbol: string) {\n'
+                + '        let orderbook = this.safeValue (this.orderbooks, symbol);\n'
+                + '        if (orderbook === undefined) {\n'
+                + '            orderbook = this.orderBook ();\n'
+                + '        }\n'
+                + '        this.handleDeltas (orderbook[\'asks\'], []);\n'
+                + '        this.orderbooks[symbol] = orderbook;\n'
+                + '    }\n');
+            expect (repaired).toContain ('OrderBookTyped(');
+            expect (repaired).toContain ('orderbook.GetAsks()');
+        });
+        test('an early exit on `safeValue (cache, key) === undefined` proves the entry (fails on the base printer)', () => {
+            const body = '    handle (keys: string[]) {\n'
+                + '        for (let i = 0; i < keys.length; i++) {\n'
+                + '            const symbol = keys[i];\n'
+                + '            if (this.safeValue (this.orderbooks, symbol) === undefined) {\n                continue;\n            }\n'
+                + '            const orderbook = this.orderbooks[symbol];\n'
+                + '            this.handleDeltas (orderbook[\'asks\'], []);\n'
+                + '        }\n    }\n';
+            expect (print (body)).toContain ('orderbook.GetAsks()');
+            expect (print (body, null)).not.toContain ('GetAsks()');
+        });
+        test('a constructor local needs no guard', () => {
+            const out = print ('    handle () {\n        const orderbook = this.orderBook ();\n        this.handleDeltas (orderbook[\'asks\'], []);\n    }\n');
+            expect (out).toContain ('orderbook.GetAsks()');
+        });
+        test('negative: an unguarded cache read can be nil, so the box and the helper stay', () => {
+            const out = print ('    handle (symbol: string) {\n        const orderbook = this.orderbooks[symbol];\n        this.handleDeltas (orderbook[\'asks\'], []);\n    }\n');
+            expect (out).not.toContain ('GetAsks()');
+            expect (out).toContain ('GetValue(orderbook, "asks")');
+        });
+        test('negative: a local also written with a foreign value keeps the box', () => {
+            const out = print ('    handle (symbol: string, other: any) {\n'
+                + '        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = this.orderBook ();\n        }\n'
+                + '        let orderbook = this.orderbooks[symbol];\n'
+                + '        orderbook = other;\n'
+                + '        this.handleDeltas (orderbook[\'asks\'], []);\n    }\n');
+            expect (out).not.toContain ('GetAsks()');
+        });
+        test('negative: a key that is not a side stays a helper read', () => {
+            const out = print ('    handle () {\n        const orderbook = this.orderBook ();\n        this.handleDeltas (orderbook[\'nonce\'], []);\n    }\n');
+            expect (out).toContain ('GetValue(orderbook, "nonce")');
+            expect (out).not.toContain ('GetAsks()');
+            expect (out).not.toContain ('GetBids()');
+        });
+        test('a book handed to a handler parameter retypes it when every call site passes a typed book', () => {
+            const out = print ('    handleBook (client: any, message: Dict, orderbook: OrderBook) {\n        this.handleDeltas (orderbook[\'asks\'], []);\n    }\n'
+                + '    handleOther (client: any, symbol: string) {\n'
+                + '        const book = this.orderBook ();\n'
+                + '        this.handleBook (client, {}, book);\n'
+                + '    }\n');
+            expect (out).toContain ('orderbook OrderBookInterface');
+            expect (out).toContain ('orderbook.GetAsks()');
+        });
+        test('negative: a book parameter with an unproven call site keeps the box', () => {
+            const out = print ('    handleBook (client: any, message: Dict, orderbook: OrderBook) {\n        this.handleDeltas (orderbook[\'asks\'], []);\n    }\n'
+                + '    handleOther (client: any, other: any) {\n'
+                + '        this.handleBook (client, {}, other);\n'
+                + '    }\n');
+            expect (out).not.toContain ('GetAsks()');
+        });
+        test('a side read bound to a local types the local as the side interface', () => {
+            const out = print ('    handle () {\n        const orderbook = this.orderBook ();\n        const asks = orderbook[\'asks\'];\n        this.handleDeltas (asks, []);\n    }\n');
+            expect (out).toContain ('var asks IOrderBookSide = orderbook.GetAsks()');
+        });
+        test('without the config nothing changes', () => {
+            expect (print (GUARDED, null)).not.toContain ('OrderBookInterface');
+        });
+    });
+});
+
+describe ('rfgo6fTupleSlot', () => {
+    // RF-go-6-F: a destructured tuple slot whose producer's Go slot type is *int64 is a native *int64 local.
+
+    const SRC = `
+    type Dict = { [key: string]: any };
+    class Exchange {
+        json (o: any): string { return ''; }
+        hmac (o: any): string { return ''; }
+        omit (a: any, b: any): any { return a; }
+        handleOptionIntegerAndParams (params: Dict, m: string, o: string, d?: number): [ number, Dict ] { return [ 1, params ]; }
+        sign (method = 'GET', params = {}) {
+            let requestBody: string = undefined;
+            let other: string = undefined;
+            if (method === 'POST') {
+                requestBody = this.json (params);
+                other = this.hmac (params);
+            }
+            const bodyJson = (method === 'POST') ? this.json (params) : undefined;
+            return { 'body': requestBody, 'b2': bodyJson, 'o': other };
+        }
+        async fetchX (symbol: string, params = {}) {
+            const [ until, paramsUntil ] = this.handleOptionIntegerAndParams (params, 'fetchX', 'until');
+            const request = {};
+            if (until !== undefined) {
+                request['t'] = until;
+                request['u'] = this.parseToInt (until / 1000);
+            }
+            return request;
+        }
+        async fetchY (symbol: string, params = {}) {
+            const [ until, paramsUntil ] = this.handleOptionIntegerAndParams (params, 'fetchY', 'until');
+            const request = { 'u': until };
+            return request;
+        }
+        async fetchZ (symbol: string, params = {}) {
+            const [ until, paramsUntil ] = this.handleOptionIntegerAndParams (params, 'fetchZ', 'until', 5);
+            if (until !== undefined) {
+                return 1;
+            }
+            return 2;
+        }
+        async fetchG (symbol: string, params = {}) {
+            const [ until, paramsUntil ] = this.handleOptionIntegerAndParams (params, 'fetchG', 'until');
+            if (until === undefined) {
+                throw new Error ('until is required');
+            }
+            const request = {};
+            request['endTime'] = until;
+            return request;
+        }
+        async fetchL (method: string, params = {}) {
+            const [ calls, paramsCalls ] = this.handleOptionIntegerAndParams (params, method, 'paginationCalls');
+            let n = 0;
+            for (let i = 0; i < calls; i++) {
+                n = n + 1;
+            }
+            return n;
+        }
+        parseToInt (a: any): number { return 1; }
+    }
+    `;
+
+    const TABLES = {
+        'goTupleSlotTypes': { 'HandleOptionIntegerAndParams': [ '*int64' ] },
+        'goTupleValueDefaultArg': { 'HandleOptionIntegerAndParams': 3 },
+    };
+
+    const print = (tables: any): string => {
+        const t = new Transpiler ({ 'verbose': false, 'go': Object.assign ({ 'parser': { 'NUM_LINES_END_FILE': 0 } }, tables) });
+        installCcxtGoHooks (t.goTranspiler);
+        return t.transpileGo (SRC).content;
+    };
+
+    describe('RF-go-6-F: *int64 tuple slot', () => {
+        test('a *int64 tuple slot read by nil tests and guarded reads is a native *int64 local (fails on the base printer)', () => {
+            const base = print ({});
+            const out = print (TABLES);
+            expect (base).toContain ('until := GetValue(untilparamsUntilVariable, 0)');
+            expect (out).toContain ('var until *int64 = nil\n\tif p, ok := untilparamsUntilVariable[0].(*int64); ok {\n\t\tuntil = p\n\t}');
+            expect (out).toContain ('if until != nil {');
+            expect (out).toContain ('request[\"t\"] = *until');
+            expect (out).toContain ('float64(*until) / 1000');
+        });
+        test('an unguarded read of the slot keeps the boxed local', () => {
+            const out = print (TABLES);
+            const fetchY = out.split ('func (this *Exchange) fetchYBody')[1].split ('\nfunc ')[0];
+            expect (fetchY).toContain ('until := GetValue(untilparamsUntilVariable, 0)');
+            expect (fetchY).not.toContain ('var until *int64');
+        });
+        test('an integer-literal default selects the value form and is not a pointer slot', () => {
+            const out = print (TABLES);
+            const fetchZ = out.split ('func (this *Exchange) fetchZBody')[1].split ('\nfunc ')[0];
+            expect (fetchZ).not.toContain ('var until *int64');
+        });
+        test('a slot behind an exiting nil guard is stored by value, never as the pointer', () => {
+            const out = print (TABLES);
+            const fetchG = out.split ('func (this *Exchange) fetchGBody')[1].split ('\nfunc ')[0];
+            expect (fetchG).toContain ('var until *int64 = nil');
+            expect (fetchG).toContain ('request[\"endTime\"] = *until');
+        });
+        test('a slot used as the bound of an ordered comparison is a native *int64 local', () => {
+            const out = print (TABLES);
+            const fetchL = out.split ('func (this *Exchange) fetchLBody')[1].split ('\nfunc ')[0];
+            expect (fetchL).toContain ('var calls *int64 = nil');
+            expect (fetchL).toContain ('calls != nil && int64(i) < *calls');
+        });
+        test('no tables, no change', () => {
+            const out = print ({});
+            expect (out).not.toContain ('var until *int64');
+        });
+    });
+});
+
+describe ('rfmG1G01UrlsViews', () => {
+    // RFM-G1 G01 (was ccxt build/hx10w5-G01.ts): urls views. The TS base declares `urls: { api: Dict; ... }`, and
+    // go/v4/exchange.go keeps `urls` a map[string]any plus two views re-derived by RefreshUrlsViews after every write:
+    // UrlsApi (urls["api"]) and UrlsApiSections (its dictionary entries). A read keyed on that declared type prints as
+    // the view's own map index; a write of urls is followed by the refresh.
+    let transpiler: Transpiler;
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+    const go = (ts: string, hooked = true): string => {
+        if (hooked) { installCcxtGoHooks(transpiler.goTranspiler); }
+        return transpiler.transpileGo(ts).content;
+    };
+
+    const BASE = 'type Dict = { [key: string]: any };\n'
+        + 'class Base {\n'
+        + '    urls!: { logo?: string; api: Dict; test: Dict; [key: string]: any };\n'
+        + '    safeString (d: any, k: any, def?: string): string | undefined { return undefined; }\n'
+        + '    clone (x: any): any { return x; }\n'
+        + '}\n';
+    const run = (stmts: string, params = ''): string => go(BASE + 'class Test extends Base {\n    f (' + params + '): any { ' + stmts + ' }\n}\n');
+
+    describe('RFM-G1 G01 urls views', () => {
+        test('a literal key on urls["api"] reads UrlsApi', () => {
+            const out = run("return this.safeString (this.urls['api']['ws'], 'spot');");
+            expect(out).toContain('this.SafeString(this.UrlsApi["ws"], "spot")');
+            expect(out).not.toContain('GetValue(');
+        });
+        test('the second level reads UrlsApiSections', () => {
+            const out = run("return this.urls['api']['ws']['public'];");
+            expect(out).toContain('return this.UrlsApiSections["ws"]["public"]');
+        });
+        test('deeper levels keep the helper for the steps below the second', () => {
+            const out = run("return this.urls['api']['ws']['ws-api']['spot'];");
+            expect(out).toContain('GetValue(this.UrlsApiSections["ws"]["ws-api"], "spot")');
+        });
+        test('a string-typed key is a valid index, an any key keeps the helper', () => {
+            expect(run("const section: string = 'ws'; return this.urls['api'][section];")).toContain('this.UrlsApi[section]');
+            const boxed = run("return this.urls['api'][section];", 'section: any');
+            expect(boxed).toContain('GetValue(this.Urls["api"], section)');
+            expect(boxed).not.toContain('UrlsApi[');
+        });
+        test('an `as Dict` assertion prints as its operand; a bare parenthesis keeps the helper', () => {
+            expect(run("return (this.urls['api'] as Dict)['ws']['privateV2'];")).toContain('this.UrlsApiSections["ws"]["privateV2"]');
+            const bare = run("return (this.urls['api'])['ws']['public'];");
+            expect(bare).not.toContain('UrlsApi');
+        });
+        test('a non-literal top key is not a view', () => {
+            const out = run("const urlKey: string = 'api'; return this.urls[urlKey]['ws'];");
+            expect(out).not.toContain('UrlsApi');
+        });
+        test('an entry the base does not declare a Dict keeps the helper', () => {
+            const out = run("return this.urls['test']['ws'];");
+            expect(out).not.toContain('UrlsApi');
+        });
+        test('other fields are untouched', () => {
+            const out = run("return this.options['ws'];");
+            expect(out).not.toContain('UrlsApi');
+        });
+        test('every write of urls or one of its entries refreshes the views, once', () => {
+            const out = run("this.urls['api'] = this.urls['test']; this.urls = u; const n = 1; return n;", 'u: any');
+            expect(out).toContain('this.Urls["api"] = this.Urls["test"]\n\tthis.RefreshUrlsViews()');
+            expect(out).toContain('this.Urls = u\n\tthis.RefreshUrlsViews()');
+            expect(out.split('RefreshUrlsViews').length - 1).toBe(2);
+        });
+        test('a comparison and a write of another field are not urls writes', () => {
+            const out = run("if (this.urls['api'] === u) { this.options['x'] = 1; } return 1;", 'u: any');
+            expect(out).not.toContain('RefreshUrlsViews');
+        });
+    });
+});
+
+describe ('rfmG4G21', () => {
+    const fs = fs__rfmG4G21;
+    const os = os__rfmG4G21;
+    const path = path__rfmG4G21;
+    // RFM-G4 G21 (folded from build/hx10w5-G21.ts): a prediction-tier `list[i]` inside
+    // `for (let i = 0; i < list.length; i++)` where `list` is `const list = await this.fetchX (..)`
+    // (the printer declares it `[]any` from the receive) and the awaited TS type is an array of
+    // objects prints the bare element, not GetValue(list, i). Anything the AST does not prove keeps GetValue.
+
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'interface Row { id: string }\n' +
+        'class Exchange {\n' +
+        '    parseRow (row: any): any { return row; }\n' +
+        '    async fetchOrders (outcome: string = undefined, params: Dict = {}): Promise<Row[]> { return []; }\n' +
+        '    async fetchMyTrades (): Promise<string[]> { return []; }\n' +
+        '    async fetchRawEventsList (params: Dict = {}): Promise<Dict[]> { return []; }\n' +
+        '}\n';
+
+    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'g21-'));
+
+    function go (body: string, tier = 'prediction'): string {
+        const dir = path.join (tmp, 'ts', 'src', tier);
+        fs.mkdirSync (dir, { 'recursive': true });
+        const file = path.join (dir, 'venue.ts');
+        fs.writeFileSync (file, PRELUDE + 'class venue extends Exchange {\n    async run (response: Dict) {\n' + body + '\n    }\n}\n');
+        const transpiler: any = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 }, 'asyncMethodSuffix': 'Async' } });
+        installCcxtGoLocalTypes (transpiler.goTranspiler);
+        return transpiler.transpileGoByPath (file).content;
+    }
+
+    const READ = 'GetValue(rows, i)';
+
+    describe('RFM-G4 G21 bounded reads of awaited object lists in the prediction tier', () => {
+        afterAll(() => {
+            fs.rmSync (tmp, { 'recursive': true, 'force': true });
+        });
+
+        test('an awaited array of objects read under `i < rows.length` is the bare element', () => {
+            const out = go (
+                '        const rows = await this.fetchOrders ();\n' +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).toContain ('var rows []any = ListTyped(');
+            expect (out).toContain ('var row any = rows[i]');
+            expect (out).not.toContain (READ);
+        });
+
+        test('a Dict[] receive qualifies the same way', () => {
+            const out = go (
+                '        const rows = await this.fetchRawEventsList ({});\n' +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).toContain ('var row any = rows[i]');
+            expect (out).not.toContain (READ);
+        });
+
+        test('a loop not bounded by the list keeps GetValue', () => {
+            const out = go (
+                '        const rows = await this.fetchOrders ();\n' +
+                '        for (let i = 0; i < 3; i++) {\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).toContain (READ);
+        });
+
+        test('a rebound list keeps GetValue', () => {
+            const out = go (
+                '        let rows = await this.fetchOrders ();\n' +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            rows = [];\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).not.toContain ('var row any = rows[i]');
+        });
+
+        test('an awaited list of scalars keeps GetValue', () => {
+            const out = go (
+                '        const rows = await this.fetchMyTrades ();\n' +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).toContain ('var rows []any = ListTyped(');
+            expect (out).toContain (READ);
+        });
+
+        test('outside the prediction tier only the loop-bounded rule reads natively', () => {
+            const bounded = go (
+                '        const rows = await this.fetchOrders ();\n' +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }', 'pro');
+            expect (bounded).toContain ('var row any = rows[i]');
+            const unbounded = go (
+                '        const rows = await this.fetchOrders ();\n' +
+                '        const row = rows[1];\n' +
+                '        this.parseRow (row);', 'pro');
+            expect (unbounded).not.toContain ('var row any = rows[1]');
+        });
+    });
+});
+
+describe ('rfmG4GB08', () => {
+    const fs = fs__rfmG4GB08;
+    const os = os__rfmG4GB08;
+    const path = path__rfmG4GB08;
+    // RFM-G4 GB08: a prediction-tier `list[i]` inside `for (let i = 0; i < list.length; i++)` can never
+    // leave the slice, so the guard closure (`func() any { if i >= 0 && i < len(list) { return
+    // DerefScalar(list[i]) } return nil }()`) prints as the element itself, or as DerefScalar(list[i])
+    // when the elements are not provably dictionaries. Anything the AST does not prove keeps the guard.
+
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'class Exchange {\n' +
+        '    safeList (d: any, k: string, def: any = undefined): any[] { return d[k] ?? def; }\n' +
+        '    parseRow (row: any): any { return row; }\n' +
+        '    rebuild (): any[] { return []; }\n' +
+        '}\n';
+
+    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'gb08-'));
+
+    function go (body: string, tier = 'prediction'): string {
+        const dir = path.join (tmp, 'ts', 'src', tier);
+        fs.mkdirSync (dir, { 'recursive': true });
+        const file = path.join (dir, 'venue.ts');
+        fs.writeFileSync (file, PRELUDE + 'class venue extends Exchange {\n    run (response: Dict) {\n' + body + '\n    }\n}\n');
+        return new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGoByPath (file).content;
+    }
+
+    const GUARD = 'func() any {';
+
+    describe('RFM-G4 GB08 bounded list reads in the prediction tier', () => {
+        afterAll(() => {
+            fs.rmSync (tmp, { 'recursive': true, 'force': true });
+        });
+
+        test('a read under `i < list.length` on a SafeList unbox is the bare element', () => {
+            const out = go (
+                "        const rows = this.safeList (response, 'rows', []);\n" +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).toContain ('var row any = rows[i]');
+            expect (out).not.toContain (GUARD);
+            expect (out).not.toContain ('DerefScalar(rows[i])');
+        });
+
+        test('a hoisted `const n = list.length` bound proves the read too', () => {
+            const out = go (
+                "        const rows = this.safeList (response, 'rows', []);\n" +
+                '        const rowsLength = rows.length;\n' +
+                '        for (let i = 0; i < rowsLength; i++) {\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).toContain ('var row any = rows[i]');
+            expect (out).not.toContain (GUARD);
+        });
+
+        test('elements that are not provably dictionaries keep the DerefScalar but lose the guard', () => {
+            const out = go (
+                '        const rows: any[] = [];\n' +
+                "        rows.push (this.parseRow (response['x']));\n" +
+                "        rows.push ('plain');\n" +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).toContain ('DerefScalar(rows[i])');
+            expect (out).not.toContain (GUARD);
+        });
+
+        test('a loop not bounded by the list keeps the guard', () => {
+            const out = go (
+                "        const rows = this.safeList (response, 'rows', []);\n" +
+                '        for (let i = 0; i < 3; i++) {\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).toContain (GUARD);
+        });
+
+        test('a counter that moves in the body keeps the guard', () => {
+            const out = go (
+                "        const rows = this.safeList (response, 'rows', []);\n" +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            i += 2;\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).toContain (GUARD);
+        });
+
+        test('a rebound list keeps the guard', () => {
+            const out = go (
+                "        let rows = this.safeList (response, 'rows', []);\n" +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            rows = this.rebuild ();\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).not.toContain ('rows[i]'); // no native read: the list is not proven a slice either
+        });
+
+        test('a list that shrinks inside the loop keeps the guard', () => {
+            const out = go (
+                "        const rows = this.safeList (response, 'rows', []);\n" +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            rows.pop ();\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }');
+            expect (out).not.toContain ('rows[i]'); // no native read: the list is not proven a slice either
+        });
+
+        // hx11 FOLD2 (hx10w9-GP19): the bounded-loop rule now covers the venue and pro tiers too; only ts/src/test stays out
+        test('a file of the test tree is out of this rule', () => {
+            const out = go (
+                "        const rows = this.safeList (response, 'rows', []);\n" +
+                '        for (let i = 0; i < rows.length; i++) {\n' +
+                '            const row = rows[i];\n' +
+                '            this.parseRow (row);\n' +
+                '        }', 'test');
+            expect (out).toContain (GUARD);
+        });
     });
 });
