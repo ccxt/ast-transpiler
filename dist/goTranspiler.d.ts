@@ -618,6 +618,15 @@ export declare class GoTranspiler extends BaseTranspiler {
     rfGo6bValueIsPlain(valueNode: any, field: any): boolean;
     rfGo6bEmptyDefaultCall(call: any, field: any): boolean;
     rfGo6bStoreAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation?: number): string | undefined;
+    goWsFieldName(node: any): string | undefined;
+    goWsMapFieldType(node: any): string | undefined;
+    goWsKey(keyNode: any): {
+        index: string;
+        pointer?: string;
+    } | undefined;
+    goWsFieldWrite(containerNode: any, containerStr: string, keyNode: any, valueNode: any, identation: number): string | undefined;
+    goWsFieldDelete(node: any, identation: number): string | undefined;
+    goWsInOpKeyDerefable(dictNode: any, keyNode: any): boolean;
     goIsNilGuardedStringPointerKey(keyNode: any): boolean;
     goInOpPointerKeyProvenNonNil(statement: any, ident: any): boolean;
     goBlockExitsOnNilTest(block: any, statement: any, ident: any): boolean;

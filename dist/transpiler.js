@@ -11151,6 +11151,8 @@ var GO_FIELD_CONTAINER_TYPES_NATIVE = Object.fromEntries([
   ...GO_SYNC_MAP_FIELDS.filter((name) => name !== "Options").map((name) => [name, "*sync.Map"])
 ]);
 var GO_PLAIN_VALUED_MAP_FIELDS = ["Options"];
+var GO_WS_MAP_FIELDS = { "Ohlcvs": "map[string]map[string]any", "FundingRates": "map[string]any" };
+var GO_WS_DELETE_CACHE_FIELDS = ["Trades"];
 var GO_OPTION_DICT_FIELDS = ["Options", "Has", "Features", "Fees", "Limits"];
 var GO_ARITHMETIC_KINDS = [
   SyntaxKind5.PlusToken,
@@ -11748,6 +11750,7 @@ var GoTranspiler = class extends BaseTranspiler {
       "Limits": "map[string]any",
       "Trades": "map[string]any",
       "Ohlcvs": "map[string]map[string]any",
+      "FundingRates": "map[string]any",
       "Clients": "map[string]any",
       // FM-A9F L3: the ws client registry
       // hx10w8-GP03: declared `map[string]any` in go/v4/exchange.go
@@ -16307,7 +16310,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       const slotStore = this.goTuplePointerSlotStoreText(right);
       const rhs = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
       const nativeRhs = slotStore ?? (right.kind === SyntaxKind5.BinaryExpression ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(right, identation)).trimStart() : rhs);
-      const native = (keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right) ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation) ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation) : void 0) ?? this.goOwnedBalanceWrite(node, baseExpr, keys, nativeRhs, right);
+      const native = (keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right) ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation) ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation) ?? this.goWsFieldWrite(baseExpr, containerStr, keys[0], right, identation) : void 0) ?? this.goOwnedBalanceWrite(node, baseExpr, keys, nativeRhs, right);
       if (keyStrs.length === 1 && this.goWsTradesField(baseExpr)) {
         return `${containerStr}.Store(${lastKey}, ${rhs})`;
       }
@@ -19139,6 +19142,87 @@ ${iden}	${containerStr}[*${keyStr}] = ${valueStr}
 ${iden}}`;
   }
   // ===== end RF-go-6-B =====
+  // ===== FOLD1 GOCACHE: ws cache fields =====
+  // `this.<ws map>[k] = v`, `delete this.<ws map>[k]` and `k in this.<ws map>` over a field declared as a symbol-keyed Go map.
+  // A `*string` key is read through `*k` once a guard proves it, else the store sits behind the nil test the helper is.
+  goWsFieldName(node) {
+    if (node?.kind !== SyntaxKind5.PropertyAccessExpression || node.expression?.kind !== SyntaxKind5.ThisKeyword || typeof node.name?.text !== "string") {
+      return void 0;
+    }
+    return this.transformPropertyAccessExpressionName(node.name.text, node.name);
+  }
+  goWsMapFieldType(node) {
+    const name = this.goWsFieldName(node);
+    return name !== void 0 && Object.prototype.hasOwnProperty.call(GO_WS_MAP_FIELDS, name) ? GO_WS_MAP_FIELDS[name] : void 0;
+  }
+  // the map index text of a key: a Go string as printed, or a `*string` local a guard proves non-nil as `*k`
+  // (`pointer` is the local when the key is an unproven pointer, which the caller guards)
+  goWsKey(keyNode) {
+    const key = this.goUnwrapPrintedAssertions(keyNode);
+    if (key?.kind === SyntaxKind5.StringLiteral || key?.kind === SyntaxKind5.NoSubstitutionTemplateLiteral) {
+      return { "index": this.printNode(key, 0) };
+    }
+    if (key?.kind !== SyntaxKind5.Identifier) {
+      return void 0;
+    }
+    const declared = this.goDeclaredTypeOfIdentifier(key);
+    const text = this.printNode(key, 0);
+    if (declared === "string") {
+      return { "index": text };
+    }
+    if (declared !== "*string") {
+      return void 0;
+    }
+    const proven = this.goHasEnclosingNilGuard(key) || this.gp15HasExitingNilGuard(key) || this.goDefaultedSafeStringLocal(key);
+    return proven ? { "index": "*" + text } : { "index": "*" + text, "pointer": text };
+  }
+  goWsFieldWrite(containerNode, containerStr, keyNode, valueNode, identation) {
+    const fieldType = this.goWsMapFieldType(containerNode);
+    const key = fieldType === void 0 ? void 0 : this.goWsKey(keyNode);
+    if (key === void 0 || valueNode === void 0) {
+      return void 0;
+    }
+    const value = this.goUnwrapParenthesizedNode(valueNode);
+    const plain = fieldType === "map[string]any" ? this.goMapWriteValueIsNotPointer(valueNode) : value?.kind === SyntaxKind5.ObjectLiteralExpression || this.goDeclaredTypeOfIdentifier(value) === "map[string]any";
+    if (!plain) {
+      return void 0;
+    }
+    const valueStr = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(valueNode, identation + 1)).trimStart();
+    if (valueStr.includes("\n")) {
+      return void 0;
+    }
+    const store = `${containerStr}[${key.index}] = ${valueStr}`;
+    const iden = this.getIden(identation);
+    return key.pointer === void 0 ? store : `if ${key.pointer} != nil {
+${iden}	${store}
+${iden}}`;
+  }
+  goWsFieldDelete(node, identation) {
+    const access = node.expression;
+    if (access?.kind !== SyntaxKind5.ElementAccessExpression || access.expression?.kind !== SyntaxKind5.PropertyAccessExpression) {
+      return void 0;
+    }
+    const field = access.expression;
+    const name = this.goWsFieldName(field);
+    const receiver = this.printNode(field, 0);
+    if (name !== void 0 && GO_WS_DELETE_CACHE_FIELDS.includes(name)) {
+      return `${receiver}.Delete(${this.printNode(access.argumentExpression, 0).trim()})`;
+    }
+    const key = node.parent?.kind === SyntaxKind5.ExpressionStatement && this.goWsMapFieldType(field) !== void 0 ? this.goWsKey(access.argumentExpression) : void 0;
+    if (key === void 0) {
+      return void 0;
+    }
+    const remove = `delete(${receiver}, ${key.index})`;
+    const iden = this.getIden(identation);
+    return key.pointer === void 0 ? remove : `if ${key.pointer} != nil {
+${iden}	${remove}
+${iden}}`;
+  }
+  // a `k in this.<ws map>` key that is a `*string` the checker types as a string: the printer derefs it everywhere else
+  goWsInOpKeyDerefable(dictNode, keyNode) {
+    return this.goWsMapFieldType(this.goUnwrapParenthesizedNode(dictNode)) !== void 0 && keyNode?.kind === SyntaxKind5.Identifier && this.goDerefableStringOperand(keyNode);
+  }
+  // ===== end FOLD1 GOCACHE =====
   // a `*string` local the enclosing control flow proves non-nil: the helper's deref
   // yields the same string key (a nil key would have made it a no-op)
   goIsNilGuardedStringPointerKey(keyNode) {
@@ -19915,7 +19999,7 @@ ${indent}}`);
           let keyText2 = this.printNode(key, 0);
           const dictMapType = (identifier ? this.goPrintedTypeOfExpression(dict, dictText) : void 0) ?? this.goInOpDictMapType(dict, dictText);
           let keyType = this.goPrintedTypeOfExpression(key, keyText2);
-          if (keyType !== "string" && this.goInOpPointerKeyProvenNonNil(statement, key)) {
+          if (keyType !== "string" && (this.goInOpPointerKeyProvenNonNil(statement, key) || this.goWsInOpKeyDerefable(dict, key))) {
             keyText2 = "*" + keyText2;
             keyType = "string";
           }
@@ -23364,6 +23448,10 @@ ${this.getIden(level)}}()`;
     const ownedBalance = this.goOwnedBalanceDelete(node);
     if (ownedBalance !== void 0) {
       return ownedBalance;
+    }
+    const wsDelete = this.goWsFieldDelete(node, identation);
+    if (wsDelete !== void 0) {
+      return wsDelete;
     }
     const native = this.goNativeDelete(node);
     if (native !== void 0) {
