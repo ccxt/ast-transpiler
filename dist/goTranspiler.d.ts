@@ -670,6 +670,30 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWsFieldWrite(containerNode: any, containerStr: string, keyNode: any, valueNode: any, identation: number): string | undefined;
     goWsFieldDelete(node: any, identation: number): string | undefined;
     goWsInOpKeyDerefable(dictNode: any, keyNode: any): boolean;
+    goOhlcvsField(node: any): boolean;
+    goOhlcvsBookAccess(node: any): any;
+    goOhlcvsBookCall(node: any): {
+        call: any;
+        key: any;
+        withDefault: boolean;
+    } | undefined;
+    goOhlcvsSameKey(a: any, b: any): boolean;
+    goOhlcvsReadKey(keyNode: any): {
+        index: string;
+    } | undefined;
+    goOhlcvsBookLocal(declaration: any): boolean;
+    goOhlcvsBookLocalOf(node: any): any;
+    goOhlcvsCacheValue(valueNode: any): boolean;
+    goOhlcvsFlatKeyNode(declaration: any): any;
+    goOhlcvsGuarded(identation: number, guards: string[], lines: string[]): string;
+    goOhlcvsAssignment(node: any, baseExpr: any, keys: any[], valueNode: any, identation: number): string | undefined;
+    goOhlcvsReadText(node: any, baseExpr: any, keys: any[]): string | undefined;
+    goOhlcvsReadDeclaration(statement: any, declaration: any, identation: number): string | undefined;
+    goOhlcvsInRead(inNode: any, statement: any): {
+        inNode: any;
+        dictText: string;
+        keyText: string;
+    } | undefined;
     goIsNilGuardedStringPointerKey(keyNode: any): boolean;
     goInOpPointerKeyProvenNonNil(statement: any, ident: any): boolean;
     goBlockExitsOnNilTest(block: any, statement: any, ident: any): boolean;
@@ -956,7 +980,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printDeleteExpression(node: any, identation: any): string;
     goNativeDelete(node: any): string | undefined;
     goDeleteReceiverText(node: any): string | undefined;
-    goDeleteKeyText(node: any): string | undefined;
+    goDeleteKeyText(keyNode: any): string | undefined;
     printThrowStatement(node: any, identation: any): string;
     goExprDepth: number;
     goWithExprDepth<T>(depth: number, callback: () => T): T;

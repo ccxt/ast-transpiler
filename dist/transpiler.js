@@ -21648,6 +21648,7 @@ var GO_FIELD_CONTAINER_TYPES_NATIVE = Object.fromEntries([
 var GO_PLAIN_VALUED_MAP_FIELDS = ["Options"];
 var GO_WS_MAP_FIELDS = { "Ohlcvs": "map[string]map[string]any", "FundingRates": "map[string]any" };
 var GO_WS_DELETE_CACHE_FIELDS = ["Trades"];
+var GO_OHLCVS_FLAT_KEY = "1m";
 var GO_OPTION_DICT_FIELDS = ["Options", "Has", "Features", "Fees", "Limits"];
 var GO_ARITHMETIC_KINDS = [
   SyntaxKind5.PlusToken,
@@ -24308,7 +24309,7 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
   rf6aPlainContainer(container, ws, noDefault) {
     if (this.rf6aContainsThis(container)) {
       const fields = noDefault ? ["options", "balance"] : ["options", "balance", "fees"];
-      if (container.kind !== SyntaxKind5.PropertyAccessExpression || container.expression?.kind !== SyntaxKind5.ThisKeyword || !fields.includes(container.name?.text)) {
+      if (container.kind !== SyntaxKind5.PropertyAccessExpression || container.expression?.kind !== SyntaxKind5.ThisKeyword || !(fields.includes(container.name?.text) || !noDefault && this.goOhlcvsField(container))) {
         return false;
       }
     }
@@ -24473,11 +24474,12 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
       return void 0;
     }
     const bindings = this.goDescendantsOf(scope).filter((n) => (n.kind === SyntaxKind5.VariableDeclaration || n.kind === SyntaxKind5.Parameter || n.kind === SyntaxKind5.BindingElement) && n.name?.kind === SyntaxKind5.Identifier && n.name.text === name);
-    if (bindings.length !== 1) {
+    const siblings = bindings.length > 1 && this.goOhlcvsBookCall(declaration.initializer)?.withDefault === true && bindings.every((b) => b.kind === SyntaxKind5.VariableDeclaration);
+    if (bindings.length !== 1 && !siblings) {
       return void 0;
     }
     const rebinds = /* @__PURE__ */ new Set();
-    const refs = this.goDescendantsOf(scope).filter((n) => n.kind === SyntaxKind5.Identifier && n.text === name && n !== declaration.name && !(n.parent?.kind === SyntaxKind5.PropertyAccessExpression && n.parent.name === n) && !(n.parent?.kind === SyntaxKind5.PropertyAssignment && n.parent.name === n));
+    const refs = this.goDescendantsOf(scope).filter((n) => n.kind === SyntaxKind5.Identifier && n.text === name && n !== declaration.name && (!siblings || this.goDeclarationOfIdentifier(n) === declaration) && !(n.parent?.kind === SyntaxKind5.PropertyAccessExpression && n.parent.name === n) && !(n.parent?.kind === SyntaxKind5.PropertyAssignment && n.parent.name === n));
     for (const ref of refs) {
       const write = ref.parent;
       if (write?.kind === SyntaxKind5.BinaryExpression && write.left === ref && write.operatorToken.kind === SyntaxKind5.EqualsToken) {
@@ -26155,6 +26157,10 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
     if (mapRange !== void 0) {
       return mapRange;
     }
+    const ohlcvsRead = this.goOhlcvsReadDeclaration(node, declaration, identation);
+    if (ohlcvsRead !== void 0) {
+      return ohlcvsRead;
+    }
     const isNew = declaration.initializer && declaration.initializer.kind === SyntaxKind5.NewExpression;
     const containerType = this.goContainerLocalType(declaration);
     const stringListLiteral = containerType === GO_STRING_LIST_LOCAL_TYPE && declaration.initializer?.kind === SyntaxKind5.ArrayLiteralExpression ? declaration.initializer : void 0;
@@ -27034,6 +27040,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
           break;
         }
         cur = expr;
+      }
+      if (op === SyntaxKind5.EqualsToken) {
+        const ohlcvsStore = this.goOhlcvsAssignment(node, baseExpr, keys, right, identation);
+        if (ohlcvsStore !== void 0) {
+          return ohlcvsStore;
+        }
       }
       const containerStr = this.printNode(baseExpr, 0);
       const keyStrs = keys.map((k) => this.printNode(k, 0));
@@ -30166,6 +30178,357 @@ ${iden}}`;
     return this.goWsMapFieldType(this.goUnwrapParenthesizedNode(dictNode)) !== void 0 && keyNode?.kind === SyntaxKind5.Identifier && this.goDerefableStringOperand(keyNode);
   }
   // ===== end FOLD1 GOCACHE =====
+  // ===== FOLD3 G05: the ws ohlcv book (hx10w5-G05 folded into the printer) =====
+  // `this.ohlcvs` is BaseExchange's `Dictionary<Dictionary<ArrayCacheByTimestamp>>`: one book per symbol, a book the plain
+  // map of its timeframes (Go: map[string]map[string]any, GO_WS_MAP_FIELDS). Every rule below is keyed on that declared
+  // field (a PropertyDeclaration of BaseExchange), never on a name alone. A statement keeps the helper's own nil tolerance
+  // as a native nil test (a nil `*string` key was a no-op write and a nil read); a key or value the printer cannot prove
+  // keeps the helper call.
+  goOhlcvsField(node) {
+    const field = this.goUnwrapParenthesizedNode(node);
+    if (this.goWsMapFieldType(field) !== "map[string]map[string]any") {
+      return false;
+    }
+    try {
+      const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(field.name)?.valueDeclaration?.resolve();
+      return declaration?.kind === SyntaxKind5.PropertyDeclaration && declaration.parent?.name?.text === "BaseExchange";
+    } catch (e) {
+      return false;
+    }
+  }
+  // `this.ohlcvs[k]`
+  goOhlcvsBookAccess(node) {
+    const access = this.goUnwrapPrintedAssertions(node);
+    return access?.kind === SyntaxKind5.ElementAccessExpression && this.goOhlcvsField(access.expression) ? access : void 0;
+  }
+  // `this.safeDict|safeValue (this.ohlcvs, k[, {}])`: the call node, its key and whether the default is the empty map
+  goOhlcvsBookCall(node) {
+    const call = this.goUnwrapPrintedAssertions(node);
+    const callee = call?.expression;
+    if (call?.kind !== SyntaxKind5.CallExpression || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || callee.name?.text !== "safeDict" && callee.name?.text !== "safeValue" || !this.goOhlcvsField(call.arguments?.[0]) || call.arguments.length !== 2 && call.arguments.length !== 3) {
+      return void 0;
+    }
+    const withDefault = call.arguments.length === 3;
+    const fallback = withDefault ? call.arguments[2] : void 0;
+    if (withDefault && (fallback?.kind !== SyntaxKind5.ObjectLiteralExpression || fallback.properties.length !== 0)) {
+      return void 0;
+    }
+    return { call, "key": call.arguments[1], withDefault };
+  }
+  // two key nodes name the same book slot: one literal, or one local read twice
+  goOhlcvsSameKey(a, b) {
+    const left = this.goUnwrapPrintedAssertions(a);
+    const right = this.goUnwrapPrintedAssertions(b);
+    if (left?.kind === SyntaxKind5.Identifier && right?.kind === SyntaxKind5.Identifier) {
+      return left.text === right.text && this.goDeclarationOfIdentifier(left) === this.goDeclarationOfIdentifier(right);
+    }
+    return left?.kind === SyntaxKind5.StringLiteral && right?.kind === SyntaxKind5.StringLiteral && left.text === right.text;
+  }
+  // a key text for a read inside an expression, which has no place for a nil test: a key goWsKey proves non-nil, or a `*string`
+  // local the checker types a string and the printer already dereferences wherever it reads the ws maps (goWsInOpKeyDerefable,
+  // the same proof the `k in this.ohlcvs` rule of FOLD1 GOCACHE takes)
+  goOhlcvsReadKey(keyNode) {
+    const key = this.goWsKey(keyNode);
+    if (key === void 0) {
+      return void 0;
+    }
+    return key.pointer === void 0 || this.goDerefableStringOperand(keyNode) || this.goDerefableStringOperand(this.goUnwrapParenthesizedNode(keyNode)) ? { "index": key.index } : void 0;
+  }
+  // `const book = this.safeDict (this.ohlcvs, symbol, {})`: the never-nil map of one symbol, declared `map[string]any`
+  goOhlcvsBookLocal(declaration) {
+    return declaration?.kind === SyntaxKind5.VariableDeclaration && declaration.name?.kind === SyntaxKind5.Identifier && this.goOhlcvsBookCall(declaration.initializer)?.withDefault === true && this.rf6aSafeDictMapLocal(declaration) === GO_SAFE_DICT_LOCAL_TYPE;
+  }
+  goOhlcvsBookLocalOf(node) {
+    const inner = this.goUnwrapPrintedAssertions(node);
+    const declaration = inner?.kind === SyntaxKind5.Identifier ? this.goDeclarationOfIdentifier(inner) : void 0;
+    return this.goOhlcvsBookLocal(declaration) ? declaration : void 0;
+  }
+  // a value stored into a book slot is a cache the field declares (ArrayCacheByTimestamp), which no scalar deref of the helper
+  // changes: `new X (..)`, or a local read out of the book and written only with `new X (..)`
+  goOhlcvsCacheValue(valueNode) {
+    const value = this.goUnwrapPrintedAssertions(valueNode);
+    if (value?.kind === SyntaxKind5.NewExpression) {
+      return true;
+    }
+    const declaration = value?.kind === SyntaxKind5.Identifier ? this.goDeclarationOfIdentifier(value) : void 0;
+    const scope = declaration === void 0 ? void 0 : this.goEnclosingFunction(declaration);
+    if (scope === void 0 || declaration.initializer === void 0) {
+      return false;
+    }
+    const fromBook = this.hasNodeWhere(declaration.initializer, (n) => this.goOhlcvsField(n) || n.kind === SyntaxKind5.Identifier && this.goOhlcvsBookLocalOf(n) !== void 0);
+    if (!fromBook && this.goUnwrapPrintedAssertions(declaration.initializer)?.kind !== SyntaxKind5.NewExpression) {
+      return false;
+    }
+    for (const n of this.goDescendantsOf(scope)) {
+      if (n.kind === SyntaxKind5.Identifier && n.text === value.text && n !== declaration.name) {
+        const parent = n.parent;
+        const writes = parent?.kind === SyntaxKind5.BinaryExpression && parent.left === n && parent.operatorToken.kind >= SyntaxKind5.FirstAssignment && parent.operatorToken.kind <= SyntaxKind5.LastAssignment;
+        const fresh = writes && parent.operatorToken.kind === SyntaxKind5.EqualsToken && this.goUnwrapPrintedAssertions(parent.right)?.kind === SyntaxKind5.NewExpression;
+        if (writes && !fresh) {
+          return false;
+        }
+        if (parent?.kind === SyntaxKind5.PostfixUnaryExpression || parent?.kind === SyntaxKind5.PrefixUnaryExpression) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+  // a one-level cache: `let stored = this.safeValue (this.ohlcvs, symbol)` filled with `new X (..)` and stored back under the same
+  // symbol (alpaca streams 1m bars with no timeframe level). The book keeps one shape for every venue, so the cache lives under the
+  // one timeframe its stream carries.
+  goOhlcvsFlatKeyNode(declaration) {
+    if (declaration?.kind !== SyntaxKind5.VariableDeclaration || declaration.name?.kind !== SyntaxKind5.Identifier || declaration.initializer === void 0) {
+      return void 0;
+    }
+    const bookCall = this.goOhlcvsBookCall(declaration.initializer);
+    const access = this.goOhlcvsBookAccess(declaration.initializer);
+    const keyNode = access !== void 0 ? access.argumentExpression : bookCall !== void 0 && !bookCall.withDefault ? bookCall.key : void 0;
+    const scope = this.goEnclosingFunction(declaration);
+    if (keyNode === void 0 || scope === void 0) {
+      return void 0;
+    }
+    let filled = false;
+    let stored = false;
+    for (const n of this.goDescendantsOf(scope)) {
+      if (n.kind !== SyntaxKind5.BinaryExpression || n.operatorToken?.kind !== SyntaxKind5.EqualsToken) {
+        continue;
+      }
+      const left = this.goUnwrapPrintedAssertions(n.left);
+      const right = this.goUnwrapPrintedAssertions(n.right);
+      if (left?.kind === SyntaxKind5.Identifier && left.text === declaration.name.text && right?.kind === SyntaxKind5.NewExpression) {
+        filled = true;
+      }
+      const slot = this.goOhlcvsBookAccess(n.left);
+      if (slot !== void 0 && right?.kind === SyntaxKind5.Identifier && right.text === declaration.name.text && this.goOhlcvsSameKey(slot.argumentExpression, keyNode)) {
+        stored = true;
+      }
+    }
+    return filled && stored ? keyNode : void 0;
+  }
+  // `if <guards> {` .. `}` around the lines, or the bare lines when the keys are all proven
+  goOhlcvsGuarded(identation, guards, lines) {
+    const iden = this.getIden(identation);
+    if (guards.length === 0) {
+      return lines.join(`
+${iden}`);
+    }
+    return `if ${guards.join(" && ")} {
+${lines.map((l) => iden + "	" + l).join("\n")}
+${iden}}`;
+  }
+  // `this.ohlcvs[k] = <ensure | book local | flat cache>`, `this.ohlcvs[k][tf] = <cache>` and `book[tf] = <cache>` as statements
+  goOhlcvsAssignment(node, baseExpr, keys, valueNode, identation) {
+    if (valueNode === void 0 || node.parent?.kind !== SyntaxKind5.ExpressionStatement) {
+      return void 0;
+    }
+    const guards = [];
+    const need = (key) => {
+      if (key.pointer !== void 0) {
+        guards.push(`${key.pointer} != nil`);
+      }
+    };
+    if (this.goOhlcvsField(baseExpr) && keys.length === 1) {
+      const key = this.goWsKey(keys[0]);
+      if (key === void 0) {
+        return void 0;
+      }
+      need(key);
+      const book = `this.Ohlcvs[${key.index}]`;
+      const ensure = this.goOhlcvsBookCall(valueNode);
+      if (ensure !== void 0 && ensure.withDefault && this.goOhlcvsSameKey(ensure.key, keys[0])) {
+        return this.goOhlcvsGuarded(identation, [...guards, `${book} == nil`], [`${book} = map[string]any{}`]);
+      }
+      const local = this.goOhlcvsBookLocalOf(valueNode);
+      if (local !== void 0) {
+        return this.goOhlcvsGuarded(identation, guards, [`${book} = ${this.printNode(local.name, 0)}`]);
+      }
+      const value2 = this.goUnwrapPrintedAssertions(valueNode);
+      const declaration = value2?.kind === SyntaxKind5.Identifier ? this.goDeclarationOfIdentifier(value2) : void 0;
+      const flat = this.goOhlcvsFlatKeyNode(declaration);
+      if (flat !== void 0 && this.goOhlcvsSameKey(flat, keys[0])) {
+        return this.goOhlcvsGuarded(identation, guards, [
+          `if ${book} == nil {`,
+          `	${book} = map[string]any{}`,
+          "}",
+          `${book}["${GO_OHLCVS_FLAT_KEY}"] = ${this.printNode(value2, 0)}`
+        ]);
+      }
+      return void 0;
+    }
+    if (!this.goOhlcvsCacheValue(valueNode)) {
+      return void 0;
+    }
+    const inner = this.goWsKey(keys[keys.length - 1]);
+    if (inner === void 0 && keys.length === 2 && this.goOhlcvsField(baseExpr)) {
+      const outer = this.goWsKey(keys[0]);
+      if (outer === void 0) {
+        return void 0;
+      }
+      need(outer);
+      const entryKey = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(keys[1], 0));
+      const entryValue = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(valueNode, identation + 1)).trimStart();
+      if (entryValue.includes("\n")) {
+        return void 0;
+      }
+      return this.goOhlcvsGuarded(identation, guards, [`AddElementToObject(this.Ohlcvs[${outer.index}], ${entryKey}, ${entryValue})`]);
+    }
+    if (inner === void 0) {
+      return void 0;
+    }
+    let receiver;
+    if (this.goOhlcvsField(baseExpr) && keys.length === 2) {
+      const outer = this.goWsKey(keys[0]);
+      if (outer === void 0) {
+        return void 0;
+      }
+      need(outer);
+      need(inner);
+      receiver = `this.Ohlcvs[${outer.index}]`;
+      guards.push(`${receiver} != nil`);
+    } else if (keys.length === 1 && this.goOhlcvsBookLocalOf(baseExpr) !== void 0) {
+      need(inner);
+      receiver = this.printNode(baseExpr, 0);
+    } else {
+      return void 0;
+    }
+    const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(valueNode, identation + 1)).trimStart();
+    if (value.includes("\n")) {
+      return void 0;
+    }
+    return this.goOhlcvsGuarded(identation, guards, [`${receiver}[${inner.index}] = ${value}`]);
+  }
+  // `this.ohlcvs[k][tf]` (and the book `this.ohlcvs[k]` handed to a reader) with keys the printer proves: the native index. A
+  // missing book reads as the nil map, a missing entry as the `any` nil, as the helper answered.
+  goOhlcvsReadText(node, baseExpr, keys) {
+    if (keys.length > 2 || this.isGoElementAccessAssignmentTarget(node) || !this.goOhlcvsField(baseExpr)) {
+      return void 0;
+    }
+    if (keys.length === 1) {
+      let outer = node;
+      while (outer.parent?.kind === SyntaxKind5.ParenthesizedExpression) {
+        outer = outer.parent;
+      }
+      const parent = outer.parent;
+      const reader = parent?.kind === SyntaxKind5.CallExpression && parent.arguments?.[0] === outer && parent.expression?.kind === SyntaxKind5.PropertyAccessExpression && parent.expression.expression?.kind === SyntaxKind5.ThisKeyword && /^safe[A-Z]/.test(parent.expression.name?.text ?? "") || parent?.kind === SyntaxKind5.BinaryExpression && parent.operatorToken?.kind === SyntaxKind5.InKeyword && parent.right === outer;
+      if (!reader) {
+        return void 0;
+      }
+    }
+    let text = "this.Ohlcvs";
+    for (const keyNode of keys) {
+      const key = this.goOhlcvsReadKey(keyNode);
+      if (key === void 0) {
+        return void 0;
+      }
+      text += `[${key.index}]`;
+    }
+    return text;
+  }
+  // `let stored = <entry read>` over keys a nil test must guard: declared first, read behind the tests (a nil key read nil)
+  goOhlcvsReadDeclaration(statement, declaration, identation) {
+    if (statement?.parent?.kind !== SyntaxKind5.FirstStatement || declaration?.name?.kind !== SyntaxKind5.Identifier || declaration.initializer === void 0) {
+      return void 0;
+    }
+    const name = this.printNode(declaration.name, 0);
+    const iden = this.getIden(identation);
+    const init = this.goUnwrapPrintedAssertions(declaration.initializer);
+    const flat = this.goOhlcvsFlatKeyNode(declaration);
+    let bookKey;
+    let bookLocal;
+    let entryKey;
+    let flatRead = false;
+    if (flat !== void 0) {
+      bookKey = flat;
+      flatRead = true;
+    } else if (init?.kind === SyntaxKind5.ElementAccessExpression && this.goOhlcvsBookAccess(init.expression) !== void 0) {
+      bookKey = this.goOhlcvsBookAccess(init.expression).argumentExpression;
+      entryKey = init.argumentExpression;
+    } else if (init?.kind === SyntaxKind5.CallExpression && init.arguments?.length === 2 && init.expression?.kind === SyntaxKind5.PropertyAccessExpression && init.expression.expression?.kind === SyntaxKind5.ThisKeyword && init.expression.name?.text === "safeValue") {
+      const source = init.arguments[0];
+      const viaAccess = this.goOhlcvsBookAccess(source);
+      const viaCall = this.goOhlcvsBookCall(source);
+      const local = this.goOhlcvsBookLocalOf(source);
+      if (viaAccess !== void 0) {
+        bookKey = viaAccess.argumentExpression;
+      } else if (viaCall !== void 0 && this.goUnwrapPrintedAssertions(source).expression.name.text === "safeDict") {
+        bookKey = viaCall.key;
+      } else if (local !== void 0) {
+        bookLocal = this.printNode(local.name, 0);
+      } else {
+        return void 0;
+      }
+      entryKey = init.arguments[1];
+    } else {
+      return void 0;
+    }
+    const guards = [];
+    let read;
+    if (flatRead) {
+      const key = this.goWsKey(bookKey);
+      if (key === void 0) {
+        return void 0;
+      }
+      if (key.pointer !== void 0) {
+        guards.push(`${key.pointer} != nil`);
+      }
+      read = `this.Ohlcvs[${key.index}]["${GO_OHLCVS_FLAT_KEY}"]`;
+    } else {
+      const entry = this.goWsKey(entryKey);
+      let book;
+      if (bookLocal !== void 0) {
+        book = bookLocal;
+      } else {
+        const key = this.goWsKey(bookKey);
+        if (key === void 0) {
+          return void 0;
+        }
+        if (key.pointer !== void 0) {
+          guards.push(`${key.pointer} != nil`);
+        }
+        book = `this.Ohlcvs[${key.index}]`;
+      }
+      if (entry === void 0) {
+        return void 0;
+      }
+      if (entry.pointer !== void 0) {
+        guards.push(`${entry.pointer} != nil`);
+      }
+      read = `${book}[${entry.index}]`;
+    }
+    if (guards.length === 0) {
+      return `${iden}var ${name} any = ${read}`;
+    }
+    return `${iden}var ${name} any
+${iden}if ${guards.join(" && ")} {
+${iden}	${name} = ${read}
+${iden}}`;
+  }
+  // `k in this.ohlcvs[s]` / `k in book`: the comma-ok read of one book entry, for keys the printer proves non-nil (the helper
+  // answered false for a nil key and a missing book; the native read of a missing book is the nil map, which has no key either)
+  goOhlcvsInRead(inNode, statement) {
+    const dict = this.goUnwrapParenthesizedNode(inNode.right);
+    const keyNode = this.goUnwrapPrintedAssertions(inNode.left);
+    if (keyNode?.kind !== SyntaxKind5.Identifier && keyNode?.kind !== SyntaxKind5.StringLiteral) {
+      return void 0;
+    }
+    let dictText;
+    const access = this.goOhlcvsBookAccess(dict);
+    if (access !== void 0) {
+      const outer = this.goOhlcvsReadKey(access.argumentExpression);
+      dictText = outer === void 0 ? void 0 : `this.Ohlcvs[${outer.index}]`;
+    } else if (this.goOhlcvsBookLocalOf(dict) !== void 0) {
+      dictText = this.printNode(dict, 0);
+    }
+    const key = this.goOhlcvsReadKey(inNode.left);
+    const proven = key !== void 0 || keyNode.kind === SyntaxKind5.Identifier && this.goInOpPointerKeyProvenNonNil(statement, keyNode) && this.goDeclaredTypeOfIdentifier(keyNode) === "*string";
+    if (dictText === void 0 || !proven) {
+      return void 0;
+    }
+    const keyText2 = key !== void 0 ? key.index : "*" + this.printNode(keyNode, 0);
+    return { inNode, dictText, keyText: keyText2 };
+  }
+  // ===== end FOLD3 G05 =====
   // a `*string` local the enclosing control flow proves non-nil: the helper's deref
   // yields the same string key (a nil key would have made it a no-op)
   goIsNilGuardedStringPointerKey(keyNode) {
@@ -30930,8 +31293,12 @@ ${indent}}`);
   // read into the init clause cannot evaluate anything the condition would have skipped.
   goIfInOpRead(condition, statement) {
     const reads = [];
+    const inCount = this.goDescendantsOf(condition).filter((n) => n.kind === SyntaxKind5.BinaryExpression && n.operatorToken?.kind === SyntaxKind5.InKeyword).length + (condition?.kind === SyntaxKind5.BinaryExpression && condition.operatorToken?.kind === SyntaxKind5.InKeyword ? 1 : 0);
     const visit = (n) => {
-      if (n.kind === SyntaxKind5.BinaryExpression && n.operatorToken?.kind === SyntaxKind5.InKeyword) {
+      const ohlcvsRead = inCount === 1 && n.kind === SyntaxKind5.BinaryExpression && n.operatorToken?.kind === SyntaxKind5.InKeyword ? this.goOhlcvsInRead(n, statement) : void 0;
+      if (ohlcvsRead !== void 0) {
+        reads.push(ohlcvsRead);
+      } else if (n.kind === SyntaxKind5.BinaryExpression && n.operatorToken?.kind === SyntaxKind5.InKeyword) {
         const dict = this.goUnwrapParenthesizedNode(n.right);
         const key = this.goUnwrapParenthesizedNode(n.left);
         const keyIsText = key?.kind === SyntaxKind5.StringLiteral || key?.kind === SyntaxKind5.NoSubstitutionTemplateLiteral || key?.kind === SyntaxKind5.Identifier;
@@ -34440,7 +34807,8 @@ ${this.getIden(level)}}()`;
     const symbol = this.goDeleteKeyText(book.argumentExpression);
     return symbol === void 0 ? void 0 : `this.Ohlcvs[${symbol}]`;
   }
-  goDeleteKeyText(node) {
+  goDeleteKeyText(keyNode) {
+    const node = this.goUnwrapPrintedAssertions(keyNode);
     if (node?.kind === SyntaxKind5.StringLiteral || node?.kind === SyntaxKind5.NoSubstitutionTemplateLiteral) {
       return this.printNode(node, 0);
     }
@@ -34451,7 +34819,7 @@ ${this.getIden(level)}}()`;
     if (declared === "string") {
       return this.printNode(node, 0);
     }
-    return declared === "*string" && this.goDerefableStringOperand(node) ? "*" + this.printNode(node, 0) : void 0;
+    return declared === "*string" && (this.goDerefableStringOperand(node) || this.goDerefableStringOperand(keyNode)) ? "*" + this.printNode(node, 0) : void 0;
   }
   printThrowStatement(node, identation) {
     if (node.expression.kind === SyntaxKind5.Identifier) {
@@ -35690,6 +36058,10 @@ ${ind}}
     const urlsView = this.goUrlsViewRead(node, baseExpr, keys, keyStrs);
     if (urlsView !== void 0) {
       return urlsView;
+    }
+    const ohlcvsText = this.goOhlcvsReadText(node, baseExpr, keys);
+    if (ohlcvsText !== void 0) {
+      return ohlcvsText;
     }
     const cacheRead = this.goG09CacheRead(node, baseExpr, containerStr, keys, keyStrs) ?? this.goG09CacheKeysElementRead(node, baseExpr, containerStr, keys, keyStrs);
     if (cacheRead !== void 0) {
