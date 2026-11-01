@@ -421,6 +421,23 @@ export declare class GoTranspiler extends BaseTranspiler {
     transformMethodNameIfNeeded(name: string): string;
     transformCallExpressionName(name: string, nameNode?: any): string;
     transformPropertyAccessExpressionName(name: string, nameNode?: any): string;
+    goWsOrderbooksField(node: any): boolean;
+    goWsOrderbooksReadParts(node: any): {
+        field: any;
+        key: any;
+        def?: any;
+        safeDict?: boolean;
+    } | undefined;
+    goWsOrderbooksReadText(node: any): string | undefined;
+    goOrderBookWriteKeepsType(goType: string, right: any): boolean;
+    goOrderBookMemberText(node: any): string | undefined;
+    goOrderBookCacheWrite(node: any): string | undefined;
+    goOrderBookCacheAccessor(node: any): string | undefined;
+    goBookDeclaredType(node: any): string | undefined;
+    goInWsBookTree(node: any): boolean;
+    goReceiverIsOrderBook(node: any): boolean;
+    goOrderBookSetterText(baseExpr: any, containerStr: string, keyNode: any, valueNode: any, valueStr: string): string | undefined;
+    goOrderBookLocalNeverNil(id: any): boolean;
     goWsCacheClassType(type: any): boolean;
     goWsCacheField(node: any): boolean;
     goWsCacheTypeOfNode(node: any): string | undefined;
@@ -429,6 +446,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWsTradesRead(node: any): boolean;
     goWsTradesReadText(node: any): string | undefined;
     goNilInitCacheLocalType(declaration: any): string | undefined;
+    goNilInitOrderBookLocalType(declaration: any): string | undefined;
+    goIsEqualityToken(kind: any): boolean;
+    goNilInitInterfaceLocalType(declaration: any, goType: string): string | undefined;
     goWsCacheReceiverIsCallable(receiver: any, type: any): boolean;
     goWsAppendCall(node: any, identation: any): string | undefined;
     goWsCacheReturnType(node: any): string | undefined;
@@ -467,6 +487,13 @@ export declare class GoTranspiler extends BaseTranspiler {
         unbox: string;
         sides: {
             [side: string]: string;
+        };
+        setters?: {
+            [field: string]: {
+                method: string;
+                value: string;
+                type: string;
+            };
         };
     } | undefined;
     goOrderBookLocalCache: Map<any, string>;
