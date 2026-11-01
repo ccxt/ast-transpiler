@@ -3758,9 +3758,11 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
         expect(output).not.toContain('postFixDecrement');
     });
     test('a counter the printer cannot name as int keeps the helper', () => {
-        expect(withKinds({}, forLoop('i++'))).toContain('postFixIncrement(ref i)');
-        expect(withKinds({ i: 'object' }, forLoop('i++'))).toContain('postFixIncrement(ref i)');
-        expect(withKinds({ i: 'Int64' }, forLoop('i++'))).toContain('postFixIncrement(ref i)');
+        // a non-literal start is not a counter the printer proves Int64 itself (fold2C05CounterAndShadow)
+        const declaration = 'let i = markets.length';
+        expect(withKinds({}, forLoop('i++', declaration))).toContain('postFixIncrement(ref i)');
+        expect(withKinds({ i: 'object' }, forLoop('i++', declaration))).toContain('postFixIncrement(ref i)');
+        expect(withKinds({ i: 'Int64' }, forLoop('i++', declaration))).toContain('postFixIncrement(ref i)');
     });
     test('a postfix whose value is read keeps the helper (twin returns the new value)', () => {
         const input =

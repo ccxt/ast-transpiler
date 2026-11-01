@@ -243,6 +243,13 @@ const CSHARP_NATIVE_COMPARISON_TOKENS = {
 // Convert.ToDouble and returns an ORIGINAL box, so only integer kinds give the same value in the
 // same box. `double` keeps the helper (Math.Min propagates NaN, and -0/+0 differ).
 const CSHARP_MINMAX_NATIVE_KINDS = [ 'int', 'Int64' ];
+// the `this.safe*` readers whose key (argument 1) a for-counter may feed: they normalise the box
+const CSHARP_COUNTER_KEYED_CALLS = [ 'safeDict', 'safeList', 'safeValue', 'safeString', 'safeInteger', 'safeNumber' ];
+const CSHARP_EQUALITY_TOKENS = [ SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken ];
+const CSHARP_COUNTER_COMPARISONS = [
+    SyntaxKind.LessThanToken, SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanToken, SyntaxKind.GreaterThanEqualsToken,
+    SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken,
+];
 
 // kinds a native slice clamp can reproduce: the integer ones, and the nullable spellings whose
 // null the helper truncates to 0
@@ -767,6 +774,12 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpPrintedReturnTypes = new WeakMap<Node, string | undefined>();
     // method names declared once tree-wide (config.csharp.uniqueMethodNames); absent = the inferred collection return is off
     csharpUniqueMethods: Set<string> | undefined = undefined;
+    // method name -> parameter position -> the C# type the embedding build layer narrows that parameter to
+    // (config.csharp.numericArgTypes); with the callee allowlist it lets the printer prove a literal-default
+    // numeric parameter's shadow local is typed (csharpShadowedNumericParamType)
+    csharpNumericArgTypes: Record<string, Record<number, string>> = {};
+    csharpShadowCallees: Set<string> = new Set<string>();
+    csharpShadowedParamTypes = new WeakMap<Node, string>();
     // method position key -> 'List<object>' | 'IDictionary<string, object>' | undefined (csharpCollectionReturnType)
     csharpCollectionReturnTypes = new Map<string, string | undefined>();
     csharpCollectionReturnProofs = new Set<string>();
@@ -803,6 +816,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     // prefix is final, so every later read of the local is statically that type and its
     // members may replace inOp/getArrayLength
     csharpTypedLocals = new WeakMap<Node, string>();
+    // for-counter declaration -> true when csharpInt64ForCounter proved it Int64 (undefined = not asked yet)
+    csharpInt64ForCounters = new WeakMap<Node, boolean>();
     // parameter declarations this printer typed as `IList<object>` (csharpArrayListParamType), so
     // their reads keep the helper's null branches (`(x?.Count ?? 0)`, the guarded indexer)
     csharpListParamDeclarations = new WeakSet<Node>();
@@ -870,6 +885,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         // RFM-C2-B: the embedding build layer's table of hand-written base member -> declared C# type
         this.csharpDeclaredBaseFields = Object.assign ({}, config['declaredBaseFieldTypes'] ?? {});
         this.csharpUniqueMethods = Array.isArray(config['uniqueMethodNames']) ? new Set<string>(config['uniqueMethodNames']) : undefined;
+        this.csharpNumericArgTypes = Object.assign({}, config['numericArgTypes'] ?? {});
+        this.csharpShadowCallees = new Set<string>(Array.isArray(config['coreArgShadowCallees']) ? config['coreArgShadowCallees'] : []);
     }
 
     initConfig() {
@@ -3131,6 +3148,17 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.csharpTypeOfInitializer(node);
     }
 
+    // `const n = c ? 1999 : 1000` is typed `1999 | 1000` by the checker: every member is a number literal
+    csharpOperandIsNumberLiteralUnion(operand): boolean {
+        const checker: any = this.checkerOrUndefined();
+        const type = checker?.getTypeAtLocation(operand);
+        if (type?.flags !== TypeFlags.Union) {
+            return false;
+        }
+        const members = type.getTypes?.() ?? [];
+        return (members.length > 0) && members.every((member) => member.flags === TypeFlags.NumberLiteral);
+    }
+
     csharpOperandIsPlainNumber(operand): boolean {
         const checker: any = this.checkerOrUndefined();
         if (checker === undefined) {
@@ -3233,13 +3261,13 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (negative || !isIdentifier(inner)) {
             return undefined;
         }
-        const declared = this.csharpArithmeticOperandType(inner) ?? this.csharpParameterOperandType(inner);
+        const declared = this.csharpArithmeticOperandType(inner) ?? this.csharpShadowedNumericParamType(inner) ?? this.csharpParameterOperandType(inner);
         const kind = (declared === 'long') ? 'Int64' : declared;
         if ((kind !== 'int') && (kind !== 'Int64') && (kind !== 'Int64?')) {
             return undefined;
         }
         // a non-null kind needs the checker's plain number too; an Int64? read is proven by its null test
-        if ((kind !== 'Int64?') && !this.csharpOperandIsPlainNumber(inner)) {
+        if ((kind !== 'Int64?') && !this.csharpOperandIsPlainNumber(inner) && !this.csharpOperandIsNumberLiteralUnion(inner)) {
             return undefined;
         }
         return { kind, node: inner, literal: false, zero: false, small: false };
@@ -3279,11 +3307,32 @@ export class CSharpTranspiler extends BaseTranspiler {
                 return undefined; // a long literal widens an int operand's pair to long
             }
         } else if (base(left) !== base(right)) {
-            return undefined; // Math.Min(int, long) boxes a long; the helper hands back the original box
+            // Math.Min(int, long) boxes a long where the helper hands back the original box: only an Int64? read
+            // (unboxed under its null proof) beside an int keeps the native form, and never into an int sink
+            if (((left.kind !== 'Int64?') && (right.kind !== 'Int64?')) || this.csharpMinMaxSinkIsNarrowInt(node)) {
+                return undefined;
+            }
         }
         const l = this.csharpIntegralNonNullText(node, left, parsedArg1);
         const r = this.csharpIntegralNonNullText(node, right, parsedArg2);
         return ((l === undefined) || (r === undefined)) ? undefined : `Math.${name}(${l}, ${r})`;
+    }
+
+    // `int x = Math.min (a, b)` / `x = Math.min (a, b)`: the sink is printed with a narrow integer type
+    csharpMinMaxSinkIsNarrowInt(call): boolean {
+        let value: any = call;
+        while (value.parent !== undefined && isParenthesizedExpression(value.parent)) {
+            value = value.parent;
+        }
+        const parent: any = value.parent;
+        const narrow = (type: string | undefined) => [ 'int', 'uint', 'short', 'byte' ].indexOf(type as string) >= 0;
+        if (isBinaryExpression(parent) && (parent.operatorToken.kind === SyntaxKind.EqualsToken) && (parent.right === value)) {
+            return narrow(this.csharpExpressionTypeOf(parent.left)); // `x = Math.min (a, b)` on an int local
+        }
+        if (!isVariableDeclaration(parent) || parent.initializer !== value) {
+            return false;
+        }
+        return narrow(this.csharpHx4DeclaredLocalType(parent) ?? this.getCSharpLocalType(parent));
     }
 
     // the operand text, `.Value` appended for a null-tested Int64? identifier; undefined when unproven
@@ -5292,6 +5341,195 @@ export class CSharpTranspiler extends BaseTranspiler {
     // a `((string)x)` wrapper is redundant as soon as the receiver's static C# type is
     // already string: the cast names the box the value is in, it never changes the value
 
+    // `limit: Int = 100` on a method whose `limit` position the build layer narrows to `Int64?`: the body
+    // prints a `limit ??= 100;` prologue, so the build layer's post-print pass keeps the parameter in a
+    // shadow local (`limitVar`) and types that local `Int64?` when every use is an identity read. This is
+    // the same decision made on the AST: every use of the parameter is a null test, an argument of an
+    // allowlisted `this.<callee>` call, or an operand of Math.min/max against an integer literal. The
+    // build layer's pass accepts the printed form of each of those, so the local is `Int64?` and a
+    // null-proven read can unbox with `.Value`. Anything else answers undefined (the shadow stays object).
+    csharpShadowedNumericParamType(node): string | undefined {
+        if (!isIdentifier(node) || (node.text !== 'limit')) {
+            return undefined;
+        }
+        const declaration: any = this.csharpParameterDeclaration(node);
+        if (declaration === undefined) {
+            return undefined;
+        }
+        const cached = this.csharpShadowedParamTypes.get(declaration);
+        if (cached !== undefined) {
+            return (cached === '') ? undefined : cached;
+        }
+        const type = this.csharpShadowedNumericParamProof(declaration) ?? '';
+        this.csharpShadowedParamTypes.set(declaration, type);
+        return (type === '') ? undefined : type;
+    }
+
+    csharpShadowedNumericParamProof(declaration): string | undefined {
+        const owner: any = declaration.parent;
+        const init: any = declaration.initializer;
+        if (!isMethodDeclaration(owner) || (owner.body === undefined) || (init?.kind !== SyntaxKind.NumericLiteral) || !/^\d{1,9}$/.test(init.text)) {
+            return undefined;
+        }
+        const position = owner.parameters.indexOf(declaration);
+        const ownerName: string = (owner.name as any)?.text;
+        const table = Object.prototype.hasOwnProperty.call(this.csharpNumericArgTypes, ownerName) ? this.csharpNumericArgTypes[ownerName] : undefined;
+        if ((position < 0) || (table?.[position] !== 'Int64?')) {
+            return undefined;
+        }
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return undefined;
+        }
+        let ok = true;
+        const visit = (n: any) => {
+            if (!ok) {
+                return;
+            }
+            if (isIdentifier(n) && (n.text === declaration.name.text) && (n !== declaration.name)
+                && (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() === declaration) && !this.csharpShadowedParamUseIsIdentity(n)) {
+                ok = false;
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        visit(owner.body);
+        return ok ? 'Int64?' : undefined;
+    }
+
+    csharpShadowedParamUseIsIdentity(read): boolean {
+        let current: any = read;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        const parent: any = current.parent;
+        if (parent?.kind === SyntaxKind.BinaryExpression) {
+            const op = parent.operatorToken.kind;
+            if (CSHARP_EQUALITY_TOKENS.indexOf(op) < 0) {
+                return false;
+            }
+            // `limit == null)` is the printed shape the shadow pass reads; a null on the left prints another one
+            const other: any = parent.right;
+            return (parent.left === current) && ((other?.kind === SyntaxKind.NullKeyword) || ((other?.kind === SyntaxKind.Identifier) && ((other as any).text === 'undefined')));
+        }
+        if (parent?.kind !== SyntaxKind.CallExpression || (parent.arguments?.indexOf(current) ?? -1) < 0) {
+            return false;
+        }
+        const callee: any = parent.expression;
+        if (!isPropertyAccessExpression(callee)) {
+            return false;
+        }
+        if ((callee.expression?.kind === SyntaxKind.Identifier) && ((callee.expression as any).text === 'Math') && ((callee.name?.text === 'min') || (callee.name?.text === 'max'))) {
+            const other: any = (parent.arguments.length === 2) ? parent.arguments[(parent.arguments[0] === current) ? 1 : 0] : undefined;
+            return (other?.kind === SyntaxKind.NumericLiteral) && /^\d{1,9}$/.test(other.text);
+        }
+        return (callee.expression?.kind === SyntaxKind.ThisKeyword) && this.csharpShadowCallees.has(callee.name?.text as string);
+    }
+
+    // `for (let i = <int literal>; …; i++)` whose every read normalises the box: an ordered / equality
+    // comparison operand, an element index, the key of a `this.safe*` read, or `i ± <int literal>`.
+    // Each such read takes an Int64 the way it takes the Int32 box, so the counter is declared Int64
+    // and its increment is the native `i++`. Counters the embedding build layer already types
+    // (csharpHx4DeclaredLocalType) keep that type.
+    csharpInt64ForCounter(declaration): boolean {
+        if (!isVariableDeclaration(declaration)) {
+            return false;
+        }
+        const cached = this.csharpInt64ForCounters.get(declaration);
+        if (cached !== undefined) {
+            return cached;
+        }
+        this.csharpInt64ForCounters.set(declaration, false); // a re-entrant question answers no
+        const proven = this.csharpInt64ForCounterProof(declaration);
+        this.csharpInt64ForCounters.set(declaration, proven);
+        return proven;
+    }
+
+    csharpInt64ForCounterProof(declaration): boolean {
+        const list: any = declaration.parent;
+        const loop: any = list?.parent;
+        const name = declaration.name;
+        if ((name?.kind !== SyntaxKind.Identifier) || (list?.declarations?.length !== 1) || !isForStatement(loop) || (loop.initializer !== list)
+            || (loop.statement?.kind !== SyntaxKind.Block) || (loop.incrementor === undefined)) {
+            return false;
+        }
+        const init: any = declaration.initializer;
+        if ((init?.kind !== SyntaxKind.NumericLiteral) || !/^\d{1,9}$/.test(init.text)) {
+            return false;
+        }
+        const step: any = loop.incrementor;
+        if (!isPostfixUnaryExpression(step) || (step.operator !== SyntaxKind.PlusPlusToken) || !isIdentifier(step.operand) || (step.operand.text !== name.text)) {
+            return false;
+        }
+        const file = String(declaration.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if ((file.indexOf('ts/src/test/') >= 0) || (file.indexOf('examples/') >= 0)) {
+            return false; // generated tests and examples keep the helper form
+        }
+        if (this.csharpTypeNameIsShadowed(this.csharpEnclosingFunction(declaration), 'Int64')) {
+            return false;
+        }
+        const classified = this.csharpHx4DeclaredLocalType(declaration); // re-entry answers no above: this is the build layer's own type
+        if ((classified !== undefined) && (classified !== this.VAR_TOKEN) && (classified !== 'var')) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return false;
+        }
+        let reads = 0;
+        let ok = true;
+        const visit = (n: any) => {
+            if (!ok) {
+                return;
+            }
+            if (isIdentifier(n) && (n.text === name.text) && (n !== name) && (n !== step.operand)) {
+                if (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration) {
+                    return; // another binding of the name
+                }
+                if (!this.csharpCounterReadNormalises(n)) {
+                    ok = false;
+                    return;
+                }
+                reads += 1;
+            }
+            n.forEachChild(visit);
+        };
+        visit(loop.condition);
+        visit(loop.statement);
+        return ok && (reads > 0);
+    }
+
+    csharpCounterReadNormalises(read): boolean {
+        let current: any = read;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        const parent: any = current.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        if (parent.kind === SyntaxKind.ElementAccessExpression) {
+            return (parent.argumentExpression === current) && !this.csharpIsWriteTarget(parent);
+        }
+        if (parent.kind === SyntaxKind.CallExpression) {
+            const callee: any = parent.expression;
+            return isPropertyAccessExpression(callee) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+                && (CSHARP_COUNTER_KEYED_CALLS.indexOf(callee.name?.text as string) >= 0) && (parent.arguments?.[1] === current);
+        }
+        if (parent.kind !== SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        const op = parent.operatorToken.kind;
+        if (CSHARP_COUNTER_COMPARISONS.indexOf(op) >= 0) {
+            return true;
+        }
+        if ((op === SyntaxKind.PlusToken) || (op === SyntaxKind.MinusToken)) {
+            const right: any = parent.right;
+            return (parent.left === current) && (right?.kind === SyntaxKind.NumericLiteral) && /^\d{1,9}$/.test(right.text);
+        }
+        return false;
+    }
+
     getCSharpLocalType(declaration): string {
         // a declaration whose initializer names a local that is itself being typed right now (a
         // `a = b + x` / `b = a + y` pair) is not provable: answer `var` instead of recursing
@@ -5308,6 +5546,9 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     csharpResolvedLocalType(declaration): string {
+        if (this.csharpInt64ForCounter(declaration)) {
+            return 'Int64';
+        }
         const csharpType = this.csharpTypeOfInitializer(declaration.initializer);
         if (csharpType === undefined) {
             return this.VAR_TOKEN;
@@ -8693,7 +8934,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (parent?.kind !== SyntaxKind.ForStatement || parent.incrementor !== node) {
             return false;
         }
-        return this.csharpExpressionTypeOf(node.operand) === 'int';
+        if (this.csharpExpressionTypeOf(node.operand) === 'int') {
+            return true;
+        }
+        const declaration: any = this.getChecker().getSymbolAtLocation(node.operand)?.valueDeclaration?.resolve();
+        return (declaration !== undefined) && this.csharpInt64ForCounter(declaration);
     }
 
     printPostFixUnaryExpression(node, identation) {

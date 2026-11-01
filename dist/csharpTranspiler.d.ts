@@ -20,6 +20,9 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpStringReturnTypes: WeakMap<Node, string>;
     csharpPrintedReturnTypes: WeakMap<Node, string>;
     csharpUniqueMethods: Set<string> | undefined;
+    csharpNumericArgTypes: Record<string, Record<number, string>>;
+    csharpShadowCallees: Set<string>;
+    csharpShadowedParamTypes: WeakMap<Node, string>;
     csharpCollectionReturnTypes: Map<string, string>;
     csharpCollectionReturnProofs: Set<string>;
     csharpLocalTypes: WeakMap<Node, string>;
@@ -31,6 +34,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpListParamExclusions?: (name: string, index: number) => boolean;
     csharpElementRowLocalSource?: (fileName: string) => boolean;
     csharpTypedLocals: WeakMap<Node, string>;
+    csharpInt64ForCounters: WeakMap<Node, boolean>;
     csharpListParamDeclarations: WeakSet<Node>;
     csharpMemberWriteCache: WeakMap<object, Map<string, boolean>>;
     csharpMemberKeyCounters: WeakMap<object, number>;
@@ -170,6 +174,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIntegerLiteralKind(node: any): string | undefined;
     csharpNumericKindHoldsLiteral(callKind: string, literalKind: string): boolean;
     csharpExpressionTypeOf(node: any): string | undefined;
+    csharpOperandIsNumberLiteralUnion(operand: any): boolean;
     csharpOperandIsPlainNumber(operand: any): boolean;
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
     csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
@@ -185,6 +190,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpNativeIntegralMod(node: any, leftText: string, rightText: string): string | undefined;
     csharpNativeIntegralMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
+    csharpMinMaxSinkIsNarrowInt(call: any): boolean;
     csharpIntegralNonNullText(call: any, operand: any, printed: string): string | undefined;
     csharpIntegralTestedInExpression(call: any, symbol: any): boolean;
     csharpIntegralBindingIsRewritten(symbol: any): boolean;
@@ -299,6 +305,12 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpEnclosingFunction(node: any): any;
     csharpTypeNameIsShadowed(scope: any, csharpType: string): boolean;
     csharpLocalIsSafeToType(scope: any, declaration: any, varName: string, csharpType: string, safeAccessor?: boolean): boolean;
+    csharpShadowedNumericParamType(node: any): string | undefined;
+    csharpShadowedNumericParamProof(declaration: any): string | undefined;
+    csharpShadowedParamUseIsIdentity(read: any): boolean;
+    csharpInt64ForCounter(declaration: any): boolean;
+    csharpInt64ForCounterProof(declaration: any): boolean;
+    csharpCounterReadNormalises(read: any): boolean;
     getCSharpLocalType(declaration: any): string;
     csharpResolvedLocalType(declaration: any): string;
     csharpIsSafeAccessorCall(initializer: any): boolean;
