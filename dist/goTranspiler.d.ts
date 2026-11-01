@@ -321,6 +321,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNonceReturnIsInt64(expression: any): boolean;
     goInt64SumOperands(call: any): any[] | undefined;
     goNonceSumText(node: any): string | undefined;
+    goBasePairReturnType(node: any): string | undefined;
+    goBasePairReturnIsPair(node: any): boolean;
+    goBasePairReturnText(node: any, identation: any): string | undefined;
     goMarketProducerReturnType(node: any): string | undefined;
     goMarketLocalUnboxCache: Map<any, string>;
     goMarketLocalUnbox(declaration: any): string | undefined;

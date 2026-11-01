@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-AWK6QGCM.js";
+} from "./chunk-MEKZ6QY3.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -20269,14 +20269,40 @@ var CCXT_GO_TUPLE_RESULT_METHODS = [
   "handleOptionBoolAndParams2",
   "handleOptionIntegerAndParams",
   "handleOptionIntegerAndParams2",
-  "handleOptionStringAndParams2"
+  "handleOptionStringAndParams2",
+  "handleParamString",
+  "handleParamString2",
+  "handleNetworkCodeAndParams",
+  "handleParamBool",
+  "handleParamBool2",
+  "handleParamInteger",
+  "handleParamInteger2"
 ];
 var CCXT_GO_TUPLE_RESULT_ELEMENT_0 = {
   "handleUntilOption": "MapTyped",
   "handleOptionBoolAndParams": "GetValueBool",
   "handleOptionBoolAndParams2": "GetValueBool",
   "handleOptionIntegerAndParams": "Int64Value",
-  "handleOptionIntegerAndParams2": "Int64Value"
+  "handleOptionIntegerAndParams2": "Int64Value",
+  "handleParamBool": "SafeBoolPtr",
+  "handleParamBool2": "SafeBoolPtr",
+  "handleParamInteger": "SafeIntegerPtr",
+  "handleParamInteger2": "SafeIntegerPtr"
+};
+var CCXT_GO_BASE_PAIR_TWINS = ["handleParamString", "handleParamString2", "handleNetworkCodeAndParams", "handleParamBool", "handleParamBool2", "handleParamInteger", "handleParamInteger2"];
+var CCXT_GO_PAIR_SLOT_0 = {
+  "handleParamString": "*string",
+  "handleParamString2": "*string",
+  "handleNetworkCodeAndParams": "*string",
+  "handleParamBool": "*bool",
+  "handleParamBool2": "*bool",
+  "handleParamInteger": "*int64",
+  "handleParamInteger2": "*int64",
+  "handleMarketTypeAndParams": "*string",
+  "handleSubTypeAndParams": "*string",
+  "handleOptionStringAndParams": "*string",
+  "handleOptionStringAndParams2": "*string",
+  "handleMarginModeAndParams": "*string"
 };
 var CCXT_GO_TUPLE_BOOL_DEFAULT_SLOT = {
   "handleOptionBoolAndParams": 3,
@@ -20299,6 +20325,253 @@ function ccxtGoTupleBoolCallIsNullable(node) {
 function ccxtGoTupleResultCall(node) {
   const callee = node?.expression;
   return node?.kind === ts.SyntaxKind.CallExpression && callee?.kind === ts.SyntaxKind.PropertyAccessExpression && CCXT_GO_TUPLE_RESULT_METHODS.includes(callee.name?.text) && (callee.expression?.kind === ts.SyntaxKind.ThisKeyword || callee.expression?.kind === ts.SyntaxKind.SuperKeyword || isIdentifierNamed(callee.expression, "exchange")) && !ccxtGoTupleBoolCallIsNullable(node);
+}
+function ccxtGoPairSlot0(goTranspiler, call) {
+  const name = call?.expression?.name?.text;
+  const slot = CCXT_GO_PAIR_SLOT_0[name];
+  if (slot === void 0 || !ccxtGoTupleResultCall(call)) {
+    return void 0;
+  }
+  try {
+    const declaration = goTranspiler.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+    return declaration?.parent?.name?.text === "BaseExchange" || !CCXT_GO_BASE_PAIR_TWINS.includes(name) ? slot : void 0;
+  } catch (e) {
+    return void 0;
+  }
+}
+function ccxtGoFreeLocalName(goTranspiler, node, base) {
+  const scope = goTranspiler.goEnclosingFunction?.(node);
+  for (const candidate of [base, base + "Slot", base + "Slot0"]) {
+    if (scope !== void 0 && !goTranspiler.hasNodeWhere(scope, (n) => n.kind === ts.SyntaxKind.Identifier && n.text === candidate)) {
+      return candidate;
+    }
+  }
+  return void 0;
+}
+var CCXT_GO_SAFE_PTR_TYPE = { "SafeStringPtr": "*string", "SafeBoolPtr": "*bool", "SafeIntegerPtr": "*int64" };
+function ccxtGoTargetIsNilHere(goTranspiler, node) {
+  const target = node?.kind === ts.SyntaxKind.BinaryExpression ? node.left?.elements?.[0] : void 0;
+  if (target?.kind !== ts.SyntaxKind.Identifier) {
+    return false;
+  }
+  const declaration = goTranspiler.goDeclarationOfIdentifier?.(target);
+  const scope = goTranspiler.goEnclosingFunction?.(node);
+  if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || scope === void 0 || !(declaration.initializer === void 0 || goTranspiler.goNilInitInitializer(declaration.initializer)) || goTranspiler.goTupleWriteRepeats(node, declaration)) {
+    return false;
+  }
+  return !goTranspiler.hasNodeWhere(scope, (n) => n.kind === ts.SyntaxKind.Identifier && n.text === target.text && n !== target && n.getStart() < node.getStart() && goTranspiler.goRebindingTargetOf(n) !== void 0);
+}
+function ccxtGoCallerMethodProbe(goTranspiler, node, declaration, identation) {
+  const call = declaration.initializer;
+  const method = goTranspiler.goEnclosingFunction?.(node);
+  if (call?.expression?.name?.text !== "handleParamString" || call.arguments?.length !== 3 || declaration.name.elements.length !== 2 || method?.kind !== ts.SyntaxKind.MethodDeclaration || method.name?.text !== "handleOptionAndParams" || !CCXT_GO_ELEMENT_1_BASE_FILE.test(method.getSourceFile().fileName) || !declaration.name.elements.every((e) => ts.isIdentifier(e.name))) {
+    return void 0;
+  }
+  const [params, key, fallback] = call.arguments.map((a) => goTranspiler.printNode(a, 0).trim());
+  const [name, rest] = declaration.name.elements.map((e) => e.name.text);
+  const iden = goTranspiler.getIden(identation);
+  return iden + "var " + name + " *string = this.SafeString(" + params + ", " + key + ", " + fallback + ")\n" + iden + rest + " := " + params + "\n" + iden + "if " + name + " != nil {\n" + iden + "	" + rest + " = this.Omit(" + params + ", " + key + ")\n" + iden + "}";
+}
+function ccxtGoPairHolderSlots(goTranspiler, declaration) {
+  goTranspiler.ccxtGoPairHolders ??= /* @__PURE__ */ new WeakMap();
+  if (goTranspiler.ccxtGoPairHolders.has(declaration)) {
+    return goTranspiler.ccxtGoPairHolders.get(declaration);
+  }
+  goTranspiler.ccxtGoPairHolders.set(declaration, void 0);
+  const call = declaration?.initializer;
+  const scope = goTranspiler.goEnclosingFunction?.(declaration);
+  if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts.SyntaxKind.Identifier || declaration.parent?.parent?.kind !== ts.SyntaxKind.VariableStatement || !ccxtGoTupleResultCall(call) || scope === void 0) {
+    return void 0;
+  }
+  const name = declaration.name.text;
+  const reads = [[], []];
+  let ok = true;
+  let declarations = 0;
+  goTranspiler.hasNodeWhere(scope, (n) => {
+    if ((n.kind === ts.SyntaxKind.VariableDeclaration || n.kind === ts.SyntaxKind.Parameter || n.kind === ts.SyntaxKind.BindingElement) && isIdentifierNamed(n.name, name)) {
+      declarations++;
+    }
+    if (!isIdentifierNamed(n, name) || n === declaration.name) {
+      return false;
+    }
+    const read = n.parent;
+    const index = read?.kind === ts.SyntaxKind.ElementAccessExpression && read.expression === n && read.argumentExpression?.kind === ts.SyntaxKind.NumericLiteral ? read.argumentExpression.text : void 0;
+    const target = read?.parent?.kind === ts.SyntaxKind.BinaryExpression && read.parent.left === read && isAssignmentOperator(read.parent.operatorToken.kind);
+    if (index !== "0" && index !== "1" || target) {
+      ok = false;
+    } else {
+      reads[Number(index)].push(read);
+    }
+    return false;
+  });
+  const first = ccxtGoTupleResultFirst(call);
+  const pointer = ["SafeStringPtr", "SafeBoolPtr", "SafeIntegerPtr"].includes(first);
+  if (!ok || declarations !== 1 || reads[0].length + reads[1].length === 0) {
+    return void 0;
+  }
+  if (pointer) {
+    goTranspiler.ccxtGoPairHolderProbing ??= /* @__PURE__ */ new Set();
+    goTranspiler.ccxtGoPairHolderProbing.add(declaration);
+    try {
+      const shape = new RegExp("^\\s*var \\w+ (?:\\*string|\\*bool|\\*int64) = (?:ccxt\\.)?Safe(?:String|Bool|Integer)Ptr\\((?:(?:ccxt\\.)?GetValue\\(" + name + ", 0\\)|" + name + "\\[0\\])\\)\\s*$");
+      const typed = reads[0].every((read) => read.parent?.kind === ts.SyntaxKind.VariableDeclaration && read.parent.initializer === read && read.parent.name?.kind === ts.SyntaxKind.Identifier && read.parent.parent?.declarations?.length === 1 && shape.test(String(goTranspiler.printNode(read.parent.parent, 0))));
+      if (!typed) {
+        return void 0;
+      }
+    } finally {
+      goTranspiler.ccxtGoPairHolderProbing.delete(declaration);
+    }
+  }
+  const names = [0, 1].map((i) => reads[i].length === 0 ? "_" : ccxtGoFreeLocalName(goTranspiler, declaration, name + "Slot" + i));
+  if (names.includes(void 0)) {
+    return void 0;
+  }
+  const result = { names, pointer, call: first };
+  goTranspiler.ccxtGoPairHolders.set(declaration, result);
+  return result;
+}
+function ccxtGoPairHolderDeclaration(goTranspiler, identifier) {
+  try {
+    const symbol = goTranspiler.getChecker().getSymbolAtLocation(identifier.expression);
+    return symbol?.valueDeclaration?.resolve?.() ?? symbol?.declarations?.map((d) => d.resolve())?.[0];
+  } catch (e) {
+    return void 0;
+  }
+}
+function ccxtGoPairHolderRead(goTranspiler, node) {
+  if (node?.expression?.kind !== ts.SyntaxKind.Identifier || node.argumentExpression?.kind !== ts.SyntaxKind.NumericLiteral) {
+    return void 0;
+  }
+  let declaration = void 0;
+  try {
+    const symbol = goTranspiler.getChecker().getSymbolAtLocation(node.expression);
+    declaration = symbol?.valueDeclaration?.resolve?.() ?? symbol?.declarations?.map((d) => d.resolve())?.[0];
+  } catch (e) {
+    return void 0;
+  }
+  if (declaration === void 0 || goTranspiler.ccxtGoPairHolderProbing?.has(declaration)) {
+    return void 0;
+  }
+  const slots = ccxtGoPairHolderSlots(goTranspiler, declaration);
+  const index = Number(node.argumentExpression.text);
+  return slots === void 0 || slots.names[index] === void 0 || slots.names[index] === "_" ? void 0 : slots.names[index];
+}
+function ccxtGoPairSlotConsumer(printed, slotName, pointer) {
+  const escaped = slotName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stripped = pointer ? printed.replace(new RegExp("^(\\s*var \\w+ (?:\\*string|\\*bool|\\*int64) = )(?:ccxt\\.)?Safe(?:String|Bool|Integer)Ptr\\(" + escaped + "\\)$"), "$1" + slotName) : printed;
+  return stripped.replace(new RegExp("^(\\s*var \\w+ map\\[string\\]any = )(?:ccxt\\.)?MapTyped\\(" + escaped + "\\)$"), "$1" + slotName).replace(new RegExp("^(\\s*)var (\\w+) any = " + escaped + "$"), "$1$2 := " + slotName);
+}
+function ccxtGoPairBind(goTranspiler, printed, node, slot0) {
+  const lines = printed.split("\n").filter((l) => l.trim() !== "");
+  const head = /^(\s*)(?:var (\w+Variable) \[\]any = |(\w+Variable) := )(.*)$/.exec(lines[0] ?? "");
+  const bound = head === null ? void 0 : ccxtGoTupleResultUnwrap(head[4]);
+  if (bound === void 0 || lines.length < 2 || lines.length > 6) {
+    return void 0;
+  }
+  const holder = head[2] ?? head[3];
+  const h = holder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const body = lines.slice(1).map((l) => l.replace(/\bccxt\./g, ""));
+  const notes = body.map((l) => /\s\/\/.*$/.exec(l)?.[0] ?? "").filter((n) => n !== "");
+  const code = body.map((l) => l.replace(/\s\/\/.*$/, "").trim());
+  const ptr = "(\\*string|\\*bool|\\*int64)";
+  const safe = "(?:Safe(?:String|Bool|Integer)Ptr)";
+  const slot0Read = "(?:GetValue\\(" + h + ", 0\\)|" + h + "\\[0\\])";
+  let at = 0;
+  let value;
+  let m;
+  if ((m = new RegExp("^var (\\w+) " + ptr + " = " + safe + "\\(" + slot0Read + "\\)$").exec(code[at] ?? "")) !== null) {
+    value = { "kind": "typed", "name": m[1], "type": m[2], "isNew": true };
+    at += 1;
+  } else if ((m = new RegExp("^(\\w+) = (Safe(?:String|Bool|Integer)Ptr)\\(" + slot0Read + "\\)$").exec(code[at] ?? "")) !== null) {
+    value = { "kind": "typed", "name": m[1], "type": CCXT_GO_SAFE_PTR_TYPE[m[2]], "isNew": false };
+    at += 1;
+  } else if ((m = new RegExp("^(\\w+) := GetValue\\(" + h + ", 0\\)$").exec(code[at] ?? "")) !== null) {
+    value = { "kind": "iife", "name": m[1], "isNew": true };
+    at += 1;
+  } else if ((m = new RegExp("^(\\w+) = GetValue\\(" + h + ", 0\\)$").exec(code[at] ?? "")) !== null) {
+    value = { "kind": "reset", "name": m[1], "isNew": false, "reset": "nil" };
+    at += 1;
+  } else if ((m = new RegExp("^(\\w+) = GetValueBool\\(" + h + ", 0, (true|false)\\)$").exec(code[at] ?? "")) !== null) {
+    value = { "kind": "reset", "name": m[1], "isNew": false, "reset": m[2] };
+    at += 1;
+  } else if ((m = new RegExp("^var (\\w+) \\*int64 = nil$").exec(code[at] ?? "")) !== null) {
+    const assertion = new RegExp("^if p, ok := " + h + "\\[0\\]\\.\\(\\*int64\\); ok \\{ ?" + m[1] + " = p ?\\}?$");
+    const joined = code.slice(at + 1, at + 4).join(" ");
+    const one = assertion.test(code[at + 1] ?? "");
+    if (!one && !new RegExp("^if p, ok := " + h + "\\[0\\]\\.\\(\\*int64\\); ok \\{ " + m[1] + " = p \\}$").test(joined.replace(/\s+/g, " "))) {
+      return void 0;
+    }
+    value = { "kind": "typed", "name": m[1], "type": "*int64", "isNew": true };
+    at += one ? 2 : 4;
+  } else {
+    return void 0;
+  }
+  let params;
+  if (at < code.length) {
+    if ((m = new RegExp("^var (\\w+) map\\[string\\]any = MapTyped\\((?:GetValue\\(" + h + ", 1\\)|" + h + "\\[1\\])\\)$").exec(code[at])) !== null) {
+      params = { "name": m[1], "isNew": true };
+    } else if ((m = new RegExp("^(\\w+) := (?:GetValue\\(" + h + ", 1\\)|" + h + "\\[1\\])$").exec(code[at])) !== null) {
+      params = { "name": m[1], "isNew": true };
+    } else if ((m = new RegExp("^(\\w+) = (?:MapTyped\\()?(?:GetValue\\(" + h + ", 1\\)|" + h + "\\[1\\])\\)?$").exec(code[at])) !== null) {
+      params = { "name": m[1], "isNew": false };
+    } else {
+      return void 0;
+    }
+    at += 1;
+  }
+  if (at !== code.length) {
+    return void 0;
+  }
+  if (value.kind === "typed" && value.type !== slot0 || value.kind !== "typed" && slot0 === void 0) {
+    return void 0;
+  }
+  const first = head[1];
+  const ind = /^\s*/.exec(lines[1])[0];
+  let lhs0 = value.name;
+  let temp;
+  if (value.kind !== "typed") {
+    temp = ccxtGoFreeLocalName(goTranspiler, node, value.name + "Ptr");
+    if (temp === void 0) {
+      return void 0;
+    }
+    lhs0 = temp;
+  }
+  const lhs1 = params === void 0 ? "_" : params.name;
+  const short = (temp !== void 0 || value.isNew) && (params === void 0 || params.isNew) && !(value.kind === "reset");
+  const note = notes[0] ?? "";
+  const out = [];
+  let lead = first;
+  if (temp !== void 0) {
+    out.push(lead + "var " + temp + " " + slot0 + " = nil");
+    lead = ind;
+  }
+  if (!short) {
+    if (temp === void 0 && value.isNew) {
+      out.push(lead + "var " + value.name + " " + value.type + " = nil");
+      lead = ind;
+    }
+    if (params !== void 0 && params.isNew) {
+      out.push(lead + "var " + params.name + " map[string]any = nil");
+      lead = ind;
+    }
+  }
+  out.push(lead + lhs0 + ", " + lhs1 + (short ? " := " : " = ") + bound + note);
+  if (value.kind === "iife") {
+    out.push(
+      ind + value.name + " := func() any {",
+      ind + "	if " + temp + " != nil {",
+      ind + "		return *" + temp,
+      ind + "	}",
+      ind + "	return nil",
+      ind + "}()"
+    );
+  } else if (value.kind === "reset") {
+    if (!(value.reset === "nil" && ccxtGoTargetIsNilHere(goTranspiler, node))) {
+      out.push(ind + value.name + " = " + value.reset);
+    }
+    out.push(ind + "if " + temp + " != nil {", ind + "	" + value.name + " = *" + temp, ind + "}");
+  }
+  return out.join("\n");
 }
 function ccxtGoTupleResultFirst(call) {
   return CCXT_GO_TUPLE_RESULT_ELEMENT_0[call.expression.name.text] ?? "SafeStringPtr";
@@ -20406,10 +20679,32 @@ function installCcxtGoTupleResults(goTranspiler) {
   };
   const printDeclaration = goTranspiler.printVariableDeclarationList;
   goTranspiler.printVariableDeclarationList = function(node, identation) {
-    const printed = printDeclaration.call(this, node, identation);
     const declaration = node?.declarations?.[0];
+    const holderSlots = node?.declarations?.length === 1 ? ccxtGoPairHolderSlots(this, declaration) : void 0;
+    if (holderSlots !== void 0) {
+      const bound = ccxtGoTupleResultUnwrap(this.printNode(declaration.initializer, 0));
+      if (bound !== void 0) {
+        return this.getIden(identation) + holderSlots.names.join(", ") + " := " + bound;
+      }
+    }
+    const printed = printDeclaration.call(this, node, identation);
+    const readSlot = node?.declarations?.length === 1 ? ccxtGoPairHolderRead(this, declaration?.initializer) : void 0;
+    if (typeof printed === "string" && readSlot !== void 0) {
+      return ccxtGoPairSlotConsumer(printed, readSlot, ccxtGoPairHolderSlots(this, ccxtGoPairHolderDeclaration(this, declaration.initializer)).pointer);
+    }
     if (typeof printed !== "string" || declaration?.name?.kind !== ts.SyntaxKind.ArrayBindingPattern || !ccxtGoTupleResultCall(declaration.initializer)) {
       return printed;
+    }
+    const probe = ccxtGoCallerMethodProbe(this, node, declaration, identation);
+    if (probe !== void 0) {
+      return probe;
+    }
+    const pairSlot = ccxtGoPairSlot0(this, declaration.initializer);
+    const ofBase = CCXT_GO_BASE_PAIR_TWINS.includes(declaration.initializer.expression.name.text);
+    const pairBind = pairSlot !== void 0 && declaration.name.elements.length === 2 ? () => ccxtGoPairBind(this, printed, node, pairSlot) : () => void 0;
+    const pairFirst = ofBase ? pairBind() : void 0;
+    if (pairFirst !== void 0) {
+      return pairFirst;
     }
     const untypedOk = ccxtGoTupleResultUntypedElementsAreSafe(this, declaration);
     const joined = ccxtGoTupleResultJoin(printed, declaration.name.elements.length, true, untypedOk, ccxtGoTupleResultFirst(declaration.initializer));
@@ -20420,7 +20715,11 @@ function installCcxtGoTupleResults(goTranspiler) {
         goTranspiler.ccxtGoTupleJoinedParams.add(params);
       }
     }
-    return joined ?? printed;
+    return joined ?? (ofBase ? void 0 : pairBind()) ?? printed;
+  };
+  const printElement = goTranspiler.printElementAccessExpression;
+  goTranspiler.printElementAccessExpression = function(node, ...rest) {
+    return ccxtGoPairHolderRead(this, node) ?? printElement.call(this, node, ...rest);
   };
   const printCustom = goTranspiler.printCustomBinaryExpressionIfAny;
   goTranspiler.printCustomBinaryExpressionIfAny = function(node, identation) {
@@ -20428,7 +20727,12 @@ function installCcxtGoTupleResults(goTranspiler) {
     if (typeof printed !== "string" || node?.left?.kind !== ts.SyntaxKind.ArrayLiteralExpression || node.operatorToken?.kind !== ts.SyntaxKind.EqualsToken || !ccxtGoTupleResultCall(node.right)) {
       return printed;
     }
-    return ccxtGoTupleResultJoin(printed, node.left.elements.length, false, false, ccxtGoTupleResultFirst(node.right)) ?? printed;
+    const pairSlot = ccxtGoPairSlot0(this, node.right);
+    const pairBind = pairSlot !== void 0 && node.left.elements.length === 2 ? () => ccxtGoPairBind(this, printed, node, pairSlot) : () => void 0;
+    if (CCXT_GO_BASE_PAIR_TWINS.includes(node.right.expression.name.text)) {
+      return pairBind() ?? printed;
+    }
+    return ccxtGoTupleResultJoin(printed, node.left.elements.length, false, false, ccxtGoTupleResultFirst(node.right)) ?? pairBind() ?? printed;
   };
   const printReturn = goTranspiler.printReturnStatement;
   goTranspiler.printReturnStatement = function(node, identation) {
@@ -21933,6 +22237,15 @@ var GO_GETARG_EXCLUDED_POSITIONS = {
   "request": [1, 3],
   "sign": [1, 3]
 };
+var GO_BASE_PAIR_TWINS = {
+  "handleParamString": "*string",
+  "handleParamString2": "*string",
+  "handleNetworkCodeAndParams": "*string",
+  "handleParamBool": "*bool",
+  "handleParamBool2": "*bool",
+  "handleParamInteger": "*int64",
+  "handleParamInteger2": "*int64"
+};
 var GO_PARAMS_TUPLE_HELPERS = {
   "handleUntilOption": 1,
   "handleNetworkCodeAndParams": 1,
@@ -22868,7 +23181,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
   // or `printAsyncTrampolineBlock`) contributes the single space before `{`.
   printGoSignature(node, identation, receiver) {
     const name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(node.name.text));
-    const returnType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.goWsCacheReturnType(node) ?? this.printFunctionType(node)).trim();
+    const returnType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.goWsCacheReturnType(node) ?? this.goBasePairReturnType(node) ?? this.printFunctionType(node)).trim();
     const parsedArgs = this.printMethodParameters(node);
     const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
     const returnSignature = returnType ? " " + returnType : "";
@@ -24917,6 +25230,29 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
     return text[0] + " + " + text[1];
   }
   // the printed return type of a market producer, or undefined to keep the checker's answer
+  // `(*string, map[string]any)` for a GO_BASE_PAIR_TWINS method declared in base/Exchange.ts, undefined otherwise
+  goBasePairReturnType(node) {
+    const slot = node?.kind === SyntaxKind5.MethodDeclaration ? GO_BASE_PAIR_TWINS[String(node.name?.text)] : void 0;
+    if (slot === void 0 || node.body === void 0 || this.isAsyncFunction(node) || !/[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(node.getSourceFile?.()?.fileName ?? ""))) {
+      return void 0;
+    }
+    const returns = this.goDescendantsOf(node.body).filter((n) => n.kind === SyntaxKind5.ReturnStatement && this.goEnclosingFunction(n) === node);
+    return returns.length === 1 && this.goBasePairReturnIsPair(returns[0]) ? "(" + slot + ", map[string]any)" : void 0;
+  }
+  goBasePairReturnIsPair(node) {
+    return node?.expression?.kind === SyntaxKind5.ArrayLiteralExpression && node.expression.elements.length === 2 && node.expression.elements.every((e) => e.kind !== SyntaxKind5.SpreadElement);
+  }
+  // `return [ value, params ]` of such a twin: `return value, MapTyped(params)`
+  goBasePairReturnText(node, identation) {
+    const method = this.goEnclosingFunction(node);
+    if (method?.kind !== SyntaxKind5.MethodDeclaration || this.goBasePairReturnType(method) === void 0) {
+      return void 0;
+    }
+    const [value, params] = node.expression.elements.map((e) => this.printNode(e, 0).trim());
+    const leadingComment = this.printLeadingComments(node, identation);
+    const trailing = this.printTraillingComment(node, identation);
+    return leadingComment + this.getIden(identation) + "return " + value + ", MapTyped(" + params + ")" + (trailing ? " " + trailing : "");
+  }
   goMarketProducerReturnType(node) {
     if (node?.kind !== SyntaxKind5.MethodDeclaration) {
       return void 0;
@@ -33580,6 +33916,10 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
     return `TickerMapToMap(this.${caches.typedMapRead}("${caches.maps[field]}"${symbols}))`;
   }
   printReturnStatement(node, identation) {
+    const pairReturn = this.goBasePairReturnText(node, identation);
+    if (pairReturn !== void 0) {
+      return pairReturn;
+    }
     const isAsyncFunction = this.isInsideAsyncFunction(node);
     if (!isAsyncFunction) {
       return super.printReturnStatement(node, identation);
@@ -56710,18 +57050,29 @@ function g08w3Check() {
 init_esm_shims();
 var SK = ts.SyntaxKind;
 var G08_PAIR_MAP_PRODUCERS = ["handleMarketTypeAndParams", "handleSubTypeAndParams"];
-var G08_BASE_SLICE_PRODUCERS = [
+var G08_PAIR_PLAIN_PRODUCERS = [
   "handleOptionAndParams",
   "handleOptionAndParams2",
+  "handleOptionStringAndParams",
+  "handleOptionStringAndParams2",
+  "handleMarginModeAndParams",
+  "handleOptionBoolAndParams",
+  "handleOptionBoolAndParams2",
+  "handleOptionIntegerAndParams",
+  "handleOptionIntegerAndParams2",
   "handleParamString",
   "handleParamString2",
   "handleNetworkCodeAndParams",
-  "handleWithdrawTagAndParams",
-  "handlePostOnly",
   "handleParamBool",
   "handleParamBool2",
   "handleParamInteger",
-  "handleParamInteger2",
+  "handleParamInteger2"
+];
+var G08_BASE_SLICE_PRODUCERS = [
+  "handleOptionAndParams",
+  "handleOptionAndParams2",
+  "handleWithdrawTagAndParams",
+  "handlePostOnly",
   "handleTriggerPricesAndParams",
   "handleTriggerDirectionAndParams"
 ];
@@ -56910,6 +57261,9 @@ var TupleSlots = class {
     const callee = call?.expression;
     if (G08_PAIR_MAP_PRODUCERS.includes(callee?.name?.text) && callee.expression?.kind === SK.ThisKeyword) {
       return this.go.getChecker() !== void 0 ? { "arity": 2, "slots": { 1: "plain:map" }, "pair": true } : void 0;
+    }
+    if (G08_PAIR_PLAIN_PRODUCERS.includes(callee?.name?.text) && callee.expression?.kind === SK.ThisKeyword) {
+      return this.go.getChecker() !== void 0 ? { "arity": 2, "slots": { 1: "plain" }, "pair": true } : void 0;
     }
     const method = this.producerDeclaration(call);
     if (method === void 0) {
@@ -57318,7 +57672,16 @@ var TupleSlots = class {
           changed = true;
           return m[1] + holder + "[" + m[2] + "].(map[string]any)";
         }
+        if (cls !== void 0) {
+          changed = true;
+          return line.replace(new RegExp("GetValue\\(" + h + ", (\\d+)\\)"), holder + "[$1]");
+        }
         return line;
+      }
+      m = new RegExp("^(.*?\\b(?:ccxt\\.)?(?:SafeStringPtr|SafeBoolPtr|SafeIntegerPtr)\\()(?:ccxt\\.)?GetValue\\(" + h + ", (\\d+)\\)(\\))$").exec(line);
+      if (m !== null && slotClass(m[2]) !== void 0) {
+        changed = true;
+        return m[1] + holder + "[" + m[2] + "]" + m[3];
       }
       m = new RegExp("^(\\s*(?:var \\w+ bool = |\\w+ = ))(?:ccxt\\.)?GetValueBool\\(" + h + ", (\\d+), false\\)$").exec(line);
       if (m !== null) {
