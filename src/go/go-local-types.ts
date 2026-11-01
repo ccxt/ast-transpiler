@@ -7325,7 +7325,7 @@ function ccxtGoTupleElementMemo (goTranspiler, family, element, compute) {
     return cache.get (element);
 }
 
-function ccxtGoTupleParamsElementType (goTranspiler, element) {
+export function ccxtGoTupleParamsElementType (goTranspiler, element) {
     return ccxtGoTupleElementMemo (goTranspiler, 'params', element, () => ccxtGoTupleParamsElementTypeUncached (goTranspiler, element));
 }
 

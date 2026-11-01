@@ -7,6 +7,7 @@ import { isArrowFunction, isBinaryExpression, isBlock, isBooleanLiteral, isCallE
 import { Checker, IndexKind, SymbolFlags, TypeFlags } from 'typescript/unstable/sync';
 import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
 import { getAllSuperTypeNodes, isFunctionLike } from './tsUtils.js';
+import { ccxtGoTupleParamsElementType } from './go/go-local-types.js';
 
 
 const GO_ITERATION_STATEMENT_KINDS = new Set<number>([SyntaxKind.ForStatement, SyntaxKind.ForInStatement,
@@ -290,6 +291,11 @@ const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 // member and returns the map (sync.Map converted), nil when absent or not a map. Emitted only when
 // every later use READS it as a dictionary — a typed nil map is a non-nil interface otherwise.
 const GO_SAFE_DICT_LOCAL_TYPE = 'map[string]any';
+// FOLD3 G03: the row parsers whose Go twin returns a struct, boxed back to its map where the row is a local
+const GO_STRUCT_BOX_PARSERS: { [name: string]: string } = { 'parseTrade': 'TradeToMap', 'safeTrade': 'TradeToMap', 'parseTransfer': 'TransferEntryToMap' };
+// FOLD3 G03: the defaulted accessors whose Go twin answers a pointer to the (literal) default at worst; value = arity with the default
+const GO_DEFAULTED_POINTER_ACCESSORS: { [name: string]: number } = { 'safeString': 3, 'safeStringLower': 3, 'safeStringUpper': 3, 'safeInteger': 3, 'safeNumber': 3, 'safeBool': 3, 'safeTimestamp': 3 };
+const GO_STRUCT_BOX_TYPES: { [name: string]: string } = { 'Trade': 'TradeToMap', 'TransferEntry': 'TransferEntryToMap' };
 
 // the hand-written helpers a typed dict local may be handed to as their receiver: each one
 // normalises the argument with derefScalar/GetValue, so a nil map reads exactly like the nil
@@ -4250,6 +4256,14 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 && (this.goContainerWriteConversion(parent.right, goType) !== undefined);
         }
         if (goType === GO_SAFE_DICT_LOCAL_TYPE) {
+            // FOLD3 G03: a nil-initialised map stored as an object-literal value (`'headers': requestHeaders`) is
+            // the value the nil box was: the typed nil map reads absent at every consumer of that container
+            if ((parent.kind === SyntaxKind.PropertyAssignment) && (parent.initializer === node) && (parent.name !== node)) {
+                const decl: any = this.goDeclarationOfIdentifier(node);
+                if ((decl !== undefined) && this.goNilInitInitializer(decl.initializer)) {
+                    return true;
+                }
+            }
             if ((parent.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.InKeyword)) {
                 // `key in x` on a typed map prints the native membership test; a `*string` key
                 // would instead emit the printer's nil-guarded literal, so that key keeps the box
@@ -5233,6 +5247,9 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             if ((containerType !== undefined) && (node?.parent?.kind === SyntaxKind.FirstStatement)) {
                 return this.getIden(identation) + "var " + this.printNode(declaration.name) + " " + containerType + " = " + parsedValue;
             }
+            if ((containerType === undefined) && (node?.parent?.kind === SyntaxKind.FirstStatement) && (this.goStructNilInitLocal(declaration) !== undefined)) {
+                return this.getIden(identation) + "var " + this.printNode(declaration.name) + " " + GO_SAFE_DICT_LOCAL_TYPE + " = " + parsedValue;  // FOLD3 G03
+            }
             // a nil-initialised local the body only writes as one nullable scalar holds that pointer
             const nilInitType = this.goNilInitLocalType(declaration);
             if (nilInitType === 'string') {
@@ -5256,7 +5273,8 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             const varName = this.printNode(declaration.name);
             // RF-go-6-A: the Dict local seeded from safeDict is declared here only; every other printer rule still sees the `any` box
             const rf6aMapValue = (containerType === undefined) ? this.rf6aSafeDictMapValue(declaration, identation) : undefined;
-            const declaredType = (containerType !== undefined) ? containerType : ((rf6aMapValue !== undefined) ? GO_SAFE_DICT_LOCAL_TYPE : this.getGoLocalType(declaration, parsedValue));
+            const structBox = (containerType === undefined) ? this.goStructBoxedLocal(declaration) : undefined;  // FOLD3 G03
+            const declaredType = (containerType !== undefined) ? containerType : (((rf6aMapValue !== undefined) || (structBox !== undefined)) ? GO_SAFE_DICT_LOCAL_TYPE : this.getGoLocalType(declaration, parsedValue));
             // a typed dict/list local is declared with the typed reader rather than the `any`
             // accessor, so the declaration compiles against the map/slice type
             const unboxValue = this.goOrderBookUnboxValue(declaration, parsedValue)  // RF-go-6-D
@@ -5264,7 +5282,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 ?? ((declaredType === GO_SAFE_DICT_LOCAL_TYPE)
                     ? (this.goSafeDictUnboxValue(declaration, identation) ?? rf6aMapValue)
                     : ((declaredType === GO_SAFE_LIST_LOCAL_TYPE) ? this.goSafeListUnboxValue(declaration, identation) : undefined));
-            let declaredValue = (unboxValue !== undefined) ? unboxValue : parsedValue.trimStart();
+            let declaredValue = (unboxValue !== undefined) ? unboxValue : ((structBox !== undefined) ? `${structBox}(${parsedValue.trim()})` : parsedValue.trimStart());
             // an annotated `string` local takes the defaulted SafeString call's deref
             if ((declaredType === 'string') && (unboxValue === undefined)
                 && (this.goTypeOfInitializer(declaration.initializer, parsedValue) === '*string')) {
@@ -8288,7 +8306,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const condition: any = this.goUnwrapParenthesizedNode(statement.expression);
-        if (!this.gp15IsNilTestOf(condition, ident)) {
+        if (!this.gp15IsNilTestOf(condition, ident) && !this.goOrChainHasNilTestOf(condition, ident)) {
             return false;
         }
         const then: any = statement.thenStatement;
@@ -8296,6 +8314,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const last: any = body[body.length - 1];
         return [ SyntaxKind.ReturnStatement, SyntaxKind.ThrowStatement, SyntaxKind.ContinueStatement,
             SyntaxKind.BreakStatement ].includes(last?.kind);
+    }
+
+    // `x === undefined || …`: a nil x makes the whole `||` chain true, so the exiting then-branch runs
+    goOrChainHasNilTestOf(node, ident): boolean {
+        const inner: any = this.goUnwrapParenthesizedNode(node);
+        if ((inner?.kind !== SyntaxKind.BinaryExpression) || (inner.operatorToken?.kind !== SyntaxKind.BarBarToken)) {
+            return false;
+        }
+        return [ inner.left, inner.right ].some((side: any) => this.gp15IsNilTestOf(this.goUnwrapParenthesizedNode(side), ident) || this.goOrChainHasNilTestOf(side, ident));
     }
 
     // the mirror of goIsNonNilTestOf: `x == null`, `x === undefined`, `!x`
@@ -9058,6 +9085,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // native `container[key] = value` when the receiver's Go type is proved by the
     // printer, otherwise undefined and the caller keeps the runtime helper
     printNativeElementAssignment(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, compound = false, valueNode?): string | undefined {
+        keyNode = this.goUnwrapPrintedAssertions(keyNode); // `m[(k as string)]` prints `m[k]`: the operand's own Go type governs
+        if (this.goNilInitContainerLocal(containerNode)) {
+            return undefined; // FOLD3 G03: the nil-initialised container takes the guarded store of printNativeMapWriteOnProvenLocal
+        }
         // a local typed because its base callee already answers the map: the helper this write printed
         // derefs a pointer value (a *int64 from Parse8601, a *bool read back out of a parsed row), a
         // native store would keep the pointer, so only a value the printer proves is not one is native
@@ -9131,6 +9162,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (rfStore !== undefined) {
             return rfStore;
         }
+        keyNode = this.goUnwrapPrintedAssertions(keyNode); // `(k as string)` prints `k`
+        const nilableStore = this.goNilableMapLocalStore(containerNode, containerStr, keyNode, keyStr, valueStr, valueNode, identation);  // FOLD3 G03
+        if (nilableStore !== undefined) {
+            return nilableStore;
+        }
         const getArgMap = this.goGetArgMapParameterIsMapLocal(containerNode);
         const provenMap = getArgMap || (this.goElementAssignmentContainerType(containerNode, containerStr) === 'map[string]any');
         if (!provenMap) {
@@ -9143,10 +9179,218 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             || !(getArgMap || this.goIsFreshUnsharedMapLocal(containerNode, containerNode)) || !this.goMapWriteValueIsNotPointer(valueNode)) {
             return undefined;
         }
+        if (this.gp15HasExitingNilGuard(keyNode)) {
+            return `${containerStr}[*${keyStr}] = ${valueStr}`;  // FOLD3 G03: an exiting nil test above already proved the key
+        }
         const iden = this.getIden(identation);
         // a multi-line value (map literal) sits one level deeper inside the guard
         return `if ${keyStr} != nil {\n${iden}\t${containerStr}[*${keyStr}] = ${valueStr.replace(/\n/g, '\n\t')}\n${iden}}`;
     }
+
+    // ===== FOLD3 G03 =====
+    // A local the printer declares `var x map[string]any` that can still hold a nil map: the no-default
+    // SafeDictMap local, a nil-initialised Dict / NullableDict container, a Trade / TransferEntry row boxed
+    // to its map, and a tuple-slot params map. The helper stores nothing into a nil map, so the native
+    // store sits behind `x != nil` (and `k != nil` for a nullable *string key).
+    goStructBoxCallee(call): string | undefined {
+        const callee: any = call?.expression;
+        if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || ((callee.expression?.kind !== SyntaxKind.ThisKeyword) && (callee.expression?.kind !== SyntaxKind.SuperKeyword))) {
+            return undefined;
+        }
+        return GO_STRUCT_BOX_PARSERS[callee.name?.text];
+    }
+
+    goStructBoxedLocalCache = new Map<any, string | undefined>();
+
+    // `const parsed = super.parseTrade (trade)`: the local is the row's map, boxed where it is declared
+    goStructBoxedLocal(declaration): string | undefined {
+        return this.goCachedLocalUnbox(this.goStructBoxedLocalCache, declaration, () => {
+            const box = this.goStructBoxCallee(declaration.initializer);
+            if ((box === undefined) || (this.rf6aSourceKind(declaration) === 'skip') || (declaration.type !== undefined)) {
+                return undefined;
+            }
+            return (this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n) => this.goStructLocalUseReadsTheMap(n),
+                (n) => this.goStructLocalNameIsNotAUse(n)) !== undefined) ? box : undefined;
+        });
+    }
+
+    goStructNilLocalCache = new Map<any, string | undefined>();
+
+    // `let transfer: TransferEntry | undefined = undefined; … transfer = this.parseTransfer (…)`: a nil map
+    // until a write boxes the row
+    goStructNilInitLocal(declaration): string | undefined {
+        return this.goCachedLocalUnbox(this.goStructNilLocalCache, declaration, () => {
+            if (!this.goNilInitInitializer(declaration.initializer) || (this.rf6aSourceKind(declaration) === 'skip')) {
+                return undefined;
+            }
+            const checker: any = this.checkerOrUndefined();
+            const type: any = checker?.getTypeAtLocation(declaration.name);
+            const parts: any[] = (type?.isUnionType?.()) ? type.getTypes().filter((t: any) => !(t.flags & (TypeFlags.Undefined | TypeFlags.Null))) : [ type ];
+            const named = (parts.length === 1) ? (parts[0]?.getAliasSymbol?.()?.escapedName ?? parts[0]?.getSymbol?.()?.escapedName) : undefined;
+            const box = GO_STRUCT_BOX_TYPES[String(named)];
+            if (box === undefined) {
+                return undefined;
+            }
+            const name = declaration.name.text as string;
+            const scope: any = this.goEnclosingFunction(declaration);
+            let writes = 0;
+            let writesAreBoxed = true;
+            this.hasNodeWhere(scope, (n: any) => {
+                if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken)
+                    && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === name)) {
+                    writes += 1;
+                    writesAreBoxed = writesAreBoxed && (this.goStructBoxCallee(n.right) === box);
+                }
+                return false;
+            });
+            if ((writes === 0) || !writesAreBoxed) {
+                return undefined;
+            }
+            return (this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n) => this.goStructLocalUseReadsTheMap(n)
+                || ((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n) && (n.parent.operatorToken?.kind === SyntaxKind.EqualsToken)),
+                (n) => this.goStructLocalNameIsNotAUse(n)) !== undefined) ? box : undefined;
+        });
+    }
+
+    // an identifier that only spells the local's name: the method's own name, a member name
+    goStructLocalNameIsNotAUse(n): boolean {
+        const parent: any = n.parent;
+        return ((parent?.kind === SyntaxKind.MethodDeclaration) && (parent.name === n))
+            || ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n))
+            || ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.name === n));
+    }
+
+    // a use of a boxed row local that reads or fills the map: a read, an element store, a nil test, a
+    // Safe* receiver, the returned row
+    goStructLocalUseReadsTheMap(n): boolean {
+        const parent: any = n.parent;
+        if (this.goSafeDictUseReadsTheMap(n) || this.goIsNilComparisonOperand(n, parent)) {
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)) {
+            const above: any = parent.parent;
+            return (above?.kind === SyntaxKind.BinaryExpression) && (above.left === parent) && (above.operatorToken?.kind === SyntaxKind.EqualsToken);
+        }
+        return parent?.kind === SyntaxKind.ReturnStatement;
+    }
+
+    // the Trade / TransferEntry box a write of the row prints
+    goStructBoxWrite(node, rightStr: string): string | undefined {
+        const declaration = (node.left?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(node.left) : undefined;
+        const box = (declaration === undefined) ? undefined : this.goStructNilInitLocal(declaration);
+        return ((box !== undefined) && (this.goStructBoxCallee(node.right) === box)) ? `${box}(${rightStr})` : undefined;
+    }
+
+    // `const [ x, paramsX ] = this.handleXxx (…)`: element 1 of a base tuple helper whose params slot the tuple rules type
+    // `map[string]any`. The slot is a map the helper omitted keys from or defaulted to `{}`; a store is guarded by `!= nil`.
+    goBaseTupleParamsSlot(element): boolean {
+        const pattern: any = element?.parent;
+        const holder: any = pattern?.parent;
+        if ((pattern?.kind !== SyntaxKind.ArrayBindingPattern) || (pattern.elements.indexOf(element) !== 1) || (holder?.kind !== SyntaxKind.VariableDeclaration)) {
+            return false;
+        }
+        const producer = this.goTupleBindingProducerName(holder);
+        if ((producer === undefined) || !/^Handle[A-Z]/.test(producer)) {
+            return false;
+        }
+        let declared: any;
+        try {
+            declared = this.checkerOrUndefined()?.getSymbolAtLocation(holder.initializer.expression.name)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return false;
+        }
+        return /[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(declared?.getSourceFile?.()?.fileName ?? ''))
+            && (ccxtGoTupleParamsElementType(this, element) === GO_SAFE_DICT_LOCAL_TYPE);
+    }
+
+    // a container local declared nil (`let x: NullableDict = undefined`) is typed by goContainerLocalType: a store before the
+    // first write would hit a nil map, so it keeps the nil test the helper applied
+    goNilInitContainerLocal(node): boolean {
+        const declaration: any = this.goDeclarationOfIdentifier(node);
+        return (declaration !== undefined) && this.goNilInitInitializer(declaration.initializer)
+            && (this.goContainerLocalType(declaration) === GO_SAFE_DICT_LOCAL_TYPE);
+    }
+
+    goNilableMapLocal(node): boolean {
+        if (node?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        let declaration: any;
+        try {
+            declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return false;
+        }
+        if (declaration?.kind === SyntaxKind.BindingElement) {
+            return this.goBaseTupleParamsSlot(declaration);
+        }
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+            return false;
+        }
+        return (this.rf6aSafeDictMapLocal(declaration) === GO_SAFE_DICT_LOCAL_TYPE)
+            || (this.goStructBoxedLocal(declaration) !== undefined) || (this.goStructNilInitLocal(declaration) !== undefined)
+            || (this.goNilInitInitializer(declaration.initializer) && (this.goContainerLocalType(declaration) === GO_SAFE_DICT_LOCAL_TYPE));
+    }
+
+    // the value a map store keeps: a pointer-free value as printed, or a defaulted Safe* accessor the helper
+    // would deref (a literal default is never the absent case); undefined keeps the helper
+    goNilableMapStoreValue(valueNode, valueStr: string): string | undefined {
+        if (this.rf6aIsPointerFreeValue(valueNode) || this.goMapWriteValueIsNotPointer(valueNode)) {
+            return valueStr;
+        }
+        const call: any = this.goUnwrapParenthesizedNode(valueNode);
+        const callee: any = call?.expression;
+        if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (call.arguments?.length < 3)) {
+            return undefined;
+        }
+        const family = GO_DEFAULTED_POINTER_ACCESSORS[callee.name?.text];
+        if ((family === undefined) || (call.arguments.length !== family)) {
+            return undefined;
+        }
+        // the shape the retired build/hx10w2-G03.ts pass dereferenced (three arguments): `*call`, as the helper's derefScalar
+        // would store the pointee. A non-literal default that is itself nil would panic here where the helper stored nil
+        // (carried over unchanged from that pass, flagged in the fold report).
+        return `*${valueStr}`;
+    }
+
+    // the receiver is the map of a safeDict read whose default is a never-nil map: no nil test needed
+    goMapLocalIsNeverNil(node): boolean {
+        const declaration: any = this.goDeclarationOfIdentifier(node);
+        const found: any = (declaration === undefined) ? undefined : this.rf6aSafeDictCall(declaration.initializer);
+        return (found !== undefined) && (found.fallback !== undefined) && (this.rf6aSafeDictMapLocal(declaration) === GO_SAFE_DICT_LOCAL_TYPE);
+    }
+
+    goNilableMapLocalStore(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, valueNode, identation: number): string | undefined {
+        if ((valueNode === undefined) || !this.goNilableMapLocal(containerNode)
+            || ((this.goElementAssignmentContainerType(containerNode, containerStr) !== undefined) && !this.goNilInitContainerLocal(containerNode))) {
+            return undefined; // a receiver goDeclaredTypeOfIdentifier already types keeps the rules that proved it
+        }
+        const value = this.goNilableMapStoreValue(valueNode, valueStr);
+        if (value === undefined) {
+            return undefined;
+        }
+        const guards: string[] = this.goMapLocalIsNeverNil(containerNode) ? [] : [ `${containerStr} != nil` ];
+        let index: string;
+        if (this.goIsStringKeyExpression(keyNode)) {
+            index = keyStr;
+        } else if ((keyNode?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(keyNode) === '*string')) {
+            index = `*${keyStr}`;
+            if (!this.goHasEnclosingNilGuard(keyNode) && !this.gp15HasExitingNilGuard(keyNode) && !this.goDefaultedSafeStringLocal(keyNode)) {
+                guards.push(`${keyStr} != nil`);
+            }
+        } else {
+            return undefined;
+        }
+        if (guards.length === 0) {
+            return `${containerStr}[${index}] = ${value}`;
+        }
+        const iden = this.getIden(identation);
+        // a multi-line value (map literal) sits one level deeper inside the guard
+        return `if ${guards.join(' && ')} {\n${iden}\t${containerStr}[${index}] = ${value.replace(/\n/g, '\n\t')}\n${iden}}`;
+    }
+    // ===== end FOLD3 G03 =====
 
     // `this.<option dict>[k] = v` with a string-typed or nil-guarded *string key: the helper's map store
     // behind the nil checks it applies; a pointer value is stored dereferenced, any other `any` keeps it
@@ -14571,6 +14815,10 @@ ${this.getIden(identation)}${returnStatement}`;
             const pointerWrite = this.goPointerWriteText(node, identation);
             if (pointerWrite !== undefined) {
                 return pointerWrite;
+            }
+            const boxedRow = (left?.kind === SyntaxKind.Identifier) ? this.goStructBoxWrite(node, this.printNode(right, identation).trim()) : undefined;  // FOLD3 G03
+            if (boxedRow !== undefined) {
+                return `${this.printNode(left, 0)} = ${boxedRow}`;
             }
             const balanceReplace = this.goOwnedBalanceReplace(node, identation);  // FOLD-1F hx10w6-G01
             if (balanceReplace !== undefined) {
