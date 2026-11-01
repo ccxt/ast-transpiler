@@ -8068,14 +8068,70 @@ export default class V {
     }
 }
 `);
-        expect(output).toContain('java.util.Map<String, io.github.ccxt.Handler> methods = new java.util.HashMap<String, io.github.ccxt.Handler>() {{');
-        expect(output).toContain('put("ticker", V.this::handleTicker);');
-        expect(output).toContain('io.github.ccxt.Handler method = methods.get(');
+        expect(output).toContain('java.util.Map<String, String> methods = new java.util.HashMap<String, String>() {{');
+        expect(output).toContain('put("ticker", "handleTicker");');
+        expect(output).toContain('String method = methods.get(');
         expect(output).toContain('method = methods.get(');
-        expect(output).toContain('method.handle(client, message);');
+        expect(output).toContain('switch (method) {');
+        expect(output).toContain('case "handleTicker":\n');
+        expect(output).toContain('this.handleTicker(client, message);\n');
+        expect(output).toContain('this.handleTrades(client, message);\n');
+        expect(output).toContain('throw new RuntimeException("Method not found: " + method);');
+        expect(output).not.toContain('io.github.ccxt.Handler');
+        expect(output).not.toContain('.handle(client, message)');
         expect(output).not.toContain('.call(this, client, message)');
-        expect(output).not.toContain('(io.github.ccxt.Handler) method');
-        expect(output).not.toContain('"handleTicker"');
+        expect(output).not.toContain('::');
+    });
+
+    test('two same-named tables: each switch lists only the methods of the table its local reads', () => {
+        const output = transpile(header + `
+export default class V {
+    handleMessage (client: Client, message: Dict) {
+        const event = this.safeString (message, 'event');
+        if (event !== undefined) {
+            const methods: Dict = { 'login': this.handleLogin };
+            const method = this.safeValue (methods, event);
+            if (method !== undefined) {
+                method.call (this, client, message);
+            }
+        } else {
+            const methods: Dict = { 'ticker': this.handleTicker };
+            const method = this.safeValue (methods, this.safeString (message, 'topic'));
+            if (method !== undefined) {
+                method.call (this, client, message);
+            }
+        }
+    }
+    handleLogin (client: Client, message: Dict) {
+    }
+    handleTicker (client: Client, message: Dict) {
+    }
+}
+`);
+        const switches = output.split('switch (method) {').slice(1).map((part) => part.split('default:')[0]);
+        expect(switches.length).toBe(2);
+        expect(switches[0]).toContain('this.handleLogin(client, message);');
+        expect(switches[0]).not.toContain('handleTicker');
+        expect(switches[1]).toContain('this.handleTicker(client, message);');
+        expect(switches[1]).not.toContain('handleLogin');
+    });
+
+    test('a dispatch used as an expression keeps the reflective table', () => {
+        const output = transpile(header + `
+export default class V {
+    handleMessage (client: Client, message: Dict) {
+        const methods: Dict = { 'ticker': this.handleTicker };
+        const method = this.safeValue (methods, this.safeString (message, 'topic'));
+        if (method !== undefined) {
+            return method.call (this, client, message);
+        }
+    }
+    handleTicker (client: Client, message: Dict) {
+    }
+}
+`);
+        expect(output).not.toContain('switch (method)');
+        expect(output).toContain('.call(this, client, message)');
     });
 
     test('a table with a non-handler value keeps the reflective table', () => {

@@ -307,10 +307,10 @@ const JAVA_DECLARED_NUMERIC_TYPES: Set<string> =
 const JAVA_BOXED_NUMERIC_TYPES: Set<string> =
     new Set<string>(['Integer', 'Long', 'Double']);
 
-// the typed table a `method.call (this, client, message)` dispatches through: the runtime
-// functional interface it holds, and the map type the table declares
-const JAVA_HANDLER_INTERFACE = 'io.github.ccxt.Handler';
-const JAVA_HANDLER_TABLE_TYPE = 'java.util.Map<String, io.github.ccxt.Handler>';
+// the typed table a `method.call (this, client, message)` dispatches through: it maps each key to
+// the handler's method name, and the dispatch is a switch of direct calls on that name
+const JAVA_HANDLER_NAME_TYPE = 'String';
+const JAVA_HANDLER_TABLE_TYPE = 'java.util.Map<String, String>';
 
 // receiver node kinds whose printed Java is a primary expression, so the `(String)`
 // checkcast in front of them binds the whole receiver (a native `+` prints its own parens)
@@ -1683,7 +1683,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (isPropertyAccessExpression(access) && access.expression === use && access.name?.text === 'call'
             && isCallExpression(access.parent) && access.parent.expression === access) {
             const callArguments: any = access.parent.arguments ?? [];
-            return callArguments.length === 3 && callArguments[0].kind === SyntaxKind.ThisKeyword
+            // a statement: the dispatch prints as a switch, which is not an expression
+            return access.parent.parent?.kind === SyntaxKind.ExpressionStatement
+                && callArguments.length === 3 && callArguments[0].kind === SyntaxKind.ThisKeyword
                 && isIdentifier(callArguments[1]) && isIdentifier(callArguments[2])
                 && this.javaHandlerArgumentType(callArguments[1], 'client') !== undefined
                 && this.javaHandlerArgumentType(callArguments[2], 'message') !== undefined;
@@ -1790,14 +1792,12 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const keys = Array.from(byKey.keys());
         const entryIndent = this.getIden(identation + 1);
-        const className = this.capitalize(this.currentClassName);
         const parts: string[] = [];
         for (const key of keys) {
-            // a qualified this: the map body is an anonymous subclass, where `this` is the map
-            parts.push(`${entryIndent}put(${JSON.stringify(key)}, ${className}.this::${byKey.get(key)});`);
+            parts.push(`${entryIndent}put(${JSON.stringify(key)}, ${JSON.stringify(byKey.get(key))});`);
         }
         // a HashMap (not Map.ofEntries): the helper's null key answers null, an immutable map's throws
-        return `new java.util.HashMap<String, ${JAVA_HANDLER_INTERFACE}>() {{\n${parts.join('\n')}\n${this.getIden(identation)}}}`;
+        return `new java.util.HashMap<String, ${JAVA_HANDLER_NAME_TYPE}>() {{\n${parts.join('\n')}\n${this.getIden(identation)}}}`;
     }
 
     // the Java type a safeValue read of a proven table prints: the handler interface
@@ -1822,7 +1822,7 @@ export class JavaTranspiler extends BaseTranspiler {
             return JAVA_HANDLER_TABLE_TYPE;
         }
         if (this.javaHandlerReads.has(this.javaHandlerKey(initializer))) {
-            return JAVA_HANDLER_INTERFACE;
+            return JAVA_HANDLER_NAME_TYPE;
         }
         return undefined;
     }
@@ -1858,8 +1858,8 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.printNode(node, 0).trim();
     }
 
-    printJavaHandlerDispatch(node) {
-        if (!isCallExpression(node)) {
+    printJavaHandlerDispatch(node, identation) {
+        if (!isCallExpression(node) || node.parent?.kind !== SyntaxKind.ExpressionStatement) {
             return undefined;
         }
         const callee = node.expression;
@@ -1893,8 +1893,31 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const receiverText = this.printNode(receiver, 0).trim();
-        // the local is declared as the interface type (javaHandlerDeclarationType), so no checkcast
-        return `${receiverText}.handle(${client}, ${message})`;
+        // the local holds the method name of the table it was read from (javaHandlerCalls is keyed by
+        // that local's own declaration), so each switch lists exactly the methods its table names
+        const names: string[] = [];
+        for (const entry of this.javaHandlerCalls.get(this.javaHandlerKey(declaration.name))) {
+            if (!names.includes(entry.name)) {
+                names.push(entry.name);
+            }
+        }
+        const iden = this.getIden(identation);
+        const caseIden = this.getIden(identation + 1);
+        const bodyIden = this.getIden(identation + 2);
+        const lines = [ `${iden}switch (${receiverText}) {` ];
+        for (const name of names) {
+            lines.push(`${caseIden}case ${JSON.stringify(name)}:`, `${bodyIden}this.${name}(${client}, ${message});`, `${bodyIden}break;`);
+        }
+        lines.push(`${caseIden}default:`, `${bodyIden}throw new RuntimeException("Method not found: " + ${receiverText});`, `${iden}}`);
+        return lines.join('\n');
+    }
+
+    printExpressionStatement(node, identation) {
+        const handlerDispatch = this.printJavaHandlerDispatch(node.expression, identation);
+        if (handlerDispatch !== undefined) {
+            return this.printNodeCommentsIfAny(node, identation, handlerDispatch);
+        }
+        return super.printExpressionStatement(node, identation);
     }
 
     printConstructorDeclaration(node, identation) {
@@ -1973,10 +1996,6 @@ export class JavaTranspiler extends BaseTranspiler {
         const handlerRead = this.printJavaHandlerRead(node);
         if (handlerRead !== undefined) {
             return handlerRead;
-        }
-        const handlerDispatch = this.printJavaHandlerDispatch(node);
-        if (handlerDispatch !== undefined) {
-            return handlerDispatch;
         }
         if (node.expression.kind === SyntaxKind.Identifier) {
             const callee = node.expression.text;
