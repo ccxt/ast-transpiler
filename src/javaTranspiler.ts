@@ -7604,6 +7604,13 @@ export class JavaTranspiler extends BaseTranspiler {
             if (kind !== undefined && (callee === 'parseFloat' || kind !== 'double')) {
                 return `${nativeName}(String.valueOf(${printed}))`;
             }
+            // `parseInt (n as any)` over a checker-plain number: the helper answered the box's
+            // truncating longValue (JS parseInt over a number string truncates too), so the
+            // Number view prints the same value; a null box NPEs where the helper answered null
+            if (callee === 'parseInt' && isAsExpression(operand) && operand.type?.kind === SyntaxKind.AnyKeyword
+                && this.javaScalarFamily(operand.expression) === 'number') {
+                return `((Number)${this.printNode(operand.expression, 0)}).longValue()`;
+            }
             // a checker-plain TS string the printer spelled as an Object: type it at the site
             if (this.javaScalarFamily(operand) === 'string') {
                 return `${nativeName}(((String)${printed}))`;
