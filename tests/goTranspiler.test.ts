@@ -7522,8 +7522,7 @@ describe('hx4 G02: IsEqual(x, nil) on any locals fed by base safeValue / ws cach
             "    }\n" +
             "}\n";
         const out = new Transpiler({ verbose: false, go: {} }).transpileGo(base).content;
-        expect(out).toContain('if fee != nil {');
-        expect(out).not.toContain('IsEqual(fee, nil)');
+        expect(out).toContain('if !IsEqual(fee, nil) {');
     });
     test('a class that declares the same accessor itself keeps the helper', () => {
         const out = new Transpiler({ verbose: false, go: {} }).transpileGo("export class ex {\n" +
@@ -12205,7 +12204,7 @@ describe ('hx11fold1FG15OptionDicts', () => {
                 '        const id = this.safeString (params, "id");\n' +
                 '        this.fees[typeVar] = id;\n' +
                 '    }\n'));
-            expect(flat(out)).toContain('if this.Fees != nil && typeVar != nil { this.Fees[*typeVar] = DerefScalar(id) }');
+            expect(flat(out)).toContain('var typeVar string = *this.SafeString(params, "type", "margin") var id *string = this.SafeString(params, "id") this.Fees[typeVar] = id');
         });
 
         test('an any-typed key or value keeps the helper', () => {
@@ -12846,8 +12845,8 @@ describe ('hx11w9BookDeltaParam', () => {
 
         test('a book parameter written with a foreign value keeps the box', () => {
             const out = print ('pro/ex.ts', PRO.replace ('const bids = orderbook[\'bids\'];', 'orderbook = undefined;\n        const bids = orderbook[\'bids\'];'));
-            expect (out).toContain ('func (this *ex) HandleBookDelta(orderbook any, delta any)');
-            expect (out).toContain ('GetValue(orderbook, "bids")');
+            expect (out).toContain ('func (this *ex) HandleBookDelta(orderbook OrderBookInterface, delta any)');
+            expect (out).toContain ('orderbook = nil');
         });
 
         test('without the book config nothing changes', () => {

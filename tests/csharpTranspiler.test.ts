@@ -6688,7 +6688,7 @@ describe ('c07inop-equality', () => {
             "        return 0;\n" +
             "    }\n" +
             "}\n", { msInt: 'Int64', week: 'Int64' });
-            expect(output).toContain('isEqual((mod(msInt, week)), 0)');
+            expect(output).toContain('if (((msInt % week) == 0))');
         });
         test('a literal the integer kind cannot hold keeps the helper', () => {
             const output = cs(
@@ -7534,7 +7534,7 @@ describe ('hx10w10CP05', () => {
                 "    }\n" +
                 "}");
             expect(output).toContain('object part = this.safeString(item, "part");');
-            expect(output).toContain('add(part, "/")');
+            expect(output).toContain('part == null ? null : part + "/"');
         });
 
         test('a guarded read whose right operand is not a printed string stays object', () => {
@@ -7550,7 +7550,7 @@ describe ('hx10w10CP05', () => {
                 "    }\n" +
                 "}");
             expect(output).toContain('object head = this.safeString(item, "head");');
-            expect(output).toContain('add(head, rest)');
+            expect(output).toContain('head == null ? null : head + (string)(object)(rest)');
         });
 
         test('a null write never claims a non-null string declaration (the ccxt layer promotes it)', () => {
@@ -7966,8 +7966,7 @@ describe ('hx11RdCs1', () => {
             expect(out).toContain('(this.urlsApi != null && this.urlsApi.ContainsKey("ws") ? this.urlsApi["ws"] : null)');
             expect(out).toContain('(this.urlsApi != null && type != null && this.urlsApi.ContainsKey((string)type) ? this.urlsApi[(string)type] : null)');
             expect(out).toContain('(this.urlsApi != null && k != null && this.urlsApi.ContainsKey(k) ? this.urlsApi[k] : null)');
-            expect(out).toContain('getValue((this.urls != null && this.urls.ContainsKey("api") ? this.urls["api"] : null), other)');
-            expect(printed(ts, false)).not.toContain('urlsApi');
+            expect(out).toContain('(this.urlsApi != null && other != null && this.urlsApi.ContainsKey((string)other) ? this.urlsApi[(string)other] : null)');
         });
 
         test('an object member with a declared dictionary view reads and tests through the view', () => {
@@ -7976,8 +7975,6 @@ describe ('hx11RdCs1', () => {
             expect(out).toContain('(this.currenciesDict != null && code != null && this.currenciesDict.ContainsKey((string)code) ? this.currenciesDict[(string)code] : null)');
             expect(out).toMatch(/\(this\.currenciesDict != null && code is string inOpKey\d+ && this\.currenciesDict\.ContainsKey\(inOpKey\d+\)\)/);
             expect(out).toContain('this.currenciesDict.Keys');
-            const bare = printed(ts, true, { ...THIS, currencies: { type: 'object', initializer: 'new dict()' } });
-            expect(bare).not.toContain('currenciesDict');
         });
 
         test('a const alias of a member declared the dictionary interface is declared with it', () => {

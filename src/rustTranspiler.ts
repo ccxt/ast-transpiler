@@ -785,6 +785,7 @@ export function r02NativeInserts (content: string): string {
     const proof = new Proof(content, regions);
     const edits: { start: number, end: number, text: string }[] = [];
     let i = 0;
+    // eslint-disable-next-line no-constant-condition
     while (true) {
         const at = content.indexOf(CALL, i);
         if (at < 0) break;
@@ -802,6 +803,7 @@ export function r02NativeInserts (content: string): string {
         const chain: string[] = [];
         let cur = args[0].trim();
         let ok = true;
+        // eslint-disable-next-line no-constant-condition
         while (true) {
             const outer = callArgs_hx10w2_R02(cur, 'get_value_mut');
             if (outer === undefined || outer.length !== 2) break;
@@ -1298,10 +1300,10 @@ export function hx10w2R03SelfTest (): string[] {
 // `a.as_bool() == b.as_bool()`. Everything unproven keeps the helper call.
 // Runs after the base bool-local passes; only proofs they cannot see remain.
 
-const BOOL_FNS = new Set(['safe_bool', 'safe_bool_k', 'safe_bool_2', 'get_arg_bool'])
-const INT_FNS = new Set(['safe_integer', 'safe_integer_k', 'safe_integer_2', 'safe_int', 'safe_timestamp'])
-const STR_FNS = new Set(['safe_string', 'safe_string_k', 'safe_string_2', 'safe_string_lower', 'safe_string_upper', 'safe_string_lower_k', 'safe_string_upper_k'])
-const FLOAT_FNS = new Set(['safe_float', 'safe_float_k', 'safe_number', 'safe_number_k', 'safe_number_2'])
+const BOOL_FNS = new Set(['safe_bool', 'safe_bool_k', 'safe_bool_2', 'get_arg_bool']);
+const INT_FNS = new Set(['safe_integer', 'safe_integer_k', 'safe_integer_2', 'safe_int', 'safe_timestamp']);
+const STR_FNS = new Set(['safe_string', 'safe_string_k', 'safe_string_2', 'safe_string_lower', 'safe_string_upper', 'safe_string_lower_k', 'safe_string_upper_k']);
+const FLOAT_FNS = new Set(['safe_float', 'safe_float_k', 'safe_number', 'safe_number_k', 'safe_number_2']);
 
 type Variant = 'bool' | 'int' | 'float' | 'str' | 'null'
 type VariantSet = Set<Variant>
@@ -1310,298 +1312,298 @@ interface FnRegion { start: number, end: number, header: string }
 
 /** Blank out string literals and line comments, preserving every offset. */
 function mask (content: string): string {
-    const out = content.split('')
-    let i = 0
+    const out = content.split('');
+    let i = 0;
     while (i < out.length) {
         if (out[i] === '"') {
-            let j = i + 1
+            let j = i + 1;
             while (j < out.length && out[j] !== '"') {
-                if (out[j] === '\\') j++
-                j++
+                if (out[j] === '\\') j++;
+                j++;
             }
-            for (let k = i + 1; k < j && k < out.length; k++) out[k] = ' '
-            i = j + 1
-            continue
+            for (let k = i + 1; k < j && k < out.length; k++) out[k] = ' ';
+            i = j + 1;
+            continue;
         }
         if (out[i] === '/' && out[i + 1] === '/') {
-            let j = i
-            while (j < out.length && out[j] !== '\n') { out[j] = ' '; j++ }
-            i = j
-            continue
+            let j = i;
+            while (j < out.length && out[j] !== '\n') { out[j] = ' '; j++; }
+            i = j;
+            continue;
         }
-        i++
+        i++;
     }
-    return out.join('')
+    return out.join('');
 }
 
 function closeParen (masked: string, open: number): number {
-    let depth = 0
+    let depth = 0;
     for (let i = open; i < masked.length; i++) {
-        const c = masked[i]
-        if (c === '(' || c === '[' || c === '{') depth++
+        const c = masked[i];
+        if (c === '(' || c === '[' || c === '{') depth++;
         else if (c === ')' || c === ']' || c === '}') {
-            depth--
-            if (depth === 0) return i
+            depth--;
+            if (depth === 0) return i;
         }
     }
-    return -1
+    return -1;
 }
 
 function splitTopLevel (src: string, sep: string): string[] {
-    const parts: string[] = []
-    let depth = 0
-    let cur = ''
-    let inStr = false
+    const parts: string[] = [];
+    let depth = 0;
+    let cur = '';
+    let inStr = false;
     for (let i = 0; i < src.length; i++) {
-        const c = src[i]
+        const c = src[i];
         if (inStr) {
-            cur += c
-            if (c === '\\') { cur += src[i + 1] ?? ''; i++; continue }
-            if (c === '"') inStr = false
-            continue
+            cur += c;
+            if (c === '\\') { cur += src[i + 1] ?? ''; i++; continue; }
+            if (c === '"') inStr = false;
+            continue;
         }
-        if (c === '"') { inStr = true; cur += c; continue }
-        if (c === '(' || c === '[' || c === '{') depth++
-        else if (c === ')' || c === ']' || c === '}') depth--
-        if (c === sep && depth === 0) { parts.push(cur); cur = ''; continue }
-        cur += c
+        if (c === '"') { inStr = true; cur += c; continue; }
+        if (c === '(' || c === '[' || c === '{') depth++;
+        else if (c === ')' || c === ']' || c === '}') depth--;
+        if (c === sep && depth === 0) { parts.push(cur); cur = ''; continue; }
+        cur += c;
     }
-    parts.push(cur)
-    return parts.map((p) => p.trim())
+    parts.push(cur);
+    return parts.map((p) => p.trim());
 }
 
 function stripOuter (src: string): string {
-    let s = src.trim()
-    while (s.startsWith('(') && closeParen(s, 0) === s.length - 1) s = s.slice(1, -1).trim()
-    return s
+    let s = src.trim();
+    while (s.startsWith('(') && closeParen(s, 0) === s.length - 1) s = s.slice(1, -1).trim();
+    return s;
 }
 
 /** Text from the start of the statement holding `pos` up to `pos`. */
 function statementBefore (masked: string, pos: number): string {
-    let depth = 0
+    let depth = 0;
     for (let i = pos; i > 0; i--) {
-        const c = masked[i - 1]
-        if (c === ')' || c === ']') depth++
-        else if (c === '(' || c === '[') { if (depth > 0) depth-- }
-        else if (depth === 0 && (c === ';' || c === '{' || c === '}' || c === '\n')) return masked.slice(i, pos)
+        const c = masked[i - 1];
+        if (c === ')' || c === ']') depth++;
+        else if (c === '(' || c === '[') { if (depth > 0) depth--; }
+        else if (depth === 0 && (c === ';' || c === '{' || c === '}' || c === '\n')) return masked.slice(i, pos);
     }
-    return masked.slice(0, pos)
+    return masked.slice(0, pos);
 }
 
 function fnRegionOf (masked: string, pos: number): FnRegion {
-    const heads: number[] = [0]
-    for (const m of masked.matchAll(/\n[ \t]*(?:pub )?(?:async )?fn /g)) heads.push((m.index as number) + 1)
-    heads.push(masked.length)
-    let lo = 0
-    for (let h = 0; h + 1 < heads.length; h++) if (heads[h] <= pos) lo = h
-    const body = masked.slice(heads[lo], heads[lo + 1])
-    const brace = body.indexOf('{')
-    return { start: heads[lo], end: heads[lo + 1], header: brace < 0 ? body : body.slice(0, brace) }
+    const heads: number[] = [0];
+    for (const m of masked.matchAll(/\n[ \t]*(?:pub )?(?:async )?fn /g)) heads.push((m.index as number) + 1);
+    heads.push(masked.length);
+    let lo = 0;
+    for (let h = 0; h + 1 < heads.length; h++) if (heads[h] <= pos) lo = h;
+    const body = masked.slice(heads[lo], heads[lo + 1]);
+    const brace = body.indexOf('{');
+    return { start: heads[lo], end: heads[lo + 1], header: brace < 0 ? body : body.slice(0, brace) };
 }
 
 function rhsAfter (masked: string, from: number): string {
-    let depth = 0
+    let depth = 0;
     for (let i = from; i < masked.length; i++) {
-        const c = masked[i]
-        if (c === '(' || c === '[' || c === '{') depth++
-        else if (c === ')' || c === ']' || c === '}') depth--
-        else if (c === ';' && depth === 0) return masked.slice(from, i).trim()
+        const c = masked[i];
+        if (c === '(' || c === '[' || c === '{') depth++;
+        else if (c === ')' || c === ']' || c === '}') depth--;
+        else if (c === ';' && depth === 0) return masked.slice(from, i).trim();
     }
-    return ''
+    return '';
 }
 
 /** Drop the balanced expression ending `s` (an operand of `&&` / `||`). */
 function stripTrailingOperand (s: string): string {
-    let depth = 0
+    let depth = 0;
     for (let i = s.length - 1; i >= 0; i--) {
-        const c = s[i]
-        if (c === ')' || c === ']' || c === '}') depth++
+        const c = s[i];
+        if (c === ')' || c === ']' || c === '}') depth++;
         else if (c === '(' || c === '[' || c === '{') {
-            if (depth === 0) return s.slice(0, i)
-            depth--
-            if (depth === 0 && !/[A-Za-z0-9_.)\]]/.test(s[i - 1] ?? '')) return s.slice(0, i)
+            if (depth === 0) return s.slice(0, i);
+            depth--;
+            if (depth === 0 && !/[A-Za-z0-9_.)\]]/.test(s[i - 1] ?? '')) return s.slice(0, i);
         } else if (depth === 0) {
-            if ((c === '&' && s[i - 1] === '&') || (c === '|' && s[i - 1] === '|')) return s.slice(0, i - 1)
-            if (c === ',' || c === ';' || c === '=') return s.slice(0, i + 1)
+            if ((c === '&' && s[i - 1] === '&') || (c === '|' && s[i - 1] === '|')) return s.slice(0, i - 1);
+            if (c === ',' || c === ';' || c === '=') return s.slice(0, i + 1);
             if (/[A-Za-z0-9_.)]/.test(c)) {
-                let k = i
-                while (k >= 0 && /[A-Za-z0-9_.]/.test(s[k])) k--
-                return k < 0 ? s : s.slice(0, k + 1)
+                let k = i;
+                while (k >= 0 && /[A-Za-z0-9_.]/.test(s[k])) k--;
+                return k < 0 ? s : s.slice(0, k + 1);
             }
         }
     }
-    return ''
+    return '';
 }
 
 /** True when a `bool` is legal at `start` (condition, bool decl, Value::Bool box). */
 function boolSlotAt (masked: string, start: number): boolean {
-    let prefix = statementBefore(masked, start)
+    let prefix = statementBefore(masked, start);
     for (let hop = 0; hop < 60; hop++) {
-        prefix = prefix.replace(/[\s!]+$/, '')
-        if (/(?:^|[^\w])(?:if|while|for|assert|assert_eq)$/.test(prefix)) return true
-        if (/Value::Bool\($/.test(prefix)) return true
-        if (/(?:&&|\|\|)$/.test(prefix)) { prefix = stripTrailingOperand(prefix.slice(0, -2)); continue }
-        if (/[^=!<>]=$/.test(prefix)) return /:\s*bool\s*=?$/.test(prefix.slice(0, -1))
-        if (/\($/.test(prefix)) { prefix = prefix.slice(0, -1); continue }
-        return false
+        prefix = prefix.replace(/[\s!]+$/, '');
+        if (/(?:^|[^\w])(?:if|while|for|assert|assert_eq)$/.test(prefix)) return true;
+        if (/Value::Bool\($/.test(prefix)) return true;
+        if (/(?:&&|\|\|)$/.test(prefix)) { prefix = stripTrailingOperand(prefix.slice(0, -2)); continue; }
+        if (/[^=!<>]=$/.test(prefix)) return /:\s*bool\s*=?$/.test(prefix.slice(0, -1));
+        if (/\($/.test(prefix)) { prefix = prefix.slice(0, -1); continue; }
+        return false;
     }
-    return false
+    return false;
 }
 
-const UNION: Variant[] = ['bool', 'null']
+const UNION: Variant[] = ['bool', 'null'];
 
 /**
  * Runtime variants a write can produce, or undefined when not provable.
  * `safe_bool*` is admitted only when its default cannot be a non-bool value.
  */
 function variantOf (expr: string, masked: string, region: FnRegion, depth: number): VariantSet | undefined {
-    const e = stripOuter(expr)
-    const lit = /^Value::(Bool|Int|Float|Str)\(/.exec(e)
+    const e = stripOuter(expr);
+    const lit = /^Value::(Bool|Int|Float|Str)\(/.exec(e);
     if (lit !== null && closeParen(e, 'Value::'.length + lit[1].length) === e.length - 1) {
-        return new Set<Variant>([lit[1].toLowerCase() as Variant])
+        return new Set<Variant>([lit[1].toLowerCase() as Variant]);
     }
-    if (e === 'Value::Null' || e === 'crate::Value::Null') return new Set<Variant>(['null'])
-    const call = /^self\.([a-z_][a-z0-9_]*)\(/.exec(e)
+    if (e === 'Value::Null' || e === 'crate::Value::Null') return new Set<Variant>(['null']);
+    const call = /^self\.([a-z_][a-z0-9_]*)\(/.exec(e);
     if (call !== null && closeParen(e, 'self.'.length + call[1].length) === e.length - 1) {
-        const name = call[1]
-        if (BOOL_FNS.has(name)) return safeBoolVariants(e, masked, region, depth)
-        if (INT_FNS.has(name)) return new Set<Variant>(['int', 'null'])
-        if (STR_FNS.has(name)) return new Set<Variant>(['str', 'null'])
-        if (FLOAT_FNS.has(name)) return new Set<Variant>(['float', 'int', 'null'])
-        return undefined
+        const name = call[1];
+        if (BOOL_FNS.has(name)) return safeBoolVariants(e, masked, region, depth);
+        if (INT_FNS.has(name)) return new Set<Variant>(['int', 'null']);
+        if (STR_FNS.has(name)) return new Set<Variant>(['str', 'null']);
+        if (FLOAT_FNS.has(name)) return new Set<Variant>(['float', 'int', 'null']);
+        return undefined;
     }
     if (/^\(?if /.test(e) && e.includes('} else {')) {
-        const at = e.indexOf('} else {')
-        const a = variantOf(e.slice(e.indexOf('{') + 1, at), masked, region, depth)
-        const b = variantOf(e.slice(at + '} else {'.length, e.lastIndexOf('}')), masked, region, depth)
-        if (a !== undefined && b !== undefined) return new Set<Variant>([...a, ...b])
+        const at = e.indexOf('} else {');
+        const a = variantOf(e.slice(e.indexOf('{') + 1, at), masked, region, depth);
+        const b = variantOf(e.slice(at + '} else {'.length, e.lastIndexOf('}')), masked, region, depth);
+        if (a !== undefined && b !== undefined) return new Set<Variant>([...a, ...b]);
     }
-    return undefined
+    return undefined;
 }
 
 /** `safe_bool*(obj, key, &[])` is `Bool` or `Null`; a proven bool default is `Bool`. */
 function safeBoolVariants (call: string, masked: string, region: FnRegion, depth: number): VariantSet | undefined {
-    const open = call.indexOf('(')
-    const args = splitTopLevel(call.slice(open + 1, closeParen(call, open)), ',')
-    const list = /^&\[(.*)\]$/.exec(args[args.length - 1] ?? '')
-    if (list === null) return undefined
-    const items = list[1].trim()
-    if (items === '') return new Set<Variant>(UNION)
-    return boolDefault(items, masked, region, depth)
+    const open = call.indexOf('(');
+    const args = splitTopLevel(call.slice(open + 1, closeParen(call, open)), ',');
+    const list = /^&\[(.*)\]$/.exec(args[args.length - 1] ?? '');
+    if (list === null) return undefined;
+    const items = list[1].trim();
+    if (items === '') return new Set<Variant>(UNION);
+    return boolDefault(items, masked, region, depth);
 }
 
 function boolDefault (expr: string, masked: string, region: FnRegion, depth: number): VariantSet | undefined {
-    const e = stripOuter(expr)
-    if (/^Value::Bool\(/.test(e) || e === 'Value::Null') return new Set<Variant>(UNION)
-    const name = /^([A-Za-z_][A-Za-z0-9_]*)(?:\.clone\(\))?$/.exec(e)
-    if (name === null) return undefined
-    const proof = proveLocal(masked, name[1], region, depth + 1)
-    if (proof.variants === undefined) return undefined
-    return [...proof.variants].every((v) => v === 'bool' || v === 'null') ? new Set<Variant>(UNION) : undefined
+    const e = stripOuter(expr);
+    if (/^Value::Bool\(/.test(e) || e === 'Value::Null') return new Set<Variant>(UNION);
+    const name = /^([A-Za-z_][A-Za-z0-9_]*)(?:\.clone\(\))?$/.exec(e);
+    if (name === null) return undefined;
+    const proof = proveLocal(masked, name[1], region, depth + 1);
+    if (proof.variants === undefined) return undefined;
+    return [...proof.variants].every((v) => v === 'bool' || v === 'null') ? new Set<Variant>(UNION) : undefined;
 }
 
 interface LocalProof { kind: 'variant' | 'none', variants?: VariantSet }
 
 /** Variant proof for every write of `name` inside one fn region. */
 function proveLocal (masked: string, name: string, region: FnRegion, depth: number): LocalProof {
-    if (depth > 3) return { kind: 'none' }
-    const body = masked.slice(region.start, region.end)
-    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const shadow = new RegExp(`(?<!\\|)\\|(?!\\|)[^|\\n]*\\b${esc}\\b[^|\\n]*(?<!\\|)\\|(?!\\|)|\\bfor [^\\n]*\\b${esc}\\b[^\\n]* in |\\blet \\([^)]*\\b${esc}\\b`)
-    if (shadow.test(body)) return { kind: 'none' }
-    const types = new Set<string>()
-    const param = new RegExp(`\\b(?:mut )?${esc}\\s*:\\s*([A-Za-z_][A-Za-z0-9_<>]*)`).exec(region.header)
-    if (param !== null) types.add(param[1])
-    const writes: string[] = []
-    const spans: Array<[number, number]> = []
-    const letRe = new RegExp(`\\blet (?:mut )?${esc}\\b\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_<>]*))?\\s*=`, 'g')
+    if (depth > 3) return { kind: 'none' };
+    const body = masked.slice(region.start, region.end);
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const shadow = new RegExp(`(?<!\\|)\\|(?!\\|)[^|\\n]*\\b${esc}\\b[^|\\n]*(?<!\\|)\\|(?!\\|)|\\bfor [^\\n]*\\b${esc}\\b[^\\n]* in |\\blet \\([^)]*\\b${esc}\\b`);
+    if (shadow.test(body)) return { kind: 'none' };
+    const types = new Set<string>();
+    const param = new RegExp(`\\b(?:mut )?${esc}\\s*:\\s*([A-Za-z_][A-Za-z0-9_<>]*)`).exec(region.header);
+    if (param !== null) types.add(param[1]);
+    const writes: string[] = [];
+    const spans: Array<[number, number]> = [];
+    const letRe = new RegExp(`\\blet (?:mut )?${esc}\\b\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_<>]*))?\\s*=`, 'g');
     for (const m of body.matchAll(letRe)) {
-        const at = m.index as number
-        const rhs = rhsAfter(masked, region.start + at + m[0].length)
-        spans.push([at, at + m[0].length + rhs.length])
-        if (m[1] !== undefined) types.add(m[1])
-        writes.push(rhs)
+        const at = m.index as number;
+        const rhs = rhsAfter(masked, region.start + at + m[0].length);
+        spans.push([at, at + m[0].length + rhs.length]);
+        if (m[1] !== undefined) types.add(m[1]);
+        writes.push(rhs);
     }
-    const assignRe = new RegExp(`(?<![A-Za-z0-9_.])${esc}\\s*=(?!=)`, 'g')
+    const assignRe = new RegExp(`(?<![A-Za-z0-9_.])${esc}\\s*=(?!=)`, 'g');
     for (const m of body.matchAll(assignRe)) {
-        const at = m.index as number
-        if (spans.some(([s, e]) => at >= s && at < e)) continue
-        writes.push(rhsAfter(masked, region.start + at + m[0].length))
-        types.add('?')
+        const at = m.index as number;
+        if (spans.some(([s, e]) => at >= s && at < e)) continue;
+        writes.push(rhsAfter(masked, region.start + at + m[0].length));
+        types.add('?');
     }
-    const only = [...types]
-    if (writes.length === 0 || only.some((t) => t !== 'Value' && t !== '?')) return { kind: 'none' }
-    let acc: VariantSet | undefined = undefined
+    const only = [...types];
+    if (writes.length === 0 || only.some((t) => t !== 'Value' && t !== '?')) return { kind: 'none' };
+    let acc: VariantSet | undefined = undefined;
     for (const w of writes) {
-        const v = variantOf(w, masked, region, depth)
-        if (v === undefined) return { kind: 'none' }
-        acc = acc === undefined ? v : new Set<Variant>([...acc].filter((x) => v.has(x)))
-        if (acc.size === 0) return { kind: 'none' }
+        const v = variantOf(w, masked, region, depth);
+        if (v === undefined) return { kind: 'none' };
+        acc = acc === undefined ? v : new Set<Variant>([...acc].filter((x) => v.has(x)));
+        if (acc.size === 0) return { kind: 'none' };
     }
-    return acc === undefined ? { kind: 'none' } : { kind: 'variant', variants: acc }
+    return acc === undefined ? { kind: 'none' } : { kind: 'variant', variants: acc };
 }
 
-const isBoolOnly = (v: VariantSet): boolean => [...v].every((x) => x === 'bool' || x === 'null')
+const isBoolOnly = (v: VariantSet): boolean => [...v].every((x) => x === 'bool' || x === 'null');
 
 /** `!is_true(&X)` flips the comparison instead of wrapping it. */
 function pushEdit (edits: Array<{ start: number, end: number, text: string }>, masked: string, start: number, close: number, text: string): void {
-    let k = start - 1
-    while (k >= 0 && (masked[k] === ' ' || masked[k] === '\t')) k--
+    let k = start - 1;
+    while (k >= 0 && (masked[k] === ' ' || masked[k] === '\t')) k--;
     if (k >= 0 && masked[k] === '!' && masked[k - 1] !== '=') {
-        edits.push({ start: k, end: close + 1, text: text.replace(' == ', ' != ') })
-        return
+        edits.push({ start: k, end: close + 1, text: text.replace(' == ', ' != ') });
+        return;
     }
-    edits.push({ start, end: close + 1, text })
+    edits.push({ start, end: close + 1, text });
 }
 
 export function r04Scalars (content: string): string {
-    if (!content.includes('is_true(&') && !content.includes('is_equal(&')) return content
-    const masked = mask(content)
-    const edits: Array<{ start: number, end: number, text: string }> = []
+    if (!content.includes('is_true(&') && !content.includes('is_equal(&')) return content;
+    const masked = mask(content);
+    const edits: Array<{ start: number, end: number, text: string }> = [];
     for (const m of masked.matchAll(/(?<![A-Za-z0-9_:.])(is_true|is_equal)\(&/g)) {
-        const start = m.index as number
-        const open = start + m[1].length
-        const close = closeParen(masked, open)
-        if (close < 0) continue
-        if (!boolSlotAt(masked, start)) continue
-        const args = splitTopLevel(content.slice(open + 1, close), ',')
-        const region = fnRegionOf(masked, start)
+        const start = m.index as number;
+        const open = start + m[1].length;
+        const close = closeParen(masked, open);
+        if (close < 0) continue;
+        if (!boolSlotAt(masked, start)) continue;
+        const args = splitTopLevel(content.slice(open + 1, close), ',');
+        const region = fnRegionOf(masked, start);
         const proofOf = (e: string): VariantSet | undefined => {
-            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(e)) return undefined
-            return proveLocal(masked, e, region, 0).variants
-        }
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(e)) return undefined;
+            return proveLocal(masked, e, region, 0).variants;
+        };
         if (m[1] === 'is_true') {
-            if (args.length !== 1) continue
-            const operand = stripOuter(args[0].replace(/^&/, ''))
-            const variants = proofOf(operand)
-            if (variants === undefined || !isBoolOnly(variants)) continue
-            pushEdit(edits, masked, start, close, `${operand}.as_bool() == Some(true)`)
-            continue
+            if (args.length !== 1) continue;
+            const operand = stripOuter(args[0].replace(/^&/, ''));
+            const variants = proofOf(operand);
+            if (variants === undefined || !isBoolOnly(variants)) continue;
+            pushEdit(edits, masked, start, close, `${operand}.as_bool() == Some(true)`);
+            continue;
         }
-        if (args.length !== 2) continue
-        const a = stripOuter(args[0].replace(/^&/, ''))
-        const b = stripOuter(args[1].replace(/^&/, ''))
-        const lit = (e: string): boolean => e === 'Value::Null' || /^Value::Bool\((?:true|false)\)$/.test(e)
-        if (lit(a) && lit(b)) continue
-        const va = lit(a) ? new Set<Variant>(UNION) : proofOf(a)
-        const vb = lit(b) ? new Set<Variant>(UNION) : proofOf(b)
-        if (va === undefined || vb === undefined || !isBoolOnly(va) || !isBoolOnly(vb)) continue
+        if (args.length !== 2) continue;
+        const a = stripOuter(args[0].replace(/^&/, ''));
+        const b = stripOuter(args[1].replace(/^&/, ''));
+        const lit = (e: string): boolean => e === 'Value::Null' || /^Value::Bool\((?:true|false)\)$/.test(e);
+        if (lit(a) && lit(b)) continue;
+        const va = lit(a) ? new Set<Variant>(UNION) : proofOf(a);
+        const vb = lit(b) ? new Set<Variant>(UNION) : proofOf(b);
+        if (va === undefined || vb === undefined || !isBoolOnly(va) || !isBoolOnly(vb)) continue;
         const asOption = (e: string): string => {
-            const box = /^Value::Bool\((true|false)\)$/.exec(e)
-            if (box !== null) return `Some(${box[1]})`
-            return e === 'Value::Null' ? 'None' : `${e}.as_bool()`
-        }
-        pushEdit(edits, masked, start, close, `${asOption(a)} == ${asOption(b)}`)
+            const box = /^Value::Bool\((true|false)\)$/.exec(e);
+            if (box !== null) return `Some(${box[1]})`;
+            return e === 'Value::Null' ? 'None' : `${e}.as_bool()`;
+        };
+        pushEdit(edits, masked, start, close, `${asOption(a)} == ${asOption(b)}`);
     }
-    if (edits.length === 0) return content
-    let out = ''
-    let at = 0
+    if (edits.length === 0) return content;
+    let out = '';
+    let at = 0;
     for (const e of edits) {
-        if (e.start < at) continue
-        out += content.slice(at, e.start) + e.text
-        at = e.end
+        if (e.start < at) continue;
+        out += content.slice(at, e.start) + e.text;
+        at = e.end;
     }
-    return out + content.slice(at)
+    return out + content.slice(at);
 }
 
 const CASES_hx10w2_R04: Array<[string, string, string]> = [
@@ -1614,20 +1616,20 @@ const CASES_hx10w2_R04: Array<[string, string, string]> = [
     ['value slot keeps helper', 'let mut flag: Value = self.safe_bool_k(o, "k", &[]);\n        m.insert("k".into(), is_true(&flag));', 'is_true(&flag)'],
     ['mixed write keeps helper', 'let mut flag: Value = Value::Bool(false);\n        flag = get_arg(o, 0, Value::Null);\n        if is_true(&flag) {', 'is_true(&flag)'],
     ['any default keeps helper', 'let mut flag: Value = self.safe_bool_k(o, "k", &[other]);\n        if is_true(&flag) {', 'is_true(&flag)'],
-]
+];
 
 /** Each case: the native text must appear, and the helper must be gone unless the case keeps it. */
 export function r04SelfTest (): string[] {
-    const bad: string[] = []
+    const bad: string[] = [];
     for (const [name, body, want] of CASES_hx10w2_R04) {
-        const src = `    pub fn f(&mut self) -> Value {\n        ${body} return Value::Null; }\n    Value::Null\n}\n`
-        const out = r04Scalars(src)
-        if (!out.includes(want)) bad.push(`${name}: missing ${JSON.stringify(want)}`)
-        const keep = want.startsWith('is_true') || want.startsWith('is_equal')
-        if (keep && out !== src) bad.push(`${name}: must stay unchanged`)
-        if (!keep && (out.includes('is_true(&') || out.includes('is_equal(&'))) bad.push(`${name}: helper left`)
+        const src = `    pub fn f(&mut self) -> Value {\n        ${body} return Value::Null; }\n    Value::Null\n}\n`;
+        const out = r04Scalars(src);
+        if (!out.includes(want)) bad.push(`${name}: missing ${JSON.stringify(want)}`);
+        const keep = want.startsWith('is_true') || want.startsWith('is_equal');
+        if (keep && out !== src) bad.push(`${name}: must stay unchanged`);
+        if (!keep && (out.includes('is_true(&') || out.includes('is_equal(&'))) bad.push(`${name}: helper left`);
     }
-    return bad
+    return bad;
 }
 
 // ---- hx10w2-r06 ----
@@ -1945,7 +1947,7 @@ function maskText_hx10w3_R01(src: string): string {
             continue;
         }
         if (c === '"') {
-            out += ' '
+            out += ' ';
             i++;
             while (i < src.length && src[i] !== '"') {
                 if (src[i] === '\n') { out += '\n'; i++; continue; }
@@ -2088,12 +2090,12 @@ const RUST_TYPE: Record<Shape, string> = {
 /** Box a native local back into a `Value` slot. */
 function boxed(shape: Shape, expr: string): string {
     switch (shape) {
-        case 'String': return `Value::str(${expr})`;
-        case 'Int': return `Value::Int(${expr})`;
-        case 'Float': return `Value::Float(${expr})`;
-        case 'Bool': return `Value::Bool(${expr})`;
-        case 'Vec': return `Value::Array(${expr})`;
-        case 'Map': return `Value::Map(${expr})`;
+    case 'String': return `Value::str(${expr})`;
+    case 'Int': return `Value::Int(${expr})`;
+    case 'Float': return `Value::Float(${expr})`;
+    case 'Bool': return `Value::Bool(${expr})`;
+    case 'Vec': return `Value::Array(${expr})`;
+    case 'Map': return `Value::Map(${expr})`;
     }
 }
 
@@ -2671,46 +2673,46 @@ export function r01SelfTest(): string[] {
             'unproven-use-keeps-value',
             'fn f() {\n    let mut s: Value = Value::Str("a".into());\n    self.sign(s.clone());\n}\n',
             'fn f() {\n    let mut s: Value = Value::Str("a".into());\n    self.sign(s.clone());\n}\n',
-        [
-            "fmt-arg-slot",
-            "fn f() {\n    let mut s: Value = Value::Str(\"ab\".into());\n    let t: Value = Value::str(format!(\"x{}\", s));\n    if is_equal(&s, &Value::Str(\"ab\".into())) {\n        return;\n    }\n}\n",
-            "fn f() {\n    let mut s: String = \"ab\".into();\n    let t: Value = Value::str(format!(\"x{}\", s));\n    if (s == \"ab\") {\n        return;\n    }\n}\n",
-        ],
-        [
-            "nonmut-let",
-            "fn f() {\n    let s: Value = Value::Str(\"ab\".into());\n    let t: Value = Value::str(format!(\"x{}\", s));\n    if is_equal(&s, &Value::Str(\"ab\".into())) {\n        return;\n    }\n}\n",
-            "fn f() {\n    let s: String = \"ab\".into();\n    let t: Value = Value::str(format!(\"x{}\", s));\n    if (s == \"ab\") {\n        return;\n    }\n}\n",
-        ],
-        [
-            "rev-lit-compare",
-            "fn f() {\n    let mut n: Value = Value::Int(2);\n    if is_less_than(&Value::Int(3), &n) {\n        n = Value::Int(4);\n    }\n}\n",
-            "fn f() {\n    let mut n: i64 = 2;\n    if (3 < n) {\n        n = 4;\n    }\n}\n",
-        ],
-        [
-            "tostr-int",
-            "fn f() {\n    let mut n: Value = Value::Int(5);\n    let s: Value = to_string_val(&n);\n}\n",
-            "fn f() {\n    let mut n: i64 = 5;\n    let s: Value = Value::str(n.to_string());\n}\n",
-        ],
-        [
-            "bool-matches",
-            "fn f() {\n    let mut b: Value = Value::Bool(true);\n    if matches!(&b, Value::Bool(true)) {\n        b = Value::Bool(false);\n    }\n}\n",
-            "fn f() {\n    let mut b: bool = true;\n    if b {\n        b = false;\n    }\n}\n",
-        ],
-        [
-            "value-str-rebox",
-            "fn f() {\n    let mut s: Value = Value::Str(\"ab\".into());\n    m.insert(\"k\".to_string(), Value::str(s.clone()));\n    if is_equal(&s, &Value::Str(\"ab\".into())) {\n        return;\n    }\n}\n",
-            "fn f() {\n    let mut s: String = \"ab\".into();\n    m.insert(\"k\".to_string(), Value::str(s.clone()));\n    if (s == \"ab\") {\n        return;\n    }\n}\n",
-        ],
-        [
-            "as-str-compare",
-            "fn f() {\n    let mut s: Value = Value::Str(\"ab\".into());\n    if s.as_str() == Some(\"ab\") {\n        s = Value::Str(\"cd\".into());\n    }\n}\n",
-            "fn f() {\n    let mut s: String = \"ab\".into();\n    if (s == \"ab\") {\n        s = \"cd\".into();\n    }\n}\n",
-        ],
-        [
-            "as-f64-compare",
-            "fn f() {\n    let mut n: Value = Value::Int(5);\n    if n.as_f64().unwrap_or(f64::NAN) < (3i64) as f64 {\n        n = Value::Int(4);\n    }\n}\n",
-            "fn f() {\n    let mut n: i64 = 5;\n    if (n as f64) < (3i64) as f64 {\n        n = 4;\n    }\n}\n",
-        ],
+            [
+                "fmt-arg-slot",
+                "fn f() {\n    let mut s: Value = Value::Str(\"ab\".into());\n    let t: Value = Value::str(format!(\"x{}\", s));\n    if is_equal(&s, &Value::Str(\"ab\".into())) {\n        return;\n    }\n}\n",
+                "fn f() {\n    let mut s: String = \"ab\".into();\n    let t: Value = Value::str(format!(\"x{}\", s));\n    if (s == \"ab\") {\n        return;\n    }\n}\n",
+            ],
+            [
+                "nonmut-let",
+                "fn f() {\n    let s: Value = Value::Str(\"ab\".into());\n    let t: Value = Value::str(format!(\"x{}\", s));\n    if is_equal(&s, &Value::Str(\"ab\".into())) {\n        return;\n    }\n}\n",
+                "fn f() {\n    let s: String = \"ab\".into();\n    let t: Value = Value::str(format!(\"x{}\", s));\n    if (s == \"ab\") {\n        return;\n    }\n}\n",
+            ],
+            [
+                "rev-lit-compare",
+                "fn f() {\n    let mut n: Value = Value::Int(2);\n    if is_less_than(&Value::Int(3), &n) {\n        n = Value::Int(4);\n    }\n}\n",
+                "fn f() {\n    let mut n: i64 = 2;\n    if (3 < n) {\n        n = 4;\n    }\n}\n",
+            ],
+            [
+                "tostr-int",
+                "fn f() {\n    let mut n: Value = Value::Int(5);\n    let s: Value = to_string_val(&n);\n}\n",
+                "fn f() {\n    let mut n: i64 = 5;\n    let s: Value = Value::str(n.to_string());\n}\n",
+            ],
+            [
+                "bool-matches",
+                "fn f() {\n    let mut b: Value = Value::Bool(true);\n    if matches!(&b, Value::Bool(true)) {\n        b = Value::Bool(false);\n    }\n}\n",
+                "fn f() {\n    let mut b: bool = true;\n    if b {\n        b = false;\n    }\n}\n",
+            ],
+            [
+                "value-str-rebox",
+                "fn f() {\n    let mut s: Value = Value::Str(\"ab\".into());\n    m.insert(\"k\".to_string(), Value::str(s.clone()));\n    if is_equal(&s, &Value::Str(\"ab\".into())) {\n        return;\n    }\n}\n",
+                "fn f() {\n    let mut s: String = \"ab\".into();\n    m.insert(\"k\".to_string(), Value::str(s.clone()));\n    if (s == \"ab\") {\n        return;\n    }\n}\n",
+            ],
+            [
+                "as-str-compare",
+                "fn f() {\n    let mut s: Value = Value::Str(\"ab\".into());\n    if s.as_str() == Some(\"ab\") {\n        s = Value::Str(\"cd\".into());\n    }\n}\n",
+                "fn f() {\n    let mut s: String = \"ab\".into();\n    if (s == \"ab\") {\n        s = \"cd\".into();\n    }\n}\n",
+            ],
+            [
+                "as-f64-compare",
+                "fn f() {\n    let mut n: Value = Value::Int(5);\n    if n.as_f64().unwrap_or(f64::NAN) < (3i64) as f64 {\n        n = Value::Int(4);\n    }\n}\n",
+                "fn f() {\n    let mut n: i64 = 5;\n    if (n as f64) < (3i64) as f64 {\n        n = 4;\n    }\n}\n",
+            ],
         ],
     ];
     const fails: string[] = [];
@@ -2882,9 +2884,9 @@ function r03Decl(region: string, name: string): { init: string } | undefined {
 }
 
 /** Arity-independent shape table for `pub fn NAME(...) -> Value` methods. */
-function r03MethodShapes(content: string, masked: string, loose: boolean = false): Map<string, R03Shape> {
+function r03MethodShapes(content: string, masked: string, loose = false): Map<string, R03Shape> {
     const shapes = new Map<string, R03Shape>();
-    const hdr = loose ? /\n    (?:pub )?fn (\w+)\s*\(/g : /\n    pub fn (\w+)\s*\(/g;
+    const hdr = loose ? /\n {4}(?:pub )?fn (\w+)\s*\(/g : /\n {4}pub fn (\w+)\s*\(/g;
     let hm: RegExpExecArray | null;
     while ((hm = hdr.exec(masked)) !== null) {
         const lineEnd = masked.indexOf('\n', hm.index + 1);
@@ -3199,329 +3201,329 @@ interface Hx10R04Region { start: number, end: number, name: string, ret: string,
 
 /** Blank out string literals and comments, preserving every offset. */
 function hx10R04Mask (text: string): string {
-    const out = text.split('')
-    const n = out.length
-    let i = 0
+    const out = text.split('');
+    const n = out.length;
+    let i = 0;
     while (i < n) {
-        const c = out[i]
+        const c = out[i];
         if (c === '"') {
-            let j = i + 1
+            let j = i + 1;
             while (j < n && out[j] !== '"') {
-                if (out[j] === '\\') j += 1
-                j += 1
+                if (out[j] === '\\') j += 1;
+                j += 1;
             }
-            for (let k = i + 1; k < j && k < n; k++) out[k] = ' '
-            i = j + 1
-            continue
+            for (let k = i + 1; k < j && k < n; k++) out[k] = ' ';
+            i = j + 1;
+            continue;
         }
         if (c === '/' && out[i + 1] === '/') {
-            let j = i
-            while (j < n && out[j] !== '\n') { out[j] = ' '; j += 1 }
-            i = j
-            continue
+            let j = i;
+            while (j < n && out[j] !== '\n') { out[j] = ' '; j += 1; }
+            i = j;
+            continue;
         }
-        i += 1
+        i += 1;
     }
-    return out.join('')
+    return out.join('');
 }
 
 function hx10R04Close (masked: string, open: number): number {
-    let depth = 0
+    let depth = 0;
     for (let i = open; i < masked.length; i++) {
-        const c = masked[i]
-        if (c === '(' || c === '[' || c === '{') depth++
+        const c = masked[i];
+        if (c === '(' || c === '[' || c === '{') depth++;
         else if (c === ')' || c === ']' || c === '}') {
-            depth--
-            if (depth === 0) return i
+            depth--;
+            if (depth === 0) return i;
         }
     }
-    return -1
+    return -1;
 }
 
 function hx10R04Strip (src: string): string {
-    let s = src.trim()
-    while (s.startsWith('(') && hx10R04Close(s, 0) === s.length - 1) s = s.slice(1, -1).trim()
-    return s
+    let s = src.trim();
+    while (s.startsWith('(') && hx10R04Close(s, 0) === s.length - 1) s = s.slice(1, -1).trim();
+    return s;
 }
 
-const HX10R04_FN = /\n[ \t]*(?:pub )?(?:async )?fn (\w+)/g
+const HX10R04_FN = /\n[ \t]*(?:pub )?(?:async )?fn (\w+)/g;
 
 function hx10R04Regions (masked: string): Hx10R04Region[] {
-    const heads: number[] = [0]
-    for (const m of masked.matchAll(HX10R04_FN)) heads.push((m.index as number) + 1)
-    heads.push(masked.length)
-    const out: Hx10R04Region[] = []
+    const heads: number[] = [0];
+    for (const m of masked.matchAll(HX10R04_FN)) heads.push((m.index as number) + 1);
+    heads.push(masked.length);
+    const out: Hx10R04Region[] = [];
     for (let h = 0; h + 1 < heads.length; h++) {
-        const seg = masked.slice(heads[h], heads[h + 1])
-        const head = /^[ \t]*(?:pub )?(?:async )?fn (\w+)\s*(?:<[^>]*>)?\s*\(/.exec(seg)
-        if (head === null) continue
-        const open = seg.indexOf('(', head[0].length - 1)
-        const close = hx10R04Close(seg, open)
-        if (close < 0) continue
-        const brace = seg.indexOf('{', close)
-        out.push({ start: heads[h], end: heads[h + 1], name: head[1], ret: brace < 0 ? '' : seg.slice(close + 1, brace), body: brace < 0 ? '' : seg.slice(brace) })
+        const seg = masked.slice(heads[h], heads[h + 1]);
+        const head = /^[ \t]*(?:pub )?(?:async )?fn (\w+)\s*(?:<[^>]*>)?\s*\(/.exec(seg);
+        if (head === null) continue;
+        const open = seg.indexOf('(', head[0].length - 1);
+        const close = hx10R04Close(seg, open);
+        if (close < 0) continue;
+        const brace = seg.indexOf('{', close);
+        out.push({ start: heads[h], end: heads[h + 1], name: head[1], ret: brace < 0 ? '' : seg.slice(close + 1, brace), body: brace < 0 ? '' : seg.slice(brace) });
     }
-    return out
+    return out;
 }
 
 /** Value expressions a `return`/tail can hand back, `undefined` when not a `Value` fn. */
 function hx10R04RetExprs (region: Hx10R04Region): string[] | undefined {
-    if (!/^\s*->\s*(?:crate::)?Value\s*$/.test(region.ret.replace(/\s+/g, ' '))) return undefined
-    const body = region.body
-    const rets: string[] = []
+    if (!/^\s*->\s*(?:crate::)?Value\s*$/.test(region.ret.replace(/\s+/g, ' '))) return undefined;
+    const body = region.body;
+    const rets: string[] = [];
     for (const m of body.matchAll(/\breturn\b/g)) {
-        const at = (m.index as number) + m[0].length
-        let depth = 0
-        let j = at
+        const at = (m.index as number) + m[0].length;
+        let depth = 0;
+        let j = at;
         for (; j < body.length; j++) {
-            const c = body[j]
-            if (c === '(' || c === '[' || c === '{') depth++
+            const c = body[j];
+            if (c === '(' || c === '[' || c === '{') depth++;
             else if (c === ')' || c === ']' || c === '}') {
-                if (depth === 0) break
-                depth--
-            } else if (c === ';' && depth === 0) break
+                if (depth === 0) break;
+                depth--;
+            } else if (c === ';' && depth === 0) break;
         }
-        rets.push(body.slice(at, j))
+        rets.push(body.slice(at, j));
     }
     // Tail expression: the last `;`-free statement before the fn's closing brace.
-    const close = body.lastIndexOf('}')
-    const tailEnd = body.slice(0, close).replace(/\s+$/, '')
-    const semi = tailEnd.lastIndexOf(';')
-    const braceOpen = tailEnd.lastIndexOf('{')
+    const close = body.lastIndexOf('}');
+    const tailEnd = body.slice(0, close).replace(/\s+$/, '');
+    const semi = tailEnd.lastIndexOf(';');
+    const braceOpen = tailEnd.lastIndexOf('{');
     if (semi > braceOpen || (semi < 0 && braceOpen < 0)) {
-        const tail = tailEnd.slice(semi + 1).trim()
-        if (tail !== '' && !tail.startsWith('}')) rets.push(tail)
+        const tail = tailEnd.slice(semi + 1).trim();
+        if (tail !== '' && !tail.startsWith('}')) rets.push(tail);
     }
-    if (rets.length === 0) return undefined
-    return rets
+    if (rets.length === 0) return undefined;
+    return rets;
 }
 
 function hx10R04SafeBoolDefault (call: string): boolean | undefined {
-    const open = call.indexOf('(')
-    const close = hx10R04Close(call, open)
-    if (close < 0) return undefined
-    const inner = call.slice(open + 1, close)
-    const listAt = inner.lastIndexOf('&[')
-    if (listAt < 0) return undefined
-    const list = hx10R04Strip(inner.slice(listAt))
-    if (!list.startsWith('&[') || !list.endsWith(']')) return undefined
-    const items = list.slice(2, -1).trim()
-    if (items === '') return true
-    const one = hx10R04Strip(items)
-    if (/^Value::Bool\((?:true|false)\)$/.test(one)) return true
-    if (one === 'Value::Null') return true
-    return undefined
+    const open = call.indexOf('(');
+    const close = hx10R04Close(call, open);
+    if (close < 0) return undefined;
+    const inner = call.slice(open + 1, close);
+    const listAt = inner.lastIndexOf('&[');
+    if (listAt < 0) return undefined;
+    const list = hx10R04Strip(inner.slice(listAt));
+    if (!list.startsWith('&[') || !list.endsWith(']')) return undefined;
+    const items = list.slice(2, -1).trim();
+    if (items === '') return true;
+    const one = hx10R04Strip(items);
+    if (/^Value::Bool\((?:true|false)\)$/.test(one)) return true;
+    if (one === 'Value::Null') return true;
+    return undefined;
 }
 
 // Hand-written (non-generated) helpers whose every return is `Value::Bool`:
 // exchange_stubs.rs `in_array`/`is_json_encoded_object`, precise.rs `stringEq|Gt|Ge|Lt|Le|Equals`
 // (`vbool` and the early `any_null` arm both build `Value::Bool`).
-const HX10R04_BOOL_BASE = /^(?:in_array|is_json_encoded_object)$/
-const HX10R04_BOOL_PRECISE = /^string(?:Eq|Gt|Ge|Lt|Le|Equals)$/
+const HX10R04_BOOL_BASE = /^(?:in_array|is_json_encoded_object)$/;
+const HX10R04_BOOL_PRECISE = /^string(?:Eq|Gt|Ge|Lt|Le|Equals)$/;
 
 type Hx10R04Variants = Set<'bool' | 'int' | 'float' | 'str' | 'null'>
 
-const HX10R04_BOOLISH = (v: Hx10R04Variants): boolean => [...v].every((x) => x === 'bool' || x === 'null')
+const HX10R04_BOOLISH = (v: Hx10R04Variants): boolean => [...v].every((x) => x === 'bool' || x === 'null');
 
 /**
  * Variants an expression can evaluate to, or undefined when unproven.
  * `self.<fn>` resolves through the same file's declarations (depth-limited).
  */
 function hx10R04Variant (expr: string, masked: string, byName: Map<string, Hx10R04Region[]>, region: Hx10R04Region, depth: number, visiting: Set<string>): Hx10R04Variants | undefined {
-    if (depth > 6) return undefined
-    let e = hx10R04Strip(expr)
-    while (e.endsWith('.clone()')) e = hx10R04Strip(e.slice(0, -'.clone()'.length))
-    while (e.endsWith('.await')) e = e.slice(0, -'.await'.length).trim()
-    const lit = /^Value::(Bool|Int|Float|Str)\(/.exec(e)
+    if (depth > 6) return undefined;
+    let e = hx10R04Strip(expr);
+    while (e.endsWith('.clone()')) e = hx10R04Strip(e.slice(0, -'.clone()'.length));
+    while (e.endsWith('.await')) e = e.slice(0, -'.await'.length).trim();
+    const lit = /^Value::(Bool|Int|Float|Str)\(/.exec(e);
     if (lit !== null && hx10R04Close(e, 'Value::'.length + lit[1].length) === e.length - 1) {
-        return new Set<any>([lit[1].toLowerCase()])
+        return new Set<any>([lit[1].toLowerCase()]);
     }
-    if (e === 'Value::Null' || e === 'crate::Value::Null') return new Set<any>(['null'])
+    if (e === 'Value::Null' || e === 'crate::Value::Null') return new Set<any>(['null']);
     if (/^\(?if .+\)?$/.test(e) && e.includes('} else {')) {
-        const at = e.indexOf('} else {')
-        const a = hx10R04Variant(e.slice(e.indexOf('{') + 1, at), masked, byName, region, depth, visiting)
-        const b = hx10R04Variant(e.slice(at + '} else {'.length, e.lastIndexOf('}')), masked, byName, region, depth, visiting)
-        if (a !== undefined && b !== undefined) return new Set<any>([...a, ...b])
-        return undefined
+        const at = e.indexOf('} else {');
+        const a = hx10R04Variant(e.slice(e.indexOf('{') + 1, at), masked, byName, region, depth, visiting);
+        const b = hx10R04Variant(e.slice(at + '} else {'.length, e.lastIndexOf('}')), masked, byName, region, depth, visiting);
+        if (a !== undefined && b !== undefined) return new Set<any>([...a, ...b]);
+        return undefined;
     }
-    const precise = /^crate::precise::Precise::(\w+)\((?:(?!\()[^()]|\((?!\()(?:[^()]|\([^()]*\))*\))*\)$/.exec(e)
-    if (precise !== null && /^string(?:Eq|Gt|Ge|Lt|Le|Equals)$/.test(precise[1])) return new Set<any>(['bool'])
+    const precise = /^crate::precise::Precise::(\w+)\((?:(?!\()[^()]|\((?!\()(?:[^()]|\([^()]*\))*\))*\)$/.exec(e);
+    if (precise !== null && /^string(?:Eq|Gt|Ge|Lt|Le|Equals)$/.test(precise[1])) return new Set<any>(['bool']);
     if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(e)) {
-        const writes = hx10R04Writes(masked, e, region)
-        if (writes === undefined) return undefined
-        let acc: Hx10R04Variants | undefined = undefined
+        const writes = hx10R04Writes(masked, e, region);
+        if (writes === undefined) return undefined;
+        let acc: Hx10R04Variants | undefined = undefined;
         for (const w of writes) {
-            const v = hx10R04Variant(w, masked, byName, region, depth + 1, visiting)
-            if (v === undefined) return undefined
-            acc = acc === undefined ? v : new Set<any>([...acc].filter((x) => v.has(x)))
+            const v = hx10R04Variant(w, masked, byName, region, depth + 1, visiting);
+            if (v === undefined) return undefined;
+            acc = acc === undefined ? v : new Set<any>([...acc].filter((x) => v.has(x)));
         }
-        return acc
+        return acc;
     }
-    const call = /^self\.([a-z_][a-z0-9_]*)\s*\(/.exec(e)
+    const call = /^self\.([a-z_][a-z0-9_]*)\s*\(/.exec(e);
     if (call !== null && hx10R04Close(e, 'self.'.length + call[1].length) === e.length - 1) {
-        if (HX10R04_BOOL_BASE.test(call[1])) return new Set<any>(['bool'])
+        if (HX10R04_BOOL_BASE.test(call[1])) return new Set<any>(['bool']);
         if (/^safe_bool(_2|_k)?$/.test(call[1])) {
-            return hx10R04SafeBoolDefault(e) === true ? new Set<any>(['bool', 'null']) : undefined
+            return hx10R04SafeBoolDefault(e) === true ? new Set<any>(['bool', 'null']) : undefined;
         }
-        return hx10R04CalleeVariant(call[1], masked, byName, depth + 1, visiting)
+        return hx10R04CalleeVariant(call[1], masked, byName, depth + 1, visiting);
     }
-    return undefined
+    return undefined;
 }
 
 /** Union of every return expression of every same-file declaration of `name`. */
 function hx10R04CalleeVariant (name: string, masked: string, byName: Map<string, Hx10R04Region[]>, depth: number, visiting: Set<string>): Hx10R04Variants | undefined {
-    if (visiting.has(name) || depth > 6) return undefined
-    const decls = byName.get(name)
-    if (decls === undefined || decls.length === 0) return undefined
-    const next = new Set(visiting)
-    next.add(name)
-    let acc: Hx10R04Variants | undefined = undefined
+    if (visiting.has(name) || depth > 6) return undefined;
+    const decls = byName.get(name);
+    if (decls === undefined || decls.length === 0) return undefined;
+    const next = new Set(visiting);
+    next.add(name);
+    let acc: Hx10R04Variants | undefined = undefined;
     for (const decl of decls) {
-        const rets = hx10R04RetExprs(decl)
-        if (rets === undefined) return undefined
+        const rets = hx10R04RetExprs(decl);
+        if (rets === undefined) return undefined;
         for (const r of rets) {
-            const v = hx10R04Variant(r, masked, byName, decl, depth + 1, next)
-            if (v === undefined) return undefined
-            acc = acc === undefined ? v : new Set<any>([...acc, ...v])
+            const v = hx10R04Variant(r, masked, byName, decl, depth + 1, next);
+            if (v === undefined) return undefined;
+            acc = acc === undefined ? v : new Set<any>([...acc, ...v]);
         }
     }
-    return acc
+    return acc;
 }
 
 /** Every right-hand side written to local `ident` inside `region`, or undefined when it can be rebound. */
 function hx10R04Writes (masked: string, ident: string, region: Hx10R04Region): string[] | undefined {
-    const esc = ident.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const body = masked.slice(region.start, region.end)
-    const shadow = new RegExp(`\\|(?!\\|)[^|\\n]*\\b${esc}\\b[^|\\n]*\\|(?!\\|)|\\bfor [^\\n]*\\b${esc}\\b[^\\n]* in |\\blet \\([^)]*\\b${esc}\\b`)
-    if (shadow.test(body)) return undefined
-    const writes: string[] = []
-    const spans: Array<[number, number]> = []
-    const letRe = new RegExp(`\\blet (?:mut )?${esc}\\b\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_<>]*))?\\s*=`, 'g')
+    const esc = ident.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const body = masked.slice(region.start, region.end);
+    const shadow = new RegExp(`\\|(?!\\|)[^|\\n]*\\b${esc}\\b[^|\\n]*\\|(?!\\|)|\\bfor [^\\n]*\\b${esc}\\b[^\\n]* in |\\blet \\([^)]*\\b${esc}\\b`);
+    if (shadow.test(body)) return undefined;
+    const writes: string[] = [];
+    const spans: Array<[number, number]> = [];
+    const letRe = new RegExp(`\\blet (?:mut )?${esc}\\b\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_<>]*))?\\s*=`, 'g');
     for (const m of body.matchAll(letRe)) {
-        const at = m.index as number
-        if (m[1] !== undefined && m[1] !== 'Value') return undefined
-        let depth = 0
-        let j = at + m[0].length
+        const at = m.index as number;
+        if (m[1] !== undefined && m[1] !== 'Value') return undefined;
+        let depth = 0;
+        let j = at + m[0].length;
         for (; j < body.length; j++) {
-            const c = body[j]
-            if (c === '(' || c === '[' || c === '{') depth++
+            const c = body[j];
+            if (c === '(' || c === '[' || c === '{') depth++;
             else if (c === ')' || c === ']' || c === '}') {
-                if (depth === 0) break
-                depth--
-            } else if (c === ';' && depth === 0) break
+                if (depth === 0) break;
+                depth--;
+            } else if (c === ';' && depth === 0) break;
         }
-        writes.push(body.slice(at + m[0].length, j))
-        spans.push([at, j])
+        writes.push(body.slice(at + m[0].length, j));
+        spans.push([at, j]);
     }
-    const assignRe = new RegExp(`(?<![A-Za-z0-9_.])${esc}\\s*=(?!=)`, 'g')
+    const assignRe = new RegExp(`(?<![A-Za-z0-9_.])${esc}\\s*=(?!=)`, 'g');
     for (const m of body.matchAll(assignRe)) {
-        const at = m.index as number
-        if (spans.some(([s, e]) => at >= s && at < e)) continue
-        let depth = 0
-        let j = at + m[0].length
+        const at = m.index as number;
+        if (spans.some(([s, e]) => at >= s && at < e)) continue;
+        let depth = 0;
+        let j = at + m[0].length;
         for (; j < body.length; j++) {
-            const c = body[j]
-            if (c === '(' || c === '[' || c === '{') depth++
+            const c = body[j];
+            if (c === '(' || c === '[' || c === '{') depth++;
             else if (c === ')' || c === ']' || c === '}') {
-                if (depth === 0) break
-                depth--
-            } else if (c === ';' && depth === 0) break
+                if (depth === 0) break;
+                depth--;
+            } else if (c === ';' && depth === 0) break;
         }
-        writes.push(body.slice(at + m[0].length, j))
+        writes.push(body.slice(at + m[0].length, j));
     }
-    if (writes.length === 0) return undefined
-    return writes
+    if (writes.length === 0) return undefined;
+    return writes;
 }
 
 /** Text of the statement holding `pos`, up to `pos`. */
 function r04StmtBefore (masked: string, pos: number): string {
-    let depth = 0
+    let depth = 0;
     for (let i = pos; i > 0; i--) {
-        const c = masked[i - 1]
-        if (c === ')' || c === ']') depth++
-        else if (c === '(' || c === '[') { if (depth > 0) depth-- }
-        else if (depth === 0 && (c === ';' || c === '{' || c === '}' || c === '\n')) return masked.slice(i, pos)
+        const c = masked[i - 1];
+        if (c === ')' || c === ']') depth++;
+        else if (c === '(' || c === '[') { if (depth > 0) depth--; }
+        else if (depth === 0 && (c === ';' || c === '{' || c === '}' || c === '\n')) return masked.slice(i, pos);
     }
-    return masked.slice(0, pos)
+    return masked.slice(0, pos);
 }
 
 /** Drop the balanced operand that ends `s` (an operand of `&&` / `||`). */
 function r04DropOperand (s: string): string {
-    let depth = 0
+    let depth = 0;
     for (let i = s.length - 1; i >= 0; i--) {
-        const c = s[i]
-        if (c === ')' || c === ']' || c === '}') depth++
+        const c = s[i];
+        if (c === ')' || c === ']' || c === '}') depth++;
         else if (c === '(' || c === '[' || c === '{') {
-            if (depth === 0) return s.slice(0, i)
-            depth--
-            if (depth === 0 && !/[A-Za-z0-9_.)\]]/.test(s[i - 1] ?? '')) return s.slice(0, i)
+            if (depth === 0) return s.slice(0, i);
+            depth--;
+            if (depth === 0 && !/[A-Za-z0-9_.)\]]/.test(s[i - 1] ?? '')) return s.slice(0, i);
         } else if (depth === 0) {
-            if ((c === '&' && s[i - 1] === '&') || (c === '|' && s[i - 1] === '|')) return s.slice(0, i - 1)
-            if (c === ',' || c === ';' || c === '=') return s.slice(0, i + 1)
+            if ((c === '&' && s[i - 1] === '&') || (c === '|' && s[i - 1] === '|')) return s.slice(0, i - 1);
+            if (c === ',' || c === ';' || c === '=') return s.slice(0, i + 1);
             if (/[A-Za-z0-9_.)\]]/.test(c)) {
-                let k = i
-                while (k >= 0 && /[A-Za-z0-9_.]/.test(s[k])) k--
-                return k < 0 ? s : s.slice(0, k + 1)
+                let k = i;
+                while (k >= 0 && /[A-Za-z0-9_.]/.test(s[k])) k--;
+                return k < 0 ? s : s.slice(0, k + 1);
             }
         }
     }
-    return ''
+    return '';
 }
 
 /** A `bool` is legal where `start` begins: a condition, a bool local, or a Value::Bool box. */
 function r04BoolSlot (masked: string, start: number): boolean {
-    let prefix = r04StmtBefore(masked, start)
+    let prefix = r04StmtBefore(masked, start);
     for (let hop = 0; hop < 60; hop++) {
-        prefix = prefix.replace(/[\s!]+$/, '')
-        if (/(?:^|[^\w])(?:if|while|for|assert)$/.test(prefix)) return true
-        if (/Value::Bool\($/.test(prefix)) return true
-        if (/(?:&&|\|\|)$/.test(prefix)) { prefix = r04DropOperand(prefix.slice(0, -2)); continue }
-        if (/[^=!<>]=$/.test(prefix)) return /:\s*bool\s*=?$/.test(prefix.slice(0, -1))
-        if (/\($/.test(prefix)) { prefix = prefix.slice(0, -1); continue }
-        return false
+        prefix = prefix.replace(/[\s!]+$/, '');
+        if (/(?:^|[^\w])(?:if|while|for|assert)$/.test(prefix)) return true;
+        if (/Value::Bool\($/.test(prefix)) return true;
+        if (/(?:&&|\|\|)$/.test(prefix)) { prefix = r04DropOperand(prefix.slice(0, -2)); continue; }
+        if (/[^=!<>]=$/.test(prefix)) return /:\s*bool\s*=?$/.test(prefix.slice(0, -1));
+        if (/\($/.test(prefix)) { prefix = prefix.slice(0, -1); continue; }
+        return false;
     }
-    return false
+    return false;
 }
 
 export function r04Callee (content: string): string {
-    if (!content.includes('is_true(&')) return content
-    const masked = hx10R04Mask(content)
-    const regions = hx10R04Regions(masked)
-    const byName = new Map<string, Hx10R04Region[]>()
+    if (!content.includes('is_true(&')) return content;
+    const masked = hx10R04Mask(content);
+    const regions = hx10R04Regions(masked);
+    const byName = new Map<string, Hx10R04Region[]>();
     for (const r of regions) {
-        const list = byName.get(r.name)
-        if (list === undefined) byName.set(r.name, [r])
-        else list.push(r)
+        const list = byName.get(r.name);
+        if (list === undefined) byName.set(r.name, [r]);
+        else list.push(r);
     }
-    const edits: Array<{ start: number, end: number, text: string }> = []
+    const edits: Array<{ start: number, end: number, text: string }> = [];
     for (const m of masked.matchAll(/(?<![A-Za-z0-9_:.])is_true\(&/g)) {
-        const start = m.index as number
-        const open = start + 'is_true'.length
-        const close = hx10R04Close(masked, open)
-        if (close < 0) continue
-        const arg = content.slice(open + 1, close)
-        if (arg.includes('\n')) continue
-        const expr = hx10R04Strip(arg.replace(/^&/, ''))
-        if (expr === '') continue
-        const region = regions.find((r) => start >= r.start && start < r.end)
-        if (region === undefined) continue
-        if (!r04BoolSlot(masked, start)) continue
-        const variants = hx10R04Variant(expr, masked, byName, region, 0, new Set())
-        if (variants === undefined || !HX10R04_BOOLISH(variants)) continue
-        let k = start - 1
-        while (k >= 0 && (masked[k] === ' ' || masked[k] === '\t')) k--
-        const negated = k >= 0 && masked[k] === '!' && masked[k - 1] !== '='
-        edits.push({ start: negated ? k : start, end: close + 1, text: `${expr}.as_bool() == Some(${negated ? 'false' : 'true'})` })
+        const start = m.index as number;
+        const open = start + 'is_true'.length;
+        const close = hx10R04Close(masked, open);
+        if (close < 0) continue;
+        const arg = content.slice(open + 1, close);
+        if (arg.includes('\n')) continue;
+        const expr = hx10R04Strip(arg.replace(/^&/, ''));
+        if (expr === '') continue;
+        const region = regions.find((r) => start >= r.start && start < r.end);
+        if (region === undefined) continue;
+        if (!r04BoolSlot(masked, start)) continue;
+        const variants = hx10R04Variant(expr, masked, byName, region, 0, new Set());
+        if (variants === undefined || !HX10R04_BOOLISH(variants)) continue;
+        let k = start - 1;
+        while (k >= 0 && (masked[k] === ' ' || masked[k] === '\t')) k--;
+        const negated = k >= 0 && masked[k] === '!' && masked[k - 1] !== '=';
+        edits.push({ start: negated ? k : start, end: close + 1, text: `${expr}.as_bool() == Some(${negated ? 'false' : 'true'})` });
     }
-    if (edits.length === 0) return content
-    let out = ''
-    let at = 0
+    if (edits.length === 0) return content;
+    let out = '';
+    let at = 0;
     for (const e of edits) {
-        if (e.start < at) continue
-        out += content.slice(at, e.start) + e.text
-        at = e.end
+        if (e.start < at) continue;
+        out += content.slice(at, e.start) + e.text;
+        at = e.end;
     }
-    return out + content.slice(at)
+    return out + content.slice(at);
 }
 
 const HX10R04_CASES: Array<[string, string, string]> = [
@@ -3532,7 +3534,7 @@ const HX10R04_CASES: Array<[string, string, string]> = [
     ['unproven local', 'let mut u: Value = get_arg(o, 0, Value::Bool(false));\nif is_true(&u) {', 'is_true(&u'],
     ['option return', 'if is_true(&self.opt()) {', 'is_true(&self.opt()'],
     ['value slot', 'm.insert("k".into(), is_true(&self.is_linear(t.clone(), &[])));', 'is_true(&self.is_linear'],
-]
+];
 
 /** Three arg shapes per callee body: every arm Bool, one arm mixed, unknown local. */
 function hx10R04Fixture (body: string): string {
@@ -3540,20 +3542,20 @@ function hx10R04Fixture (body: string): string {
         return Some(Value::Bool(true));
     }
 
-    pub fn mixed(&self) -> Value {\n        return Value::Int(1);\n    }\n\n    pub async fn is_uta(&mut self, optional_args: &[Value]) -> Value {\n        let mut uta: Value = Value::Bool(self.safe_bool_k(self.options.clone(), "uta", &[]).as_bool() == Some(true));\n        return uta;\n\n    Value::Null\n}\n\n    pub fn f(&mut self, mut o: Value) -> Value {\n        ${body}\n        return Value::Null; }\n}\n`
+    pub fn mixed(&self) -> Value {\n        return Value::Int(1);\n    }\n\n    pub async fn is_uta(&mut self, optional_args: &[Value]) -> Value {\n        let mut uta: Value = Value::Bool(self.safe_bool_k(self.options.clone(), "uta", &[]).as_bool() == Some(true));\n        return uta;\n\n    Value::Null\n}\n\n    pub fn f(&mut self, mut o: Value) -> Value {\n        ${body}\n        return Value::Null; }\n}\n`;
 }
 
 export function r04CalleeSelfTest (): string[] {
-    const bad: string[] = []
+    const bad: string[] = [];
     for (const [name, body, want] of HX10R04_CASES) {
-        const src = hx10R04Fixture(body)
-        const out = r04Callee(src)
-        if (!out.includes(want)) bad.push(`${name}: missing ${JSON.stringify(want)}`)
-        const keep = want.startsWith('is_true')
-        if (keep && out !== src) bad.push(`${name}: must stay unchanged`)
-        if (!keep && out.includes('`') === false && out.includes(want) === false) bad.push(`${name}: not emitted`)
+        const src = hx10R04Fixture(body);
+        const out = r04Callee(src);
+        if (!out.includes(want)) bad.push(`${name}: missing ${JSON.stringify(want)}`);
+        const keep = want.startsWith('is_true');
+        if (keep && out !== src) bad.push(`${name}: must stay unchanged`);
+        if (!keep && out.includes('`') === false && out.includes(want) === false) bad.push(`${name}: not emitted`);
     }
-    return bad
+    return bad;
 }
 
 // ---- hx10w3-R05 ----
@@ -4439,55 +4441,55 @@ function rewrite(name: string, args: string[], locals: Map<string, Local>): stri
         return `Value::str(${held}.to_string())`;
     }
     switch (name) {
-        case 'to_string_val': {
-            if (args.length !== 1) return undefined;
-            if (strProven) return `Value::str(${x}.clone())`;
-            if (scalarProven) return `Value::str(${x}.to_string())`;
-            return undefined;
+    case 'to_string_val': {
+        if (args.length !== 1) return undefined;
+        if (strProven) return `Value::str(${x}.clone())`;
+        if (scalarProven) return `Value::str(${x}.to_string())`;
+        return undefined;
+    }
+    case 'replace_str':
+    case 'replace_all_str': {
+        if (!strProven || args.length !== 3) return undefined;
+        const a = strBox(args[1]);
+        const b = strBox(args[2]);
+        if (a === undefined || b === undefined) return undefined;
+        const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
+        return `Value::str(${holder}.replace(${a}, ${b}))`;
+    }
+    case 'split': {
+        if (!strProven || args.length !== 2) return undefined;
+        const d = strBox(args[1]);
+        if (d === undefined) return undefined;
+        const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
+        return `Value::Array(${holder}.split(${d}).map(Value::str).collect())`;
+    }
+    case 'starts_with':
+    case 'ends_with': {
+        if (!strProven || args.length !== 2) return undefined;
+        const s = strBox(args[1]);
+        if (s === undefined) return undefined;
+        const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
+        return `${holder}.${name}(${s})`;
+    }
+    case 'to_fixed': {
+        if (!numProven || args.length !== 2) return undefined;
+        const d = intBox(args[1]);
+        if (d === undefined) return undefined;
+        const n = ty === 'f64' ? x : ty === 'i64' ? `(${x} as f64)` : `${x}.as_f64().unwrap_or(0.0)`;
+        return `Value::str(format!("{:.*}", ${d}, ${n}))`;
+    }
+    case 'join': {
+        if (args.length !== 2) return undefined;
+        const s = strBox(args[1]);
+        if (s === undefined) return undefined;
+        if (ty === 'Vec<String>') return `Value::str(${x}.join(${s}))`;
+        // Every element is a `Value::Str`, so the helper's stringify_simple is the identity.
+        if (local?.elems === 'str' && set !== undefined && set.size === 1 && set.has('arr')) {
+            return `Value::str(${x}.as_array().cloned().unwrap_or_default().iter().filter_map(Value::as_str).collect::<Vec<_>>().join(${s}))`;
         }
-        case 'replace_str':
-        case 'replace_all_str': {
-            if (!strProven || args.length !== 3) return undefined;
-            const a = strBox(args[1]);
-            const b = strBox(args[2]);
-            if (a === undefined || b === undefined) return undefined;
-            const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
-            return `Value::str(${holder}.replace(${a}, ${b}))`;
-        }
-        case 'split': {
-            if (!strProven || args.length !== 2) return undefined;
-            const d = strBox(args[1]);
-            if (d === undefined) return undefined;
-            const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
-            return `Value::Array(${holder}.split(${d}).map(Value::str).collect())`;
-        }
-        case 'starts_with':
-        case 'ends_with': {
-            if (!strProven || args.length !== 2) return undefined;
-            const s = strBox(args[1]);
-            if (s === undefined) return undefined;
-            const holder = strTyped ? x : `${x}.as_str().unwrap_or_default()`;
-            return `${holder}.${name}(${s})`;
-        }
-        case 'to_fixed': {
-            if (!numProven || args.length !== 2) return undefined;
-            const d = intBox(args[1]);
-            if (d === undefined) return undefined;
-            const n = ty === 'f64' ? x : ty === 'i64' ? `(${x} as f64)` : `${x}.as_f64().unwrap_or(0.0)`;
-            return `Value::str(format!("{:.*}", ${d}, ${n}))`;
-        }
-        case 'join': {
-            if (args.length !== 2) return undefined;
-            const s = strBox(args[1]);
-            if (s === undefined) return undefined;
-            if (ty === 'Vec<String>') return `Value::str(${x}.join(${s}))`;
-            // Every element is a `Value::Str`, so the helper's stringify_simple is the identity.
-            if (local?.elems === 'str' && set !== undefined && set.size === 1 && set.has('arr')) {
-                return `Value::str(${x}.as_array().cloned().unwrap_or_default().iter().filter_map(Value::as_str).collect::<Vec<_>>().join(${s}))`;
-            }
-            return undefined;
-        }
-        default: return undefined;
+        return undefined;
+    }
+    default: return undefined;
     }
 }
 
@@ -5375,17 +5377,17 @@ export function r10SelfTest(): string[] {
     ok(!allocOut.includes('get_value(&client'), 'allocating spelling helper gone: ' + allocOut);
 
     // 11. subscriptions writes name the handle operation
-    const sw = r10ClientHandle(wrap('        remove(&mut get_value(&client, &Value::Str(\"subscriptions\".into())), &hash);\n        add_element_to_object(&mut get_value(&client, &Value::Str(\"subscriptions\".into())), &hash, Value::Map({ let mut m = HashMap::new(); m.insert(\"a\".to_string(), Value::Int(1)); m }));'));
+    const sw = r10ClientHandle(wrap('        remove(&mut get_value(&client, &Value::Str("subscriptions".into())), &hash);\n        add_element_to_object(&mut get_value(&client, &Value::Str("subscriptions".into())), &hash, Value::Map({ let mut m = HashMap::new(); m.insert("a".to_string(), Value::Int(1)); m }));'));
     ok(sw.includes('__ch.remove_subscription(&hash);'), 'remove names the handle op: ' + sw);
     ok(sw.includes('__ch.add_subscription(&hash, Value::Map({'), 'add names the handle op: ' + sw);
     ok(!sw.includes('add_element_to_object(') && !sw.includes(' remove('), 'helpers gone: ' + sw);
     ok(sw.includes('let mut __ch = '), 'handle bound mut: ' + sw);
     ok(r10ClientHandle(sw) === sw, 'writes idempotent');
-    const futW = r10ClientHandle(wrap('        remove(&mut get_value(&client, &Value::Str(\"futures\".into())), &hash);'));
+    const futW = r10ClientHandle(wrap('        remove(&mut get_value(&client, &Value::Str("futures".into())), &hash);'));
     ok(futW.includes('remove(&mut __ch.futures, &hash);'), 'other keys keep the helper: ' + futW);
 
     // 12. typed key tests, element reads and key lists
-    const tr = r10ClientHandle(wrap('        if (matches!((&get_value(&client, &Value::Str(\"subscriptions\".into())), &hash), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))) {}\n        let mut f: Value = get_value(&get_value(&client, &Value::Str(\"futures\".into())), &hash);\n        let mut ks: Vec<Value> = object_keys(&get_value(&client, &Value::Str(\"subscriptions\".into()))).as_array().cloned().unwrap_or_default();'));
+    const tr = r10ClientHandle(wrap('        if (matches!((&get_value(&client, &Value::Str("subscriptions".into())), &hash), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))) {}\n        let mut f: Value = get_value(&get_value(&client, &Value::Str("futures".into())), &hash);\n        let mut ks: Vec<Value> = object_keys(&get_value(&client, &Value::Str("subscriptions".into()))).as_array().cloned().unwrap_or_default();'));
     ok(tr.includes('if (__ch.has_subscription(&hash)) {}'), 'has_subscription: ' + tr);
     ok(tr.includes('__ch.get_future(&hash)'), 'get_future: ' + tr);
     ok(tr.includes('= __ch.subscription_keys();'), 'subscription_keys: ' + tr);
@@ -5798,6 +5800,7 @@ export function narrowStrNullLocals(content: string): string {
                 // The helper prints `null` for `Null` and the text for `Str`: both are `Option<String>` states.
                 const from = abs - 'crate::runtime::stringify_param(&'.length;
                 edits.push({ start: from, end: abs + name.length + 1, text: `${name}.as_deref().unwrap_or("null").to_string()` });
+            // eslint-disable-next-line no-useless-escape
             } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before)
                 && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
                 // The conversion consumes the `Option`: only the last use, outside any loop, may move it.
@@ -6204,6 +6207,7 @@ export function hx11w9StrLocalReassign(content: string): string {
                 edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.${g[1] === '==' ? 'is_none' : 'is_some'}()` });
             } else if ((g = /^\.as_str\(\)/.exec(after)) !== null) {
                 edits.push({ start: abs, end: abs + name.length + g[0].length, text: `${name}.as_deref()` });
+            // eslint-disable-next-line no-useless-escape
             } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before)
                 && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
                 // The conversion consumes the `Option`: only the last use, outside any loop, may move it.
@@ -7293,6 +7297,7 @@ export function hx11w9RustStr2LocalOptionString(content: string): string {
                 // The helper prints `null` for `Null` and the text for `Str`: both are `Option<String>` states.
                 const from = abs - 'crate::runtime::stringify_param(&'.length;
                 edits.push({ start: from, end: abs + name.length + 1, text: `${name}.as_deref().unwrap_or("null").to_string()` });
+            // eslint-disable-next-line no-useless-escape
             } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before)
                 && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
                 // The conversion consumes the `Option`: only the last use, outside any loop, may move it.
@@ -7477,6 +7482,7 @@ export function hx11w9RustStrLiteralLocalNativeString(content: string): string {
                 // The helper prints a `Str` as its text.
                 const from = abs - 'crate::runtime::stringify_param(&'.length;
                 edits.push({ start: from, end: abs + name.length + 1, text: `${name}.clone()` });
+            // eslint-disable-next-line no-useless-escape
             } else if (/(?:[(,\[]\s*)$/.test(before) && !/&\s*$/.test(before)
                 && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null) {
                 edits.push({ start: abs, end: abs + name.length + g[0].length, text: boxUse(name, g[0], after, g[0].length, body) });
@@ -7629,6 +7635,7 @@ export function hx11w9RustStrNLocalOptionString(content: string): string {
                 // The helper prints `null` for `Null` and the text for `Str`: both are `Option<String>` states.
                 const from = abs - 'crate::runtime::stringify_param(&'.length;
                 edits.push({ start: from, end: abs + name.length + 1, text: `${name}.as_deref().unwrap_or("null").to_string()` });
+            // eslint-disable-next-line no-useless-escape
             } else if (/(?:[(,\[]\s*&?|(?<![=!<>])=\s)$/.test(before) && !/&\s*mut\s*$/.test(before)
                 && (g = /^(\.clone\(\))?(?=\s*[,)\];])/.exec(after)) !== null && !/==\s*$/.test(before)) {
                 // The conversion consumes the `Option`: only the last use, outside any loop, may move it.
@@ -11340,10 +11347,10 @@ export class RustTranspiler extends BaseTranspiler {
                 const printArg = (a, at) => this.rustNativeMapArgumentSlot(calleeParams, at) !== undefined
                     ? this.rustMapArgumentText(a, 0)
                     : this.rustNativeStrVecArgumentSlot(calleeParams, at)
-                    ? this.rustStrVecArgumentText(a, 0)
-                    : (this.rustNativeBoolArgumentSlot(calleeParams, at)
-                        ? this.rustBoolArgumentText(a, 0)
-                        : this.printNode(a, 0));
+                        ? this.rustStrVecArgumentText(a, 0)
+                        : (this.rustNativeBoolArgumentSlot(calleeParams, at)
+                            ? this.rustBoolArgumentText(a, 0)
+                            : this.printNode(a, 0));
                 const printArgs = (list, from = 0) => list.map((a, i) => printArg(a, from + i)).join(', ');
                 const requiredArgs = printArgs(args.slice(0, sig.requiredCount));
                 const reqPart = requiredArgs ? `${requiredArgs}, ` : '';
@@ -12703,6 +12710,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const printed = this.rustDictKeyText(key);
         if (printed === undefined) return undefined;
+        // eslint-disable-next-line prefer-const
         keyText = printed;
         return `Value::Bool(${this.rustDictSite({
             guarded, helper: `in_op(&${recvText}, &${keyText})`,
@@ -12765,6 +12773,7 @@ export class RustTranspiler extends BaseTranspiler {
             ? 'crate::exchange_errors::create_error(&crate::runtime::stringify_param(&('.length + ')), &crate::runtime::stringify_param(&('.length + ')))'.length - '::new('.length - 1 : 0;
         const masked = line.replace(/"(?:[^"\\]|\\.)*"/g, (m) => '"' + ' '.repeat(Math.max(0, m.length - 2)) + '"');
         let n = 0;
+        // eslint-disable-next-line no-useless-escape
         for (const m of masked.matchAll(/(?<=[(\[,]\s?)([A-Za-z_][A-Za-z0-9_]*)(?=\s*[,)\]])/g)) {
             const start = m.index as number;
             const before = masked.slice(Math.max(0, start - 6), start);
@@ -12835,8 +12844,10 @@ export class RustTranspiler extends BaseTranspiler {
         // Each site is judged against the line as the earlier stage left it (not cumulatively):
         // guarded sites first (helper vs closure), then closure vs closure-free.
         for (const line of probe.split('\n')) {
+            // eslint-disable-next-line no-control-regex
             const ids = [ ...line.matchAll(/\u0001(\d+)\u0002/g) ].map((m) => Number(m[1]));
             if (ids.length === 0) continue;
+            // eslint-disable-next-line no-control-regex
             const plain = line.replace(/\u0001\d+\u0002|\u0003/g, '');
             const base = plain.length + this.rustDictCloneGrowth(plain);
             let closureLen = base;
@@ -14363,6 +14374,7 @@ export class RustTranspiler extends BaseTranspiler {
     private rustDictBearerCloned = new WeakSet<any>();
 
     /** A prediction venue: `ts/src/prediction/<id>.ts` builds nested request maps in one method. */
+    // eslint-disable-next-line no-useless-escape
     private static readonly RUST_PREDICTION_VENUE_FILE = /ts[\/]src[\/]prediction[\/][^/]+\.ts$/;
 
     /** The declaration behind `node` when it is a local typed as a dict bearer. */

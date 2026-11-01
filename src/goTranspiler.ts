@@ -14,7 +14,6 @@ import * as tsSync from 'typescript/unstable/sync';
 import * as astTranspilerUtils from './tsUtils.js';
 
 // ---- tsApi ----
-// @ts-nocheck
 // The `ts` namespace the ported Go hooks read: the TS7 enums, node guards and checker API the generator runs on,
 // plus ast-transpiler's TS6-named helpers (ccxt build/csharp-local-types.js `ts`, copied), and the describe()-literal
 // url proof `urlsDescribeStringProducer` the Go local typing consumes.
@@ -279,7 +278,6 @@ export function urlsDescribeStringProducer (initializer) {
 }
 
 // ---- hx10w3-G06 ----
-// @ts-nocheck
 // ===== hx10 wave3 G06: nil-declared locals typed from the tuple slot that writes them =====
 //
 // `let params = undefined` prints `var params any = nil`; every later write decides the type. The U03
@@ -984,7 +982,6 @@ export function hx10G06Check () {
 
 // ---- go-local-types ----
 const hx10G06InstallTupleJoins = installHx10G06NilDeclaredTupleJoins;
-// @ts-nocheck
 
 // CCXT-side extension of the Go printer's local-variable typing.
 //
@@ -6506,7 +6503,7 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'FetchOptionUnderlyingsAsync': '[]any',
     // TS Promise<Order>
     'FetchOrderAsync': 'map[string]any',
-    // binance.go:fetchOrderBookBody `var orderbook map[string]any = this.ParseOrderBook(...)` then `ch <- 
+    // binance.go:fetchOrderBookBody `var orderbook map[string]any = this.ParseOrderBook(...)` then `ch <-
     'FetchOrderBookAsync': 'map[string]any',
     // R1 concrete container send in the body
     'FetchOrderBooksAsync': 'map[string]any',
@@ -10139,6 +10136,7 @@ function bindingMentionsName (binding, name) {
 function isDestructuringTarget (id) {
     let container = undefined;
     let current = id;
+    // eslint-disable-next-line no-constant-condition
     while (true) {
         const parent = current.parent;
         if (parent === undefined) {
@@ -12124,7 +12122,7 @@ function g22ArithReadIsSafe (goTranspiler, node, name) {
         parent = current.parent;
     }
     const escaped = name.replace (/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const nativeUse = new RegExp ('(?<![\\w.\"])' + escaped + '\\s*[-*/%<>]|[-*/%<>]\\s*' + escaped + '(?![\\w\"])');
+    const nativeUse = new RegExp ('(?<![\\w."])' + escaped + '\\s*[-*/%<>]|[-*/%<>]\\s*' + escaped + '(?![\\w"])');
     if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (G22_ARITH_TOKENS.indexOf (parent.operatorToken?.kind) >= 0)) {
         return !nativeUse.test ((goTranspiler.printNode (parent, 0) ?? '').trim ());
     }
@@ -12377,7 +12375,6 @@ function installHx5X32StringPtrParams (goTranspiler) {
 export { ccxtGoTupleResultCall, ccxtGoTupleResultFirst, ccxtGoTupleResultUnwrap };
 
 // ---- hx10w2-G08 ----
-// @ts-nocheck
 // ===== hx10 w2 G08: destructured tuple slots read natively when the producer proves what the slot holds =====
 // `const [ a, b ] = this.m (..)` prints `a := GetValue(h, 0)`. When every `return [ .. ]` of `m` stores a
 // value that GetValue(h, i) would hand back unchanged, the slot is `plain` and reads as `h[i]`; a slot that
@@ -12404,6 +12401,7 @@ const G08_BASE_SLICE_PRODUCERS = [
     'handleOptionAndParams', 'handleOptionAndParams2', 'handleWithdrawTagAndParams', 'handlePostOnly',
     'handleTriggerPricesAndParams', 'handleTriggerDirectionAndParams',
 ];
+// eslint-disable-next-line no-useless-escape
 const G08_BASE_FILE = /[\/]base[\/]Exchange(\.nooverloads\.\d+)?\.ts$/;
 
 const FUNCTION_LIKE = [
@@ -12759,6 +12757,7 @@ class TupleSlots {
         const name = element.name.text;
         const fn = this.enclosingFunction (element);
         for (const line of text.split ('\n')) {
+            // eslint-disable-next-line no-useless-escape
             const pair = /^\s*([\w\[\].]*(?:\s*,\s*[\w\[\].]*)+)\s*:=\s*(.*)$/.exec (line);
             if ((pair !== null) && pair[1].split (',').some ((p) => p.trim () === name)) {
                 return { 'kind': 'multi', 'type': undefined, 'init': null, 'index': pair[1].split (',').map ((p) => p.trim ()).indexOf (name), 'call': declaration.initializer, fn };
@@ -13263,7 +13262,7 @@ function gb01Rejection (go: any, fn: any, param: any): string | undefined {
     if (!gb01CallSitesPassMap (go, fn, index)) { return 'call site passes another type'; }
     if (!go.goLocalIsSafeToType (fn.body, param, name, GB01_TYPE)) { return 'body writes another type'; }
     if (!go.goParameterKeepsNilCompareNative (fn.body, param, GB01_TYPE)) { return 'body nil-compares the parameter'; }
-    if (gb01UsesNullish (go, fn.body, param)) { return 'body reads the parameter with ??' }
+    if (gb01UsesNullish (go, fn.body, param)) { return 'body reads the parameter with ??'; }
     return undefined;
 }
 
@@ -13677,7 +13676,7 @@ export function installCcxtGoGb11HandleErrorsCode (goTranspiler: any) {
     const originalArgs = goTranspiler.goUnifiedStringCallArgs;
     // the previous hook (go-local-types derefs a *string argument into `*x`) runs exactly once: the
     // code rewrite only touches the text it answered
-    const args = function (this: any, node: any, identation: any, flat: boolean = false) {
+    const args = function (this: any, node: any, identation: any, flat = false) {
         const printed = originalArgs.call (this, node, identation, flat);
         if (printed === undefined) { return printed; }
         const rewritten = gb11CodeArg (this, node, printed);
@@ -13867,7 +13866,6 @@ export function installCcxtGoSignTyping (goTranspiler: any) {
 }
 
 // ---- hx11fmgo5-G01 ----
-// @ts-nocheck
 // FM-GO5 G01: type-keyed rules folded in from ccxt build/hx10w3-G01.ts (was a post-print text pass).
 
 // ---- ws client subscriptions table (was build/hx10w3-G01.ts) ---------------------------------
@@ -14042,7 +14040,6 @@ export function installFmGo5G01 (goTranspiler: any) {
 }
 
 // ---- hx11fmgo5-G04 ----
-// @ts-nocheck
 // FM-GO5 G04: typed `IsEqual(x, <nil|-N>)` comparisons, folded in from ccxt build/hx10w2-G04.ts (a text pass over the
 // printed Go). Two rules at the `===` / `!==` node, both keyed on checker declarations:
 //
@@ -14129,7 +14126,6 @@ export function installFmGo5G04 (goTranspiler: any) {
 }
 
 // ---- hx11fmgo5-GP08 ----
-// @ts-nocheck
 // FM-GO5 GP08 (was ccxt build/hx10w8-GP08.ts). A first result read of a `(T, map[string]any)` Go twin of the
 // base-class tuple helpers (handleMarketTypeAndParams, handleOptionStringAndParams, handleOptionBoolAndParams, ...;
 // go/v4/exchange_market_type.go) binds natively instead of going through TupleSlice + GetValue:
@@ -14272,7 +14268,6 @@ export function installFmGo5GP08 (goTranspiler: any) {
 }
 
 // ---- hx11fmgo5-OG02 ----
-// @ts-nocheck
 // FM-GO5 OG02: the per-instance request id / nonce counters and the last request/response fields are owned by one
 // goroutine (go/v4/exchange_request_book.go). Folded in from ccxt build/hx10w6-OG02.ts; every rule is keyed on the
 // checker-resolved declaration (a member of the base `Exchange` class), never on printed text:
@@ -14577,7 +14572,6 @@ export function installFmGo5OG02 (goTranspiler: any) {
 }
 
 // ---- hx11rdgo2-wscache ----
-// @ts-nocheck
 // RD-GO-2: the base ws caches (orderbooks / ohlcvs / trades / fundingRates / balance) are plain maps owned by the exchange's
 // ws dispatch loop (go/v4/exchange_ws_cache.go). Handlers run on that loop and keep the plain map; code on its own goroutine
 // (an async method, setBalanceCache, cleanWsData) hands the loop an operation. Folded in from ccxt build/hx10w3-G02.ts and
@@ -14820,7 +14814,6 @@ export function installRdGo2WsCache (goTranspiler: any) {
 }
 
 // ---- hx11rf-go5 ----
-// @ts-nocheck
 // RF-go-5: type-keyed rules folded in from ccxt build/ post-print passes (hx11 refactor).
 
 // ---- owned tables (was build/hx10w7-OG05.ts) -------------------------------------------------
@@ -18405,7 +18398,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))) {
                 return false;
             }
-            let node: any = n;
+            const node: any = n;
             const parent: any = n.parent;
             if (parent === undefined) {
                 return false;
@@ -22814,6 +22807,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 if (arg === undefined) {
                     continue;
                 }
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
                 if (process.env.GP13_DEBUG) { require('fs').appendFileSync(process.env.GP13_DEBUG, 'site ' + methodName + ' ' + file + ' arg=' + JSON.stringify((arg ?? '').substring(0, 50)) + ' ok=' + String(this.goTextSliceArgumentMatches(arg, goType, file, tree, match.index)) + '\n'); }
                 if (!this.goTextSliceArgumentMatches(arg, goType, file, tree, match.index)) {
                     passes = false;
@@ -23886,7 +23880,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const tail = siblingText.substring(decl.index + decl[0].length, at);
             // the call site must sit in the same method body: a 4-space closing brace
             // between them means the declaration belongs to another method
-            if (/^    \}/m.test(tail)) {
+            if (/^ {4}\}/m.test(tail)) {
                 return false;
             }
             return !new RegExp('(?<![\\w.$])' + identifier[1] + '\\s*=(?!=)').test(tail);
@@ -24596,7 +24590,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             return (this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n) => this.goStructLocalUseReadsTheMap(n)
                 || ((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n) && (n.parent.operatorToken?.kind === SyntaxKind.EqualsToken)),
-                (n) => this.goStructLocalNameIsNotAUse(n)) !== undefined) ? box : undefined;
+            (n) => this.goStructLocalNameIsNotAUse(n)) !== undefined) ? box : undefined;
         });
     }
 
@@ -28311,6 +28305,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const calleeFile = String(declared.getSourceFile?.()?.fileName ?? '');
+        // eslint-disable-next-line no-useless-escape
         return (calleeFile !== '') && !/(^|[\/])base[\/]Exchange\.ts$/.test(calleeFile);
     }
 
@@ -31017,6 +31012,7 @@ ${tryBodyBlock}
             return this.goTypeOfInitializer(node, printed) === 'string';
         case SyntaxKind.ElementAccessExpression: // an element of a declared `[]string` local, printed as the slice index, is a Go string
             return (node.expression?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(node.expression) === '[]string')
+                // eslint-disable-next-line no-useless-escape
                 && /^[A-Za-z_]\w*\[[^\[\]()]+\]$/.test((printed ?? '').trim());
         }
         return false;

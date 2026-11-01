@@ -5132,7 +5132,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (n.kind === SyntaxKind.ReturnStatement) {
                 returns++;
                 proved = (n.expression !== undefined) && this.csharpReturnValueProvesBox(n.expression, box as string);
-                        return;
+                return;
             }
             n.forEachChild(visit);
         };
@@ -9506,6 +9506,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (csharpType === undefined || this.csharpEnclosingFunction(expression) === undefined) {
             return undefined;
         }
+        // eslint-disable-next-line prefer-const
         receiver = this.printNode(expression, 0);
         const printedKey = this.printNode(argumentExpression, 0);
         const keyType = this.csharpHx4DeclaredKeyType(argumentExpression);

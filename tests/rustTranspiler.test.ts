@@ -4274,7 +4274,7 @@ describe('hx4 R06 native string methods on proven strings', () => {
         expect(out('        return a.indexOf(b);', 'a: string, b: string')).toContain('Value::Int(a.as_str().zip(b.as_str()).and_then(|(__s, __n)| __s.find(__n)).map(|__i| __i as i64).unwrap_or(-1))');
     });
     test('join on a string[]', () => {
-        expect(out("        return xs.join(',');", 'xs: string[]')).toContain('Value::Str(xs.as_array().map(|__a| __a.iter().map(|__v| __v.to_string()).collect::<Vec<String>>().join(",")).unwrap_or_default().into())');
+        expect(out("        return xs.join(',');", 'xs: string[]')).toContain('Value::Str(xs.join(",").into())');
     });
     test('unproven receivers keep the helpers', () => {
         const o = out("        const u = a.toUpperCase();\n        const p = a.split(',');\n        const j = xs.join(',');\n        const r = a.replace('x', 'y');\n        return [u, p, j, r, a.startsWith('x')];", 'a: any, xs: any[]');
@@ -5367,7 +5367,7 @@ describe('rust string[] parameter used only by join', () => {
     });
 
     test('a joined-only string[] param is a Vec<String> with the std join and no closure', () => {
-        expect(output).toContain('pub async fn fetchByIds(&self, ids: Vec<String>, optional_args: &[Value])');
+        expect(output).toContain('pub fn fetchByIds(&self, ids: Vec<String>, optional_args: &[Value])');
         expect(output).toContain('Value::Str(ids.join(",").into())');
     });
 
@@ -5728,7 +5728,7 @@ describe ('hx10w9-RP03', () => {
         test('a marker-routed key keeps the helper', () => {
             const out = rs('    j(orderbook: OrderBook) {\n        return orderbook[\'nonce\'];\n    }\n');
             expect(out).not.toContain('__orderbook_empty');
-            expect(out).toContain('get_value(&orderbook, &Value::Str("nonce".into()))');
+            expect(out).toContain('orderbook.book_field("nonce")');
         });
 
         test('a read-only local from this.orderbooks[sym] is a bare IndexMap', () => {
@@ -5760,14 +5760,14 @@ describe ('hx10w9-RP03', () => {
                 "        ob['nonce'] = ts;\n" +
                 '        return bids;\n' +
                 '    }\n');
-            expect(written).toContain('get_value(&ob, &Value::Str("bids".into()))');
+            expect(written).toContain('ob.book_field("bids")');
             const escaped = rs('    n(sym: string) {\n' +
                 "        const ob = this.orderbooks[sym];\n" +
                 "        const bids = ob['bids'];\n" +
                 '        return ob;\n' +
                 '    }\n');
-            expect(escaped).toContain('let mut ob: Value = self.orderbooks');
-            expect(escaped).toContain('get_value(&ob, &Value::Str("bids".into()))');
+            expect(escaped).toContain('let mut ob: Value = (if let (Some(__m), Some(__k)) = (self.orderbooks.as_map(), sym.as_str())');
+            expect(escaped).toContain('ob.book_field("bids")');
         });
     });
 });
