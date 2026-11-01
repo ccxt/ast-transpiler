@@ -14372,7 +14372,7 @@ const OWNER_CLASSES = [ 'BaseExchange', 'PredictionExchange' ];
 const NIL_TESTABLE_FIELDS = new Set ([
     'Outcomes', 'Outcomes_by_id', 'Events_by_slug', 'Features',
     'ProxyUrl', 'Proxy', 'Proxy_url', 'ProxyUrlCallback', 'Proxy_url_callback',
-    'Markets', 'Markets_by_id', 'Currencies', 'Currencies_by_id',
+    'Markets', 'Markets_by_id', 'Currencies', 'Currencies_by_id', 'Tickers', 'Bidsasks',
 ]);
 
 function isNilLiteral (node: any) {
@@ -15108,6 +15108,8 @@ const GO_NATIVE_CALL_RETURN_TYPES: { [name: string]: string } = {
     'strconv.FormatInt': 'string',
     'strconv.FormatBool': 'string',
     'strings.Join': 'string',
+    // printed only over maps.Keys of a string-keyed ws cache map (goWsCacheKeysText)
+    'slices.Collect': '[]string',
 };
 
 // `this.<name>`, `this.<name>2` and `this.<name>N` of each accessor family, all typed `goType`
@@ -21220,6 +21222,92 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return `${this.printNode(left, 0)}, _ = ${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim()}.(map[string]any)`;
     }
 
+    // `this.balance[k]` key of a native Balance store: a Go string, or a `*string` (`pointer` = the local still to nil-test)
+    goBalanceKey(keyNode): { index: string; pointer?: string } | undefined {
+        return this.goWsKey(keyNode);
+    }
+
+    // a Balance value the helper would store unchanged: no scalar pointer for its derefScalar to unwrap
+    goBalancePlainValue(valueNode): boolean {
+        if (this.goWritePrintsPointerBox(valueNode)) {
+            return false;
+        }
+        if (this.goMapWriteValueIsNotPointer(valueNode)) {
+            return true;
+        }
+        const value: any = this.goUnwrapPrintedAssertions(valueNode);
+        if ((value?.kind !== SyntaxKind.Identifier) && (value?.kind !== SyntaxKind.CallExpression)) {
+            return false;
+        }
+        const field = this.nativeStoreFields?.['balance'];
+        if ((field !== undefined) && this.rfGo6bValueIsPlain(valueNode, field)) {
+            return true;
+        }
+        // a TS object (Dict, Balances, Account) is a map or list box at run time, never a scalar pointer
+        const checker: any = this.checkerOrUndefined();
+        const type: any = checker?.getTypeAtLocation(value);
+        if (type === undefined) {
+            return false;
+        }
+        const parts = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [type];
+        const present = parts.filter((t) => (t.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0);
+        return (present.length > 0) && present.every((t) => (t.flags & TypeFlags.Object) !== 0);
+    }
+
+    // the base Balance map can be indexed: every write of the field in the file leaves a map
+    goBalanceIndexable(field): boolean {
+        const table = this.nativeStoreFields?.['balance'];
+        return (this.goA9fL1CacheField(field) === 'Balance') && (table !== undefined)
+            && this.rfGo6bFieldNeverNil(field.getSourceFile(), field.name.text, table);
+    }
+
+    // `this.balance[k] = v` / `this.balance[k1][k2] = v` statements: the map store, the entry store through the entry's map
+    goBalanceStoreText(node, baseExpr, keys: any[], valueNode, rhs: string, identation: number): string | undefined {
+        if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || (keys.length > 2) || rhs.includes('\n')
+            || !this.goBalanceIndexable(baseExpr) || !this.goBalancePlainValue(valueNode)) {
+            return undefined;
+        }
+        const parsed = keys.map((k) => this.goBalanceKey(k));
+        if (parsed.some((k) => k === undefined)) {
+            return undefined;
+        }
+        const iden = this.getIden(identation);
+        const field = this.printNode(baseExpr, 0);
+        const pointers = parsed.filter((k) => k.pointer !== undefined).map((k) => `${k.pointer} != nil`);
+        let store: string;
+        if (keys.length === 1) {
+            store = `${field}[${parsed[0].index}] = ${rhs}`;
+        } else {
+            // the helper writes into an entry that is a (non-nil) map and skips any other entry
+            const inner = (pointers.length > 0) ? '\t' : '';
+            store = `if entry, ok := ${field}[${parsed[0].index}].(map[string]any); ok && (entry != nil) {\n${iden}${inner}\tentry[${parsed[1].index}] = ${rhs}\n${iden}${inner}}`;
+        }
+        if (pointers.length === 0) {
+            return store;
+        }
+        return `if ${pointers.join(' && ')} {\n${iden}\t${store}\n${iden}}`;
+    }
+
+    // the container step `this.Balance[k]` of a nested Balance write whose key is a proven Go string
+    goBalanceChainStep(baseExpr, containerStr: string, keyNode): string | undefined {
+        if (!this.goBalanceIndexable(baseExpr)) {
+            return undefined;
+        }
+        const key = this.goBalanceKey(keyNode);
+        return ((key === undefined) || (key.pointer !== undefined)) ? undefined : `${containerStr}[${key.index}]`;
+    }
+
+    // `delete this.balance[k]` as a statement with a proven key: the map delete
+    goBalanceDeleteText(node): string | undefined {
+        const access: any = node.expression;
+        if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || (access?.kind !== SyntaxKind.ElementAccessExpression)
+            || !this.goBalanceIndexable(access.expression)) {
+            return undefined;
+        }
+        const key = this.goBalanceKey(access.argumentExpression);
+        return ((key === undefined) || (key.pointer !== undefined)) ? undefined : `delete(${this.printNode(access.expression, 0)}, ${key.index})`;
+    }
+
     goWsCacheEmptyLiteral(node): string | undefined {
         const type = this.goWsCacheMapType(node);
         if (type !== undefined) {
@@ -21662,6 +21750,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const cacheStore = (keyStrs.length === 1) ? this.goWsCacheStoreText(baseExpr, keys[0], this.goWsCacheValue(baseExpr, right, rhs), node, identation) : undefined;
             if (cacheStore !== undefined) {
                 return cacheStore;
+            }
+            const balanceStore = (op === SyntaxKind.EqualsToken) ? this.goBalanceStoreText(node, baseExpr, keys, right, rhs, identation) : undefined;
+            if (balanceStore !== undefined) {
+                return balanceStore;
             }
             return (native !== undefined) ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
@@ -30098,7 +30190,7 @@ ${this.getIden(identation)}${returnStatement}`;
         if (wsDelete !== undefined) {
             return wsDelete;
         }
-        const native = this.goNativeDelete(node);
+        const native = this.goNativeDelete(node) ?? this.goBalanceDeleteText(node);
         if (native !== undefined) {
             return native;
         }
@@ -30762,8 +30854,12 @@ ${tryBodyBlock}
     goElementWriteChain(baseExpr, containerStr: string, keyNodes, keyStrs: string[]): string {
         let acc = containerStr;
         let first = 0;
+        const balanceStep = (keyStrs.length > 1) ? this.goBalanceChainStep(baseExpr, containerStr, keyNodes[0]) : undefined;
         if ((keyStrs.length > 1) && this.goWsCacheMapType(baseExpr) !== undefined) {
             acc = `${containerStr}[${this.goWsCacheKey(keyNodes[0]).index}]`;
+            first = 1;
+        } else if (balanceStep !== undefined) {
+            acc = balanceStep;
             first = 1;
         } else if ((keyStrs.length > 1) && (this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any')
             && this.goKeyIsString(keyNodes[0], keyStrs[0])) {
