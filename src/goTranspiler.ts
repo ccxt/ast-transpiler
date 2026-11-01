@@ -960,6 +960,7 @@ export class GoTranspiler extends BaseTranspiler {
         };
         this.generatedListCallees = new Set<string>(config['generatedListCallees'] ?? []); // RF-go-6-C
         this.asyncMapRowListCallees = new Set<string>(config['asyncMapRowListCallees'] ?? []);
+        this.asyncTickerMapCallees = new Set<string>(config['asyncTickerMapCallees'] ?? []);  // hx11 FOLD2 WT01
         this.goTupleSlotTypes = config['goTupleSlotTypes'] ?? {};
         this.goTupleValueDefaultArg = config['goTupleValueDefaultArg'] ?? {};
         const caches = config['ownedCaches'];
@@ -5173,6 +5174,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             // the awaited call can carry a multi-line literal argument: printing it at the
             // declaration's own level keeps that literal one level deeper
             const parsedInitializer = this.printNode(declaration.initializer, identation);
+            if (this.goTickerRowRead(declaration) !== undefined) {  // hx11 FOLD2 WT01: the typed ticker map, read once by the return
+                return `
+${this.getIden(identation)}var ${parsedName} map[string]Ticker = PanicOnError(${parsedInitializer})`;
+            }
             const awaitUnbox = this.goAwaitReceiveUnbox(declaration.initializer, parsedInitializer);
             if (awaitUnbox !== undefined) {
                 // the conversion runs PanicOnError first (inside the bracket), so the panic
@@ -12950,7 +12955,8 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
         let trailingComment = this.printTraillingComment(node, identation);
         trailingComment = trailingComment ? " " + trailingComment : trailingComment;
         const exp =  node.expression;
-        let rightPart = exp ? (' ' + (this.goTickerCacheTypedRead(node) ?? this.printNode(exp, identation))) : '';
+        const tickerRow = this.goTickerRowReturn(node, identation);  // hx11 FOLD2 WT01
+        let rightPart = exp ? (' ' + (tickerRow?.value ?? this.goTickerCacheTypedRead(node) ?? this.printNode(exp, identation))) : '';
         rightPart = rightPart.trim();
 
         // `return nil` only exits the synthetic try/catch closure; at the function's own
@@ -12990,7 +12996,7 @@ ${this.getIden(identation)}${returnStatement}`;
             return `\n${this.getIden(identation)}${returnStatement}`;
         }
 
-        return `
+        return `${tickerRow?.lines ?? ''}
 ${leadingComment}${this.getIden(identation)}ch <- ${rightPart}${trailingComment}
 ${this.getIden(identation)}${returnStatement}`;
         // ${this.getIden(identation)}return ${rightPart}`;
@@ -15244,6 +15250,113 @@ ${tryBodyBlock}
     // Go-cased methods whose channel carries a `[]map[string]any` (the host's async table): the awaited
     // list is a MapSliceToList carrier, every row a map, never a scalar box.
     asyncMapRowListCallees: Set<string> = new Set<string>();
+
+    // ===== hx11 FOLD2 WT01 (folded from ccxt build/hx11w8-WT01.ts) =====
+    // Go-cased methods whose channel carries a `map[string]Ticker` (the host's async table, non-receiver rows).
+    asyncTickerMapCallees: Set<string> = new Set<string>();
+    goTickerRowCache: Map<any, { key: any, keyIsPointer: boolean, ret: any } | null> = new Map();
+
+    // `const tickers = await this.watchTickers ([ k ], params); return tickers[k];` in an async method that
+    // answers `Promise<Ticker>`: the receive is a `map[string]Ticker` (the channel's own element, no box), so the
+    // row is the map index. Sound when `tickers` is read exactly once, by that return, the key is a Go `string`
+    // (a missing key is the zero Ticker, as `TickerFromMap(nil)` was) or a `*string` local/parameter that is never
+    // rebound (a nil key reads the zero Ticker, guarded). Any other key type keeps the boxed GetValue read.
+    goTickerRowRead(declaration): { key: any, keyIsPointer: boolean, ret: any } | undefined {
+        if (this.goTickerRowCache.has(declaration)) {
+            return this.goTickerRowCache.get(declaration) ?? undefined;
+        }
+        this.goTickerRowCache.set(declaration, null);
+        const result = this.goTickerRowReadUncached(declaration);
+        this.goTickerRowCache.set(declaration, result ?? null);
+        return result;
+    }
+
+    goTickerRowReadUncached(declaration): { key: any, keyIsPointer: boolean, ret: any } | undefined {
+        const SK = SyntaxKind;
+        if ((this.asyncTickerMapCallees.size === 0) || (declaration?.kind !== SK.VariableDeclaration) || (declaration.name?.kind !== SK.Identifier)
+            || (declaration.initializer?.kind !== SK.AwaitExpression) || this.goNodeIsInPredictionTree(declaration)) {
+            return undefined;
+        }
+        const list: any = declaration.parent;
+        if ((list?.kind !== SK.VariableDeclarationList) || (list.declarations?.length !== 1)) {
+            return undefined;
+        }
+        const call: any = declaration.initializer.expression;
+        const callee: any = call?.expression;
+        if ((call?.kind !== SK.CallExpression) || (callee?.kind !== SK.PropertyAccessExpression) || (callee.expression?.kind !== SK.ThisKeyword)) {
+            return undefined;
+        }
+        const method = String(callee.name?.text ?? '');
+        if (!this.asyncTickerMapCallees.has(method.charAt(0).toUpperCase() + method.slice(1))) {
+            return undefined;
+        }
+        const fn: any = this.goEnclosingFunction(declaration);
+        const answers: any = fn?.type;
+        if ((fn?.kind !== SK.MethodDeclaration) || !this.isAsyncFunction(fn) || (answers?.typeName?.text !== 'Promise')
+            || (answers.typeArguments?.[0]?.typeName?.text !== 'Ticker')) {
+            return undefined;
+        }
+        const name = declaration.name.text as string;
+        const refs: any[] = [];
+        const foreign = this.hasNodeWhere(fn, (n: any) => {
+            if ((n.kind === SK.Identifier) && (n.text === 'tickerRow')) {
+                return true;
+            }
+            if (((n.kind === SK.VariableDeclaration) || (n.kind === SK.Parameter)) && (n !== declaration) && (n.name?.kind === SK.Identifier) && (n.name.text === name)) {
+                return true;
+            }
+            if ((n.kind === SK.Identifier) && (n.text === name) && (n !== declaration.name)) {
+                const property = (n.parent?.kind === SK.PropertyAccessExpression) && (n.parent.name === n);
+                if (!property && this.goIdentifierRefersToDeclaration(n, declaration)) {
+                    refs.push(n);
+                }
+            }
+            return false;
+        });
+        if (foreign || (refs.length !== 1)) {
+            return undefined;
+        }
+        const access: any = refs[0].parent;
+        const ret: any = access?.parent;
+        if ((access?.kind !== SK.ElementAccessExpression) || (access.expression !== refs[0]) || (access.argumentExpression?.kind !== SK.Identifier)
+            || (ret?.kind !== SK.ReturnStatement) || (ret.expression !== access) || (this.goEnclosingFunction(ret) !== fn)) {
+            return undefined;
+        }
+        const key: any = access.argumentExpression;
+        const keyDeclaration: any = this.goDeclarationOfIdentifier(key) ?? this.checkerOrUndefined()?.getSymbolAtLocation(key)?.valueDeclaration?.resolve();
+        if (((keyDeclaration?.kind !== SK.VariableDeclaration) && (keyDeclaration?.kind !== SK.Parameter)) || (keyDeclaration.name?.kind !== SK.Identifier)
+            || this.goLocalIsRebound(this.goEnclosingFunction(keyDeclaration), keyDeclaration.name)) {
+            return undefined;
+        }
+        const keyType = this.goDeclaredTypeOfIdentifier(key);
+        if ((keyType !== 'string') && (keyType !== '*string')) {
+            return undefined;
+        }
+        return { key, 'keyIsPointer': keyType === '*string', ret };
+    }
+
+    // the statements a ticker-row return prints in place of `ch <- GetValue(tickers, k)`, or undefined
+    goTickerRowReturn(node, identation): { lines: string, value: string } | undefined {
+        const access: any = node?.expression;
+        if ((access?.kind !== SyntaxKind.ElementAccessExpression) || (access.expression?.kind !== SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        const declaration: any = this.goDeclarationOfIdentifier(access.expression);
+        const read = (declaration === undefined) ? undefined : this.goTickerRowRead(declaration);
+        if ((read === undefined) || (read.ret !== node)) {
+            return undefined;
+        }
+        const map = this.printNode(access.expression, 0).trim();
+        const key = this.printNode(read.key, 0).trim();
+        if (!read.keyIsPointer) {
+            return { 'lines': '', 'value': `TickerToMap(${map}[${key}])` };
+        }
+        const ind = this.getIden(identation);
+        return {
+            'lines': `${ind}var tickerRow Ticker\n${ind}if ${key} != nil {\n${ind}\ttickerRow = ${map}[*${key}]\n${ind}}\n\n`,
+            'value': 'TickerToMap(tickerRow)',
+        };
+    }
 
     goAwaitedMapRowList(base): boolean {
         const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(base)?.valueDeclaration?.resolve?.();

@@ -979,6 +979,26 @@ export declare class GoTranspiler extends BaseTranspiler {
     goLoopBoundedIndexRead(node: any, baseExpr: any, keyNode: any, containerStr: string, keyStr: string): string | undefined;
     goAwaitedListLocal(base: any): boolean;
     asyncMapRowListCallees: Set<string>;
+    asyncTickerMapCallees: Set<string>;
+    goTickerRowCache: Map<any, {
+        key: any;
+        keyIsPointer: boolean;
+        ret: any;
+    } | null>;
+    goTickerRowRead(declaration: any): {
+        key: any;
+        keyIsPointer: boolean;
+        ret: any;
+    } | undefined;
+    goTickerRowReadUncached(declaration: any): {
+        key: any;
+        keyIsPointer: boolean;
+        ret: any;
+    } | undefined;
+    goTickerRowReturn(node: any, identation: any): {
+        lines: string;
+        value: string;
+    } | undefined;
     goAwaitedMapRowList(base: any): boolean;
     goListElementsAreObjects(baseExpr: any): boolean;
     goJsonOriginUseIsReadOnly(node: any, name: string): boolean;
