@@ -752,6 +752,7 @@ export declare function ccxtGoAwaitReceiveUnbox(goTranspiler: any, awaitNode: an
 };
 export { ccxtGoTupleResultJoin };
 export declare function installCcxtGoLocalTypes(goTranspiler: any, unifiedInt64Params?: any): void;
+export declare function ccxtGoTupleParamsElementType(goTranspiler: any, element: any): any;
 declare class GoNilDeclaredAssignmentScan {
     constructor(goTranspiler: any, declaration: any, name: any);
     isName(node: any): boolean;

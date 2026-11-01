@@ -567,6 +567,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     gp15SafeStringLiteralDefaultCall(call: any): boolean;
     gp15HasExitingNilGuard(ident: any): boolean;
     gp15StatementExitsOnNil(statement: any, ident: any): boolean;
+    goOrChainHasNilTestOf(node: any, ident: any): boolean;
     gp15IsNilTestOf(node: any, ident: any): boolean;
     goIdentifierRefersTo(node: any, other: any): boolean;
     goSameFileCallsOf(fn: any, name: string): Array<any>;
@@ -606,6 +607,20 @@ export declare class GoTranspiler extends BaseTranspiler {
     printNativeGuardedPointerKeyAssignment(containerNode: any, containerStr: string, containerType: any, fieldType: any, keyNode: any, keyStr: string, valueStr: string, compound: boolean, valueNode: any): string | undefined;
     goGetArgMapParameterIsMapLocal(node: any): boolean;
     printNativeMapWriteOnProvenLocal(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode?: any, identation?: number): string | undefined;
+    goStructBoxCallee(call: any): string | undefined;
+    goStructBoxedLocalCache: Map<any, string>;
+    goStructBoxedLocal(declaration: any): string | undefined;
+    goStructNilLocalCache: Map<any, string>;
+    goStructNilInitLocal(declaration: any): string | undefined;
+    goStructLocalNameIsNotAUse(n: any): boolean;
+    goStructLocalUseReadsTheMap(n: any): boolean;
+    goStructBoxWrite(node: any, rightStr: string): string | undefined;
+    goBaseTupleParamsSlot(element: any): boolean;
+    goNilInitContainerLocal(node: any): boolean;
+    goNilableMapLocal(node: any): boolean;
+    goNilableMapStoreValue(valueNode: any, valueStr: string): string | undefined;
+    goMapLocalIsNeverNil(node: any): boolean;
+    goNilableMapLocalStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation: number): string | undefined;
     printOptionDictFieldWrite(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
     goMapWriteValueIsNotPointer(valueNode: any): boolean;
     nativeStoreFields: {
