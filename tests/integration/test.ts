@@ -93,7 +93,8 @@ function transpileTests() {
         'use std::collections::HashMap;',
         '',
     ].join('\n');
-    const rust = rustPreamble + result[5].content;
+    // the ccxt rust port backs Value maps with indexmap::IndexMap and rewrites object literals to it
+    const rust = rustPreamble + result[5].content.replace(/\bstd::collections::HashMap\b/g, 'indexmap::IndexMap');
 
     const cppPreamble = [
         '#include "helpers.h"',

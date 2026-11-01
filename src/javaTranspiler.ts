@@ -8982,7 +8982,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const type = this.javaOperandType(operand);
         // a plain identifier of a type that can never hold a List: the helper answers false
         // for null/undefined and for every scalar, and the reference stays untouched
-        if (operand.kind === SyntaxKind.Identifier && this.javaNonArrayType(type)) {
+        if (operand.kind === SyntaxKind.Identifier && this.javaNonArrayType(type) && !this.javaUntypedNullishDefault(operand)) {
             return 'false';
         }
         if (this.isVarargsArrayReference(operand)) {
@@ -8992,6 +8992,12 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         return `(${parsedArg} instanceof java.util.List)`;
+    }
+
+    // `p = undefined` with no annotation: the checker's `undefined` is only the default, callers pass anything
+    javaUntypedNullishDefault(operand): boolean {
+        const decl: any = this.javaDeclarationOfIdentifier(operand);
+        return decl !== undefined && decl.kind === SyntaxKind.Parameter && decl.type === undefined && decl.initializer !== undefined;
     }
 
     // Operand shapes whose print is a primary expression: `instanceof` binds tighter than the

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use indexmap::IndexMap as HashMap;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,12 +96,6 @@ impl From<Vec<Value>> for Value {
 
 pub trait ShiftRemoveExt {
     fn shift_remove(&mut self, k: &str) -> Option<Value>;
-}
-
-impl ShiftRemoveExt for HashMap<String, Value> {
-    fn shift_remove(&mut self, k: &str) -> Option<Value> {
-        self.remove(k)
-    }
 }
 
 impl fmt::Display for Value {
@@ -633,4 +627,21 @@ pub fn to_fixed(v: &Value, decimals: &Value) -> Value {
 
 pub fn is_instance(_v: &Value, _t: &Value) -> bool {
     false
+}
+
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
+        Value::Str(s.to_string())
+    }
+}
+
+/// Method form of truthiness, as the ccxt rust runtime exposes it on `Value` and `bool`.
+pub trait IsTruthyExt {
+    fn is_truthy(&self) -> bool;
+}
+
+impl<T: IsTruthy + ?Sized> IsTruthyExt for T {
+    fn is_truthy(&self) -> bool {
+        self.truthy()
+    }
 }

@@ -11,9 +11,9 @@ class Second
 }
 partial class Test
 {
-    public virtual object boolToString(object x)
+    public virtual object boolToString(bool? x)
     {
-        if (isTrue(x))
+        if (x == true)
         {
             return "true";
         } else
@@ -59,7 +59,7 @@ partial class Test
         Console.WriteLine(c); // should print 3
         string s1 = "a";
         string s2 = "b";
-        object s3 = add(s1, s2);
+        string s3 = (s1 + s2);
         object stringVar = null;
         stringVar = "hello";
         Console.WriteLine(stringVar); // should print "hello"
@@ -88,7 +88,7 @@ partial class Test
         };
         Console.WriteLine(((IDictionary<string,object>)dict)["a"]); // should print "b"
         object i = 0;
-        for (object w = 0; isLessThan(w, 10); postFixIncrement(ref w))
+        for (Int64 w = 0; isLessThan(w, 10); w++)
         {
             i = add(i, 1);
         }
@@ -192,7 +192,7 @@ partial class Test
         // concatenation test
         string a = "a";
         string b = "b";
-        object c = add(a, b);
+        string c = (a + b);
         Console.WriteLine(c); // should print "ab"
     }
 

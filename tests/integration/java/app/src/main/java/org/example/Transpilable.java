@@ -13,7 +13,7 @@ class Test
 {
     public Object boolToString(Object x)
     {
-        if (Helpers.isTrue(x))
+        if (Boolean.TRUE.equals(x))
         {
             return "true";
         } else
@@ -22,18 +22,16 @@ class Test
         }
     }
 
-    public void functionWithOptionals(Object a, Object... optionalArgs)
+    public void functionWithOptionals(Object a, Object c, Object d)
     {
-        Object c = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null;
-        Object d = optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : 1;
         System.out.println(a);
         if (!java.util.Objects.equals(c, null))
         {
             System.out.println(c);
         }
-        if (!java.util.Objects.equals(d, null))
+        if (!java.util.Objects.equals(java.util.Objects.requireNonNullElse(d, 1), null))
         {
-            System.out.println(d);
+            System.out.println(java.util.Objects.requireNonNullElse(d, 1));
         }
     }
 
@@ -44,12 +42,12 @@ class Test
 
     public void testJavaScope()
     {
-        Object newObject = new java.util.HashMap<String, Object>() {{
+        java.util.Map<String, Object> newObject = new java.util.HashMap<String, Object>() {{
             put( "a", Test.this.getValue(5) );
             put( "b", Test.this.getValue(Test.this.getValue(Test.this.getValue(2))) );
         }};
-        System.out.println(Helpers.GetValue(newObject, "a")); // should print 5
-        System.out.println(Helpers.GetValue(newObject, "b")); // should print 2
+        System.out.println(newObject.get("a")); // should print 5
+        System.out.println(newObject.get("b")); // should print 2
     }
 
     public void test()
@@ -84,10 +82,10 @@ class Test
         System.out.println(((java.util.List<?>)arr).size()); // should print 4
         Object first = (arr == null || 0 >= ((java.util.List<?>)arr).size() ? null : ((java.util.List<?>)arr).get(0));
         System.out.println(first); // should print 1
-        Object dict = new java.util.HashMap<String, Object>() {{
+        java.util.Map<String, Object> dict = new java.util.HashMap<String, Object>() {{
             put( "a", "b" );
         }};
-        System.out.println(Helpers.GetValue(dict, "a")); // should print "b"
+        System.out.println(dict.get("a")); // should print "b"
         Object i = 0;
         for (var w = 0; w < 10; w++)
         {
@@ -98,12 +96,12 @@ class Test
         java.util.Collections.reverse((java.util.List<Object>)list2);
         System.out.println((list2 == null || 0 >= ((java.util.List<?>)list2).size() ? null : ((java.util.List<?>)list2).get(0))); // should print 5
         //should delete key from dict
-        Object dict2 = new java.util.HashMap<String, Object>() {{
+        java.util.Map<String, Object> dict2 = new java.util.HashMap<String, Object>() {{
             put( "a", 1 );
             put( "b", 2 );
         }};
         ((java.util.Map<String,Object>)dict2).remove((String)"a");
-        Object dictKeys = Helpers.objectKeys(dict2);
+        Object dictKeys = new java.util.ArrayList<Object>(dict2.keySet());
         System.out.println(((java.util.List<?>)dictKeys).size()); // should print 1
         System.out.println((dictKeys == null || 0 >= ((java.util.List<?>)dictKeys).size() ? null : ((java.util.List<?>)dictKeys).get(0))); // should print "b"
         Object firstConcat = new java.util.ArrayList<Object>(java.util.Arrays.asList("a", "b"));
@@ -114,15 +112,15 @@ class Test
         Object baseString = "aabba";
         Object replacedAllString = Helpers.replaceAll((String)baseString, (String)"a", (String)"");
         System.out.println(replacedAllString); // should print "bb"
-        this.functionWithOptionals("hello");
-        this.functionWithOptionals("hello", 5);
+        this.functionWithOptionals("hello", (Object) null, 1);
+        this.functionWithOptionals("hello", 5, 1);
         this.functionWithOptionals("hello", 5, 1);
         Object list3 = new java.util.ArrayList<Object>(java.util.Arrays.asList("empty"));
         Helpers.addElementToObject(list3, 0, "first");
         System.out.println(Helpers.GetValue(list3, 0)); // should print "first"
-        Object dict3 = new java.util.HashMap<String, Object>() {{}};
-        ((java.util.Map<String, Object>)dict3).put("key", "value");
-        System.out.println(Helpers.GetValue(dict3, "key")); // should print "value"
+        java.util.Map<String, Object> dict3 = new java.util.HashMap<String, Object>() {{}};
+        dict3.put("key", "value");
+        System.out.println(dict3.get("key")); // should print "value"
         this.testJavaScope();
         var first1second1Variable = this.handleOptionAndParamsTest();
         var first1 = ((java.util.List<Object>) first1second1Variable).get(0);
@@ -156,10 +154,8 @@ class Test
         return new java.util.ArrayList<Object>(java.util.Arrays.asList(1, "a"));
     }
 
-    public void funcWithParams(Object... optionalArgs)
+    public void funcWithParams(Object a, Object parameters)
     {
-        Object a = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null;
-        Object parameters = optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : new java.util.HashMap<String, Object>() {{}};
         if ((a instanceof java.util.List))
         {
             System.out.println(Helpers.getArrayLength(a));

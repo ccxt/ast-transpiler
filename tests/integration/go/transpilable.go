@@ -68,7 +68,7 @@ func (this *Test) Test() {
 	fmt.Println(c) // should print 3
 	var s1 string = "a"
 	var s2 string = "b"
-	var s3 any = s1 + s2
+	var s3 string = s1 + s2
 	var stringVar any = nil
 	stringVar = "hello"
 	fmt.Println(stringVar) // should print "hello"
@@ -87,7 +87,12 @@ func (this *Test) Test() {
 	}
 	var arr []any = []any{1, 2, 3, 4}
 	fmt.Println(len(arr)) // should print 4
-	var first any = GetValue(arr, 0)
+	var first any = func() any {
+		if 0 >= 0 && 0 < len(arr) {
+			return DerefScalar(arr[0])
+		}
+		return nil
+	}()
 	fmt.Println(first) // should print 1
 	var dict map[string]any = map[string]any{
 		"a": "b",
@@ -100,14 +105,25 @@ func (this *Test) Test() {
 	fmt.Println(ToString(i)) // should print 10
 	var list2 []any = []any{1, 2, 3, 4, 5}
 	Reverse(list2)
-	fmt.Println(GetValue(list2, 0)) // should print 5
+	fmt.Println(func() any {
+		if 0 >= 0 && 0 < len(list2) {
+			return DerefScalar(list2[0])
+		}
+		return nil
+	}()) // should print 5
 	//should delete key from dict
 	var dict2 map[string]any = map[string]any{
 		"a": 1,
 		"b": 2,
 	}
-	Remove(dict2, "a")
-	var dictKeys []string = ObjectKeys(dict2)
+	delete(dict2, "a")
+	var dictKeys []string = nil
+	if dict2 != nil {
+		dictKeys = make([]string, 0, len(dict2))
+		for objectKey := range dict2 {
+			dictKeys = append(dictKeys, objectKey)
+		}
+	}
 	fmt.Println(len(dictKeys))         // should print 1
 	fmt.Println(GetValue(dictKeys, 0)) // should print "b"
 	var firstConcat []any = []any{"a", "b"}
@@ -123,7 +139,12 @@ func (this *Test) Test() {
 	this.FunctionWithOptionals("hello", 5, 1)
 	var list3 []any = []any{"empty"}
 	list3[0] = "first"
-	fmt.Println(GetValue(list3, 0)) // should print "first"
+	fmt.Println(func() any {
+		if 0 >= 0 && 0 < len(list3) {
+			return DerefScalar(list3[0])
+		}
+		return nil
+	}()) // should print "first"
 	var dict3 map[string]any = map[string]any{}
 	dict3["key"] = "value"
 	fmt.Println(dict3["key"]) // should print "value"
@@ -174,13 +195,13 @@ func (this *Test) HandleOptionAndParamsTest() any {
 func (this *Test) FuncWithParams(optionalArgs ...any) {
 	a := GetArg(optionalArgs, 0, nil)
 	_ = a
-	params := GetArg(optionalArgs, 1, map[string]any{})
+	var params map[string]any = GetArgMap(optionalArgs, 1, map[string]any{})
 	_ = params
 	if IsArray(a) {
 		fmt.Println(GetArrayLength(a))
 	}
-	if InOp(params, "a") {
-		fmt.Println(GetValue(params, "a"))
+	if _, ok := params["a"]; ok {
+		fmt.Println(params["a"])
 	}
 }
 func (this *Test) TestStringMethods() {
@@ -205,7 +226,7 @@ func (this *Test) TestStringMethods() {
 	// concatenation test
 	var a string = "a"
 	var b string = "b"
-	var c any = a + b
+	var c string = a + b
 	fmt.Println(c) // should print "ab"
 }
 func (this *Test) FunctionThatThrows() {
