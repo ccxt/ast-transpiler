@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-MEKZ6QY3.js";
+} from "./chunk-YEJ2U6VR.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({

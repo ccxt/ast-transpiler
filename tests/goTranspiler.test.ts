@@ -9543,8 +9543,9 @@ describe ('goOrderbooksCache', () => {
             + '    }\n}\n';
         test('tickers and bidsasks print the map index, delete and membership with no cache method', () => {
             const out = printBase (HANDLER);
-            expect (out).toContain ('this.Tickers[*symbol] = ticker');
-            expect (out).toContain ('this.Bidsasks[*symbol] = ticker');
+            expect (out).toContain ('this.Tickers[*symbol] = TickerFromMap(ticker)');
+            expect (out).toContain ('this.Bidsasks[*symbol] = TickerFromMap(ticker)');
+            expect (out).toContain ('var last any = TickerToMap(this.Tickers[*symbol])');
             expect (out).toContain ('delete(this.Tickers, *symbol)');
             expect (out).toContain ('delete(this.Bidsasks, *symbol)');
             expect (out).toContain ('if _, ok := this.Tickers[*symbol]; ok {');
@@ -9556,7 +9557,7 @@ describe ('goOrderbooksCache', () => {
         });
         test('an any-typed key stores and deletes behind a comma-ok string assertion, never a panicking one', () => {
             const out = printBase ('class x extends Exchange {\n    handle (market: any, ticker: any) {\n        this.tickers[market[\'symbol\']] = ticker;\n        delete this.tickers[market[\'symbol\']];\n    }\n}\n');
-            expect (out).toContain ('if wsKey, ok := (GetValue(market, \"symbol\")).(string); ok {\n\t\tthis.Tickers[wsKey] = ticker\n\t}');
+            expect (out).toContain ('if wsKey, ok := (GetValue(market, \"symbol\")).(string); ok {\n\t\tthis.Tickers[wsKey] = TickerFromMap(ticker)\n\t}');
             expect (out).toContain ('if wsKey, ok := (GetValue(market, \"symbol\")).(string); ok {\n\t\tdelete(this.Tickers, wsKey)\n\t}');
         });
         test('an owned field name on another class keeps the helper', () => {
