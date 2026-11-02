@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-3MO76RER.js";
+} from "./chunk-MEKZ6QY3.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -12924,6 +12924,10 @@ function ccxtGoSafeCollectionCall(initializer) {
   }
   const method = callee.name === void 0 ? "" : callee.name.text;
   const family = CCXT_GO_SAFE_COLLECTION_FAMILIES[method];
+  const container = node.arguments?.[0];
+  if (container?.kind === ts.SyntaxKind.PropertyAccessExpression && container.expression?.kind === ts.SyntaxKind.ThisKeyword && (container.name?.text === "tickers" || container.name?.text === "bidsasks")) {
+    return void 0;
+  }
   return family === void 0 ? void 0 : { "family": family, "call": node };
 }
 function ccxtGoSafeCollectionArgs(initializer) {
@@ -24506,9 +24510,7 @@ var GO_FIELD_CONTAINER_TYPES_NATIVE = Object.fromEntries([
     "Limits",
     "Fees",
     "Status",
-    "Countries",
-    "Tickers",
-    "Bidsasks"
+    "Countries"
   ].map((name) => [name, "map[string]any"]),
   ...GO_SYNC_MAP_FIELDS.filter((name) => name !== "Options").map((name) => [name, "*sync.Map"])
 ]);
@@ -25127,8 +25129,8 @@ var GoTranspiler = class extends BaseTranspiler {
       "Fees": "map[string]any",
       "Limits": "map[string]any",
       "Trades": "map[string]any",
-      "Tickers": "map[string]any",
-      "Bidsasks": "map[string]any",
+      "Tickers": "map[string]Ticker",
+      "Bidsasks": "map[string]Ticker",
       "Ohlcvs": "map[string]map[string]any",
       "FundingRates": "map[string]any",
       "Clients": "map[string]any",
@@ -26935,6 +26937,9 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
         return void 0;
       }
     } else if (args.length !== 2) {
+      return void 0;
+    }
+    if (this.goWsTickersField(this.goUnwrapParenthesizedNode(args[0]))) {
       return void 0;
     }
     return { container: args[0], key: args[1] };
@@ -29684,7 +29689,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     return this.goWsCacheField(inner) || this.goWsTradesField(inner) || this.goWsTradesRead(inner);
   }
   // ---- native ws cache maps: BaseExchange tickers / bidsasks / trades / orderbooks are plain Go maps -------------
-  // tickers, bidsasks: map[string]any; trades: map[string]WsArrayCache; orderbooks: map[string]OrderBookInterface.
+  // tickers, bidsasks: map[string]Ticker; trades: map[string]WsArrayCache; orderbooks: map[string]OrderBookInterface.
+  // A ticker entry is the Ticker struct: a store builds it from the row (TickerFromMap), a read handed on untyped boxes it
+  // (TickerToMap), and filterByArray over the cache by symbol is the typed FilterTickersBySymbol.
   // Reads, stores, deletes and membership tests print the map operation itself (no helper, no lock).
   goWsTickersField(node) {
     if (node?.kind !== SyntaxKind5.PropertyAccessExpression || node.expression?.kind !== SyntaxKind5.ThisKeyword || node.name?.text !== "tickers" && node.name?.text !== "bidsasks") {
@@ -29701,7 +29708,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   goWsCacheMapType(node) {
     const field = this.goUnwrapParenthesizedNode(node);
     if (this.goWsTickersField(field)) {
-      return "map[string]any";
+      return "map[string]Ticker";
     }
     if (this.goWsTradesField(field)) {
       return "map[string]WsArrayCache";
@@ -29733,7 +29740,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return this.goWsTickersField(inner.expression) && !this.isGoElementAccessAssignmentTarget(inner) && parent?.kind !== SyntaxKind5.DeleteExpression && parent?.kind !== SyntaxKind5.PostfixUnaryExpression && parent?.kind !== SyntaxKind5.PrefixUnaryExpression ? { field: inner.expression, key: inner.argumentExpression } : void 0;
     }
     const callee = inner?.expression;
-    if (inner?.kind !== SyntaxKind5.CallExpression || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || callee.name?.text !== "safeValue" || (inner.arguments?.length ?? 0) !== 2 || !this.goWsTickersField(inner.arguments[0])) {
+    const count = inner?.arguments?.length ?? 0;
+    const safeDict = callee?.name?.text === "safeDict" && (count === 2 || count === 3 && inner.arguments[2].kind === SyntaxKind5.ObjectLiteralExpression && (inner.arguments[2].properties?.length ?? 0) === 0);
+    if (inner?.kind !== SyntaxKind5.CallExpression || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || !(callee.name?.text === "safeValue" && count === 2 || safeDict) || !this.goWsTickersField(inner.arguments[0])) {
       return void 0;
     }
     try {
@@ -29759,6 +29768,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       }
       field = parts.field;
       keyNode = parts.key;
+    }
+    if (this.goWsTickersField(this.goUnwrapParenthesizedNode(field))) {
+      return `TickerToMap(${super.printPropertyAccessExpression(this.goUnwrapParenthesizedNode(field), 0)}[${this.goWsCacheKey(keyNode).index}])`;
     }
     return `${this.printNode(field, 0)}[${this.goWsCacheKey(keyNode).index}]`;
   }
@@ -29813,18 +29825,71 @@ ${iden}}`;
       return void 0;
     }
     const key = this.goWsCacheKey(keyNode);
+    if (this.goWsCacheMapType(containerNode) === "map[string]Ticker") {
+      const present = `func() bool { _, ok := ${this.printNode(containerNode, 0)}[${key.index}]; return ok }()`;
+      return key.pointer === void 0 ? present : `${key.pointer} != nil && ${present}`;
+    }
     const read = `${this.printNode(containerNode, 0)}[${key.index}] != nil`;
     return key.pointer === void 0 ? read : `${key.pointer} != nil && ${read}`;
   }
   // the value text stored into a cache entry: a book or list cache the printer holds as `any` is asserted to the map's value type
   goWsCacheValue(containerNode, valueNode, valueText) {
     const type = this.goWsCacheMapType(containerNode);
+    if (type === "map[string]Ticker") {
+      return `TickerFromMap(${valueText.trim()})`;
+    }
     const target = type === "map[string]OrderBookInterface" ? "OrderBookInterface" : type === "map[string]WsArrayCache" ? "WsArrayCache" : void 0;
     const declared = this.goUnwrapParenthesizedNode(valueNode)?.kind === SyntaxKind5.Identifier ? this.goDeclaredTypeOfIdentifier(this.goUnwrapParenthesizedNode(valueNode)) : void 0;
     if (target === void 0 || declared === target || this.goIsOrderBookProducer(valueNode) || this.goUnwrapParenthesizedNode(valueNode)?.kind === SyntaxKind5.NewExpression) {
       return valueText;
     }
     return `${valueText.trim()}.(${target})`;
+  }
+  // `this.filterByArray[Tickers] (this.tickers|this.bidsasks, 'symbol', symbols[, true])`: the typed cache filtered by symbol,
+  // boxed to the map the base method answered (a struct channel send drops the box again)
+  goWsTickersFilterText(node) {
+    const inner = this.goUnwrapParenthesizedNode(node);
+    const callee = inner?.expression;
+    const args = inner?.arguments ?? [];
+    if (inner?.kind !== SyntaxKind5.CallExpression || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || callee.name?.text !== "filterByArray" && callee.name?.text !== "filterByArrayTickers" || args.length < 3 || args.length > 4 || args.length === 4 && args[3].kind !== SyntaxKind5.TrueKeyword || !this.goWsTickersField(this.goUnwrapParenthesizedNode(args[0])) || args[1].kind !== SyntaxKind5.StringLiteral || args[1].text !== "symbol") {
+      return void 0;
+    }
+    const symbols = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(args[2], 0)).trim();
+    return `TickerMapToMap(this.FilterTickersBySymbol(${super.printPropertyAccessExpression(this.goUnwrapParenthesizedNode(args[0]), 0)}, ${symbols}))`;
+  }
+  // a whole ticker cache handed on as a value (`client.resolve (this.tickers, h)`, `return this.tickers`, a ternary arm):
+  // the untyped box. The map operations themselves (index, store, delete, `in`, nil test, reset, Object.keys) keep the field.
+  goWsTickersValueText(node) {
+    if (!this.goWsTickersField(node)) {
+      return void 0;
+    }
+    let child = node;
+    let parent = node.parent;
+    while (parent?.kind === SyntaxKind5.ParenthesizedExpression) {
+      child = parent;
+      parent = parent.parent;
+    }
+    const kind = parent?.kind;
+    if (kind === SyntaxKind5.ElementAccessExpression && parent.expression === child) {
+      return void 0;
+    }
+    if (kind === SyntaxKind5.BinaryExpression) {
+      const op = parent.operatorToken?.kind;
+      const other = parent.left === child ? parent.right : parent.left;
+      if (op === SyntaxKind5.EqualsToken && parent.left === child || op === SyntaxKind5.InKeyword && parent.right === child || (op === SyntaxKind5.EqualsEqualsEqualsToken || op === SyntaxKind5.ExclamationEqualsEqualsToken || op === SyntaxKind5.EqualsEqualsToken || op === SyntaxKind5.ExclamationEqualsToken) && this.goIsNilLiteral(other)) {
+        return void 0;
+      }
+    }
+    if (kind === SyntaxKind5.CallExpression && parent.expression?.kind === SyntaxKind5.PropertyAccessExpression && parent.expression.expression?.kind === SyntaxKind5.Identifier && parent.expression.expression.text === "Object") {
+      return void 0;
+    }
+    if (kind === SyntaxKind5.CallExpression && parent.expression === child) {
+      return void 0;
+    }
+    if (kind !== SyntaxKind5.CallExpression && kind !== SyntaxKind5.ReturnStatement && kind !== SyntaxKind5.ConditionalExpression && kind !== SyntaxKind5.VariableDeclaration && kind !== SyntaxKind5.AsExpression) {
+      return void 0;
+    }
+    return `TickerMapToMap(${super.printPropertyAccessExpression(node, 0)})`;
   }
   // `Object.keys (this.<cache>)`: the keys as a `[]string`
   goWsCacheKeysText(argNode) {
@@ -29833,7 +29898,7 @@ ${iden}}`;
     }
     this.goFileStdlibImports.add("maps");
     this.goFileStdlibImports.add("slices");
-    return `slices.Collect(maps.Keys(${this.printNode(argNode, 0)}))`;
+    return `slices.Collect(maps.Keys(${super.printPropertyAccessExpression(this.goUnwrapParenthesizedNode(argNode), 0)}))`;
   }
   // `this.balance = this.safeBalance (..)`: the Go Balance field is a map and SafeBalance answers `any`
   goBalanceSafeBalanceWrite(node, identation) {
@@ -30157,6 +30222,10 @@ ${iden}}`;
     const orderbooksRead = this.goWsOrderbooksReadText(node);
     if (orderbooksRead !== void 0) {
       return orderbooksRead;
+    }
+    const tickersFilter = this.goWsTickersFilterText(node);
+    if (tickersFilter !== void 0) {
+      return tickersFilter;
     }
     if (node.expression.kind === SyntaxKind5.PropertyAccessExpression) {
       const args = node.arguments;
@@ -34530,7 +34599,7 @@ ${iden}}
     const dictText = bookEntry ?? this.printNode(dict, 0);
     const dictMapType = (dict?.kind === SyntaxKind5.Identifier ? this.goPrintedTypeOfExpression(dict, dictText) : void 0) ?? this.goInOpDictMapType(dict, dictText);
     const keyText = this.printNode(keyNode, 0);
-    if (dictText.includes("\n") || keyText.includes("\n") || dictMapType !== "map[string]any" && dictMapType !== "map[string]map[string]any") {
+    if (dictText.includes("\n") || keyText.includes("\n") || dictMapType !== "map[string]any" && dictMapType !== "map[string]map[string]any" && dictMapType !== "map[string]Ticker") {
       return void 0;
     }
     const name = this.goIfInOpBindingName(node);
@@ -34571,7 +34640,12 @@ ${indent}}`);
             keyText = "*" + keyText;
             keyType = "string";
           }
-          if (!dictText.includes("\n") && !keyText.includes("\n") && (dictMapType === "map[string]any" || dictMapType === "map[string]map[string]any") && keyType === "string") {
+          const tickerKey = keyType !== "string" && dictMapType === "map[string]Ticker" ? this.goWsCacheKey(key) : void 0;
+          if (tickerKey !== void 0 && tickerKey.pointer === void 0 && tickerKey.asserted === void 0) {
+            keyText = tickerKey.index;
+            keyType = "string";
+          }
+          if (!dictText.includes("\n") && !keyText.includes("\n") && (dictMapType === "map[string]any" || dictMapType === "map[string]map[string]any" || dictMapType === "map[string]Ticker") && keyType === "string") {
             reads.push({ inNode: n, dictText, keyText });
           }
         }
@@ -34998,7 +35072,28 @@ ${indent}}`);
     const formattedObjectBody = objectBody ? "\n" + objectBody + "\n" + this.getIden(level) : objectBody;
     return this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
   }
+  // `if (k in this.tickers) { .. }` with a `*string` key: a nil key is absent, so the comma-ok read sits inside the nil test
+  goWsTickersPointerInIf(node, identation) {
+    const condition = this.goUnwrapParenthesizedNode(node?.expression);
+    if (node?.kind !== SyntaxKind5.IfStatement || node.elseStatement !== void 0 || node.parent?.kind === SyntaxKind5.IfStatement || node.thenStatement?.kind !== SyntaxKind5.Block || condition?.kind !== SyntaxKind5.BinaryExpression || condition.operatorToken?.kind !== SyntaxKind5.InKeyword || !this.goWsTickersField(this.goUnwrapParenthesizedNode(condition.right))) {
+      return void 0;
+    }
+    const key = this.goWsCacheKey(condition.left);
+    if (key.pointer === void 0 || key.asserted !== void 0) {
+      return void 0;
+    }
+    const indent = this.getIden(identation);
+    const field = super.printPropertyAccessExpression(this.goUnwrapParenthesizedNode(condition.right), 0);
+    const body = this.printBlock(node.thenStatement, identation + 1, false);
+    return this.printNodeCommentsIfAny(node, identation, `${indent}if ${key.pointer} != nil {
+${this.getIden(identation + 1)}if _, ok := ${field}[${key.index}]; ok${body}
+${indent}}`);
+  }
   printIfStatement(node, identation) {
+    const tickersIn = this.goWsTickersPointerInIf(node, identation);
+    if (tickersIn !== void 0) {
+      return tickersIn;
+    }
     const nested = this.goInOpGuardedNestedIf(node, identation);
     if (nested !== void 0) {
       return nested;
@@ -37629,6 +37724,10 @@ ${this.getIden(level)}}()`;
     const bookMember = this.goOrderBookMemberText(node);
     if (bookMember !== void 0) {
       return bookMember;
+    }
+    const tickersValue = this.goWsTickersValueText(node);
+    if (tickersValue !== void 0) {
+      return tickersValue;
     }
     return super.printPropertyAccessExpression(node, identation);
   }

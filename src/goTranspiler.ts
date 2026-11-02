@@ -2447,6 +2447,12 @@ function ccxtGoSafeCollectionCall (initializer) {
     }
     const method = callee.name === undefined ? '' : callee.name.text;
     const family = CCXT_GO_SAFE_COLLECTION_FAMILIES[method];
+    // the base ws ticker caches are typed Go maps: their entry read is the map index (goWsTickersReadParts)
+    const container = node.arguments?.[0];
+    if ((container?.kind === ts.SyntaxKind.PropertyAccessExpression) && (container.expression?.kind === ts.SyntaxKind.ThisKeyword)
+        && ((container.name?.text === 'tickers') || (container.name?.text === 'bidsasks'))) {
+        return undefined;
+    }
     return family === undefined ? undefined : { 'family': family, 'call': node };
 }
 
@@ -15424,7 +15430,7 @@ const GO_FIELD_CONTAINER_TYPES_NATIVE: { [name: string]: string } = Object.fromE
     ...[
         'Options', 'Has', 'Api', 'TransformedApi', 'RequiredCredentials', 'HttpExceptions', 'Timeframes', 'Features',
         'Exceptions', 'Precision', 'UserAgents', 'TokenBucket', 'CommonCurrencies', 'ProxyDictionaries',
-        'WsClients', 'Clients', 'Limits', 'Fees', 'Status', 'Countries', 'Tickers', 'Bidsasks',
+        'WsClients', 'Clients', 'Limits', 'Fees', 'Status', 'Countries',
     ].map((name) => [ name, 'map[string]any' ]),
     ...GO_SYNC_MAP_FIELDS.filter((name) => name !== 'Options').map((name) => [ name, '*sync.Map' ]),
 ]);
@@ -17799,6 +17805,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             }
         } else if (args.length !== 2) {
             return undefined;
+        }
+        if (this.goWsTickersField(this.goUnwrapParenthesizedNode(args[0]))) {
+            return undefined; // a typed ticker cache: the entry read is the map index (goWsTickersReadParts)
         }
         return { container: args[0], key: args[1] };
     }
@@ -21039,7 +21048,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     // ---- native ws cache maps: BaseExchange tickers / bidsasks / trades / orderbooks are plain Go maps -------------
-    // tickers, bidsasks: map[string]any; trades: map[string]WsArrayCache; orderbooks: map[string]OrderBookInterface.
+    // tickers, bidsasks: map[string]Ticker; trades: map[string]WsArrayCache; orderbooks: map[string]OrderBookInterface.
+    // A ticker entry is the Ticker struct: a store builds it from the row (TickerFromMap), a read handed on untyped boxes it
+    // (TickerToMap), and filterByArray over the cache by symbol is the typed FilterTickersBySymbol.
     // Reads, stores, deletes and membership tests print the map operation itself (no helper, no lock).
     goWsTickersField(node): boolean {
         if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression?.kind !== SyntaxKind.ThisKeyword)
@@ -21060,7 +21071,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     goWsCacheMapType(node): string | undefined {
         const field = this.goUnwrapParenthesizedNode(node);
         if (this.goWsTickersField(field)) {
-            return 'map[string]any';
+            return 'map[string]Ticker';
         }
         if (this.goWsTradesField(field)) {
             return 'map[string]WsArrayCache';
@@ -21096,8 +21107,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 && (parent?.kind !== SyntaxKind.PrefixUnaryExpression)) ? { field: inner.expression, key: inner.argumentExpression } : undefined;
         }
         const callee: any = inner?.expression;
+        // `this.safeDict (this.tickers, k[, {}])`: an absent entry reads the zero Ticker, whose box is a non-nil row of nil fields
+        const count = inner?.arguments?.length ?? 0;
+        const safeDict = (callee?.name?.text === 'safeDict') && ((count === 2) || ((count === 3)
+            && (inner.arguments[2].kind === SyntaxKind.ObjectLiteralExpression) && ((inner.arguments[2].properties?.length ?? 0) === 0)));
         if ((inner?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeValue') || ((inner.arguments?.length ?? 0) !== 2)
+            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || !(((callee.name?.text === 'safeValue') && (count === 2)) || safeDict)
             || !this.goWsTickersField(inner.arguments[0])) {
             return undefined;
         }
@@ -21127,6 +21142,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             field = parts.field;
             keyNode = parts.key;
+        }
+        if (this.goWsTickersField(this.goUnwrapParenthesizedNode(field))) {
+            return `TickerToMap(${super.printPropertyAccessExpression(this.goUnwrapParenthesizedNode(field), 0)}[${this.goWsCacheKey(keyNode).index}])`;
         }
         return `${this.printNode(field, 0)}[${this.goWsCacheKey(keyNode).index}]`;
     }
@@ -21172,6 +21190,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const key = this.goWsCacheKey(keyNode);
+        if (this.goWsCacheMapType(containerNode) === 'map[string]Ticker') {
+            // a struct entry has no nil: presence is the comma-ok read (a nil `*string` key is absent)
+            const present = `func() bool { _, ok := ${this.printNode(containerNode, 0)}[${key.index}]; return ok }()`;
+            return (key.pointer === undefined) ? present : `${key.pointer} != nil && ${present}`;
+        }
         const read = `${this.printNode(containerNode, 0)}[${key.index}] != nil`;
         return (key.pointer === undefined) ? read : `${key.pointer} != nil && ${read}`;
     }
@@ -21179,12 +21202,72 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // the value text stored into a cache entry: a book or list cache the printer holds as `any` is asserted to the map's value type
     goWsCacheValue(containerNode, valueNode, valueText: string): string {
         const type = this.goWsCacheMapType(containerNode);
+        if (type === 'map[string]Ticker') {
+            return `TickerFromMap(${valueText.trim()})`;
+        }
         const target = (type === 'map[string]OrderBookInterface') ? 'OrderBookInterface' : ((type === 'map[string]WsArrayCache') ? 'WsArrayCache' : undefined);
         const declared = (this.goUnwrapParenthesizedNode(valueNode)?.kind === SyntaxKind.Identifier) ? this.goDeclaredTypeOfIdentifier(this.goUnwrapParenthesizedNode(valueNode)) : undefined;
         if ((target === undefined) || (declared === target) || this.goIsOrderBookProducer(valueNode) || (this.goUnwrapParenthesizedNode(valueNode)?.kind === SyntaxKind.NewExpression)) {
             return valueText;
         }
         return `${valueText.trim()}.(${target})`;
+    }
+
+    // `this.filterByArray[Tickers] (this.tickers|this.bidsasks, 'symbol', symbols[, true])`: the typed cache filtered by symbol,
+    // boxed to the map the base method answered (a struct channel send drops the box again)
+    goWsTickersFilterText(node): string | undefined {
+        const inner: any = this.goUnwrapParenthesizedNode(node);
+        const callee: any = inner?.expression;
+        const args: any[] = inner?.arguments ?? [];
+        if ((inner?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+            || ((callee.name?.text !== 'filterByArray') && (callee.name?.text !== 'filterByArrayTickers'))
+            || (args.length < 3) || (args.length > 4) || ((args.length === 4) && (args[3].kind !== SyntaxKind.TrueKeyword))
+            || !this.goWsTickersField(this.goUnwrapParenthesizedNode(args[0]))
+            || (args[1].kind !== SyntaxKind.StringLiteral) || (args[1].text !== 'symbol')) {
+            return undefined;
+        }
+        const symbols = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(args[2], 0)).trim();
+        return `TickerMapToMap(this.FilterTickersBySymbol(${super.printPropertyAccessExpression(this.goUnwrapParenthesizedNode(args[0]), 0)}, ${symbols}))`;
+    }
+
+    // a whole ticker cache handed on as a value (`client.resolve (this.tickers, h)`, `return this.tickers`, a ternary arm):
+    // the untyped box. The map operations themselves (index, store, delete, `in`, nil test, reset, Object.keys) keep the field.
+    goWsTickersValueText(node): string | undefined {
+        if (!this.goWsTickersField(node)) {
+            return undefined;
+        }
+        let child: any = node;
+        let parent: any = node.parent;
+        while (parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            child = parent;
+            parent = parent.parent;
+        }
+        const kind = parent?.kind;
+        if ((kind === SyntaxKind.ElementAccessExpression) && (parent.expression === child)) {
+            return undefined;
+        }
+        if (kind === SyntaxKind.BinaryExpression) {
+            const op = parent.operatorToken?.kind;
+            const other = (parent.left === child) ? parent.right : parent.left;
+            if (((op === SyntaxKind.EqualsToken) && (parent.left === child)) || ((op === SyntaxKind.InKeyword) && (parent.right === child))
+                || (((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)
+                    || (op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken)) && this.goIsNilLiteral(other))) {
+                return undefined;
+            }
+        }
+        if ((kind === SyntaxKind.CallExpression) && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (parent.expression.expression?.kind === SyntaxKind.Identifier) && (parent.expression.expression.text === 'Object')) {
+            return undefined;
+        }
+        if ((kind === SyntaxKind.CallExpression) && (parent.expression === child)) {
+            return undefined;
+        }
+        if ((kind !== SyntaxKind.CallExpression) && (kind !== SyntaxKind.ReturnStatement) && (kind !== SyntaxKind.ConditionalExpression)
+            && (kind !== SyntaxKind.VariableDeclaration) && (kind !== SyntaxKind.AsExpression)) {
+            return undefined;
+        }
+        return `TickerMapToMap(${super.printPropertyAccessExpression(node, 0)})`;
     }
 
     // `Object.keys (this.<cache>)`: the keys as a `[]string`
@@ -21194,7 +21277,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         this.goFileStdlibImports.add('maps');
         this.goFileStdlibImports.add('slices');
-        return `slices.Collect(maps.Keys(${this.printNode(argNode, 0)}))`;
+        return `slices.Collect(maps.Keys(${super.printPropertyAccessExpression(this.goUnwrapParenthesizedNode(argNode), 0)}))`;
     }
 
     // `this.balance = this.safeBalance (..)`: the Go Balance field is a map and SafeBalance answers `any`
@@ -21555,6 +21638,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const orderbooksRead = this.goWsOrderbooksReadText(node);
         if (orderbooksRead !== undefined) {
             return orderbooksRead;
+        }
+        const tickersFilter = this.goWsTickersFilterText(node);
+        if (tickersFilter !== undefined) {
+            return tickersFilter;
         }
         if (node.expression.kind === SyntaxKind.PropertyAccessExpression) {
             const args = node.arguments;
@@ -26582,7 +26669,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             ?? this.goInOpDictMapType(dict, dictText);
         const keyText = this.printNode(keyNode, 0);
         if (dictText.includes('\n') || keyText.includes('\n')
-            || ((dictMapType !== 'map[string]any') && (dictMapType !== 'map[string]map[string]any'))) {
+            || ((dictMapType !== 'map[string]any') && (dictMapType !== 'map[string]map[string]any') && (dictMapType !== 'map[string]Ticker'))) {
             return undefined;
         }
         const name = this.goIfInOpBindingName(node);
@@ -26627,8 +26714,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                         keyText = '*' + keyText;
                         keyType = 'string';
                     }
+                    // a typed ticker cache has no nil entry to test: its `in` is the comma-ok read on the proven cache key
+                    const tickerKey = ((keyType !== 'string') && (dictMapType === 'map[string]Ticker')) ? this.goWsCacheKey(key) : undefined;
+                    if ((tickerKey !== undefined) && (tickerKey.pointer === undefined) && (tickerKey.asserted === undefined)) {
+                        keyText = tickerKey.index;
+                        keyType = 'string';
+                    }
                     if (!dictText.includes('\n') && !keyText.includes('\n')
-                        && ((dictMapType === 'map[string]any') || (dictMapType === 'map[string]map[string]any'))
+                        && ((dictMapType === 'map[string]any') || (dictMapType === 'map[string]map[string]any') || (dictMapType === 'map[string]Ticker'))
                         && (keyType === 'string')) {
                         reads.push({ inNode: n, dictText, keyText });
                     }
@@ -26652,8 +26745,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         'Fees': 'map[string]any',
         'Limits': 'map[string]any',
         'Trades': 'map[string]any',
-        'Tickers': 'map[string]any',
-        'Bidsasks': 'map[string]any',
+        'Tickers': 'map[string]Ticker',
+        'Bidsasks': 'map[string]Ticker',
         'Ohlcvs': 'map[string]map[string]any',
         'FundingRates': 'map[string]any',
         'Clients': 'map[string]any',  // the ws client registry
@@ -27151,7 +27244,29 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
     }
 
+    // `if (k in this.tickers) { .. }` with a `*string` key: a nil key is absent, so the comma-ok read sits inside the nil test
+    goWsTickersPointerInIf(node, identation): string | undefined {
+        const condition: any = this.goUnwrapParenthesizedNode(node?.expression);
+        if ((node?.kind !== SyntaxKind.IfStatement) || (node.elseStatement !== undefined) || (node.parent?.kind === SyntaxKind.IfStatement)
+            || (node.thenStatement?.kind !== SyntaxKind.Block) || (condition?.kind !== SyntaxKind.BinaryExpression)
+            || (condition.operatorToken?.kind !== SyntaxKind.InKeyword) || !this.goWsTickersField(this.goUnwrapParenthesizedNode(condition.right))) {
+            return undefined;
+        }
+        const key = this.goWsCacheKey(condition.left);
+        if ((key.pointer === undefined) || (key.asserted !== undefined)) {
+            return undefined;
+        }
+        const indent = this.getIden(identation);
+        const field = super.printPropertyAccessExpression(this.goUnwrapParenthesizedNode(condition.right), 0);
+        const body = this.printBlock(node.thenStatement, identation + 1, false);
+        return this.printNodeCommentsIfAny(node, identation, `${indent}if ${key.pointer} != nil {\n${this.getIden(identation + 1)}if _, ok := ${field}[${key.index}]; ok${body}\n${indent}}`);
+    }
+
     printIfStatement(node, identation) {
+        const tickersIn = this.goWsTickersPointerInIf(node, identation);
+        if (tickersIn !== undefined) {
+            return tickersIn;
+        }
         // a nil-guarded pointer key needs the read inside the guard
         const nested = this.goInOpGuardedNestedIf(node, identation);
         if (nested !== undefined) {
@@ -30221,6 +30336,10 @@ ${this.getIden(identation)}${returnStatement}`;
         const bookMember = this.goOrderBookMemberText(node);
         if (bookMember !== undefined) {
             return bookMember;
+        }
+        const tickersValue = this.goWsTickersValueText(node);
+        if (tickersValue !== undefined) {
+            return tickersValue;
         }
         return super.printPropertyAccessExpression(node, identation);
     }

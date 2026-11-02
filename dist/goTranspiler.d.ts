@@ -1266,6 +1266,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWsCacheStoreText(containerNode: any, keyNode: any, valueText: string, node: any, identation: number): string | undefined;
     goWsCacheHasText(containerNode: any, keyNode: any): string | undefined;
     goWsCacheValue(containerNode: any, valueNode: any, valueText: string): string;
+    goWsTickersFilterText(node: any): string | undefined;
+    goWsTickersValueText(node: any): string | undefined;
     goWsCacheKeysText(argNode: any): string | undefined;
     goBalanceSafeBalanceWrite(node: any, identation: number): string | undefined;
     goBalanceKey(keyNode: any): {
@@ -1604,6 +1606,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goPrintBinaryMemoized(node: any, identation: number): string;
     printNode(node: any, identation?: number): string;
     printObjectLiteralExpression(node: any, identation: any): string;
+    goWsTickersPointerInIf(node: any, identation: any): string | undefined;
     printIfStatement(node: any, identation: any): string;
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
