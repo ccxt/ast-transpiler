@@ -29,7 +29,7 @@ interface IParameterType {
     type: string;
     isOptional: boolean;
     initializer?: string;
-    // hx10 GP14: the Go type the printer gave a required parameter (Go only), so the generated
+    // the Go type the printer gave a required parameter (Go only), so the generated
     // public wrapper prints the same signature as the method it delegates to
     goType?: string;
 }

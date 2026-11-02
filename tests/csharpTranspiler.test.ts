@@ -8,8 +8,8 @@ import { test } from '@jest/globals';
 import { expect } from '@jest/globals';
 import * as fs from 'fs';
 import * as path from 'path';
-import fs__hx11FoldC01BaseListParams from 'fs';
-import path__hx11FoldC01BaseListParams from 'path';
+import fs__csharpBaseListParams from 'fs';
+import path__csharpBaseListParams from 'path';
 jest.mock('module',()=>({
     __esModule: true,                 // this makes it work
     default: jest.fn()
@@ -630,7 +630,7 @@ describe('csharp transpiling tests', () => {
             "object x = new Dictionary<string, object>() {};\n" +
             "((List<object>)x)[Convert.ToInt32(1)] = 1;");
     })
-    // U58: the same declared-receiver proof reaches every other shape the printer wraps around a
+    // the same declared-receiver proof reaches every other shape the printer wraps around a
     // dictionary element access — the element READ, Object.keys/values and `delete`. The unhooked
     // emission is the base printer's, byte for byte.
     test('a dict-typed receiver drops the cast on reads, Object.keys/values and delete', () => {
@@ -682,7 +682,7 @@ describe('csharp transpiling tests', () => {
             "x.Remove((string)\"a\");\n" +
             "x[\"b\"] = 2;");
     })
-    // U58: a receiver that binds to a PARAMETER is answered by csharpPrintedParamType — the type
+    // a receiver that binds to a PARAMETER is answered by csharpPrintedParamType — the type
     // the printed signature carries (INFER_ARG_TYPE). Without a hook the same snippet keeps every
     // cast, and a parameter the printer leaves `object` keeps it too.
     test('the declared-receiver hook reaches a parameter receiver', () => {
@@ -727,7 +727,7 @@ describe('csharp transpiling tests', () => {
             "}");
     })
     // the typed dict read family: the consumer's classifier proves the receiver's declared C# type
-    // (see build/csharp-local-types.js), the printer then binds the typed static twin. Without the
+    // (supplied by the embedding build layer), the printer then binds the typed static twin. Without the
     // hook (undefined) every read keeps the `getValue (...)` wrapper byte for byte.
     describe('typed dict element access', () => {
         const install = (answer) => {
@@ -1552,9 +1552,8 @@ describe('csharp typed body locals', () => {
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("public virtual bool isDictionary(object value)");
         // the `isTrue(...)` the `&&` operand used to carry is gone: the operand
-        // prints as a C# bool (this is #82's csharpConditionPrintsBool node-shape fold,
-        // and S62's printed-form fold names the same identity); the return unbox is
-        // unchanged
+        // prints as a C# bool (csharpConditionPrintsBool proves the node shape; the
+        // printed-form check names the same identity); the return unbox is unchanged
         // the `value !== undefined` guard is a null test on the `object value` parameter
         expect(output).toContain("return ((bool)((object)(((value != null)) && ((value is IDictionary<string, object>))))!);");
     });
@@ -1875,7 +1874,7 @@ describe('csharp typed body locals', () => {
         expect(output).toContain('object code = (currency != null && currency.ContainsKey("code") ? currency["code"] : null);');
         expect(output).not.toContain('getValue(currency, "code")');
     });
-    test('hx4 C01: a null-tested declared collection still reads natively', () => {
+    test('a null-tested declared collection still reads natively', () => {
         const printer: any = (transpiler as any).csharpTranspiler;
         const previous = printer.csharpDeclaredLocalTypeResolver;
         printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'row') ? 'Dictionary<string, object>' : ((declaration?.name?.text === 'items') ? 'List<object>' : undefined);
@@ -1898,7 +1897,7 @@ describe('csharp typed body locals', () => {
         expect(output).toContain('object last = getValue(items, -1);');
         expect(output).toContain('object id = getValue(other, "id");');
     });
-    test('hx4 C11: identifier keys on declared collections and base dict fields read natively', () => {
+    test('identifier keys on declared collections and base dict fields read natively', () => {
         const printer: any = (transpiler as any).csharpTranspiler;
         const previous = printer.csharpDeclaredLocalTypeResolver;
         const previousLocal = printer.csharpLocalTypeOf;
@@ -2472,7 +2471,7 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
         expect(output).toContain("isEqual(x, null)");
     });
     test('a local the embedding build layer declares a string compares natively to a literal', () => {
-        // the embedding build layer (ccxt: build/csharp-local-types.js) prints some locals
+        // the embedding build layer prints some locals
         // with a concrete C# type of its own; its answer comes back through
         // csharpExpressionTypeResolver, so a read of such a local IS that declared type
         const withDeclaredTypes = (types, input) => {
@@ -3020,7 +3019,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
     });
 });
 
-// U55: `isEqual (x, null)` -> `x == null` for an operand whose emitted declaration the
+// `isEqual (x, null)` -> `x == null` for an operand whose emitted declaration the
 // embedding classifier names a typed reference / nullable scalar (csharpNullComparisonTypeOf).
 // The helper's first two guards are the C# null test itself, so the native operator is the same
 // comparison; a non-nullable value scalar does not compile with `== null` and every operand the
@@ -3304,11 +3303,9 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain('bool has = (inOp(keys, "k"));');
     });
-    // U60: `k in x` where the emitted declaration of x is a dictionary the printer cannot name
-    // itself (build/csharp-local-types.js retypes it AFTER printing) -- the printer asks the
-    // csharpDeclaredDictReceiverType hook. inOp's dictionary branch is
-    // `(obj != null) && (key != null) && obj.ContainsKey(key)`, so the emission carries the
-    // null-safe receiver read and, for a possibly-null identifier key, the helper's own guard.
+    // `k in x` on a dictionary the build layer retypes after printing: the printer asks the
+    // csharpDeclaredDictReceiverType hook; the emission keeps inOp's null-safe receiver read and,
+    // for a possibly-null identifier key, the helper's own `key != null` guard.
     test('a `k in x` receiver no hook names keeps inOp byte-identically', () => {
         const input =
         "class Exchange {\n" +
@@ -3736,8 +3733,8 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
 
 describe('csharp helper removal: a for-header counter prints the native ++ / --', () => {
     // the counter's printed `int` type comes back through csharpExpressionTypeResolver (the
-    // embedding build layer proves it — build/csharp-local-types.js in ccxt retypes the
-    // declaration `int i = 0` itself); these tests stub that resolver with a name map
+    // embedding build layer retypes the declaration `int i = 0` itself); these tests stub
+    // that resolver with a name map
     const withKinds = (kinds, input) => {
         transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.text];
         try {
@@ -4729,7 +4726,7 @@ describe('csharp loop-index element reads', () => {
     });
 });
 
-// the embedding build layer (ccxt: build/csharp-local-types.js) prints the declaration of some
+// the embedding build layer prints the declaration of some
 // locals itself and reports that same type through csharpExpressionTypeResolver; a `bool` there
 // is the declaration the emitted code carries, so the condition can use the read bare
 describe('isTrue drops for a declared bool the printer did not type itself', () => {
@@ -5143,7 +5140,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
             transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
         }
     });
-    // D-18: a name the ts/src census cleared (every declaration agrees, every call site passes a
+    // a name the ts/src call-site analysis cleared (every declaration agrees, every call site passes a
     // compatible argument) prints the typed spelling on the base declaration and on every override;
     // every other name keeps `object` (C# overrides are invariant on parameter types, so a
     // half-retyped name cannot compile).
@@ -5375,9 +5372,9 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        // S62 folds the wrapper around the printed `isEqual (...)` too (that describe), so the
-        // ternary condition is the bare helper call here; the `((bool) …)` cast removal stays
-        // this unit's own change and is asserted by the two negatives below.
+        // the falsy wrapper is dropped around the printed `isEqual (...)` too, so the ternary
+        // condition is the bare helper call; the `((bool) …)` cast removal is asserted by the
+        // two negatives below.
         expect(output).toContain("isEqual(side, \"sell\") ? a : b");
         expect(output).not.toContain("isTrue(isEqual(side, \"sell\")) ? a : b");
         expect(output).not.toContain("((bool) isTrue");
@@ -5415,7 +5412,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         expect(output).toContain("isTrue(flag) ? a : b");
     });
 
-    // S60: `isEqual (x, "lit")` -> `x == "lit"` when csharpLocalTypeOf names the operand a
+    // `isEqual (x, "lit")` -> `x == "lit"` when csharpLocalTypeOf names the operand a
     // string. A string literal is never null and isEqual's string branch is the same
     // `((string)a) == ((string)b)` ordinal comparison, so the emission is equivalent.
     test('string-literal equality keeps isEqual while csharpLocalTypeOf is not installed', () => {
@@ -5429,9 +5426,9 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        // no hook installed: the helper call is what S60's gate must keep. S62 folds the isTrue
-        // wrapper around the printed isEqual (see the S62 describe), so the assertions below
-        // pin the helper AND -- stronger -- that no native operator was emitted.
+        // no hook installed: the string-literal gate must keep the helper call. The isTrue wrapper
+        // is dropped around the printed isEqual, so the assertions below pin the helper AND --
+        // stronger -- that no native operator was emitted.
         expect(output).toContain('if (isEqual(s, "lit"))');
         expect(output).toContain('if (!isEqual(s, "other"))');
         expect(output).toContain('if (isEqual("third", s))');
@@ -5475,12 +5472,12 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
             "    }\n" +
             "}";
             const output = transpiler.transpileCSharp(input).content;
-            // an 'object' answer is not a string: S60 never fires and the helper stays (S62
-            // folds the isTrue wrapper around the printed isEqual)
+            // an 'object' answer is not a string: the string gate never fires and the helper
+            // stays (the isTrue wrapper around the printed isEqual is still dropped)
             expect(output).toContain('if (isEqual(s, "lit"))');
             expect(output).toContain('if (isEqual(s, a))');
-            // `isEqual(s, null)` is inlined by #82's printInlineEquality (null comparison on an
-            // object operand); the S60 string gate above cannot name it either way
+            // `isEqual(s, null)` is inlined by printInlineEquality (null comparison on an
+            // object operand); the string gate above cannot name it either way
             expect(output).toContain('if ((s == null))');
             expect(output).not.toContain('s == "lit"');
         } finally {
@@ -5491,7 +5488,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
 
 describe('x.push on a receiver the classifier declares a list drops the cast', () => {
     // the printer's own print names no type for `const keys = []` / `this.safeList (...)`:
-    // the ccxt classifier (build/csharp-local-types.js) retypes those declarations AFTER
+    // the embedding classifier retypes those declarations AFTER
     // printing, so the printer asks the csharpLocalTypeOf hook for the printed type
     afterEach(() => {
         delete (transpiler as any).csharpTranspiler.csharpLocalTypeOf;
@@ -5558,11 +5555,10 @@ describe('x.push on a receiver the classifier declares a list drops the cast', (
     });
 });
 
-// cs-strict S14: `((List<object>)x)[i] = v` drops the cast when the receiver's PRINTED
-// declaration is a concrete List<object>. The declaration is typed after printing by the
-// ccxt classifier (build/csharp-local-types.js), so the printer reads it through the
-// `csharpLocalTypeOf` hook the classifier installs; the tests below stub that hook.
-describe('cs-strict S14 element-access list cast gate', () => {
+// `((List<object>)x)[i] = v` drops the cast when the receiver's PRINTED declaration is a
+// concrete List<object>; the classifier types it after printing, so the printer reads it
+// through the `csharpLocalTypeOf` hook (stubbed below).
+describe('element-access list cast gate on a printed List<object> receiver', () => {
     const config = {
         'verbose': false,
         'csharp': {
@@ -5615,7 +5611,7 @@ describe('cs-strict S14 element-access list cast gate', () => {
     test('a union string key defers to the instance exception hook (worker dispatch)', () => {
         const localTranspiler: any = new Transpiler(config as any);
         localTranspiler.csharpTranspiler.csharpLocalTypeOf = listReceiver;
-        // build/csharp-worker.ts#setupCsharpPrinter replaces this hook per instance; the
+        // the embedding worker replaces this hook per instance; the
         // element-access rule must not preempt it for a key that may be a string
         localTranspiler.csharpTranspiler.printElementAccessExpressionExceptionIfAny = () => 'INSTANCE_HOOK';
         const output = localTranspiler.transpileCSharp('function test (key: string | undefined) {\n    const orders: any[] = [];\n    orders[key] = 5;\n}').content;
@@ -5676,8 +5672,8 @@ describe('csharp typed condition operands', () => {
         expect(output).toContain("if (!isSpot)");
         expect(output).toContain("bool both = isSpot && (isEqual(a, 1));");
         expect(output).toContain("bool either = isSpot || (isEqual(a, 1));");
-        // S62 folds the wrapper around the printed `(isEqual(a, 1))` operand too; what this test
-        // pins is the bare `isSpot` operand, which only S61's type hook can name
+        // the wrapper around the printed `(isEqual(a, 1))` operand is dropped too; what this test
+        // pins is the bare `isSpot` operand, which only the local-type hook can name
         expect(output).not.toContain("isTrue((isEqual(a, 1)))");
         expect(output).not.toContain("isTrue(isSpot)");
     });
@@ -5844,7 +5840,7 @@ describe('csharp typed condition operands', () => {
     });
 });
 
-describe('S62: falsy wrapper around a printed bool', () => {
+describe('falsy wrapper around a printed bool', () => {
     test('the wrapper is dropped around a bool-returning helper call', () => {
         const input =
         "class Exchange {\n" +
@@ -5913,16 +5909,16 @@ describe('S62: falsy wrapper around a printed bool', () => {
         expect(output).toContain("if ((this.safeBool(a, \"x\") == true))");
         expect(output).toContain("if (isTrue(this.isThing(a)))");
         expect(output).toContain("if (a is Object)");
-        // wave-1's ternary unit dropped the `((bool) …)` cast around the condition; the ternary
+        // the `((bool) …)` cast around the ternary condition is dropped; the ternary
         // itself stays inside the wrapper, because its C# type is the branches' common type
         // (object), not bool -- see csharpTextHasTopLevelConditional. The merged printer must
-        // not fold it on the strength of the leading `isTrue(flag)` text.
+        // not drop it on the strength of the leading `isTrue(flag)` text.
         expect(output).toContain("if (isTrue(isTrue(flag) ? a : b))");
         expect(output).not.toContain("((bool)");
         expect(output).not.toContain("if (isTrue(flag) ? a : b)");
     });
 
-    // U57: `add (x, y)` -> `(x + y)` when csharpNativeStringConcat proves the LEFT operand's
+    // `add (x, y)` -> `(x + y)` when csharpNativeStringConcat proves the LEFT operand's
     // printed declaration is a string. The call such an operand binds is add(string, string)
     // (`a + b`) or add(string, object) (`a + b?.ToString()`), and C#'s string concatenation
     // computes exactly those values for every input, null operands included.
@@ -6065,12 +6061,12 @@ describe('csharp declared-receiver .length: getArrayLength -> Count/Length (hook
     });
 });
 
-// U59: `x[i]` reads on a list receiver. getValue answers null for an index off the end while
+// `x[i]` reads on a list receiver. getValue answers null for an index off the end while
 // the C# indexer throws, so the native read is emitted only where the enclosing `for` re-tests
 // `i < x.length` at the top of every iteration and neither the index nor the receiver can move
 // in the body. The receiver/index types come from the consumer hook
 // (csharpListIndexReadTypes); these tests stub it.
-describe('U59 list index reads bounded by the enclosing for', () => {
+describe('list index reads bounded by the enclosing for', () => {
     const config = {
         'verbose': false,
         'csharp': {
@@ -6197,8 +6193,8 @@ describe('U59 list index reads bounded by the enclosing for', () => {
 });
 
 
-// hx4 L44
-describe('hx4 L44 guarded nullable negation', () => {
+// a negation guarded by a null test of the same nullable read
+describe('guarded nullable negation', () => {
     const transpiler = new Transpiler({});
     const cls = (body: string) =>
         "class Exchange {\n" +
@@ -6279,7 +6275,7 @@ describe('array-annotated parameters', () => {
         expect(output).toContain('getArrayLength(rows)');
     });
     test('a same-named call site in another class is still a call site of that name', () => {
-        // the census is name-scoped: the second class's `main` shares the key, so its object
+        // the call-site analysis is name-scoped: the second class's `main` shares the key, so its object
         // argument keeps BOTH declarations boxed (a worker batch resolves no declaration handle)
         const input =
         "class Exchange {\n" +
@@ -6318,7 +6314,7 @@ describe('array-annotated parameters', () => {
 });
 });
 
-// PC04: a `boolean` parameter prints `bool?` only when every call site in the program passes a
+// a `boolean` parameter prints `bool?` only when every call site in the program passes a
 // C# bool at that position; the body condition then drops the `isTrue` wrapper.
 describe('boolean parameters become bool? on a proven call-site census', () => {
     const method = (name, flag, body) =>
@@ -6390,7 +6386,7 @@ describe('boolean parameters become bool? on a proven call-site census', () => {
     });
 });
 
-describe('csharp native Promise.all -> Task.WhenAll (hx10w6 AU03)', () => {
+describe('csharp native Promise.all -> Task.WhenAll', () => {
     const head =
         "interface Ticker { id: string }\n" +
         "class Test {\n" +
@@ -6474,7 +6470,7 @@ describe('csharp native Promise.all -> Task.WhenAll (hx10w6 AU03)', () => {
     });
 });
 
-describe('csharp native Promise.all over mixed Task types (RD-CS-2, folds hx10w5-C08)', () => {
+describe('csharp native Promise.all over mixed Task types', () => {
     const head =
         "class Test {\n" +
         "    async fetchA (x: number): Promise<{ [key: string]: any }> { return {}; }\n" +
@@ -6512,7 +6508,7 @@ describe('csharp native Promise.all over mixed Task types (RD-CS-2, folds hx10w5
     });
 });
 
-describe('csharp destructured Promise.all slots over un-annotated any tasks (RD-CS-2, folds hx11w8 slots)', () => {
+describe('csharp destructured Promise.all slots over un-annotated any tasks', () => {
     const head =
         "class Test {\n" +
         "    async fetchAny (x: any) { const r: any = x; return r; }\n" +
@@ -6560,7 +6556,7 @@ describe('csharp destructured Promise.all slots over un-annotated any tasks (RD-
     });
 });
 
-describe('csharp native Promise.all negative shapes (hx10w6 AU03)', () => {
+describe('csharp native Promise.all negative shapes', () => {
     const head =
         "class Test {\n" +
         "    async fetchA (x: number): Promise<{ [key: string]: any }> { return {}; }\n" +
@@ -6588,7 +6584,7 @@ describe('csharp native Promise.all negative shapes (hx10w6 AU03)', () => {
     });
 });
 
-describe('csharp native Promise.all reaches every body shape (hx10w6 AU03)', () => {
+describe('csharp native Promise.all reaches every body shape', () => {
     const head =
         "type Dict = { [key: string]: any };\n" +
         "class Test {\n" +
@@ -6619,7 +6615,7 @@ describe('csharp native Promise.all reaches every body shape (hx10w6 AU03)', () 
     });
 });
 
-describe('csharp native Promise.all keeps the helper for typed map aliases (hx10w6 AU03)', () => {
+describe('csharp native Promise.all keeps the helper for typed map aliases', () => {
     test('a Dict alias whose values are all any goes native', () => {
         const ts = "type Dict<Value = any> = { [key: string]: Value };\n" +
         "class Test {\n" +
@@ -6650,7 +6646,7 @@ describe('csharp native Promise.all keeps the helper for typed map aliases (hx10
 describe ('c07inop-equality', () => {
     const transpiler = new Transpiler();
     const printer = () => (transpiler as any).csharpTranspiler;
-    // the embedding build layer (ccxt: build/csharp-local-types.js) answers csharpExpressionTypeResolver
+    // the embedding build layer answers csharpExpressionTypeResolver
     // for the locals it prints with its own C# type: the reads are then already those types
     const cs = (input: string, types: { [name: string]: string } = {}) => {
         const target = printer();
@@ -7052,7 +7048,7 @@ describe ('csharpNullableStateFields', () => {
         'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
     };
 
-    // the build layer (build/csharp-local-types.js) answers the declared C# type of a local through
+    // the build layer answers the declared C# type of a local through
     // csharpLocalTypeOf; this stands in for it: the loop counter `i` is an int, `key` a string?
     const DECLARED: { [name: string]: any } = {
         'fees': { type: 'IDictionary<string, object>', initializer: 'new dict()' },
@@ -7063,7 +7059,7 @@ describe ('csharpNullableStateFields', () => {
         const source = 'class BaseExchange {\n    fees: any; requiredCredentials: any; accounts: any[];\n    f (key: string | undefined) {\n' + lines + '\n    }\n}';
         const transpiler = new Transpiler(config);
         (transpiler as any).csharpTranspiler.csharpLocalTypeOf = (node: any) => ({ 'i': 'int', 'key': 'string?' } as any)[node.text];
-        // hx11 RF-cs-2: the member rules read the declared C# type of the hand-written members (Exchange.Options.cs);
+        // the member rules read the declared C# type of the hand-written members (Exchange.Options.cs);
         // the fixture declares the same three members, the expectations below are unchanged
         (transpiler as any).csharpTranspiler.csharpDeclaredMemberType = (owner: string, name: string) => (owner === 'this' ? DECLARED : {} as any)[name];
         return transpiler.transpileCSharp(source).content;
@@ -7113,10 +7109,10 @@ describe ('csharpPromiseAllImplicitApi', () => {
         default: jest.fn()
     }));
 
-    // RF-cs-2 a: `await Promise.all (list)` whose every element is the Task<T> of an implicit-API endpoint
+    // `await Promise.all (list)` whose every element is the Task<T> of an implicit-API endpoint
     // (a method of the generated ts/src/abstract/<ex>.ts class) with ONE plain T prints a List<Task<T>> and
     // awaits it with Task.WhenAll; T comes from the endpoint's declared Promise<...> type.
-    describe('csharp promiseAll over implicit-API tasks -> Task.WhenAll (RF-cs-2 a)', () => {
+    describe('csharp promiseAll over implicit-API tasks -> Task.WhenAll', () => {
         const TMP = path.join(__dirname, 'files', 'tmp-rfcs2a-promiseall');
         const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
         const ABSTRACT = path.join(TMP, 'ts', 'src', 'abstract', 'x.ts');
@@ -7250,7 +7246,7 @@ describe ('csharpPromiseAllImplicitApi', () => {
             expect(body).not.toContain('promiseAll(');
         });
 
-        test('a dict endpoint stays with the AU03 task-local plan', () => {
+        test('a dict endpoint stays with the Promise.all task-local plan', () => {
             const body = method('dictAu03');
             expect(body).toMatch(/await Task\.WhenAll\(hxauTask\d+_\d+, hxauTask\d+_\d+\);/);
             expect(body).not.toContain('List<Task<');
@@ -7323,7 +7319,7 @@ describe ('fold2C05CounterAndShadow', () => {
         '    }\n' +
         '}';
 
-    describe('FOLD2 C05: Int64 for-counter in the printer', () => {
+    describe('Int64 for-counter in the printer', () => {
         test('a literal counter whose reads normalise the box is declared Int64 with a native increment', () => {
             const out = printer(counters, false);
             expect(out).toContain('for (Int64 i = 0; ');
@@ -7365,7 +7361,7 @@ describe ('fold2C05CounterAndShadow', () => {
         '    }\n' +
         '}';
 
-    describe('FOLD2 C05: literal-default limit shadow proven on the AST', () => {
+    describe('literal-default limit shadow proven on the AST', () => {
         test('without the build layer tables the helper stays', () => {
             const transpiler: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
             const out = transpiler.transpileCSharp(shadow).content;
@@ -7387,7 +7383,7 @@ describe ('fold2C05CounterAndShadow', () => {
     });
 });
 
-describe ('hx10w10CP05', () => {
+describe ('csharp nullable scalar locals', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -7397,7 +7393,7 @@ describe ('hx10w10CP05', () => {
 
     const transpile = (ts: string): string => new Transpiler(config).transpileCSharp(ts).content;
 
-    describe('hx10w10 CP05: C# nullable scalar locals', () => {
+    describe('C# nullable scalar locals from safe* signatures', () => {
         test('safeNumber / safeNumber2 name the base signature `double?`', () => {
             const output = transpile(
                 "class Exchange {\n" +
@@ -7586,7 +7582,7 @@ describe ('hx10w10CP05', () => {
     });
 });
 
-describe ('hx10w9CP02', () => {
+describe ('csharp add on non-null strings', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -7596,7 +7592,7 @@ describe ('hx10w9CP02', () => {
 
     const transpile = (ts: string): string => new Transpiler(config).transpileCSharp(ts).content;
 
-    describe('hx10w9 CP02: `add` on a proven non-null string operand', () => {
+    describe('`add` on a proven non-null string operand', () => {
         test('a local held a non-null string keeps its type across self-concat writes', () => {
             const output = transpile(
                 "class Exchange {\n" +
@@ -7693,9 +7689,9 @@ describe ('hx10w9CP02', () => {
     });
 });
 
-describe ('hx11FoldC01BaseListParams', () => {
-    const fs = fs__hx11FoldC01BaseListParams;
-    const path = path__hx11FoldC01BaseListParams;
+describe ('csharp base-tier list parameters', () => {
+    const fs = fs__csharpBaseListParams;
+    const path = path__csharpBaseListParams;
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -7703,8 +7699,8 @@ describe ('hx11FoldC01BaseListParams', () => {
 
     // A base-tier method (ts/src/base/*.ts, printed alone) types its array parameter from the
     // declared TS type; its overrides and in-program calls follow it.
-    describe('csharp base-tier array parameters (fold of ccxt hx10w3-C01)', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-fold-c01');
+    describe('csharp base-tier array parameters', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-csharp-base-tier-array-parameters');
         const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
         const VENUE = path.join(TMP, 'ts', 'src', 'venue.ts');
         let base: string;
@@ -7775,16 +7771,15 @@ describe ('hx11FoldC01BaseListParams', () => {
     });
 });
 
-describe ('hx11RFcs2DeclaredMembers', () => {
+describe ('csharp declared member types', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
     }));
 
-    // hx11 RF-cs-2: the native dictionary / list operations on the hand-written base members and the ws
-    // client maps are keyed on the member's DECLARED C# type (csharpDeclaredMemberType), which the embedding
-    // build layer reads from cs/ccxt/base/Exchange.Options.cs and cs/ccxt/ws/Client.cs. The fixture below
-    // declares the same members; the baseline run installs no hook and keeps every helper call.
+    // native dictionary / list operations on hand-written base members and ws client maps are keyed on the
+    // member's DECLARED C# type (csharpDeclaredMemberType, read from the hand-written .cs files); the fixture
+    // declares the same members, and the baseline run installs no hook and keeps every helper call.
 
     const config = {
         'verbose': false,
@@ -7819,7 +7814,7 @@ describe ('hx11RFcs2DeclaredMembers', () => {
         + '    isDictionary (value: any): boolean { return true; }\n';
     const CLIENT_CLASS = 'class Client { subscriptions: any; }\n';
 
-    describe('csharp declared hand-written members (RF-cs-2)', () => {
+    describe('csharp declared hand-written members', () => {
         test('a dictionary member reads, tests and sizes through its own declared type', () => {
             const ts = BASE + '    f (k: string) { const a = this.urls["x"]; if ("test" in this.headers) { return 1; } const b = this.fees[k]; return [a, b]; }\n}';
             const out = printed(ts, true);
@@ -7903,7 +7898,7 @@ describe ('hx11RFcs2DeclaredMembers', () => {
     });
 });
 
-describe ('hx11RFcs3JsonParse', () => {
+describe ('csharp JSON.parse native deserialization', () => {
     jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
     const config = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
@@ -7922,13 +7917,13 @@ describe ('hx11RFcs3JsonParse', () => {
     });
 });
 
-describe ('hx11RdCs1', () => {
+describe ('csharp declared member views', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
     }));
 
-    // hx11 RD-CS-1 (folds ccxt hx10w3-C02 and hx10w4-BF01): a declared typed view of a hand-written base member
+    // a declared typed view of a hand-written base member
     // answers the member's reads natively, and a string-typed `object` local concatenates natively.
 
     const config = {
@@ -7959,7 +7954,7 @@ describe ('hx11RdCs1', () => {
         + '    currencies_by_id: any;\n'
         + '    safeString (a: any, b: any): string | undefined { return undefined; }\n';
 
-    describe('RD-CS-1: declared member views and string-typed object concatenation', () => {
+    describe('declared member views and string-typed object concatenation', () => {
         test('urls["api"][key] reads through the declared urlsApi view', () => {
             const ts = BASE + '    f (type: string, other: any) { const a = this.urls["api"]["ws"]; const b = this.urls["api"][type]; const k = this.safeString (other, "k"); const d = this.urls["api"][k]; const c = this.urls["api"][other]; return [a, b, c, d]; }\n}';
             const out = printed(ts, true);
@@ -8006,13 +8001,13 @@ describe ('hx11RdCs1', () => {
     });
 });
 
-describe ('hx11RfmC2C', () => {
+describe ('csharp bool parameters and bool-declared calls', () => {
     jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
     const config = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
     const print = (src: string) => new Transpiler(config).transpileCSharp(src).content;
 
-    describe('csharp boolean parameter census (hx11 RFM-C2-C)', () => {
+    describe('csharp boolean parameter call-site proof', () => {
         test('an un-annotated `= false` parameter every caller feeds a bool prints bool?', () => {
             const out = print('class T {\n    f (flag = false) {\n        if (flag) { return 1; }\n        return 0;\n    }\n    g () {\n        return this.f (true);\n    }\n}');
             expect(out).toContain('f(bool? flag = null)');
@@ -8040,7 +8035,7 @@ describe ('hx11RfmC2C', () => {
         });
     });
 
-    describe('csharp bool-declared call typed in a subclass (hx11 RFM-C2-C)', () => {
+    describe('csharp bool-declared call typed in a subclass', () => {
         test('a local fed by an inherited bool-returning method is bool', () => {
             const out = print('class R {\n}\nclass A extends R {\n    isOk (): boolean {\n        return true;\n    }\n}\nclass B extends A {\n    f () {\n        const ok = this.isOk ();\n        if (ok) { return 1; }\n        return 0;\n    }\n}');
             expect(out).toContain('bool ok = this.isOk()');
@@ -8048,7 +8043,7 @@ describe ('hx11RfmC2C', () => {
         });
     });
 
-    describe('csharp bool-declared call on a root class (hx11 RFM-C2-C)', () => {
+    describe('csharp bool-declared call on a root class', () => {
         test('a method inherited from a class with no parent keeps the object box', () => {
             const out = print('class A {\n    isOk (): boolean {\n        return true;\n    }\n}\nclass B extends A {\n    f () {\n        const ok = this.isOk ();\n        if (ok) { return 1; }\n        return 0;\n    }\n}');
             expect(out).toContain('object ok = this.isOk()');
@@ -8056,7 +8051,7 @@ describe ('hx11RfmC2C', () => {
     });
 });
 
-describe ('rdcs3InferredReturnBox', () => {
+describe ('csharp inferred collection return box', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -8065,7 +8060,7 @@ describe ('rdcs3InferredReturnBox', () => {
     const unique = [ 'pairOf', 'rowOf', 'chained', 'mixed', 'dictLiteral', 'asyncPair', 'overridden', 'noReturn', 'scalar' ];
     const makeConfig = (table: boolean): any => ({ 'verbose': false, 'csharp': { ...(table ? { 'uniqueMethodNames': unique } : {}), 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } });
 
-    // RD-CS-3 (relocates RFM-C1 w3C06): a venue-local method declared once, annotated with a collection
+    // a venue-local method declared once, annotated with a collection
     const source =
         "type Dict = { [key: string]: any };\n" +
         "type List = any[];\n" +
@@ -8130,7 +8125,7 @@ describe ('rdcs3InferredReturnBox', () => {
 
     const printed = (table: boolean): string => (new Transpiler(makeConfig(table)) as any).transpileCSharp(source).content;
 
-    describe('RD-CS-3: inferred collection return box', () => {
+    describe('inferred collection return box', () => {
         test('without the table every signature and local keeps the printer box', () => {
             const out = printed(false);
             expect(out).toContain('public virtual object pairOf(object a, object b)');
@@ -8165,7 +8160,7 @@ describe ('rdcs3InferredReturnBox', () => {
     });
 });
 
-describe ('rdcs3NativeMinMaxMod', () => {
+describe ('csharp native mod / Math.Min / Math.Max', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -8221,7 +8216,7 @@ describe ('rdcs3NativeMinMaxMod', () => {
         return transpiler.transpileCSharp(source).content;
     };
 
-    describe('RD-CS-3: native mod / Math.Min / Math.Max on declared integral operands', () => {
+    describe('native mod / Math.Min / Math.Max on declared integral operands', () => {
         test('without declared kinds every call keeps the helper', () => {
             const out = printer(false);
             expect(out).toContain('mod(x, y)');
@@ -8278,13 +8273,13 @@ describe ('rdcs3NativeMinMaxMod', () => {
     });
 });
 
-describe ('rdcs3ParseJsonStringCall', () => {
+describe ('csharp parseJson on a string-returning call', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
     }));
 
-    // RD-CS-3 (relocates hx10w3-C06 parseJson): a callee whose emitted signature already returns a string
+    // a callee whose emitted signature already returns a string
     // makes parseJson's `(string)` unbox an identity, so the deserializer is called on the call itself.
     describe('parseJson on a string-returning this-call', () => {
         const TMP = path.join(__dirname, 'files', 'tmp-rdcs3-parsejson');
@@ -8325,7 +8320,7 @@ describe ('rdcs3ParseJsonStringCall', () => {
     });
 });
 
-describe ('rdcs3TupleBoolSlot', () => {
+describe ('csharp destructured tuple bool slot', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -8448,7 +8443,7 @@ describe ('rdcs3TupleBoolSlot', () => {
         return out.slice(start, end);
     };
 
-    describe('RD-CS-3: bool slot of a destructured handleOptionAndParams', () => {
+    describe('bool slot of a destructured handleOptionAndParams', () => {
         test('an assignment destructuring types the bool local and casts the slot', () => {
             const body = method(printer(true), 'write');
             expect(body).toContain('bool warn = true;');
@@ -8498,7 +8493,7 @@ describe ('rdcs3TupleBoolSlot', () => {
     });
 });
 
-describe ('rfcs1DeclaredDictMember', () => {
+describe ('csharp declared dictionary member reads', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -8534,7 +8529,7 @@ describe ('rfcs1DeclaredDictMember', () => {
         return transpiler.transpileCSharp(source).content;
     };
 
-    describe('RF-cs-1 c03: declared dictionary member reads', () => {
+    describe('declared dictionary member reads', () => {
         test('without the consumer hook the helper emission is unchanged', () => {
             const out = printer(false);
             expect(out).toContain('getValue(client.futures, messageHash)');
@@ -8560,7 +8555,7 @@ describe ('rfcs1DeclaredDictMember', () => {
     });
 });
 
-describe ('rfmC2AX3ObjectKeyWsCache', () => {
+describe ('csharp object-key ws cache reads', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -8587,7 +8582,7 @@ describe ('rfmC2AX3ObjectKeyWsCache', () => {
         return transpiler.transpileCSharp(source).content;
     }
 
-    describe('csharp routed ws cache and object-key dictionary reads (RFM-C2-A / 1F-hx10w2-C01 / RFM-X3-cs)', () => {
+    describe('csharp routed ws cache and object-key dictionary reads', () => {
         test('a string? key on a routed ws cache is a guarded ContainsKey read', () => {
             const out = printed('        return this.ohlcvs[symbol];', 'string?');
             expect(out).toContain('(this.ohlcvs != null && symbol != null && this.ohlcvs.ContainsKey(symbol) ? this.ohlcvs[symbol] : null)');
@@ -8614,7 +8609,7 @@ describe ('rfmC2AX3ObjectKeyWsCache', () => {
     });
 });
 
-describe ('rfmC2BDeclaredBaseField', () => {
+describe ('csharp declared base-field reads', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -8623,7 +8618,7 @@ describe ('rfmC2BDeclaredBaseField', () => {
     const declared = { 'urls': 'IDictionary<string, object>', 'positions': 'object' };
     const makeConfig = (hook: boolean): any => ({ 'verbose': false, 'csharp': { ...(hook ? { 'declaredBaseFieldTypes': declared } : {}), 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } });
 
-    // RFM-C2-B: reads of a hand-written base field the consumer declares (config.csharp.declaredBaseFieldTypes)
+    // reads of a hand-written base field the consumer declares (config.csharp.declaredBaseFieldTypes)
     const source =
         "class Exchange {\n" +
         "    urls: any;\n" +
@@ -8660,7 +8655,7 @@ describe ('rfmC2BDeclaredBaseField', () => {
         return transpiler.transpileCSharp(source).content;
     };
 
-    describe('RFM-C2-B: declared base-field dictionary reads', () => {
+    describe('declared base-field dictionary reads', () => {
         test('without the consumer hook the helper emission is unchanged', () => {
             const out = printer(false);
             expect(out).toContain('getValue(this.positions, type)');
@@ -8691,16 +8686,15 @@ describe ('rfmC2BDeclaredBaseField', () => {
             const out = printer(true);
             expect(out).toContain('((x % y) == 0)');
             expect(out).toContain('((x % y) != 3)');
-            // RF-cs-2 c (folds ccxt build/hx10w2-C04 nestedEqualText): a literal divisor of an Int64 identifier prints the
-            // same remainder the host's mod pass would (`(Int64)((double)x % 7)`) behind the operator, so isEqual(mod (x, 7), 0)
-            // no longer reaches that pass. The non-Int64 and non-literal-divisor shapes below keep the helper.
+            // a literal divisor of an Int64 identifier prints the same remainder the host's mod pass would
+            // (`(Int64)((double)x % 7)`) behind the operator; the non-Int64 and non-literal-divisor shapes keep the helper.
             expect(out).toContain('(((Int64)((double)x % 7)) == 0)');
             expect(out).not.toContain('isEqual(mod(x, y)');
             expect(out).toContain('mod(x, this.foo)');
         });
     });
 
-    describe('RFM-C2-B: omit of a declared dictionary member', () => {
+    describe('omit of a declared dictionary member', () => {
         const omitSource = "class Exchange {\n    urls: any;\n    positions: any;\n    f () {\n        const a = this.omit (this.urls, 'x');\n        const b = this.omit (this.positions, 'x');\n        const c = this.omit (this.urls, 'x', 'y');\n        this.urls = a;\n    }\n    omit (a: any, ...k: any[]) { return a }\n}";
         const run = (hook: boolean): string => (new Transpiler(makeConfig(hook)) as any).transpileCSharp(omitSource).content;
         test('without the table the local keeps the printer box', () => {

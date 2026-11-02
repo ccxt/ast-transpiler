@@ -14,27 +14,27 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { installCcxtGoHooks as installCcxtGoHooks__fold3G03PrintedMapLocals } from '../src/goTranspiler';
-import fs__hx10w10GP24 from 'fs';
-import os__hx10w10GP24 from 'os';
-import path__hx10w10GP24 from 'path';
-import fs__hx10w9GP13 from 'fs';
-import os__hx10w9GP13 from 'os';
-import path__hx10w9GP13 from 'path';
+import fs__goToStringNativeArms from 'fs';
+import os__goToStringNativeArms from 'os';
+import path__goToStringNativeArms from 'path';
+import fs__goTypedSliceArgs from 'fs';
+import os__goTypedSliceArgs from 'os';
+import path__goTypedSliceArgs from 'path';
 import { installCcxtGoSignTyping } from '../src/transpiler';
-import { g08w3Check } from '../src/transpiler';
-import { hx10w8GB01Check } from '../src/transpiler';
-import { hx10w8GB05Check } from '../src/transpiler';
-import { hx10w9GB11Check } from '../src/transpiler';
-import { hx10G06Check } from '../src/transpiler';
-import fs__hx11foldBGAnySliceToList from 'fs';
-import os__hx11foldBGAnySliceToList from 'os';
-import path__hx11foldBGAnySliceToList from 'path';
-import fs__hx11rfmG1GP18 from 'fs';
-import os__hx11rfmG1GP18 from 'os';
-import path__hx11rfmG1GP18 from 'path';
-import fs__hx11rfmX2BaseMapLocals from 'fs';
-import os__hx11rfmX2BaseMapLocals from 'os';
-import path__hx11rfmX2BaseMapLocals from 'path';
+import { goDynamicCallParamsCheck } from '../src/transpiler';
+import { goDictParamTypesSelfTest } from '../src/transpiler';
+import { goParseFrameParamTypesSelfTest } from '../src/transpiler';
+import { goHandleErrorsCodeSelfTest } from '../src/transpiler';
+import { goNilJoinTypeSelfTest } from '../src/transpiler';
+import fs__goAnySliceToList from 'fs';
+import os__goAnySliceToList from 'os';
+import path__goAnySliceToList from 'path';
+import fs__goEndpointReceiveTypedView from 'fs';
+import os__goEndpointReceiveTypedView from 'os';
+import path__goEndpointReceiveTypedView from 'path';
+import fs__goBaseMapLocals from 'fs';
+import os__goBaseMapLocals from 'os';
+import path__goBaseMapLocals from 'path';
 import { installCcxtGoDictParams } from '../src/transpiler';
 import { installRfGo5OwnedTables } from '../src/transpiler';
 import fs__rfmG4G21 from 'fs';
@@ -845,7 +845,7 @@ describe('go pointer-typed Safe* body locals', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var data []any = SafeListTyped(item, \"data\")");
         expect(output).toContain("i < len(data)");
-        // the loop bounds the read (hx11 FM-GO1-B): the plain index of a SafeList element
+        // the loop bounds the read the plain index of a SafeList element
         expect(output).toContain("this.SafeValue(data[i], \"id\")");
         expect(output).not.toContain("DerefScalar(data[i])");
         expect(output).toContain("DerefScalar(data[0])");
@@ -1796,7 +1796,7 @@ describe('go inline equality', () => {
         const input =
         "function f (symbols: any) {\n" +
         "    const keys = Object.keys (symbols);\n" +
-        "    for (let i = 0; i < symbols.length; i++) {\n" + // RF-go-6-C: a loop bounded by keys.length reads keys[i] natively
+        "    for (let i = 0; i < symbols.length; i++) {\n" + // a loop bounded by keys.length reads keys[i] natively
         "        const hash = 'myTrades:' + keys[i];\n" +
         "        const key = keys[i];\n" +
         "    }\n" +
@@ -2755,7 +2755,7 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("IsGreaterThan(x, since)");
-        // hx4 G09: the int side widens to int64 the way the helper converts it
+        // the int side widens to int64 the way the helper converts it
         expect(output).toContain("(x != nil && *x > int64(n))");
     });
     test('an unguarded call operand keeps the helper', () => {
@@ -2782,16 +2782,16 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
         expect(output).toContain("return (GetLength(arr) > -1)");
         expect(output).not.toContain("IsGreaterThan(GetLength(arr), -1)");
     });
-    // hx4 G09
-    const g09Stubs =
+    // numeric kind widening in comparisons
+    const numericKindStubs =
         "    rateLimit: number = 2000;\n" +
         "    fetchHistoryCacheSize: number = 0;\n" +
         "    safeInteger(a, b, c = undefined) { return a; }\n" +
         "    safeFloat(a, b, c = undefined) { return a; }\n";
-    test('hx4 G09: mixed int/int64/float64 kinds widen the narrower side', () => {
+    test('mixed int/int64/float64 kinds widen the narrower side', () => {
         const input =
         "class Exchange {\n" +
-        g09Stubs +
+        numericKindStubs +
         "    f (arr, item) {\n" +
         "        const n = arr.length;\n" +
         "        const x = this.safeInteger (item, 'x');\n" +
@@ -2805,10 +2805,10 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
         expect(output).toContain("(*g > float64(n))");
         expect(output).not.toContain("IsGreaterThanOrEqual(n, x)");
     });
-    test('hx4 G09: float64 `<` against another kind keeps the helper; a length read widens', () => {
+    test('float64 `<` against another kind keeps the helper; a length read widens', () => {
         const input =
         "class Exchange {\n" +
-        g09Stubs +
+        numericKindStubs +
         "    f (arr, item) {\n" +
         "        const n = arr.length;\n" +
         "        const g = this.safeFloat (item, 'g');\n" +
@@ -2820,10 +2820,10 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
         expect(output).toContain("IsLessThan(g, n)");
         expect(output).toContain("(x == nil || int64(GetArrayLength(arr)) > *x)");
     });
-    test('hx4 G09: base value fields compare natively', () => {
+    test('base value fields compare natively', () => {
         const input =
         "class Exchange {\n" +
-        g09Stubs +
+        numericKindStubs +
         "    f () {\n" +
         "        return [ this.rateLimit > 0, this.fetchHistoryCacheSize > 0 ];\n" +
         "    }\n" +
@@ -2832,7 +2832,7 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
         expect(output).toContain("(this.RateLimit > 0)");
         expect(output).toContain("(this.FetchHistoryCacheSize > 0)");
     });
-    test('hx4 G09: a same-named field outside the base class keeps the helper', () => {
+    test('a same-named field outside the base class keeps the helper', () => {
         const input =
         "class Venue {\n" +
         "    rateLimit: number = 2000;\n" +
@@ -4460,7 +4460,7 @@ describe('gofmt binary expression spacing', () => {
         native = new Transpiler(config);
         // the Go printer routes `+ - * / %` through the numeric helpers
         // (Add/Subtract/Multiply/Divide/Mod); printing them natively exercises the
-        // gofmt spacing rule itself, which is what the campaign removes gofmt for
+        // gofmt spacing rule itself, which is why the output is gofmt-checked
         const goTranspiler: any = (native as any).goTranspiler;
         goTranspiler.binaryExpressionsWrappers = {};
         Object.assign(goTranspiler.SupportedKindNames, {
@@ -5681,7 +5681,7 @@ describe('go ToString -> the receiver when it is a declared string', () => {
         "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toContain('var n int = len(keys)');
-        // hx10w10 GP24: the helper's `case int` arm is Sprintf("%d"), i.e. Itoa
+        // the helper's `case int` arm is Sprintf("%d"), i.e. Itoa
         expect(output).toContain('return strconv.Itoa(n)');
         expect(output).toContain('import "strconv"');
     });
@@ -6187,7 +6187,7 @@ describe('native parameter types (B-02)', () => {
         expect(output).toContain('func (this *Test) ParseStatus(status any) <-chan any {');
     });
 
-    test('a method outside the parse* family with a proven caller prints *string (hx4 G11)', () => {
+    test('a method outside the parse* family with a proven caller prints *string', () => {
         const input = baseWithAccessors +
             "class Test extends Base {\n" +
             "    statusOf (status: string | undefined) {\n" +
@@ -6246,15 +6246,15 @@ describe('required string parameters of exchange-local methods', () => {
             "}\n";
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain('func (this *Test) CreateOrder(symbol any, typeVar any) any {');
-        // hx4 G11: a Str parameter every caller passes a literal is a Go string
+        // a Str parameter every caller passes a literal is a Go string
         expect(output).toContain('func (this *Test) A(x string) any {');
         expect(output).toContain('func (this *Test) B(x any) any {');
-        // hx4 G11: a SafeString caller proves the nil-guarded *string, never a bare string
+        // a SafeString caller proves the nil-guarded *string, never a bare string
         expect(output).toContain('func (this *Test) C(x *string) any {');
     });
 });
 
-describe('hx4 G11: required params of exchange-local methods typed from every caller', () => {
+describe('required params of exchange-local methods typed from every caller', () => {
     const base =
         "type Dict = { [key: string]: any };\n" +
         "type List = any[];\n" +
@@ -6284,7 +6284,7 @@ describe('hx4 G11: required params of exchange-local methods typed from every ca
         expect(output).not.toContain('GetArrayLength(items)');
     });
 
-    // hx10 GP14: the async arm types from its callers (aBody x string); the four proofs below
+    // the async arm types from its callers (aBody x string); the four proofs below
     // still keep the box of a sync method
     test('a ?? default, a nil test, a mixed caller or a GetArg-bound optional keeps the box', () => {
         const input = base +
@@ -6310,7 +6310,7 @@ describe('hx4 G11: required params of exchange-local methods typed from every ca
     });
 });
 
-describe('hx4 G13: numeric required params typed from every caller', () => {
+describe('numeric required params typed from every caller', () => {
     const base =
         "type Dict = { [key: string]: any };\n" +
         "type Int = number | undefined;\n" +
@@ -6339,7 +6339,7 @@ describe('hx4 G13: numeric required params typed from every caller', () => {
         expect(output).toContain('func (this *Test) Closest(limit *int64, step int64) any {');
     });
 
-    // hx10 GP14: the async arm types only the value type its call sites pass, so a `*int64`
+    // the async arm types only the value type its call sites pass, so a `*int64`
     // producer keeps the box too; mixed and any callers and a `??` default keep the box
     test('a mixed or any caller or a ?? default keeps the box', () => {
         const input = base +
@@ -6643,9 +6643,9 @@ describe('native parameter types, Dict/List (D-01)', () => {
         expect(output).toContain('func (this *Test) ParseFlag(flag any) any {');
     });
 
-    // hx10w9 GP13 scopes the typed array-literal rule to the slice table's own slots, so this
+    // the typed slice-argument rule scopes the typed array-literal rule to the slice table's own slots, so this
     // pre-existing negative case keeps its box: a venue-local string-list parameter is proved by
-    // slice-typed call-site values, never by the `[]any{..}` a bare literal used to print.
+    // slice-typed call-site values, never by a bare `[]any{..}` literal.
     test('a non-any element []-typed parameter keeps the box', () => {
         const input = baseWithAccessors +
             "class Test extends Base {\n" +
@@ -6809,10 +6809,10 @@ describe('native parameter types, Dict/List across the ts/src tree (D-01)', () =
 // (a slice literal, a `[]any`-returning accessor, the SafeList unbox) prints the guarded
 // native index instead of GetValue(x, key) — the guard reproduces the helper's answer for
 // an absent index (nil) while the native index cannot panic.
-describe('hx11 FM-GO1-B GP19: a list read bounded by its own counting loop is the plain index', () => {
-    // hx11 FOLD1 (hx10w9-GP19): the prediction tier takes the same rule; the build pass it replaces ran on prediction/*.go
+describe('a list read bounded by its own counting loop is the plain index', () => {
+    // the prediction tier (prediction/*.go) takes the same bounded-loop rule
     const predictionRead = (file: string): string => {
-        const dir = nodefs.mkdtempSync(nodepath.join(nodeos.tmpdir(), 'hx11-fold1-gp19-'));
+        const dir = nodefs.mkdtempSync(nodepath.join(nodeos.tmpdir(), 'a-list-read-bounded-by-'));
         try {
             const target = nodepath.join(dir, file);
             nodefs.mkdirSync(nodepath.dirname(target), { recursive: true });
@@ -6939,7 +6939,7 @@ describe('go GetValue(x, key) -> guarded native index on a declared []any', () =
         const output = transpile(ts);
         expect(output).toContain('var list []any = []any{}');
         expect(output).toContain('for i := 0; i < len(list); i++');
-        // hx11 FM-GO1-B: the loop bounds the read, so the guard closure is gone
+        // the loop bounds the read, so the guard closure is gone
         expect(output).toContain('var v any = list[i]');
         expect(output).not.toContain('func() any');
         expect(output).not.toContain('GetValue(list');
@@ -7165,9 +7165,9 @@ describe('pro handler frame parameters (D-03)', () => {
         expect(output).toContain('func (this *ex) HandleTicker(client any, message any) any {');
     });
 
-    test('the base stub override carries the dict frame (GP12 lifted the D8 pin)', () => {
-        // GP12 types the ws frame: the Go dispatch asserts the decoded object once, so an
-        // object-framed venue's override no longer prints the box
+    test('the base stub override carries the dict frame (typed ws frame)', () => {
+        // the ws frame is typed: the Go dispatch asserts the decoded object once, so an
+        // object-framed venue's override does not print the box
         const file = treeFor('tmp-d03-pro-tree-override',
             "export class ex extends Exchange {\n" +
             "    override handleMessage (client: Client, message: Dict) {\n" +
@@ -7324,7 +7324,7 @@ describe('unified string parameters (unifiedStringParams)', () => {
     });
 });
 
-describe('go nil-initialised string accumulators (GP16)', () => {
+describe('go nil-initialised string accumulators', () => {
     const run = (body: string) => new Transpiler({ verbose: false }).transpileGo(
         'type Str = string | undefined;\nclass T {\n    safeString (o, k, d?): Str { return o[k]; }\n    f (method = \'GET\', o): Str {\n' + body + '    }\n}\n').content;
     test('a nil-initialised accumulator whose writes are strings prints var x string', () => {
@@ -7402,7 +7402,7 @@ describe('go string locals rewritten by self-concatenation', () => {
     });
 });
 
-describe('go GetValue on GetArgMap-bound parameters (hx4 G01)', () => {
+describe('go GetValue on GetArgMap-bound parameters', () => {
     const run = (body: string) => {
         const inst = new Transpiler({ verbose: false });
         (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Dict': 'map[string]any' };
@@ -7422,7 +7422,7 @@ describe('go GetValue on GetArgMap-bound parameters (hx4 G01)', () => {
         const output = run("        params['w'] = this.safeString (params, 'q');\n        const a = params['x'];\n        return [ a, this.safeString (params, 'z') ];\n");
         expect(output).toContain('GetValue(params, "x")');
     });
-    test('RF-go-6-A: a bare read of a never-written (pointer-free) map parameter indexes natively', () => {
+    test('a bare read of a never-written (pointer-free) map parameter indexes natively', () => {
         const output = run("        const a = params['x'];\n        return [ a, this.safeString (params, 'z') ];\n");
         expect(output).toContain('var a any = params["x"]');
     });
@@ -7441,7 +7441,7 @@ describe('go GetValue on GetArgMap-bound parameters (hx4 G01)', () => {
         expect(output).toContain('GetValue(params, "x")');
     });
 });
-describe('hx10w6 G16: `key in dict` as a native two-value map read', () => {
+describe('`key in dict` as a native two-value map read', () => {
     const getArg = () => {
         const inst = new Transpiler({ verbose: false });
         (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Dict': 'map[string]any' };
@@ -7476,7 +7476,7 @@ describe('hx10w6 G16: `key in dict` as a native two-value map read', () => {
     });
 });
 
-describe('go GetValue on GetArgMap-bound parameters: element-write values (hx4 G01)', () => {
+describe('go GetValue on GetArgMap-bound parameters: element-write values', () => {
     test('the value of an element write keeps GetValue for the write pass', () => {
         const inst = new Transpiler({ verbose: false });
         (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Dict': 'map[string]any' };
@@ -7485,8 +7485,8 @@ describe('go GetValue on GetArgMap-bound parameters: element-write values (hx4 G
     });
 });
 
-describe('hx4 G02: IsEqual(x, nil) on any locals fed by base safeValue / ws caches', () => {
-    const root = nodepath.join(__dirname, 'files', 'tmp-hx4-g02', 'ts', 'src');
+describe('IsEqual(x, nil) on any locals fed by base safeValue / ws caches', () => {
+    const root = nodepath.join(__dirname, 'files', 'tmp-isequal-x-nil-on-any', 'ts', 'src');
     const BASE = "export class Exchange {\n" +
         "    options: any = {};\n" +
         "    safeValue (o: any, k: any, d: any = undefined): any { return d; }\n" +
@@ -7503,7 +7503,7 @@ describe('hx4 G02: IsEqual(x, nil) on any locals fed by base safeValue / ws cach
             "    f (p: any) {\n" + body + "        return 0;\n    }\n}\n");
         return new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
     };
-    afterAll(() => nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-hx4-g02'), { recursive: true, force: true }));
+    afterAll(() => nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-isequal-x-nil-on-any'), { recursive: true, force: true }));
 
     test('a base safeValue local compares natively', () => {
         const out = write("        const v = this.safeValue (p, 'a');\n        if (v === undefined) { return 1; }\n        if (v !== undefined) { return 2; }\n");
@@ -7553,8 +7553,8 @@ describe('hx4 G02: IsEqual(x, nil) on any locals fed by base safeValue / ws cach
     });
 });
 
-// hx4 G04: int/int64 widening and string-literal-union concat leaves
-describe('hx4 G04 go arithmetic residual', () => {
+// int/int64 widening and string-literal-union concat leaves
+describe('go int/int64 widening and literal-union concat', () => {
     const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
     test('int64 minus an int local widens the int side', () => {
         const input =
@@ -7636,7 +7636,7 @@ describe('hx4 G04 go arithmetic residual', () => {
     });
 });
 
-describe('hx4 G06 length / indexOf on proven non-nil *string', () => {
+describe('go length / indexOf on proven non-nil *string', () => {
     const sq = (s: string) => s.replace(/\s+/g, ' ');
     test('a narrowed *string length and indexOf deref natively', () => {
         const input =
@@ -7677,7 +7677,7 @@ describe('hx4 G06 length / indexOf on proven non-nil *string', () => {
     });
 });
 
-// hx4 G08
+// typed local reads
 describe('go string helpers on a *string narrowed to string literals', () => {
     test('a literal-union narrowed *string is dereferenced, a nilable or mixed one keeps the helper', () => {
         const input =
@@ -7714,8 +7714,8 @@ describe('go string helpers on a *string narrowed to string literals', () => {
     });
 });
 
-// hx4 X02: currency rows (Currency()/SafeCurrency() return CurrencyTyped rows) read bare
-describe('go GetValue on currency rows (hx4 X02)', () => {
+// currency rows (Currency()/SafeCurrency() return CurrencyTyped rows) read bare
+describe('go GetValue on currency rows', () => {
     const run = (body: string) => {
         const inst: any = new Transpiler({ verbose: false });
         const g = inst.goTranspiler;
@@ -7727,7 +7727,7 @@ describe('go GetValue on currency rows (hx4 X02)', () => {
                 return known;
             }
             const access = node.parent;
-            return ((access?.expression === node) && (this['g01' + 'ReadOk'](node, access) !== 'map[string]any')) ? undefined : 'map[string]any';
+            return ((access?.expression === node) && (this['goMapParam' + 'ReadOk'](node, access) !== 'map[string]any')) ? undefined : 'map[string]any';
         };
         return inst.transpileGo("interface CurrencyInterface { id: string; code: string; }\ntype Currency = CurrencyInterface | undefined;\n" +
             "class T {\n    currency (code: string): CurrencyInterface { return undefined; }\n    safeCurrency (id: string): CurrencyInterface { return undefined; }\n" +
@@ -7836,7 +7836,7 @@ describe('go container locals from the checker type', () => {
     });
 });
 
-describe('hx10 G06: typed tuple slots from the producer', () => {
+describe('typed tuple slots from the producer', () => {
     const run = (body: string) => new Transpiler({ verbose: false }).transpileGo(
         "type Dict = { [key: string]: any };\n" +
         "type Str = string | undefined;\n" +
@@ -7874,7 +7874,7 @@ describe('hx10 G06: typed tuple slots from the producer', () => {
     });
 });
 
-describe('hx10 G09: slice parameters typed from their array annotation', () => {
+describe('slice parameters typed from their array annotation', () => {
     const run = (body: string) => new Transpiler({ verbose: false }).transpileGo(
         "type Dict = { [key: string]: any };\n" +
         "class Base { ok (a: any): any { return a; } }\n" +
@@ -7910,7 +7910,7 @@ describe('hx10 G09: slice parameters typed from their array annotation', () => {
     });
 });
 
-describe('hx10 G10: `x := y` aliases carry the source local printed type', () => {
+describe('`x := y` aliases carry the source local printed type', () => {
     const run = (body: string) => new Transpiler({ verbose: false }).transpileGo(
         "type Dict = { [key: string]: any };\n" +
         "class Base { safeString (a: any, k: any, d: any = undefined): any { return d; } safeDict (a: any, k: any, d: any = undefined): any { return d; } }\n" +
@@ -7946,7 +7946,7 @@ describe('hx10 G10: `x := y` aliases carry the source local printed type', () =>
     });
 });
 
-describe('RFM-G4 G09: PredictionExchange cache fields declared map[string]any print natively', () => {
+describe('PredictionExchange cache fields declared map[string]any print natively', () => {
     const FIELDS = ['Outcomes', 'Outcomes_by_id', 'Events', 'Events_by_slug'];
     const HEAD =
         "type Dictionary<T> = { [key: string]: T };\n" +
@@ -8364,11 +8364,11 @@ describe('go JSON-origin list element reads', () => {
     });
 });
 
-describe('RF-go-6-A (FOLD2 GP26): element reads of map locals the printer types through an awaited receive', () => {
+describe('element reads of map locals the printer types through an awaited receive', () => {
     const fs = require('fs');
     const os = require('os');
     const path = require('path');
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gp26-'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'element-reads-of-map-locals-'));
     afterAll(() => {
         fs.rmSync(tmp, { 'recursive': true, 'force': true });
     });
@@ -8399,11 +8399,11 @@ describe('RF-go-6-A (FOLD2 GP26): element reads of map locals the printer types 
     });
 });
 
-describe('FOLD3 B02+GP17: the base pair twins bind natively at every call site', () => {
+describe('the base pair twins bind natively at every call site', () => {
     const fs = require('fs');
     const os = require('os');
     const path = require('path');
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fold3-'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'the-base-pair-twins-bind-'));
     afterAll(() => {
         fs.rmSync(tmp, { 'recursive': true, 'force': true });
     });
@@ -8454,7 +8454,7 @@ describe('FOLD3 B02+GP17: the base pair twins bind natively at every call site',
         const written = run("        const tagAndParams = this.handleParamString (params, 'tag');\n        tagAndParams[1] = {};\n        return tagAndParams[0];\n");
         expect(written).toContain('TupleSlice(this.HandleParamString(params, "tag"))');
     });
-    test('FOLD4: the params slot of a base handleOptionAndParams holder reads by index', () => {
+    test('the params slot of a base handleOptionAndParams holder reads by index', () => {
         const output = run("        const [ value, paramsOption1 ] = this.handleOptionAndParams (params, 'run', 'o1');\n        if (value !== undefined) {\n            const paramsOmitted = this.omit (paramsOption1, 'o2');\n            return [ value, paramsOmitted ];\n        }\n        return this.handleOptionAndParams (paramsOption1, 'run', 'o2');\n");
         expect(output).toContain('valueparamsOption1Variable[1]');
         expect(output).not.toContain('GetValue(valueparamsOption1Variable, 1)');
@@ -8468,7 +8468,7 @@ describe('FOLD3 B02+GP17: the base pair twins bind natively at every call site',
     });
 });
 
-describe ('a9jMarketsAccessorInOp', () => {
+describe ('goMarketsAccessorInOp', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
@@ -8512,7 +8512,7 @@ describe ('a9jMarketsAccessorInOp', () => {
     });
 });
 
-describe ('fmCache', () => {
+describe ('goWsCaches', () => {
     // FM-CACHE: the ws list caches. A BaseExchange field declared `ArrayCache` is the Go WsArrayCache field and
     // `Dictionary<ArrayCache>` the TradesCache; locals, closures and parameters that provably hold them are typed
     // WsArrayCache, `.append` on such a receiver is the plain interface method (the Appender assertion otherwise),
@@ -8786,9 +8786,9 @@ describe ('fmCache', () => {
     });
 });
 
-describe ('fmGo43MapRange', () => {
-    // FM-GO4-3: `const xs = Object.keys/values(m)` on a declared map[string]any prints the nil-preserving
-    // range collection (what ccxt's hx10w2-G06 text pass rewrote the helper call into).
+describe ('goMapKeysValuesRange', () => {
+    // `const xs = Object.keys/values(m)` on a declared map[string]any prints the nil-preserving
+    // range collection.
 
     let transpiler: Transpiler;
     beforeAll(() => {
@@ -8857,8 +8857,8 @@ describe ('fmGo43MapRange', () => {
     });
 });
 
-describe ('fmGo5G01', () => {
-    // FM-GO5 G01: the ws client's subscriptions table (a map owned by one goroutine) hands every operation to
+describe ('goClientSubscriptions', () => {
+    // the ws client's subscriptions table (a map owned by one goroutine) hands every operation to
     // the owner, keyed on the checker-resolved `Client.subscriptions` declaration (no regex over printed Go).
     const t = (install = true) => {
         const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
@@ -8901,7 +8901,7 @@ describe ('fmGo5G01', () => {
         '',
     ].join ('\n');
 
-    describe('FM-GO5 G01 client subscriptions hand-off', () => {
+    describe('go ws client subscriptions hand-off', () => {
         test('every access on Client.subscriptions calls the owner', () => {
             const out = t ().transpileGo (SRC).content;
             expect (out).toContain ('client.SubscriptionHas(h)');
@@ -8932,8 +8932,8 @@ describe ('fmGo5G01', () => {
     });
 });
 
-describe ('fmGo5G04', () => {
-    // FM-GO5 G04: nil tests of base fields and pointer-vs-negative-literal compares print native Go, keyed on the
+describe ('goTypedIsEqualNil', () => {
+    // nil tests of base fields and pointer-vs-negative-literal compares print native Go, keyed on the
     // checker-resolved declaration (no printed-text pass in ccxt).
     const t = (install = true) => {
         const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
@@ -8959,7 +8959,7 @@ describe ('fmGo5G04', () => {
         '',
     ].join ('\n');
 
-    describe('FM-GO5 G04 typed IsEqual nil / negative literal', () => {
+    describe('go typed IsEqual nil / negative literal', () => {
         test('base fields and *int64 locals compare natively', () => {
             const out = t ().transpileGo (SRC).content;
             expect (out).toContain ('if this.Features == nil {');
@@ -8981,8 +8981,8 @@ describe ('fmGo5G04', () => {
     });
 });
 
-describe ('fmGo5GP08', () => {
-    // FM-GO5 GP08: a first-result read of the base-class `(T, map[string]any)` tuple helpers binds natively; keyed on the
+describe ('goTupleFirstResultBinds', () => {
+    // a first-result read of the base-class `(T, map[string]any)` tuple helpers binds natively; keyed on the
     // checker-resolved declaring class (an override keeps the boxed read), no per-exchange name list in ccxt.
     const BASE = [
         'type Dict = { [key: string]: any };',
@@ -9040,7 +9040,7 @@ describe ('fmGo5GP08', () => {
         return out.slice (out.indexOf ('func (this *Ex)'));
     };
 
-    describe ('FM-GO5 GP08 tuple first-result binds', () => {
+    describe ('go tuple first-result binds', () => {
         test('direct and held first-result reads bind natively', () => {
             const out = print (SRC);
             expect (out).toContain ('typeVar, _ := this.HandleMarketTypeAndParams("fetchX", market, params)');
@@ -9068,8 +9068,8 @@ describe ('fmGo5GP08', () => {
     });
 });
 
-describe ('fmGo5OG02', () => {
-    // FM-GO5 OG02: request id / nonce counters and the last-response fields are owned by the request book; every rule is
+describe ('goRequestBook', () => {
+    // request id / nonce counters and the last-response fields are owned by the request book; every rule is
     // keyed on the checker-resolved declaration (a member of the base `BaseExchange` class), not on printed text.
     const t = (install = true) => {
         const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
@@ -9111,7 +9111,7 @@ describe ('fmGo5OG02', () => {
     const DIRECT = '    requestId (): number {\n        this.lockId ();\n        const requestId = this.sum (this.safeInteger (this.options, \'requestId\', 0), 1);\n        this.options[\'requestId\'] = requestId;\n        this.unlockId ();\n        return requestId;\n    }\n';
     const CHAINED = '    requestId (): number {\n        this.lockId ();\n        const previous = this.safeInteger (this.options, \'reqid\', 0);\n        const next = this.sum (previous, 1);\n        this.options[\'reqid\'] = next;\n        this.unlockId ();\n        return next;\n    }\n';
 
-    describe('FM-GO5 OG02 request book', () => {
+    describe('go request book', () => {
         test('a direct counter span hands the increment to the owner', () => {
             const out = t ().transpileGo (venue (DIRECT)).content;
             expect (out).toContain ('var requestId int64 = this.NextRequestId("requestId")');
@@ -9170,8 +9170,8 @@ describe ('fmGo5OG02', () => {
     });
 });
 
-describe ('fmgo4NonceInt64', () => {
-    // FM-GO4-1: Nonce () / IncrementingNonce () are int64 end to end (was ccxt build/hx11w8-nonce-int64.ts).
+describe ('goNonceInt64', () => {
+    // Nonce () / IncrementingNonce () are int64 end to end.
     // The rule is keyed on the checker: a method named nonce () of a class chain ending in BaseExchange.nonce
     // prints int64 when every return is a provable int64 operand; a local fed by nonce () is an int64.
 
@@ -9197,7 +9197,7 @@ describe ('fmgo4NonceInt64', () => {
     const go = (derived: string) => transpiler.transpileGo(BASE + 'class Venue extends BaseExchange {\n' + derived + '\n}\n').content;
     const venueNonce = (out: string) => out.substring(out.indexOf('func (this *Venue) Nonce()'));
 
-    describe('FM-GO4-1 nonce is int64', () => {
+    describe('go nonce is int64', () => {
         test('base nonce () prints int64', () => {
             expect(go('')).toContain('func (this *BaseExchange) Nonce() int64 {');
         });
@@ -9252,8 +9252,8 @@ describe ('fmgo4NonceInt64', () => {
     });
 });
 
-describe ('fold1GoWsCacheFields', () => {
-    // FOLD1 GOCACHE: element write, delete and `in` over the symbol-keyed ws map fields of BaseExchange
+describe ('goWsCacheFields', () => {
+    // element write, delete and `in` over the symbol-keyed ws map fields of BaseExchange
     const HEAD = 'type Dict = { [key: string]: any };\n'
         + 'class Exchange {\n'
         + '    ohlcvs: Dict = {};\n'
@@ -9266,7 +9266,7 @@ describe ('fold1GoWsCacheFields', () => {
         return t.transpileGo (HEAD + '    handle (message: Dict) {\n' + body + '\n    }\n}\n').content;
     };
 
-    describe('FOLD1 ws cache fields', () => {
+    describe('go ws cache fields', () => {
         test('a map literal store behind a nil test is a native store (fails on the base printer)', () => {
             const out = print ("const symbol = this.safeString (message, 's'); this.ohlcvs[symbol] = {};");
             expect (out).toContain ('if symbol != nil {\n\t\tthis.Ohlcvs[*symbol] = map[string]any{}\n\t}');
@@ -9305,9 +9305,9 @@ describe ('fold1GoWsCacheFields', () => {
     });
 });
 
-describe ('fold3G03PrintedMapLocals', () => {
+describe ('goPrintedMapLocalStores', () => {
     const installCcxtGoHooks = installCcxtGoHooks__fold3G03PrintedMapLocals;
-    // FOLD3 G03 (build/hx10w2-G03.ts folded): a native `m[k] = v` store on a map local the printer declares itself,
+    // a native `m[k] = v` store on a map local the printer declares itself,
     // behind the nil test the helper applied; `(k as string)` keys; Trade / TransferEntry rows boxed to their map;
     // the params slot of a base tuple helper.
     const BASE =
@@ -9342,7 +9342,7 @@ describe ('fold3G03PrintedMapLocals', () => {
     };
     const flat = (s: string) => s.replace(/\s+/g, ' ');
 
-    describe('FOLD3 G03: native stores on printed map locals', () => {
+    describe('native stores on printed map locals', () => {
         test('a no-default safeDict local: the store sits behind the nil test the helper applied', () => {
             const out = run(
                 '    f (orders: Dict, id: string, fee: Dict): any {\n' +
@@ -9439,8 +9439,8 @@ describe ('fold3G03PrintedMapLocals', () => {
     });
 });
 
-describe ('fold3OrderbooksCache', () => {
-    // FOLD3 hx11w9: BaseExchange.orderbooks is the typed OrderBookCache. Its reads, stores, membership tests and deletes
+describe ('goOrderbooksCache', () => {
+    // BaseExchange.orderbooks is the typed OrderBookCache. Its reads, stores, membership tests and deletes
     // print the cache's own methods, book locals are typed OrderBookInterface, and the member assertion is only printed on a box.
 
     const BOOK = {
@@ -9467,7 +9467,7 @@ describe ('fold3OrderbooksCache', () => {
         + '    safeInteger (o: any, k: string): number | undefined { return o[k]; }\n';
 
     const print = (body: string, book: any = BOOK): string => {
-        const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'fold3ob-'));
+        const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'goorderbookscache-'));
         try {
             fs.mkdirSync (path.join (dir, 'ts', 'src', 'base'), { 'recursive': true });
             fs.mkdirSync (path.join (dir, 'ts', 'src', 'pro'), { 'recursive': true });
@@ -9565,7 +9565,7 @@ describe ('fold3OrderbooksCache', () => {
         });
     });
 
-    describe('FOLD3 hx11w9 order book cache', () => {
+    describe('go order book cache', () => {
         test('cache reads, stores, membership and deletes print the cache methods (fails on the base printer)', () => {
             const out = print (HANDLER);
             expect (out).toContain ('if !(this.Orderbooks[symbol.(string)] != nil) {');
@@ -9612,8 +9612,8 @@ describe ('fold3OrderbooksCache', () => {
     });
 });
 
-describe ('fold4Go05OhlcvsBook', () => {
-    // FOLD3 G05: the ws ohlcv book. `this.ohlcvs` is BaseExchange's Dictionary<Dictionary<ArrayCacheByTimestamp>> (Go: one
+describe ('goOhlcvsBook', () => {
+    // the ws ohlcv book. `this.ohlcvs` is BaseExchange's Dictionary<Dictionary<ArrayCacheByTimestamp>> (Go: one
     // map[string]map[string]any), so every helper call around a book is the native map operation behind the nil tests the helper applied.
     const HEAD = 'type Dict = { [key: string]: any };\ntype Str = string | undefined;\n'
         + 'class ArrayCacheByTimestamp { constructor (limit: any) {} append (x: any) {} }\n'
@@ -9631,7 +9631,7 @@ describe ('fold4Go05OhlcvsBook', () => {
     };
     // the book-local rule keys on the source tree (rf6aSourceKind: ts/src/pro), so it reads a real file
     const printPro = (body: string): string => {
-        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'fold3-G05-'));
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'goohlcvsbook-'));
         try {
             const dir = path.join (tmp, 'ts', 'src', 'pro');
             fs.mkdirSync (dir, { recursive: true });
@@ -9655,7 +9655,7 @@ describe ('fold4Go05OhlcvsBook', () => {
         '}',
     ].join ('\n');
 
-    describe('FOLD3 G05 ohlcv book', () => {
+    describe('go ohlcv book', () => {
         test('ensure, entry read and entry write are native behind the nil tests (fail on the base printer)', () => {
             const out = print (HANDLER);  // plain `*string` keys, so every test is spelled out
             expect (out).toContain ('if symbol != nil && this.Ohlcvs[*symbol] == nil {\n\t\tthis.Ohlcvs[*symbol] = map[string]any{}\n\t}');
@@ -9717,7 +9717,7 @@ describe ('fold4Go05OhlcvsBook', () => {
             const out = print ("this.ohlcvs[message['s']][message['t']] = new ArrayCacheByTimestamp (10);");
             expect (out).toContain ('AddElementToObject(');
         });
-        test('FOLD4: an any-typed cache key stores through the typed book slot, not GetValue of the field', () => {
+        test('an any-typed cache key stores through the typed book slot, not GetValue of the field', () => {
             const out = print ([
                 "const symbol = this.safeString (message, 's');",
                 "const timeframe = this.safeString (message, 't', '');",
@@ -9733,17 +9733,17 @@ describe ('fold4Go05OhlcvsBook', () => {
             expect (out).toContain ('AddElementToObject(this.Ohlcvs[*symbol], cacheKey, stored)');
             expect (out).not.toContain ('GetValue(');
         });
-        test('FOLD4: a nil symbol key keeps the no-op behind a nil test', () => {
+        test('a nil symbol key keeps the no-op behind a nil test', () => {
             const out = print ("const symbol = this.safeString (message, 's'); const key: any = message['k']; this.ohlcvs[symbol][key] = new ArrayCacheByTimestamp (10);");
             expect (out).toContain ('if symbol != nil {');
             expect (out).not.toContain ('GetValue(this.Ohlcvs');
         });
-        test('FOLD4: delete of an entry whose key is asserted a string is the native delete', () => {
+        test('delete of an entry whose key is asserted a string is the native delete', () => {
             const out = print ("const symbol = this.safeString (message, 's', ''); const timeframe = this.safeString (message, 't'); if (symbol in this.ohlcvs) { delete this.ohlcvs[symbol][(timeframe as string)]; }");
             expect (out).toContain ('delete(this.Ohlcvs[symbol], *timeframe)');
             expect (out).not.toContain ('Remove(');
         });
-        test('FOLD4: delete of an entry whose key may be nil keeps the helper', () => {
+        test('delete of an entry whose key may be nil keeps the helper', () => {
             const out = print ("const symbol = this.safeString (message, 's', ''); const timeframe = this.safeString (message, 't'); delete this.ohlcvs[symbol][timeframe];");
             expect (out).toContain ('Remove(');
         });
@@ -9755,7 +9755,7 @@ describe ('fold4Go05OhlcvsBook', () => {
     });
 });
 
-describe ('g02MarketParams', () => {
+describe ('goRequiredMarketParams', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
@@ -9773,7 +9773,7 @@ describe ('g02MarketParams', () => {
         'type Str = string | undefined;\n' +
         'class Base {}\n';
 
-    describe('hx10 G02 required market parameters', () => {
+    describe('go required market parameters', () => {
         test('an untyped market parameter whose callers all pass the accessor row prints the map', () => {
             const ts = PRELUDE +
                 'class Test extends Base {\n' +
@@ -9882,7 +9882,7 @@ describe ('goArrayLengthLocalSinks', () => {
 
     const transpile = (ts: string) => transpiler.transpileGo(ts).content;
 
-    // hx10w6 G08: GetArrayLength(x) -> len(x) on a local the printer itself declares as a slice.
+    // GetArrayLength(x) -> len(x) on a local the printer itself declares as a slice.
     // The declaration only takes []any when every later use reads the list the member already was;
     // a nil test, an any-parameter helper and a copy into another any/[]any local all qualify.
     describe('go .length on a list local from safeList', () => {
@@ -10077,7 +10077,7 @@ describe ('goMarketTableFields', () => {
     });
 });
 
-describe ('gp01MapWriteOnProvenLocal', () => {
+describe ('goMapWriteOnProvenLocal', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
@@ -10104,7 +10104,7 @@ describe ('gp01MapWriteOnProvenLocal', () => {
     const SAFE = '    safeString (a: any, b: any): string { return ""; }\n' +
         '    safeDict (a: any, b: any): any { return a; }\n';
 
-    describe('hx10 GP01 native map writes on proven locals', () => {
+    describe('go native map writes on proven locals', () => {
         test('a Dict parameter with a {} default is the GetArgMap map: a literal key is a plain store', () => {
             const out = go(cls('    make (symbol: string, cost: number, params: Dict = {}): any {\n' +
                 "        params['quoteOrderQty'] = cost;\n" +
@@ -10248,7 +10248,7 @@ describe ('gp01MapWriteOnProvenLocal', () => {
     });
 });
 
-describe ('gp07NilInitPointer', () => {
+describe ('goNilInitPointer', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
@@ -10266,7 +10266,7 @@ describe ('gp07NilInitPointer', () => {
         'type Bool = boolean | undefined;\n' +
         'class Base {}\n';
 
-    describe('hx10w8 GP07 nil-initialised locals', () => {
+    describe('go nil-initialised locals', () => {
         test('a Str local the body only writes one accessor into holds that pointer', () => {
             const ts = PRELUDE +
                 'class Test extends Base {\n' +
@@ -10397,8 +10397,8 @@ describe ('gp07NilInitPointer', () => {
     });
 });
 
-describe ('gp12wsframe', () => {
-    // hx10 GP12: the ws frame parameter of `override handleMessage (client, message: Dict)`.
+describe ('goWsFrameParam', () => {
+    // the ws frame parameter of `override handleMessage (client, message: Dict)`.
     // The frame is only provable with the real ts/src tree: the Go ws dispatch asserts the decoded
     // object once, and a handler the frame is passed to inherits the type through its call site.
     const BASE_FIXTURE =
@@ -10435,15 +10435,15 @@ describe ('gp12wsframe', () => {
     afterAll (() => {
         const dir = nodepath.join (__dirname, 'files');
         for (const entry of nodefs.readdirSync (dir)) {
-            if (entry.startsWith ('tmp-gp12-')) {
+            if (entry.startsWith ('tmp-gowsframeparam-')) {
                 nodefs.rmSync (nodepath.join (dir, entry), { recursive: true, force: true });
             }
         }
     });
 
-    describe ('hx10 GP12 ws frame parameter', () => {
+    describe ('go ws frame parameter', () => {
         test ('a Dict-annotated override frame prints map[string]any and its reads go native', () => {
-            const output = goPath ('tmp-gp12-frame',
+            const output = goPath ('tmp-gowsframeparam-frame',
                 "export class ex extends Exchange {\n" +
                 "    override handleMessage (client: Client, message: Dict) {\n" +
                 "        const event = message['e'];\n" +
@@ -10456,7 +10456,7 @@ describe ('gp12wsframe', () => {
         });
 
         test ('a handler the frame is passed to inherits the map type', () => {
-            const output = goPath ('tmp-gp12-chain',
+            const output = goPath ('tmp-gowsframeparam-chain',
                 "export class ex extends Exchange {\n" +
                 "    handleOrderBook (client: Client, message: Dict) {\n" +
                 "        return message['asks'];\n" +
@@ -10473,7 +10473,7 @@ describe ('gp12wsframe', () => {
         });
 
         test ('an any-annotated override frame keeps the box', () => {
-            const output = goPath ('tmp-gp12-any',
+            const output = goPath ('tmp-gowsframeparam-any',
                 "export class ex extends Exchange {\n" +
                 "    override handleMessage (client: Client, message: any) {\n" +
                 "        return this.safeValue (message, 'event');\n" +
@@ -10484,7 +10484,7 @@ describe ('gp12wsframe', () => {
         });
 
         test ('an array-framed venue keeps the box even with the Dict annotation', () => {
-            const output = goPath ('tmp-gp12-array',
+            const output = goPath ('tmp-gowsframeparam-array',
                 "export class Phemex extends Exchange {\n" +
                 "    override handleMessage (client: Client, message: Dict) {\n" +
                 "        return this.safeValue (message, 'event');\n" +
@@ -10495,7 +10495,7 @@ describe ('gp12wsframe', () => {
         });
 
         test ('a frame the body reassigns to another type keeps the box', () => {
-            const output = goPath ('tmp-gp12-write',
+            const output = goPath ('tmp-gowsframeparam-write',
                 "export class ex extends Exchange {\n" +
                 "    override handleMessage (client: Client, message: Dict) {\n" +
                 "        message = 'text';\n" +
@@ -10506,7 +10506,7 @@ describe ('gp12wsframe', () => {
         });
 
         test ('a nil test on the frame compares the map natively', () => {
-            const output = goPath ('tmp-gp12-nil',
+            const output = goPath ('tmp-gowsframeparam-nil',
                 "export class ex extends Exchange {\n" +
                 "    override handleMessage (client: Client, message: Dict) {\n" +
                 "        if (message === undefined) {\n" +
@@ -10520,7 +10520,7 @@ describe ('gp12wsframe', () => {
         });
 
         test ('an in-read inside an if condition prints the native init clause', () => {
-            const output = goPath ('tmp-gp12-inop-if',
+            const output = goPath ('tmp-gowsframeparam-inop-if',
                 "export class ex extends Exchange {\n" +
                 "    override handleMessage (client: Client, message: Dict) {\n" +
                 "        if (('result' in message) && (message['id'] !== undefined)) {\n" +
@@ -10534,7 +10534,7 @@ describe ('gp12wsframe', () => {
         });
 
         test ('an in-read outside an if condition keeps the box (no closure body)', () => {
-            const output = goPath ('tmp-gp12-inop-value',
+            const output = goPath ('tmp-gowsframeparam-inop-value',
                 "export class ex extends Exchange {\n" +
                 "    override handleMessage (client: Client, message: Dict) {\n" +
                 "        const hasResult = 'result' in message;\n" +
@@ -10545,7 +10545,7 @@ describe ('gp12wsframe', () => {
         });
 
         test ('a non-handleMessage override keeps the box', () => {
-            const output = goPath ('tmp-gp12-other',
+            const output = goPath ('tmp-gowsframeparam-other',
                 "export class ex extends Exchange {\n" +
                 "    override onMessage (client: Client, message: Dict) {\n" +
                 "        return this.safeValue (message, 'event');\n" +
@@ -10560,7 +10560,7 @@ describe ('gp12wsframe', () => {
     });
 });
 
-describe ('gp15NilProvenStringArg', () => {
+describe ('goNilProvenStringArg', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
@@ -10577,7 +10577,7 @@ describe ('gp15NilProvenStringArg', () => {
         '    safeString (a: any, b: any, c?: string): Str { return undefined; }\n' +
         '}\n';
 
-    describe('hx10 GP15 *string argument into a venue string parameter', () => {
+    describe('go *string argument into a venue string parameter', () => {
         test('a dominating guard dereferences the pointer and the parameter prints string', () => {
             const ts = PRELUDE +
                 'class Test extends Base {\n' +
@@ -10739,14 +10739,14 @@ describe ('gp15NilProvenStringArg', () => {
 
         afterAll(() => {
             for (const entry of nodefs.readdirSync(nodepath.join(__dirname, 'files'))) {
-                if (entry.startsWith('tmp-gp15-')) {
+                if (entry.startsWith('tmp-derefStringArg-')) {
                     nodefs.rmSync(nodepath.join(__dirname, 'files', entry), { recursive: true, force: true });
                 }
             }
         });
 
         test('a Safe* accessor with a non-nil default dereferences in place', () => {
-            const file = treeFor('tmp-gp15-default',
+            const file = treeFor('tmp-derefStringArg-default',
                 "export class ex extends Exchange {\n" +
                 "    main (message: Dict) {\n" +
                 "        this.cleanFlag (this.safeString (message, 'id', ''));\n" +
@@ -10761,7 +10761,7 @@ describe ('gp15NilProvenStringArg', () => {
         });
 
         test('a pro handle* method types its string parameter, the frame keeps its box', () => {
-            const file = treeFor('tmp-gp15-pro',
+            const file = treeFor('tmp-derefStringArg-pro',
                 "export class ex extends Exchange {\n" +
                 "    handleUnsubscription (client: Client, message: Dict) {\n" +
                 "        const messageHash = this.safeString (message, 'messageHash');\n" +
@@ -10780,7 +10780,7 @@ describe ('gp15NilProvenStringArg', () => {
         });
 
         test('a pro handle* Str parameter takes the pointer when the body nil-tests it', () => {
-            const file = treeFor('tmp-gp15-pro-str',
+            const file = treeFor('tmp-derefStringArg-pro-str',
                 "type Str = string | undefined;\n" +
                 "export class ex extends Exchange {\n" +
                 "    handleUnsubscription (client: Client, message: Dict) {\n" +
@@ -10803,7 +10803,7 @@ describe ('gp15NilProvenStringArg', () => {
         });
 
         test('a pro handle* string parameter the body never nil-tests keeps the box', () => {
-            const file = treeFor('tmp-gp15-pro-unguarded',
+            const file = treeFor('tmp-derefStringArg-pro-unguarded',
                 "export class ex extends Exchange {\n" +
                 "    handleUnsubscription (client: Client, message: Dict) {\n" +
                 "        this.handleUnsubscriptionCache (this.safeString (message, 'symbol'));\n" +
@@ -10819,11 +10819,11 @@ describe ('gp15NilProvenStringArg', () => {
     });
 });
 
-describe ('hx10w10GP24', () => {
-    const fs = fs__hx10w10GP24;
-    const os = os__hx10w10GP24;
-    const path = path__hx10w10GP24;
-    // hx10w10 GP24: `x.toString()` prints the native op when the receiver's Go type is one the
+describe ('goToStringNativeArms', () => {
+    const fs = fs__goToStringNativeArms;
+    const os = os__goToStringNativeArms;
+    const path = path__goToStringNativeArms;
+    // `x.toString()` prints the native op when the receiver's Go type is one the
     // helper reproduces exactly — int (Itoa), int64 and a non-nil `*int64` (FormatInt), bool
     // (FormatBool), []string (bracket-join) — and the helper call otherwise. The generated
     // base-class files take the same arms only once a writer installs the stdlib import seam.
@@ -10843,7 +10843,7 @@ describe ('hx10w10GP24', () => {
         return new Transpiler(config()).transpileGo(ts).content;
     }
 
-    describe('hx10w10 GP24 printToStringCall native arms', () => {
+    describe('go printToStringCall native arms', () => {
         test('an int local prints strconv.Itoa', () => {
             const out = go(
                 '    run (a: any): string {\n' +
@@ -10932,7 +10932,7 @@ describe ('hx10w10GP24', () => {
         // The base-class writers splice the transpiled body into a file they assemble themselves,
         // so the printer may only emit a stdlib call there once that writer declares the import.
         test('a generated base file emits the native arm only under the import seam', () => {
-            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10w10-GP24-'));
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'a-generated-base-file-emits-'));
             try {
                 const src = path.join(tmp, 'ts', 'src');
                 fs.mkdirSync(path.join(src, 'base'), { recursive: true });
@@ -10960,7 +10960,7 @@ describe ('hx10w10GP24', () => {
 
         // the seam is a path predicate: a sliced writer's source (the ws cache tests) keeps the helper
         test('a source outside the seam paths keeps the helper', () => {
-            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10w10-GP24-cache-'));
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'a-generated-base-file-emits-cache-'));
             try {
                 const src = path.join(tmp, 'ts', 'src');
                 fs.mkdirSync(path.join(src, 'base'), { recursive: true });
@@ -10984,10 +10984,10 @@ describe ('hx10w10GP24', () => {
         });
     });
 
-    // hx11 RFM-G1 GP24: the printer answers which stdlib packages a file's native emissions call, so a
+    // the printer answers which stdlib packages a file's native emissions call, so a
     // writer that splices the printed body into a file it assembles declares exactly those
     // (ITranspiledFile.stdlibImports), and a span the writer cuts out never records an import.
-    describe('hx11 GP24 stdlib imports the printer recorded', () => {
+    describe('go stdlib imports the printer recorded', () => {
         const SRC =
             'type Dict = { [key: string]: any };\n' +
             'export class Exchange {\n' +
@@ -11005,7 +11005,7 @@ describe ('hx10w10GP24', () => {
             '    }\n' +
             '}\n';
         const run = (config: any) => {
-            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx11-GP24-'));
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'go-stdlib-imports-the-printer-'));
             try {
                 const src = path.join(tmp, 'ts', 'src', 'base');
                 fs.mkdirSync(src, { recursive: true });
@@ -11041,8 +11041,8 @@ describe ('hx10w10GP24', () => {
     });
 });
 
-describe ('hx10w2G08TupleSlots', () => {
-    // hx10w2 G08 (was ccxt build/hx10w2-G08.js): a destructured tuple slot reads natively when the
+describe ('goTupleSlotReads', () => {
+    // a destructured tuple slot reads natively when the
     // producer's own `return [ .. ]` paths prove what the slot holds.
 
     const BASE = 'type Dict = any; type Bool = boolean | undefined;\n'
@@ -11075,7 +11075,7 @@ describe ('hx10w2G08TupleSlots', () => {
         + '        return [ po, paramsPo ];\n'
         + '    }\n';
 
-    describe('hx10w2 G08 tuple slot reads', () => {
+    describe('go tuple slot reads', () => {
         test('a plain bool slot and a map slot read natively', () => {
             const out = go (USE);
             expect (out).toContain ('po := poparamsPoVariable[0]');
@@ -11102,7 +11102,7 @@ describe ('hx10w2G08TupleSlots', () => {
     });
 });
 
-describe ('hx10w8GP09', () => {
+describe ('goRedundantMapTyped', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
@@ -11130,7 +11130,7 @@ describe ('hx10w8GP09', () => {
         '    }\n' +
         '}\n';
 
-    describe('hx10w8 GP09 redundant MapTyped on an overloaded base producer', () => {
+    describe('go redundant MapTyped on an overloaded base producer', () => {
         test('a table-named base producer types the caller local without MapTyped', () => {
             const ts = PRELUDE +
                 'class Test extends Base {\n' +
@@ -11189,11 +11189,11 @@ describe ('hx10w8GP09', () => {
     });
 });
 
-describe ('hx10w9GP13', () => {
-    const fs = fs__hx10w9GP13;
-    const os = os__hx10w9GP13;
-    const path = path__hx10w9GP13;
-    // hx10w9 GP13: typed array-literal call arguments plus the slice mirror of the string table.
+describe ('goTypedSliceArgs', () => {
+    const fs = fs__goTypedSliceArgs;
+    const os = os__goTypedSliceArgs;
+    const path = path__goTypedSliceArgs;
+    // typed array-literal call arguments plus the slice mirror of the string table.
     // `[ sym ]` at a `string[]` slot must print `[]string{sym}` (and `len(symbols)` for its length)
     // instead of a `[]any{...}` box, and the table may only type a method whose declarations and
     // call sites all agree — every other shape keeps the box.
@@ -11233,7 +11233,7 @@ describe ('hx10w9GP13', () => {
         return transpiler.transpileGo(ts).content;
     }
 
-    describe('hx10w9 GP13 typed slice arguments and the slice table', () => {
+    describe('go typed slice arguments and the slice table', () => {
         test('a proven literal at a table slot prints the slice and the native length', () => {
             const ts = PRELUDE +
                 'class ex extends Exchange {\n' +
@@ -11334,7 +11334,7 @@ describe ('hx10w9GP13', () => {
         });
 
         test('the sibling-file proof types the base and prints the caller literal', () => {
-            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10-GP13-'));
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'the-sibling-file-proof-types-'));
             try {
                 const src = path.join(tmp, 'ts', 'src');
                 fs.mkdirSync(path.join(src, 'base'), { recursive: true });
@@ -11364,7 +11364,7 @@ describe ('hx10w9GP13', () => {
         });
 
         test('a Str argument keeps the base boxed even when the file names a string parameter', () => {
-            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10-GP13-str-'));
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'the-sibling-file-proof-types-str-'));
             try {
                 const src = path.join(tmp, 'ts', 'src');
                 fs.mkdirSync(path.join(src, 'base'), { recursive: true });
@@ -11399,7 +11399,7 @@ describe ('hx10w9GP13', () => {
         });
 
         test('a defaulted string parameter proves its element', () => {
-            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10-GP13-def-'));
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'the-sibling-file-proof-types-def-'));
             try {
                 const src = path.join(tmp, 'ts', 'src');
                 fs.mkdirSync(path.join(src, 'base'), { recursive: true });
@@ -11430,7 +11430,7 @@ describe ('hx10w9GP13', () => {
     });
 });
 
-describe ('hx10w9GP14', () => {
+describe ('goAsyncVenueParams', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
@@ -11453,7 +11453,7 @@ describe ('hx10w9GP14', () => {
         'type Str = string | undefined;\n' +
         'class Base {}\n';
 
-    describe('hx10 GP14 async venue-only parameters', () => {
+    describe('go async venue-only parameters', () => {
         test('an untyped parameter whose every caller passes the market row prints the map in both halves', () => {
             const ts = PRELUDE +
                 'class Test extends Base {\n' +
@@ -11599,7 +11599,7 @@ describe ('hx10w9GP14', () => {
         });
     });
 
-    describe('hx10 GP14 wrapper records', () => {
+    describe('go wrapper records', () => {
         // the generated public wrapper is built from these records (ccxt createWrapper), so a
         // positional parameter has to carry the type its core prints
         const record = (out: any, name: string): any => (out.methodsTypes ?? []).find((m: any) => m.name === name);
@@ -11643,8 +11643,8 @@ describe ('hx10w9GP14', () => {
     });
 });
 
-describe ('hx11GoHooks', () => {
-    // hx11 ast-move (Go): ccxt's Go printer hooks now live in src/go and are installed from the package entry.
+describe ('goPrinterHooks', () => {
+    // ccxt's Go printer hooks live in src/go and are installed from the package entry.
 
     const SIGN = 'type Dict = { [key: string]: any };\n'
         + 'class Exchange {\n'
@@ -11664,7 +11664,7 @@ describe ('hx11GoHooks', () => {
         return t.transpileGo (source).content;
     };
 
-    describe('hx11 go hooks (moved from ccxt build/)', () => {
+    describe('go printer hooks installed from the package entry', () => {
         test('sign typing: api binds as []string and api[0] indexes natively (fails on the base printer)', () => {
             const base = print (false);
             const hooked = print (true);
@@ -11686,14 +11686,14 @@ describe ('hx11GoHooks', () => {
             expect (t.transpileGo (SIGN).content).toContain ('api[0]');
         });
         test.each ([
-            [ 'G06', hx10G06Check ], [ 'G08', g08w3Check ], [ 'GB01', hx10w8GB01Check ],
-            [ 'GB05', hx10w8GB05Check ], [ 'GB11', hx10w9GB11Check ],
+            [ 'G06', goNilJoinTypeSelfTest ], [ 'G08', goDynamicCallParamsCheck ], [ 'GB01', goDictParamTypesSelfTest ],
+            [ 'GB05', goParseFrameParamTypesSelfTest ], [ 'GB11', goHandleErrorsCodeSelfTest ],
         ])('%s self-check (base vs hooked printer) reports no problems', (_name, check) => {
             expect ((check as () => string[]) ()).toEqual ([]);
         });
     });
 
-    describe('hx11 w8 unifiedBoolParams', () => {
+    describe('go unifiedBoolParams', () => {
         const SRC = 'class Exchange {\n    setMode (hedged: boolean, symbol: string = undefined): any {\n        if (hedged) { return 1; }\n        return 2;\n    }\n}\n';
         const print = (table: any): string => new Transpiler ({ 'verbose': false, 'go': { 'unifiedBoolParams': table, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo (SRC).content;
         test('a tabled required boolean param prints bool and a native if', () => {
@@ -11707,8 +11707,8 @@ describe ('hx11GoHooks', () => {
     });
 });
 
-describe ('hx11RFgo7', () => {
-    // hx11 RF-go-7: createOrders `[]any` slot, Client.url / bound-parameter call-site proofs, uncalled-method table.
+describe ('goGeneralParamRules', () => {
+    // createOrders `[]any` slot, Client.url / bound-parameter call-site proofs, uncalled-method table.
 
     const PRELUDE =
         'type Dict = { [key: string]: any };\n' +
@@ -11726,7 +11726,7 @@ describe ('hx11RFgo7', () => {
     const config = (go: any) => ({ 'verbose': false, 'go': Object.assign({ 'parser': { 'NUM_LINES_END_FILE': 0 } }, go) });
     const go = (ts: string, extra: any = {}) => new Transpiler(config(extra)).transpileGo(ts).content;
 
-    describe('hx11 RF-go-7 general parameter rules', () => {
+    describe('go general parameter rules', () => {
         test('a table-listed []any slot prints orders []any and the native length', () => {
             const out = go(PRELUDE, { 'unifiedSliceParams': { 'createOrders': { 0: '[]any' } } });
             expect(out).toContain('orders []any');
@@ -11778,8 +11778,8 @@ describe ('hx11RFgo7', () => {
     });
 });
 
-describe ('hx11StringCallPointerLocal', () => {
-    // hx11 RFM-X4 JSONSTR (moved from ccxt build/hx11w8-json-string.ts): a `this.<m>(..)` call whose checker
+describe ('goStringCallPointerLocal', () => {
+    // a `this.<m>(..)` call whose checker
     // type is exactly TS `string` and whose Go signature returns `string` is not boxed with SafeStringPtr
     // when it is stored in a *string slot; its value is kept in a typed local and the pointer takes the
     // local's address (`jsonText := this.Json(x)` + `name = &jsonText`).
@@ -11798,7 +11798,7 @@ describe ('hx11StringCallPointerLocal', () => {
         return t.transpileGo (PRELUDE + 'class Foo extends Exchange {\n' + body + '}\n').content;
     };
 
-    describe('hx11 string-returning call stored in a *string slot', () => {
+    describe('go string-returning call stored in a *string slot', () => {
         test('statement assignment keeps the string in a typed local (fails on the boxed form)', () => {
             const out = print (
                 '    sign (params: Dict, method: string): any {\n'
@@ -11884,7 +11884,7 @@ describe ('hx11StringCallPointerLocal', () => {
     });
 });
 
-describe ('hx11fold1FG07', () => {
+describe ('goPointerHelperTupleSlots', () => {
     const PRELUDE = 'type Dict = { [key: string]: any };\n'
         + 'type Str = string | undefined;\ntype Int = number | undefined;\ntype Bool = boolean | undefined;\n'
         + 'class Base {\n'
@@ -11907,7 +11907,7 @@ describe ('hx11fold1FG07', () => {
 
     const TAG = "        const [ tag, paramsTag ] = this.handleParamString (params, 'tag');\n";
 
-    describe('hx11 fold 1F G07: tuple slot 0 of the pointer helpers is the typed pointer', () => {
+    describe('tuple slot 0 of the pointer helpers is the typed pointer', () => {
         test('nil test, guarded map store, literal compare and a deref-ing callee keep the pointer', () => {
             const out = fn(TAG, "        this.checkAddress (address, 'c', tag);\n        if (tag !== undefined) {\n            request['memo'] = tag;\n        }\n        if (tag === 'x') {\n            request['y'] = 1;\n        }\n");
             expect(out).toContain('var tag *string = SafeStringPtr(tagparamsTagVariable[0])');
@@ -11968,7 +11968,7 @@ describe ('hx11fold1FG07', () => {
         });
     });
 
-    describe('hx11 fold 1F G07: option helpers keep the typed assertion read', () => {
+    describe('option helpers keep the typed assertion read', () => {
         test('a variable default selects the Nullable twin: the slot reads through the typed assertion', () => {
             const out = fn("        const dflt = true;\n        const [ stock, paramsStock ] = this.handleOptionBoolAndParams (params, 'f', 'stock', dflt);\n",
                 "        if (stock === true) {\n            request['s'] = 1;\n        }\n");
@@ -11977,7 +11977,7 @@ describe ('hx11fold1FG07', () => {
         });
     });
 
-    describe('hx11 fold 1F G07: tabled integer option slots', () => {
+    describe('tabled integer option slots', () => {
         const decl = "        const [ calls, paramsCalls ] = this.handleOptionIntegerAndParams (params, 'f', 'calls', address);\n";
         const uses = "        const n = this.other (calls);\n        request['n'] = this.checkAddress (calls);\n";
         test('a slot the embedder tables as *int64 is the pointer when a deref-ing callee reads it', () => {
@@ -11995,7 +11995,7 @@ describe ('hx11fold1FG07', () => {
     });
 });
 
-describe ('hx11fold1FG15OptionDicts', () => {
+describe ('goOptionDictReceivers', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
@@ -12019,7 +12019,7 @@ describe ('hx11fold1FG15OptionDicts', () => {
         return output.replace(/\s+/g, ' ');
     }
 
-    describe('hx11 fold 1F G15: option dict field receivers', () => {
+    describe('go option dict field receivers', () => {
         test('a string-typed key stores natively behind the nil-map guard', () => {
             const out = go(cls('    a (marketType: string = "margin") {\n' +
                 '        const options = this.safeDict (this.options, marketType, {});\n' +
@@ -12064,8 +12064,8 @@ describe ('hx11fold1FG15OptionDicts', () => {
     });
 });
 
-describe ('hx11fold2WT01TickerRow', () => {
-    // hx11 FOLD2 WT01 (folded from ccxt build/hx11w8-WT01.ts): `const tickers = await this.watchTickers ([ k ]); return tickers[k]`
+describe ('goWatchTickersRow', () => {
+    // `const tickers = await this.watchTickers ([ k ]); return tickers[k]`
     // in an async method answering Promise<Ticker> reads one row of the typed `map[string]Ticker`, keyed on the checker
     // (the awaited method is tabled as a ticker-map channel; no printed-text pass in ccxt).
     const SRC = (body: string, params = 'symbol: string, params = {}') => [
@@ -12088,7 +12088,7 @@ describe ('hx11fold2WT01TickerRow', () => {
     };
     const STRING_KEY = '        const tickers = await this.watchTickers ([ symbol ], params);\n        return tickers[symbol];';
 
-    describe('hx11 FOLD2 WT01 typed ticker row', () => {
+    describe('go typed ticker row', () => {
         test('a string key indexes the typed ticker map (fails without the table)', () => {
             const out = print (STRING_KEY);
             expect (out).toContain ('var tickers map[string]Ticker = PanicOnError(');
@@ -12125,10 +12125,10 @@ describe ('hx11fold2WT01TickerRow', () => {
     });
 });
 
-describe ('hx11foldBGAnySliceToList', () => {
-    const fs = fs__hx11foldBGAnySliceToList;
-    const os = os__hx11foldBGAnySliceToList;
-    const path = path__hx11foldBGAnySliceToList;
+describe ('goAnySliceToList', () => {
+    const fs = fs__goAnySliceToList;
+    const os = os__goAnySliceToList;
+    const path = path__goAnySliceToList;
     // An awaited list local that the printer declares `[]any` (goAwaitReceiveUnbox) reads its rows as xs[i]:
     // a `this.xs` field or `{ xs: v }` key of the same name is not a use of the local, and a callee whose
     // channel carries `[]map[string]any` has map rows, never a scalar box.
@@ -12223,8 +12223,8 @@ describe ('hx11foldBGAnySliceToList', () => {
     });
 });
 
-describe ('hx11rfGo3', () => {
-    // hx11 RF-go-3: rules folded from ccxt build/ post-print passes into the Go printer.
+describe ('goPostPrintRules', () => {
+    // Go printer rules for async boolean parameters and the Options field.
     let transpiler: Transpiler;
     beforeAll(() => {
         transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
@@ -12232,7 +12232,7 @@ describe ('hx11rfGo3', () => {
     const go = (ts: string): string => transpiler.transpileGo(ts).content;
     const signature = (out: string, name: string): string => out.split('\nfunc ').find((f) => f.startsWith('(this *Test) ' + name + '(')) ?? '';
 
-    describe('RF-go-3 async boolean parameter (was hx11w8-async-bool)', () => {
+    describe('go async boolean parameter', () => {
         const body = (call: string, use = 'if (flag) { return 1; } return 2;') => 'class Base {}\nclass Test extends Base {\n'
             + '    async load (flag: boolean): Promise<any> { ' + use + ' }\n'
             + '    async main (): Promise<any> { ' + call + ' }\n}\n';
@@ -12251,7 +12251,7 @@ describe ('hx11rfGo3', () => {
     });
 
     const OPTIONS = 'type Dict = { [key: string]: any };\nclass Base { options: Dict = {}; safeString (d: Dict, k: string): string | undefined { return undefined; } safeDict (d: Dict, k: string): Dict { return {}; } }\n';
-    describe('RF-go-3 Options is a plain map[string]any field (was hx10w2-G09)', () => {
+    describe('go Options is a plain map[string]any field', () => {
         const run = (stmts: string, params = '') => go(OPTIONS + 'class Test extends Base {\n    f (' + params + '): any { ' + stmts + ' }\n}\n');
         test('literal-key store and read are native', () => {
             const out = run("this.options['k'] = 1; return this.options['k'];");
@@ -12277,11 +12277,11 @@ describe ('hx11rfGo3', () => {
     });
 });
 
-describe ('hx11rfmG1GP18', () => {
-    const fs = fs__hx11rfmG1GP18;
-    const os = os__hx11rfmG1GP18;
-    const path = path__hx11rfmG1GP18;
-    // RFM-G1 GP18: a receive from an implicit endpoint whose declared type is the stub's EndpointResult
+describe ('goEndpointReceiveTypedView', () => {
+    const fs = fs__goEndpointReceiveTypedView;
+    const os = os__goEndpointReceiveTypedView;
+    const path = path__goEndpointReceiveTypedView;
+    // a receive from an implicit endpoint whose declared type is the stub's EndpointResult
     // element reads the carrier's typed view (`.Checked()`, hoisted by ccxt's go-err pass to `rN.Value`)
     // instead of converting `.Raw` through MapTyped/ListTyped. The element comes from the receiver's own
     // generated `<id>_api.go`; another receiver's stub of the same name, or a stub of the other shape,
@@ -12352,7 +12352,7 @@ describe ('hx11rfmG1GP18', () => {
         }
     }
 
-    describe('RFM-G1 GP18 endpoint receive reads the typed view', () => {
+    describe('go endpoint receive reads the typed view', () => {
         test('a map stub receive prints the checked typed view, not MapTyped(Raw)', () => {
             const out = print (stubs ('map[string]any', '[]any'));
             expect (out).toContain ('var response map[string]any = (<-this.PrivateGetOrdersId(params)).Checked()');
@@ -12419,11 +12419,11 @@ describe ('hx11rfmG1GP18', () => {
     });
 });
 
-describe ('hx11rfmX2BaseMapLocals', () => {
-    const fs = fs__hx11rfmX2BaseMapLocals;
-    const os = os__hx11rfmX2BaseMapLocals;
-    const path = path__hx11rfmX2BaseMapLocals;
-    // hx11 RFM-X2 (GO-A): `var x any = this.<M>(..)` where <M> is a BaseExchange method whose Go signature
+describe ('goBaseMapLocals', () => {
+    const fs = fs__goBaseMapLocals;
+    const os = os__goBaseMapLocals;
+    const path = path__goBaseMapLocals;
+    // `var x any = this.<M>(..)` where <M> is a BaseExchange method whose Go signature
     // (base, every override, IDerivedExchange) is `map[string]any` prints `var x map[string]any`. The callee
     // already hands back that map boxed into `any` (a nil map stays a typed nil in the box), so only the
     // static type narrows: nil compares (`IsEqual(x, nil)` -> `x == nil`) and pushing the local into a list
@@ -12460,7 +12460,7 @@ describe ('hx11rfmX2BaseMapLocals', () => {
     }
 
     function goAt (relative: string, body: string): string {
-        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'hx11rfm-x2-'));
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'go-at-'));
         try {
             const file = path.join (tmp, relative);
             fs.mkdirSync (path.dirname (file), { recursive: true });
@@ -12485,7 +12485,7 @@ describe ('hx11rfmX2BaseMapLocals', () => {
         '        return result;\n' +
         '    }\n';
 
-    describe ('hx11 RFM-X2 base map-returning callee locals', () => {
+    describe ('go base map-returning callee locals', () => {
         test ('a nil-tested local that is pushed into a list is typed and the nil test goes native', () => {
             const out = go (NIL_AND_PUSH);
             expect (out).toContain ('var parsed map[string]any = this.ParseMarket(');
@@ -12586,7 +12586,7 @@ describe ('hx11rfmX2BaseMapLocals', () => {
     });
 });
 
-describe ('hx11w8GoNativeDelete', () => {
+describe ('goDeleteStatement', () => {
     let transpiler: Transpiler;
     beforeAll(() => {
         transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
@@ -12617,7 +12617,7 @@ describe ('hx11w8GoNativeDelete', () => {
     });
 });
 
-describe ('hx11w9BookDeltaParam', () => {
+describe ('goBookDeltaParam', () => {
     // handleBookDelta / handleBookDeltas declare `orderbook: WsOrderBook`: the base and every override print the book
     // interface, and the side reads on that parameter print its accessors. A forwarding pro handler follows its callee.
 
@@ -12733,7 +12733,7 @@ describe ('hx11w9BookDeltaParam', () => {
     });
 });
 
-describe ('hx11w9D1NilProvenStringArg', () => {
+describe ('goNilStringLocalDerefArg', () => {
     let transpiler: Transpiler;
     beforeAll(() => {
         transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
@@ -12754,7 +12754,7 @@ describe ('hx11w9D1NilProvenStringArg', () => {
     });
 });
 
-describe ('hx11w9GB01DictCalls', () => {
+describe ('goDictReturningCalls', () => {
     const BASE =
         'type Dict = { [key: string]: any };\n' +
         'export class Exchange {\n' +
@@ -12794,27 +12794,27 @@ describe ('hx11w9GB01DictCalls', () => {
         return t.transpileGoByPath(nodepath.join(dir, 'base', 'Exchange.ts')).content;
     };
 
-    describe('hx11 w9 GB01: calls to same-tree methods declared : Dict', () => {
+    describe('calls to same-tree methods declared : Dict', () => {
         afterAll(() => {
-            nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-gb01-dict'), { recursive: true, force: true });
-            nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-gb01-any'), { recursive: true, force: true });
+            nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-calls-to-same-tree-methods-dict'), { recursive: true, force: true });
+            nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-calls-to-same-tree-methods-any'), { recursive: true, force: true });
         });
 
         test('a call to a method declared : Dict proves the tabled map parameters', () => {
-            const out = printBase('tmp-gb01-dict', 'parseBalanceHelper (entry: Dict): Dict');
+            const out = printBase('tmp-calls-to-same-tree-methods-dict', 'parseBalanceHelper (entry: Dict): Dict');
             expect(out).toContain('MergeBalanceAccount(result map[string]any, code any, account any)');
         });
 
         test('a call to a method without a Dict return type keeps the box', () => {
-            const out = printBase('tmp-gb01-any', 'parseBalanceHelper (entry: Dict)');
+            const out = printBase('tmp-calls-to-same-tree-methods-any', 'parseBalanceHelper (entry: Dict)');
             expect(out).toContain('MergeBalanceAccount(result map[string]any, code any, account any)');
         });
     });
 });
 
-describe ('rdGo3MapTypedIdentity', () => {
-    // RD-GO-3: a MapTyped wrap around an operand that is already map[string]any by declaration is the identity,
-    // so the printer does not emit it (was the ccxt build passes hx10w6-G11 / hx10w7-G14).
+describe ('goMapTypedIdentity', () => {
+    // a MapTyped wrap around an operand that is already map[string]any by declaration is the identity,
+    // so the printer does not emit it.
     const BASE = [
         'type Dict = { [key: string]: any };',
         'type Str = string | undefined;',
@@ -12830,7 +12830,7 @@ describe ('rdGo3MapTypedIdentity', () => {
         return out.slice (out.indexOf ('func (this *Ex)'));
     };
 
-    describe ('RD-GO-3 MapTyped identity wraps are not printed', () => {
+    describe ('go MapTyped identity wraps are not printed', () => {
         test('a local from a callee that prints map[string]any is declared without the wrap', () => {
             const out = print ([
                 'class Ex extends BaseExchange {',
@@ -12874,8 +12874,8 @@ describe ('rdGo3MapTypedIdentity', () => {
     });
 });
 
-describe ('rf6aMapLocals', () => {
-    // RF-go-6-A: type-keyed Go map-local rules (a Dict local seeded from safeDict is a map[string]any read with the
+describe ('goTypeKeyedMapLocals', () => {
+    // type-keyed Go map-local rules (a Dict local seeded from safeDict is a map[string]any read with the
     // typed twin; an element read on a map[string]any receiver with a Go string key is the native index).
     const PRELUDE =
         'type Dict = { [key: string]: any };\n' +
@@ -12904,7 +12904,7 @@ describe ('rf6aMapLocals', () => {
         }
     };
 
-    describe('RF-go-6-A: safeDict-seeded Dict locals', () => {
+    describe('safeDict-seeded Dict locals', () => {
         test('a never-nil default types the local and reads through SafeDictMap', () => {
             const out = run(
                 '    f (p: Dict): any {\n' +
@@ -12984,7 +12984,7 @@ describe ('rf6aMapLocals', () => {
         });
     });
 
-    describe('RF-go-6-A: element reads on map[string]any receivers', () => {
+    describe('element reads on map[string]any receivers', () => {
         test('a defaulted Dict parameter read with a literal key is the native index', () => {
             const out = run(
                 '    f (symbol: string, config: Dict = {}): any {\n' +
@@ -13024,8 +13024,8 @@ describe ('rf6aMapLocals', () => {
     });
 });
 
-describe ('rfGo5OwnedTables', () => {
-    // RF-go-5: base-class tables owned by one goroutine print publisher/accessor calls, keyed on the checker-resolved
+describe ('goOwnedBaseTables', () => {
+    // base-class tables owned by one goroutine print publisher/accessor calls, keyed on the checker-resolved
     // declaring class (no per-exchange name list in ccxt).
     const t = (install = true) => {
         const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
@@ -13052,7 +13052,7 @@ describe ('rfGo5OwnedTables', () => {
         '',
     ].join ('\n');
 
-    describe('RF-go-5 owned base tables', () => {
+    describe('go owned base tables', () => {
         test('writes publish, reads use the accessor; other fields untouched', () => {
             const out = t ().transpileGo (SRC).content;
             expect (out).toContain ('this.PublishBaseCurrencies(x)');
@@ -13076,8 +13076,8 @@ describe ('rfGo5OwnedTables', () => {
     });
 });
 
-describe ('rfGo6bNativeStoreFields', () => {
-    // RF-go-6-B: element write on a hand-written BaseExchange map field (type table passed by the embedder)
+describe ('goNativeStoreFields', () => {
+    // element write on a hand-written BaseExchange map field (type table passed by the embedder)
     const TABLE = {
         'balance': {
             'type': 'map[string]any',
@@ -13106,7 +13106,7 @@ describe ('rfGo6bNativeStoreFields', () => {
         return t.transpileGo (HEAD + extra + '    handle (message: Dict, timestamp: number) {\n' + body + '\n    }\n}\n').content;
     };
 
-    describe('RF-go-6-B native store on a tabled map field', () => {
+    describe('go native store on a tabled map field', () => {
         test('a literal key and a plain value store natively (fails on the base printer: no table)', () => {
             const withTable = print ("this.balance['info'] = { 'a': 1 }; this.balance['datetime'] = 'x';");
             expect (withTable).toContain ('this.Balance["datetime"] = "x"');
@@ -13147,7 +13147,7 @@ describe ('rfGo6bNativeStoreFields', () => {
         test('delete of a literal key is the map delete', () => {
             expect (print ("delete this.balance['spot'];")).toContain ('delete(this.Balance, "spot")');
         });
-        test('hx11 r3: a whole GetValue value stores natively; a guarded *string key reads the plain index', () => {
+        test('a whole GetValue value stores natively; a guarded *string key reads the plain index', () => {
             const stored = print ("const k = 'a'; this.balance[k] = message[k];");
             expect (stored).toContain ('this.Balance[k] = ');
             expect (stored).not.toContain ('AddElementToObject(this.Balance');
@@ -13155,7 +13155,7 @@ describe ('rfGo6bNativeStoreFields', () => {
             expect (read).toContain ('this.Balance[*t]');
             expect (read).not.toContain ('func() any');
         });
-        test('hx11 r3: a spawn/delay site counts as a call of the referenced method, with the arguments after it', () => {
+        test('a spawn/delay site counts as a call of the referenced method, with the arguments after it', () => {
             const t: any = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
             const go: any = t.goTranspiler;
             let seen: any[] = [];
@@ -13175,7 +13175,7 @@ describe ('rfGo6bNativeStoreFields', () => {
                 + '    async loadIt (type: string) { return type; }\n}\n');
             expect (seen).toEqual ([ [ "'spot'" ], [ "'swap'" ] ]);
         });
-        test('hx11 r3: delete of a client url from the registry is the map delete', () => {
+        test('delete of a client url from the registry is the map delete', () => {
             const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
             const out = t.transpileGo ('class Client { url: string; }\nclass Exchange {\n    clients: any = {};\n'
                 + '    client (u: string): Client { return new Client (); }\n'
@@ -13193,8 +13193,8 @@ describe ('rfGo6bNativeStoreFields', () => {
     });
 });
 
-describe ('rfgo6cListReads', () => {
-    // RF-go-6-C: Go native reads on proven list receivers (moved from ccxt build/hx10w2-G02.ts)
+describe ('goProvenListReads', () => {
+    // Go native reads on proven list receivers
     const SRC = 'type Trade = { id: string };\n'
         + 'class Exchange {\n'
         + '    parseTrades (trades: any[], market: any = undefined): Trade[] { return []; }\n'
@@ -13297,7 +13297,7 @@ describe ('rfgo6cListReads', () => {
     const print = (callees: string[]): string => new Transpiler ({ 'verbose': false, 'go': { 'generatedListCallees': callees, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo (SRC).content;
     const fn = (out: string, name: string): string => out.split (/\nfunc /).find ((f) => f.indexOf (name + '(') >= 0) ?? '';
 
-    describe('RF-go-6-C list reads', () => {
+    describe('go list reads', () => {
         test('a tabled callee whose TS result is an array types its local []any and .length goes native (fails on the base printer)', () => {
             const withTable = fn (print ([ 'ParseTrades' ]), 'F');
             expect (withTable).toContain ('var trades []any = this.ParseTrades(');
@@ -13333,7 +13333,7 @@ describe ('rfgo6cListReads', () => {
             expect (r1).not.toContain ('func() any');
         });
         test('an object-element read keeps the guard when the element type is not provably an object, or the list is mutated', () => {
-            // hx11 FOLD2 (hx10w9-GP19): a safeList of a parameter is a decoded-JSON list, so its bounded read is the bare index
+            // a safeList of a parameter is a decoded-JSON list, so its bounded read is the bare index
             const r2 = fn (print ([ 'SafeList' ]), 'R2');
             expect (r2).toContain ('out = rows[i]');
             const r3 = fn (print ([ 'ParseTrades' ]), 'R3');
@@ -13349,8 +13349,8 @@ describe ('rfgo6cListReads', () => {
     });
 });
 
-describe ('rfgo6dOrderBook', () => {
-    // RF-go-6-D: an order-book side read `book['asks']` prints as the port's accessor when the checker type of the
+describe ('goOrderBookSideReads', () => {
+    // an order-book side read `book['asks']` prints as the port's accessor when the checker type of the
     // receiver is the book class and the Go local is retyped at its declaration (no nil can reach the read).
 
     const BOOK = {
@@ -13397,7 +13397,7 @@ describe ('rfgo6dOrderBook', () => {
         + '        this.handleDeltas (orderbook[\'bids\'], []);\n'
         + '    }\n';
 
-    describe('RF-go-6-D order book side reads', () => {
+    describe('go order book side reads', () => {
         test('a cache read behind its create-if-absent guard is typed and its sides print the accessors (fails on the base printer)', () => {
             const out = print (GUARDED);
             expect (out).toContain ('var orderbook OrderBookInterface = ');
@@ -13481,8 +13481,8 @@ describe ('rfgo6dOrderBook', () => {
     });
 });
 
-describe ('rfgo6fTupleSlot', () => {
-    // RF-go-6-F: a destructured tuple slot whose producer's Go slot type is *int64 is a native *int64 local.
+describe ('goInt64TupleSlot', () => {
+    // a destructured tuple slot whose producer's Go slot type is *int64 is a native *int64 local.
 
     const SRC = `
     type Dict = { [key: string]: any };
@@ -13554,7 +13554,7 @@ describe ('rfgo6fTupleSlot', () => {
         return t.transpileGo (SRC).content;
     };
 
-    describe('RF-go-6-F: *int64 tuple slot', () => {
+    describe('*int64 tuple slot', () => {
         test('a *int64 tuple slot read by nil tests and guarded reads is a native *int64 local (fails on the base printer)', () => {
             const base = print ({});
             const out = print (TABLES);
@@ -13594,8 +13594,8 @@ describe ('rfgo6fTupleSlot', () => {
     });
 });
 
-describe ('rfmG1G01UrlsViews', () => {
-    // RFM-G1 G01 (was ccxt build/hx10w5-G01.ts): urls views. The TS base declares `urls: { api: Dict; ... }`, and
+describe ('goUrlsViews', () => {
+    // urls views. The TS base declares `urls: { api: Dict; ... }`, and
     // go/v4/exchange.go keeps `urls` a map[string]any plus two views re-derived by RefreshUrlsViews after every write:
     // UrlsApi (urls["api"]) and UrlsApiSections (its dictionary entries). A read keyed on that declared type prints as
     // the view's own map index; a write of urls is followed by the refresh.
@@ -13616,7 +13616,7 @@ describe ('rfmG1G01UrlsViews', () => {
         + '}\n';
     const run = (stmts: string, params = ''): string => go(BASE + 'class Test extends Base {\n    f (' + params + '): any { ' + stmts + ' }\n}\n');
 
-    describe('RFM-G1 G01 urls views', () => {
+    describe('go urls views', () => {
         test('a literal key on urls["api"] reads UrlsApi', () => {
             const out = run("return this.safeString (this.urls['api']['ws'], 'spot');");
             expect(out).toContain('this.SafeString(this.UrlsApi["ws"], "spot")');
@@ -13666,11 +13666,11 @@ describe ('rfmG1G01UrlsViews', () => {
     });
 });
 
-describe ('rfmG4G21', () => {
+describe ('goPredictionAwaitedListReads', () => {
     const fs = fs__rfmG4G21;
     const os = os__rfmG4G21;
     const path = path__rfmG4G21;
-    // RFM-G4 G21 (folded from build/hx10w5-G21.ts): a prediction-tier `list[i]` inside
+    // a prediction-tier `list[i]` inside
     // `for (let i = 0; i < list.length; i++)` where `list` is `const list = await this.fetchX (..)`
     // (the printer declares it `[]any` from the receive) and the awaited TS type is an array of
     // objects prints the bare element, not GetValue(list, i). Anything the AST does not prove keeps GetValue.
@@ -13685,7 +13685,7 @@ describe ('rfmG4G21', () => {
         '    async fetchRawEventsList (params: Dict = {}): Promise<Dict[]> { return []; }\n' +
         '}\n';
 
-    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'g21-'));
+    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'gopredictionawaitedlistreads-'));
 
     function go (body: string, tier = 'prediction'): string {
         const dir = path.join (tmp, 'ts', 'src', tier);
@@ -13699,7 +13699,7 @@ describe ('rfmG4G21', () => {
 
     const READ = 'GetValue(rows, i)';
 
-    describe('RFM-G4 G21 bounded reads of awaited object lists in the prediction tier', () => {
+    describe('go bounded reads of awaited object lists in the prediction tier', () => {
         afterAll(() => {
             fs.rmSync (tmp, { 'recursive': true, 'force': true });
         });
@@ -13776,11 +13776,11 @@ describe ('rfmG4G21', () => {
     });
 });
 
-describe ('rfmG4GB08', () => {
+describe ('goPredictionBoundedListReads', () => {
     const fs = fs__rfmG4GB08;
     const os = os__rfmG4GB08;
     const path = path__rfmG4GB08;
-    // RFM-G4 GB08: a prediction-tier `list[i]` inside `for (let i = 0; i < list.length; i++)` can never
+    // a prediction-tier `list[i]` inside `for (let i = 0; i < list.length; i++)` can never
     // leave the slice, so the guard closure (`func() any { if i >= 0 && i < len(list) { return
     // DerefScalar(list[i]) } return nil }()`) prints as the element itself, or as DerefScalar(list[i])
     // when the elements are not provably dictionaries. Anything the AST does not prove keeps the guard.
@@ -13793,7 +13793,7 @@ describe ('rfmG4GB08', () => {
         '    rebuild (): any[] { return []; }\n' +
         '}\n';
 
-    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'gb08-'));
+    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'gopredictionboundedlistreads-'));
 
     function go (body: string, tier = 'prediction'): string {
         const dir = path.join (tmp, 'ts', 'src', tier);
@@ -13805,7 +13805,7 @@ describe ('rfmG4GB08', () => {
 
     const GUARD = 'func() any {';
 
-    describe('RFM-G4 GB08 bounded list reads in the prediction tier', () => {
+    describe('go bounded list reads in the prediction tier', () => {
         afterAll(() => {
             fs.rmSync (tmp, { 'recursive': true, 'force': true });
         });
@@ -13890,7 +13890,7 @@ describe ('rfmG4GB08', () => {
             expect (out).not.toContain ('rows[i]'); // no native read: the list is not proven a slice either
         });
 
-        // hx11 FOLD2 (hx10w9-GP19): the bounded-loop rule now covers the venue and pro tiers too; only ts/src/test stays out
+        // the bounded-loop rule covers the venue and pro tiers too; only ts/src/test stays out
         test('a file of the test tree is out of this rule', () => {
             const out = go (
                 "        const rows = this.safeList (response, 'rows', []);\n" +
@@ -13903,7 +13903,7 @@ describe ('rfmG4GB08', () => {
     });
 });
 
-describe ('hx11 fold ROOT-go-async-recv', () => {
+describe ('go async receive at the root tree', () => {
     // a receive from a same-class async producer whose every return is nil or a []any is bound to a holder
     // named after its target: `<target>Recv, _ := PanicOnError((<-this.MAsync(..))).([]any)` + `var <target> []any = <target>Recv`
     // (the comma-ok assertion answers what ListTyped did); a numeric suffix is added only on a name collision.
@@ -13913,7 +13913,7 @@ describe ('hx11 fold ROOT-go-async-recv', () => {
         '    async isUnifiedEnabled (params = {}) {\n        return undefined;\n    }\n' +
         '    async handleLoose (params: any = {}) {\n        return params;\n    }\n';
     function print (body: string): string {
-        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'hx11-async-recv-'));
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'print-async-recv-'));
         try {
             const src = path.join (tmp, 'ts', 'src');
             fs.mkdirSync (path.join (src, 'base'), { 'recursive': true });

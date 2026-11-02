@@ -561,17 +561,12 @@ describe('java transpiling tests', () => {
     });
 
 
-    // Regression (real CCXT bitmart/bingx authenticate shape): a var was marked in
-    // ReassignedVars by a PRIOR transpile call and then read back while transpiling
-    // a different file where the same class+method+var name is `const`. That
-    // cross-call leak produced spurious `finalXxx` snapshots whose presence depended
-    // on emit order, so re-emitting the same file gave different Java.
-    //
-    // ReassignedVars is now reset per source file, so the priming call below cannot
-    // reach the target: `timestamp` is `const` here and must be captured directly.
+    // ReassignedVars is reset per source file: a var reassigned in a PRIOR transpile call must not
+    // leak into another file where the same class+method+var is `const` (output must not depend
+    // on emit order), so `timestamp` here is captured directly.
     test('object literal: prior transpile does not leak ReassignedVars into the next file', () => {
         const fresh = new Transpiler();
-        // Would previously prime ReassignedVars with T-authenticate-timestamp.
+        // Primes ReassignedVars with T-authenticate-timestamp in a separate call.
         const priming =
         "class T {\n" +
         "    async authenticate(type, params = {}) {\n" +
@@ -1133,7 +1128,7 @@ describe('java boolean conditions emitted without the Helpers.isTrue wrapper', (
             .toContain("if (Helpers.isTrue(x))");
         expect(conditionOf("        if (x) { return; }\n")).toContain("if (Helpers.isTrue(x))");
         // a `boolean | undefined` METHOD parameter is a Boolean-or-null box: the null-safe TRUE test
-        // (hx11 RFM-J2 leaf C; it was a ccxt-side printCondition hook)
+        // (printed from the parameter's declared type)
         expect(conditionOf("        if (x) { return; }\n", 'test(x: boolean | undefined): void'))
             .toContain("if (Boolean.TRUE.equals(x))");
         // negation of a non-boolean keeps the helper inside the `!`
@@ -2320,7 +2315,7 @@ describe('declared-list element reads: Helpers.GetValue(x, i) -> x.get(i)', () =
         "}";
         withResolver((declaration: any) => declaration.name?.text === 'x' ? LIST_TYPE : 'Long', () => {
             const output = transpiler.transpileJava(input).content;
-            // build/javaTranspiler.ts nativeJavaJ03ElementReads owns this shape
+            // the nativeJavaElementReads rule owns this shape
             expect(output).toContain('Helpers.GetValue(x, i)');
         });
     });
@@ -2485,8 +2480,8 @@ describe('declared-list element reads: Helpers.GetValue(x, i) -> x.get(i)', () =
 });
 
 describe('declared-map element reads: Helpers.GetValue(m, k) -> guarded m.get(k)', () => {
-    // a `Map<String, Object>` declaration (the B-11/B-15 local table, or a param the printer
-    // retypes per B-09/D-10) with a key the printer cannot fold into a literal prints the
+    // a `Map<String, Object>` declaration (a declared local, or a param the printer
+    // retypes) with a key the printer cannot fold into a literal prints the
     // native map accessor. GetValue's Map branch answers null for a null receiver, a null
     // key and a key that is not a String, so the emission carries the same tests; every
     // unproven receiver or key keeps the helper.
@@ -3372,7 +3367,7 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         expect(output).not.toContain("addElementToObject");
     });
 
-    test('shared field map writes a non-null value natively (hx10w9 JP01)', () => {
+    test('shared field map writes a non-null value natively (base options field)', () => {
         // the base declares `public Map<String, Object> options = new SynchronizedOptions ()`, so
         // `put` reaches the same hand-off the helper's map branch calls; with a non-null value the
         // helper's null-removal branch can never run
@@ -6916,10 +6911,10 @@ describe('java element write after a hand-back destructuring', () => {
     });
 });
 
-// hx4 J01: `m[k] = v` on a declared Map<String, Object> local whose every write is a
+// `m[k] = v` on a declared Map<String, Object> local whose every write is a
 // provably non-concurrent map prints `m.put(k, v)`, null value included
-describe('hx4 J01: declared-map element write prints native put', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-hx4-j01');
+describe('declared-map element write prints native put', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-declared-map-element-write-prints');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const MAP_TYPE = 'Map<String, Object>';
     const source =
@@ -7023,7 +7018,7 @@ describe('hx4 J01: declared-map element write prints native put', () => {
     });
 });
 
-describe('hx4 J02: more hand-written base map fields read natively', () => {
+describe('more hand-written base map fields read natively', () => {
     // tickers / bidsasks / trades / fees / urls / markets_by_id are BaseExchange.java map fields that
     // can be null; a non-literal key can be null too (ConcurrentHashMap.get(null) throws): both guarded
     const fields =
@@ -7078,7 +7073,7 @@ describe('hx4 J02: more hand-written base map fields read natively', () => {
     });
 });
 
-describe('java base map fields and `as string` keys read natively (hx11 1F J02)', () => {
+describe('java base map fields and `as string` keys read natively', () => {
     const fields =
         "class T {\n" +
         "    has: any = {};\n" +
@@ -7148,7 +7143,7 @@ describe('java base map fields and `as string` keys read natively (hx11 1F J02)'
     });
 });
 
-describe('hx4 J05: integral mod compared with an int literal', () => {
+describe('integral mod compared with an int literal', () => {
     const java = (src: string) => transpiler.transpileJava(src).content;
     test('`(s.length % 2) !== 0` goes native', () => {
         const out = java(`class T {
@@ -7209,8 +7204,7 @@ describe('hx4 J05: integral mod compared with an int literal', () => {
     });
 });
 
-// hx4 J06
-describe('java native indexOf on an ===-narrowed string-literal union (hx4 J06)', () => {
+describe('java native indexOf on an ===-narrowed string-literal union', () => {
     test('a plain string narrowed by === literals prints String.indexOf', () => {
         const input =
         "class T {\n" +
@@ -7280,9 +7274,9 @@ describe('java native indexOf on an ===-narrowed string-literal union (hx4 J06)'
     });
 });
 
-// hx4 J09: the proofs anchor on base-tier declarations, so the fixture mirrors the repo layout
-describe('hx4 J09: isTrue / isInstance / core-argument residual', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-hx4-j09');
+// the proofs anchor on base-tier declarations, so the fixture mirrors the repo layout
+describe('isTrue / isInstance / core-argument residual', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-istrue-isinstance-core-argument-residual');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const ERRORS_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'errors.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
@@ -7452,7 +7446,7 @@ describe('hx4 J09: isTrue / isInstance / core-argument residual', () => {
     });
 });
 
-describe('hx4 J15: equality on two declared numeric boxes compares values', () => {
+describe('equality on two declared numeric boxes compares values', () => {
     const withTypes = (types: any, body: () => void) => {
         const printer: any = (transpiler as any).javaTranspiler;
         const previous = printer.javaDeclaredLocalTypeResolver;
@@ -7507,17 +7501,17 @@ describe('hx4 J15: equality on two declared numeric boxes compares values', () =
         });
     });
 
-    test('a box against a literal keeps the J05 guarded operator', () => {
+    test('a box against a literal keeps the guarded integral operator', () => {
         withTypes({ a: 'Long' }, () => {
             expect(transpiler.transpileJava(src("a === 5")).content).toContain("(a != null && a == 5)");
         });
     });
 });
 
-// hx4 J16: an awaited implicit-API call (ts/src/abstract/<id>.ts, body `this.request(..)`) is a fresh
+// an awaited implicit-API call (ts/src/abstract/<id>.ts, body `this.request(..)`) is a fresh
 // parse: a safeDict of its response takes the native put even when the call's arguments read a field
-describe('hx4 J16: implicit-API response is a non-shared put source', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-hx4-j16');
+describe('implicit-API response is a non-shared put source', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-implicit-api-response-is-a');
     const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const ABSTRACT = path.join(TMP, 'ts', 'src', 'abstract', 'x.ts');
     const VENUE = path.join(TMP, 'ts', 'src', 'v.ts');
@@ -7600,11 +7594,11 @@ describe('hx4 J16: implicit-API response is a non-shared put source', () => {
     });
 });
 
-// hx10 wave-4 PJ01: a generated venue method's PLAIN annotation (`string`, a string-indexed
+// a generated venue method's PLAIN annotation (`string`, a string-indexed
 // dict) prints its Java type, while a declaration whose heritage reaches the hand-written
 // base tier keeps `Object` (Java overrides are invariant).
-describe('java plain-annotation parameters (PJ01)', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-pj01-plain-params');
+describe('java plain-annotation parameters', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-java-plain-annotation-parameters-plain-params');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'pjprobe.ts');
 
@@ -7665,11 +7659,11 @@ describe('java plain-annotation parameters (PJ01)', () => {
     });
 });
 
-// PJ03: generated methods whose TS return is an array (element slots not strings) declare
+// generated methods whose TS return is an array (element slots not strings) declare
 // `java.util.List<Object>` when every return site already prints a List<Object>; a method whose
 // annotation proves nothing (`any`) still declares the Map/List its body provably returns.
 // `string[]`/`Strings` returns keep the boxed declaration (their slots print List<String>).
-describe('java native list and body-proven returns (pj03)', () => {
+describe('java native list and body-proven returns', () => {
     const TMP = path.join(__dirname, 'files', 'tmp-javapj03');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
@@ -7790,11 +7784,11 @@ describe('java native list and body-proven returns (pj03)', () => {
     });
 });
 
-// hx10 J09: an override that re-declares a base `params: Dict = {}` as a bare `params = {}` inherits
+// an override that re-declares a base `params: Dict = {}` as a bare `params = {}` inherits
 // the declaration's native type (Java overrides are invariant), so the body prints the Map core
 // instead of an Object body plus a Map bridge.
-describe('hx10 J09: unannotated params overrides a typed declaration', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-hx10-j09');
+describe('unannotated params overrides a typed declaration', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-unannotated-params-overrides-a-typed');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'pro', 'venuej09.ts');
@@ -7940,11 +7934,11 @@ describe('java test-tier parameter types', () => {
     });
 });
 
-// hx10w6 J04: a local the printer itself feeds a fresh plain map prints that map type, so its
+// a local the printer itself feeds a fresh plain map prints that map type, so its
 // element writes bind the native put with no box cast at the site. Only a value whose Java print
 // IS `Map<String, Object>` (an object literal, base extend/deepExtend, base account()) qualifies,
 // and only while every write hands the local another fresh map.
-describe('java element-write local declaration typing (hx10w6-J04)', () => {
+describe('java element-write local declaration typing', () => {
     test('a literal-fed local prints the map type and its writes stay native', () => {
         const input =
         "function f (params) {\n" +
@@ -7977,8 +7971,8 @@ describe('java element-write local declaration typing (hx10w6-J04)', () => {
     });
 });
 
-describe('java element-write local declaration typing over the hand-written base (hx10w6-J04)', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-j04w6');
+describe('java element-write local declaration typing over the hand-written base', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-java-element-write-local-declaration');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const VENUE_FIXTURE = path.join(TMP, 'exchanges', 'bitfake.ts');
 
@@ -8025,7 +8019,7 @@ describe('java element-write local declaration typing over the hand-written base
 });
 
 describe('java ws handler tables', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hx10w6-j06-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'java-ws-handler-tables-'));
     const write = (relative: string, content: string): string => {
         const file = path.join(root, relative);
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -8225,7 +8219,7 @@ export default class V {
     });
 });
 
-describe('hx10 J07: a nested native sum is a typed arithmetic operand', () => {
+describe('a nested native sum is a typed arithmetic operand', () => {
     // `(a + b) - 1`: the `+` prints natively (its operands are long-proved), and its result is a
     // Java primitive long, so the enclosing `- * /` takes the native operator with no cast and no
     // box test. A pair the printer already proves keeps its own operand printing.
@@ -8282,11 +8276,11 @@ describe('hx10 J07: a nested native sum is a typed arithmetic operand', () => {
     });
 });
 
-// hx10 wave-6 J08: a parameter the printer typed in its signature is a declared Map, so its
+// a parameter the printer typed in its signature is a declared Map, so its
 // element reads and its non-null element writes print the native accessor. A write whose value
 // can be null keeps the helper: only Helpers.addElementToObject removes on a ConcurrentHashMap.
-describe('hx10 J08: element access on a typed parameter', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-hx10-j08');
+describe('element access on a typed parameter', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-element-access-on-a-typed');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuej08.ts');
@@ -8395,10 +8389,10 @@ describe('java typed String slice / split / replaceAll (RF-java-1)', () => {
     });
 });
 
-// hx11 FJ4-D: a local initialised from a sync `this.<m> (...)` call of a generated venue method whose own
+// a local initialised from a sync `this.<m> (...)` call of a generated venue method whose own
 // declaration prints a native Map/List takes that type in the printer (javaDeclaredLocalType), with no
 // build-side resolver wrapper: the consumer's tables know nothing about this file or its first generation
-describe('java venue-callee local type (hx11 FJ4-D)', () => {
+describe('java venue-callee local type', () => {
     const TMP = path.join(__dirname, 'files', 'tmp-javafj4d');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
@@ -8767,9 +8761,8 @@ describe('java base-tier list parameters (FJ4-A2)', () => {
     });
 });
 
-// RFM-J2 leaf D: hx10w2-J05 (objectValues / isInstance) and hx10w3-J06 (awaited / tuple box locals) as
-// checker-keyed printer rules. The proofs anchor on base-tier declarations, so the fixture mirrors the layout.
-describe('rfm-j2d: objectValues copy, catch isInstance, awaited / tuple box locals', () => {
+// objectValues / isInstance and awaited / tuple box locals are checker-keyed printer rules. The proofs anchor on base-tier declarations, so the fixture mirrors the layout.
+describe('objectValues copy, catch isInstance, awaited / tuple box locals', () => {
     const TMP = path.join(__dirname, 'files', 'tmp-rfm-j2d');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const ERRORS_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'errors.ts');
@@ -8870,7 +8863,7 @@ describe('rfm-j2d: objectValues copy, catch isInstance, awaited / tuple box loca
     });
 });
 
-describe ('hx11BF02FileBuiltMapFields', () => {
+describe ('java file-built map fields', () => {
     jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
     let transpiler: Transpiler;
@@ -8890,7 +8883,7 @@ describe ('hx11BF02FileBuiltMapFields', () => {
         "    test(type: string, v: any): any {\n" + body + "\n    }\n}";
     const java = (src: string) => transpiler.transpileJava(src).content;
 
-    describe('hx11 BF02: file-built map fields', () => {
+    describe('plain-map vs mixed field writes', () => {
         test('a plain-map file reads and puts natively', () => {
             const out = java(wrap(
                 "    init (): void {\n        this.positions = {};\n    }\n",
@@ -8935,7 +8928,7 @@ describe ('hx11BF02FileBuiltMapFields', () => {
     });
 });
 
-describe ('hx11J12FailedFuture', () => {
+describe ('java failed future', () => {
     jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
     let transpiler: Transpiler;
@@ -8976,7 +8969,7 @@ describe ('hx11J12FailedFuture', () => {
     });
 });
 
-describe ('hx11fold1FJ01FreshMapWrite', () => {
+describe ('java fresh map write', () => {
     jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
     let transpiler: Transpiler;
@@ -9005,16 +8998,16 @@ describe ('hx11fold1FJ01FreshMapWrite', () => {
     });
 });
 
-describe ('hx11fold1FJ06PlainCaches', () => {
+describe ('java plain base cache maps', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
     }));
 
-    // hx11 fold 1F (hx10w2 J06): a base cache the hand-written BaseExchange.java declares as a plain
+    // a base cache the hand-written BaseExchange.java declares as a plain
     // `Map<String, Object> = new HashMap<>()` takes the native put / guarded get on a String key.
     describe('java plain base caches', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-hx11-fold-1f-j06');
+        const TMP = path.join(__dirname, 'files', 'tmp-java-plain-base-caches');
         const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
         const VENUE = path.join(TMP, 'ts', 'src', 'pro', 'fake.ts');
         const body =
@@ -9103,17 +9096,17 @@ describe ('hx11fold1FJ06PlainCaches', () => {
     });
 });
 
-describe ('hx11fold1FJ09JavaBoxedNative', () => {
+describe ('java boxed native emission', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
     }));
 
-    // hx11 fold 1F hx10w6-J09: two native forms the switch-blob pass used to collapse after printing.
+    // two native forms printed directly by the printer:
     //  * `Object.keys (this.<f>)` for a BaseExchange Map field is a null-guarded key copy;
     //  * `x + <int literal>` on a local the build layer reports as the nullable `Long` box is a null-propagating add.
     describe('java boxed native forms', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-hx11-j09');
+        const TMP = path.join(__dirname, 'files', 'tmp-java-boxed-native-forms');
         const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
         const VENUE = path.join(TMP, 'ts', 'src', 'fake.ts');
         const body =
@@ -9206,17 +9199,17 @@ describe ('hx11fold1FJ09JavaBoxedNative', () => {
     });
 });
 
-describe ('hx11rdJava3DescribedDictChains', () => {
+describe ('java described dict chain reads', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
     }));
 
-    // hx11 RD-JAVA-3 (folds hx10w3 J05): nested reads of the hand-written Map<String, Object>
+    // nested reads of the hand-written Map<String, Object>
     // header fields (urls / fees / limits) that the class's own describe () literal holds as objects.
 
     describe('java described dict chains', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-hx11rd-java3');
+        const TMP = path.join(__dirname, 'files', 'tmp-java-described-dict-chains');
         const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
         const VENUE = path.join(TMP, 'ts', 'src', 'pro', 'fake.ts');
         const body =
@@ -9307,14 +9300,14 @@ describe ('hx11rdJava3DescribedDictChains', () => {
     });
 });
 
-describe ('hx11rfmJ2CDeclaredBox', () => {
+describe ('java declared-box operands', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
     }));
 
-    // hx11 RFM-J2 leaf C: the Helpers.isTrue / add / subtract / multiply / divide family from the DECLARED
-    // Java type of the operands (ccxt's build/hx10w2-J03.js text pass folded into the printer).
+    // the Helpers.isTrue / add / subtract / multiply / divide family prints from the DECLARED
+    // Java type of the operands.
     describe('java declared-box operands: native arithmetic and boolean parameter conditions', () => {
         const DECLARED: { [name: string]: string } = {
             a: 'Long', b: 'Long', n: 'Integer', i: 'int', d: 'Double', e: 'Double', p: 'long', f: 'double', g: 'double', s: 'String',
@@ -9413,19 +9406,17 @@ describe ('hx11rfmJ2CDeclaredBox', () => {
     });
 });
 
-describe ('hx11rfmJ2EJavaWsClientMaps', () => {
+describe ('java ws client maps', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
     }));
 
-    // hx11 RFM-J2 E (folds ccxt hx10w3-J01): the ws Client's futures / subscriptions / rejections are
-    // `public final Map<String, V>` fields of the hand-written WsClient.java (ts/src/base/ws/Client.ts),
-    // declared `Dictionary<any>` in TS. On the `client` the generated handlers receive, and on a local
-    // bound to one of them, every Map operation binds on the field's own type: no receiver cast, native
-    // keySet / values, `put` for a String key (OwnerMap.put(k, null) is the helper's removal), `remove`.
+    // ws Client futures / subscriptions / rejections are `public final Map<String, V>` fields of WsClient.java,
+    // so on `client` (or a local bound to one) Map ops bind on the field type: no cast, native keySet / values,
+    // `put` for a String key (OwnerMap.put(k, null) is the helper's removal), `remove`.
     describe('java ws client map operations', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-hx11rfm-j2e');
+        const TMP = path.join(__dirname, 'files', 'tmp-java-ws-client-map-operations');
         const CLIENT = path.join(TMP, 'ts', 'src', 'base', 'ws', 'Client.ts');
         const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
         const VENUE = path.join(TMP, 'ts', 'src', 'pro', 'fake.ts');
@@ -9579,20 +9570,17 @@ describe ('hx11rfmJ2EJavaWsClientMaps', () => {
     });
 });
 
-describe ('hx11rfmX2JavaOwnerMaps', () => {
+describe ('java owner-store maps', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
     }));
 
-    // hx11 rfm X2 (folds hx10w4 OJ01 + hx10w7 OJ06): hand-written single-owner maps print native ops.
-    //  * `this.options` (BaseExchange.java: `options = new SynchronizedOptions ()`, put(k, null) removes)
-    //    takes a literal-key element write as `put`, and the loadMarkets currency hand-off key reads
-    //    through its owner-field accessor;
-    //  * `client.futures|subscriptions|rejections` (ts/src/base/ws/Client.ts = WsClient.java OwnerMap views)
-    //    read as a null-guarded `get`.
+    // hand-written single-owner maps print native ops: `this.options` (SynchronizedOptions) takes a literal-key
+    // write as `put` and the loadMarkets currency key reads via its accessor; `client.futures|subscriptions|
+    // rejections` (WsClient.java OwnerMap views) read as a null-guarded `get`.
     describe('java owner-store maps', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-hx11rfm-x2');
+        const TMP = path.join(__dirname, 'files', 'tmp-java-owner-store-maps');
         const CLIENT = path.join(TMP, 'ts', 'src', 'base', 'ws', 'Client.ts');
         const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
         const VENUE = path.join(TMP, 'ts', 'src', 'pro', 'fake.ts');
@@ -9730,16 +9718,16 @@ describe ('hx11rfmX2JavaOwnerMaps', () => {
     });
 });
 
-describe ('hx11w8JavaCrc32Equality', () => {
+describe ('java crc32 equality', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
     }));
 
-    // hx11 w8: crc32 checksum compares. BaseExchange.crc32 hands back a Long box on every path, so
+    // crc32 checksum compares: BaseExchange.crc32 hands back a Long box on every path, so
     // against a local the build layer declares Long, Objects.equals is isEqual's integral branch.
     describe('java crc32 checksum equality', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-hx11w8-crc32');
+        const TMP = path.join(__dirname, 'files', 'tmp-java-crc32-checksum-equality-crc32');
         const CRYPTO = path.join(TMP, 'ts', 'src', 'base', 'functions', 'crypto.ts');
         const VENUE = path.join(TMP, 'ts', 'src', 'pro', 'fake.ts');
         const OTHER = path.join(TMP, 'ts', 'src', 'pro', 'other.ts');
@@ -9835,7 +9823,7 @@ describe ('jp01MapFieldWrite', () => {
         return transpiler.transpileJava(input).content;
     };
 
-    describe('hx10w9 JP01: element writes into the base header map fields', () => {
+    describe('element writes into the base header map fields', () => {
 
         test('options takes the native put on a non-null value', () => {
             const output = java('        this.options["sandboxMode"] = true;\n');
@@ -9895,11 +9883,11 @@ describe ('jp01MapFieldWrite', () => {
     });
 });
 
-describe ('pj04-orderbook-params', () => {
-    // PJ04: a WsOrderBook-typed parameter prints the ws order book class, its literal-key reads go
+describe ('java WsOrderBook parameter typing', () => {
+    // a WsOrderBook-typed parameter prints the ws order book class, its literal-key reads go
     // native, and an Object argument at the call site carries the checkcast.
-    describe('WsOrderBook parameters (hx10w4 PJ04)', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-pj04-orderbook');
+    describe('WsOrderBook parameters', () => {
+        const TMP = path.join(__dirname, 'files', 'tmp-wsorderbook-parameters-orderbook');
         const BOOK_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'ws', 'OrderBook.ts');
         const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
         let venueOutput: string;

@@ -381,7 +381,7 @@ describe('go `key in obj` -> map membership', () => {
         const output = transpile(ts);
         expect(output).toContain('InOp(m, k)');
     });
-    // hx10w8-GP03: InOp derefs its key (nil answers false) and a map read of a nil pointer
+    // InOp derefs its key (nil answers false) and a map read of a nil pointer
     // panics, so a pointer key needs a nil proof that dominates the read
     test('a nil test earlier in the block admits the pointer key read', () => {
         const ts = pointerKeyFixture(

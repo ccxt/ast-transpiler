@@ -5,25 +5,25 @@ import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as passes from '../src/rustTranspiler';
-import { hx10w2R03SelfTest } from '../src/rustTranspiler';
-import { r04SelfTest } from '../src/rustTranspiler';
-import { r06SelfTest } from '../src/rustTranspiler';
-import { r01SelfTest } from '../src/rustTranspiler';
-import { hx10R03SelfTest } from '../src/rustTranspiler';
-import { r04CalleeSelfTest } from '../src/rustTranspiler';
-import { r06w3SelfTest } from '../src/rustTranspiler';
-import { r07StringSelfTest } from '../src/rustTranspiler';
-import { r10SelfTest } from '../src/rustTranspiler';
-import { r01W2SelfTest } from '../src/rustTranspiler';
-import { rp02SelfTest } from '../src/rustTranspiler';
+import { nativeContainerOpsSelfTest } from '../src/rustTranspiler';
+import { nativeBoolScalarsSelfTest } from '../src/rustTranspiler';
+import { arrOnlyVecPushSelfTest } from '../src/rustTranspiler';
+import { rustTypedLocalsSelfTest } from '../src/rustTranspiler';
+import { calleeShapeContainerOpsSelfTest } from '../src/rustTranspiler';
+import { nativeBoolCalleeSelfTest } from '../src/rustTranspiler';
+import { rustVecPushInlineSelfTest } from '../src/rustTranspiler';
+import { rustStringNativesSelfTest } from '../src/rustTranspiler';
+import { clientHandleSelfTest } from '../src/rustTranspiler';
+import { rustNativeGetValueSelfTest } from '../src/rustTranspiler';
+import { mapParamDispatchSelfTest } from '../src/rustTranspiler';
 
 // fixture trees used above are written to a temp dir so the suite carries no fixture files
 const rustInlineFixtures: Record<string, Record<string, string>> = {
- "hx10w4pr02": {
+ "bool-params": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['sandbox'] = true;\n        }\n    }\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n    hold (f: any): any {\n        return f;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required `boolean` read only in condition slots -> native `bool`\n    settlementData (isBuy: boolean, amount: any) {\n        if (isBuy) {\n            return -amount;\n        }\n        return amount;\n    }\n    // optional `boolean`: bound with the truthiness the use sites applied\n    starkAmount (amount: any, roundUp: boolean = false) {\n        if (roundUp) {\n            return amount + 1;\n        }\n        return amount;\n    }\n    // a bool parameter forwarded into a native-`bool` slot\n    forwarded (on: boolean) {\n        return this.settlementData (on, 1);\n    }\n    // a `Value` argument coerces at the call site\n    fromValue (raw: any) {\n        return this.settlementData (raw, 2);\n    }\n    // a bool parameter read outside a bool sink keeps the box\n    boxed (flag: boolean) {\n        const held = flag;\n        return held;\n    }\n    // an override keeps the base `Value` signature\n    override setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['demo'] = true;\n        }\n    }\n    // a method reference handed to another call keeps the `Value` signature\n    channelB (flag: boolean) {\n        if (flag) {\n            return 1;\n        }\n        return 2;\n    }\n    holdRef () {\n        return this.hold (this.channelB);\n    }\n}\n"
  },
- "hx10w5r09": {
+ "bool-locals": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required bool parameter: the native-`bool` slot a local may flow into\n    settle (isMarket: boolean, amount: any) {\n        if (isMarket) {\n            return -amount;\n        }\n        return amount;\n    }\n    // a bool local from a comparison, read in condition slots AND a native-`bool` slot\n    localIntoBoolSlot (type: string) {\n        const isMarket = (type === 'market');\n        if (!isMarket) {\n            return 0;\n        }\n        if (isMarket && (type === 'x')) {\n            return 1;\n        }\n        return this.settle (isMarket, 2);\n    }\n    // a comparison local read only in conditions stays typed (no regression)\n    localConditionsOnly (type: string) {\n        const isSpot = (type === 'spot');\n        if (isSpot) {\n            return 1;\n        }\n        return 0;\n    }\n    // negative: a Value slot keeps the box\n    localIntoValueSlot (type: string) {\n        const isWide = (type === 'spot');\n        const held = [ isWide ];\n        return held;\n    }\n    // negative: a `Value` read into the bool slot still coerces\n    valueIntoBoolSlot (raw: any) {\n        return this.settle (raw, 3);\n    }\n}\n"
  },
@@ -341,7 +341,7 @@ describe('rust transpiling tests', () => {
         expect(output).not.toContain('Value::Bool(a.as_f64()');
     });
 
-    test('string comparison replicates the helper natively (hx4 R22)', () => {
+    test('string comparison replicates the helper natively', () => {
         const ts =
         "let a = 'x';\n" +
         "let b = 'y';\n" +
@@ -360,7 +360,7 @@ describe('rust transpiling tests', () => {
         "    const x = 1;\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // hx4 R25 inline helper dispatch
+        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // inline helper dispatch
     });
 
     // One number at runtime already pins `<`/`>` to the helper's f64 compare
@@ -399,7 +399,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // hx4 R25
+        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // inline math/comparison dispatch
     });
 
     test('less or equal with a single typed number operand keeps the helper', () => {
@@ -410,7 +410,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // hx4 R25
+        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // inline math/comparison dispatch
     });
 
     // A numeric literal / `.length` / `indexOf` is Int or Float at runtime,
@@ -478,7 +478,7 @@ describe('rust transpiling tests', () => {
 
     // Two strings are the helper's lexical branch — a numeric-string literal
     // goes through the same path, so it must keep the helper.
-    test('string against a numeric-string literal keeps the f64 parse (hx4 R22)', () => {
+    test('string against a numeric-string literal keeps the f64 parse', () => {
         const ts =
         "function f(hex: string) {\n" +
         "    if (hex >= '80') {\n" +
@@ -543,19 +543,19 @@ describe('rust transpiling tests', () => {
     test('subtraction wrapping', () => {
         const ts = 'const c = a - b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // hx4 R25
+        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // inline math/comparison dispatch
     });
 
     test('multiplication wrapping', () => {
         const ts = 'const c = a * b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x * __y),'); // hx4 R25
+        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x * __y),'); // inline math/comparison dispatch
     });
 
     test('division wrapping', () => {
         const ts = 'const c = a / b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(Some(__x), Some(__y)) if __y != 0.0 => Value::Float(__x / __y)'); // hx4 R25
+        expect(output).toContain('(Some(__x), Some(__y)) if __y != 0.0 => Value::Float(__x / __y)'); // inline math/comparison dispatch
     });
 
     test('modulo wrapping', () => {
@@ -568,26 +568,26 @@ describe('rust transpiling tests', () => {
     test('less than wrapping', () => {
         const ts = 'const r = a < b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // hx4 R25 inline helper dispatch
+        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // inline helper dispatch
     });
 
     test('less than or equal wrapping', () => {
         const ts = 'const r = a <= b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('__x < __y'); // hx4 R25
+        expect(output).toContain('__x < __y'); // inline math/comparison dispatch
         expect(output).toContain('(Value::Null, Value::Null) => true');
     });
 
     test('greater than wrapping', () => {
         const ts = 'const r = a > b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('__x > __y'); // hx4 R25
+        expect(output).toContain('__x > __y'); // inline math/comparison dispatch
     });
 
     test('greater than or equal wrapping', () => {
         const ts = 'const r = a >= b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('__x > __y'); // hx4 R25
+        expect(output).toContain('__x > __y'); // inline math/comparison dispatch
     });
 
     // Compound assignment
@@ -600,7 +600,7 @@ describe('rust transpiling tests', () => {
     test('-= assignment', () => {
         const ts = 'x -= 1;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('x = (match (&(x), &(Value::Int(1))) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // hx4 R25
+        expect(output).toContain('x = (match (&(x), &(Value::Int(1))) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // inline math/comparison dispatch
     });
 
     // Postfix unary
@@ -1590,7 +1590,7 @@ describe('rust checker-typed native container access', () => {
         expect(output).toContain('add(&a, &b)');
     });
 
-    // hx4 R09: a non-null string side puts `add` on its string branch (stringify_simple == Display).
+    // a non-null string side puts `add` on its string branch (stringify_simple == Display).
     test('number + string emits native concat', () => {
         const ts =
         'const a: number = 1;\n' +
@@ -1676,7 +1676,7 @@ describe('rust checker-typed native container access', () => {
         expect(output).toContain('add(&a, &b)');
     });
 
-    test('always-Str local + any concatenates natively (hx4 R22)', () => {
+    test('always-Str local + any concatenates natively', () => {
         const ts =
         'function h(): any { return 2; }\n' +
         'const a: string = "x";\n' +
@@ -2372,7 +2372,7 @@ describe('rust is_true over a proven boolean Value', () => {
         expect(output).not.toContain('is_true(&self.safeBool2');
     });
 
-    test('a method returning only bool literals tests as_bool natively (hx4 R12)', () => {
+    test('a method returning only bool literals tests as_bool natively', () => {
         const ts = boolClass('        if (this.isLinear(this.options)) { return 1; }');
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('if self.isLinear(self.options).as_bool() == Some(true) {');
@@ -2430,8 +2430,8 @@ describe('rust is_true over a proven boolean Value', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        // PR02 prints a call-site-proven `boolean` parameter as a native `bool`, so the condition
-        // is the bare name (PR04's identifier arm applies only while the parameter stays boxed)
+        // the transpiler prints a call-site-proven `boolean` parameter as a native `bool`, so the condition
+        // is the bare name (the identifier arm applies only while the parameter stays boxed)
         expect(output).toContain('if isPrivate {');
         expect(output).toContain('if !isPrivate {');
         expect(output).not.toContain('is_true(&isPrivate)');
@@ -2541,7 +2541,7 @@ describe('rust declared-Dict locals', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        // hx10w9 RP03: the element local is a bare IndexMap, so the read is a map
+        // the element local is a bare IndexMap, so the read is a map
         // lookup (`market.as_map()` box would only add the `|__m|` closure).
         expect(output).toContain('market.get("id").cloned().unwrap_or(Value::Null)');
         expect(output).toContain('let mut market: indexmap::IndexMap<String, Value> = (if let (Some(__m), Some(__k)) = (self.markets.as_map(), symbol.as_str())');
@@ -2821,7 +2821,7 @@ describe('rust declared-Dict locals (rust-25)', () => {
     });
 
     test('the declaration stays Value (no native HashMap retype)', () => {
-        // hx10w6 R02: a read-only dict local is a bare IndexMap; a written one stays boxed.
+        // a read-only dict local is a bare IndexMap; a written one stays boxed.
         const snippet =
             'class T {\n' +
             '    m(response) {\n' +
@@ -3875,7 +3875,7 @@ describe('rust typed-receiver native reads (D-28)', () => {
             '    extend(a: any, b: any) { return a; }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        // hx10w6 R01: the local is a typed bearer now, so the read is a plain map
+        // the local is a typed bearer now, so the read is a plain map
         // lookup and the earlier `this.` argument boxes a clone (no `as_map` chain).
         expect(output).toContain('dict.get(key.as_str().unwrap_or("")).cloned().unwrap_or(Value::Null)');
         expect(output).toContain('return self.extend(Value::Map(dict.clone()), Value::Map({');
@@ -4083,7 +4083,7 @@ describe('rust order book sides keep the runtime helpers', () => {
     });
 });
 
-describe('hx4 R01 native element writes on plain-dict locals', () => {
+describe('native element writes on plain-dict locals', () => {
     const insert = (receiver: string, key: string, value: string) =>
         `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
     let output = '';
@@ -4131,7 +4131,7 @@ describe('hx4 R01 native element writes on plain-dict locals', () => {
     });
 });
 
-describe('rust this-field dynamic dict reads (hx4 R02)', () => {
+describe('rust this-field dynamic dict reads', () => {
     const DECL = 'interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\nclass C { x: number; }\n';
 
     test('a dynamic string key on a Dict-declared field reads natively', () => {
@@ -4163,7 +4163,7 @@ describe('rust this-field dynamic dict reads (hx4 R02)', () => {
     });
 });
 
-describe('hx4 R04: native Vec push on typed array locals', () => {
+describe('native Vec push on typed array locals', () => {
     const wrap = (body: string) => `class T {\n    parseX (x) { return x; }\n    filterBy (a, b) { return a; }\n    f (items: any[]) {\n${body}\n    }\n}`;
     test('push-only local returned is a Vec<Value> with native push', () => {
         const out = transpiler.transpileRust(wrap('        const result = [];\n        result.push (items[0]);\n        result.push (this.parseX (1));\n        return result;')).content;
@@ -4201,14 +4201,14 @@ describe('hx4 R04: native Vec push on typed array locals', () => {
             '        let out = [];\n        out.push (1);\n        out = [];\n        return out;',
         ]) {
             const out = transpiler.transpileRust(wrap(body)).content;
-            // the box stays (hx4 R18 may spell its Arr push natively)
+            // the box stays (the Arr push may be spelled natively)
             expect(out).toMatch(/append_to_array\(&mut out|if let Value::Arr\(__a\) = &mut out \{/);
             expect(out).not.toContain('Vec<Value>');
         }
     });
 });
 
-describe('hx4 R05 native IndexMap ops on proven dict receivers', () => {
+describe('native IndexMap ops on proven dict receivers', () => {
     let rest = '';
     let ws = '';
     beforeAll(() => {
@@ -4244,7 +4244,7 @@ describe('hx4 R05 native IndexMap ops on proven dict receivers', () => {
     });
 });
 
-describe('hx4 R06 native string methods on proven strings', () => {
+describe('native string methods on proven strings', () => {
     const m = (body: string, params = 'a: string') => `class A {\n    run(${params}) {\n${body}\n    }\n}`;
     const out = (body: string, params?: string) => transpiler.transpileRust(m(body, params)).content;
 
@@ -4286,15 +4286,15 @@ describe('hx4 R06 native string methods on proven strings', () => {
     });
     test('non-literal operands keep the helpers', () => {
         const o = out("        return [a.split(s), a.startsWith(s), a.replace(s, 'y')];", 'a: string, s: string');
-        // hx4 R13: a string-variable split delimiter / replace pattern goes native
+        // a string-variable split delimiter / replace pattern goes native
         expect(o).toContain('a.as_str().zip(s.as_str()).map(|(__s, __d)| __s.split(__d)');
-        // hx4 R17: a string-variable affix goes native too
+        // a string-variable affix goes native too
         expect(o).toContain('a.as_str().zip(s.as_str()).is_some_and(|(__s, __p)| __s.starts_with(__p))');
         expect(o).toContain('a.as_str().zip(s.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, \"y\").into()))');
     });
 });
 
-describe('w4 PR06 padEnd / toFixed native arms on proven operands', () => {
+describe('padEnd / toFixed native arms on proven operands', () => {
     const m = (body: string, params = 'a: string') => `class A {\n    run(${params}) {\n${body}\n    }\n}`;
     const out = (body: string, params?: string) => transpiler.transpileRust(m(body, params)).content;
 
@@ -4317,8 +4317,8 @@ describe('w4 PR06 padEnd / toFixed native arms on proven operands', () => {
     });
 });
 
-// hx4 R07 — numeric/string helpers go native on checker-proven operands
-describe('rust R07 native numeric/string helpers', () => {
+// numeric/string helpers go native on checker-proven operands
+describe('rust native numeric/string helpers', () => {
     const rust = (ts: string) => transpiler.transpileRust(ts).content;
     test('number toString prints Display format', () => {
         const out = rust('function f(n: number) { const r = n.toString(); return r; }');
@@ -4360,44 +4360,44 @@ describe('rust R07 native numeric/string helpers', () => {
     });
 });
 
-describe('hx4 R09 rust typed-operand is_equal/add/subtract', () => {
-    const r09 = (code: string) => transpiler.transpileRust(code).content;
+describe('rust typed-operand is_equal/add/subtract', () => {
+    const nativeIntResult = (code: string) => transpiler.transpileRust(code).content;
 
     test('string + number and Str + number', () => {
-        const out = r09('function f (n: number, s: string, t: string | undefined) {\n    const a = s + n;\n    const b = t + n;\n    return [ a, b ];\n}\n');
+        const out = nativeIntResult('function f (n: number, s: string, t: string | undefined) {\n    const a = s + n;\n    const b = t + n;\n    return [ a, b ];\n}\n');
         expect(out).toContain('let mut a: Value = Value::Str(format!("{}{}", s, n).into());');
         expect(out).toContain('add(&t, &n)');
     });
 
     test('number + any keeps the helper', () => {
-        const out = r09('function f (n: number, s: string, x: any) {\n    const a = s + x;\n    const b = x + n;\n    return [ a, b ];\n}\n');
+        const out = nativeIntResult('function f (n: number, s: string, x: any) {\n    const a = s + x;\n    const b = x + n;\n    return [ a, b ];\n}\n');
         expect(out).toContain('add(&s, &x)');
         expect(out).toContain('add(&x, &n)');
     });
 
     test('.length on an any receiver minus/plus a number goes native', () => {
-        const out = r09('function f (x: any, n: number) {\n    const a = x.length - 1;\n    const b = x.length + n;\n    return [ a, b ];\n}\n');
+        const out = nativeIntResult('function f (x: any, n: number) {\n    const a = x.length - 1;\n    const b = x.length + n;\n    return [ a, b ];\n}\n');
         expect(out).not.toContain('subtract(');
         expect(out).not.toContain('add(');
         expect(out).toContain('(match (&(get_array_length(&x)), &(Value::Int(1))) { (Value::Int(x), Value::Int(y)) => Value::Int(x - y)');
     });
 
     test('const length local of an any receiver compares natively', () => {
-        const out = r09('function f (x: any, y: any) {\n    const length = x.length;\n    const other = y.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (length === other) {\n        return 2;\n    }\n    return 3;\n}\n');
+        const out = nativeIntResult('function f (x: any, y: any) {\n    const length = x.length;\n    const other = y.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (length === other) {\n        return 2;\n    }\n    return 3;\n}\n');
         expect(out).toContain('if (length.as_f64() == Some(0.0))');
         expect(out).toContain('if (length.as_f64() == other.as_f64())');
         expect(out).not.toContain('is_equal(');
     });
 
     test('let length local, and any vs const length, keep the helpers', () => {
-        const out = r09('function f (x: any, y: any) {\n    let length = x.length;\n    length = y;\n    const l2 = x.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (l2 === y) {\n        return 2;\n    }\n    return l2 - y;\n}\n');
+        const out = nativeIntResult('function f (x: any, y: any) {\n    let length = x.length;\n    length = y;\n    const l2 = x.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (l2 === y) {\n        return 2;\n    }\n    return l2 - y;\n}\n');
         expect(out).toContain('is_equal(&length, &Value::Int(0))');
         expect(out).toContain('is_equal(&l2, &y)');
-        expect(out).toContain('(match (&(l2), &(y)) {'); // hx4 R25
+        expect(out).toContain('(match (&(l2), &(y)) {'); // inline math/comparison dispatch
     });
 });
 
-describe('hx4 R10 native reads on plain-dict locals and Dict parameters', () => {
+describe('native reads on plain-dict locals and Dict parameters', () => {
     const dyn = (receiver: string, key: string) =>
         `(if let (Some(__m), Some(__k)) = (${receiver}.as_map(), ${key}.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
     let output = '';
@@ -4422,7 +4422,7 @@ describe('hx4 R10 native reads on plain-dict locals and Dict parameters', () => 
     });
 });
 
-describe('hx4 R11: relaxed Vec locals and native list length', () => {
+describe('relaxed Vec locals and native list length', () => {
     const wrap = (body: string, params = 'items: any[]') => `class T {\n    parseX (x) { return x; }\n    filterBy (a, b) { return a; }\n    f (${params}) {\n${body}\n    }\n}`;
     const rs = (body: string, params?: string) => transpiler.transpileRust(wrap(body, params)).content;
     test('a non-final this-call argument clones into its box', () => {
@@ -4447,7 +4447,7 @@ describe('hx4 R11: relaxed Vec locals and native list length', () => {
             '        const out = [];\n        out.push (1);\n        const k = \'a\';\n        return out[k];',
         ]) {
             const out = rs(body);
-            // the box stays (hx4 R18 may spell its Arr push natively)
+            // the box stays (the Arr push may be spelled natively)
             expect(out).toMatch(/append_to_array\(&mut out|if let Value::Arr\(__a\) = &mut out \{/);
             expect(out).not.toContain('Vec<Value>');
         }
@@ -4464,7 +4464,7 @@ describe('hx4 R11: relaxed Vec locals and native list length', () => {
     });
 });
 
-describe('hx4 R12 safeDict / builder plain dicts and bool-value truthiness', () => {
+describe('safeDict / builder plain dicts and bool-value truthiness', () => {
     const insert = (receiver: string, key: string, value: string) =>
         `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
     let output = '';
@@ -4501,7 +4501,7 @@ describe('hx4 R12 safeDict / builder plain dicts and bool-value truthiness', () 
     });
 });
 
-describe('hx4 R13 proven-Str safeString locals: native equality / replace / split / toString / case', () => {
+describe('proven-Str safeString locals: native equality / replace / split / toString / case', () => {
     let replaceOut = '';
     let eqOut = '';
     beforeAll(() => {
@@ -4532,7 +4532,7 @@ describe('hx4 R13 proven-Str safeString locals: native equality / replace / spli
     });
 });
 
-describe('hx4 R14 overloaded base safeDict/safeList/safeBool feed the plain-dict and list proofs', () => {
+describe('overloaded base safeDict/safeList/safeBool feed the plain-dict and list proofs', () => {
     let output = '';
     beforeAll(() => {
         output = transpiler.transpileRustByPath('./tests/files/input/hx4r14/ts/src/venue.ts').content;
@@ -4555,11 +4555,11 @@ describe('hx4 R14 overloaded base safeDict/safeList/safeBool feed the plain-dict
         expect(output).toContain('last = trades.as_array().and_then(|__arr| match &((match (&(numTrades), &(Value::Int(1)))');
         expect(output).toContain('let mut prev: Value = trades.as_array().and_then(|__arr| match &((match (&(i), &(Value::Int(1)))');
         expect(output).toContain('Value::Int(__n) if *__n >= 0 => __arr.get(*__n as usize), _ => None }).cloned().unwrap_or(Value::Null)');
-        expect(output).toContain('get_value(&trades, &(match (&(k), &(Value::Int(1))) {'); // hx4 R25
+        expect(output).toContain('get_value(&trades, &(match (&(k), &(Value::Int(1))) {'); // inline math/comparison dispatch
     });
 });
 
-describe('hx4 R15 Vec<Value> object-literal / join uses and negated bool tuple locals', () => {
+describe('Vec<Value> object-literal / join uses and negated bool tuple locals', () => {
     let output = '';
     beforeAll(() => {
         output = transpiler.transpileRustByPath('./tests/files/input/hx4r15/ts/src/venue.ts').content;
@@ -4586,7 +4586,7 @@ describe('hx4 R15 Vec<Value> object-literal / join uses and negated bool tuple l
     });
 });
 
-describe('hx4 R16 rust math/comparison on structurally numeric operands', () => {
+describe('rust math/comparison on structurally numeric operands', () => {
     const r16 = (code: string) => transpiler.transpileRust(code).content;
     const src = 'class X {\n' +
         '    sum (...xs: any[]): any { return xs[0]; }\n' +
@@ -4627,15 +4627,15 @@ describe('hx4 R16 rust math/comparison on structurally numeric operands', () => 
     });
 
     test('any operands and two nullable sides of <= keep the helpers', () => {
-        expect(out).toContain('(match (&(a), &(bid)) { (__a, __b) =>'); // hx4 R25
-        expect(out).toContain('(match (&(a), &(Value::Int(1))) {'); // hx4 R25
-        expect(out).toContain('(match (&(self.sum(a, Value::Int(1))), &(Value::Int(2))) { (__a, __b) =>'); // hx4 R25
+        expect(out).toContain('(match (&(a), &(bid)) { (__a, __b) =>'); // inline math/comparison dispatch
+        expect(out).toContain('(match (&(a), &(Value::Int(1))) {'); // inline math/comparison dispatch
+        expect(out).toContain('(match (&(self.sum(a, Value::Int(1))), &(Value::Int(2))) { (__a, __b) =>'); // inline math/comparison dispatch
         expect(out).toContain('let mut m: Value = (match ((self.sum(bid, Value::Int(1))).as_f64(), (Value::Int(2)).as_f64())');
-        expect(out).toContain('(match (&(bid), &(limit)) { (__a, __b) =>'); // hx4 R25
+        expect(out).toContain('(match (&(bid), &(limit)) { (__a, __b) =>'); // inline math/comparison dispatch
     });
 });
 
-describe('hx4 R17 string helpers and anchored concat', () => {
+describe('string helpers and anchored concat', () => {
     const src = "type Str = string | undefined;\nclass Precise { constructor (s: string) {} }\nclass A {\n    id: string = 'a';\n    safeString (o: any, k: any, d: any = undefined): Str { return undefined; }\n    run (x: any, code: string, s: Str, n: number) {\n        const h = this.safeString (x, 'h', '');\n        let qs = '';\n        qs = qs.replaceAll ('%2C', ',');\n        const r = code.replace (s, h);\n        const p = new Precise ('1');\n        return [ h.trim (), code.startsWith (s), code.endsWith (h), qs, r, this.id + ' x ' + x, 'n' + n, 'p' + p, x + 'y', x.trim (), x.replaceAll ('a', 'b'), x.startsWith (s) ];\n    }\n}\n";
     let o = '';
     beforeAll(() => { o = transpiler.transpileRust(src).content; });
@@ -4659,7 +4659,7 @@ describe('hx4 R17 string helpers and anchored concat', () => {
     });
 });
 
-describe('hx4 R18 collection helpers on proven plain-dict / Arr-only locals', () => {
+describe('collection helpers on proven plain-dict / Arr-only locals', () => {
     let rest = '';
     let prediction = '';
     beforeAll(() => {
@@ -4672,7 +4672,7 @@ describe('hx4 R18 collection helpers on proven plain-dict / Arr-only locals', ()
         expect(rest).toContain('return Value::from(vec![out, count, Value::Int(parsed.len() as i64)]);');
     });
 
-    test('literal-key in on an R10 plain local is contains_key', () => {
+    test('literal-key in on a plain-dict local is contains_key', () => {
         expect(rest).toContain('if (matches!(&account, Value::Dict(__d) if __d.contains_key("free"))) {');
         expect(rest).toContain('in_op(&response, &Value::Str("code".into()))');
     });
@@ -4693,7 +4693,7 @@ describe('hx4 R18 collection helpers on proven plain-dict / Arr-only locals', ()
     });
 });
 
-describe('hx4 R20 bool-call equality and numeric add', () => {
+describe('bool-call equality and numeric add', () => {
     const src = "class A {\n    sbeReadUint (h: string, o: number, l: number): number { return o + l; }\n    sum (...a: any[]): any { return a[0]; }\n    run (requestPath: any, frameHex: string, frameLength: number, x: any, flag: any) {\n        const blockLength = this.sbeReadUint (frameHex, 0, 2);\n        const position = this.sum (blockLength, 8);\n        if (requestPath.endsWith ('login') === true) { return 1; }\n        if (position + 4 > frameLength) { return 0; }\n        const k = x + 1;\n        return [ x.startsWith ('z') !== true, k, flag === true ];\n    }\n}\n";
     let o = '';
     beforeAll(() => { o = transpiler.transpileRust(src).content; });
@@ -4710,7 +4710,7 @@ describe('hx4 R20 bool-call equality and numeric add', () => {
     });
 });
 
-describe('hx4 R21 base-tier enumeration, Arr-only sources and string-method receivers', () => {
+describe('base-tier enumeration, Arr-only sources and string-method receivers', () => {
     let base = '';
     let rest = '';
     beforeAll(() => {
@@ -4718,7 +4718,7 @@ describe('hx4 R21 base-tier enumeration, Arr-only sources and string-method rece
         rest = transpiler.transpileRustByPath('./tests/files/input/hx4r21/ts/src/venue.ts').content;
     });
 
-    // hx10w9 RP04: `built` is a literal-built local, so it is a typed bearer now and
+    // `built` is a literal-built local, so it is a typed bearer now and
     // enumerates through the map's own iterators (no `as_map` box, no `object_keys`).
     test('Object.keys / Object.values on a base-tier plain local are native; any keeps the helper', () => {
         expect(base).toContain('let mut keys: Value = Value::Array(built.keys().map(|__k| Value::Str(__k.clone().into())).collect());');
@@ -4738,7 +4738,7 @@ describe('hx4 R21 base-tier enumeration, Arr-only sources and string-method rece
     });
 });
 
-describe('hx4 R22 self-referential numeric writes, always-Str locals, Str ordering', () => {
+describe('self-referential numeric writes, always-Str locals, Str ordering', () => {
     const src = "type Str = string | undefined;\nclass A {\n    sum (...a: any[]): any { return a[0]; }\n    safeString (o: any, k: any, d: any = undefined): Str { return undefined; }\n    json (x: any): string { return ''; }\n    run (blockLength: number, raw: any, snap: any, method: string, path: string, params: any, x: any) {\n        let position = this.sum (blockLength, 8);\n        position = position + 4;\n        let earliest: Str = undefined;\n        const gameTime = this.safeString (raw, 'gameTime');\n        if ((gameTime !== undefined) && ((earliest === undefined) || (gameTime < earliest))) {\n            earliest = gameTime;\n        }\n        const version = this.safeString (snap, 'v', '');\n        const held = this.safeString (snap, 'h', '');\n        const newer = (held !== '') && (version <= held);\n        let body: any = undefined;\n        if (method === 'POST') { body = this.json (params); }\n        let auth = '/' + path;\n        if (body !== undefined) { auth = auth + body; }\n        let maybe = this.safeString (x, 'k');\n        const bad = maybe + body;\n        const loose = x < raw;\n        const anyLe = x <= 'b';\n        return [ position, earliest, newer, auth, bad, loose, anyLe ];\n    }\n}\n";
     let o = '';
     beforeAll(() => { o = transpiler.transpileRust(src).content; });
@@ -4755,12 +4755,12 @@ describe('hx4 R22 self-referential numeric writes, always-Str locals, Str orderi
     });
     test('unproven operands keep the helpers', () => {
         expect(o).toContain('add(&maybe, &body)');
-        expect(o).toContain('(match (&(x), &(raw)) { (__a, __b) =>'); // hx4 R25
-        expect(o).toContain('(match (&(x), &(Value::Str("b".into()))) { (__a, __b) =>'); // hx4 R25
+        expect(o).toContain('(match (&(x), &(raw)) { (__a, __b) =>'); // inline math/comparison dispatch
+        expect(o).toContain('(match (&(x), &(Value::Str("b".into()))) { (__a, __b) =>'); // inline math/comparison dispatch
     });
 });
 
-describe('hx4 R23 plain-dict sources in the base tier and pro files', () => {
+describe('plain-dict sources in the base tier and pro files', () => {
     let base = '';
     let pro = '';
     beforeAll(() => {
@@ -4770,12 +4770,12 @@ describe('hx4 R23 plain-dict sources in the base tier and pro files', () => {
 
     test('base extend copies of locals / typed Dict params insert natively', () => {
         expect(base).toContain('if let Value::Dict(__d) = &mut itemWithKey { std::sync::Arc::make_mut(__d).insert(crate::runtime::stringify_param(&keyName), key.clone()); }');
-        // hx10w7 R03: `extend` of a literal + a Dict-typed place declares the bearer.
+        // `extend` of a literal + a Dict-typed place declares the bearer.
         expect(base).toContain('result.insert("swap".into(), Value::Bool(false));');
     });
 
     test('base safeDict(this.options, k, {}) local reads natively', () => {
-        // hx10w7 R03: the safeDict local is a bearer, so the read is one map lookup.
+        // the safeDict local is a bearer, so the read is one map lookup.
         expect(base).toContain('accountsByType.get(account.as_str().unwrap_or("")).cloned().unwrap_or(Value::Null)');
     });
 
@@ -4789,13 +4789,13 @@ describe('hx4 R23 plain-dict sources in the base tier and pro files', () => {
     });
 
     test('pro safeDict(this.options, k, {}) local reads natively', () => {
-        // hx10w7 R03: bearer read and write, no helper and no cow_guard.
+        // bearer read and write, no helper and no cow_guard.
         expect(pro).toContain('subs.insert("a".into(), Value::Int(1));');
         expect(pro).toContain('subs.get("a").cloned().unwrap_or(Value::Null)');
     });
 });
 
-describe('hx4 R25 inline math/comparison dispatch and Str|Null field concat', () => {
+describe('inline math/comparison dispatch and Str|Null field concat', () => {
     const src = "class A {\n    convertToBigIntCustom (x: any) {\n        return parseInt (x);\n    }\n    signHash (hash: any, privateKey: any) {\n        const signature = ecdsa (hash, privateKey);\n        const r = signature['r'];\n        const s = signature['s'];\n        return {\n            'r': r.padStart (64, '0'),\n            's': s.padStart (64, '0'),\n            'v': 27,\n        };\n    }\n    signMessage (message: any, privateKey: any) {\n        return this.signHash (message, privateKey.slice (-64));\n    }\n    signOnboardingAction (): object {\n        const signature = this.signMessage ('x', 'y');\n        return signature;\n    }\n    run (request: any, params: any, config: any, cache: any[], h: any) {\n        const amountMultiplier = this.convertToBigIntCustom ('1000000');\n        const amountInt = request['num_tokens'] * amountMultiplier;\n        const z = this.parseToInt (request['num_tokens'] * amountMultiplier);\n        const limit = params['limit'];\n        const entry = config[0];\n        if (limit <= entry[0]) { return 1; }\n        const signature: any = this.signOnboardingAction ();\n        const pk = this.hashMessage (signature['r'] + signature['s']);\n        const cacheLength = cache.length;\n        const snapshotDelay = this.handleOption ('a', 'b', 25);\n        if (cacheLength === snapshotDelay) { return 2; }\n        if (h === 1) { return 3; }\n        return [ amountInt, z, pk ];\n    }\n}\n";
     let o = '';
     beforeAll(() => { o = transpiler.transpileRust(src).content; });
@@ -4818,7 +4818,7 @@ describe('hx4 R25 inline math/comparison dispatch and Str|Null field concat', ()
     });
 });
 
-describe('hx4 R26 tuple slot-1 params of base handle*AndParams helpers', () => {
+describe('tuple slot-1 params of base handle*AndParams helpers', () => {
     const insert = (receiver: string, key: string, value: string) =>
         `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
     let rest = '';
@@ -4849,7 +4849,7 @@ describe('hx4 R26 tuple slot-1 params of base handle*AndParams helpers', () => {
     });
 });
 
-describe('hx10 w4 PR01 typed locals: Vec literal seeds and Arr-only index reads', () => {
+describe('typed locals: Vec literal seeds and Arr-only index reads', () => {
     const wrap = (body: string, params = 'items: any[]') => `class T {
     parseX (x) { return x; }
     f (${params}) {
@@ -4885,7 +4885,7 @@ ${body}
     });
 });
 
-describe('hx10 PR02 native `bool` parameters', () => {
+describe('native `bool` parameters', () => {
     let base = '';
     let venue = '';
     beforeAll(() => {
@@ -4893,8 +4893,8 @@ describe('hx10 PR02 native `bool` parameters', () => {
             'verbose': false,
             'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } }
         } as any);
-        base = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'hx10w4pr02', 'ts/src/base/Exchange.ts')).content;
-        venue = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'hx10w4pr02', 'ts/src/venue.ts')).content;
+        base = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'bool-params', 'ts/src/base/Exchange.ts')).content;
+        venue = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'bool-params', 'ts/src/venue.ts')).content;
     });
 
     test('a required `boolean` read only in condition slots prints `bool`', () => {
@@ -4922,7 +4922,7 @@ describe('hx10 PR02 native `bool` parameters', () => {
     test('the base tier and base overrides keep the `Value` ABI', () => {
         expect(base).toContain('pub fn setSandboxMode(&self, enabled: Value)');
         expect(base).toContain('pub fn isPostOnly(&self, isMarketOrder: Value, optional_args: &[Value]) -> Value {');
-        // PR04 spells native truthiness of a boolean-typed `Value` as the `as_bool()` compare,
+        // native truthiness of a boolean-typed `Value` as the `as_bool()` compare,
         // so the boxed ABI still shows (no bare `if enabled {`)
         expect(base).toContain('if enabled.as_bool() == Some(true) {');
         expect(venue).toContain('pub fn setSandboxMode(&self, enabled: Value)');
@@ -4930,12 +4930,12 @@ describe('hx10 PR02 native `bool` parameters', () => {
 
     test('a method passed as a value keeps the `Value` signature', () => {
         expect(venue).toContain('pub fn channelB(&self, flag: Value) -> Value {');
-        // PR04's identifier arm: a boolean-typed `Value` prints the native `as_bool()` compare
+        // identifier arm: a boolean-typed `Value` prints the native `as_bool()` compare
         expect(venue).toContain('if flag.as_bool() == Some(true) {');
     });
 });
 
-describe('hx10 w5 R02 typed dict bearers', () => {
+describe('typed dict bearers', () => {
     const wrap = (body: string, params = 'v: any') => `class T {
     parseX (x) { return x; }
     f (${params}) {
@@ -4963,7 +4963,7 @@ ${body}
         expect(arg).toContain('return self.parseX(Value::Map(params));');
     });
 
-    // hx10w9 RP04: a boxed key (`v`, `0`) now writes through `stringify_param` — the
+    // a boxed key (`v`, `0`) now writes through `stringify_param` — the
     // helper's own conversion — so the negatives are receivers the bearer proof rejects.
     test('negative: an element-read receiver or a foreign container keeps the box', () => {
         const dyn = rs("        const d = {};\n        d[v] = 1;\n        return d['a'];");
@@ -4988,7 +4988,7 @@ ${body}
         expect(num).toContain('add_element_to_object(&mut d, &Value::Int(0), v)');
     });
 
-    test('a chained write on a one-level bearer types the local (hx10w7 R04)', () => {
+    test('a chained write on a one-level bearer types the local', () => {
         const nested = rs("        const d = {};\n        d['a']['b'] = v;\n        return d['a'];");
         expect(nested).toContain('let mut d: indexmap::IndexMap<String, Value>');
         expect(nested).toContain('if let Value::Dict(__d) = d.entry("a".into()).or_default()');
@@ -4996,14 +4996,14 @@ ${body}
     });
 });
 
-describe('hx10w5 R09 bool locals into native-`bool` slots', () => {
+describe('bool locals into native-`bool` slots', () => {
     let venue = '';
     beforeAll(() => {
         const fresh = new Transpiler({
             'verbose': false,
             'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } }
         } as any);
-        venue = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'hx10w5r09', 'ts/src/venue.ts')).content;
+        venue = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'bool-locals', 'ts/src/venue.ts')).content;
     });
 
     test('a comparison local read in a native-`bool` slot is declared `bool`', () => {
@@ -5026,7 +5026,7 @@ describe('hx10w5 R09 bool locals into native-`bool` slots', () => {
     });
 });
 
-describe('hx10w6 R01 bearer write shapes', () => {
+describe('bearer write shapes', () => {
     const wrap = (body: string, params = 'v: any') => `class T {
     parseX (x) { return x; }
     f (${params}) {
@@ -5092,7 +5092,7 @@ ${body}
     });
 });
 
-describe('hx10w6 R02 read-only container bearers', () => {
+describe('read-only container bearers', () => {
     const wrap = (body: string, params = 'v: any') => `class T {
     parseX (x) { return x; }
     f (${params}) {
@@ -5159,7 +5159,7 @@ ${body}
     });
 });
 
-describe('hx10w6 R04 two-level dict bearers', () => {
+describe('two-level dict bearers', () => {
     const wrap = (body: string, params = 'v: any') => `class T {
     parseX (x) { return x; }
     f (${params}) {
@@ -5232,7 +5232,7 @@ ${body}
     });
 });
 
-describe('hx10w7 R03 dict bearer from a map-producing call', () => {
+describe('dict bearer from a map-producing call', () => {
     const wrap = (body: string, params = 'v: any') => `type Dict = { [key: string]: any };
 class T {
     safeDict (o: Dict, k: string, d: Dict = {}): Dict { return d; }
@@ -5503,7 +5503,7 @@ describe('FM-RS1 L2 integer for-loop counters', () => {
     });
 });
 
-describe ('hx10w10RP06', () => {
+describe ('rustCallInitContainerLocals', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
@@ -5530,9 +5530,9 @@ describe ('hx10w10RP06', () => {
         return transpiler.transpileRust(PRELUDE + body + '}\n').content;
     }
 
-    // hx10w10 RP06: a local initialised from `this.<m>(…)` is typed as the container
+    // a local initialised from `this.<m>(…)` is typed as the container
     // the callee's own returns build, so its reads and writes print the native op.
-    describe('hx10w10 RP06 call-init container locals', () => {
+    describe('call-init container locals', () => {
         test('a base method that returns a literal map types the local and its write', () => {
             const out = rust('    depth (response: any, symbol: Str) {\n'
                 + '        const orderbook = this.parseOrderBook (response, symbol);\n'
@@ -5677,7 +5677,7 @@ describe ('hx10w10RP06', () => {
     });
 });
 
-describe ('hx10w9-RP03', () => {
+describe ('rustGetValueOnMapLocals', () => {
     jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
     let transpiler: Transpiler;
@@ -5698,7 +5698,7 @@ describe ('hx10w9-RP03', () => {
     const MAP_READ = (name: string, key: string) => `${name}.get("${key}").cloned().unwrap_or(Value::Null)`;
     const SHADOW = 'let orderbook = orderbook.as_map().unwrap_or(&__orderbook_empty);';
 
-    describe('hx10w9 RP03: get_value on proven map locals (ws order book)', () => {
+    describe('get_value on proven map locals (ws order book)', () => {
         test('an OrderBook parameter is shadowed as a map; literal reads are lookups', () => {
             const out = rs('    handleBookDelta(orderbook: OrderBook, delta: Dict) {\n' +
                 "        const bids = orderbook['bids'];\n" +
@@ -5772,13 +5772,13 @@ describe ('hx10w9-RP03', () => {
     });
 });
 
-describe ('hx10w9RP02', () => {
+describe ('rustDictParamBearers', () => {
         // fixture trees are written to a temp dir so the suite carries no fixture files
         const inlineFixtures: Record<string, Record<string, string>> = {
-     "hx10w9rp02": {
-      "ts/src/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    omit (a: any, b: any): any {\n        return a;\n    }\n\n    watch (a: any, b: any, c: any): any {\n        return a;\n    }\n\n    // hx10w9 RP02: a `Dict` parameter written by literal key, called only with a\n    // typed dict bearer -> `&mut IndexMap` and a bare `.insert`.\n    orderRequest (method: string, request: Dict, orderParams: Dict, params: Dict = {}): [Dict, Dict] {\n        if (method === 'create') {\n            orderParams['limit_price'] = this.omit (params, []);\n        }\n        orderParams['order_type'] = method;\n        request['params'] = orderParams;\n        const omitted: Dict = this.omit (params, []);\n        return [ request, omitted ];\n    }\n\n    createOrder (type: string, params: Dict = {}) {\n        const orderParams: Dict = {\n            'order_type': type,\n            'order_qty': 1,\n        };\n        const request: Dict = {\n            'method': 'add_order',\n            'params': orderParams,\n        };\n        const [ requestValue, paramsValue ] = this.orderRequest ('create', request, orderParams, params);\n        return this.watch ('url', 'hash', this.omit (requestValue, paramsValue));\n    }\n\n    // A caller that passes a non-bearer keeps the boxed parameter.\n    plainCreate (params: Dict = {}) {\n        const request: Dict = { 'method': 'add_order' };\n        return this.plainOrder ('create', request, params, params);\n    }\n\n    plainOrder (method: string, request: Dict, orderParams: Dict, params: Dict = {}): [Dict, Dict] {\n        orderParams['order_type'] = method;\n        request['params'] = orderParams;\n        return [ request, params ];\n    }\n\n    // A read-only `Dict` parameter keeps the D-25 borrowed shadow.\n    readOnly (orderParams: Dict): any {\n        return orderParams['order_type'];\n    }\n}\n\nclass second {\n    extend (a: any, b: any = undefined): any {\n        return a;\n    }\n\n    safeInteger (a: any, b: any): any {\n        return 1;\n    }\n\n    postAction (operationType: string, sigPayload: Dict, params: Dict): Dict {\n        sigPayload['builder_code'] = operationType;\n        const finalHeaders: Dict = { };\n        finalHeaders['account'] = operationType;\n        const request = this.extend (finalHeaders, sigPayload);\n        return request;\n    }\n\n    caller (type: string, params: Dict = {}) {\n        const sigPayload: Dict = { 'amount': 1 };\n        sigPayload['exclude'] = type;\n        return this.postAction ('op', sigPayload, params);\n    }\n}\n\nclass nested {\n    omit (a: any, b: any): any {\n        return a;\n    }\n\n    build (orderParams: Dict, params: Dict): Dict {\n        orderParams['type'] = 'market';\n        const triggers: Dict = {};\n        triggers['price'] = '1';\n        triggers['price_type'] = 'quote';\n        orderParams['triggers'] = triggers;\n        return this.omit (orderParams, params);\n    }\n\n    caller (params: Dict = {}) {\n        const orderParams: Dict = { 'qty': 1 };\n        const request: Dict = { 'params': orderParams };\n        const [ value, rest ] = [ this.build (orderParams, params), params ];\n        return this.omit (request, rest);\n    }\n}\n"
+     "owned-map-params": {
+      "ts/src/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    omit (a: any, b: any): any {\n        return a;\n    }\n\n    watch (a: any, b: any, c: any): any {\n        return a;\n    }\n\n    // a `Dict` parameter written by literal key, called only with a\n    // typed dict bearer -> `&mut IndexMap` and a bare `.insert`.\n    orderRequest (method: string, request: Dict, orderParams: Dict, params: Dict = {}): [Dict, Dict] {\n        if (method === 'create') {\n            orderParams['limit_price'] = this.omit (params, []);\n        }\n        orderParams['order_type'] = method;\n        request['params'] = orderParams;\n        const omitted: Dict = this.omit (params, []);\n        return [ request, omitted ];\n    }\n\n    createOrder (type: string, params: Dict = {}) {\n        const orderParams: Dict = {\n            'order_type': type,\n            'order_qty': 1,\n        };\n        const request: Dict = {\n            'method': 'add_order',\n            'params': orderParams,\n        };\n        const [ requestValue, paramsValue ] = this.orderRequest ('create', request, orderParams, params);\n        return this.watch ('url', 'hash', this.omit (requestValue, paramsValue));\n    }\n\n    // A caller that passes a non-bearer keeps the boxed parameter.\n    plainCreate (params: Dict = {}) {\n        const request: Dict = { 'method': 'add_order' };\n        return this.plainOrder ('create', request, params, params);\n    }\n\n    plainOrder (method: string, request: Dict, orderParams: Dict, params: Dict = {}): [Dict, Dict] {\n        orderParams['order_type'] = method;\n        request['params'] = orderParams;\n        return [ request, params ];\n    }\n\n    // A read-only `Dict` parameter keeps the D-25 borrowed shadow.\n    readOnly (orderParams: Dict): any {\n        return orderParams['order_type'];\n    }\n}\n\nclass second {\n    extend (a: any, b: any = undefined): any {\n        return a;\n    }\n\n    safeInteger (a: any, b: any): any {\n        return 1;\n    }\n\n    postAction (operationType: string, sigPayload: Dict, params: Dict): Dict {\n        sigPayload['builder_code'] = operationType;\n        const finalHeaders: Dict = { };\n        finalHeaders['account'] = operationType;\n        const request = this.extend (finalHeaders, sigPayload);\n        return request;\n    }\n\n    caller (type: string, params: Dict = {}) {\n        const sigPayload: Dict = { 'amount': 1 };\n        sigPayload['exclude'] = type;\n        return this.postAction ('op', sigPayload, params);\n    }\n}\n\nclass nested {\n    omit (a: any, b: any): any {\n        return a;\n    }\n\n    build (orderParams: Dict, params: Dict): Dict {\n        orderParams['type'] = 'market';\n        const triggers: Dict = {};\n        triggers['price'] = '1';\n        triggers['price_type'] = 'quote';\n        orderParams['triggers'] = triggers;\n        return this.omit (orderParams, params);\n    }\n\n    caller (params: Dict = {}) {\n        const orderParams: Dict = { 'qty': 1 };\n        const request: Dict = { 'params': orderParams };\n        const [ value, rest ] = [ this.build (orderParams, params), params ];\n        return this.omit (request, rest);\n    }\n}\n"
      },
-     "hx10w9rp02chain": {
+     "owned-map-params-chain": {
       "ts/src/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    // a key-chain write has no native print on a map parameter, so the parameter stays boxed\n    watchMany (request: Dict, ids: string[]) {\n        request['type'] = 'SUBSCRIBE';\n        request['channels'][0]['codes'] = ids;\n        return request;\n    }\n\n    watch (ids: string[]) {\n        const request: Dict = {\n            'channels': [ {} ],\n        };\n        return this.watchMany (request, ids);\n    }\n}\n\nexport default venue;\n"
      }
     };
@@ -5802,14 +5802,14 @@ describe ('hx10w9RP02', () => {
         transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
     });
 
-    // hx10w9 RP02: a `Dict` parameter that only takes map operations and whose every
+    // a `Dict` parameter that only takes map operations and whose every
     // call site passes a typed dict bearer prints `&mut IndexMap`, so its writes are
     // plain `.insert` instead of a per-site `Arc::make_mut` guard.
     describe('owned map parameters', () => {
         let rust = '';
 
         beforeAll(() => {
-            rust = transpiler.transpileRustByPath(path.join (fixtureRoot, 'hx10w9rp02', 'ts/src/venue.ts')).content;
+            rust = transpiler.transpileRustByPath(path.join (fixtureRoot, 'owned-map-params', 'ts/src/venue.ts')).content;
         });
 
         test('the proven parameter prints a mutable map reference', () => {
@@ -5845,14 +5845,14 @@ describe ('hx10w9RP02', () => {
 
     describe('owned map parameters: chained writes', () => {
         test('a parameter written through a key chain stays boxed', () => {
-            const rust = transpiler.transpileRustByPath(path.join (fixtureRoot, 'hx10w9rp02chain', 'ts/src/venue.ts')).content;
+            const rust = transpiler.transpileRustByPath(path.join (fixtureRoot, 'owned-map-params-chain', 'ts/src/venue.ts')).content;
             expect(rust).toContain('pub fn watchMany(&self, request: Value, ids: Value)');
             expect(rust).not.toContain('request: &mut indexmap::IndexMap<String, Value>');
         });
     });
 });
 
-describe ('hx10w9RP04', () => {
+describe ('rustBearerBoxedKeyWrites', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
@@ -5877,11 +5877,11 @@ describe ('hx10w9RP04', () => {
         return transpiler.transpileRust(PRELUDE + body + '}\n').content;
     }
 
-    // hx10w9 RP04: `x[k] = v` / `k in x` on a typed dict bearer whose key is not a
+    // `x[k] = v` / `k in x` on a typed dict bearer whose key is not a
     // checker-proven `string`. The helper stores a non-`Str` key through
     // `stringify_simple` — `stringify_param` is that function — and `in_op` only ever
     // matches a `Str` key, so both stay exact on the bare `IndexMap`.
-    describe('hx10w9 RP04 bearer writes with a boxed key', () => {
+    describe('bearer writes with a boxed key', () => {
         test('a computed key writes through stringify_param, no helper, no cow guard', () => {
             const out = rust('    build (values: any[]) {\n'
                 + '        const result: Dict = {};\n'
@@ -6017,7 +6017,7 @@ describe ('hx10w9RP04', () => {
     });
 });
 
-describe ('hx11w9RustStringMethodLocal', () => {
+describe ('rustStringMethodLocals', () => {
     jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
     const transpiler = new Transpiler({ verbose: false, rust: { parser: { NUM_LINES_END_FILE: 0 } } });
@@ -6041,7 +6041,7 @@ describe ('hx11w9RustStringMethodLocal', () => {
     });
 });
 
-describe ('r05RemoveNative', () => {
+describe ('rustNativeDelete', () => {
         // fixture trees are written to a temp dir so the suite carries no fixture files
         const inlineFixtures: Record<string, Record<string, string>> = {
      "r05": {
@@ -6064,7 +6064,7 @@ describe ('r05RemoveNative', () => {
         transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
     });
 
-    describe('hx10 R05 native `delete` with a computed key on a proven dict receiver', () => {
+    describe('native `delete` with a computed key on a proven dict receiver', () => {
         let rest = '';
         let ws = '';
         beforeAll(() => {
@@ -6093,7 +6093,7 @@ describe ('r05RemoveNative', () => {
     });
 });
 
-describe ('rp05NestedDictWrite', () => {
+describe ('rustNestedDictParamWrites', () => {
         // fixture trees are written to a temp dir so the suite carries no fixture files
         const inlineFixtures: Record<string, Record<string, string>> = {
      "rp05": {
@@ -6114,7 +6114,7 @@ describe ('rp05NestedDictWrite', () => {
         default: jest.fn()
     }));
 
-    describe('rp05 native nested dict writes on proven Dict parameters', () => {
+    describe('native nested dict writes on proven Dict parameters', () => {
         let out = '';
         beforeAll(() => {
             const config = { 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
@@ -6133,7 +6133,7 @@ describe ('rp05NestedDictWrite', () => {
             expect(out).toContain('get_mut(&crate::runtime::stringify_param(&code))');
         });
 
-        test('locals are left to the wave-2 text pass (no churn on its output)', () => {
+        test('locals are left to the final-text pass (no churn on its output)', () => {
             expect(out).toContain('add_element_to_object(get_value_mut(&mut request, &Value::Str("a".into())), &Value::Str("b".into()), Value::Int(2));');
         });
 
@@ -6182,7 +6182,7 @@ describe ('rustDictRead', () => {
     const free = (recv: string, key: string) =>
         `(if let (Some(__m), Some(__k)) = (${recv}.as_map(), ${key}.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
 
-    describe('rust closure-free dict reads (FM-RS1 L1)', () => {
+    describe('rust closure-free dict reads', () => {
         test('a Str-place key into a fresh-literal local prints the closure-free read', () => {
             expect(output).toContain(`let mut viaCode: Value = ${free('result', 'code')};`);
             expect(output).not.toContain('get_value(&result, &code)');
@@ -6214,39 +6214,39 @@ describe ('rustDictRead', () => {
 });
 
 describe ('rustPasses', () => {
-    describe('rust final-text passes (moved from ccxt build/)', () => {
+    describe('rust final-text passes', () => {
         test('every pass is exported from the package entry', () => {
-            for (const name of ['nativeGetValue', 'r02NativeInserts', 'hx10w2R03', 'r04Scalars', 'r06Push', 'r01TypedLocals',
-                'hx10w3R03', 'r04Callee', 'r05FieldChainInserts', 'r06w3Push', 'r07StringNatives', 'bf03PlainDictChains',
-                'r10ClientHandle', 'narrowStrSinkLocals', 'narrowStrNullLocals', 'hx11RustSignApiStr']) {
+            for (const name of ['nativeGetValue', 'nativeInserts', 'nativeContainerOps', 'nativeBoolScalars', 'arrOnlyVecPush', 'rustTypedLocals',
+                'calleeShapeContainerOps', 'nativeBoolCallee', 'fieldChainInserts', 'rustVecPushInline', 'rustStringNatives', 'plainDictChains',
+                'clientHandleViews', 'narrowStrSinkLocals', 'narrowStrNullLocals', 'rustSignApiStr']) {
                 expect(typeof (passes as any)[name]).toBe('function');
             }
         });
         const selfTests: { [k: string]: () => string[] | number } = {
-            hx10w2R03SelfTest, r04SelfTest, r06SelfTest, r01SelfTest, hx10R03SelfTest, r04CalleeSelfTest, r06w3SelfTest, r07StringSelfTest, r10SelfTest,
+            nativeContainerOpsSelfTest, nativeBoolScalarsSelfTest, arrOnlyVecPushSelfTest, rustTypedLocalsSelfTest, calleeShapeContainerOpsSelfTest, nativeBoolCalleeSelfTest, rustVecPushInlineSelfTest, rustStringNativesSelfTest, clientHandleSelfTest,
         };
         for (const [name, fn] of Object.entries(selfTests)) {
             test(`${name} passes`, () => { expect(fn()).toEqual([]); });
         }
-        test('r01W2 and RP02 self-tests pass', () => {
+        test('typed-locals and dict-param self-tests pass', () => {
             const log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
-            try { expect(r01W2SelfTest()).toBe(0); expect(rp02SelfTest()).toBe(0); } finally { log.mockRestore(); }
+            try { expect(rustNativeGetValueSelfTest()).toBe(0); expect(mapParamDispatchSelfTest()).toBe(0); } finally { log.mockRestore(); }
         });
         test('narrowStrSinkLocals types a format!-only safe_string local', () => {
             const src = 'pub fn f(&mut self) -> Value {\n    let mut s: Value = self.safe_string_k(x.clone(), "id", &[]);\n    let t: String = format!("a{}", s);\n    return Value::Null;\n}\n';
             expect(passes.narrowStrSinkLocals(src)).toContain('safe_string_k_opt');
         });
-        test('hx11RustSignApiStr is idempotent on unrelated text', () => {
+        test('the sign-API Str pass is idempotent on unrelated text', () => {
             const src = 'fn f() { let x = 1; }\n';
-            expect(passes.hx11RustSignApiStr(src)).toBe(src);
+            expect(passes.rustSignApiStr(src)).toBe(src);
         });
-        test('bf03PlainDictChains lowers a Value-ident key on balance/ohlcvs without get_value_mut', () => {
+        test('plainDictChains lowers a Value-ident key on balance/ohlcvs without get_value_mut', () => {
             const src = 'pub fn f(&mut self, symbol: Value) {\n    let mut tf: Value = Value::Null;\n    if let Value::Dict(__r05d) = get_value_mut(&mut self.ohlcvs, &symbol) { std::sync::Arc::make_mut(__r05d).insert(crate::runtime::stringify_param(&tf), tf.clone()); }\n}\n';
-            const out = passes.bf03PlainDictChains(src);
+            const out = passes.plainDictChains(src);
             expect(out).not.toContain('get_value_mut');
             expect(out).toContain('.entry(crate::runtime::stringify_param(&symbol)).or_insert(Value::Null)');
             const unknown = src.replace('symbol: Value', 'symbol: &str');
-            expect(passes.bf03PlainDictChains(unknown)).toContain('get_value_mut');
+            expect(passes.plainDictChains(unknown)).toContain('get_value_mut');
         });
     });
 
@@ -6288,7 +6288,7 @@ describe ('rustPasses', () => {
 describe ('rustPredictionBearers', () => {
         // fixture trees are written to a temp dir so the suite carries no fixture files
         const inlineFixtures: Record<string, Record<string, string>> = {
-     "hx10w6r12": {
+     "prediction-bearers": {
       "ts/src/prediction/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    extend (a: any, b: any): any {\n        return a;\n    }\n\n    use (a: any): any {\n        return a;\n    }\n\n    parseNestedAction (params: Dict = {}, vault: any = undefined) {\n        const orderAction: Dict = { 'type': 'order' };\n        orderAction['orders'] = [ this.use (params) ];\n        if (vault !== undefined) {\n            orderAction['vault'] = vault;\n        }\n        const signature = this.use (orderAction);\n        return { 'action': orderAction, 'signature': signature };\n    }\n\n    parseSingleMove (params: Dict = {}) {\n        const request: Dict = { 'limit': 10 };\n        request['type'] = 'limit';\n        return this.use (request);\n    }\n\n    parseReassigned (params: Dict = {}) {\n        let query: Dict = { 'limit': 10 };\n        query = this.extend (query, params);\n        return this.use (query);\n    }\n\n    parseCaptured (params: Dict = {}) {\n        const seen: Dict = {};\n        seen['a'] = true;\n        return [ 1, 2 ].map ((x) => this.use (seen) as any);\n    }\n\n    parseShorthand (params: Dict = {}) {\n        const inner: Dict = { 'a': 1 };\n        return { inner };\n    }\n}\n",
       "ts/src/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    extend (a: any, b: any): any {\n        return a;\n    }\n\n    use (a: any): any {\n        return a;\n    }\n\n    parseNestedAction (params: Dict = {}, vault: any = undefined) {\n        const orderAction: Dict = { 'type': 'order' };\n        orderAction['orders'] = [ this.use (params) ];\n        if (vault !== undefined) {\n            orderAction['vault'] = vault;\n        }\n        const signature = this.use (orderAction);\n        return { 'action': orderAction, 'signature': signature };\n    }\n}\n"
      }
@@ -6313,7 +6313,7 @@ describe ('rustPredictionBearers', () => {
         transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
     });
 
-    // hx10w6 R12: a prediction venue nests one request map inside another (`{ action: obj }`,
+    // a prediction venue nests one request map inside another (`{ action: obj }`,
     // `this.use (obj, …)`), so the typed-bearer proof admits several escapes there, each boxed
     // as a clone; every other tier keeps the single-final-move rule.
     describe('prediction-tier multi-escape dict bearers', () => {
@@ -6321,8 +6321,8 @@ describe ('rustPredictionBearers', () => {
         let rest = '';
 
         beforeAll(() => {
-            prediction = transpiler.transpileRustByPath(path.join (fixtureRoot, 'hx10w6r12', 'ts/src/prediction/venue.ts')).content;
-            rest = transpiler.transpileRustByPath(path.join (fixtureRoot, 'hx10w6r12', 'ts/src/venue.ts')).content;
+            prediction = transpiler.transpileRustByPath(path.join (fixtureRoot, 'prediction-bearers', 'ts/src/prediction/venue.ts')).content;
+            rest = transpiler.transpileRustByPath(path.join (fixtureRoot, 'prediction-bearers', 'ts/src/venue.ts')).content;
         });
 
         test('a nested builder writes natively and boxes a clone per escape', () => {
@@ -6355,7 +6355,7 @@ describe ('rustPredictionBearers', () => {
             expect(prediction).toContain('m.insert("inner".to_string(), inner.clone());');
         });
 
-        test('outside the prediction tier the R01 rule types it: clone before the last use, move at it', () => {
+        test('outside the prediction tier the bearer rule types it: clone before the last use, move at it', () => {
             expect(rest).toContain('let mut orderAction: indexmap::IndexMap<String, Value> = (');
             expect(rest).toContain('self.use(Value::Map(orderAction.clone()))');
             expect(rest).toContain('Value::Map(orderAction));');

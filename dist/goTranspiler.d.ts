@@ -3,44 +3,13 @@ import { SyntaxKind } from 'typescript/unstable/ast';
 import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
 export declare const ts: any;
 export declare function urlsDescribeStringProducer(initializer: any): boolean;
-export declare function installHx10G06NilDeclaredTupleJoins(goTranspiler: any): void;
-export declare function hx10G06Check(): any[];
+export declare function installNilDeclaredTupleJoins(goTranspiler: any): void;
+export declare function goNilJoinTypeSelfTest(): any[];
 export declare const CCXT_GO_BOOL_METHOD_NAMES: string[];
 export declare const CCXT_GO_STRING_PTR_METHOD_NAMES: string[];
 export declare const CCXT_GO_HELPER_RETURN_TYPES: {
-    GetArgMap: string;
-    GetArgMapSlice: string;
-    GetArgAnySlice: string;
-    GetArgStringSlice: string;
-    GetArgString: string;
-    GetArgBool: string;
-    GetArgInt64: string;
-    GetArgFloat64: string;
-    GetArgStringPtr: string;
-    GetArgInt64Ptr: string;
-    GetArgFloat64Ptr: string;
-    GetArgBoolPtr: string;
-    'this.ToArray': string;
-    'this.SortBy': string;
-    'this.SortBy2': string;
-    'this.FilterBy': string;
-    'this.ParseTransactionsByType': string;
-    'this.ArraySlice': string;
-    'this.Sort': string;
-    'this.ExtractParams': string;
-    'this.ArrayConcat': string;
-    'this.ArraysConcat': string;
-    'this.ParseCurrenciesCustom': string;
-    'this.DeepExtend2': string;
-    'this.Account': string;
-    'this.ParseOrderBook': string;
-    'this.Market': string;
-    'this.Currency': string;
-    'this.SafeCurrency': string;
-    'this.SafeMarket': string;
-    'this.Outcome': string;
-    'this.SafeOutcome': string;
-    'this.ParseSearchQueries': string;
+    'this.ParseTimeframe': string;
+    'exchange.ParseTimeframe': string;
     'this.ApplyEventFetchParams': string;
     'this.ParsePredictionPositions': string;
     'this.ParseDepositAddresses': string;
@@ -147,8 +116,39 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.HandleParamString': string;
     'this.HandleParamString2': string;
     'this.HandleMarketTypeAndParams': string;
-    'this.ParseTimeframe': string;
-    'exchange.ParseTimeframe': string;
+    'this.Outcome': string;
+    'this.SafeOutcome': string;
+    'this.ParseSearchQueries': string;
+    'this.ToArray': string;
+    'this.SortBy': string;
+    'this.SortBy2': string;
+    'this.FilterBy': string;
+    'this.ParseTransactionsByType': string;
+    'this.ArraySlice': string;
+    'this.Sort': string;
+    'this.ExtractParams': string;
+    'this.ArrayConcat': string;
+    'this.ArraysConcat': string;
+    'this.ParseCurrenciesCustom': string;
+    'this.DeepExtend2': string;
+    'this.Account': string;
+    'this.ParseOrderBook': string;
+    'this.Market': string;
+    'this.Currency': string;
+    'this.SafeCurrency': string;
+    'this.SafeMarket': string;
+    GetArgMap: string;
+    GetArgMapSlice: string;
+    GetArgAnySlice: string;
+    GetArgStringSlice: string;
+    GetArgString: string;
+    GetArgBool: string;
+    GetArgInt64: string;
+    GetArgFloat64: string;
+    GetArgStringPtr: string;
+    GetArgInt64Ptr: string;
+    GetArgFloat64Ptr: string;
+    GetArgBoolPtr: string;
 };
 export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.OrderBook': string;
@@ -159,7 +159,7 @@ export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
 export declare function ccxtGoElementAccessType(goTranspiler: any, initializer: any, printedValue: any): string;
 export declare const CCXT_GO_FAMILY_RETURN_TYPE = "*string";
 export declare const CCXT_GO_FAMILY_LITERAL_RETURN_TYPE = "string";
-export declare function ccxtGoTernaryType(goTranspiler: any, printedValue: any): "bool" | "float64" | "int" | "string";
+export declare function ccxtGoTernaryType(goTranspiler: any, printedValue: any): "string" | "bool" | "int" | "float64";
 export declare function ccxtGoTernaryDeclaration(node: any): any;
 export declare function ccxtGoTypeOfArithmeticInitializer(goTranspiler: any, initializer: any, printedValue: any): string;
 export declare function ccxtGoUnboxArithmeticDeclaration(goTranspiler: any, printed: any): any;
@@ -782,7 +782,7 @@ declare class GoNilDeclaredAssignmentScan {
 }
 export declare function installCcxtGoNilDeclaredStringJoins(goTranspiler: any): void;
 export declare class GoNilDeclaredValueAssignmentScan extends GoNilDeclaredAssignmentScan {
-    valueTypeOf(rhs: any): "bool" | "float64" | "int";
+    valueTypeOf(rhs: any): "bool" | "int" | "float64";
     classifyIdentifier(node: any, assigned: any): any;
     isStringWrite(rhs: any): boolean;
 }
@@ -806,24 +806,24 @@ declare function ccxtGoTupleResultJoin(printed: any, count: any, declare: any, u
 export { ccxtGoTupleResultCall, ccxtGoTupleResultFirst, ccxtGoTupleResultUnwrap };
 export declare function installCcxtGoTupleSlotReads(goTranspiler: any): void;
 export declare function installCcxtGoParamTypes(goTranspiler: any): any;
-export declare function g08w3Check(): string[];
-export declare const GB01_DICT_PARAMS: {
+export declare function goDynamicCallParamsCheck(): string[];
+export declare const GO_BASE_DICT_PARAMS: {
     [method: string]: number[];
 };
 export declare function installCcxtGoDictParams(goTranspiler: any): any;
-export declare function hx10w8GB01Failures(): string[];
-export declare function hx10w8GB01Check(): string[];
+export declare function goBaseDictParamFailures(): string[];
+export declare function goDictParamTypesSelfTest(): string[];
 export declare function installCcxtGoGb05ParamTypes(goTranspiler: any): any;
-export declare function hx10w8GB05Check(): string[];
+export declare function goParseFrameParamTypesSelfTest(): string[];
 export declare function installCcxtGoGb11HandleErrorsCode(goTranspiler: any): any;
-export declare function hx10w9GB11Check(): string[];
+export declare function goHandleErrorsCodeSelfTest(): string[];
 export declare function installCcxtGoSignTyping(goTranspiler: any): void;
 export declare function installFmGo5G01(goTranspiler: any): void;
 export declare function installFmGo5G04(goTranspiler: any): void;
 export declare function installFmGo5GP08(goTranspiler: any): void;
 export declare function installFmGo5OG02(goTranspiler: any): void;
 export declare function installRfGo5OwnedTables(goTranspiler: any): void;
-export declare function installHx11w8NumParams(goTranspiler: any): void;
+export declare function installNumParams(goTranspiler: any): void;
 export declare function installCcxtGoHooks(goTranspiler: any, unifiedInt64Params?: any): void;
 declare function alignGoTrailingComments(content: string): string;
 export { alignGoTrailingComments, };
@@ -1427,12 +1427,12 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBoundIdentifierType(arg: any): string | undefined;
     goUncalledStringParameterType(param: any): string | undefined;
     goSiblingPassesUnifiedString(argText: string, fileText: string, at: number | undefined): boolean;
-    gp15NilProvenStringPtrArg(arg: any): boolean;
-    gp15SafeStringLiteralDefaultCall(call: any): boolean;
-    gp15HasExitingNilGuard(ident: any): boolean;
-    gp15StatementExitsOnNil(statement: any, ident: any): boolean;
+    goNilProvenStringPtrArg(arg: any): boolean;
+    goSafeStringLiteralDefaultCall(call: any): boolean;
+    goHasExitingNilGuard(ident: any): boolean;
+    goStatementExitsOnNil(statement: any, ident: any): boolean;
     goOrChainHasNilTestOf(node: any, ident: any): boolean;
-    gp15IsNilTestOf(node: any, ident: any): boolean;
+    goIsNilTestOfIdentifier(node: any, ident: any): boolean;
     goIdentifierRefersTo(node: any, other: any): boolean;
     goSameFileCallsOf(fn: any, name: string): Array<any>;
     goTsSrcTree(file: any): any;
@@ -1453,16 +1453,16 @@ export declare class GoTranspiler extends BaseTranspiler {
     goFieldContainerTypeNative(node: any): string | undefined;
     goValueMayHoldPointer(valueNode: any): boolean;
     goIsPlainValuedMapField(node: any): boolean;
-    goG09CacheField(node: any): boolean;
-    goG09CacheNilCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean, lFam: any, rFam: any): string | undefined;
-    goG09CacheKeyText(keyNode: any, keyStr: string): string | undefined;
-    goG09IndexBoundedBy(index: any, list: any, use: any): boolean;
-    goG09CacheKeysRange(declaration: any, declaredType: string, varName: string, identation: any): string | undefined;
-    goG09CacheDuplicateNilTest(node: any): string | undefined;
-    goG09CacheKeysElementRead(node: any, baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string | undefined;
-    goG09CacheRead(node: any, baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string | undefined;
-    goG09CacheWrite(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound: boolean, valueNode: any): string | undefined;
-    goG09CacheInitializedBefore(access: any): boolean;
+    goCacheField(node: any): boolean;
+    goCacheNilCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean, lFam: any, rFam: any): string | undefined;
+    goCacheKeyText(keyNode: any, keyStr: string): string | undefined;
+    goIndexBoundedBy(index: any, list: any, use: any): boolean;
+    goCacheKeysRange(declaration: any, declaredType: string, varName: string, identation: any): string | undefined;
+    goCacheDuplicateNilTest(node: any): string | undefined;
+    goCacheKeysElementRead(node: any, baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string | undefined;
+    goCacheRead(node: any, baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string | undefined;
+    goCacheWrite(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound: boolean, valueNode: any): string | undefined;
+    goCacheInitializedBefore(access: any): boolean;
     goIsStringKeyExpression(node: any): boolean;
     goSliceIndexProvablyInRange(node: any, indexNode: any): boolean;
     goLocalIsRebound(scope: any, nameNode: any): boolean;
@@ -1712,8 +1712,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     printReturnStatement(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;
-    gp15CallParamAt(call: any, index: number): any;
-    gp15DerefStringArgCall(node: any, identation: any): string | undefined;
+    goCallParamAt(call: any, index: number): any;
+    goDerefStringArgCall(node: any, identation: any): string | undefined;
     printIdentifier(node: any): string;
     isArraySliceTypes: string[];
     isArrayNonSliceTypes: string[];
@@ -1892,7 +1892,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGb08PredictionFile(): boolean;
     goGb08IsDictExpression(expr: any): boolean;
     goGb08BoundedListRead(node: any, keyNode: any): 'native' | 'deref' | undefined;
-    goG21AwaitedObjectListRead(node: any, keyNode: any): boolean;
+    goAwaitedObjectListRead(node: any, keyNode: any): boolean;
     printElementAccessExpression(node: any, identation: any): string;
     isInsideVoidFunction(node: Node): boolean;
     /**
@@ -1903,23 +1903,23 @@ export declare class GoTranspiler extends BaseTranspiler {
      * Check if the last statement in a block is a conditional with returns in all branches
      */
     blockEndsWithConditionalReturn(statements: NodeArray<Statement>): boolean;
-    g01MapParamType(node: any): string | undefined;
-    g01ReadOk(receiver: any, access: any): string | undefined;
-    g01LiteralKey(key: any): boolean;
-    g01IsWriteValue(access: any): boolean;
-    g01MarketRow(node: any): boolean;
-    g01DerefConsumer(access: any): boolean;
-    goG02NonPointerAccessorSource(expr: any): boolean;
-    goG02LiteralDefault(node: any): boolean;
-    goHx4G06DerefLength(expression: any, printedText: string, lengthNode: any): string | undefined;
-    goHx4G06DerefIndexOf(node: any, name: any, parsedArg: any): string | undefined;
+    goMapParamType(node: any): string | undefined;
+    goMapParamReadOk(receiver: any, access: any): string | undefined;
+    goMapParamLiteralKey(key: any): boolean;
+    goMapParamIsWriteValue(access: any): boolean;
+    goMapParamMarketRow(node: any): boolean;
+    goMapParamDerefConsumer(access: any): boolean;
+    goNonPointerAccessorSource(expr: any): boolean;
+    goLiteralDefaultArg(node: any): boolean;
+    goDerefLength(expression: any, printedText: string, lengthNode: any): string | undefined;
+    goDerefIndexOf(node: any, name: any, parsedArg: any): string | undefined;
     goLiteralUnionNarrowedStringDeref(node: any): boolean;
-    GO_G09_NUMERIC_FIELDS: {
+    GO_THIS_NUMERIC_FIELDS: {
         [tsName: string]: string;
     };
-    goG09FieldKind(node: any): string | undefined;
-    goG09OperandKind(node: any, text: string): [string, boolean] | undefined;
-    printG09WideningComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
+    goBaseFieldKind(node: any): string | undefined;
+    goWideningOperandKind(node: any, text: string): [string, boolean] | undefined;
+    printWideningComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
 }
 export interface GoTranspiler {
     goNativeIntWideningArithmetic(node: any, leftType: string, rightType: string, leftText: string, rightText: string): {
@@ -1937,17 +1937,17 @@ export interface GoTranspiler {
     x02CurrencyRow(node: any): boolean;
 }
 export interface GoTranspiler {
-    g11NativeParameterType(fn: any, param: any, index: number): string | undefined;
-    g11ParameterHasNullishDefault(body: any, param: any): boolean;
+    goRequiredParameterNativeType(fn: any, param: any, index: number): string | undefined;
+    goParameterHasNullishDefault(body: any, param: any): boolean;
 }
 export interface GoTranspiler {
-    g14CallSiteParameterCandidates(fn: any, param: any, index: number): string[];
-    g14FeedsNullableSlot(fn: any, param: any): boolean;
-    g14HasDynamicCallee(fn: any, name: string): boolean;
+    goCallSiteParameterCandidates(fn: any, param: any, index: number): string[];
+    goFeedsNullableSlot(fn: any, param: any): boolean;
+    goHasDynamicCallee(fn: any, name: string): boolean;
     goAnnotateMethodTypes(methodsTypes: any[], file: any): void;
 }
 export interface GoTranspiler {
-    g13NumericParameterCandidates(param: any): string[];
+    goNumericParameterCandidates(param: any): string[];
 }
 export interface GoTranspiler {
     goA9fL1CacheField(node: any): string | undefined;

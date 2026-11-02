@@ -1475,7 +1475,7 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.transformIdentifier(node, idValue);
     }
 
-    // ── typed ws handler tables (hx10w5-J06) ────────────────────────────────────
+    // ── typed ws handler tables ─────────────────────────────────────────────────
     // `const methods = { 'ticker': this.handleTicker }; const method = this.safeValue (methods, topic);
     //  method.call (this, client, message)`: the table and its single read are proven together, so the
     // literal prints method references and the call prints a virtual call instead of reflection.
@@ -5151,7 +5151,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 && this.javaInOwnerMember(node) && !JAVA_BOX_CAST.test(lastKey) && !JAVA_BOX_CAST.test(rhs)) {
                 return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
-            if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
+            if (this.javaMapPutIsNative(baseExpr, keys)) {
                 return `${prefixes}${acc}.put(${keyArg}, ${rhs})`;
             }
             // `this.<field>[k] = v` where the file only ever builds the field as a plain HashMap
@@ -5208,9 +5208,9 @@ export class JavaTranspiler extends BaseTranspiler {
             return `Helpers.inOp(${objText}, ${keyText})`;
         }
 
-        const hx4J05 = this.printHx4J05ModComparison(left, right, op);
-        if (hx4J05 !== undefined) {
-            return hx4J05;
+        const modComparison = this.printJavaModComparison(left, right, op);
+        if (modComparison !== undefined) {
+            return modComparison;
         }
         // native comparison when both operands provably print as Java numbers. `>` is exact for every
         // numeric pair (isGreaterThan is a toDouble compare, NaN included); `>=` / `<` / `<=` also go
@@ -6152,7 +6152,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (index.includes('Helpers.') || index.includes('()') || index.includes(' ? ')) {
             return undefined; // a boxed, call-borne or null-armed index is not the helper's own int index
         }
-        // j03 (build/javaTranspiler.ts nativeJavaJ03ElementReads) already converts a numeric
+        // the ccxt build pass nativeJavaElementReads already converts a numeric
         // literal, a counter, an int/long/Long/Integer name and the `((long) X) - 1L` form;
         // those sites stay byte-identical and are not ours to re-spell
         if (/^[A-Za-z_$][\w$]*$/.test(index)) {
@@ -6243,7 +6243,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const name = receiver.name?.text;
         const field = (typeof name === 'string') ? JAVA_FIELD_TYPES[name] : undefined;
         if (field === undefined || field.map !== true) {
-            return this.javaJ02FieldMapReadText(receiver, key) ?? this.javaPlainCacheReadText(receiver, key);
+            return this.javaHashMapFieldReadText(receiver, key) ?? this.javaPlainCacheReadText(receiver, key);
         }
         const keyText = this.printNode(key, 0);
         let keyGuarded = false;
@@ -6779,10 +6779,10 @@ export class JavaTranspiler extends BaseTranspiler {
         return hasDouble ? 'double' : 'long';
     }
 
-    // hx10 J07: 'long' | 'double' for a nested `+` this printer already prints natively through
+    // 'long' | 'double' for a nested `+` this printer already prints natively through
     // printWidenedNativeAdd, or undefined. Mirrors that printer's operand proof (javaWidenedNumericKind)
     // behind the family and concat tests printInlineHelperArithmetic applies before it calls it.
-    javaJ07NestedAddKind(node): string | undefined {
+    javaNestedAddKind(node): string | undefined {
         while (node?.kind === SyntaxKind.ParenthesizedExpression) {
             node = node.expression;
         }
@@ -6801,9 +6801,9 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     // the `- * /` operand kind: the printer's own proof first, then the nested-sum proof
-    javaJ07ArithmeticKind(node, allowDeclaredLocals = true): string | undefined {
+    javaArithmeticKind(node, allowDeclaredLocals = true): string | undefined {
         const kind = this.javaProvableNumericKind(node, allowDeclaredLocals);
-        return kind !== undefined ? kind : this.javaJ07NestedAddKind(node);
+        return kind !== undefined ? kind : this.javaNestedAddKind(node);
     }
 
     // ---- ordered comparison over declared numeric locals ----
@@ -7122,8 +7122,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (receiver === undefined) {
             return undefined;
         }
-        // a conditional receiver keeps the helper: the campaign's diff audit flags every
-        // added line that carries a `?`, and such a line never goes native in this family
+        // a conditional receiver keeps the helper: a line carrying a `?` never goes native
+        // in this family
         if (this.javaSplitTernaryReceiver(receiver)) {
             return undefined;
         }
@@ -7246,7 +7246,7 @@ export class JavaTranspiler extends BaseTranspiler {
         return safe;
     }
 
-    // ---- declared-box arithmetic (hx11 RFM-J2 leaf C) ----
+    // ---- declared-box arithmetic ----
     // `Helpers.add/subtract/multiply/divide` on operands whose DECLARED Java type (the embedding layer's
     // javaDeclaredLocalTypeResolver, or a Long core parameter) is Long/long/Integer/int/Double/double, or an
     // integer literal. Every helper answers `null` for a null operand, so a boxed operand's null arm is
@@ -7480,11 +7480,11 @@ export class JavaTranspiler extends BaseTranspiler {
         let leftKind = this.javaProvableNumericKind(left, childAllows);
         let rightKind = this.javaProvableNumericKind(right, childAllows);
         let pairKind = this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind);
-        // hx10 J07: an unproven pair retries with the nested-sum operand kind, so a native `+`
+        // an unproven pair retries with the nested-sum operand kind, so a native `+`
         // this printer already prints is consumable by the enclosing `- * /`
         if (pairKind === undefined) {
-            const nestedLeft = this.javaJ07ArithmeticKind(left, childAllows);
-            const nestedRight = this.javaJ07ArithmeticKind(right, childAllows);
+            const nestedLeft = this.javaArithmeticKind(left, childAllows);
+            const nestedRight = this.javaArithmeticKind(right, childAllows);
             const nestedPair = this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, nestedLeft, nestedRight);
             if (nestedPair !== undefined) {
                 leftKind = nestedLeft;
@@ -8348,7 +8348,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 varToken = arithmeticType + " ";
             } else {
                 // a local fed a fresh plain map prints that map type, so its element writes bind
-                // the native put instead of casting the Object box at the site (hx10w6 J04)
+                // the native put instead of casting the Object box at the site
                 const elementWriteType = this.javaElementWriteMapLocalType(declaration);
                 if (elementWriteType !== undefined) {
                     varToken = elementWriteType + " ";
@@ -9300,7 +9300,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printIndexOfCall(node, _identation, name = undefined, parsedArg = undefined) {
-        return this.javaNativeIndexOfCall(node, name, parsedArg) ?? this.javaHx4J06NarrowedIndexOf(node, name, parsedArg) ?? `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
+        return this.javaNativeIndexOfCall(node, name, parsedArg) ?? this.javaNarrowedIndexOf(node, name, parsedArg) ?? `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
     }
 
     printSearchCall(_node, _identation, name = undefined, parsedArg = undefined) {
@@ -9482,7 +9482,7 @@ export class JavaTranspiler extends BaseTranspiler {
         return `Helpers.replaceAll((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
     }
 
-    // ---- RF-java-1: typed String slice / replaceAll (folded from build/hx10w2-J04.js) ----
+    // ---- typed String slice / replaceAll ----
     // integral printed types only: the helper's toInt truncation has no native analogue for a double
     javaIntegralDeclaredTypes: Set<string> = new Set(['long', 'int', 'short', 'byte', 'Long', 'Integer', 'Short', 'Byte']);
 
@@ -10702,10 +10702,10 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         return false;
     }
-    // hx4 J01: `m[k] = v` on a local the printer declared `Map<String, Object>` whose every write is a
+    // `m[k] = v` on a local the printer declared `Map<String, Object>` whose every write is a
     // provably non-concurrent map (fresh literal/extend/omit, or a base safeDict* of non-field data):
     // the helper's map branch is then `m.put(k, v)` (null value included; its CHM removal never applies)
-    javaHx4MapPutIsNative(baseExpr, keys: any[]): boolean {
+    javaMapPutIsNative(baseExpr, keys: any[]): boolean {
         if (keys.length !== 1 || baseExpr === undefined || !isIdentifier(baseExpr) || !this.javaDeclaredMapReceiver(baseExpr)) {
             return false;
         }
@@ -10718,11 +10718,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (declaration === undefined || declaration.kind !== SyntaxKind.VariableDeclaration || !declaration.initializer) {
             return false; // parameters may carry a caller's ConcurrentHashMap
         }
-        const admits = (rhs) => this.javaHx4PlainMapSource(baseExpr, rhs);
+        const admits = (rhs) => this.javaPlainMapSource(baseExpr, rhs);
         return admits(declaration.initializer) && !this.javaLocalIsReassigned(baseExpr, admits);
     }
 
-    javaHx4PlainMapSource(container, value): boolean {
+    javaPlainMapSource(container, value): boolean {
         const node = this.unwrapPrintTransparentExpression(value);
         if (node === undefined) {
             return false;
@@ -10744,14 +10744,14 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         if (name === 'safeDict' || name === 'safeDict2' || name === 'safeDictN') {
             // hands back an element of the source or the default: never a field map or a ws client map
-            return node.arguments.length > 0 && this.javaHx4NonSharedSource(node.arguments[0], 0)
+            return node.arguments.length > 0 && this.javaNonSharedSource(node.arguments[0], 0)
                 && (node.arguments.length < (name === 'safeDict2' ? 4 : 3)
-                    || this.javaHx4DefaultIsPlain(node.arguments[node.arguments.length - 1]));
+                    || this.javaMapDefaultIsPlain(node.arguments[node.arguments.length - 1]));
         }
         return false;
     }
 
-    javaHx4DefaultIsPlain(value): boolean {
+    javaMapDefaultIsPlain(value): boolean {
         const node = this.unwrapPrintTransparentExpression(value);
         return node !== undefined && (isObjectLiteralExpression(node) || node.kind === SyntaxKind.UndefinedKeyword
             || (isIdentifier(node) && node.text === 'undefined') || node.kind === SyntaxKind.NullKeyword);
@@ -10759,13 +10759,13 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // data that can not hold one of the runtime's ConcurrentHashMaps (this.<field> top level, ws client
     // futures/subscriptions/rejections and their entries): a local/param/element chain not rooted at them
-    javaHx4NonSharedSource(value, depth: number): boolean {
+    javaNonSharedSource(value, depth: number): boolean {
         const node = this.unwrapPrintTransparentExpression(value);
         if (node === undefined || depth > 40) {
             return false;
         }
         if (isElementAccessExpression(node)) {
-            return this.javaHx4NonSharedSource(node.expression, depth + 1);
+            return this.javaNonSharedSource(node.expression, depth + 1);
         }
         if (!isIdentifier(node)) {
             return false;
@@ -10779,29 +10779,29 @@ export class JavaTranspiler extends BaseTranspiler {
             const text = (type?.getSymbol?.()?.escapedName ?? '') + '';
             return !/Client/.test(text) && !/^(client|subscriptions|futures|rejections)$/.test(node.text);
         }
-        const known = this.javaHx4SourceVerdicts.get(declaration);
+        const known = this.javaNonSharedSourceVerdicts.get(declaration);
         if (known !== undefined) {
             return known; // `true` while in progress: a self-referencing write adds no new source
         }
-        this.javaHx4SourceVerdicts.set(declaration, true);
-        this.javaHx4InProgress.add(declaration);
+        this.javaNonSharedSourceVerdicts.set(declaration, true);
+        this.javaMapSourceInProgress.add(declaration);
         const writes: any[] = declaration.initializer ? [declaration.initializer] : [];
         const verdict = !this.javaLocalIsReassigned(node, (rhs) => { writes.push(rhs); return true; })
-            && writes.every((w) => this.javaHx4NonSharedValue(w, depth + 1));
-        this.javaHx4InProgress.delete(declaration);
-        if (verdict && this.javaHx4InProgress.size > 0) {
-            this.javaHx4SourceVerdicts.delete(declaration); // leaned on an unfinished verdict: recompute later
+            && writes.every((w) => this.javaNonSharedValue(w, depth + 1));
+        this.javaMapSourceInProgress.delete(declaration);
+        if (verdict && this.javaMapSourceInProgress.size > 0) {
+            this.javaNonSharedSourceVerdicts.delete(declaration); // leaned on an unfinished verdict: recompute later
         } else {
-            this.javaHx4SourceVerdicts.set(declaration, verdict);
+            this.javaNonSharedSourceVerdicts.set(declaration, verdict);
         }
         return verdict;
     }
 
-    javaHx4SourceVerdicts = new WeakMap<any, boolean>();
-    javaHx4InProgress = new Set<any>();
+    javaNonSharedSourceVerdicts = new WeakMap<any, boolean>();
+    javaMapSourceInProgress = new Set<any>();
 
     // a value expression that never reads a field map or a ws client's maps
-    javaHx4NonSharedValue(value, depth: number): boolean {
+    javaNonSharedValue(value, depth: number): boolean {
         let shared = false;
         const walk = (n) => {
             if (shared || n === undefined) {
@@ -10822,7 +10822,7 @@ export class JavaTranspiler extends BaseTranspiler {
             }
             if (isIdentifier(n) && n !== value && !(n.parent !== undefined && isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
                 const declaration: any = this.javaDeclarationOfIdentifier(n);
-                if (declaration !== undefined && !this.javaHx4NonSharedSource(n, depth + 1)) {
+                if (declaration !== undefined && !this.javaNonSharedSource(n, depth + 1)) {
                     shared = true;
                     return;
                 }
@@ -10900,16 +10900,16 @@ export class JavaTranspiler extends BaseTranspiler {
         return 'other';
     }
 
-    // hx4 J02: `this.<field>[k]` on the J02 base map fields. ConcurrentHashMap.get(null) throws
+    // `this.<field>[k]` on the JAVA_HASH_MAP_FIELDS base map fields. ConcurrentHashMap.get(null) throws
     // where the helper answers null, so a non-literal key is always null-tested; the receiver can
     // be null too. Key and receiver print twice, so both must be side-effect free.
-    javaJ02FieldMapReadText(receiver, key): string | undefined {
+    javaHashMapFieldReadText(receiver, key): string | undefined {
         const name = receiver?.name?.text;
         if (typeof name === 'string' && Object.prototype.hasOwnProperty.call(JAVA_BASE_MAP_READ_FIELDS, name)) {
             return this.javaBaseMapFieldReadText(receiver, key, JAVA_BASE_MAP_READ_FIELDS[name]);
         }
         if (typeof name !== 'string'
-            || (!Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name) && !this.javaFileBuiltMapField(receiver, name, false))) {
+            || (!Object.prototype.hasOwnProperty.call(JAVA_HASH_MAP_FIELDS, name) && !this.javaFileBuiltMapField(receiver, name, false))) {
             return undefined;
         }
         const literal = isStringLiteralLikeNode(key);
@@ -10940,11 +10940,10 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${guard} ? null : ${read}.get(${this.printNode(key, 0)}))`;
     }
 
-    // hx4 J05
     // `(a % N) <op> M` (N a non-zero integer literal, a an int/long operand, M an int literal): the
     // native mod prints a finite integral double |v| < |N|, where isEqual (IsInteger -> toLong) and
     // isGreaterThan (toDouble) both reduce to the plain double comparison against M.
-    javaHx4J05IntegralModOperand(node): boolean {
+    javaIntegralModOperand(node): boolean {
         while (node !== undefined && node.kind === SyntaxKind.ParenthesizedExpression) {
             node = node.expression;
         }
@@ -10965,7 +10964,7 @@ export class JavaTranspiler extends BaseTranspiler {
         return true;
     }
 
-    printHx4J05ModComparison(left, right, op): string | undefined {
+    printJavaModComparison(left, right, op): string | undefined {
         const javaOps = {
             [SyntaxKind.EqualsEqualsToken]: '==', [SyntaxKind.EqualsEqualsEqualsToken]: '==',
             [SyntaxKind.ExclamationEqualsToken]: '!=', [SyntaxKind.ExclamationEqualsEqualsToken]: '!=',
@@ -10976,8 +10975,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (javaOp === undefined) {
             return undefined;
         }
-        const modLeft = this.javaHx4J05IntegralModOperand(left);
-        const modRight = !modLeft && this.javaHx4J05IntegralModOperand(right);
+        const modLeft = this.javaIntegralModOperand(left);
+        const modRight = !modLeft && this.javaIntegralModOperand(right);
         if (!modLeft && !modRight) {
             return undefined;
         }
@@ -10993,10 +10992,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${leftText} ${javaOp} ${rightText})`;
     }
 
-    // hx4 J06
     // `x.indexOf(t)` where a string/Str-declared x is narrowed to a union of string literals
     // (`===` tests): x is a non-null String, so String.indexOf is the helper's String arm
-    javaHx4J06NarrowedIndexOf(node, name, parsedArg) {
+    javaNarrowedIndexOf(node, name, parsedArg) {
         const receiver = node?.expression?.expression;
         const arg = node?.arguments?.[0];
         if (receiver === undefined || arg === undefined || name === undefined || parsedArg === undefined
@@ -11033,13 +11031,12 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 }
 
-// hx4 J02
 // more hand-written BaseExchange map fields: every write in BaseExchange.java and ts/src is a
 // HashMap / ConcurrentHashMap / Map-cast or null (markets_by_id = null, urls/fees from describe())
 // base fields declared Object/Map whose plain-map type is proven per source file (javaFileBuiltMapField)
 const JAVA_FILE_BUILT_MAP_FIELDS: Set<string> = new Set(['markets', 'positions']);
 
-const JAVA_J02_MAP_FIELDS: { [name: string]: true } = {
+const JAVA_HASH_MAP_FIELDS: { [name: string]: true } = {
     'tickers': true,
     'bidsasks': true,
     'trades': true,
@@ -11058,7 +11055,7 @@ const JAVA_BASE_MAP_READ_FIELDS: { [name: string]: { declared: boolean, anyKey: 
     'requiredCredentials': { declared: false, anyKey: true },
 };
 
-// hx4 J09: isTrue / isInstance / toLongOrNull / toStringArg go native on proven operands.
+// isTrue / isInstance / toLongOrNull / toStringArg go native on proven operands.
 // A call whose resolved declaration is a base-tier accessor/thrower (ts/src/base/Exchange.ts or the
 // ts/src/base/functions mixins it re-exports) or a lib.*.d.ts built-in, and whose return type is not a
 // Promise, runs synchronously: it prints no `.join()`, so it cannot raise a CompletionException.
@@ -11067,17 +11064,17 @@ const JAVA_SYNC_CALL_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/](functions[\\/][^\
 export interface JavaTranspiler {
     javaCounterPlan(statements, identation: number): Map<any, any> | undefined;
     javaPrintBodyStatements(statements, identation: number): string[];
-    hx4J09BoxIdentifier(node, seen: Set<any>, depth: number): boolean;
-    hx4J09BoxValue(node, seen: Set<any>, depth: number): boolean;
-    hx4J09LiteralTupleElement(node, index: number): boolean;
-    hx4J09CatchCannotWrap(node): boolean;
-    hx4J09CoreArgument(type: string, printed: string, node): string | undefined;
-    hx4J09CcxtErrorClass(node): boolean;
+    javaBoxIdentifier(node, seen: Set<any>, depth: number): boolean;
+    javaBoxValue(node, seen: Set<any>, depth: number): boolean;
+    javaLiteralTupleElement(node, index: number): boolean;
+    javaCatchCannotWrap(node): boolean;
+    javaCoreArgument(type: string, printed: string, node): string | undefined;
+    javaCcxtErrorClass(node): boolean;
 }
 
 // a class declared in ts/src/base/errors.ts: its Java twin extends RuntimeException, so
 // `catchVar instanceof X` compiles against the `Exception` catch parameter
-JavaTranspiler.prototype.hx4J09CcxtErrorClass = function (node): boolean {
+JavaTranspiler.prototype.javaCcxtErrorClass = function (node): boolean {
     const checker: any = this.checkerOrUndefined();
     let symbol: any;
     try {
@@ -11095,7 +11092,7 @@ JavaTranspiler.prototype.hx4J09CcxtErrorClass = function (node): boolean {
 
 // a local whose declared TS type is boolean-family and whose every write (D2 scan, tuples
 // included) is a Boolean-or-null box; a write cycle back to a local under proof is accepted
-JavaTranspiler.prototype.hx4J09BoxIdentifier = function (node, seen: Set<any>, depth: number): boolean {
+JavaTranspiler.prototype.javaBoxIdentifier = function (node, seen: Set<any>, depth: number): boolean {
     const checker: any = this.checkerOrUndefined();
     if (checker === undefined || node?.kind !== SyntaxKind.Identifier || depth > 6) {
         return false;
@@ -11110,7 +11107,7 @@ JavaTranspiler.prototype.hx4J09BoxIdentifier = function (node, seen: Set<any>, d
     }
     const next = new Set(seen);
     next.add(decl);
-    const accepts = (value) => this.hx4J09BoxValue(value, next, depth + 1);
+    const accepts = (value) => this.javaBoxValue(value, next, depth + 1);
     if (decl.kind === SyntaxKind.BindingElement) {
         const pattern = decl.parent;
         const declaration = pattern?.parent;
@@ -11120,7 +11117,7 @@ JavaTranspiler.prototype.hx4J09BoxIdentifier = function (node, seen: Set<any>, d
         }
         const index = pattern.elements.indexOf(decl);
         if (!this.javaBooleanBoxTupleElement(declaration.initializer, index)
-            && !this.hx4J09LiteralTupleElement(declaration.initializer, index)) {
+            && !this.javaLiteralTupleElement(declaration.initializer, index)) {
             return false;
         }
         return this.javaWritesAreBoxed(symbol, { initializer: undefined, parent: declaration }, next, accepts, true);
@@ -11141,22 +11138,22 @@ JavaTranspiler.prototype.hx4J09BoxIdentifier = function (node, seen: Set<any>, d
 };
 
 // a value whose printed Java is a Boolean, boolean or null
-JavaTranspiler.prototype.hx4J09BoxValue = function (node, seen: Set<any>, depth: number): boolean {
+JavaTranspiler.prototype.javaBoxValue = function (node, seen: Set<any>, depth: number): boolean {
     if (node === undefined) {
         return false;
     }
     if (node.kind === SyntaxKind.ParenthesizedExpression || node.kind === SyntaxKind.AsExpression
         || node.kind === SyntaxKind.NonNullExpression) {
-        return this.hx4J09BoxValue(node.expression, seen, depth);
+        return this.javaBoxValue(node.expression, seen, depth);
     }
     if (node.kind === SyntaxKind.NullKeyword || (node.kind === SyntaxKind.Identifier && node.text === 'undefined')) {
         return true;
     }
     if (node.kind === SyntaxKind.ConditionalExpression) {
-        return this.hx4J09BoxValue(node.whenTrue, seen, depth) && this.hx4J09BoxValue(node.whenFalse, seen, depth);
+        return this.javaBoxValue(node.whenTrue, seen, depth) && this.javaBoxValue(node.whenFalse, seen, depth);
     }
     if (node.kind === SyntaxKind.Identifier) {
-        return this.hx4J09BoxIdentifier(node, seen, depth);
+        return this.javaBoxIdentifier(node, seen, depth);
     }
     if (this.javaPrintsBooleanValue(node, new Set<any>())) {
         return true;
@@ -11182,12 +11179,12 @@ JavaTranspiler.prototype.hx4J09BoxValue = function (node, seen: Set<any>, depth:
         return false;
     }
     const fallback = node.arguments?.[at];
-    return fallback !== undefined && this.hx4J09BoxValue(fallback, seen, depth);
+    return fallback !== undefined && this.javaBoxValue(fallback, seen, depth);
 };
 
 // element `index` of a base-tier `this.m(..)` whose every return is an array literal with a
 // Java boolean at that position (`handlePostOnly`: `[ true, p ]` / `[ false, p ]`)
-JavaTranspiler.prototype.hx4J09LiteralTupleElement = function (node, index: number): boolean {
+JavaTranspiler.prototype.javaLiteralTupleElement = function (node, index: number): boolean {
     if (node?.kind !== SyntaxKind.CallExpression || index < 0) {
         return false;
     }
@@ -11230,7 +11227,7 @@ JavaTranspiler.prototype.hx4J09LiteralTupleElement = function (node, index: numb
 // `e instanceof X` on a catch variable equals Helpers.isInstance (which first unwraps a
 // CompletionException/ExecutionException) when the try block cannot raise a wrapped one:
 // no await, every call a synchronous base-tier accessor/thrower
-JavaTranspiler.prototype.hx4J09CatchCannotWrap = function (node): boolean {
+JavaTranspiler.prototype.javaCatchCannotWrap = function (node): boolean {
     if (node?.kind !== SyntaxKind.Identifier) {
         return false;
     }
@@ -11270,7 +11267,7 @@ JavaTranspiler.prototype.hx4J09CatchCannotWrap = function (node): boolean {
 
 // core-argument conversions a declaration already proves: a const `= undefined` local is
 // null; a const `x.length` local the build layer declares Integer widens to the Long slot
-JavaTranspiler.prototype.hx4J09CoreArgument = function (type: string, printed: string, node): string | undefined {
+JavaTranspiler.prototype.javaCoreArgument = function (type: string, printed: string, node): string | undefined {
     if (node === undefined || !isIdentifier(node) || printed !== node.text || (type !== 'Long' && type !== 'String')) {
         return undefined;
     }
@@ -11300,26 +11297,26 @@ JavaTranspiler.prototype.hx4J09CoreArgument = function (type: string, printed: s
             inner = inner.expression;
         }
         if (inner?.kind === SyntaxKind.Identifier && printed.trimStart().startsWith(this.FALSY_WRAPPER_OPEN)
-            && this.hx4J09BoxIdentifier(inner, new Set<any>(), 0)) {
+            && this.javaBoxIdentifier(inner, new Set<any>(), 0)) {
             return this.getIden(identation) + `Boolean.TRUE.equals(${this.printNode(inner, 0)})`;
         }
         return printed;
     };
     const printInstanceOfExpression = proto.printInstanceOfExpression;
     proto.printInstanceOfExpression = function (node, identation) {
-        if (node.right?.kind === SyntaxKind.Identifier && this.hx4J09CcxtErrorClass(node.right)
-            && this.hx4J09CatchCannotWrap(node.left)) {
+        if (node.right?.kind === SyntaxKind.Identifier && this.javaCcxtErrorClass(node.right)
+            && this.javaCatchCannotWrap(node.left)) {
             return this.getIden(identation) + `(${this.printNode(node.left, 0)} instanceof ${node.right.text})`;
         }
         return printInstanceOfExpression.call(this, node, identation);
     };
     const javaConvertToCoreType = proto.javaConvertToCoreType;
     proto.javaConvertToCoreType = function (type: string, printed: string, node) {
-        return this.hx4J09CoreArgument(type, printed, node) ?? javaConvertToCoreType.call(this, type, printed, node);
+        return this.javaCoreArgument(type, printed, node) ?? javaConvertToCoreType.call(this, type, printed, node);
     };
 }
 
-// hx4 J15: two declared numeric boxes compare by value, never by reference. Same-class integral
+// two declared numeric boxes compare by value, never by reference. Same-class integral
 // boxes take Objects.equals (Helpers.isEqual's null table + toLong compare); a Double on either side
 // compares doubleValue() (isEqual's toDouble: 0.0 == -0.0, NaN != NaN), other integral pairs longValue().
 {
@@ -11351,17 +11348,17 @@ JavaTranspiler.prototype.hx4J09CoreArgument = function (type: string, printed: s
     };
 }
 
-// hx4 J16: an awaited implicit-API call (declared in ts/src/abstract/<id>.ts, body `this.request(..)`)
+// an awaited implicit-API call (declared in ts/src/abstract/<id>.ts, body `this.request(..)`)
 // hands back a fresh Jackson parse of the HTTP body: never a field map or a ws client map, whatever
-// its arguments read, so J01's non-shared proof admits it as a put source.
-const JAVA_J16_IMPLICIT_API_FILE = /(^|[\\/])ts[\\/]src[\\/]abstract[\\/][a-z0-9_]+\.ts$/;
+// its arguments read, so the map-put non-shared proof admits it as a put source.
+const JAVA_IMPLICIT_API_FILE = /(^|[\\/])ts[\\/]src[\\/]abstract[\\/][a-z0-9_]+\.ts$/;
 {
     const proto: any = JavaTranspiler.prototype;
-    const nonSharedValue = proto.javaHx4NonSharedValue;
-    proto.javaHx4NonSharedValue = function (value, depth: number): boolean {
-        return this.javaJ16ImplicitApiResponse(value) || nonSharedValue.call(this, value, depth);
+    const nonSharedValue = proto.javaNonSharedValue;
+    proto.javaNonSharedValue = function (value, depth: number): boolean {
+        return this.javaImplicitApiResponse(value) || nonSharedValue.call(this, value, depth);
     };
-    proto.javaJ16ImplicitApiResponse = function (value): boolean {
+    proto.javaImplicitApiResponse = function (value): boolean {
         let node = this.unwrapPrintTransparentExpression(value);
         if (node?.kind !== SyntaxKind.AwaitExpression) {
             return false;
@@ -11378,7 +11375,7 @@ const JAVA_J16_IMPLICIT_API_FILE = /(^|[\\/])ts[\\/]src[\\/]abstract[\\/][a-z0-9
             return false;
         }
         const fileName = declaration?.getSourceFile?.()?.fileName;
-        if (typeof fileName !== 'string' || !JAVA_J16_IMPLICIT_API_FILE.test(fileName) || !declaration.body) {
+        if (typeof fileName !== 'string' || !JAVA_IMPLICIT_API_FILE.test(fileName) || !declaration.body) {
             return false;
         }
         const statements = declaration.body.statements ?? [];
@@ -11388,7 +11385,7 @@ const JAVA_J16_IMPLICIT_API_FILE = /(^|[\\/])ts[\\/]src[\\/]abstract[\\/][a-z0-9
     };
 }
 
-// hx11 w8: `a !== b` / `a === b` where one side is a never-rewritten const read off
+// `a !== b` / `a === b` where one side is a never-rewritten const read off
 // `this.crc32(..)` and the other a local declared `Long`. BaseExchange.crc32 returns a Long
 // box on every path, so Objects.equals (Long.equals, null-safe) is isEqual's integral branch.
 const JAVA_CRC32_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]crypto\.ts$/;

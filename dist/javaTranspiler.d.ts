@@ -93,7 +93,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     getVarKey(node: any): string;
     equalityOperandFamily(type: any): string | undefined;
     isNullishLiteral(node: any): boolean;
-    javaEqualityLiteralKind(node: any): "double" | "int" | "long";
+    javaEqualityLiteralKind(node: any): "int" | "double" | "long";
     javaNativeLengthKind(node: any): string;
     isJavaPrimitiveCounterReference(node: any): boolean;
     javaLocalNumberKind(node: any, depth: any): any;
@@ -141,7 +141,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaIntegerLiteralKind(node: any): "int" | "long";
     isVarargsArrayReference(node: any, depth?: number): any;
     isJavaListType(type: any): boolean;
-    javaLengthKind(expression: any): "List" | "ListOrNull" | "String" | "StringOrNull";
+    javaLengthKind(expression: any): "String" | "List" | "StringOrNull" | "ListOrNull";
     isJavaListValueType(type: any): any;
     isJavaListBackedClassType(type: any): boolean;
     isJavaNullishUnion(type: any, isMember: any): any;
@@ -150,7 +150,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPrimitiveOperandKind(node: any): any;
     javaPrintedIntCounter(node: any): boolean;
     isJavaFloatLiteral(node: any): boolean;
-    javaPrintedCallKind(node: any): "double" | "int" | "long";
+    javaPrintedCallKind(node: any): "int" | "double" | "long";
     javaComparisonOperandsAreExact(left: any, leftKind: any, right: any, rightKind: any): boolean;
     javaComparisonOperandIsExactAgainstDouble(node: any, kind: any): boolean;
     isJavaMapType(type: any): boolean;
@@ -309,8 +309,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaLiteralFractionalProduct(left: any, right: any): boolean;
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
-    javaJ07NestedAddKind(node: any): string | undefined;
-    javaJ07ArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
+    javaNestedAddKind(node: any): string | undefined;
+    javaArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaComparisonOperand(node: any): {
         kind: string;
         boxed: boolean;
@@ -351,7 +351,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printNativePadStart(node: any, name: any): string;
     javaCharLiteral(character: any): any;
     javaUnwrapParentheses(node: any): any;
-    javaNativeArithmeticType(node: any): "Double" | "Long" | "String";
+    javaNativeArithmeticType(node: any): "String" | "Long" | "Double";
     javaEnclosingFunction(node: any): any;
     javaArithmeticWriteIsSafe(right: any, javaType: any): boolean;
     javaScopingBlock(node: any): any;
@@ -359,7 +359,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaBindingsAreDisjoint(declaration: any, other: any): boolean;
     javaArithmeticLocalUseIsSafe(node: any, declaration: any, javaType: any): boolean;
     javaArithmeticLocalIsSafeToType(scope: any, declaration: any, javaType: any): boolean;
-    javaArithmeticLocalType(declaration: any): "Double" | "Long" | "String";
+    javaArithmeticLocalType(declaration: any): "String" | "Long" | "Double";
     javaProvableNumericDoubleOperand(node: any): boolean;
     getFinalVarName(varName: string): string;
     getOriginalVarName(name: string): string;
@@ -517,32 +517,32 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printForStatement(node: any, identation: any): string;
     printReturnStatement(node: any, identation: any): string;
     private allBranchesTerminate;
-    javaHx4MapPutIsNative(baseExpr: any, keys: any[]): boolean;
-    javaHx4PlainMapSource(container: any, value: any): boolean;
-    javaHx4DefaultIsPlain(value: any): boolean;
-    javaHx4NonSharedSource(value: any, depth: number): boolean;
-    javaHx4SourceVerdicts: WeakMap<any, boolean>;
-    javaHx4InProgress: Set<any>;
-    javaHx4NonSharedValue(value: any, depth: number): boolean;
+    javaMapPutIsNative(baseExpr: any, keys: any[]): boolean;
+    javaPlainMapSource(container: any, value: any): boolean;
+    javaMapDefaultIsPlain(value: any): boolean;
+    javaNonSharedSource(value: any, depth: number): boolean;
+    javaNonSharedSourceVerdicts: WeakMap<any, boolean>;
+    javaMapSourceInProgress: Set<any>;
+    javaNonSharedValue(value: any, depth: number): boolean;
     javaFileBuiltMapField(receiver: any, name: string, forWrite: boolean): boolean;
     javaAssignedMapKind(value: any, depth: number): string;
-    javaJ02FieldMapReadText(receiver: any, key: any): string | undefined;
+    javaHashMapFieldReadText(receiver: any, key: any): string | undefined;
     javaBaseMapFieldReadText(receiver: any, key: any, field: {
         declared: boolean;
         anyKey: boolean;
     }): string | undefined;
-    javaHx4J05IntegralModOperand(node: any): boolean;
-    printHx4J05ModComparison(left: any, right: any, op: any): string | undefined;
-    javaHx4J06NarrowedIndexOf(node: any, name: any, parsedArg: any): string;
+    javaIntegralModOperand(node: any): boolean;
+    printJavaModComparison(left: any, right: any, op: any): string | undefined;
+    javaNarrowedIndexOf(node: any, name: any, parsedArg: any): string;
 }
 export interface JavaTranspiler {
     javaCounterPlan(statements: any, identation: number): Map<any, any> | undefined;
     javaPrintBodyStatements(statements: any, identation: number): string[];
-    hx4J09BoxIdentifier(node: any, seen: Set<any>, depth: number): boolean;
-    hx4J09BoxValue(node: any, seen: Set<any>, depth: number): boolean;
-    hx4J09LiteralTupleElement(node: any, index: number): boolean;
-    hx4J09CatchCannotWrap(node: any): boolean;
-    hx4J09CoreArgument(type: string, printed: string, node: any): string | undefined;
-    hx4J09CcxtErrorClass(node: any): boolean;
+    javaBoxIdentifier(node: any, seen: Set<any>, depth: number): boolean;
+    javaBoxValue(node: any, seen: Set<any>, depth: number): boolean;
+    javaLiteralTupleElement(node: any, index: number): boolean;
+    javaCatchCannotWrap(node: any): boolean;
+    javaCoreArgument(type: string, printed: string, node: any): string | undefined;
+    javaCcxtErrorClass(node: any): boolean;
 }
 export {};

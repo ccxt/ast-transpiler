@@ -499,16 +499,13 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpSliceBoundExpression(value: any, length: any): string;
     csharpSliceBoundOperand(node: any, isEnd?: boolean): {
         kind: string;
-        value: any;
-        text?: undefined;
-    } | {
-        value?: undefined;
-        kind: string;
-        text?: undefined;
-    } | {
-        value?: undefined;
-        kind: string;
         text: string;
+    } | {
+        kind: string;
+        value: any;
+    } | {
+        kind: string;
+        value?: undefined;
     };
     csharpSliceArithmeticBound(node: any): {
         kind: string;
@@ -520,7 +517,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpSliceArithmeticOperandsArePure(node: any): boolean;
     csharpSliceClampExpression(bound: any, length: any): string;
-    csharpSliceReceiverKind(expression: any): "list" | "string";
+    csharpSliceReceiverKind(expression: any): "string" | "list";
     csharpSliceStringType(type: any): boolean;
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     printReplaceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
@@ -556,12 +553,12 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printNewExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
     printPropertyAccessModifiers(node: any): string;
-    csharpHx4DeclaredReceiverReadable(node: any, expression: any): boolean;
-    csharpHx4IdentifierKeyRead(expression: any, argumentExpression: any): string | undefined;
+    csharpDeclaredReceiverReadable(node: any, expression: any): boolean;
+    csharpIdentifierKeyRead(expression: any, argumentExpression: any): string | undefined;
     csharpObjectKeyCastable(key: any): boolean;
-    csharpHx4IsPlainRead(node: any): boolean;
-    csharpHx4DeclaredKeyType(key: any): string | undefined;
-    csharpHx4GuardedNullableNegation(node: any, csharpType: string): boolean;
-    csharpHx4DeclaredLocalType(declaration: any): string | undefined;
-    csharpHx4NativeNegatedNullableLocal(node: any, leftSide: string): string | undefined;
+    csharpIsPlainRead(node: any): boolean;
+    csharpDeclaredKeyType(key: any): string | undefined;
+    csharpGuardedNullableNegation(node: any, csharpType: string): boolean;
+    csharpFinalDeclaredLocalType(declaration: any): string | undefined;
+    csharpNativeNegatedNullableLocal(node: any, leftSide: string): string | undefined;
 }

@@ -13,7 +13,7 @@ import { JavaTranspiler } from './javaTranspiler.js';
 import { RustTranspiler, RUST_DECLARED_DICT_LOCALS } from './rustTranspiler.js';
 import type { RustDeclaredDictLocalEntry } from './rustTranspiler.js';
 import { CppTranspiler } from './cppTranspiler.js';
-import { installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installHx11w8NumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, hx10G06Check, g08w3Check, hx10w8GB01Check, hx10w8GB05Check, hx10w9GB11Check } from './goTranspiler.js';
+import { installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest } from './goTranspiler.js';
 
 const __dirname_mock = currentPath;
 
@@ -557,7 +557,7 @@ export default class Transpiler {
         }
 
         const methodsTypes = this.pythonTranspiler.getMethodTypes(src);
-        // hx10 GP14: the Go delegate wrapper is generated from these records, so an async
+        // the Go delegate wrapper is generated from these records, so an async
         // parameter's printed type has to travel with them (every other port ignores the field)
         if (lang === Languages.Go) {
             this.goTranspiler.goAnnotateMethodTypes(methodsTypes, src);
@@ -835,12 +835,12 @@ export {
     // the rust declared-Dict locals vocabulary + entry shape (rust-25), so the
     // helper-removal consumers can import them from the package entry
     RUST_DECLARED_DICT_LOCALS,
-    // ccxt's Go printer hooks (moved from ccxt build/, hx11 ast-move)
+    // ccxt's Go printer hooks
     installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams,
-    installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installHx11w8NumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads,
+    installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads,
     CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES,
-    hx10G06Check, g08w3Check, hx10w8GB01Check, hx10w8GB05Check, hx10w9GB11Check,
+    goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest,
 };
 export type { RustDeclaredDictLocalEntry };
 // the rust final-text passes the ccxt build script runs after its own post-passes
-export { nativeGetValue, r02NativeInserts, hx10w2R03, r04Scalars, r06Push, r01TypedLocals, hx10w3R03, r04Callee, r05FieldChainInserts, r06w3Push, r07StringNatives, bf03PlainDictChains, r10ClientHandle, hx10w9Rp02ParamKind, hx10w9Rp02DispatchArg, hx10w9Rp02SplitArgs, hx10w9Rp02RefMapParamNames, narrowStrSinkLocals, narrowStrNullLocals, hx11RustSignApiStr, hx11w9RustIntLocalNullSinkOptionI64, hx11w9RustStrLiteralLocalNativeString, hx11w9StrLocalReassign, hx11w9RustBoolKLocalOptionBool, hx11w9RustBool2LocalOptionBool, hx11w9RustBoolNLocalOptionBool, hx11w9RustStr2LocalOptionString, hx11w9RustNumber2LocalOptionF64, hx11w9RustInt2IntNLocalOptionI64, hx11w9RustStrNLocalOptionString, hx11w9RustNumber2SinkLocalOptionF64R2 } from './rustTranspiler.js';
+export { nativeGetValue, nativeInserts, nativeContainerOps, nativeBoolScalars, arrOnlyVecPush, rustTypedLocals, calleeShapeContainerOps, nativeBoolCallee, fieldChainInserts, rustVecPushInline, rustStringNatives, plainDictChains, clientHandleViews, mapParamKind, mapParamDispatchArg, mapParamSplitArgs, refMapParamNames, narrowStrSinkLocals, narrowStrNullLocals, rustSignApiStr, rustIntLocalNullSinkOptionI64, rustStrLiteralLocalNativeString, strLocalReassign, rustBoolKLocalOptionBool, rustBool2LocalOptionBool, rustBoolNLocalOptionBool, rustStr2LocalOptionString, rustNumber2LocalOptionF64, rustInt2IntNLocalOptionI64, rustStrNLocalOptionString, rustNumber2SinkLocalOptionF64R2 } from './rustTranspiler.js';
