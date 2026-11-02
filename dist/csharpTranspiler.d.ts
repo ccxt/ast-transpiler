@@ -499,13 +499,16 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpSliceBoundExpression(value: any, length: any): string;
     csharpSliceBoundOperand(node: any, isEnd?: boolean): {
         kind: string;
-        text: string;
-    } | {
-        kind: string;
         value: any;
+        text?: undefined;
     } | {
-        kind: string;
         value?: undefined;
+        kind: string;
+        text?: undefined;
+    } | {
+        value?: undefined;
+        kind: string;
+        text: string;
     };
     csharpSliceArithmeticBound(node: any): {
         kind: string;
@@ -517,7 +520,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpSliceArithmeticOperandsArePure(node: any): boolean;
     csharpSliceClampExpression(bound: any, length: any): string;
-    csharpSliceReceiverKind(expression: any): "string" | "list";
+    csharpSliceReceiverKind(expression: any): "list" | "string";
     csharpSliceStringType(type: any): boolean;
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     printReplaceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;

@@ -13,7 +13,7 @@ import { installFmGo5OG02 } from '../src/transpiler';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { installCcxtGoHooks as installCcxtGoHooks__fold3G03PrintedMapLocals } from '../src/goTranspiler';
+import { installCcxtGoHooks as installCcxtGoHooksFromGoModule } from '../src/goTranspiler';
 import fs__goToStringNativeArms from 'fs';
 import os__goToStringNativeArms from 'os';
 import path__goToStringNativeArms from 'path';
@@ -9306,7 +9306,7 @@ describe ('goWsCacheFields', () => {
 });
 
 describe ('goPrintedMapLocalStores', () => {
-    const installCcxtGoHooks = installCcxtGoHooks__fold3G03PrintedMapLocals;
+    const installCcxtGoHooks = installCcxtGoHooksFromGoModule;
     // a native `m[k] = v` store on a map local the printer declares itself,
     // behind the nil test the helper applied; `(k as string)` keys; Trade / TransferEntry rows boxed to their map;
     // the params slot of a base tuple helper.

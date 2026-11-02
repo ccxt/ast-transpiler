@@ -3762,7 +3762,7 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
         expect(output).not.toContain('postFixDecrement');
     });
     test('a counter the printer cannot name as int keeps the helper', () => {
-        // a non-literal start is not a counter the printer proves Int64 itself (fold2C05CounterAndShadow)
+        // a non-literal start is not a counter the printer proves Int64 itself
         const declaration = 'let i = markets.length';
         expect(withKinds({}, forLoop('i++', declaration))).toContain('postFixIncrement(ref i)');
         expect(withKinds({ i: 'object' }, forLoop('i++', declaration))).toContain('postFixIncrement(ref i)');
@@ -7265,7 +7265,7 @@ describe ('csharpPromiseAllImplicitApi', () => {
     });
 });
 
-describe ('fold2C05CounterAndShadow', () => {
+describe ('Int64 for-counters and literal-default shadows', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -8671,7 +8671,7 @@ describe ('csharp declared base-field reads', () => {
         test('an object member whose every write stores a dictionary keeps the helper cast and tests the key type', () => {
             const out = printer(true);
             expect(out).toContain('(((IDictionary<string,object>)this.positions) != null && type != null && ((IDictionary<string,object>)this.positions).ContainsKey((string)type) ? ((IDictionary<string,object>)this.positions)[(string)type] : null)');
-            expect(out).toMatch(/type is string hx10w3Key\d+ && \(\(IDictionary<string,object>\)this\.positions\)\.ContainsKey\(hx10w3Key\d+\)/);
+            expect(out).toMatch(/type is string entryKey\d+ && \(\(IDictionary<string,object>\)this\.positions\)\.ContainsKey\(entryKey\d+\)/);
             expect(out).toContain('inOp(this.positions, other)');
         });
 

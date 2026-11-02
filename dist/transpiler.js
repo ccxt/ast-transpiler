@@ -5800,7 +5800,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const source = key.getSourceFile?.();
     const used = this.csharpBaseFieldKeyNames.get(source) ?? 0;
     this.csharpBaseFieldKeyNames.set(source, used + 1);
-    const bound = `hx10w3Key${used}`;
+    const bound = `entryKey${used}`;
     return `(${receiver.field} != null && ${printedKey.text} is string ${bound} && ${receiver.text}.ContainsKey(${bound}))`;
   }
   // `isEqual (a % b, N)` -> `((a % b) == N)` when both operands are Int64 / Int64? locals: the helper takes the double remainder and converts it back, which is the
@@ -22536,7 +22536,7 @@ var GO_BASE_DICT_PARAM_FAILURES = [];
 function gb01Log(message) {
   GO_BASE_DICT_PARAM_FAILURES.push(message);
   if (GB01_DEBUG || GB01_LENIENT) {
-    console.error("gb01log: " + message);
+    console.error("go dict param types: " + message);
   }
 }
 function gb01IsBaseFile(fn) {
@@ -22705,7 +22705,7 @@ function gb01Derived(go, param) {
     const message = `${file}: ${method}(${param.name?.text}) keeps the box: ${reason}`;
     if (!GB01_LENIENT) {
       if (!gb01IsBaseFile(fn) || reason === "not a parameter") {
-        throw new Error("gb01derived: " + message + " (the base prints map[string]any, an override must too)");
+        throw new Error("go dict param types: " + message + " (the base prints map[string]any, an override must too)");
       }
     }
     gb01Log(message);

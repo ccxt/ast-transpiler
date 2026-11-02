@@ -3696,7 +3696,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const source: any = key.getSourceFile?.();
         const used = this.csharpBaseFieldKeyNames.get(source) ?? 0;
         this.csharpBaseFieldKeyNames.set(source, used + 1);
-        const bound = `hx10w3Key${used}`;
+        const bound = `entryKey${used}`;
         return `(${receiver.field} != null && ${printedKey.text} is string ${bound} && ${receiver.text}.ContainsKey(${bound}))`;
     }
 
