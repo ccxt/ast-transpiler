@@ -3684,8 +3684,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (isIdentifier(expr.expression) && this.rustCallsRuntimeHandle(node)) {
             return this.printRuntimeVariadicCall(node, this.printNode(expr.expression, 0), expr.name.text, identation, false, true);
         }
-        // a ws class reaches its REST parent's methods through `self.parent`; REST `super_*` shims are fixed-arity
-        if (expr.expression.kind === SyntaxKind.SuperKeyword && /ts[\/]src[\/]pro[\/]/.test(String(node.getSourceFile().fileName))) {
+        // a ws class reaches its REST parent's methods through `self.parent`; REST `super_*` shims are fixed-arity except the network ones
+        if (expr.expression.kind === SyntaxKind.SuperKeyword && (/ts[\/]src[\/]pro[\/]/.test(String(node.getSourceFile().fileName))
+            || /^network(?:CodeToId|IdToCode)$/.test(expr.name.text))) {
             return this.printRuntimeVariadicCall(node, 'super', expr.name.text, identation);
         }
 
