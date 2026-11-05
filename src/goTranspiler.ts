@@ -16429,6 +16429,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (this.goIsNativeSliceCall(initializer)) {
             return 'string';
         }
+        if (this.goIsSafeContainerIsArray(initializer)) {
+            return 'bool';
+        }
         if (((initializer?.kind === SyntaxKind.ElementAccessExpression) || (initializer?.kind === SyntaxKind.CallExpression))
             && this.goWsTradesRead(initializer)) {
             return GO_WS_CACHE_TYPE; // a TradesCache entry read
@@ -26852,7 +26855,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         // a predicate the printer folds to a constant — IsArray on a proven slice or map —
         // prints a Go bool that the probe above cannot name
-        if ((node?.kind === SyntaxKind.CallExpression) && ((printed === 'true') || (printed === 'false'))) {
+        if ((node?.kind === SyntaxKind.CallExpression) && ((printed === 'true') || (printed === 'false') || this.goIsSafeContainerIsArray(node))) {
             return printed;
         }
         if (GO_BOOL_FIELDS.has(printed)) {
@@ -29484,6 +29487,45 @@ ${this.getIden(identation)}${returnStatement}`;
         return safe;
     }
 
+    // `Array.isArray (x)` on a single-write safeList / safeDict local: printed as a Go bool
+    goIsSafeContainerIsArray(call): boolean {
+        const arg: any = call?.arguments?.[0];
+        return (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (call.expression.expression?.getText?.() === 'Array') && (call.expression.name?.text === 'isArray')
+            && (arg?.kind === SyntaxKind.Identifier) && (this.goSingleWriteSafeContainerKind(arg) !== undefined);
+    }
+
+    // `!Array.isArray (x)` on such a local: the nil test / constant without a negation around it
+    printNegatedSafeContainerIsArray(operand): string | undefined {
+        const call: any = this.goUnwrapParenthesizedNode(operand);
+        const arg: any = call?.arguments?.[0];
+        if (!this.goIsSafeContainerIsArray(call)) {
+            return undefined;
+        }
+        return (this.goSingleWriteSafeContainerKind(arg) === 'dict') ? 'true' : `(${this.printNode(arg, 0)} == nil)`;
+    }
+
+    // an `any` local bound once by `safeList(..)` / `safeDict(..)` with a nil default: the list box is an array or nil,
+    // the dict box is never an array
+    goSingleWriteSafeContainerKind(nameNode): 'list' | 'dict' | undefined {
+        const declaration: any = this.goDeclarationOfIdentifier(nameNode);
+        const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+        if ((init?.kind !== SyntaxKind.CallExpression) || (init.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (init.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+            || this.goLocalIsRebound(this.goEnclosingFunction(declaration), declaration.name)) {
+            return undefined;
+        }
+        const name = init.expression.name?.text;
+        const args = init.arguments ?? [];
+        const fallback: any = (args.length === 3) ? this.goUnwrapParenthesizedNode(args[2]) : undefined;
+        const nilDefault = (args.length === 2) || ((fallback?.kind === SyntaxKind.Identifier) && (fallback.text === 'undefined')) || (fallback?.kind === SyntaxKind.NullKeyword);
+        if ((name === 'safeList') || (name === 'safeListN')) {
+            return nilDefault ? 'list' : undefined;
+        }
+        const emptyDict = (fallback?.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0);
+        return ((name === 'safeDict') && (nilDefault || emptyDict)) ? 'dict' : undefined;
+    }
+
     // native IsArray: a constant for an operand whose Go type the printer proves, and
     // the two-value assertion on an `any` box that only ever holds a []any
     printNativeIsArray(node, parsedArg: string | undefined): string | undefined {
@@ -29501,6 +29543,10 @@ ${this.getIden(identation)}${returnStatement}`;
                 return this.goIdentifierUsedElsewhere(argNode) ? (isSlice ? 'true' : 'false') : undefined;
             }
             return undefined;
+        }
+        const safeKind = this.goSingleWriteSafeContainerKind(argNode);
+        if (safeKind !== undefined) {
+            return (safeKind === 'dict') ? 'false' : `(${parsedArg} != nil)`;
         }
         if (!this.goLocalHoldsOnlyArrays(argNode)) {
             return undefined;
@@ -30764,6 +30810,10 @@ ${tryBodyBlock}
     printPrefixUnaryExpression(node, identation) {
         const {operand, operator} = node;
         if (operator === SyntaxKind.ExclamationToken) {
+            const negatedIsArray = this.printNegatedSafeContainerIsArray(operand);
+            if (negatedIsArray !== undefined) {
+                return this.getIden(identation) + negatedIsArray;
+            }
             // not branch check falsy/turthy values if needed;
             return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
         }

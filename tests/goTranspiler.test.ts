@@ -7457,6 +7457,15 @@ describe('`key in dict` as a native two-value map read', () => {
         expect(output).toContain('delete(client.(ClientInterface).GetRejections(), subHash)');
         expect(output).not.toContain('Remove(');
     });
+    test('Array.isArray on a single-write safeList / safeDict local folds to a nil test or a constant', () => {
+        const transpiler: any = new Transpiler({ verbose: false });
+        installCcxtGoHooks(transpiler.goTranspiler);
+        const output = transpiler.transpileGo('class Exchange {\n    safeList (o, k, d = undefined): any { return d; }\n    safeDict (o, k, d = undefined): any { return d; }\n    f (r) {\n        const data = this.safeList (r, \'data\');\n        const book = this.safeDict (r, \'book\', {});\n        const isArray = Array.isArray (book);\n        if (!Array.isArray (data)) {\n            return 1;\n        }\n        if (isArray || !Array.isArray (book)) {\n            return data;\n        }\n        let x = this.safeList (r, \'x\');\n        x = r;\n        return Array.isArray (x);\n    }\n}\n').content;
+        expect(output).toContain('var isArray bool = false');
+        expect(output).toContain('if data == nil {');
+        expect(output).toContain('if isArray || true {');
+        expect(output).toContain('return IsArray(x)');
+    });
     test('a Balance entry compares natively against undefined', () => {
         const output = new Transpiler({ verbose: false }).transpileGo('class Exchange {\n    balance = {};\n    options = {};\n    f () {\n        const k = \'spot\';\n        if (this.balance[k] === undefined) {\n            this.balance[k] = {};\n        }\n        return (this.balance[k] !== undefined) && (this.options[k] === undefined);\n    }\n}\n').content;
         expect(output).toContain('if this.Balance[k] == nil {');
