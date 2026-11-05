@@ -1812,6 +1812,14 @@ describe('rust error constructor message arguments', () => {
         expect(output).toContain('crate::runtime::Math::min(&x, &y)');
     });
 
+    test('a class picked at runtime constructs by name through create_error', () => {
+        const ts = "function f(table: any, k: any, msg: any) {\n    const e = new table[k] (msg);\n    throw new table[k] (msg);\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('panic!("{}", crate::exchange_errors::create_error(&crate::runtime::stringify_param(&(get_value(&table, &k))), &crate::runtime::stringify_param(&(msg))));');
+        expect(output).toContain('Value::from(crate::exchange_errors::create_error(');
+        expect(output).not.toContain('::new(');
+    });
+
     test('jwt / rsa calls are printed at the runtime signers\' fixed arity', () => {
         const ts = "function jwt (r: any, s: any, h: any, isRsa = false, o: any = {}): any { return r; }\nfunction rsa (r: any, s: any, h: any, p = 'pkcs1'): any { return r; }\n"
             + "function f(a: any, b: any, h: any) {\n    const t = jwt (a, b, h);\n    return rsa (a, b, h, 'pss');\n}";

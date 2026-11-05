@@ -11431,6 +11431,14 @@ export class RustTranspiler extends BaseTranspiler {
             const args = node.arguments.map((a, index) => this.printErrorConstructorArg(snake, index, a, identation)).join(', ');
             return `crate::exchange_errors::${snake}(${args})`;
         }
+        // A class picked at runtime (`new table[k](msg)`, or a thrown local class value)
+        // constructs by name through `create_error`; a value position keeps it boxed.
+        const dynamicClass = this.rustDynamicErrorClass(node);
+        if (dynamicClass !== undefined) {
+            const args = node.arguments.map(a => this.printNode(a, identation)).join(', ');
+            const built = `crate::exchange_errors::create_error(&crate::runtime::stringify_param(&(${dynamicClass})), &crate::runtime::stringify_param(&(${args})))`;
+            return node.parent?.kind === SyntaxKind.ThrowStatement ? built : `Value::from(${built})`;
+        }
         // Classes the ccxt post-pass routes to the same constructors — their
         // message argument is audited too; every other `X::new(..)` prints as
         // before.
@@ -11438,6 +11446,16 @@ export class RustTranspiler extends BaseTranspiler {
             ? node.arguments.map((a, index) => this.printErrorConstructorArg(this.rustErrorConstructorName(expression), index, a, identation)).join(', ')
             : node.arguments.map(a => this.printNode(a, identation)).join(', ');
         return `${expression}::new(${args})`;
+    }
+
+    /** Printed class expression of a `new` whose class is a runtime value, else undefined. */
+    rustDynamicErrorClass(node): string | undefined {
+        const target: any = node.expression;
+        if (isElementAccessExpression(target)) return this.printNode(target, 0).trim();
+        if (!isIdentifier(target) || node.parent?.kind !== SyntaxKind.ThrowStatement) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(target);
+        if (declaration === undefined || !(isVariableDeclaration(declaration) || isParameterDeclaration(declaration) || isBindingElement(declaration))) return undefined;
+        return this.printNode(target, 0).trim();
     }
 
     /** `param.member` where `param` is a class-typed parameter, the member is
