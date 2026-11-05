@@ -19069,16 +19069,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     // the variable declaration an identifier binds to, through the checker (undefined for every
     // other shape) — the market rule resolves its own locals this way, never by printed name
-    // the parameter an identifier reads, or undefined for any other binding
-    goParameterOfIdentifier(node): any {
-        try {
-            const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
-            return (declaration?.kind === SyntaxKind.Parameter) ? declaration : undefined;
-        } catch (e) {
-            return undefined;
-        }
-    }
-
     goDeclarationOfIdentifier(node): any {
         try {
             const symbol = this.getChecker().getSymbolAtLocation(node);
@@ -23916,10 +23906,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // `<param>.url` of a `<param>: Client` parameter
     goIsClientUrl(arg): boolean {
-        if ((arg?.kind !== SyntaxKind.PropertyAccessExpression) || (arg.name?.text !== 'url') || (arg.expression?.kind !== SyntaxKind.Identifier)) {
+        return (arg?.kind === SyntaxKind.PropertyAccessExpression) && (arg.name?.text === 'url') && this.goIsClientParameter(arg.expression);
+    }
+
+    // an identifier bound to a `<param>: Client` parameter
+    goIsClientParameter(node): boolean {
+        if (node?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg.expression)?.valueDeclaration?.resolve?.();
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
         return (decl?.kind === SyntaxKind.Parameter) && (decl.type?.getText() === 'Client');
     }
 
@@ -30426,7 +30421,14 @@ ${this.getIden(identation)}${returnStatement}`;
 
     goDeleteReceiverText(node): string | undefined {
         if (node?.kind === SyntaxKind.Identifier) {
-            return (this.goDeclaredTypeOfIdentifier(node) === 'map[string]any') ? this.printNode(node, 0) : undefined;
+            const declaration = this.goDeclarationOfIdentifier(node);
+            const declared = this.goDeclaredTypeOfIdentifier(node) ?? this.goPrintedLocalDeclarationType(node)
+                ?? ((declaration !== undefined) ? this.rf6aSafeDictMapLocal(declaration) : undefined);
+            return (declared === 'map[string]any') ? this.printNode(node, 0) : undefined;
+        }
+        const field = this.goDeletableMapField(node);
+        if (field !== undefined) {
+            return field;
         }
         const book: any = node;
         if ((book?.kind !== SyntaxKind.ElementAccessExpression) || (book.expression?.kind !== SyntaxKind.PropertyAccessExpression)
@@ -30435,6 +30437,23 @@ ${this.getIden(identation)}${returnStatement}`;
         }
         const symbol = this.goDeleteKeyText(book.argumentExpression);
         return (symbol === undefined) ? undefined : `this.Ohlcvs[${symbol}]`;
+    }
+
+    // `this.options` / a ws cache field / `client.rejections`: a Go map the struct declares, so Remove is the builtin delete
+    goDeletableMapField(node): string | undefined {
+        if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.name?.kind !== SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        const name = node.name.text;
+        if (node.expression?.kind === SyntaxKind.ThisKeyword) {
+            const goName = this.transformPropertyAccessExpressionName(name, node.name);
+            return GO_DELETABLE_MAP_FIELDS.has(goName) ? `this.${goName}` : undefined;
+        }
+        if ((name !== 'rejections') || (node.expression?.kind !== SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        // the ws Client's `rejections` table: `client.Rejections` reads the map through the ClientInterface getter
+        return this.goIsClientParameter(node.expression) ? `${this.printNode(node.expression, 0)}.(ClientInterface).GetRejections()` : undefined;
     }
 
     goDeleteKeyText(keyNode): string | undefined {
@@ -31095,7 +31114,7 @@ ${tryBodyBlock}
         case SyntaxKind.AsExpression:
             return this.goKeyIsString(node.expression, printed);
         case SyntaxKind.Identifier:
-            return (this.goDeclaredTypeOfIdentifier(node) === 'string') || (this.goGetArgParameterType(this.goParameterOfIdentifier(node)) === 'string');
+            return (this.goDeclaredTypeOfIdentifier(node) ?? this.goBoundIdentifierType(node)) === 'string';
         case SyntaxKind.CallExpression:
             return this.goTypeOfInitializer(node, printed) === 'string';
         case SyntaxKind.ElementAccessExpression: // an element of a declared `[]string` local, printed as the slice index, is a Go string
@@ -33036,6 +33055,9 @@ GoTranspiler.prototype.goNumericParameterCandidates = function (param) {
     }
     return [];
 };
+
+// BaseExchange map fields (go/v4/exchange.go) a `delete this.<field>[k]` removes from with the builtin delete
+const GO_DELETABLE_MAP_FIELDS = new Set<string>([ 'Options', 'Clients', 'Tickers', 'Bidsasks', 'FundingRates', 'Ohlcvs', 'Trades' ]);
 
 // ---- ws cache fields (goA9fL1*) -------------------------------------------------
 export interface GoTranspiler {

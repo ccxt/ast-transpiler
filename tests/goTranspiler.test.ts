@@ -7488,6 +7488,14 @@ describe('`key in dict` as a native two-value map read', () => {
         expect(output).toContain('"interval": this.Timeframes[timeframe],');
         expect(output).not.toContain('GetValue(this.Timeframes');
     });
+    test('delete on the options map and a ws client rejections table is the builtin delete', () => {
+        const transpiler: any = new Transpiler({ verbose: false });
+        installCcxtGoHooks(transpiler.goTranspiler);
+        const output = transpiler.transpileGo('class Client {\n    rejections = {};\n}\nclass Exchange {\n    options = {};\n    safeString (o, k, d = undefined): string | undefined { return d; }\n    safeDict (o, k, d = undefined): any { return d; }\n    f (client: Client, key: string) {\n        const subHash = key.replace (\'unsubscribe:\', \'\');\n        delete this.options[\'_temp\'];\n        delete client.rejections[subHash];\n    }\n}\n').content;
+        expect(output).toContain('delete(this.Options, "_temp")');
+        expect(output).toContain('delete(client.(ClientInterface).GetRejections(), subHash)');
+        expect(output).not.toContain('Remove(');
+    });
     test('a Balance entry compares natively against undefined', () => {
         const output = new Transpiler({ verbose: false }).transpileGo('class Exchange {\n    balance = {};\n    options = {};\n    f () {\n        const k = \'spot\';\n        if (this.balance[k] === undefined) {\n            this.balance[k] = {};\n        }\n        return (this.balance[k] !== undefined) && (this.options[k] === undefined);\n    }\n}\n').content;
         expect(output).toContain('if this.Balance[k] == nil {');
