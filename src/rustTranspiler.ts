@@ -11426,7 +11426,7 @@ export class RustTranspiler extends BaseTranspiler {
         // are constructed via `new XError(msg)`. Route them through the runtime
         // error constructors (snake_case fn calls).
         const errorClassPattern = /^(?:[A-Z][a-zA-Z]*(?:Error|Required|Found|Failed|Rejected|Available|Exceeded|Limit|Pending|Funds|Address|Order|Cached|Fillable|Closed|Maintenance|Nonce|Timeout|Response|Settings|User|Supported|Implemented|Denied|Enabled|Suspended|Symbol|Change|Unavailable|Proxy|Set|Needed))$/;
-        if (typeof expression === 'string' && errorClassPattern.test(expression)) {
+        if (typeof expression === 'string' && (errorClassPattern.test(expression) || RustTranspiler.RUST_NAME_VALUE_IMPORTS.has(expression) && /^[A-Z]/.test(expression))) {
             const snake = this.rustErrorConstructorName(expression);
             const args = node.arguments.map((a, index) => this.printErrorConstructorArg(snake, index, a, identation)).join(', ');
             return `crate::exchange_errors::${snake}(${args})`;
