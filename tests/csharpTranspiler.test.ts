@@ -3731,6 +3731,21 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
     });
 });
 
+describe('csharp function parameters', () => {
+    test('a string[] parameter of a top-level function prints IList<object> unless rebound', () => {
+        const output = transpiler.transpileCSharp(
+            "function f (exchange, symbols: string[]) {\n" +
+            "    return symbols.length;\n" +
+            "}\n" +
+            "function g (exchange, symbols: string[]) {\n" +
+            "    symbols = [];\n" +
+            "    return symbols;\n" +
+            "}\n").content;
+        expect(output).toContain('f(object exchange, IList<object> symbols)');
+        expect(output).toContain('g(object exchange, object symbols)');
+    });
+});
+
 describe('csharp helper removal: a for-header counter prints the native ++ / --', () => {
     // the counter's printed `int` type comes back through csharpExpressionTypeResolver (the
     // embedding build layer retypes the declaration `int i = 0` itself); these tests stub
