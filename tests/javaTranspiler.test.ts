@@ -1136,9 +1136,9 @@ describe('java boolean conditions emitted without the Helpers.isTrue wrapper', (
             .toContain("if (!Helpers.isTrue(x))");
     });
 
-    test('logical operators over non-boolean operands keep the wrapper', () => {
+    test('logical operators wrap only their non-boolean operands', () => {
         const output = conditionOf("        if (x && x) { return; }\n", 'test(x: string): void');
-        expect(output).toContain("if (Helpers.isTrue(Helpers.isTrue(x) && Helpers.isTrue(x)))");
+        expect(output).toContain("if ((Helpers.isTrue(x) && Helpers.isTrue(x)))");
     });
 
     test('comparison operands inside a logical expression are unwrapped individually', () => {
@@ -4228,6 +4228,33 @@ describe('java inOp -> containsKey: declared Map receivers and nullable dicts', 
     });
 });
 
+describe('java replaceAll on a lowered/trimmed receiver', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'java-replaceall-lowered-'));
+    const write = (relative: string, content: string): string => {
+        const file = path.join(root, relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, content);
+        return file;
+    };
+    const body = (expr: string) => `export default class V {\n    m (s: string) {\n        const y = ${expr};\n        return y;\n    }\n}\n`;
+
+    test('a toLowerCase receiver with literal arguments prints String.replace', () => {
+        const output = transpiler.transpileJavaByPath(write('ts/src/venue0.ts', body("s.toLowerCase ().replaceAll ('-', '_')"))).content;
+        expect(output).toContain('((String)s).toLowerCase().replace("-", "_")');
+        expect(output).not.toContain('Helpers.replaceAll');
+    });
+
+    test('a non-literal pattern keeps the helper', () => {
+        const output = transpiler.transpileJavaByPath(write('ts/src/venue1.ts', body("s.trim ().replaceAll (s, '_')"))).content;
+        expect(output).toContain('Helpers.replaceAll(');
+    });
+
+    test('a test-tier file keeps the helper', () => {
+        const output = transpiler.transpileJavaByPath(write('ts/src/test/venue2.ts', body("s.toUpperCase ().replaceAll ('-', '_')"))).content;
+        expect(output).toContain('Helpers.replaceAll(');
+    });
+});
+
 describe('java replaceAll native emission', () => {
     // Literal pattern and replacement on a side-effect-free receiver: the helper's null /
     // empty-pattern guards cannot fire, so the call is emitted as a native String.replace
@@ -5331,6 +5358,22 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
             "    }\n");
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain('Helpers.promiseAll(new java.util.ArrayList<Object>(java.util.Arrays.asList(this.fetchA(), this.fetchB())))');
+    });
+
+    test('a null-guarded negation of an unwritten Long local prints Long.valueOf', () => {
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        (byPath as any).javaTranspiler.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'scale' ? 'Long' : undefined);
+        const input = "class T {\n" +
+            "    f (c: any): any {\n" +
+            "        const scale: number = c['s'];\n" +
+            "        const a = (scale !== undefined) ? Math.pow (10, -scale) : undefined;\n" +
+            "        const b = -scale;\n" +
+            "        return [ a, b ];\n" +
+            "    }\n" +
+            "}\n";
+        const output = byPath.transpileJava(input).content;
+        expect(output).toContain('Long.valueOf(-scale)');
+        expect(output).toContain('Object b = Helpers.opNeg(scale);');
     });
 
     test('a Promise.all over a list variable keeps the helper (element types unknown)', () => {
@@ -10162,5 +10205,157 @@ describe ('rfJava3StringTypedParse', () => {
         test('an any operand keeps the helper', () => {
             expect(out).toContain('Helpers.parseFloat(p)');
         });
+    });
+});
+
+describe('java ws receiver calls', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'java-ws-receiver-calls-'));
+    const write = (relative: string, content: string): string => {
+        const file = path.join(root, relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, content);
+        return file;
+    };
+    write('ts/src/base/Exchange.ts', 'export default class Exchange {\n    tickers: { [key: string]: any } = {};\n    orders: any = undefined;\n}\n');
+    let venue = 0;
+    const transpile = (relative: string, body: string, types: { [name: string]: string } = {}): string => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const original = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => types[declaration?.name?.text];
+            return transpiler.transpileJavaByPath(write(relative.replace('#', String(venue++)), body)).content;
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = original;
+        }
+    };
+    const venueClass = (base: string, members: string) => `import Exchange from '${base}/Exchange.js';\nexport default class V extends Exchange {\n${members}\n}\n`;
+    const members = `    handle (raw: any, symbol: string, snapshot: any) {
+        const cache = raw;
+        const book = raw;
+        const side = raw;
+        cache.append (1);
+        book.reset (snapshot);
+        book.reset ();
+        side.store (1, 2);
+        this.orders.append (3);
+        const limit = book.limit ();
+        if (symbol in this.tickers) {
+            delete this.tickers[symbol];
+        }
+        return [ limit, this.tickers[symbol] ];
+    }
+    other (stored: any) {
+        stored.append (1);
+        stored.reset (2);
+        return stored.limit ();
+    }`;
+    const body = venueClass('../base', members);
+
+    test('a ws local declared a ws class calls its method natively', () => {
+        const output = transpile('ts/src/pro/venue#.ts', body, {
+            'cache': 'io.github.ccxt.ws.ArrayCache', 'book': 'io.github.ccxt.ws.WsOrderBook', 'side': 'io.github.ccxt.ws.OrderBookSide',
+        });
+        expect(output.split('public Object other')[0]).not.toContain('Helpers.callDynamically(');
+        expect(output).toContain('book.reset(snapshot);');
+        expect(output).toContain('book.reset(null);');
+        expect(output).toContain('side.store(1, 2);');
+        expect(output).toContain('((io.github.ccxt.ws.ArrayCache) this.orders).append(3);');
+        expect(output).toContain('book.limit()');
+        expect(output).toContain('this.tickers.containsKey(symbol)');
+        expect(output).toContain('this.tickers.remove((String)symbol)');
+        expect(output).toContain(': this.tickers.get(symbol))');
+    });
+
+    test('an undeclared ws receiver dispatches reflectively, a sole-declaring class takes a cast', () => {
+        const output = transpile('ts/src/pro/venue#.ts', body);
+        expect(output).toContain('((io.github.ccxt.ws.ArrayCache) stored).append(1);');
+        expect(output).toContain('Helpers.callDynamically(stored, "reset", new Object[]{2});');
+        expect(output).toContain('Helpers.callDynamically(stored, "limit", new Object[]{})');
+    });
+
+    test('REST venues print the plain call', () => {
+        const output = transpile('ts/src/venue#.ts', venueClass('./base', members), { 'book': 'io.github.ccxt.ws.WsOrderBook' });
+        expect(output).not.toContain('Helpers.callDynamically(');
+        expect(output).toContain('book.reset(snapshot)');
+        expect(output).toContain('stored.reset(2)');
+        // the base cache field is declared a Map in either tier
+        expect(output).toContain('this.tickers.containsKey(symbol)');
+    });
+
+    afterAll(() => {
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+});
+
+describe('java logical conditions and base int-call arithmetic', () => {
+    test('an outermost && / || condition prints the Java operator without isTrue', () => {
+        const out = transpiler.transpileJava('function f (x: any, y: any) { if (x && y) { return 1; } const z = (x || y) && x; return z; }').content;
+        expect(out).toContain('if ((Helpers.isTrue(x) && Helpers.isTrue(y)))');
+        expect(out).toContain('Object z = Helpers.isTrue((Helpers.isTrue(x) || Helpers.isTrue(y))) && Helpers.isTrue(x);');
+    });
+    test('a non-base precisionFromString call keeps Helpers.multiply', () => {
+        const out = transpiler.transpileJava('class A { precisionFromString (s: string): number { return 1; } f (s: string) { return this.precisionFromString (s) * 2; } }').content;
+        expect(out).toContain('Helpers.multiply(this.precisionFromString(s), 2)');
+    });
+});
+
+describe('java in over a declared List local', () => {
+    test('a List-declared receiver prints the null-guarded contains of Helpers.inOp', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const original = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => {
+                const name = declaration?.name?.text;
+                if (name === 'ids') { return 'List<Object>'; }
+                if (name === 'id' || name === 'other') { return 'String'; }
+                return undefined;
+            };
+            const ts = "class t {\n    f (raw) {\n        const ids = [];\n        const id = this.safeString (raw, 'a');\n        let other: number = 1;\n        if (!(id in ids)) { ids.push (id); }\n        if ('x' in ids) { return 1; }\n        if (other in raw) { return 2; }\n        return ids;\n    }\n}\n";
+            const out = transpiler.transpileJava(ts).content;
+            expect(out).toContain('(ids != null && id != null && ids.contains(id))');
+            expect(out).toContain('(ids != null && ids.contains("x"))');
+            expect(out).not.toContain('Helpers.inOp(ids');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = original;
+        }
+    });
+});
+
+describe('Promise.all over a list in the ts/src tiers', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-promise-all-stream');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
+    const TEST_FIXTURE = path.join(TMP, 'ts', 'src', 'test', 'probe.ts');
+    const body = "class T {\n" +
+        "    async fetchA (): Promise<number> {\n" +
+        "        return 1;\n" +
+        "    }\n" +
+        "    async run (): Promise<any> {\n" +
+        "        const tasks: Promise<any>[] = [ this.fetchA () ];\n" +
+        "        return await Promise.all (tasks);\n" +
+        "    }\n" +
+        "}\n";
+    let venue: string;
+    let testTier: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TEST_FIXTURE), { recursive: true });
+        fs.writeFileSync(VENUE_FIXTURE, body);
+        fs.writeFileSync(TEST_FIXTURE, body);
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        venue = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+        testTier = byPath.transpileJavaByPath(TEST_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('an exchange-tier Promise.all inlines the helper steps', () => {
+        expect(venue).toContain('((java.util.List<?>)(tasks)).stream().filter(java.util.concurrent.CompletableFuture.class::isInstance).map((promiseAllItem) -> (java.util.concurrent.CompletableFuture<?>) promiseAllItem)');
+        expect(venue).not.toContain('Helpers.promiseAll');
+    });
+
+    test('the test tier keeps the helper', () => {
+        expect(testTier).toContain('Helpers.promiseAll(tasks)');
     });
 });

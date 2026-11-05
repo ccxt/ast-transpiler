@@ -349,6 +349,30 @@ const JAVA_DECLARED_STRING_TYPE = /^(java\.util\.)?String$/;
 // the Java spellings a declaration publishes for the ws order book class (import-shortened included)
 const THIS_WS_ORDERBOOK_TYPE = /^(?:io\.github\.ccxt\.ws\.)?WsOrderBook$/;
 
+// ws-tier cache calls (`x.append (v)`, `book.reset (s)`, ...): the hand-written ws classes declare these
+// methods, so a receiver declared one of them binds natively; any other receiver dispatches reflectively
+// Exchange.ts cache fields BaseExchange.java declares `Map<String, Object>`: Map calls bind with no receiver cast
+const JAVA_BASE_DECLARED_MAP_CACHE_FIELDS: Set<string> = new Set(['tickers', 'bidsasks', 'fundingRates']);
+const JAVA_WS_RECEIVER_TIER_FILE = /(^|\/)ts\/src\/(pro|prediction)\/[a-z0-9_]+\.ts$/;
+const JAVA_WS_DYNAMIC_METHODS: Set<string> = new Set(['append', 'reset', 'storeArray', 'store']);
+const JAVA_WS_DYNAMIC_FIELDS: Set<string> = new Set(['myTrades', 'positions', 'orders', 'trades', 'ohlcvs', 'tickers', 'orderbooks']);
+// names that hold plain maps/lists or the Client, never a ws cache
+const JAVA_WS_PLAIN_RECEIVERS: Set<string> = new Set(['new', 'var', 'for', 'if', 'else', 'return', 'try', 'catch', 'throw',
+    'list', 'channel', 'response', 'request', 'message', 'data', 'params', 'options', 'config', 'entry', 'item', 'key', 'value',
+    'client', 'exchange', 'string', 'array', 'map', 'set', 'ticker', 'trade', 'order', 'balance', 'position', 'currency', 'market']);
+// methods each declared ws class binds (argument counts; `value` = callable outside statement position)
+const JAVA_WS_TYPED_METHODS: { [cls: string]: { [method: string]: { argc: number[], value: boolean } } } = {
+    'io.github.ccxt.ws.ArrayCache': { 'append': { argc: [1], value: false } },
+    'io.github.ccxt.ws.WsOrderBook': { 'reset': { argc: [0, 1], value: false }, 'limit': { argc: [0], value: true } },
+    'io.github.ccxt.ws.OrderBookSide': { 'store': { argc: [2, 3], value: false }, 'storeArray': { argc: [1], value: false }, 'limit': { argc: [0], value: false } },
+};
+// statement calls only one ws class declares: the reflective lookup binds exactly the cast call
+const JAVA_WS_CAST_METHODS: { [method: string]: { cls: string, argc: number[] } } = {
+    'append': { cls: 'io.github.ccxt.ws.ArrayCache', argc: [1] },
+    'store': { cls: 'io.github.ccxt.ws.OrderBookSide', argc: [2, 3] },
+    'storeArray': { cls: 'io.github.ccxt.ws.OrderBookSide', argc: [1] },
+};
+
 // TS parameter annotations (`Dict`, `Market`, `Currency`, `Str`, `OrderType`/`OrderSide`, `Bool`) print the native Java
 // type on the declaring method. `Int`/`Num` stay `Object`: a TS `number` is an Integer, Long or
 // Double box in generated code, so neither a `Long`/`Double` parameter nor a cast site is provable.
@@ -1122,6 +1146,28 @@ export class JavaTranspiler extends BaseTranspiler {
         const declared = this.javaDeclaredTypeOf(node);
         return declared !== undefined && declared.replace(/\s+/g, '').replace(/^java\.util\./, '')
             === type.replace(/\s+/g, '').replace(/^java\.util\./, '');
+    }
+
+    // `k in xs` over a local declared List: Helpers.inOp's List branch is a null-guarded contains
+    javaDeclaredListContains(right, left, objText: string, keyText: string): string | undefined {
+        if (!isIdentifier(right) || objText !== right.text) {
+            return undefined;
+        }
+        const literal = isStringLiteralLikeNode(left);
+        if (!literal && !(isIdentifier(left) && keyText === left.text)) {
+            return undefined;
+        }
+        if (!literal) {
+            const keyDeclared = this.javaDeclaredTypeOf(left);
+            if (keyDeclared === undefined || !/^[A-Z][\w.]*(?:<.*>)?$/.test(keyDeclared)) {
+                return undefined;
+            }
+        }
+        const declared = this.javaDeclaredTypeOf(right);
+        if (declared === undefined || !/^(?:java\.util\.)?(?:List|ArrayList)<[^<>]*>$/.test(declared)) {
+            return undefined;
+        }
+        return `(${objText} != null && ${literal ? '' : `${keyText} != null && `}${objText}.contains(${keyText}))`;
     }
 
     // Java erasure of a printed type, for override/bridge comparisons
@@ -1918,6 +1964,58 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.printNodeCommentsIfAny(node, identation, handlerDispatch);
         }
         return super.printExpressionStatement(node, identation);
+    }
+
+    printCallExpression(node, identation) {
+        return this.printJavaWsReceiverCall(node, identation) ?? super.printCallExpression(node, identation);
+    }
+
+    // `x.append|reset|store|storeArray|limit (...)` in a ws/prediction venue: native on a local declared the
+    // ws class that has the method, a cast statement where one class alone declares it, else callDynamically
+    printJavaWsReceiverCall(node, identation): string | undefined {
+        const callee = node.expression;
+        if (!isPropertyAccessExpression(callee) || !JAVA_WS_RECEIVER_TIER_FILE.test(node.getSourceFile().fileName)) {
+            return undefined;
+        }
+        const method = callee.name.text;
+        const receiver = callee.expression;
+        const argc = node.arguments.length;
+        let receiverText: string;
+        if (isPropertyAccessExpression(receiver) && receiver.expression.kind === SyntaxKind.ThisKeyword
+            && JAVA_WS_DYNAMIC_FIELDS.has(receiver.name.text)) {
+            if (!JAVA_WS_DYNAMIC_METHODS.has(method)) {
+                return undefined;
+            }
+            receiverText = 'this.' + receiver.name.text;
+        } else if (isIdentifier(receiver)) {
+            receiverText = this.printNode(receiver, 0);
+            if (!/^[a-z]\w+$/.test(receiverText)) {
+                return undefined;
+            }
+            if (method === 'limit' ? argc !== 0 : (!JAVA_WS_DYNAMIC_METHODS.has(method) || JAVA_WS_PLAIN_RECEIVERS.has(receiverText))) {
+                return undefined;
+            }
+        } else {
+            return undefined;
+        }
+        const args = this.printArgsForCallExpression(node, identation);
+        const statement = node.parent?.kind === SyntaxKind.ExpressionStatement;
+        if (isIdentifier(receiver)) {
+            const declaration: any = this.javaDeclarationOfIdentifier(receiver);
+            const cls = declaration !== undefined && isVariableDeclaration(declaration) && declaration.name?.text === receiverText
+                ? this.javaDeclaredTypeOfDeclaration(declaration) : undefined;
+            const spec = cls !== undefined ? JAVA_WS_TYPED_METHODS[cls]?.[method] : undefined;
+            // WsOrderBook.reset takes one Object: the helper pads an omitted argument with null
+            const single = cls === 'io.github.ccxt.ws.WsOrderBook' || !args.includes('\n');
+            if (spec !== undefined && spec.argc.includes(argc) && (spec.value || statement) && single) {
+                return `${receiverText}.${method}(${argc === 0 && method === 'reset' ? 'null' : args.trim()})`;
+            }
+        }
+        const cast = JAVA_WS_CAST_METHODS[method];
+        if (cast !== undefined && statement && cast.argc.includes(argc)) {
+            return `((${cast.cls}) ${receiverText}).${method}(${args.trim()})`;
+        }
+        return `${this.DYNAMIC_CALL_OPEN}${receiverText}, "${method}", new Object[]{${args}})`;
     }
 
     printConstructorDeclaration(node, identation) {
@@ -5197,13 +5295,18 @@ export class JavaTranspiler extends BaseTranspiler {
                     return withGuard(`${objText}.containsKey(${keyText})`);
                 }
                 if (this.isJavaMapType(objectType)) {
-                    return withGuard(`((java.util.Map<?, ?>)${objText}).containsKey(${keyText})`);
+                    const receiverText = this.javaBaseDeclaredMapCacheField(right) ? objText : `((java.util.Map<?, ?>)${objText})`;
+                    return withGuard(`${receiverText}.containsKey(${keyText})`);
                 }
                 // `Dictionary | undefined` (a no-overload safe* signature): the helper answers
                 // false for the nullish arm, the guard keeps exactly that
                 if (this.isJavaNullableMapType(objectType) && this.javaRepeatableOperand(right)) {
                     return `(${objText} != null && ${guarded}((java.util.Map<?, ?>)${objText}).containsKey(${keyText}))`;
                 }
+            }
+            const listContains = this.javaDeclaredListContains(right, left, objText, keyText);
+            if (listContains !== undefined) {
+                return listContains;
             }
             return `Helpers.inOp(${objText}, ${keyText})`;
         }
@@ -5244,6 +5347,10 @@ export class JavaTranspiler extends BaseTranspiler {
             const declaredBox = this.printDeclaredBoxArithmetic(node, left, right, leftText, rightText, op);
             if (declaredBox !== undefined) {
                 return declaredBox;
+            }
+            const integral = this.printIntegralCallArithmetic(left, right, leftText, rightText, op);
+            if (integral !== undefined) {
+                return integral;
             }
 
 
@@ -6382,6 +6489,12 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.printCheckerTypedElementAccessRead(node) ?? super.printElementAccessExpression(node, identation);
     }
 
+    // generated library tiers only (exchanges, pro, prediction, base); tests keep the helpers
+    javaLibraryTierNode(node): boolean {
+        const file = node?.getSourceFile?.()?.fileName ?? '';
+        return file.includes('ts/src/') && !file.includes('ts/src/test/');
+    }
+
     // `Helpers.GetValue(book, "asks")` on a receiver declared the ws order book class: the class's
     // own `get` is the helper's map branch (containsKey holds every one of these keys), and GetValue
     // answers null for a null receiver, so the native read carries the same guard
@@ -7379,6 +7492,75 @@ export class JavaTranspiler extends BaseTranspiler {
             return parent.condition !== child;
         }
         return (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) && parent.expression === child;
+    }
+
+    // ---- integral arithmetic on base int calls ----
+    // `- *` where each operand is a primitive long/int local, an integer literal, a nested native
+    // product/difference, or a base `this.precisionFromString/parseTimeframe(..)` (BaseExchange
+    // declares both `public int`): Helpers.multiply/subtract's Long arm is the same long result.
+    javaIntegralOperandKind(node, text: string): 'long' | 'int' | undefined {
+        if (isNumericLiteral(node)) {
+            return /^\d{1,18}$/.test(node.text) ? 'long' : undefined;
+        }
+        if (isPrefixUnaryExpression(node) && node.operator === SyntaxKind.MinusToken && isNumericLiteral(node.operand)) {
+            return /^\d{1,18}$/.test(node.operand.text) ? 'long' : undefined;
+        }
+        if (isBinaryExpression(node)) {
+            return (node.operatorToken.kind === SyntaxKind.MinusToken || node.operatorToken.kind === SyntaxKind.AsteriskToken)
+                && /^\(.*\)$/.test(text) && !text.includes('Helpers.') ? 'long' : undefined;
+        }
+        if (isIdentifier(node)) {
+            const kind = this.javaDeclaredBoxOperandKind(node, text);
+            return kind === 'longprim' ? 'long' : kind === 'intprim' ? 'int' : undefined;
+        }
+        if (isCallExpression(node) && isPropertyAccessExpression(node.expression)
+            && node.expression.expression.kind === SyntaxKind.ThisKeyword
+            && ['precisionFromString', 'parseTimeframe'].includes(node.expression.name.text)) {
+            const declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
+            const fileName = declaration?.getSourceFile?.()?.fileName ?? '';
+            return /(^|[\\/])ts[\\/]src[\\/]base[\\/](Exchange(\.nooverloads\.\d+)?|functions[\\/]\w+)\.ts$/.test(fileName) ? 'int' : undefined;
+        }
+        return undefined;
+    }
+
+    printIntegralCallArithmetic(left, right, leftText: string, rightText: string, op): string | undefined {
+        if (op !== SyntaxKind.MinusToken && op !== SyntaxKind.AsteriskToken) {
+            return undefined;
+        }
+        const ta = this.javaIntegralOperandKind(left, leftText);
+        const tb = this.javaIntegralOperandKind(right, rightText);
+        // only a site with an int call operand: the declared-local pairs belong to the box rules
+        if (ta === undefined || tb === undefined || (!isCallExpression(left) && !isCallExpression(right))) {
+            return undefined;
+        }
+        const literal = (n, t: string) => (isNumericLiteral(n) || isPrefixUnaryExpression(n)) ? t + 'L' : t;
+        const a = ta === 'int' ? `((long) ${leftText})` : literal(left, leftText);
+        const b = tb === 'int' && ta === 'int' ? `((long) ${rightText})` : literal(right, rightText);
+        return `(${a} ${op === SyntaxKind.MinusToken ? '-' : '*'} ${/^-/.test(b) ? `(${b})` : b})`;
+    }
+
+    // `a && b` / `a || b` as a condition: both sides print through printCondition, so the Java
+    // operator already yields a primitive boolean. The test tree keeps the helper spelling.
+    printLogicalCondition(node): string | undefined {
+        let inner = node;
+        while (isParenthesizedExpression(inner)) {
+            inner = inner.expression;
+        }
+        if (!isBinaryExpression(inner) || (inner.operatorToken.kind !== SyntaxKind.AmpersandAmpersandToken
+            && inner.operatorToken.kind !== SyntaxKind.BarBarToken)
+            || /(^|[\\/])ts[\\/]src[\\/]test[\\/]/.test(node.getSourceFile?.()?.fileName ?? '')) {
+            return undefined;
+        }
+        let outer = node.parent;
+        while (outer !== undefined && isParenthesizedExpression(outer)) {
+            outer = outer.parent;
+        }
+        // an operand of an enclosing `&&` / `||` keeps its own spelling; the outermost test unwraps
+        if (this.javaConditionPrintsBoolean(node) || (outer !== undefined && isBinaryExpression(outer)
+            && (outer.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken || outer.operatorToken.kind === SyntaxKind.BarBarToken))) {
+            return undefined;
+        }
+        return `(${this.printNode(node, 0)})`;
     }
 
     printDeclaredBoxArithmetic(node, left, right, leftText: string, rightText: string, op): string | undefined {
@@ -9221,7 +9403,23 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printPromiseAllCall(node, identation, parsedArg = undefined) {
-        return this.printNativePromiseAllCall(node) ?? `Helpers.promiseAll(${parsedArg})`;
+        return this.printNativePromiseAllCall(node) ?? this.printJavaPromiseAllStream(node, parsedArg) ?? `Helpers.promiseAll(${parsedArg})`;
+    }
+
+    // Helpers.promiseAll's own steps inline (List cast, CompletableFuture filter, allOf, in-order join
+    // into an ArrayList) in the ts/src exchange and base tiers; the test tier keeps the helper call
+    printJavaPromiseAllStream(node, parsedArg) {
+        const fileName = String(node?.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if (parsedArg === undefined || !/(^|\/)ts\/src\//.test(fileName) || JAVA_TEST_TIER_FILES.test(fileName)) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        return `((java.util.List<?>)(${parsedArg})).stream().filter(${future}.class::isInstance)`
+            + `.map((promiseAllItem) -> (${future}<?>) promiseAllItem)`
+            + '.collect(java.util.stream.Collectors.collectingAndThen(java.util.stream.Collectors.toList(), (promiseAllFutures) -> '
+            + `${future}.allOf(promiseAllFutures.toArray(new ${future}<?>[0]))`
+            + `.<java.util.List<Object>>thenApply((promiseAllDone) -> promiseAllFutures.stream().<Object>map(${future}::join)`
+            + '.collect(java.util.stream.Collectors.toCollection(java.util.ArrayList<Object>::new)))))';
     }
 
     printMathFloorCall(node, _identation, parsedArg = undefined) {
@@ -9474,6 +9672,14 @@ export class JavaTranspiler extends BaseTranspiler {
         const receiver = this.sideEffectFreeReceiver(node?.expression);
         if (pattern !== undefined && replacement !== undefined && receiver) {
             return `(${name} == null ? null : ((String)${name}).replace(${pattern}, ${replacement}))`;
+        }
+        // a toLowerCase/toUpperCase/trim receiver is a non-null String (or throws first, as the helper's argument would)
+        const callee = node?.expression?.expression;
+        if (pattern !== undefined && replacement !== undefined && this.javaLibraryTierNode(node)
+            && isCallExpression(callee) && isPropertyAccessExpression(callee.expression) && callee.arguments.length === 0
+            && ['toLowerCase', 'toUpperCase', 'trim'].includes(callee.expression.name.text)
+            && /^(?:\(\(String\)[\w.]+\)|[\w.]+)\.(?:toLowerCase|toUpperCase|trim)\(\)$/.test(name)) {
+            return `${name}.replace(${pattern}, ${replacement})`;
         }
         const typed = this.javaTypedStringReplaceAllCall(node, name, parsedArg, parsedArg2);
         if (typed !== undefined) {
@@ -9777,6 +9983,46 @@ export class JavaTranspiler extends BaseTranspiler {
             && this.javaLengthKind(node.expression) !== undefined;
     }
 
+    // `-x` in the true arm of `(x !== undefined) ? ... : ...` on an unwritten Long/Double local:
+    // the guard rules out null, so the helper's box-preserving negation is the box's valueOf
+    javaNullGuardedNegationBox(node): string | undefined {
+        const operand = node.operand;
+        if (!isIdentifier(operand)) {
+            return undefined;
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(operand);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || this.javaLocalHasWriteAtAll(declaration.name)) {
+            return undefined;
+        }
+        const box = this.javaDeclaredTypeOfDeclaration(declaration);
+        if (box !== 'Long' && box !== 'Double') {
+            return undefined;
+        }
+        const symbol = this.getChecker().getSymbolAtLocation(operand);
+        let child: any = node;
+        for (let current: any = node.parent; current !== undefined && !isFunctionLike(current); child = current, current = current.parent) {
+            if (current.kind !== SyntaxKind.ConditionalExpression) {
+                continue;
+            }
+            if (current.whenTrue !== child) {
+                return undefined;
+            }
+            let condition: any = current.condition;
+            while (condition?.kind === SyntaxKind.ParenthesizedExpression) {
+                condition = condition.expression;
+            }
+            const op = condition?.operatorToken?.kind;
+            const right = condition?.right;
+            const nullish = right?.kind === SyntaxKind.NullKeyword || (isIdentifier(right) && right.text === 'undefined');
+            if (condition?.kind === SyntaxKind.BinaryExpression && (op === SyntaxKind.ExclamationEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsToken)
+                && nullish && isIdentifier(condition.left) && this.getChecker().getSymbolAtLocation(condition.left) === symbol) {
+                return box;
+            }
+            return undefined;
+        }
+        return undefined;
+    }
+
     printPrefixUnaryExpression(node, identation) {
         const { operand, operator } = node;
         if (operator === SyntaxKind.ExclamationToken) {
@@ -9788,6 +10034,10 @@ export class JavaTranspiler extends BaseTranspiler {
         } else if (operator === SyntaxKind.MinusToken) {
             if (this.javaNativeNegation(operand)) {
                 return `-${leftSide}`;
+            }
+            const guardedBox = this.javaNullGuardedNegationBox(node);
+            if (guardedBox !== undefined) {
+                return `${guardedBox}.valueOf(-${leftSide})`;
             }
             return `Helpers.opNeg(${leftSide})`;
         }
@@ -10461,6 +10711,10 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printCondition(node, identation) {
+        const logical = this.printLogicalCondition(node);
+        if (logical !== undefined) {
+            return this.getIden(identation) + logical;
+        }
         if (this.javaConditionPrintsBoolean(node)) {
             return this.getIden(identation) + this.printNode(node, 0);
         }
@@ -10501,7 +10755,21 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaWsClientMapReceiver(node.expression.expression)) {
             return `${object}.remove((String)${key})`;
         }
+        if (this.javaBaseDeclaredMapCacheField(node.expression.expression)) {
+            return `${object}.remove((String)${key})`;
+        }
         return `((java.util.Map<String,Object>)${object}).remove((String)${key})`;
+    }
+
+    // `this.<field>` resolving to an Exchange.ts field of JAVA_BASE_DECLARED_MAP_CACHE_FIELDS
+    javaBaseDeclaredMapCacheField(expression): boolean {
+        if (expression === undefined || !isPropertyAccessExpression(expression) || expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !JAVA_BASE_DECLARED_MAP_CACHE_FIELDS.has(expression.name.text)) {
+            return false;
+        }
+        const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(expression.name)?.valueDeclaration?.resolve();
+        const fileName = declaration?.getSourceFile?.()?.fileName;
+        return typeof fileName === 'string' && JAVA_THIS_RETURN_TYPES_BASE_FILE.test(fileName);
     }
 
     printThrowStatement(node, identation) {
@@ -10919,7 +11187,8 @@ export class JavaTranspiler extends BaseTranspiler {
         const target = this.printNode(receiver, 0);
         const keyText = this.printNode(key, 0);
         const keyGuard = literal ? '' : `${keyText} == null || `;
-        return `(${keyGuard}${target} == null ? null : ((java.util.Map<?, ?>)${target}).get(${keyText}))`;
+        const read = this.javaBaseDeclaredMapCacheField(receiver) ? target : `((java.util.Map<?, ?>)${target})`;
+        return `(${keyGuard}${target} == null ? null : ${read}.get(${keyText}))`;
     }
 
     javaBaseMapFieldReadText(receiver, key, field: { declared: boolean, anyKey: boolean }): string | undefined {
