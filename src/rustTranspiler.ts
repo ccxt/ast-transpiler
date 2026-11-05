@@ -3687,7 +3687,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a ws class reaches its REST parent's methods through `self.parent`; REST `super_*` shims are fixed-arity except the network ones
         if (expr.expression.kind === SyntaxKind.SuperKeyword && (/ts[\/]src[\/]pro[\/]/.test(String(node.getSourceFile().fileName))
             || /^network(?:CodeToId|IdToCode)$/.test(expr.name.text))) {
-            return this.printRuntimeVariadicCall(node, 'super', expr.name.text, identation);
+            return this.printRuntimeVariadicCall(node, 'super', expr.name.text, identation)
+                ?? this.printTranspiledVariadicCall(node, 'super', expr.name.text, identation);
         }
 
         // Handle this.method(...) calls with optional params
