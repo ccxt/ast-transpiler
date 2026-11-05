@@ -1787,11 +1787,37 @@ describe('rust error constructor message arguments', () => {
         expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" msg".into())))');
     });
 
-    test('a concat message of a post-pass error class also drops its box', () => {
+    test('every ccxt error class constructs through its runtime fn with an unboxed message', () => {
         const ts = "function f(id: string) {\n    throw new BadRequest (id + ' msg');\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('BadRequest::new(format!("{}{}", id, Value::Str(" msg".into())))');
-        expect(output).not.toContain('BadRequest::new(Value::Str(');
+        expect(output).toContain('crate::exchange_errors::bad_request(format!("{}{}", id, Value::Str(" msg".into())))');
+        expect(output).not.toContain('BadRequest::new(');
+    });
+
+    test('imported hash, error-class and precision names used as values print natively', () => {
+        const ts = "import { sha256 } from './hashes.js';\nimport { BadRequest } from './errors.js';\nimport { TICK_SIZE } from './number.js';\n"
+            + "function f(sign: any) {\n    const table = { '1': BadRequest };\n    const mode = TICK_SIZE;\n    return sign ('x', sha256);\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Str("BadRequest".into())');
+        expect(output).toContain('Value::Int(crate::runtime::TICK_SIZE)');
+        expect(output).toContain('Value::Str("sha256".into())');
+    });
+
+    test('Math / Precise calls take their args by reference and Precise trims to its runtime arity', () => {
+        const ts = "class Precise {\n    static stringDiv (a: any, b: any, p: any = 18): any { return a; }\n    static stringAdd (a: any, b: any): any { return a; }\n}\n"
+            + "function f(a: any, b: any) {\n    const x = Precise.stringDiv (a, b, 8);\n    const y = Precise.stringDiv (a, b);\n    return Math.min (x, y);\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::precise::Precise::stringDivPrec(&a, &b, &Value::Int(8))');
+        expect(output).toContain('crate::precise::Precise::stringDiv(&a, &b)');
+        expect(output).toContain('crate::runtime::Math::min(&x, &y)');
+    });
+
+    test('jwt / rsa calls are printed at the runtime signers\' fixed arity', () => {
+        const ts = "function jwt (r: any, s: any, h: any, isRsa = false, o: any = {}): any { return r; }\nfunction rsa (r: any, s: any, h: any, p = 'pkcs1'): any { return r; }\n"
+            + "function f(a: any, b: any, h: any) {\n    const t = jwt (a, b, h);\n    return rsa (a, b, h, 'pss');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('jwt(a, b, h, Value::Bool(false), Value::Null)');
+        expect(output).toContain('rsa(a, b, h)');
     });
 
     test('an unproven message keeps its box', () => {
@@ -3411,7 +3437,8 @@ describe('rust native container reads (B-28)', () => {
         // The fixture lives under a `ws/Client.ts` path, the shape the predicate
         // keys on (the class is the ws client; the port holds it as a Dict).
         const output = transpiler.transpileRustByPath('./tests/files/input/ws/Client.ts').content;
-        expect(output).toContain('client.as_map().and_then(|__m| __m.get("url")).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('client.url()');
+        expect(output).not.toContain('__m.get("url")');
         expect(output).not.toContain('get_value(&client, &Value::Str("url"');
         expect(output).toContain('let mut s: Value = client.subscriptions;');
     });
