@@ -12715,6 +12715,8 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeMapAccess(receiverText: string, receiverNode: Node, keyText: string): string | undefined {
+        // `client.url` on a ws `Client`: the handle's own accessor, no map closure.
+        if (keyText === 'url' && this.rustIsWsClientType(this.getCheckedTypeOf(receiverNode))) return `${receiverText}.url()`;
         // A native-map parameter is an `&mut IndexMap` too.
         if (this.rustMapParamDeclaration(receiverNode) !== undefined && RustTranspiler.rustBearerKeyTextOk(keyText)) {
             return `${receiverText}.get("${this.escapeRustStringLiteral(keyText)}").cloned().unwrap_or(Value::Null)`;
@@ -12855,19 +12857,20 @@ export class RustTranspiler extends BaseTranspiler {
      *  class is the default export of `ts/src/base/ws/Client.ts`, so its type
      *  symbol is named `default`; the declaration itself carries the name. */
     rustParameterIsClientHandle(declaration: ParameterDeclaration): boolean {
-        const named = (type: Type | undefined): boolean => {
-            if (type === undefined) return false;
-            const symbol: any = this.typeSymbolOf(type);
-            const declarations: any[] = symbolDeclarations(symbol);
-            return declarations.some((d) => {
+        return this.rustIsWsClientType(this.getCheckedTypeOf(declaration.name));
+    }
+
+    /** The ws `Client` class (or a union with it); its type symbol is the file's `default` export. */
+    rustIsWsClientType(type: Type | undefined): boolean {
+        const named = (t: Type | undefined): boolean => {
+            if (t === undefined) return false;
+            return symbolDeclarations(this.typeSymbolOf(t)).some((d: any) => {
                 if (!isClassDeclaration(d) || d.name === undefined || d.name.text !== 'Client') return false;
                 const file = String(d.getSourceFile().fileName).replace(/\\/g, '/');
                 return file.endsWith('/ws/Client.ts') || file.endsWith('/ws/Client.d.ts');
             });
         };
-        const type = this.getCheckedTypeOf(declaration.name);
-        if (named(type)) return true;
-        return (typeParts(type) ?? []).some((member: Type) => named(member));
+        return named(type) || (typeParts(type) ?? []).some((member: Type) => named(member));
     }
 
     /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
