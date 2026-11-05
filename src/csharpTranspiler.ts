@@ -684,11 +684,10 @@ const CSHARP_OVERRIDE_PARAM_TYPES: { [name: string]: { [index: number]: string }
     signEvmTransaction: { 0: 'IDictionary<string, object>' },
 };
 
-
 // a parameter whose ts/src annotation is an array of JSON cells (`Dict[]`, `Market[]`,
 // `any[]`) prints `IList<object>` -- the very value the generated C# tree passes for a TS array --
 // instead of `object`, so its `.length` / element reads emit `Count` / the guarded indexer. Two
-// whole-program proofs gate it, so a base member and every override keep ONE signature (D8) and no
+// whole-program proofs gate it, so a base member and every override keep ONE signature and no
 // call site needs a conversion:
 //   1. every declaration of that (method, position) in the program spells the same list type, and
 //   2. every call site of that NAME in the program passes an array of JSON cells at that position,
@@ -881,7 +880,6 @@ export class CSharpTranspiler extends BaseTranspiler {
         this.supportsFalsyOrTruthyValues = false;
         this.requiresCallExpressionCast = true;
         this.id = "C#";
-
 
         this.initConfig();
 
@@ -1126,7 +1124,6 @@ export class CSharpTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-
     // The C# declared type of an expression's receiver (`request` in `request["k"] = v`), as
     // the consumer's classifier knows it — ccxt's build/csharp-local-types.js overrides this
     // with its scope-aware local map. Undefined on an unpatched printer
@@ -1191,12 +1188,6 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpressionExceptionIfAny(node) {
-        // convert this[method] into this.call(method) or this.callAsync(method)
-    //    if (node?.expression?.kind === SyntaxKind.ThisKeyword) {
-    //         const isAsyncDecl = node?.parent?.kind === SyntaxKind.AwaitExpression;
-    //         const open = isAsyncDecl ? this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN : this.UKNOWN_PROP_WRAPPER_OPEN;
-    //         return open.replace('(', '');
-    //    }
     }
 
     // reads print getValue(recv, key), which yields null for a missing key; a C# indexer
@@ -2413,9 +2404,6 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
             // const isAsyncDecl = true;
             const isAsyncDecl = node?.parent?.kind === SyntaxKind.AwaitExpression;
-            // const open = isAsyncDecl ? this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN : this.UKNOWN_PROP_WRAPPER_OPEN;
-            // const close = this.UNKOWN_PROP_WRAPPER_CLOSE;
-            // return `${open}"${propName}"${parsedArguments}${close}`;
             const argsArray = `new object[] { ${parsedArguments} }`;
             const open = this.DYNAMIC_CALL_OPEN;
             let statement = `${open}this, "${propName}", ${argsArray})`;
@@ -2480,17 +2468,10 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
         }
 
-        // // replace this[method]() calls
-        // const thisElementAccess = this.printThisElementAccesssIfNeeded(node, identation);
-        // if (thisElementAccess) {
-        //     return thisElementAccess;
-        // }
-
         // handle dynamic calls, this[method](A) or exchange[b] (c) using reflection
         if (node.expression.kind === SyntaxKind.ElementAccessExpression) {
             return this.printDynamicCall(node, identation);
         }
-
 
         return undefined;
     }
@@ -4414,7 +4395,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         // an `object` box: only a parameter of this function (a local may box the hand-written
         // base's own instantiation — `client.futures` is IDictionary<string, Future> — and the
-        // printer cannot tell), and only while nothing has rewritten it (D2)
+        // printer cannot tell), and only while nothing has rewritten it
         if (!isIdentifier(obj) || (this.csharpTypedLocalType(obj) !== undefined)) {
             return undefined;
         }
@@ -4771,8 +4752,6 @@ export class CSharpTranspiler extends BaseTranspiler {
             const boolSlot = this.csharpBoolOptionSlotWriteIsTyped(left);
 
             parsedArrayBindingElements.forEach((e, index) => {
-                // const type = this.getType(node);
-                // const parsedType = this.getTypeFromRawType(type);
                 const leftElement = arrayBindingPatternElements[index];
                 const leftType = this.getChecker().getTypeAtLocation(leftElement);
                 const parsedType = this.getTypeFromRawType(leftType);
@@ -4890,34 +4869,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             return `${open}${leftText}, ${rightText}${close}`;
         }
 
-        // x = y
-        // cast y to x type when y is unknown
-        // if (op === SyntaxKind.EqualsToken) {
-        //     const leftType = this.getChecker().getTypeAtLocation(left);
-        //     const rightType = this.getChecker().getTypeAtLocation(right);
-
-        //     if (this.isAnyType(rightType.flags) && !this.isAnyType(leftType.flags)) {
-        //         // const parsedType = this.getTypeFromRawType(leftType);
-        //         return `${leftText} = ${rightText}`;
-        //     }
-        // }
-
         return undefined;
     }
-
-    // castVariableAssignmentIfNeeded(left, right, identation) {
-    //     const leftType = this.getChecker().getTypeAtLocation(left);
-    //     const rightType = this.getChecker().getTypeAtLocation(right);
-
-    //     const leftText = this.printNode(left, 0);
-    //     const rightText = this.printNode(right, 0);
-
-    //     if (this.isAnyType(rightType.flags) && !this.isAnyType(leftType.flags)) {
-    //         const parsedType = this.getTypeFromRawType(leftType);
-    //         return `${this.getIden(identation)}${leftText} = (${parsedType})${rightText}`;
-    //     }
-    //     return undefined;
-    // }
 
     // the C# type of a whole-call / whole-property initializer, keyed on the AST so
     // the printer's cast wrappers (`((string)x).ToUpper()`) do not hide the callee
@@ -6015,8 +5968,6 @@ export class CSharpTranspiler extends BaseTranspiler {
             let arrayBindingStatement =  `${this.getIden(identation)}${tempDeclaration};\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
-                // const type = this.getType(node);
-                // const parsedType = this.getTypeFromRawType(type);
                 const slotDeclaration = ((index === 0) && this.csharpBoolSlotBinding(arrayBindingPatternElements[0])) ? 'bool ' : 'var ';
                 const slotCast = (slotDeclaration === 'bool ') ? '(bool)' : '';
                 const statement = this.getIden(identation) + `${slotDeclaration}${e} = ${slotCast}` + (tempType ? `${syntheticName}[${index}]` : `((IList<object>) ${syntheticName})[${index}]`);
@@ -6507,7 +6458,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 }
             }
             for (const parameter of rows) {
-                // an override of a base-tier member follows the base spelling whatever it annotates (D8)
+                // an override of a base-tier member follows the base spelling whatever it annotates
                 const followsBase = baseTier && !csharpListParamFileIsPrintedAlone(parameter) && this.csharpListParamBodyReadsAsList(parameter);
                 // the signature printer only types an array annotation: the census must say the same
                 if (baseTier && !followsBase && !csharpSyntacticArrayType(parameter.type)) {
@@ -6744,7 +6695,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     // A parameter of a method that participates in an override relation prints the spelling its
-    // base member and every sibling override agree on (CSHARP_OVERRIDE_PARAM_TYPES; D8): C# is
+    // base member and every sibling override agree on (CSHARP_OVERRIDE_PARAM_TYPES): C# is
     // invariant on override parameter types, so a half-retyped name is CS0115, while a name the
     printParameterType(node) {
         if (node === undefined || node.kind !== SyntaxKind.Parameter) {
@@ -9476,8 +9427,6 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printThrowStatement(node, identation) {
-        // const expression = this.printNode(node.expression, 0);
-        // return this.getIden(node) + this.THROW_TOKEN + " " + expression + this.LINE_TERMINATOR;
         if (node.expression.kind === SyntaxKind.Identifier) {
             return this.getIden(identation) + this.THROW_TOKEN + ' ' + this.printNode(node.expression, 0) + this.LINE_TERMINATOR;
         }
@@ -9533,28 +9482,6 @@ export class CSharpTranspiler extends BaseTranspiler {
         return modifiers + ' ' + typeText + ' ';
     }
 
-    // printLeadingComments(node, identation) {
-    //     const fullText = this.getSrc().getFullText();
-    //     const commentsRangeList = ts.getLeadingCommentRanges(fullText, node.pos);
-    //     const commentsRange = commentsRangeList ? commentsRangeList : undefined;
-    //     let res = "";
-    //     if (commentsRange) {
-    //         for (const commentRange of commentsRange) {
-    //             const commentText = fullText.slice(commentRange.pos, commentRange.end);
-    //             if (commentText !== undefined) {
-    //                 const formatted = commentText
-    //                     .split("\n")
-    //                     .map(line=>line.trim())
-    //                     .map(line => !(line.trim().startsWith("*")) ? this.getIden(identation) + line : this.getIden(identation) + " " + line) .join("\n");
-    //                 // res+= this.transformLeadingComment(formatted) + "\n";
-    //             }
-    //         }
-    //     }
-    //     return res;
-    // }
-
-    // a declared C# collection keeps its static type across every write, and the
-    // null/ContainsKey/Count test reads the live value, so only an enclosing function is needed
     csharpDeclaredReceiverReadable(node, expression): boolean {
         return this.csharpEnclosingFunction(node) !== undefined && isIdentifier(expression);
     }
@@ -9700,47 +9627,3 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
 }
-
-// if (this.requiresCallExpressionCast) {
-//     const parsedTypes = this.getTypesFromCallExpressionParameters(node);
-//     const tmpArgs = [];
-//     args.forEach((arg, index) => {
-//         const parsedType = parsedTypes[index];
-//         const cast = parsedType ? `(${parsedType})` : '';
-//         tmpArgs.push(cast + this.printNode(arg, identation).trim());
-//     });
-//     parsedArgs = tmpArgs.join(",");
-// } else {
-//     parsedArgs = args.map((a) => {
-//         return  this.printNode(a, identation).trim();
-//     }).join(", ");
-// }
-
-// getTypesFromCallExpressionParameters(node) {
-//     const resolvedParams = this.getChecker().getResolvedSignature(node).parameters;
-//     const parsedTypes = [];
-//     resolvedParams.forEach((p) => {
-//         const decl = p.declarations[0];
-//         const type = this.getChecker().getTypeAtLocation(decl);
-//         const parsedType = this.getTypeFromRawType(type);
-//         parsedTypes.push(parsedType);
-//     });
-
-//     return parsedTypes;
-// }
-
-
-// get class decl node
-// Use the ts.getAllSuperTypeNodes function to get the base classes for the MyClass
-// const baseClasses = ts.getAllSuperTypeNodes(classDeclaration);
-
-// // Create a type checker
-// const typeChecker = ts.createTypeChecker(sourceFile.context.program, sourceFile.context.checker);
-
-// // Get the type of the base class
-// const baseClassType = typeChecker.getTypeAtLocation(baseClasses[0]);
-
-// // Get the class declaration for the base class
-// const baseClassDeclaration = baseClassType.symbol.valueDeclaration;
-
-// console.log(baseClassDeclaration);
