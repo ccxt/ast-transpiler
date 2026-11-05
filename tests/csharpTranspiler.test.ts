@@ -1,19 +1,18 @@
 import { Transpiler } from '../src/transpiler';
-import { readFileSync } from 'fs';
 // the test bodies name their TS source snippets `ts`, so the compiler API gets its own name
 import { SyntaxKind } from 'typescript/unstable/ast';
 import { isStringLiteralLikeNode } from 'typescript/unstable/ast/is';
-import { describe } from '@jest/globals';
-import { test } from '@jest/globals';
-import { expect } from '@jest/globals';
+import { describe, test, expect } from '@jest/globals';
 import * as fs from 'fs';
 import * as path from 'path';
-import fs__csharpBaseListParams from 'fs';
-import path__csharpBaseListParams from 'path';
 jest.mock('module',()=>({
     __esModule: true,                 // this makes it work
     default: jest.fn()
   }));
+
+// the parser options most suites print with: getValue(...) element reads, no trailing lines
+const WRAPPED_PARSER = { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' };
+const PLAIN_PARSER = { 'NUM_LINES_END_FILE': 0 };
 
 let transpiler: Transpiler;
 
@@ -1556,7 +1555,7 @@ describe('isTrue is dropped when the condition already prints a C# bool', () => 
 // the generator prints itself (`this.<name>(...)`, same csharpBooleanReturnType as the definition)
 // or by the hand-written-callee table (callees cs/ccxt/base declares with a bool signature and no
 // TS annotation to read: Precise's comparisons, the imported isEmpty/isJsonEncodedObject props).
-describe('isTrue is dropped for a call whose C# signature is a non-nullable bool (cs-14)', () => {
+describe('isTrue is dropped for a call whose C# signature is a non-nullable bool', () => {
     test('a `this.` method declared `: boolean` goes bare, including under ! and ||', () => {
         const input =
         "class T {\n" +
@@ -1734,7 +1733,7 @@ describe('a nullable bool local prints an explicit `== true` instead of isTrue',
     });
 });
 
-// D-24: `isTrue(<call>)` where the call's PRINTED C# signature is `bool?` — the hand-written
+// `isTrue(<call>)` where the call's PRINTED C# signature is `bool?` — the hand-written
 // `bool? safeBool(...)` base family and a `this.<name>(...)` whose TS declaration the generator
 // prints itself — answers exactly what the lifted `== true` answers for that box (null -> false,
 // the box's own bool otherwise), so the wrapper goes. A receiver the printer cannot name, or a
@@ -2322,7 +2321,7 @@ describe('csharp equality of two reads the embedding build layer typed', () => {
 });
 
 describe('csharp equality on a declared scalar read: literals and the parameter registry', () => {
-    // D-21: a read the printer's own tables can only call `object` still compares by value
+    // a read the printer's own tables can only call `object` still compares by value
     // when its emitted DECLARATION carries a scalar type -- the build layer's read oracle
     // (locals it retyped) or its declared-type registry (parameters its typing pass narrowed).
     const p = () => transpiler.csharpTranspiler;
@@ -2428,7 +2427,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         expect(withRegistry((declaration) => rowKinds[declaration?.name?.text], collections)).toContain("isEqual(rows, other)");
     });
     test('a registered read against null keeps the null branch decision', () => {
-        // a required numeric parameter keeps B-18's answer (the helper): the registry spelling
+        // a required numeric parameter keeps the registry's answer (the helper): the registry spelling
         // must not turn the null branch into a native comparison; an optional one is
         // null-comparable and keeps printing `== null`
         const required =
@@ -3081,7 +3080,7 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
         "    const isPrimary = entry['default'] === 'primary';\n" +
         "    return isPrimary;\n" +
         "}");
-        // the read goes native first (B-20: the resolver proves the receiver's box), then the
+        // the read goes native first (the resolver proves the receiver's box), then the
         // comparison drops isEqual
         expect(output).toContain('bool isPrimary = (((entry != null && ((IDictionary<string, object>)entry).ContainsKey("default") ? ((IDictionary<string, object>)entry)["default"] : null) as string) == "primary");');
         expect(output).not.toContain('isEqual(getValue(entry, "default"), "primary")');
@@ -3336,7 +3335,7 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
         "    return ('x' in params);\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        // D2: the box at the read is whatever the assignment stored
+        // the box at the read is whatever the assignment stored
         expect(output).toContain('return (inOp(parameters, "x"));');
     });
     test('a native receiver still needs a printed string key', () => {
@@ -4381,7 +4380,7 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
     });
 });
 
-describe('cs-10: literal-key reads on declared collection locals go native', () => {
+describe('literal-key reads on declared collection locals go native', () => {
     test('a dictionary local reads its key natively, answering null where GetValue does', () => {
         const input =
         "class Exchange {\n" +
@@ -4493,7 +4492,7 @@ describe('cs-10: literal-key reads on declared collection locals go native', () 
     });
 });
 
-describe('B-20: always-dictionary fields and oracle-proven dictionaries read natively', () => {
+describe('always-dictionary fields and oracle-proven dictionaries read natively', () => {
     test('a literal-key read of the exceptions field carries the helper\'s dictionary cast', () => {
         const input =
         "class Exchange {\n" +
@@ -4573,7 +4572,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         try {
             const output = transpiler.transpileCSharp(input).content;
             // a list box has no dictionary key read; `currency` is a market-row receiver whose
-            // proven dictionary type reads natively (B-19), with the helper's missing-key null
+            // proven dictionary type reads natively, with the helper's missing-key null
             expect(output).toContain('object a = getValue(rows, "x");');
             expect(output).toContain('object b = (currency.ContainsKey("code") ? currency["code"] : null);');
             // a numeric key is not a dictionary key
@@ -4640,7 +4639,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
             expect(output).toContain('parsePredictionOpenInterest(object interest, object market = null)');
         });
     });
-    // ---- batch D, D-19: ws handler `message` parameter ----
+    // ---- ws handler `message` parameter ----
     const wsHandlerSource = (body: string, messageType: string = 'Dict', extra: string = '') =>
         'type Dict = { [key: string]: any };\n' +
         'interface Client { id: string; }\n' +
@@ -6102,7 +6101,7 @@ describe('csharp native Promise.all keeps the helper for typed map aliases', () 
     });
 });
 
-describe ('c07inop-equality', () => {
+describe ('csharp isEqual / inOp over typed operands', () => {
     const transpiler = new Transpiler();
     const printer = () => (transpiler as any).csharpTranspiler;
     // the embedding build layer answers csharpExpressionTypeResolver
@@ -6284,15 +6283,11 @@ describe ('c07inop-equality', () => {
     });
 });
 
-describe ('csharpBaseDictionaryViews', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
+describe ('csharp base dictionary views', () => {
 
     const config = {
         'verbose': false,
-        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+        'csharp': { 'parser': WRAPPED_PARSER }
     };
 
     // a class declaring the hand-written base members the way ts/src/base/Exchange.ts does
@@ -6367,15 +6362,11 @@ describe ('csharpBaseDictionaryViews', () => {
     });
 });
 
-describe ('csharpDeclaredStringIndexRead', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
+describe ('csharp declared string index reads', () => {
 
     const config = {
         'verbose': false,
-        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+        'csharp': { 'parser': WRAPPED_PARSER }
     };
 
     // `declared` answers csharpStringReceiverType, the hook the embedding build layer fills with the
@@ -6420,15 +6411,11 @@ describe ('csharpDeclaredStringIndexRead', () => {
     });
 });
 
-describe ('csharpElementRowLocal', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
+describe ('csharp element-row local suite', () => {
 
     const config = {
         'verbose': false,
-        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+        'csharp': { 'parser': WRAPPED_PARSER }
     };
 
     function printed(source: string, enabled: boolean): string {
@@ -6493,18 +6480,14 @@ describe ('csharpElementRowLocal', () => {
     });
 });
 
-describe ('csharpNullableStateFields', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
+describe ('csharp nullable state fields', () => {
 
     // Hand-written BaseExchange fields declared in cs/ccxt/base/Exchange.Options.cs as
     // `IDictionary<string, object> fees|requiredCredentials` and `List<object> accounts` stay null until
     // initializeProperties stores the describe() row, so a native read carries the helper's null test.
     const config = {
         'verbose': false,
-        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+        'csharp': { 'parser': WRAPPED_PARSER }
     };
 
     // the build layer answers the declared C# type of a local through
@@ -6562,17 +6545,13 @@ describe ('csharpNullableStateFields', () => {
     });
 });
 
-describe ('csharpPromiseAllImplicitApi', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
+describe ('csharp Promise.all over the implicit API', () => {
 
     // `await Promise.all (list)` whose every element is the Task<T> of an implicit-API endpoint
     // (a method of the generated ts/src/abstract/<ex>.ts class) with ONE plain T prints a List<Task<T>> and
     // awaits it with Task.WhenAll; T comes from the endpoint's declared Promise<...> type.
     describe('csharp promiseAll over implicit-API tasks -> Task.WhenAll', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-rfcs2a-promiseall');
+        const TMP = path.join(__dirname, 'files', 'tmp-csharp-promiseall-implicit-api');
         const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
         const ABSTRACT = path.join(TMP, 'ts', 'src', 'abstract', 'x.ts');
         const VENUE = path.join(TMP, 'ts', 'src', 'v.ts');
@@ -6666,7 +6645,7 @@ describe ('csharpPromiseAllImplicitApi', () => {
                 "        return r;\n" +
                 "    }\n" +
                 "}\n");
-            const byPath = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const byPath = new Transpiler({ 'verbose': false, 'csharp': { 'parser': PLAIN_PARSER } });
             out = byPath.transpileCSharpByPath(VENUE).content;
         });
 
@@ -6725,15 +6704,11 @@ describe ('csharpPromiseAllImplicitApi', () => {
 });
 
 describe ('Int64 for-counters and literal-default shadows', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
     const config: any = {
         'verbose': false,
         'csharp': {
-            'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' },
+            'parser': WRAPPED_PARSER,
             'numericArgTypes': { 'fetchOHLCV': { 2: 'Int64?', 3: 'Int64?' } },
             'coreArgShadowCallees': [ 'fetchPaginatedCallDeterministic', 'parseOHLCVs' ]
         }
@@ -6822,7 +6797,7 @@ describe ('Int64 for-counters and literal-default shadows', () => {
 
     describe('literal-default limit shadow proven on the AST', () => {
         test('without the build layer tables the helper stays', () => {
-            const transpiler: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const transpiler: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': PLAIN_PARSER } });
             const out = transpiler.transpileCSharp(shadow).content;
             expect(out).toContain('mathMin(limit, 10000)');
         });
@@ -6843,12 +6818,8 @@ describe ('Int64 for-counters and literal-default shadows', () => {
 });
 
 describe ('csharp nullable scalar locals', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
-    const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } };
+    const config: any = { 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } };
 
     const transpile = (ts: string): string => new Transpiler(config).transpileCSharp(ts).content;
 
@@ -7042,12 +7013,8 @@ describe ('csharp nullable scalar locals', () => {
 });
 
 describe ('csharp add on non-null strings', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
-    const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } };
+    const config: any = { 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } };
 
     const transpile = (ts: string): string => new Transpiler(config).transpileCSharp(ts).content;
 
@@ -7149,12 +7116,6 @@ describe ('csharp add on non-null strings', () => {
 });
 
 describe ('csharp base-tier list parameters', () => {
-    const fs = fs__csharpBaseListParams;
-    const path = path__csharpBaseListParams;
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
     // A base-tier method (ts/src/base/*.ts, printed alone) types its array parameter from the
     // declared TS type; its overrides and in-program calls follow it.
@@ -7193,7 +7154,7 @@ describe ('csharp base-tier list parameters', () => {
                 '        return this.ids (box);\n' +
                 '    }\n' +
                 '}\n');
-            const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } });
+            const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } });
             base = (transpiler as any).transpileCSharpByPath(BASE).content;
             venue = (transpiler as any).transpileCSharpByPath(VENUE).content;
         });
@@ -7231,10 +7192,6 @@ describe ('csharp base-tier list parameters', () => {
 });
 
 describe ('csharp declared member types', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
     // native dictionary / list operations on hand-written base members and ws client maps are keyed on the
     // member's DECLARED C# type (csharpDeclaredMemberType, read from the hand-written .cs files); the fixture
@@ -7242,7 +7199,7 @@ describe ('csharp declared member types', () => {
 
     const config = {
         'verbose': false,
-        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+        'csharp': { 'parser': WRAPPED_PARSER }
     };
 
     const THIS: { [name: string]: any } = {
@@ -7358,9 +7315,8 @@ describe ('csharp declared member types', () => {
 });
 
 describe ('csharp JSON.parse native deserialization', () => {
-    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
-    const config = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+    const config = { 'verbose': false, 'csharp': { 'parser': PLAIN_PARSER } };
     const print = (src: string) => new Transpiler(config).transpileCSharp(src).content;
 
     describe('csharp JSON.parse on a string-declared read', () => {
@@ -7377,17 +7333,13 @@ describe ('csharp JSON.parse native deserialization', () => {
 });
 
 describe ('csharp declared member views', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
     // a declared typed view of a hand-written base member
     // answers the member's reads natively, and a string-typed `object` local concatenates natively.
 
     const config = {
         'verbose': false,
-        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+        'csharp': { 'parser': WRAPPED_PARSER }
     };
 
     const THIS: { [name: string]: any } = {
@@ -7461,9 +7413,8 @@ describe ('csharp declared member views', () => {
 });
 
 describe ('csharp bool parameters and bool-declared calls', () => {
-    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
-    const config = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+    const config = { 'verbose': false, 'csharp': { 'parser': PLAIN_PARSER } };
     const print = (src: string) => new Transpiler(config).transpileCSharp(src).content;
 
     describe('csharp boolean parameter call-site proof', () => {
@@ -7511,13 +7462,9 @@ describe ('csharp bool parameters and bool-declared calls', () => {
 });
 
 describe ('csharp inferred collection return box', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
     const unique = [ 'pairOf', 'rowOf', 'chained', 'mixed', 'dictLiteral', 'asyncPair', 'overridden', 'noReturn', 'scalar' ];
-    const makeConfig = (table: boolean): any => ({ 'verbose': false, 'csharp': { ...(table ? { 'uniqueMethodNames': unique } : {}), 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } });
+    const makeConfig = (table: boolean): any => ({ 'verbose': false, 'csharp': { ...(table ? { 'uniqueMethodNames': unique } : {}), 'parser': WRAPPED_PARSER } });
 
     // a venue-local method declared once, annotated with a collection
     const source =
@@ -7620,12 +7567,8 @@ describe ('csharp inferred collection return box', () => {
 });
 
 describe ('csharp native mod / Math.Min / Math.Max', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
-    const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } };
+    const config: any = { 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } };
 
     // declared C# kinds the consumer's resolver answers for identifier reads
     const kinds: any = { 'x': 'Int64', 'y': 'Int64', 'n': 'Int64?', 'k': 'int', 'm': 'int', 'd': 'double', 'o': 'object', 'i': 'Int64' };
@@ -7733,15 +7676,11 @@ describe ('csharp native mod / Math.Min / Math.Max', () => {
 });
 
 describe ('csharp parseJson on a string-returning call', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
     // a callee whose emitted signature already returns a string
     // makes parseJson's `(string)` unbox an identity, so the deserializer is called on the call itself.
     describe('parseJson on a string-returning this-call', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-rdcs3-parsejson');
+        const TMP = path.join(__dirname, 'files', 'tmp-csharp-parsejson');
         const VENUE = path.join(TMP, 'ts', 'src', 'v.ts');
         let out: string;
 
@@ -7760,7 +7699,7 @@ describe ('csharp parseJson on a string-returning call', () => {
                 "        return [ a, b, c, d ];\n" +
                 "    }\n" +
                 "}\n");
-            out = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileCSharpByPath(VENUE).content;
+            out = new Transpiler({ 'verbose': false, 'csharp': { 'parser': PLAIN_PARSER } }).transpileCSharpByPath(VENUE).content;
         });
 
         afterAll(() => {
@@ -7780,12 +7719,8 @@ describe ('csharp parseJson on a string-returning call', () => {
 });
 
 describe ('csharp destructured tuple bool slot', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
-    const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } };
+    const config: any = { 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } };
 
     const source =
         "class Exchange {\n" +
@@ -7953,10 +7888,6 @@ describe ('csharp destructured tuple bool slot', () => {
 });
 
 describe ('csharp declared dictionary member reads', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
     const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'INFER_ARG_TYPE': true, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } };
 
@@ -8015,10 +7946,6 @@ describe ('csharp declared dictionary member reads', () => {
 });
 
 describe ('csharp object-key ws cache reads', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
     // ws cache properties of the hand-written base are owner-routed IDictionary<string, object> members;
     // an object-keyed read of a declared dictionary local carries the helper's (string) cast
@@ -8029,7 +7956,7 @@ describe ('csharp object-key ws cache reads', () => {
     };
     const config = {
         'verbose': false,
-        'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } }
+        'csharp': { 'parser': WRAPPED_PARSER }
     };
 
     function printed(lines: string, keyType: string, params = 'symbol: string'): string {
@@ -8069,13 +7996,9 @@ describe ('csharp object-key ws cache reads', () => {
 });
 
 describe ('csharp declared base-field reads', () => {
-    jest.mock('module', () => ({
-        __esModule: true,
-        default: jest.fn()
-    }));
 
     const declared = { 'urls': 'IDictionary<string, object>', 'positions': 'object' };
-    const makeConfig = (hook: boolean): any => ({ 'verbose': false, 'csharp': { ...(hook ? { 'declaredBaseFieldTypes': declared } : {}), 'parser': { 'NUM_LINES_END_FILE': 0, 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(', 'ELEMENT_ACCESS_WRAPPER_CLOSE': ')' } } });
+    const makeConfig = (hook: boolean): any => ({ 'verbose': false, 'csharp': { ...(hook ? { 'declaredBaseFieldTypes': declared } : {}), 'parser': WRAPPED_PARSER } });
 
     // reads of a hand-written base field the consumer declares (config.csharp.declaredBaseFieldTypes)
     const source =
@@ -8168,7 +8091,7 @@ describe ('csharp declared base-field reads', () => {
     });
 });
 
-describe ('csAwaitInt64TaskCalls', () => {
+describe ('csharp PascalCase Int64 task calls', () => {
     const input =
     "type int = number;\n" +
     "type Int = number | undefined;\n" +
