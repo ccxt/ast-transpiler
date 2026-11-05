@@ -7900,6 +7900,51 @@ export class RustTranspiler extends BaseTranspiler {
         return `"${text}"`;
     }
 
+    // Imported hash algorithms and ccxt error classes used as values are their names.
+    static readonly RUST_NAME_VALUE_IMPORTS = new Set([
+        'sha256', 'sha512', 'sha384', 'sha224', 'sha3', 'sha1', 'md5', 'keccak', 'ed25519', 'ripemd160', 'secp256k1', 'p256',
+        'NotSupported', 'ArgumentsRequired', 'InvalidOrder', 'InvalidAddress', 'BadRequest', 'BadResponse', 'AuthenticationError',
+        'ExchangeError', 'ExchangeNotAvailable', 'NetworkError', 'DDoSProtection', 'RateLimitExceeded', 'InsufficientFunds',
+        'OrderNotFound', 'InvalidNonce', 'PermissionDenied', 'AccountNotEnabled', 'AccountSuspended', 'NotImplemented',
+        'OperationFailed', 'OperationRejected', 'RequestTimeout', 'MarginModeAlreadySet', 'ManualInteractionNeeded',
+        'UnsubscribeError', 'ContractUnavailable', 'MarketClosed', 'ExchangeClosedByUser', 'NullResponse', 'InvalidProxySettings',
+        'ChecksumError', 'OnMaintenance', 'BadSymbol', 'NoChange', 'CancelPending', 'OrderNotCached', 'OrderImmediatelyFillable',
+        'OrderNotFillable', 'DuplicateOrderId', 'RestrictedLocation', 'AddressPending', 'BaseError',
+    ]);
+
+    // Precision-mode constants imported from base/functions/number.
+    static readonly RUST_NUMBER_CONSTANT_IMPORTS = new Set([
+        'TICK_SIZE', 'TRUNCATE', 'ROUND', 'ROUND_UP', 'ROUND_DOWN', 'NO_PADDING', 'PAD_WITH_ZERO', 'SIGNIFICANT_DIGITS', 'DECIMAL_PLACES',
+    ]);
+
+    printIdentifier(node) {
+        const name = String(node.text);
+        if (RustTranspiler.RUST_NAME_VALUE_IMPORTS.has(name) && this.rustIsImportedValueName(node)) {
+            return `Value::Str(${this.quotedStringLiteral(name)}.into())`;
+        }
+        if (RustTranspiler.RUST_NUMBER_CONSTANT_IMPORTS.has(name) && this.rustIsImportedValueName(node)) {
+            return `Value::Int(crate::runtime::${name})`;
+        }
+        return super.printIdentifier(node);
+    }
+
+    /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
+    rustIsImportedValueName(node): boolean {
+        const parent: any = node.parent;
+        if (parent === undefined) return false;
+        if ((isCallExpression(parent) || parent.kind === SyntaxKind.NewExpression) && parent.expression === node) return false;
+        if (isPropertyAccessExpression(parent) || parent.kind === SyntaxKind.PropertyAssignment && parent.name === node) return false;
+        if (isElementAccessExpression(parent) && parent.expression === node) return false;
+        let declarations: any[];
+        try {
+            declarations = symbolDeclarations(this.getChecker().getSymbolAtLocation(node));
+        } catch (e) {
+            return false;
+        }
+        return declarations.length > 0 && declarations.every((d) => d.kind === SyntaxKind.ImportSpecifier
+            || (isBindingElement(d) && isSourceFile(findAncestor(d, (a) => isStatement(a))?.parent)));
+    }
+
     printStringLiteral(node) {
         const text = node.text;
         if (text in this.StringLiteralReplacements) return this.StringLiteralReplacements[text];
@@ -11207,6 +11252,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (params === undefined) {
             return super.printArgsForCallExpression(node, identation);
         }
+        return this.rustPrintedArgs(node, identation, params).join(', ');
+    }
+
+    rustPrintedArgs(node, identation, params = this.rustCalleeParams(node)): string[] {
+        if (params === undefined) return Array.from(node.arguments).map((a: any) => this.printNode(a, identation).trim());
         return Array.from(node.arguments).map((arg, at) => {
             if (this.rustNativeMapArgumentSlot(params, at) !== undefined) {
                 return this.rustMapArgumentText(arg, identation);
@@ -11217,7 +11267,39 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustNativeBoolArgumentSlot(params, at)
                 ? this.rustBoolArgumentText(arg, identation)
                 : this.printNode(arg, identation).trim();
-        }).join(', ');
+        });
+    }
+
+    // `Math.X(..)` / `Precise.X(..)` call the runtime namespaces by reference; the Precise
+    // wrappers take their TS arity without the optional precision (`stringDiv` keeps it as `stringDivPrec`).
+    private static readonly RUST_PRECISE_TRIMMED = /^string(?:Div|Mul|Add|Sub|Mod|Eq|Gt|Ge|Lt|Le|Min|Max|Abs|Neg)$/;
+
+    printRustNamespaceCall(node, identation): string | undefined {
+        const callee: any = node.expression;
+        if (!isPropertyAccessExpression(callee) || !isIdentifier(callee.expression)) return undefined;
+        const ns = String(callee.expression.text);
+        let name = String(callee.name.text);
+        if (ns !== 'Math' && ns !== 'Precise') return undefined;
+        if (ns === 'Math' && node.arguments.length === 1 && (name === 'round' || name === 'floor' || name === 'ceil')) return undefined;
+        let args = this.rustPrintedArgs(node, identation).map((a) => a.trim());
+        if (ns === 'Precise' && RustTranspiler.RUST_PRECISE_TRIMMED.test(name)) {
+            if (name === 'stringDiv' && args.length >= 3) name = 'stringDivPrec';
+            args = args.slice(0, name === 'stringDivPrec' ? 3 : (name === 'stringAbs' || name === 'stringNeg') ? 1 : 2);
+        }
+        const path = ns === 'Math' ? 'crate::runtime::Math' : 'crate::precise::Precise';
+        return `${path}::${name}(${args.map((a) => a.startsWith('&') ? a : `&${a}`).join(', ')})`;
+    }
+
+    // The runtime signers have fixed arities: `jwt(request, secret, hash, isRsa, opts)`, `rsa(request, secret, hash)`.
+    printRustSignerCall(node, identation): string | undefined {
+        const callee: any = node.expression;
+        if (!isIdentifier(callee) || (callee.text !== 'jwt' && callee.text !== 'rsa')) return undefined;
+        const args = this.rustPrintedArgs(node, identation);
+        if (callee.text === 'rsa') return `rsa(${args.slice(0, 3).join(', ')})`;
+        const defaults = ['Value::Null', 'Value::Null', 'Value::Null', 'Value::Bool(false)', 'Value::Null'];
+        const fixed = args.slice(0, 5);
+        while (fixed.length < 5) fixed.push(defaults[fixed.length]);
+        return `jwt(${fixed.join(', ')})`;
     }
 
     printCallExpression(node, identation) {
@@ -11262,6 +11344,9 @@ export class RustTranspiler extends BaseTranspiler {
         // instead of the runtime helper the ccxt post-pass would emit.
         const nativeParse = this.printNativeParseCall(node);
         if (nativeParse !== undefined) return nativeParse;
+
+        const runtimeCall = this.printRustNamespaceCall(node, identation) ?? this.printRustSignerCall(node, identation);
+        if (runtimeCall !== undefined) return runtimeCall;
 
         // `this.json(v)`: `Exchange::json` is exactly the free `json_stringify`, which takes the value
         // by reference, so the call sites' `.clone()` is dropped. `self.<field>` args keep the method:
