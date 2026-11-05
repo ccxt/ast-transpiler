@@ -9,19 +9,30 @@ jest.mock('module',()=>({
     default: jest.fn()
 }));
 
+// the java printer with no trailing file lines, as every fixture expects
+const newJavaTranspiler = (): Transpiler => new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } });
+
+// the text of method `name` in printed Java, up to its closing brace
+const methodText = (text: string, name: string): string => {
+    const start = text.indexOf(' ' + name + '(');
+    return text.slice(start, text.indexOf('\n    }', start));
+};
+
+// ts/src/base/types.ts prelude shared by the by-path fixtures
+const DICT_STR_TYPES = "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+    "export type Dict = Dictionary<any>;\n" +
+    "export type Str = string | undefined;\n";
+
+// ts/src/base/errors.ts with the two classes the isInstance fixtures throw
+const ERRORS_SOURCE = "class BaseError extends Error {\n}\n" +
+    "class BadSymbol extends BaseError {\n}\n" +
+    "export { BaseError, BadSymbol };\n";
+
 let transpiler: Transpiler;
 
 beforeAll(() => {
-    const config = {
-        'verbose': false,
-        'java': {
-            'parser': {
-                'NUM_LINES_END_FILE': 0,
-            }
-        }
-    }
-    transpiler = new Transpiler(config);
-})
+    transpiler = newJavaTranspiler();
+});
 
 describe('java transpiling tests', () => {
     test('basic variable declaration', () => {
@@ -1302,7 +1313,7 @@ ${body}
     });
 });
 
-describe('java nullable-boolean locals (Bool) drop the Helpers.isTrue wrapper (b14)', () => {
+describe('java nullable-boolean locals (Bool) drop the Helpers.isTrue wrapper', () => {
     // a `let x: boolean | undefined` local whose every write is a Java boolean value or a
     // proven Boolean-or-null box prints `Boolean.TRUE.equals(x)`: on such a box that is
     // exactly the helper's answer (null/FALSE test false, TRUE tests true)
@@ -1400,7 +1411,7 @@ ${body}
     });
 });
 
-describe('java boolean-returning generated methods: isTrue -> Boolean.TRUE.equals (b14)', () => {
+describe('java boolean-returning generated methods: isTrue -> Boolean.TRUE.equals', () => {
     // a `this.<name>(...)` whose resolved body returns a boolean value on every path hands back
     // a Boolean-or-null box, so the wrapper becomes the null-safe TRUE test - the same proof the
     // hand-written base table (JAVA_THIS_BOOLEAN_METHODS) gives its own methods
@@ -1443,7 +1454,7 @@ ${body}
     });
 });
 
-describe('java isTrue: locals bound to boolean-returning calls / awaits (d13)', () => {
+describe('java isTrue: locals bound to boolean-returning calls / awaits', () => {
     // the box of a local is proven from every write: a `this.<name>(...)` whose resolved body
     // returns a boolean value on every path, the awaited value of such an async method, both
     // branches of a `cond ? a : b`, and a hand-written relational Precise static
@@ -1517,7 +1528,7 @@ class T {
         expect(output).not.toContain('Helpers.isTrue(isAmountNeg)');
     });
 
-    test('a parameter the printer declares Boolean prints Boolean.TRUE.equals (d13)', () => {
+    test('a parameter the printer declares Boolean prints Boolean.TRUE.equals', () => {
         const printer: any = (transpiler as any).javaTranspiler;
         const original = printer.javaNativeParameterType;
         try {
@@ -1617,13 +1628,13 @@ describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
         expect(output).toContain("Helpers.isEqual(n, 1)");
         expect(output).toContain("Helpers.isEqual(n, n)");
         expect(output).toContain("Helpers.isEqual(o, o)");
-        // two int literals print two Java primitives, so the constant pair is native (java-15)
+        // two int literals print two Java primitives, so the constant pair is native
         expect(output).toContain("(1 == 2)");
         expect(output).not.toContain("java.util.Objects.equals");
     });
 });
 
-describe('java numeric equality (Helpers.isEqual -> native compare, java-15)', () => {
+describe('java numeric equality (Helpers.isEqual -> native compare)', () => {
     // Helpers.isEqual compares two numeric operands by value, so a pair whose printed Java
     // operands are primitives of one numeric kind prints the native operator, and a pair of
     // equal-kind boxes prints Objects.equals (whose class the kind pins down).
@@ -2165,7 +2176,7 @@ describe('declared-map element reads: Helpers.GetValue(x, "lit") -> x.get("lit")
             // first step of each chain is a read of the declared map
             expect(output).toContain('Helpers.addElementToObject(x.get("a"), "b", v);');
             expect(output).toContain('Helpers.addElementToObject(Helpers.GetValue(x.get("c"), "d"), "e", v);');
-            // a single-key write is not a chain: java-12's family, untouched here
+            // a single-key write is not a chain and is untouched here
             expect(output).toContain('Helpers.addElementToObject(x, "f", v);');
         });
         // without a consumer every step is the helper again
@@ -2304,7 +2315,7 @@ describe('declared-list element reads: Helpers.GetValue(x, i) -> x.get(i)', () =
         });
     });
 
-    test('a bare identifier index stays with the ccxt j03 pass, byte-identically', () => {
+    test('a bare identifier index keeps the helper, byte-identically', () => {
         const input =
         "class T {\n" +
         "    test(x: any, i: number): void {\n" +
@@ -2651,7 +2662,7 @@ describe('OrderType/OrderSide parameters print String', () => {
             "        this.place (t, 'buy');\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
 
@@ -2666,10 +2677,10 @@ describe('OrderType/OrderSide parameters print String', () => {
     });
 });
 
-describe('declared-map element reads (d-11): a retyped Dict parameter consumes the read', () => {
-    // the headline shape of D-11: the receiver is a parameter B-09/D-10 print as a Java Map,
+describe('declared-map element reads: a retyped Dict parameter consumes the read', () => {
+    // the receiver is a typed parameter the printer declares as a Java Map,
     // so the read binds natively exactly as it does for a typed local.
-    const TMP = path.join(__dirname, 'files', 'tmp-d11-map-params');
+    const TMP = path.join(__dirname, 'files', 'tmp-map-param-reads');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
 
@@ -2678,9 +2689,7 @@ describe('declared-map element reads (d-11): a retyped Dict parameter consumes t
     beforeAll(() => {
         fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
         fs.writeFileSync(TYPES_FIXTURE,
-            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
-            "export type Dict = Dictionary<any>;\n" +
-            "export type Str = string | undefined;\n");
+            DICT_STR_TYPES);
         fs.writeFileSync(VENUE_FIXTURE,
             "import type { Dict } from './base/types';\n" +
             "class Venue {\n" +
@@ -2694,7 +2703,7 @@ describe('declared-map element reads (d-11): a retyped Dict parameter consumes t
             "        const id = data['id'];\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
 
@@ -3171,13 +3180,13 @@ describe('java widened native add (numeric `+` on provably non-null operands)', 
     });
 });
 
-// java-19: `this.milliseconds()` is a hand-written BaseExchange method declared
+// `this.milliseconds()` is a hand-written BaseExchange method declared
 // `public Long milliseconds()` (java/lib/.../BaseExchange.java), so a call to it is a
 // provable Java long operand. The base-tier path below is what makes the call resolve
 // to that declaration - the real run prints ts/src/base/Exchange.ts, a venue override
 // prints its own class file and must keep the helper.
-describe('java hand-written return-type arithmetic (java-19)', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-java19');
+describe('java hand-written return-type arithmetic', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-hand-written-return-arith');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const VENUE_FIXTURE = path.join(TMP, 'exchanges', 'bitfake.ts');
 
@@ -3212,7 +3221,7 @@ describe('java hand-written return-type arithmetic (java-19)', () => {
         fs.mkdirSync(path.dirname(VENUE_FIXTURE), { recursive: true });
         fs.writeFileSync(BASE_FIXTURE, baseSource);
         fs.writeFileSync(VENUE_FIXTURE, baseSource);
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         baseOutput = byPath.transpileJavaByPath(BASE_FIXTURE).content;
         venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
@@ -3902,7 +3911,7 @@ describe('helper removal: native comparison / containsKey / size', () => {
         expect(output).toContain("((java.util.Map<?, ?>)Helpers.GetValue(o, k)).containsKey(j)");
     });
 
-    // ---- java-17: printed-primitive comparison operands -------------------
+    // printed-primitive comparison operands
     // `.length`, `.indexOf`/`.search`, Math.round and Math.floor/ceil/pow all print
     // through emitters whose Java text is a primitive, so the ordered comparison no
     // longer round-trips through the Object-taking helper.
@@ -4321,7 +4330,7 @@ describe('java replaceAll native emission', () => {
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
     });
 
-    // java-18: `-`/`*`/`/` on a local the embedding layer declares `Long`/`Double` print
+    // `-`/`*`/`/` on a local the embedding layer declares `Long`/`Double` print
     // natively; the embedding layer (build/java-local-types.js) installs the resolver, so
     // the tests below fake it with a name table.
     const withNumericLocals = (javaTypes: any, body: () => void) => {
@@ -4409,7 +4418,7 @@ describe('java replaceAll native emission', () => {
         });
     });
 
-    test('a declared Long local adds an integer literal natively (D-14 widened add)', () => {
+    test('a declared Long local adds an integer literal natively (widened add)', () => {
         withNumericLocals({ now: 'Long' }, () => {
             const input =
             "class T {\n" +
@@ -4424,7 +4433,7 @@ describe('java replaceAll native emission', () => {
         });
     });
 
-    // D-14: the production proof source is the embedding layer's declared-local table
+    // the production proof source is the embedding layer's declared-local table
     // (build/java-local-types.js#installJavaDeclaredLocalTypes records the printed type of
     // every declaration the local-typing chain wrote); the tests fake that table.
     const withDeclaredLocalTypes = (javaTypes: any, body: () => void) => {
@@ -4606,7 +4615,7 @@ describe('falsy-wrapper removal: boolean identifiers and Array.isArray', () => {
         expect(output).toContain("if (Boolean.TRUE.equals(d))");
     });
 
-    test('a local bound to a generated boolean-returning method prints Boolean.TRUE.equals (d13)', () => {
+    test('a local bound to a generated boolean-returning method prints Boolean.TRUE.equals', () => {
         // the box is the call's own proven box: every return of the resolved body prints a
         // Java boolean value, so the local can never hold anything else
         const output = wrapped("        const a: boolean = this.isBool();\n" +
@@ -5304,7 +5313,7 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
         expect(output).not.toContain("String.format(");
     });
 
-    // Helper-removal (java-28): `Promise.all ([...])` whose every element is
+    // `Promise.all ([...])` whose every element is
     // checker-typed `Promise<...>` prints CompletableFuture.allOf instead of the
     // reflective Helpers.promiseAll loop; anything unproven keeps the helper.
     const promiseAllSnippet = (body: string) =>
@@ -5361,7 +5370,7 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
     });
 
     test('a null-guarded negation of an unwritten Long local prints Long.valueOf', () => {
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         (byPath as any).javaTranspiler.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'scale' ? 'Long' : undefined);
         const input = "class T {\n" +
             "    f (c: any): any {\n" +
@@ -5396,7 +5405,7 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
     });
 });
 
-describe('java native-arithmetic locals (java-31)', () => {
+describe('java native-arithmetic locals', () => {
     test('a native concat initializer declares the local String', () => {
         const input =
         "class T {\n" +
@@ -5906,14 +5915,14 @@ describe('java helper removal: mod / Math.pow residual families', () => {
     });
 });
 
-// b-09: the TS parameter annotations `Dict`/`Market`/`Currency`/`Str` reach the Java
+// the TS parameter annotations `Dict`/`Market`/`Currency`/`Str` reach the Java
 // declaration of an INTERNAL method (a generated venue tier method that does not override a
 // hand-written base signature), and the declared-type table answers for the parameter, so
 // its element reads print the native accessor. The fixtures mirror the repository layout
 // (ts/src/<venue>.ts + ts/src/base/{types,Exchange}.ts), because both the base-tier policy
 // and the alias declarations are file-anchored.
-describe('java typed parameters (b-09)', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-b09-params');
+describe('java typed parameters', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-typed-params');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
@@ -5923,9 +5932,7 @@ describe('java typed parameters (b-09)', () => {
     beforeAll(() => {
         fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
         fs.writeFileSync(TYPES_FIXTURE,
-            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
-            "export type Dict = Dictionary<any>;\n" +
-            "export type Str = string | undefined;\n" +
+            DICT_STR_TYPES +
             "export type Num = number | undefined;\n" +
             "export type Int = number | undefined;\n" +
             "export type Bool = boolean | undefined;\n" +
@@ -6016,7 +6023,7 @@ describe('java typed parameters (b-09)', () => {
             "        v.parseZ ({ 'a': 1 }, raw, data, data);\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
 
@@ -6039,11 +6046,11 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).not.toContain('Helpers.GetValue(market');
     });
 
-    // d-10: the base tier prints its annotated parameters too, and every declaration of
+    // the base tier prints its annotated parameters too, and every declaration of
     // the method up and down the chain prints the same native type - the override moves
     // with the base declaration (Java overrides are invariant on parameter types), and a
     // fixed parameter with no annotation of its own takes the inherited type.
-    test('the base declaration and its override print the same typed signature (d-10)', () => {
+    test('the base declaration and its override print the same typed signature', () => {
         expect(venueOutput).toContain('public void parseX(java.util.Map<String, Object> data, String status)');
     });
 
@@ -6103,7 +6110,7 @@ describe('java typed parameters (b-09)', () => {
     });
 
     test('a core argument declared with the core type, or an int literal for Long, needs no conversion', () => {
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         const printer: any = (byPath as any).javaTranspiler;
         printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'm' ? 'java.util.Map<String, Object>' : undefined);
         const out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
@@ -6129,24 +6136,22 @@ describe('java typed parameters (b-09)', () => {
     });
 });
 
-// d-10: override parameters/returns move with the base declaration. A declaration whose
+// override parameters/returns move with the base declaration. A declaration whose
 // parameter carries no native annotation of its own still prints the type its base prints
 // (otherwise the override would stop overriding the typed base method in Java), and a
 // declaration whose own annotation disagrees with the base keeps the boxed signature.
-describe('java override parameters move with the base declaration (d-10)', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-d10-overrides');
+describe('java override parameters move with the base declaration', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-override-params');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
-    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venue10.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'overridevenue.ts');
 
     let output: string;
 
     beforeAll(() => {
         fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
         fs.writeFileSync(TYPES_FIXTURE,
-            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
-            "export type Dict = Dictionary<any>;\n" +
-            "export type Str = string | undefined;\n" +
+            DICT_STR_TYPES +
             "export interface MarketInterface {\n    id: string;\n}\n" +
             "export type Market = MarketInterface | undefined;\n");
         fs.writeFileSync(BASE_FIXTURE,
@@ -6182,7 +6187,7 @@ describe('java override parameters move with the base declaration (d-10)', () =>
             "        const id = data['id'];\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         // mirrors build/java-local-types.js publishJavaDeclaredLocalTypes: the emitted declaration
         // type of a local the build layer retyped (Map for `result`, List<Object> for `rows`,
         // List<String> for `strings`)
@@ -6348,14 +6353,14 @@ describe('objectKeys on a declared map local', () => {
         expect(output).toContain('Helpers.objectKeys(this.options)');
     });
 });
-// D-09: internal (non-override) generated methods print the native Java type named by the
+// internal (non-override) generated methods print the native Java type named by the
 // TS annotation (Map<String, Object> for dict-shaped types, String for Str, Boolean for
 // Bool) when EVERY return statement of the body already prints that type. A method a base
 // class declares (D8), an async method and any body whose returns are not provable keep the
 // boxed `Object` signature. The fixtures mirror the repository layout because the rule is
 // gated on the declaration living in a generated tier file (ts/src/<name>.ts).
-describe('java native return types of internal methods (d09)', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-javad09');
+describe('java native return types of internal methods', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-internal-returns');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuefake.ts');
     const TYPES_SOURCE =
@@ -6386,7 +6391,7 @@ describe('java native return types of internal methods (d09)', () => {
         fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
         fs.writeFileSync(TYPES_FIXTURE, TYPES_SOURCE);
         fs.writeFileSync(VENUE_FIXTURE, VENUE_SOURCE);
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         // mirrors build/java-local-types.js publishJavaDeclaredLocalTypes: the emitted declaration
         // type of a local the build layer retyped (Map for `result`, List<Object> for `rows`,
         // List<String> for `strings`)
@@ -6435,15 +6440,15 @@ describe('java native return types of internal methods (d09)', () => {
     });
 });
 
-// d-12: `this.spawn(this.someMethod, args...)` is the pro-tier dispatch shape - the ccxt
+// `this.spawn(this.someMethod, args...)` is the pro-tier dispatch shape - the ccxt
 // post-pass rewrites the reference into a lambda `() -> { this.someMethod(args); }`, so the
 // arguments bind to the METHOD's printed parameters. A parameter the printer declared
 // natively (`Dict`/`Str`/`Bool`/`Market`/`Currency`) needs the same checkcast a direct call
 // site carries, or `Object message` cannot convert to `Map<String,Object>` (job 1008:
 // Lbank/Binance/Weex pro handlers). Fixtures mirror the repository layout, because the
 // alias declarations and the base-tier policy are file-anchored.
-describe('java spawn method references (d-12)', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-d12-spawn');
+describe('java spawn method references', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-spawn-references');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const CLIENT_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Client.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
@@ -6454,9 +6459,7 @@ describe('java spawn method references (d-12)', () => {
     beforeAll(() => {
         fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
         fs.writeFileSync(TYPES_FIXTURE,
-            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
-            "export type Dict = Dictionary<any>;\n" +
-            "export type Str = string | undefined;\n");
+            DICT_STR_TYPES);
         fs.writeFileSync(CLIENT_FIXTURE,
             "export default class Client {\n    resolve (x: any, y: any): void {}\n}\n");
         fs.writeFileSync(BASE_FIXTURE,
@@ -6493,7 +6496,7 @@ describe('java spawn method references (d-12)', () => {
             "        this.spawn (this.handleBase, client, message);\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
 
@@ -6521,7 +6524,7 @@ describe('java spawn method references (d-12)', () => {
         expect(venueOutput).toContain('this.spawn(this.handleUntyped, client, message);');
     });
 
-    test('a spawned base-tier method follows the typed base declaration (D-10)', () => {
+    test('a spawned base-tier method follows the typed base declaration', () => {
         // the base tier is generated too, so its annotated `data: Dict` prints the Map and the spawn casts to it
         expect(venueOutput).toContain('this.spawn(this.handleBase, client, (java.util.Map<String, Object>) (message));');
     });
@@ -6532,14 +6535,14 @@ describe('java spawn method references (d-12)', () => {
     });
 });
 
-// D-16: a prediction venue (ts/src/prediction/<id>.ts) extends its abstract class ->
+// a prediction venue (ts/src/prediction/<id>.ts) extends its abstract class ->
 // PredictionExchange -> BaseExchange, a chain that never reaches the `Exchange` class of
 // ts/src/base/Exchange.ts. The venue's method still overrides the Exchange-tier body
 // javaTranspiler.ts injects into the generated PredictionExchange.java, and those declarations
 // keep `Object` parameters (the base tier is a JAVA_NATIVE_PARAMETER_BASE_FILE) - so the venue
 // parameter prints `Object` too, whatever alias its own annotation names.
-describe('java prediction venue Exchange-tier parameter boxing (D-16)', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-d16');
+describe('java prediction venue Exchange-tier parameter boxing', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-prediction-boxing');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const PREDICTION_BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'PredictionExchange.ts');
@@ -6570,7 +6573,7 @@ describe('java prediction venue Exchange-tier parameter boxing (D-16)', () => {
             "    async fetchOrder (id: Str, outcome: Str = undefined, params: Dict = {}): Promise<any> { return null; }\n" +
             "    async fetchEvents (query: Str, params: Dict = {}): Promise<any> { return null; }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
 
@@ -6697,7 +6700,7 @@ describe('java full arity for own methods of a non-exchange class', () => {
             "        this.assertErr (true, 'm');\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         output = byPath.transpileJavaByPath(TEST_FIXTURE).content;
     });
 
@@ -6716,6 +6719,32 @@ describe('java full arity for own methods of a non-exchange class', () => {
         expect(output).toMatch(/symbol, java\.util\.Objects\.requireNonNullElse\(timeframe, "1m"\), java\.util\.Objects\.requireNonNullElse\(limit, 25L?\), parameters/);
         expect(output).not.toContain('timeframeValue');
         expect(output).not.toMatch(/timeframe = /);
+    });
+});
+
+describe('ordered comparison over a const indexOf local', () => {
+    const src = "class V {\n" +
+        "    m (s: string, n: string) {\n" +
+        "        const q = s.indexOf ('?');\n" +
+        "        const a = q > 0;\n" +
+        "        const b = q > -1 && q < s.length - 1;\n" +
+        "        let r = s.indexOf ('x');\n" +
+        "        const c = r >= 0;\n" +
+        "        const w = s.indexOf (n);\n" +
+        "        return w > 0;\n" +
+        "    }\n" +
+        "}\n";
+
+    test('a const local bound to indexOf of a literal compares as a non-null Integer', () => {
+        const out = transpiler.transpileJava(src).content;
+        expect(out).toContain('Object a = (((Integer) q) > 0);');
+        expect(out).toContain('Object b = (((Integer) q) > -1) && (((Integer) q) < (((long) ((String)s).length()) - 1L));');
+    });
+
+    test('a let local and a non-literal indexOf argument keep the helper', () => {
+        const out = transpiler.transpileJava(src).content;
+        expect(out).toContain('Object c = Helpers.isGreaterThanOrEqual(r, 0);');
+        expect(out).toContain('return Helpers.isGreaterThan(w, 0);');
     });
 });
 
@@ -6842,7 +6871,7 @@ describe('java native arithmetic on printer-proven numeric operands', () => {
             "        return [ found, 1 * 1.67, 2 * 0.5 ];\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
     afterAll(() => {
@@ -6882,7 +6911,7 @@ describe('java native arithmetic on printer-proven numeric operands', () => {
 });
 
 describe('java element write on a reassigned fresh map', () => {
-    const t = new Transpiler({ java: { parser: { NUM_LINES_END_FILE: 0 } } } as any);
+    const t = newJavaTranspiler();
     test('reassigned only with fresh maps prints Map.put', () => {
         const input =
         "class T {\n" +
@@ -6929,7 +6958,7 @@ describe('java element write on a reassigned fresh map', () => {
 });
 
 describe('java element write after a hand-back destructuring', () => {
-    const t = new Transpiler({ java: { parser: { NUM_LINES_END_FILE: 0 } } } as any);
+    const t = newJavaTranspiler();
     const body = (ret: string) =>
         "class T {\n" +
         "    h(k: string, r: any, p: any): any[] {\n" +
@@ -7011,7 +7040,7 @@ describe('declared-map element write prints native put', () => {
     beforeAll(() => {
         fs.mkdirSync(path.dirname(BASE_FIXTURE), { recursive: true });
         fs.writeFileSync(BASE_FIXTURE, source);
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         noResolver = byPath.transpileJavaByPath(BASE_FIXTURE).content;
         const printer: any = (byPath as any).javaTranspiler;
         printer.javaDeclaredLocalTypeResolver = (declaration: any) =>
@@ -7323,22 +7352,18 @@ describe('isTrue / isInstance / core-argument residual', () => {
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const ERRORS_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'errors.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
-    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuej09.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuecore.ts');
     let out: string;
     let byPath: Transpiler;
 
     beforeAll(() => {
         fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
         fs.writeFileSync(TYPES_FIXTURE,
-            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
-            "export type Dict = Dictionary<any>;\n" +
-            "export type Str = string | undefined;\n" +
+            DICT_STR_TYPES +
             "export type Int = number | undefined;\n" +
             "export type Bool = boolean | undefined;\n");
         fs.writeFileSync(ERRORS_FIXTURE,
-            "class BaseError extends Error {\n}\n" +
-            "class BadSymbol extends BaseError {\n}\n" +
-            "export { BaseError, BadSymbol };\n");
+            ERRORS_SOURCE);
         fs.writeFileSync(BASE_FIXTURE,
             "import type { Dict, Str, Int, Bool } from './types';\n" +
             "export default class Exchange {\n" +
@@ -7449,7 +7474,7 @@ describe('isTrue / isInstance / core-argument residual', () => {
             "        this.fetchRows (t, other);\n" +
             "    }\n" +
             "}\n");
-        byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        byPath = newJavaTranspiler();
         const printer: any = (byPath as any).javaTranspiler;
         printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'n' ? 'Integer' : undefined);
         out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
@@ -7609,7 +7634,7 @@ describe('implicit-API response is a non-shared put source', () => {
             "        return data;\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         const printer: any = (byPath as any).javaTranspiler;
         printer.javaDeclaredLocalTypeResolver = (declaration: any) =>
             (declaration?.kind !== undefined && declaration.name?.text === 'data') ? 'Map<String, Object>' : undefined;
@@ -7672,7 +7697,7 @@ describe('java plain-annotation parameters', () => {
             "        this.localString (raw);\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
 
@@ -7707,10 +7732,10 @@ describe('java plain-annotation parameters', () => {
 // annotation proves nothing (`any`) still declares the Map/List its body provably returns.
 // `string[]`/`Strings` returns keep the boxed declaration (their slots print List<String>).
 describe('java native list and body-proven returns', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-javapj03');
+    const TMP = path.join(__dirname, 'files', 'tmp-list-returns');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
-    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuepj03.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuelists.ts');
     const TYPES_SOURCE = 'export type Dict = Record<string, any>;\n';
     const BASE_SOURCE =
         'export class Exchange {\n' +
@@ -7722,7 +7747,7 @@ describe('java native list and body-proven returns', () => {
     const VENUE_SOURCE =
         "import { Dict } from './base/types';\n" +
         "import { Exchange } from './base/Exchange';\n" +
-        'export default class venuepj03 extends Exchange {\n' +
+        'export default class venuelists extends Exchange {\n' +
         '    parseRows (data: Dict): any[] { return [ data ]; }\n' +
         '    parseRowsChain (data: Dict): any[] { return this.parseRows (data); }\n' +
         '    parseRowsValues (data: Dict): any[] { return Object.values (data); }\n' +
@@ -7748,7 +7773,7 @@ describe('java native list and body-proven returns', () => {
         fs.writeFileSync(TYPES_FIXTURE, TYPES_SOURCE);
         fs.writeFileSync(BASE_FIXTURE, BASE_SOURCE);
         fs.writeFileSync(VENUE_FIXTURE, VENUE_SOURCE);
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         // mirrors build/java-local-types.js publishJavaDeclaredLocalTypes: the emitted declaration
         // type of a local the build layer retyped (Map for `result`, List<Object> for `rows`,
         // List<String> for `strings`)
@@ -7834,7 +7859,7 @@ describe('unannotated params overrides a typed declaration', () => {
     const TMP = path.join(__dirname, 'files', 'tmp-unannotated-params-overrides-a-typed');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
-    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'pro', 'venuej09.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'pro', 'venuecore.ts');
     let venueOutput: string;
 
     beforeAll(() => {
@@ -7869,7 +7894,7 @@ describe('unannotated params overrides a typed declaration', () => {
             "        return params;\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
 
@@ -7913,9 +7938,7 @@ describe('java test-tier parameter types', () => {
     beforeAll(() => {
         fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
         fs.writeFileSync(TYPES_FIXTURE,
-            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
-            "export type Dict = Dictionary<any>;\n" +
-            "export type Str = string | undefined;\n" +
+            DICT_STR_TYPES +
             "export type Strings = string[];\n");
         fs.mkdirSync(path.dirname(TEST_FIXTURE), { recursive: true });
         fs.writeFileSync(VENUE_FIXTURE,
@@ -7946,7 +7969,7 @@ describe('java test-tier parameter types', () => {
             "    return await exchange.fetchCountry (code);\n" +
             "}\n" +
             "export default testFetchOrders;\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         out = byPath.transpileJavaByPath(TEST_FIXTURE).content;
     });
 
@@ -8039,7 +8062,7 @@ describe('java element-write local declaration typing over the hand-written base
         fs.mkdirSync(path.dirname(VENUE_FIXTURE), { recursive: true });
         fs.writeFileSync(BASE_FIXTURE, source);
         fs.writeFileSync(VENUE_FIXTURE, source);
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         baseOutput = byPath.transpileJavaByPath(BASE_FIXTURE).content;
         venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
@@ -8326,7 +8349,7 @@ describe('element access on a typed parameter', () => {
     const TMP = path.join(__dirname, 'files', 'tmp-element-access-on-a-typed');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
-    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuej08.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuetyped.ts');
     let venueOutput: string;
 
     beforeAll(() => {
@@ -8359,7 +8382,7 @@ describe('element access on a typed parameter', () => {
             "        return [ blob, value ];\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
 
@@ -8395,7 +8418,7 @@ describe('element access on a typed parameter', () => {
     });
 });
 
-describe('java Object.values local (RF-java-2)', () => {
+describe('java Object.values local', () => {
     const wrap = (body: string) => "class T {\n    m(d: any): any {\n" + body + "\n    }\n}";
     test('unwritten Object.values local is a List<Object>', () => {
         const out = transpiler.transpileJava(wrap("const v = Object.values(d);\n        return v;")).content;
@@ -8407,7 +8430,7 @@ describe('java Object.values local (RF-java-2)', () => {
     });
 });
 
-describe('java typed String slice / split / replaceAll (RF-java-1)', () => {
+describe('java typed String slice / split / replaceAll', () => {
     const run = (body: string) => transpiler.transpileJava(
         "class T {\n    test(s: string, sep: string, repl: string, o: any): any {\n" + body + "\n    }\n}").content;
 
@@ -8436,10 +8459,10 @@ describe('java typed String slice / split / replaceAll (RF-java-1)', () => {
 // declaration prints a native Map/List takes that type in the printer (javaDeclaredLocalType), with no
 // build-side resolver wrapper: the consumer's tables know nothing about this file or its first generation
 describe('java venue-callee local type', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-javafj4d');
+    const TMP = path.join(__dirname, 'files', 'tmp-venue-callee');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
-    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuefj4d.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuecallee.ts');
     const BASE_SOURCE =
         'export class Exchange {\n' +
         '    safeValue (a: any, k: any, d: any = undefined): any { return d; }\n' +
@@ -8449,7 +8472,7 @@ describe('java venue-callee local type', () => {
     const VENUE_SOURCE =
         "import { Dict } from './base/types';\n" +
         "import { Exchange } from './base/Exchange';\n" +
-        'export default class venuefj4d extends Exchange {\n' +
+        'export default class venuecallee extends Exchange {\n' +
         '    parseMap (data: Dict): any { return { "a": data }; }\n' +
         '    parseList (data: Dict): any { return [ data ]; }\n' +
         '    parseUnproven (data: Dict): any { return this.safeValue (data, "k"); }\n' +
@@ -8470,7 +8493,7 @@ describe('java venue-callee local type', () => {
         fs.writeFileSync(TYPES_FIXTURE, 'export type Dict = Record<string, any>;\n');
         fs.writeFileSync(BASE_FIXTURE, BASE_SOURCE);
         fs.writeFileSync(VENUE_FIXTURE, VENUE_SOURCE);
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         (byPath as any).javaTranspiler.javaDeclaredLocalTypeResolver = resolver;
         return byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     };
@@ -8509,8 +8532,8 @@ describe('java venue-callee local type', () => {
 });
 
 
-describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded native reads (FJ4-B)', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-fj4b-typed-reads');
+describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded native reads', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-ws-client-typed-reads');
     const CLIENT_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'ws', 'Client.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'pro', 'probe.ts');
@@ -8595,7 +8618,7 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
             "        return client.futures[key];\n" +
             "    }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
         other = byPath.transpileJavaByPath(OTHER_FIXTURE).content;
     });
@@ -8693,13 +8716,13 @@ describe('java plain map field writes from owner-executor members', () => {
 });
 
 
-// FJ4-A2: a fixed `any[]` / `number[]` parameter of a base-tier (ts/src/base/Exchange.ts, below the transpile
+// a fixed `any[]` / `number[]` parameter of a base-tier (ts/src/base/Exchange.ts, below the transpile
 // delimiter) method prints `java.util.List<Object>` when the checker types it a plain array, the body never
 // writes it, no ancestor declares the method, the repo declares the name once with no reference other than
 // `this.name (..)` and no hand-written Java caller, and EVERY caller hands a value that already prints a List
 // (so no call gains a checkcast). The whole-repo facts arrive through printer.javaRepoMethodUses (plain data).
-describe('java base-tier list parameters (FJ4-A2)', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-fj4a2');
+describe('java base-tier list parameters', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-base-list-params');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
     const LITERAL = { kind: SyntaxKind.ArrayLiteralExpression, elements: [] };
     const OPAQUE = { kind: SyntaxKind.Identifier, text: 'anything' };
@@ -8737,7 +8760,7 @@ describe('java base-tier list parameters (FJ4-A2)', () => {
         "}\n";
 
     const print = (uses: any) => {
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         const printer: any = (byPath as any).javaTranspiler;
         if (uses !== undefined) {
             printer.javaRepoMethodUses = (name: string) => uses(name);
@@ -8806,23 +8829,19 @@ describe('java base-tier list parameters (FJ4-A2)', () => {
 
 // objectValues / isInstance and awaited / tuple box locals are checker-keyed printer rules. The proofs anchor on base-tier declarations, so the fixture mirrors the layout.
 describe('objectValues copy, catch isInstance, awaited / tuple box locals', () => {
-    const TMP = path.join(__dirname, 'files', 'tmp-rfm-j2d');
+    const TMP = path.join(__dirname, 'files', 'tmp-object-values-isinstance');
     const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
     const ERRORS_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'errors.ts');
     const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
-    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuej2d.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuevalues.ts');
     let out: string;
 
     beforeAll(() => {
         fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
         fs.writeFileSync(TYPES_FIXTURE,
-            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
-            "export type Dict = Dictionary<any>;\n" +
-            "export type Str = string | undefined;\n");
+            DICT_STR_TYPES);
         fs.writeFileSync(ERRORS_FIXTURE,
-            "class BaseError extends Error {\n}\n" +
-            "class BadSymbol extends BaseError {\n}\n" +
-            "export { BaseError, BadSymbol };\n");
+            ERRORS_SOURCE);
         fs.writeFileSync(BASE_FIXTURE,
             "import type { Dict, Str } from './types';\n" +
             "export default class Exchange {\n" +
@@ -8856,7 +8875,7 @@ describe('objectValues copy, catch isInstance, awaited / tuple box locals', () =
             "    readTuple (symbol: string) { const [ request, query ] = this.prepareTuple (); return request[symbol]; }\n" +
             "    readTupleMixed (symbol: string) { const [ request2, query2 ] = this.prepareTuple (); return this.omit (request2, query2); }\n" +
             "}\n");
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
     });
 
@@ -8912,7 +8931,7 @@ describe ('java file-built map fields', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
-        transpiler = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } });
+        transpiler = newJavaTranspiler();
     });
 
     // `this.markets` / `this.positions` are Object/Map base fields: the read is the helper's Map branch and
@@ -8977,7 +8996,7 @@ describe ('java failed future', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
-        transpiler = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } });
+        transpiler = newJavaTranspiler();
     });
 
     const java = (body: string, extra = ''): string => transpiler.transpileJava(
@@ -9017,7 +9036,7 @@ describe ('java fresh map write', () => {
 
     let transpiler: Transpiler;
     beforeAll(() => {
-        transpiler = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        transpiler = newJavaTranspiler();
     });
 
     const run = (body: string) => transpiler.transpileJava(`class T {\n    test(other: any): void {\n${body}\n    }\n}`).content;
@@ -9090,7 +9109,7 @@ describe ('java plain base cache maps', () => {
                 "}\n");
             fs.writeFileSync(VENUE, "import { Exchange } from '../base/Exchange.js';\n" + body);
             const make = (caches: string[]) => {
-                const t: any = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+                const t: any = newJavaTranspiler();
                 const printer: any = t.javaTranspiler;
                 printer.javaPlainCacheFields = new Set(caches);
                 // the build layer's local-type pass publishes `String sym` for the safeString local
@@ -9105,27 +9124,22 @@ describe ('java plain base cache maps', () => {
             fs.rmSync(TMP, { recursive: true, force: true });
         });
 
-        const method = (text: string, name: string) => {
-            const start = text.indexOf(' ' + name + '(');
-            return text.slice(start, text.indexOf('\n    }', start));
-        };
-
         test('a String key writes natively, null value included', () => {
-            const w1 = method(out, 'w1');
+            const w1 = methodText(out, 'w1');
             expect(w1).toContain('this.tickers.put("a", v);');
             expect(w1).toContain('this.tickers.put(((String)sym), v);');
             expect(w1).toContain('this.tickers.put(((String)sym), null);');
         });
 
         test('an any-valued bag, an unnamed field and an unproven key keep the helper', () => {
-            const w1 = method(out, 'w1');
+            const w1 = methodText(out, 'w1');
             expect(w1).toContain('Helpers.addElementToObject(this.bag, ((String)sym), v)');
             expect(w1).toContain('Helpers.addElementToObject(this.other, ((String)sym), v)');
             expect(w1).toContain('Helpers.addElementToObject(this.tickers, this.hash((String) (k)), v)');
         });
 
         test('a String-declared key reads through the guarded get', () => {
-            const r1 = method(out, 'r1');
+            const r1 = methodText(out, 'r1');
             expect(r1).toContain('Object a = (this.tickers == null || sym == null ? null : this.tickers.get(sym));');
             expect(r1).toContain('Helpers.GetValue(this.bag, ((String)sym))');
             expect(r1).toContain('Helpers.GetValue(this.other, ((String)sym))');
@@ -9133,8 +9147,8 @@ describe ('java plain base cache maps', () => {
         });
 
         test('without a declared plain cache every site keeps the helper', () => {
-            expect(method(bare, 'w1')).toContain('Helpers.addElementToObject(this.tickers, "a", v)');
-            expect(method(bare, 'r1')).toContain('Helpers.GetValue(this.tickers, ((String)sym))');
+            expect(methodText(bare, 'w1')).toContain('Helpers.addElementToObject(this.tickers, "a", v)');
+            expect(methodText(bare, 'r1')).toContain('Helpers.GetValue(this.tickers, ((String)sym))');
         });
     });
 });
@@ -9177,7 +9191,7 @@ describe ('java boxed native emission', () => {
         let bare: string;
 
         const run = (withResolver: boolean) => {
-            const t = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const t = newJavaTranspiler();
             const printer: any = (t as any).javaTranspiler;
             printer.javaOwnerStoreFields = new Set(['options']);
             if (withResolver) {
@@ -9207,37 +9221,32 @@ describe ('java boxed native emission', () => {
             fs.rmSync(TMP, { recursive: true, force: true });
         });
 
-        const method = (text: string, name: string) => {
-            const start = text.indexOf(' ' + name + '(');
-            return text.slice(start, text.indexOf('\n    }', start));
-        };
-
         test('Object.keys on a base Map field is the null-guarded key copy', () => {
-            const k1 = method(out, 'k1');
+            const k1 = methodText(out, 'k1');
             expect(k1).toContain('(this.tickers == null ? new java.util.ArrayList<Object>() : new java.util.ArrayList<Object>(this.tickers.keySet()))');
         });
 
         test('a local fed by it declares the List<Object> its copy is', () => {
-            expect(method(out, 'k1')).toContain('List<Object> e = (this.tickers == null');
+            expect(methodText(out, 'k1')).toContain('List<Object> e = (this.tickers == null');
         });
 
         test('an owner store, an unlisted field and a venue field keep the helper', () => {
-            const k1 = method(out, 'k1');
+            const k1 = methodText(out, 'k1');
             expect(k1).toContain('Helpers.objectKeys(this.options)');
             expect(k1).toContain('Helpers.objectKeys(this.currencies)');
             expect(k1).toContain('Helpers.objectKeys(this.own)');
         });
 
         test('a nullable Long local plus an int literal is a null-propagating add', () => {
-            const a1 = method(out, 'a1');
+            const a1 = methodText(out, 'a1');
             expect(a1).toContain('(r == null ? null : (Object) (r + 1L))');
         });
 
         test('an unreported local and an untyped operand keep Helpers.add', () => {
-            const a1 = method(out, 'a1');
+            const a1 = methodText(out, 'a1');
             expect(a1).toContain('Helpers.add(o, 1)');
             expect(a1).not.toContain('(m == null ? null');
-            expect(method(bare, 'a1')).not.toContain('r == null ? null');
+            expect(methodText(bare, 'a1')).not.toContain('r == null ? null');
         });
     });
 });
@@ -9296,7 +9305,7 @@ describe ('java described dict chain reads', () => {
                 "}\n");
             fs.writeFileSync(VENUE, "import { Exchange, Dict } from '../base/Exchange.js';\n" + body);
             const make = (fields: string[]) => {
-                const t: any = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+                const t: any = newJavaTranspiler();
                 t.javaTranspiler.javaHeaderMapFields = new Set(fields);
                 return t.transpileJavaByPath(VENUE).content as string;
             };
@@ -9308,37 +9317,32 @@ describe ('java described dict chain reads', () => {
             fs.rmSync(TMP, { recursive: true, force: true });
         });
 
-        const method = (text: string, name: string) => {
-            const start = text.indexOf(' ' + name + '(');
-            return text.slice(start, text.indexOf('\n    }', start));
-        };
-
         test('a literal path the describe literal holds as objects reads natively', () => {
-            const r1 = method(out, 'r1');
+            const r1 = methodText(out, 'r1');
             expect(r1).toContain('Object a = ((java.util.Map<String, Object>)((java.util.Map<String, Object>)');
             expect(r1).toContain('.get("ws")).get("public");');
             expect(r1).not.toContain('Helpers.GetValue(this.urls');
         });
 
         test('a name key is null-guarded', () => {
-            expect(method(out, 'r1')).toContain('Object b = (t == null ? null : ((java.util.Map<String, Object>)');
-            expect(method(out, 'r1')).toContain('.get("ws")).get(t));');
+            expect(methodText(out, 'r1')).toContain('Object b = (t == null ? null : ((java.util.Map<String, Object>)');
+            expect(methodText(out, 'r1')).toContain('.get("ws")).get(t));');
         });
 
         test('a field the header does not declare Map<String, Object> keeps the helper', () => {
-            expect(method(out, 'r1')).toContain('Object d = Helpers.GetValue(Helpers.GetValue(this.limits, "amount"), "min");');
-            expect(method(out, 'r1')).toContain('Object c = Helpers.GetValue((this.fees == null');
+            expect(methodText(out, 'r1')).toContain('Object d = Helpers.GetValue(Helpers.GetValue(this.limits, "amount"), "min");');
+            expect(methodText(out, 'r1')).toContain('Object c = Helpers.GetValue((this.fees == null');
         });
 
         test('scalar, missing and foreign paths keep the helper', () => {
-            const r2 = method(out, 'r2');
+            const r2 = methodText(out, 'r2');
             expect(r2.match(/Helpers\.GetValue\(/g)?.length).toBe(4);
             expect(r2).toContain('Helpers.GetValue((this.markets == null');
         });
 
         test('without header map fields every site keeps the helper', () => {
-            expect(method(bare, 'r1')).toContain('Helpers.GetValue(');
-            expect(method(bare, 'r1')).not.toContain('.get("ws"))).get("public")');
+            expect(methodText(bare, 'r1')).toContain('Helpers.GetValue(');
+            expect(methodText(bare, 'r1')).not.toContain('.get("ws"))).get("public")');
         });
     });
 });
@@ -9359,7 +9363,7 @@ describe ('java declared-box operands', () => {
         let transpiler: Transpiler;
 
         beforeAll(() => {
-            transpiler = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            transpiler = newJavaTranspiler();
             printer = (transpiler as any).javaTranspiler;
             printer.javaDeclaredLocalTypeResolver = (declaration: any) => DECLARED[declaration?.name?.text];
         });
@@ -9529,7 +9533,7 @@ describe ('java ws client maps', () => {
             fs.writeFileSync(OTHER, "import { Exchange } from '../base/Exchange.js';\n" +
                 "type Dictionary<T> = { [key: string]: T };\nclass Client {\n    futures: Dictionary<any>;\n    subscriptions: Dictionary<any>;\n    rejections: Dictionary<any>;\n}\n" +
                 body.replace('export class fake extends Exchange {', 'export class other extends Exchange {'));
-            const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const byPath = newJavaTranspiler();
             out = byPath.transpileJavaByPath(VENUE).content;
             outOther = byPath.transpileJavaByPath(OTHER).content;
         });
@@ -9538,13 +9542,8 @@ describe ('java ws client maps', () => {
             fs.rmSync(TMP, { recursive: true, force: true });
         });
 
-        const method = (text: string, name: string) => {
-            const start = text.indexOf(' ' + name + '(');
-            return text.slice(start, text.indexOf('\n    }', start));
-        };
-
         test('in / delete on the first-parameter client bind on the field type with no receiver cast', () => {
-            const d1 = method(out, 'd1');
+            const d1 = methodText(out, 'd1');
             expect(d1).toContain('client.subscriptions.containsKey(messageHash)');
             expect(d1).toContain('client.subscriptions.remove((String)messageHash)');
             expect(d1).toContain('client.futures.containsKey(messageHash)');
@@ -9554,37 +9553,37 @@ describe ('java ws client maps', () => {
         });
 
         test('a client that is not the first parameter keeps the receiver cast', () => {
-            const d1 = method(out, 'd1');
+            const d1 = methodText(out, 'd1');
             expect(d1).toContain('((java.util.Map<?, ?>)other.subscriptions).containsKey(messageHash)');
             expect(d1).toContain('((java.util.Map<String,Object>)other.subscriptions).remove((String)messageHash)');
         });
 
         test('a class that is not the ws Client keeps the receiver cast', () => {
-            const d1 = method(outOther, 'd1');
+            const d1 = methodText(outOther, 'd1');
             expect(d1).toContain('((java.util.Map<String,Object>)client.subscriptions).remove((String)messageHash)');
             expect(d1).not.toContain('client.subscriptions.remove(');
         });
 
         test('Object.keys / Object.values on a ws map print the native copy', () => {
-            const k1 = method(out, 'k1');
+            const k1 = methodText(out, 'k1');
             expect(k1).toContain('new java.util.ArrayList<Object>(client.subscriptions.keySet())');
             expect(k1).toContain('new java.util.ArrayList<Object>(client.futures.keySet())');
             expect(k1).toContain('new java.util.ArrayList<Object>(client.rejections.values())');
             expect(k1).not.toContain('Helpers.objectKeys');
             expect(k1).not.toContain('Helpers.objectValues');
-            expect(method(outOther, 'k1')).toContain('Helpers.objectKeys(client.subscriptions)');
+            expect(methodText(outOther, 'k1')).toContain('Helpers.objectKeys(client.subscriptions)');
         });
 
         test('a String-key write on a Map<String, Object> field is the native put; the Future map keeps the helper', () => {
-            const p1 = method(out, 'p1');
+            const p1 = methodText(out, 'p1');
             expect(p1).toContain('client.subscriptions.put(messageHash, v);');
             expect(p1).toContain('client.subscriptions.put(\"authenticated\", v);');
             expect(p1).toContain('Helpers.addElementToObject(client.futures, messageHash, v)');
-            expect(method(outOther, 'p1')).toContain('Helpers.addElementToObject(client.subscriptions, messageHash, v)');
+            expect(methodText(outOther, 'p1')).toContain('Helpers.addElementToObject(client.subscriptions, messageHash, v)');
         });
 
         test('a local bound to a ws map holds the field type and its operations need no cast', () => {
-            const a1 = method(out, 'a1');
+            const a1 = methodText(out, 'a1');
             expect(a1).toContain('java.util.Map<String, Object> subs = client.subscriptions;');
             expect(a1).toContain('new java.util.ArrayList<Object>(subs.keySet())');
             expect(a1).toContain('new java.util.ArrayList<Object>(subs.values())');
@@ -9594,7 +9593,7 @@ describe ('java ws client maps', () => {
         });
 
         test('an any-typed first-parameter client (the base tier) binds the same way', () => {
-            const u1 = method(out, 'u1');
+            const u1 = methodText(out, 'u1');
             expect(u1).toContain('new java.util.ArrayList<Object>(client.futures.keySet())');
             // the `any` receiver keeps the null test on a key it cannot check
             expect(u1).toContain('(messageHash != null && client.subscriptions.containsKey(messageHash))');
@@ -9602,11 +9601,11 @@ describe ('java ws client maps', () => {
         });
 
         test('a literal-key read out of client.futures declares the Future type', () => {
-            expect(method(out, 'l1')).toContain('io.github.ccxt.ws.Future promise = client.futures.get(\"authenticated\");');
+            expect(methodText(out, 'l1')).toContain('io.github.ccxt.ws.Future promise = client.futures.get(\"authenticated\");');
         });
 
         test('a rewritten alias local stays an Object box', () => {
-            const a2 = method(out, 'a2');
+            const a2 = methodText(out, 'a2');
             expect(a2).toContain('Object subs = client.subscriptions;');
             expect(a2).not.toContain('java.util.Map<String, Object> subs');
         });
@@ -9678,7 +9677,7 @@ describe ('java owner-store maps', () => {
             fs.writeFileSync(OTHER, "import { Exchange } from '../base/Exchange.js';\n" +
                 "type Dictionary<T> = { [key: string]: T };\nclass Client {\n    futures: Dictionary<any>;\n    subscriptions: Dictionary<any>;\n    rejections: Dictionary<any>;\n    other: Dictionary<any>;\n}\n" +
                 body.replace('export class fake extends Exchange {', 'export class other extends Exchange {\n    safeDict (d: any, k: any, def: any = undefined): any { return def; }'));
-            const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const byPath = newJavaTranspiler();
             // the build layer names the header's owner stores and hand-off accessors (installJavaOwnerStores)
             const printer: any = (byPath as any).javaTranspiler;
             printer.javaOwnerStoreFields = new Set(['options']);
@@ -9686,7 +9685,7 @@ describe ('java owner-store maps', () => {
             out = byPath.transpileJavaByPath(VENUE).content;
             outOther = byPath.transpileJavaByPath(OTHER).content;
             // no owner store named: every options site keeps the helper
-            const bare = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const bare = newJavaTranspiler();
             outBare = bare.transpileJavaByPath(VENUE).content;
         });
 
@@ -9694,19 +9693,14 @@ describe ('java owner-store maps', () => {
             fs.rmSync(TMP, { recursive: true, force: true });
         });
 
-        const method = (text: string, name: string) => {
-            const start = text.indexOf(' ' + name + '(');
-            return text.slice(start, text.indexOf('\n    }', start));
-        };
-
         test('a literal-key write on the owner store options is the native put', () => {
-            const w1 = method(out, 'w1');
+            const w1 = methodText(out, 'w1');
             expect(w1).toContain('this.options.put("sandbox", v);');
             expect(w1).not.toContain('addElementToObject(this.options, "sandbox"');
         });
 
         test('a nullish literal on the owner store prints remove; a computed key and another field keep the helper', () => {
-            const w1 = method(out, 'w1');
+            const w1 = methodText(out, 'w1');
             expect(w1).toContain('Helpers.addElementToObject(this.options, k, v)');
             expect(w1).toContain('this.options.remove("gone");');
             expect(w1).not.toContain('this.options.put("gone"');
@@ -9714,7 +9708,7 @@ describe ('java owner-store maps', () => {
         });
 
         test('the cachedCurrencies hand-off reads the owner field accessor', () => {
-            const r1 = method(out, 'r1');
+            const r1 = methodText(out, 'r1');
             expect(r1).toContain('this.cachedCurrenciesForLoad()');
             expect(r1).toContain('this.cachedCurrenciesForLoadOrEmpty()');
             // another key and a non-empty default keep the options read
@@ -9723,19 +9717,19 @@ describe ('java owner-store maps', () => {
         });
 
         test('without a declared owner store every options site keeps the helper', () => {
-            const w1 = method(outBare, 'w1');
+            const w1 = methodText(outBare, 'w1');
             expect(w1).toContain('Helpers.addElementToObject(this.options, "sandbox", v)');
-            expect(method(outBare, 'r1')).not.toContain('cachedCurrenciesForLoad');
+            expect(methodText(outBare, 'r1')).not.toContain('cachedCurrenciesForLoad');
         });
 
         test('a venue-overridden safeDict keeps the options read', () => {
-            const r1 = method(outOther, 'r1');
+            const r1 = methodText(outOther, 'r1');
             expect(r1).not.toContain('cachedCurrenciesForLoad');
             expect(r1).toContain('this.safeDict(this.options, "cachedCurrencies"');
         });
 
         test('ws client map reads are the guarded native get', () => {
-            const c1 = method(out, 'c1');
+            const c1 = methodText(out, 'c1');
             expect(c1).toContain('(client.subscriptions == null || messageHash == null ? null : client.subscriptions.get(messageHash))');
             expect(c1).toContain('(client.rejections == null || messageHash == null ? null : client.rejections.get(messageHash))');
             expect(c1).not.toContain('Helpers.GetValue(client.subscriptions, messageHash)');
@@ -9743,16 +9737,16 @@ describe ('java owner-store maps', () => {
         });
 
         test('a computed key and a non-ws-client receiver keep the helper', () => {
-            const c1 = method(out, 'c1');
+            const c1 = methodText(out, 'c1');
             expect(c1).toContain('Helpers.GetValue(client.subscriptions, this.hash((String) (messageHash)))');
             expect(c1).toContain('Helpers.GetValue(client.other, messageHash)');
-            const o1 = method(outOther, 'c1');
+            const o1 = methodText(outOther, 'c1');
             expect(o1).toContain('Helpers.GetValue(client.subscriptions, messageHash)');
             expect(o1).not.toContain('client.subscriptions == null');
         });
 
         test('a local read from client.futures prints the Future type and the chained write reads natively', () => {
-            const c2 = method(out, 'c2');
+            const c2 = methodText(out, 'c2');
             expect(c2).toContain('io.github.ccxt.ws.Future future = (client.futures == null || messageHash == null ? null : client.futures.get(messageHash));');
             expect(c2).toContain('(client.subscriptions == null || messageHash == null ? null : client.subscriptions.get(messageHash))');
             expect(c2).toContain('(client.subscriptions == null ? null : client.subscriptions.get("authenticated"))');
@@ -9811,7 +9805,7 @@ describe ('java crc32 equality', () => {
             fs.writeFileSync(VENUE, "import { crc32 } from '../base/functions/crypto.js';\n" + body);
             // a venue-local crc32 is not the base function: it must keep the helper
             fs.writeFileSync(OTHER, body.replace('crc32 = crc32;', 'crc32 (s: string, g: boolean): number { return 2; }'));
-            const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const byPath = newJavaTranspiler();
             const printer: any = (byPath as any).javaTranspiler;
             printer.javaDeclaredLocalTypeResolver = (declaration: any) => {
                 const name = declaration?.name?.text;
@@ -9825,31 +9819,26 @@ describe ('java crc32 equality', () => {
             fs.rmSync(TMP, { recursive: true, force: true });
         });
 
-        const method = (text: string, name: string) => {
-            const start = text.indexOf(' ' + name + '(');
-            return text.slice(start, text.indexOf('\n    }', start));
-        };
-
         test('a never-rewritten crc32 const against a Long local compares natively', () => {
-            const f1 = method(out, 'f1');
+            const f1 = methodText(out, 'f1');
             expect(f1).toContain('!java.util.Objects.equals(local, resp)');
             expect(f1).toContain('java.util.Objects.equals(resp, local)');
             expect(f1).not.toContain('Helpers.isEqual');
         });
 
         test('a rewritten crc32 local, a non-crc32 local and an Object operand keep the helper', () => {
-            expect(method(out, 'f2')).toContain('Helpers.isEqual(local, resp)');
-            expect(method(out, 'f3')).not.toContain('Objects.equals(local, resp)');
-            expect(method(out, 'f4')).toContain('Helpers.isEqual(local, raw)');
+            expect(methodText(out, 'f2')).toContain('Helpers.isEqual(local, resp)');
+            expect(methodText(out, 'f3')).not.toContain('Objects.equals(local, resp)');
+            expect(methodText(out, 'f4')).toContain('Helpers.isEqual(local, raw)');
         });
 
         test('a venue-declared crc32 keeps the helper', () => {
-            expect(method(outOther, 'f1')).toContain('Helpers.isEqual(');
+            expect(methodText(outOther, 'f1')).toContain('Helpers.isEqual(');
         });
     });
 });
 
-describe ('jp01MapFieldWrite', () => {
+describe ('java base map field writes', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -9858,7 +9847,7 @@ describe ('jp01MapFieldWrite', () => {
     let transpiler: Transpiler;
 
     beforeAll(() => {
-        transpiler = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } });
+        transpiler = newJavaTranspiler();
     });
 
     const java = (body: string, members = ''): string => {
@@ -9967,7 +9956,7 @@ describe ('java WsOrderBook parameter typing', () => {
                 "        this.handleBookDelta(orderbook, delta);\n" +
                 "    }\n" +
                 "}\n");
-            const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const byPath = newJavaTranspiler();
             venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
             baseOutput = '';
         });
@@ -10001,7 +9990,7 @@ describe ('java WsOrderBook parameter typing', () => {
     });
 });
 
-describe ('rdJava1OwnerCountersValues', () => {
+describe ('java owner-store counters and Object.values', () => {
     jest.mock('module', () => ({
         __esModule: true,
         default: jest.fn()
@@ -10009,7 +9998,7 @@ describe ('rdJava1OwnerCountersValues', () => {
 
     // RD-JAVA-1: owner-store counters (lockId/unlockId, incrementingNonce), Object.values on a declared Map local and
     // catch-variable instanceof are printer rules keyed on checker-resolved declarations.
-    const mk = () => new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const mk = () => newJavaTranspiler();
     const BASE = [
         'class BaseExchange {',
         '    options: any = {};',
@@ -10079,7 +10068,7 @@ describe ('rdJava1OwnerCountersValues', () => {
     });
 
     describe('RD-JAVA-1 Object.values and catch instanceof', () => {
-        const TMP = path.join (__dirname, 'files', 'tmp-rd-java-1');
+        const TMP = path.join (__dirname, 'files', 'tmp-owner-counters');
         const BASE_FILE = path.join (TMP, 'ts', 'src', 'base', 'Exchange.ts');
         const ERRORS = path.join (TMP, 'ts', 'src', 'base', 'errors.ts');
         const TYPES = path.join (TMP, 'ts', 'src', 'base', 'types.ts');
@@ -10171,12 +10160,12 @@ describe ('rdJava1OwnerCountersValues', () => {
     });
 });
 
-describe ('rfJava3StringTypedParse', () => {
+describe ('java String-typed parseInt / parseFloat', () => {
     jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
-    // RF-java-3: parseInt/parseFloat on an operand that prints as java.lang.String call the String-typed twin.
+    // parseInt/parseFloat on an operand that prints as java.lang.String call the String-typed twin.
     describe('java string-typed parse', () => {
-        const TMP = path.join(__dirname, 'files', 'tmp-rfjava3-parse');
+        const TMP = path.join(__dirname, 'files', 'tmp-string-typed-parse');
         const VENUE = path.join(TMP, 'ts', 'src', 'fake.ts');
         const body =
             "export class fake {\n" +
@@ -10189,7 +10178,7 @@ describe ('rfJava3StringTypedParse', () => {
         beforeAll(() => {
             fs.mkdirSync(path.dirname(VENUE), { recursive: true });
             fs.writeFileSync(VENUE, body);
-            const t = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            const t = newJavaTranspiler();
             out = t.transpileJavaByPath(VENUE).content;
         });
         afterAll(() => { fs.rmSync(TMP, { recursive: true, force: true }); });
@@ -10341,7 +10330,7 @@ describe('Promise.all over a list in the ts/src tiers', () => {
         fs.mkdirSync(path.dirname(TEST_FIXTURE), { recursive: true });
         fs.writeFileSync(VENUE_FIXTURE, body);
         fs.writeFileSync(TEST_FIXTURE, body);
-        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const byPath = newJavaTranspiler();
         venue = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
         testTier = byPath.transpileJavaByPath(TEST_FIXTURE).content;
     });
