@@ -5080,6 +5080,19 @@ describe('element-access list cast gate on a printed List<object> receiver', () 
         const output = transpile(listInput('    const key: any = "k";\n    orders[key] = 5;'), listReceiver);
         expect(output).toContain("((IDictionary<string,object>)orders)[(string)key] = 5;");
     });
+    const cacheTranspile = (input: string) => {
+        const localTranspiler: any = new Transpiler(config as any);
+        localTranspiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.text === 'orders' ? 'ccxt.pro.ArrayCache' : undefined);
+        return localTranspiler.transpileCSharp(input).content;
+    };
+    test('an ArrayCache-declared receiver writes through IList<object>', () => {
+        const output = cacheTranspile(listInput('    orders[0] = 5;'));
+        expect(output).toContain("((IList<object>)orders)[Convert.ToInt32(0)] = 5;");
+    });
+    test('an ArrayCache-declared receiver keeps the dictionary cast for a string key', () => {
+        const output = cacheTranspile(listInput('    orders["k"] = 5;'));
+        expect(output).toContain('((IDictionary<string,object>)orders)["k"] = 5;');
+    });
 });
 
 describe('dictionary index-write cast elision hook', () => {

@@ -8007,6 +8007,13 @@ export class CSharpTranspiler extends BaseTranspiler {
                 return `${this.printNode(node.expression, 0)}[Convert.ToInt32(${this.printNode(node.argumentExpression, 0)})]`;
             }
         }
+        if (this.csharpIsPlainIndexWrite(node) && (this.csharpDeclaredLocalType(node.expression) === 'ccxt.pro.ArrayCache')) {
+            const type = this.getChecker().getTypeAtLocation(node.argumentExpression);
+            if ((type.flags & (TypeFlags.NumberLike)) !== 0 && (type.flags & TypeFlags.Union) === 0) {
+                // an ArrayCache IS an IList<object>: its index write goes through that interface
+                return `((IList<object>)${this.printNode(node.expression, 0)})[Convert.ToInt32(${this.printNode(node.argumentExpression, 0)})]`;
+            }
+        }
         const listRead = this.csharpListIndexRead(node);
         if (listRead !== undefined) {
             return listRead;
@@ -8451,19 +8458,23 @@ export class CSharpTranspiler extends BaseTranspiler {
     // `List<object>` (identity conversion; not IList<object>, a checked downcast). Type comes via the
     // `csharpLocalTypeOf` hook; `x[i] += v` and reads stay on the base path (third override layer).
     csharpElementAccessReceiverIsList(node) {
-        if (node?.kind !== SyntaxKind.ElementAccessExpression) {
-            return false;
-        }
-        const parent = node.parent;
-        if (parent?.kind !== SyntaxKind.BinaryExpression || parent.operatorToken?.kind !== SyntaxKind.EqualsToken || parent.left !== node) {
-            return false;
-        }
-        const receiver = node.expression;
-        if (receiver?.kind !== SyntaxKind.Identifier) {
-            return false;
+        return this.csharpIndexWriteReceiverType(node) === 'List<object>';
+    }
+
+    // the printed declaration type of the identifier receiver of a plain `x[i] = v`, else undefined
+    csharpIndexWriteReceiverType(node): string | undefined {
+        if (!this.csharpIsPlainIndexWrite(node)) {
+            return undefined;
         }
         const localTypeOf = (this as any).csharpLocalTypeOf;
-        return (typeof localTypeOf === 'function') && (localTypeOf.call(this, receiver) === 'List<object>');
+        return (typeof localTypeOf === 'function') ? localTypeOf.call(this, node.expression) : undefined;
+    }
+
+    // `x[i] = v` with an identifier receiver
+    csharpIsPlainIndexWrite(node): boolean {
+        const parent = node?.parent;
+        return (node?.kind === SyntaxKind.ElementAccessExpression) && (node.expression?.kind === SyntaxKind.Identifier)
+            && (parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.left === node);
     }
 
     // an index WRITE (`x["k"] = v`) needs no `((IDictionary<string,object>)x)` cast when the
