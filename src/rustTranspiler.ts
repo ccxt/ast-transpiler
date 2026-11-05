@@ -5,10 +5,9 @@ import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Sym
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 import * as fs from 'fs';
 
-// ---- rustNativeForms ----
 // ── type-keyed native forms ──
 // A plain place path (`a`, `self.a.b`): side-effect-free, so it may be read twice or evaluated eagerly.
-export const RUST_PLAIN_PLACE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const RUST_PLAIN_PLACE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
@@ -108,7 +107,7 @@ export interface RustParamShadow {
     declaration: ParameterDeclaration;
 }
 
-/** Shadow kinds: `&IndexMap<String, Value>` / `&Vec<Value>` (D-25). */
+/** Shadow kinds: `&IndexMap<String, Value>` / `&Vec<Value>`. */
 export type RustParamShadowKind = 'map' | 'list';
 
 /** Vocabulary of the parameter-shadow table (`RustTranspiler.rustParamShadowOf`). */
@@ -641,7 +640,7 @@ export class RustTranspiler extends BaseTranspiler {
         return current;
     }
 
-    // B-26 extends the proof with the printer's own bool-typed sinks: a narrowed `let x: bool = …`
+    // The proof extends to the printer's own bool-typed sinks: a narrowed `let x: bool = …`
     // (getRustBoolLocalInitializer) and a logical boxed in `Value::Bool(…)`
     // (printCustomBinaryExpressionIfAny) both demand a `bool`, so their operands may print bare.
     rustConditionBoolSlot(node): boolean {
@@ -1102,11 +1101,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (new RegExp(`\\b${receiver}\\b`).test(value)) {
             return `{ let __be_tmp = ${value}; ${receiver}.set_book_meta(${keyLiteral[1]}, __be_tmp); }`;
         }
-        const trimmed = value.trim();
-        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed) && trimmed !== 'self'
-            && trimmed !== 'true' && trimmed !== 'false') {
-            value = `${trimmed}.clone()`;
-        }
+        value = RustTranspiler.cloneIfBareLocal(value.trim(), value);
         return `${receiver}.set_book_meta(${keyLiteral[1]}, ${value})`;
     }
 
@@ -1148,8 +1143,7 @@ export class RustTranspiler extends BaseTranspiler {
             return `{ let __be_tmp = ${value}; ${insert('__be_tmp')} }`;
         }
         const trimmed = value.trim();
-        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed) && trimmed !== 'self'
-            && trimmed !== 'true' && trimmed !== 'false') {
+        if (RustTranspiler.isBareLocal(trimmed)) {
             return insert(`${trimmed}.clone()`);
         }
         return insert(value);
@@ -1232,8 +1226,7 @@ export class RustTranspiler extends BaseTranspiler {
             return fits(out) ? out : undefined;
         }
         const trimmed = value.trim();
-        const out = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed) && trimmed !== 'self'
-            && trimmed !== 'true' && trimmed !== 'false' ? guard(`${trimmed}.clone()`) : guard(value);
+        const out = guard(RustTranspiler.cloneIfBareLocal(trimmed, value));
         return fits(out) ? out : undefined;
     }
 
@@ -1297,7 +1290,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
         }
         if (RustTranspiler.RUST_NATIVE_INSERT_RECEIVERS.has(ident.text)) {
-            return false; // rust-13 whitelist: not a construction proof
+            return false; // whitelist only: not a construction proof
         }
         return undefined;
     }
@@ -1454,7 +1447,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // A parameter with a default carries the transpiler's own initializer,
         // so it keeps the pre-unit proof; without one only the annotation proof
-        // (`Dict`-style params — the B-25 read family) can admit it.
+        // (`Dict`-style params, read natively) can admit it.
         if (isParameterDeclaration(declaration) && this.rustParamStaysPlainDict(declaration)) {
             return true;
         }
@@ -1509,7 +1502,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     // A parameter the checker proves is a plain dict (`Dict`, `Dictionary<T>`,
-    // a `Market`-style alias — the proof B-25's native reads use) whose every
+    // a `Market`-style alias — the proof the native reads use) whose every
     // write in the body keeps that shape: an object literal with no runtime tag
     rustParamStaysPlainDict(declaration: ParameterDeclaration): boolean {
         if (declaration.type === undefined || declaration.name?.kind !== SyntaxKind.Identifier) {
@@ -3641,7 +3634,7 @@ export class RustTranspiler extends BaseTranspiler {
         const blockOpen = this.getBlockOpen(identation);
         const blockClose = this.getBlockClose(identation);
         const shadows = this.rustParamShadowLines(node, identation + 2);
-        // D-27: a `handle*` method's `message: Dict` param gets a borrowed
+        // A `handle*` method's `message: Dict` param gets a borrowed
         // `&IndexMap` shadow so its `safe_*` reads print natively.
         const shadowPlan = this.rustProHandlerShadowPlan(node, identation);
         const savedShadowParam = this.rustProHandlerShadowParam;
@@ -3686,10 +3679,10 @@ export class RustTranspiler extends BaseTranspiler {
                 ?? this.printTranspiledVariadicCall(node, 'self', expr.name.text, identation);
         }
         if (isIdentifier(expr.expression) && this.rustCallsTestExchange(node)) {
-            return this.printRuntimeVariadicCall(node, this.printNode(expr.expression, 0), expr.name.text, identation, true);
+            return this.printRuntimeVariadicCall(node, this.printNode(expr.expression, 0), expr.name.text, identation, true, true);
         }
         if (isIdentifier(expr.expression) && this.rustCallsRuntimeHandle(node)) {
-            return this.printRuntimeVariadicCall(node, this.printNode(expr.expression, 0), expr.name.text, identation);
+            return this.printRuntimeVariadicCall(node, this.printNode(expr.expression, 0), expr.name.text, identation, false, true);
         }
         // a ws class reaches its REST parent's methods through `self.parent`; REST `super_*` shims are fixed-arity
         if (expr.expression.kind === SyntaxKind.SuperKeyword && /ts[\/]src[\/]pro[\/]/.test(String(node.getSourceFile().fileName))) {
@@ -3717,6 +3710,16 @@ export class RustTranspiler extends BaseTranspiler {
         }
 
         return undefined;
+    }
+
+    /** A bare local name (not `self`/`true`/`false`): passing it by value needs a `.clone()`. */
+    static isBareLocal(text: string): boolean {
+        return /^[A-Za-z_][A-Za-z0-9_]*$/.test(text) && text !== 'self' && text !== 'true' && text !== 'false';
+    }
+
+    /** `text.clone()` for a bare local, else `otherwise` (default: the text itself). */
+    static cloneIfBareLocal(text: string, otherwise: string = text): string {
+        return RustTranspiler.isBareLocal(text) ? `${text}.clone()` : otherwise;
     }
 
     // Hand-written runtime methods (`exchange_stubs.rs`, `exchange.rs`, the ws `Client`/`Future` handles) take a
@@ -3764,15 +3767,38 @@ export class RustTranspiler extends BaseTranspiler {
         ['extend_exchange_options', undefined], ['exception_message', undefined], ['fetch2', 1], ['build_ohlcvc', 1],
     ]);
 
-    printRuntimeVariadicCall(node, receiver: string, methodName: string, identation: number, testCrate = false): string | undefined {
+    printRuntimeVariadicCall(node, receiver: string, methodName: string, identation: number, testCrate = false, handleProven = false): string | undefined {
+        if (!handleProven && !this.rustCalleeIsRuntimeBase(node)) return undefined;
         const name = this.toSnakeCaseName(methodName);
         const fixed = testCrate && RustTranspiler.RUST_TEST_VARIADIC_ARITY.has(name)
             ? RustTranspiler.RUST_TEST_VARIADIC_ARITY.get(name) : RustTranspiler.RUST_RUNTIME_VARIADIC_ARITY.get(name);
         if (fixed === undefined) return undefined;
+        return this.printOptionalArgsSliceCall(node, receiver, methodName, fixed, identation);
+    }
+
+    // `receiver.m(a0..a{fixed-1}, &[rest])`; bare locals are cloned so a local reused by a later call is not moved.
+    printOptionalArgsSliceCall(node, receiver: string, methodName: string, fixed: number, identation: number): string | undefined {
         const args = this.rustPrintedArgs(node, identation);
         if (args.length < fixed || (args.length > 0 && args[args.length - 1].startsWith('&['))) return undefined;
         const cloned = args.map((a) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(a) && a !== 'self' ? `${a}.clone()` : a);
         return `${receiver}.${methodName}(${cloned.slice(0, fixed).join(', ')}${fixed > 0 ? ', ' : ''}&[${cloned.slice(fixed).join(', ')}])`;
+    }
+
+    // The callee is declared in `ts/src/base/` (a base method, or a base field aliasing a helper);
+    // a same-named method of the class itself keeps its own signature.
+    rustCalleeIsRuntimeBase(node): boolean {
+        let decl: any;
+        try {
+            decl = signatureDeclaration((this.getChecker() as any).getResolvedSignature(node));
+        } catch (e) {
+            return false;
+        }
+        decl = decl?.resolve?.() ?? decl;
+        if (decl !== undefined && /ts[\/]src[\/]base[\/]/.test(String(decl.getSourceFile?.()?.fileName ?? ''))) return true;
+        // `base64ToBinary = base64ToBinary`: the property is declared on the base class, its function elsewhere
+        const symbol: any = this.getChecker().getSymbolAtLocation(node.expression.name ?? node.expression);
+        const member: any = symbol === undefined ? undefined : symbolDeclarations(symbol)?.[0];
+        return member !== undefined && /ts[\/]src[\/]base[\/]/.test(String(member.getSourceFile?.()?.fileName ?? ''));
     }
 
     // `exchange.m(..)` in a test source, the receiver typed as the base `Exchange` class.
@@ -3805,18 +3831,12 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     // A call to a transpiled method with optional parameters: its Rust signature is the required
-    // parameters plus `optional_args: &[Value]`, so the remaining arguments fold into that slice and
-    // bare locals are cloned (a reused local is not moved). Hand-written base helpers keep their own ABI.
+    // parameters plus `optional_args: &[Value]`. Hand-written base helpers keep their own ABI.
     printTranspiledVariadicCall(node, receiver: string, methodName: string, identation: number): string | undefined {
         const params = this.rustTranspiledCalleeParams(node, methodName);
         if (params === undefined || params.some((p: any) => p.dotDotDotToken !== undefined)) return undefined;
         const required = params.filter((p: any) => !p.initializer && !p.questionToken).length;
-        if (required === params.length) return undefined;
-        const args = this.rustPrintedArgs(node, identation);
-        if (args.length < required || (args.length > 0 && args[args.length - 1].startsWith('&['))) return undefined;
-        const cloned = args.map((a) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(a) && a !== 'self' ? `${a}.clone()` : a);
-        const head = cloned.slice(0, required).join(', ');
-        return `${receiver}.${methodName}(${head}${required > 0 ? ', ' : ''}&[${cloned.slice(required).join(', ')}])`;
+        return required === params.length ? undefined : this.printOptionalArgsSliceCall(node, receiver, methodName, required, identation);
     }
 
     // Parameters of the method body a call binds to (the implementation behind an overload), when that
@@ -3839,7 +3859,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!/ts[\/]src[\/]/.test(file) || /ts[\/]src[\/](?:test|abstract|base[\/]ws)[\/]/.test(file)) return undefined;
         if (/ts[\/]src[\/]base[\/]/.test(file)) {
             const marker = String(sourceFile.text ?? '').indexOf('METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT');
-            if (marker < 0 || decl.pos < marker) return undefined;
+            if (marker < 0 || decl.end < marker) return undefined;
         }
         return Array.from(decl.parameters);
     }
@@ -3905,12 +3925,12 @@ export class RustTranspiler extends BaseTranspiler {
         const expression = node.expression;
 
         // `this.safeString(<shadowed param>, 'k')` — the read inlined against
-        // the parameter shadow (D-25). Ahead of the optional-arg dispatch below,
+        // the parameter shadow. Ahead of the optional-arg dispatch below,
         // which prints the call for any callee with optional parameters
         const shadowSafeRead = this.printShadowSafeReadCall(node);
         if (shadowSafeRead !== undefined) return shadowSafeRead;
 
-        // D-27: `this.safe_*(message, "k")` on a shadowed WS-handler param —
+        // `this.safe_*(message, "k")` on a shadowed WS-handler param —
         // the native `.get("k")` match replaces the `safe_*_k` helper call.
         // Checked first: the out-of-order path would print the boxed call for
         const shadowRead = this.printProHandlerShadowRead(node);
@@ -4515,7 +4535,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** The local/parameter proof of a dynamic-key map read: a parameter whose
-     *  annotation proves a plain dict (B-25), or any local whose checker type
+     *  annotation proves a plain dict, or any local whose checker type
      *  proves a plain map and which nothing in the enclosing function
      *  re-assigns (D2). Returns the proven declaration. */
     rustProvenDynamicMapReceiver(node: Node): Declaration | undefined {
@@ -4884,7 +4904,7 @@ export class RustTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-    // ── pro-tier WS handler `message` shadow (D-27) ───────────────────────────
+    // ── pro-tier WS handler `message` shadow ─────────────────────────────────
     // `handle_x (client: Client, message: Dict)` is dispatched by NAME with
     // `Value` args, so the printed signature keeps `Value`; the annotation still
 
@@ -4953,7 +4973,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustProHandlerShadowPlan(node: Node, identation: number): { param: ParameterDeclaration, lines: string } | undefined {
         const param = this.rustProHandlerMessageParam(node);
         if (param === undefined) return undefined;
-        // a D-25 parameter shadow already rebinds the name to the borrowed map; its reads are native
+        // a parameter shadow already rebinds the name to the borrowed map; its reads are native
         if (this.rustParamShadowTable(node).has(String((param.name as any).text))) return undefined;
         const saved = this.rustProHandlerShadowParam;
         this.rustProHandlerShadowParam = param;
@@ -5295,7 +5315,7 @@ export class RustTranspiler extends BaseTranspiler {
         const recv = this.printNode(baseExpr, 0).trim();
         const trimmed = rhs.trim();
         const value = this.rustPrintedBoolArg(rhs) ? `Value::Bool(${rhs})`
-            : (/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed) && trimmed !== 'self' && trimmed !== 'true' && trimmed !== 'false' ? `${trimmed}.clone()` : rhs);
+            : RustTranspiler.cloneIfBareLocal(trimmed, rhs);
         return `if let Value::Dict(__r08a) = &mut ${recv} { let __r08e = std::sync::Arc::make_mut(__r08a).entry(${k1}.to_string()).or_insert(Value::Null);`
             + ` if let Value::Dict(__r08b) = __r08e { std::sync::Arc::make_mut(__r08b).insert(${k2}.to_string(), ${value}); } }`;
     }
@@ -5984,7 +6004,7 @@ export class RustTranspiler extends BaseTranspiler {
         const nativeTruthinessText = this.rustNativeTruthiness(node); if (nativeTruthinessText !== undefined) return idn + nativeTruthinessText;
         const identifierTruthiness = this.printNativeIdentifierTruthiness(node);
         if (identifierTruthiness !== undefined) return idn + identifierTruthiness;
-        // B-26: an operand whose printer emission is already a Rust `bool`.
+        // An operand whose printer emission is already a Rust `bool`.
         const nativeCondition = this.printNativeParenthesizedCondition(node);
         if (nativeCondition !== undefined && this.rustConditionBoolSlot(node)) return idn + nativeCondition;
         const expression = this.printNode(node, 0);
@@ -5995,7 +6015,7 @@ export class RustTranspiler extends BaseTranspiler {
         return `${idn}is_true(&${this.printTruthyArgument(expression)})`;
     }
 
-    // B-26: `is_true(&(…)` on an operand the printer already emits as a native Rust `bool` (payload
+    // `is_true(&(…)` on an operand the printer already emits as a native Rust `bool` (payload
     // compares, `matches!` predicates, `&&`/`||` of those) is the identity (`IsTruthy for bool`);
     // native text has no helper token, so it is emitted only in a bool slot (`isBareBoolEmissionSafe`).
 
@@ -6219,8 +6239,7 @@ export class RustTranspiler extends BaseTranspiler {
         const text = this.printNode(node, identation);
         const trimmed = text.trim();
         if (RustTranspiler.isBoolValueExpression(trimmed)) return `Value::Bool(${trimmed})`;
-        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed) && trimmed !== 'self' && trimmed !== 'true' && trimmed !== 'false') return `${trimmed}.clone()`;
-        return text;
+        return RustTranspiler.cloneIfBareLocal(trimmed, text);
     }
 
     // Built-in method call overrides
@@ -6465,10 +6484,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (new RegExp(`\\b${name}\\b`).test(value)) {
             return `{ let __be_tmp = ${value}; ${insert('__be_tmp')} }`;
         }
-        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value) && value !== 'self' && value !== 'true' && value !== 'false') {
-            return insert(`${value}.clone()`);
-        }
-        return insert(value);
+        return insert(RustTranspiler.cloneIfBareLocal(value));
     }
 
     /** A local (single binding in its function, no closure capture of a write)
@@ -6793,8 +6809,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isArrayLiteralExpression(initializer) || initializer.elements.length === 0) return undefined;
         const parts = initializer.elements.map((element) => {
             const text = this.printNode(element, 0).trim();
-            const bare = /^[A-Za-z_][A-Za-z0-9_]*$/.test(text) && text !== 'self' && text !== 'true' && text !== 'false';
-            return bare ? `${text}.clone()` : text;
+            return RustTranspiler.cloneIfBareLocal(text);
         });
         return `vec![${parts.join(', ')}]`;
     }
@@ -6870,7 +6885,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (name === undefined || parsedArg === undefined || this.rustVecLocalDeclarationOf(receiver) === undefined) return undefined;
         const arg = parsedArg.trim();
         // `append_to_array` takes the value by move; ccxt's post-pass cloned a bare local there.
-        const value = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(arg) && arg !== 'self' && arg !== 'true' && arg !== 'false' ? `${arg}.clone()` : arg;
+        const value = RustTranspiler.cloneIfBareLocal(arg);
         return `${name}.push(${value})`;
     }
 
@@ -7369,10 +7384,7 @@ export class RustTranspiler extends BaseTranspiler {
             return `{ let __be_tmp = ${value}; ${name}.insert(${keyArg}, __be_tmp); }`;
         }
         const trimmed = value.trim();
-        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed) && trimmed !== 'self' && trimmed !== 'true' && trimmed !== 'false') {
-            return `${name}.insert(${keyArg}, ${trimmed}.clone())`;
-        }
-        return `${name}.insert(${keyArg}, ${value})`;
+        return `${name}.insert(${keyArg}, ${RustTranspiler.cloneIfBareLocal(trimmed, value)})`;
     }
 
     // ── chained writes on a one-level bearer ──────────────────────────────────
@@ -7909,8 +7921,7 @@ export class RustTranspiler extends BaseTranspiler {
         const k2 = this.rustNestedBearerWriteKey(key2Node, key2Text, name);
         if (k1 === undefined || k2 === undefined) return undefined;
         const value = this.rustPrintedBoolArg(valueText) ? `Value::Bool(${valueText})` : valueText.trim();
-        const arg = /^[A-Za-z_][A-Za-z0-9_]*$/.test(value) && value !== 'self' && value !== 'true' && value !== 'false'
-            ? `${value}.clone()` : value;
+        const arg = RustTranspiler.cloneIfBareLocal(value);
         return `${name}.entry(${k1}).or_default().insert(${k2}, ${arg})`;
     }
 
@@ -9279,7 +9290,7 @@ export class RustTranspiler extends BaseTranspiler {
             && node.parent?.kind === SyntaxKind.ExpressionStatement && name.trim() === this.printNode(recv, 0).trim()
             && this.rustVecPushShape(node, String(recv.text))) {
             const bareArg = parsedArg.trim();
-            const bareValue = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(bareArg) && bareArg !== 'self' && bareArg !== 'true' && bareArg !== 'false' ? `${bareArg}.clone()` : bareArg;
+            const bareValue = RustTranspiler.cloneIfBareLocal(bareArg);
             return `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${bareValue}); }`;
         }
         if (name === undefined || parsedArg === undefined || node?.arguments?.length !== 1
@@ -9291,7 +9302,7 @@ export class RustTranspiler extends BaseTranspiler {
         // carries no book-cache handle, so its push is the same guarded `Arc::make_mut`.
         const arg = parsedArg.trim();
         // `append_to_array` takes the value by move; ccxt's post-pass cloned a bare local there.
-        const value = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(arg) && arg !== 'self' && arg !== 'true' && arg !== 'false' ? `${arg}.clone()` : arg;
+        const value = RustTranspiler.cloneIfBareLocal(arg);
         return `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value}); }`;
     }
 

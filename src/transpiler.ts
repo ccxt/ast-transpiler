@@ -832,7 +832,7 @@ export {
     // the trailing-comment alignment pass, so a consumer that assembles its own Go files
     // (ccxt build/goTranspiler.ts) can run it on the assembled text as well
     alignGoTrailingComments,
-    // the rust declared-Dict locals vocabulary + entry shape (rust-25), so the
+    // the rust declared-Dict locals vocabulary + entry shape, so the
     // helper-removal consumers can import them from the package entry
     RUST_DECLARED_DICT_LOCALS,
     // ccxt's Go printer hooks

@@ -49,6 +49,14 @@ beforeAll(() => {
     transpiler = new Transpiler(config);
 })
 
+// the native dict insert the printer emits for a literal key
+const insert = (receiver: string, key: string, value: string) =>
+    `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+
+// `body` as the method `f(params)` of a class that also declares `parseX`, transpiled to Rust
+const rustInParseXClass = (body: string, params = 'v: any') =>
+    transpiler.transpileRust(`class T {\n    parseX (x) { return x; }\n    f (${params}) {\n${body}\n    }\n}`).content;
+
 describe('rust transpiling tests', () => {
     test('basic variable declaration', () => {
         const ts = "const x = 1;"
@@ -1589,7 +1597,7 @@ describe('rust checker-typed native container access', () => {
         expect(output).not.toContain('add(&a, &s)');
     });
 
-    // phase-2 rust-19: a `Str` (`string | undefined`) operand holds only a
+    // A `Str` (`string | undefined`) operand holds only a
     // string or the `Value::Null` the helper stringifies as "null" — the same
     // text `Display` produces — so it concatenates natively against an operand
     // the checker proves is ALWAYS a string.
@@ -1829,7 +1837,7 @@ describe('rust error constructor message arguments', () => {
     });
 });
 
-// B-31 — the runtime `Value::Str` payload is a `Cow<'static, str>`: a string
+// The runtime `Value::Str` payload is a `Cow<'static, str>`: a string
 // literal borrows its `&'static str` (`Value::Str("lit".into())`, zero
 // allocation) instead of allocating a `String`, so `.clone()` on a literal
 // box is a pointer copy.
@@ -1863,8 +1871,6 @@ describe('rust borrowed string literals (Cow payload)', () => {
 });
 
 describe('rust native dict inserts', () => {
-    const insert = (receiver: string, key: string, value: string) =>
-        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
     const dynamic = (receiver: string, key: string, value: string) =>
         `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert(crate::runtime::stringify_param(&${key}), ${value}); }`;
 
@@ -2207,7 +2213,7 @@ describe('rust truthiness sinks take the bare bool', () => {
     });
 });
 
-// B-26: the condition printer's last resort wraps an operand no earlier branch
+// The condition printer's last resort wraps an operand no earlier branch
 // claimed. A parenthesised comparison the checker proved native (or the
 // `Value::Bool(…)` the printer boxes it in for a `Value` slot) is already a Rust
 // `bool`, so `is_true(&(…))` — the identity over `IsTruthy for bool` — is dropped.
@@ -2798,7 +2804,7 @@ describe('rust native equality on declared reads', () => {
     });
 });
 
-describe('rust declared-Dict locals (rust-25)', () => {
+describe('rust declared-Dict locals: table and census', () => {
     // The declared-Dict table answers `rustDeclaredLocalTypeResolver(node)` for a
     // local the printer itself can prove holds a `Value::Dict` at every use: the
     // initialiser is a `safe_dict*` call whose default is itself Dict-proven, or
@@ -3293,7 +3299,7 @@ describe('rust typed-parameter dict reads', () => {
     });
 });
 
-describe('rust native container reads (B-28)', () => {
+describe('rust native container reads on typed receivers', () => {
     // A dynamic (non-literal) index into a checker-proven list reads natively,
     // a declared Dict local produced by `this.client(url)` reads its `url`
     // field natively, and a read the ccxt write passes have to see keeps the
@@ -3586,7 +3592,7 @@ describe('rust destructure over an array-returning callee', () => {
     });
 });
 
-describe('rust parameter shadows (D-25)', () => {
+describe('rust parameter shadows', () => {
     const DICT_DECL =
         "interface Dictionary<T> { [key: string]: T; }\n" +
         "type Dict = Dictionary<any>;\n";
@@ -3692,7 +3698,7 @@ describe('rust parameter shadows (D-25)', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).not.toContain('__data_empty');
-        // the boxed write is D-31's native insert on the (unshadowed) Value
+        // the boxed write is the native insert on the (unshadowed) Value
         expect(output).toContain('if let Value::Dict(__d) = &mut data { std::sync::Arc::make_mut(__d).insert("id".into(), Value::Int(1)); };');
     });
 
@@ -3816,7 +3822,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
     });
 });
 
-describe('rust typed-receiver native reads (D-28)', () => {
+describe('rust typed-receiver native reads', () => {
     // A dynamic-key read on a checker-proven map local (not only on an
     // annotated parameter) reads natively, and a local/parameter read stays
     // native inside the args of a `&mut self` call while a `this`-field read
@@ -3903,7 +3909,7 @@ describe('rust typed-receiver native reads (D-28)', () => {
         expect(output).toContain('dict.get(key.as_str().unwrap_or("")).cloned().unwrap_or(Value::Null)');
         expect(output).toContain('return self.extend(Value::Map(dict.clone()), Value::Map({');
         expect(output).not.toContain('dict.as_map().and_then(|__m| key.as_str()');
-        // the List parameter is shadowed (D-25), so the index reads on the borrowed slice
+        // the List parameter is shadowed, so the index reads on the borrowed slice
         expect(output).toContain('items.get(0).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(&dict, &key)');
     });
@@ -3924,11 +3930,11 @@ describe('rust typed-receiver native reads (D-28)', () => {
     });
 });
 
-describe('rust pro-tier handler message shadow (D-27)', () => {
+describe('rust pro-tier handler message shadow', () => {
     // `Client` is a class in the pro tier (base/ws/Client.ts); the shadow is
     // scoped to the `handle_x (client: Client, message: Dict)` shape.
-    // A parameter whose every use is a read gets the D-25 borrowed shadow instead;
-    // the handler view fires when the message is also passed on (a move the D-25
+    // A parameter whose every use is a read gets the borrowed parameter shadow instead;
+    // the handler view fires when the message is also passed on (a move the parameter
     // census rejects), so these fixtures forward the frame to the client.
     const DECLS =
         "interface Dictionary<T> { [key: string]: T; }\n" +
@@ -4007,7 +4013,7 @@ describe('rust pro-tier handler message shadow (D-27)', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        // read-only Dict param: the D-25 shadow prints the read, never the handler view
+        // read-only Dict param: the parameter shadow prints the read, never the handler view
         expect(output).toContain('let message = message.as_map().unwrap_or(&__message_empty);');
         expect(output).not.toContain('__pro_message');
     });
@@ -4107,8 +4113,6 @@ describe('rust order book sides keep the runtime helpers', () => {
 });
 
 describe('native element writes on plain-dict locals', () => {
-    const insert = (receiver: string, key: string, value: string) =>
-        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
     let output = '';
     beforeAll(() => {
         output = transpiler.transpileRustByPath('./tests/files/input/hx4r01/ts/src/venue.ts').content;
@@ -4488,8 +4492,6 @@ describe('relaxed Vec locals and native list length', () => {
 });
 
 describe('safeDict / builder plain dicts and bool-value truthiness', () => {
-    const insert = (receiver: string, key: string, value: string) =>
-        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
     let output = '';
     beforeAll(() => {
         output = transpiler.transpileRustByPath('./tests/files/input/hx4r12/ts/src/venue.ts').content;
@@ -4842,8 +4844,6 @@ describe('inline math/comparison dispatch and Str|Null field concat', () => {
 });
 
 describe('tuple slot-1 params of base handle*AndParams helpers', () => {
-    const insert = (receiver: string, key: string, value: string) =>
-        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
     let rest = '';
     let pro = '';
     beforeAll(() => {
@@ -4959,13 +4959,7 @@ describe('native `bool` parameters', () => {
 });
 
 describe('typed dict bearers', () => {
-    const wrap = (body: string, params = 'v: any') => `class T {
-    parseX (x) { return x; }
-    f (${params}) {
-${body}
-    }
-}`;
-    const rs = (body: string, params?: string) => transpiler.transpileRust(wrap(body, params)).content;
+    const rs = rustInParseXClass;
 
     test('a literal-only dict local is a bare IndexMap with native reads and inserts', () => {
         const out = rs("        const request = { 'type': 'limit' };\n        request['symbol'] = v;\n        const sym = request['symbol'];\n        return sym;");
@@ -5050,13 +5044,7 @@ describe('bool locals into native-`bool` slots', () => {
 });
 
 describe('bearer write shapes', () => {
-    const wrap = (body: string, params = 'v: any') => `class T {
-    parseX (x) { return x; }
-    f (${params}) {
-${body}
-    }
-}`;
-    const rs = (body: string, params?: string) => transpiler.transpileRust(wrap(body, params)).content;
+    const rs = rustInParseXClass;
 
     test('a string-proven computed key writes the bare map', () => {
         const out = rs("        const m = {};\n        m['a' + k] = v;\n        return m;", 'v: any, k: string');
@@ -5116,13 +5104,7 @@ ${body}
 });
 
 describe('read-only container bearers', () => {
-    const wrap = (body: string, params = 'v: any') => `class T {
-    parseX (x) { return x; }
-    f (${params}) {
-${body}
-    }
-}`;
-    const rs = (body: string, params?: string) => transpiler.transpileRust(wrap(body, params)).content;
+    const rs = rustInParseXClass;
 
     test('a split local is a Vec<Value> with closure-free native reads', () => {
         const out = rs("        const parts = v.split ('-');\n        const a = parts[0];\n        const b = parts[1];\n        return a;");
@@ -5183,13 +5165,7 @@ ${body}
 });
 
 describe('two-level dict bearers', () => {
-    const wrap = (body: string, params = 'v: any') => `class T {
-    parseX (x) { return x; }
-    f (${params}) {
-${body}
-    }
-}`;
-    const rs = (body: string, params?: string) => transpiler.transpileRust(wrap(body, params)).content;
+    const rs = rustInParseXClass;
 
     test('an object-of-objects local is a nested IndexMap with native write and move', () => {
         const out = rs("        const request = { 'params': {} };\n        request['params']['limit'] = v;\n        return request;");
@@ -6311,5 +6287,47 @@ describe ('rustPredictionBearers', () => {
             expect(rest).toContain('self.use(Value::Map(orderAction.clone()))');
             expect(rest).toContain('Value::Map(orderAction));');
         });
+    });
+});
+
+describe('rust dynamic self access and optional-argument slices', () => {
+    const base = 'ts/src/base/Exchange.ts';
+    const fixture = (rel: string, text: string): string => {
+        const out = path.join(rustFixtureRoot, 'variadic', rel);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, text);
+        return out;
+    };
+    let venue = '';
+    beforeAll(() => {
+        fixture(base, 'export default class Exchange {\n'
+            + '    safeStringUpperN (o: any, k: any, d: any = undefined): any { return o; }\n'
+            + '    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n'
+            + '    parseLiquidation (order: any, market: any = undefined): any { return order; }\n'
+            + '}\n');
+        const file = fixture('ts/src/venue.ts', "import Exchange from './base/Exchange.js';\n"
+            + 'export default class venue extends Exchange {\n'
+            + '    async run (name: string, key: string, o: any) {\n'
+            + '        const r = await this[name] (o);\n'
+            + '        const v = this[key];\n'
+            + "        const s = this.safeStringUpperN (o, 'id');\n"
+            + '        const p = this.parseLiquidation (o);\n'
+            + '        return [ r, v, s, p ];\n'
+            + '    }\n'
+            + '}\n');
+        venue = transpiler.transpileRustByPath(file).content;
+    });
+    test('this[name](args) dispatches by name with cloned arguments', () => {
+        expect(venue).toContain('self.call_dynamic_checked(name.clone(), vec![(o).clone()])');
+    });
+    test('a this[key] read resolves the field by name', () => {
+        expect(venue).toContain('self.prop(&key)');
+        expect(venue).not.toContain('get_value(&self');
+    });
+    test('a hand-written base helper folds past its runtime arity', () => {
+        expect(venue).toContain('self.safeStringUpperN(o.clone(), Value::Str("id".into()), &[])');
+    });
+    test('a transpiled base method folds its optional parameters', () => {
+        expect(venue).toContain('self.parseLiquidation(o.clone(), &[])');
     });
 });
