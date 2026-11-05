@@ -19069,6 +19069,16 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     // the variable declaration an identifier binds to, through the checker (undefined for every
     // other shape) — the market rule resolves its own locals this way, never by printed name
+    // the parameter an identifier reads, or undefined for any other binding
+    goParameterOfIdentifier(node): any {
+        try {
+            const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+            return (declaration?.kind === SyntaxKind.Parameter) ? declaration : undefined;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
     goDeclarationOfIdentifier(node): any {
         try {
             const symbol = this.getChecker().getSymbolAtLocation(node);
@@ -31085,7 +31095,7 @@ ${tryBodyBlock}
         case SyntaxKind.AsExpression:
             return this.goKeyIsString(node.expression, printed);
         case SyntaxKind.Identifier:
-            return this.goDeclaredTypeOfIdentifier(node) === 'string';
+            return (this.goDeclaredTypeOfIdentifier(node) === 'string') || (this.goGetArgParameterType(this.goParameterOfIdentifier(node)) === 'string');
         case SyntaxKind.CallExpression:
             return this.goTypeOfInitializer(node, printed) === 'string';
         case SyntaxKind.ElementAccessExpression: // an element of a declared `[]string` local, printed as the slice index, is a Go string

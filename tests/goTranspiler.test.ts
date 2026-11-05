@@ -7481,6 +7481,13 @@ describe('`key in dict` as a native two-value map read', () => {
         expect(output).not.toContain('InOp(this.Urls');
         expect(output).not.toContain('InOp(this.HttpExceptions');
     });
+    test('a string GetArg parameter indexes a base map field natively', () => {
+        const transpiler: any = new Transpiler({ verbose: false });
+        installCcxtGoHooks(transpiler.goTranspiler);
+        const output = transpiler.transpileGo('class T {\n    timeframes = {};\n    f (symbol: string, timeframe = \'1m\') {\n        return { \'interval\': this.timeframes[timeframe] };\n    }\n}\n').content;
+        expect(output).toContain('"interval": this.Timeframes[timeframe],');
+        expect(output).not.toContain('GetValue(this.Timeframes');
+    });
     test('a Balance entry compares natively against undefined', () => {
         const output = new Transpiler({ verbose: false }).transpileGo('class Exchange {\n    balance = {};\n    options = {};\n    f () {\n        const k = \'spot\';\n        if (this.balance[k] === undefined) {\n            this.balance[k] = {};\n        }\n        return (this.balance[k] !== undefined) && (this.options[k] === undefined);\n    }\n}\n').content;
         expect(output).toContain('if this.Balance[k] == nil {');
