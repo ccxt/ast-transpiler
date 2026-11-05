@@ -1,48 +1,9 @@
 import { assert } from 'console';
-import { installFmGo5G04, Transpiler, alignGoTrailingComments, installCcxtGoHooks } from '../src/transpiler';
-
+import { Transpiler, alignGoTrailingComments, goDictParamTypesSelfTest, goDynamicCallParamsCheck, goHandleErrorsCodeSelfTest, goNilJoinTypeSelfTest, goParseFrameParamTypesSelfTest, installCcxtGoDictParams, installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoSignTyping, installFmGo5G01, installFmGo5G04, installFmGo5GP08, installFmGo5OG02, installRfGo5OwnedTables } from '../src/transpiler';
 import { SyntaxKind } from 'typescript/unstable/ast';
-import { readFileSync } from 'fs';
-import * as nodefs from 'fs';
-import * as nodepath from 'path';
-import * as nodeos from 'os';
-import { installFmGo5G01 } from '../src/transpiler';
-import { installCcxtGoLocalTypes } from '../src/transpiler';
-import { installFmGo5GP08 } from '../src/transpiler';
-import { installFmGo5OG02 } from '../src/transpiler';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { installCcxtGoHooks as installCcxtGoHooksFromGoModule } from '../src/goTranspiler';
-import fs__goToStringNativeArms from 'fs';
-import os__goToStringNativeArms from 'os';
-import path__goToStringNativeArms from 'path';
-import fs__goTypedSliceArgs from 'fs';
-import os__goTypedSliceArgs from 'os';
-import path__goTypedSliceArgs from 'path';
-import { installCcxtGoSignTyping } from '../src/transpiler';
-import { goDynamicCallParamsCheck } from '../src/transpiler';
-import { goDictParamTypesSelfTest } from '../src/transpiler';
-import { goParseFrameParamTypesSelfTest } from '../src/transpiler';
-import { goHandleErrorsCodeSelfTest } from '../src/transpiler';
-import { goNilJoinTypeSelfTest } from '../src/transpiler';
-import fs__goAnySliceToList from 'fs';
-import os__goAnySliceToList from 'os';
-import path__goAnySliceToList from 'path';
-import fs__goEndpointReceiveTypedView from 'fs';
-import os__goEndpointReceiveTypedView from 'os';
-import path__goEndpointReceiveTypedView from 'path';
-import fs__goBaseMapLocals from 'fs';
-import os__goBaseMapLocals from 'os';
-import path__goBaseMapLocals from 'path';
-import { installCcxtGoDictParams } from '../src/transpiler';
-import { installRfGo5OwnedTables } from '../src/transpiler';
-import fs__rfmG4G21 from 'fs';
-import os__rfmG4G21 from 'os';
-import path__rfmG4G21 from 'path';
-import fs__rfmG4GB08 from 'fs';
-import os__rfmG4GB08 from 'os';
-import path__rfmG4GB08 from 'path';
 
 jest.mock('module',()=>({
     __esModule: true,                 // this makes it work
@@ -6384,24 +6345,24 @@ describe('native parameter types across the ts/src tree (B-02)', () => {
         "}\n";
 
     const treeFor = (name: string, proCall: string) => {
-        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
-        nodefs.mkdirSync(nodepath.join(src, 'base'), { recursive: true });
-        nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
-        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
-        nodefs.writeFileSync(nodepath.join(src, 'ex.ts'), EX_FIXTURE);
-        nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'),
+        const src = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+        fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        fs.writeFileSync(path.join(src, 'ex.ts'), EX_FIXTURE);
+        fs.writeFileSync(path.join(src, 'pro', 'ex.ts'),
             "import { ex } from '../ex';\n" +
             "export class expro extends ex {\n" +
             "    use () {\n" +
             "        return " + proCall + ";\n" +
             "    }\n" +
             "}\n");
-        return nodepath.join(src, 'ex.ts');
+        return path.join(src, 'ex.ts');
     };
 
     afterAll(() => {
-        nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-b02-tree'), { recursive: true, force: true });
-        nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-b02-tree-neg'), { recursive: true, force: true });
+        fs.rmSync(path.join(__dirname, 'files', 'tmp-b02-tree'), { recursive: true, force: true });
+        fs.rmSync(path.join(__dirname, 'files', 'tmp-b02-tree-neg'), { recursive: true, force: true });
     });
 
     test('a proven sibling call site types the parameter', () => {
@@ -6418,11 +6379,11 @@ describe('native parameter types across the ts/src tree (B-02)', () => {
 
     test('a sibling caller passing its own any parameter keeps a local string parameter any on the relative driver path', () => {
         const name = 'tmp-b02-tree-anyarg';
-        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
-        nodefs.mkdirSync(nodepath.join(src, 'base'), { recursive: true });
-        nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
-        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
-        nodefs.writeFileSync(nodepath.join(src, 'ex.ts'),
+        const src = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+        fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        fs.writeFileSync(path.join(src, 'ex.ts'),
             "import { Exchange } from './base/Exchange';\n" +
             "export class ex extends Exchange {\n" +
             "    async createOrder (symbol: string, side: string) {\n" +
@@ -6432,7 +6393,7 @@ describe('native parameter types across the ts/src tree (B-02)', () => {
             "        return symbol + side;\n" +
             "    }\n" +
             "}\n");
-        nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'),
+        fs.writeFileSync(path.join(src, 'pro', 'ex.ts'),
             "import { ex } from '../ex';\n" +
             "export class expro extends ex {\n" +
             "    async createOrderWs (symbol: string, side: string) {\n" +
@@ -6442,11 +6403,11 @@ describe('native parameter types across the ts/src tree (B-02)', () => {
         const cwd = process.cwd();
         let output;
         try {
-            process.chdir(nodepath.join(__dirname, 'files', name));
+            process.chdir(path.join(__dirname, 'files', name));
             output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath('ts/src/ex.ts').content;
         } finally {
             process.chdir(cwd);
-            nodefs.rmSync(nodepath.join(__dirname, 'files', name), { recursive: true, force: true });
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
         }
         expect(output).toMatch(/func \(this \*ex\) OrderRequest\(symbol any, side any\)/);
     });
@@ -6712,24 +6673,24 @@ describe('native parameter types, Dict/List across the ts/src tree (D-01)', () =
         "}\n";
 
     const treeFor = (name: string, proCall: string) => {
-        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
-        nodefs.mkdirSync(nodepath.join(src, 'base'), { recursive: true });
-        nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
-        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
-        nodefs.writeFileSync(nodepath.join(src, 'ex.ts'), EX_FIXTURE);
-        nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'),
+        const src = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+        fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        fs.writeFileSync(path.join(src, 'ex.ts'), EX_FIXTURE);
+        fs.writeFileSync(path.join(src, 'pro', 'ex.ts'),
             "import { ex } from '../ex';\n" +
             "export class expro extends ex {\n" +
             "    use () {\n" +
             "        return " + proCall + ";\n" +
             "    }\n" +
             "}\n");
-        return nodepath.join(src, 'ex.ts');
+        return path.join(src, 'ex.ts');
     };
 
     afterAll(() => {
-        nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-d01-tree'), { recursive: true, force: true });
-        nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-d01-tree-neg'), { recursive: true, force: true });
+        fs.rmSync(path.join(__dirname, 'files', 'tmp-d01-tree'), { recursive: true, force: true });
+        fs.rmSync(path.join(__dirname, 'files', 'tmp-d01-tree-neg'), { recursive: true, force: true });
     });
 
     test('a sibling call site passing an object literal proves the parameter', () => {
@@ -6750,10 +6711,10 @@ describe('native parameter types, Dict/List across the ts/src tree (D-01)', () =
         // WITHOUT a leading `./`, which a `/ts/src/base/` substring test misses — and the
         // base signature then disagrees with every prediction caller that passes `any`
         const name = 'tmp-d01-base';
-        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
-        nodefs.mkdirSync(nodepath.join(src, 'base'), { recursive: true });
-        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
-        nodefs.writeFileSync(nodepath.join(src, 'base', 'PredictionExchange.ts'),
+        const src = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        fs.writeFileSync(path.join(src, 'base', 'PredictionExchange.ts'),
             "import { Exchange } from './Exchange';\n" +
             "type Dict = { [key: string]: any };\n" +
             "export default class PredictionExchange extends Exchange {\n" +
@@ -6767,11 +6728,11 @@ describe('native parameter types, Dict/List across the ts/src tree (D-01)', () =
         const cwd = process.cwd();
         let output;
         try {
-            process.chdir(nodepath.join(__dirname, 'files', name));
+            process.chdir(path.join(__dirname, 'files', name));
             output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath('ts/src/base/PredictionExchange.ts').content;
         } finally {
             process.chdir(cwd);
-            nodefs.rmSync(nodepath.join(__dirname, 'files', name), { recursive: true, force: true });
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
         }
         expect(output).toContain('func (this *PredictionExchange) ParseData(data any) any {');
         expect(output).toContain('return GetValue(data, "a")');
@@ -6783,12 +6744,12 @@ describe('native parameter types, Dict/List across the ts/src tree (D-01)', () =
         // declaration scan matched that literal and typed a parameter every real caller
         // passes as an `any` box (farm job 1053, buildGO)
         const name = 'tmp-d01-tree-shadow';
-        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
-        nodefs.mkdirSync(nodepath.join(src, 'base'), { recursive: true });
-        nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
-        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
-        nodefs.writeFileSync(nodepath.join(src, 'ex.ts'), EX_FIXTURE);
-        nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'),
+        const src = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+        fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        fs.writeFileSync(path.join(src, 'ex.ts'), EX_FIXTURE);
+        fs.writeFileSync(path.join(src, 'pro', 'ex.ts'),
             "import { ex } from '../ex';\n" +
             "export class expro extends ex {\n" +
             "    other () {\n" +
@@ -6799,9 +6760,9 @@ describe('native parameter types, Dict/List across the ts/src tree (D-01)', () =
             "        return this.parseData (data);\n" +
             "    }\n" +
             "}\n");
-        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(nodepath.join(src, 'ex.ts')).content;
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(path.join(src, 'ex.ts')).content;
         expect(output).toContain('func (this *ex) ParseData(data any) any {');
-        nodefs.rmSync(nodepath.join(__dirname, 'files', name), { recursive: true, force: true });
+        fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
     });
 });
 
@@ -6812,11 +6773,11 @@ describe('native parameter types, Dict/List across the ts/src tree (D-01)', () =
 describe('a list read bounded by its own counting loop is the plain index', () => {
     // the prediction tier (prediction/*.go) takes the same bounded-loop rule
     const predictionRead = (file: string): string => {
-        const dir = nodefs.mkdtempSync(nodepath.join(nodeos.tmpdir(), 'a-list-read-bounded-by-'));
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a-list-read-bounded-by-'));
         try {
-            const target = nodepath.join(dir, file);
-            nodefs.mkdirSync(nodepath.dirname(target), { recursive: true });
-            nodefs.writeFileSync(target,
+            const target = path.join(dir, file);
+            fs.mkdirSync(path.dirname(target), { recursive: true });
+            fs.writeFileSync(target,
                 "export class Test {\n" +
                 "    safeList (a, b, c?) { return undefined; }\n" +
                 "    f (a: any) {\n" +
@@ -6825,7 +6786,7 @@ describe('a list read bounded by its own counting loop is the plain index', () =
                 "        return a;\n    }\n}\n");
             return new Transpiler({ verbose: false, go: {} }).transpileGoByPath(target).content.replace(/[\t\n ]+/g, ' ');
         } finally {
-            nodefs.rmSync(dir, { recursive: true, force: true });
+            fs.rmSync(dir, { recursive: true, force: true });
         }
     };
 
@@ -7094,28 +7055,28 @@ describe('pro handler frame parameters (D-03)', () => {
         "import type { Dict } from '../base/types';\n";
 
     const treeFor = (name: string, pro: string, sibling?: string, base = true) => {
-        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
-        nodefs.mkdirSync(nodepath.join(src, 'base', 'ws'), { recursive: true });
-        nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
-        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
-        nodefs.writeFileSync(nodepath.join(src, 'base', 'ws', 'Client.ts'), CLIENT_FIXTURE);
-        nodefs.writeFileSync(nodepath.join(src, 'base', 'types.ts'), TYPES_FIXTURE);
+        const src = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base', 'ws'), { recursive: true });
+        fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        fs.writeFileSync(path.join(src, 'base', 'ws', 'Client.ts'), CLIENT_FIXTURE);
+        fs.writeFileSync(path.join(src, 'base', 'types.ts'), TYPES_FIXTURE);
         if (base) {
-            nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'), PRO_HEADER + pro);
+            fs.writeFileSync(path.join(src, 'pro', 'ex.ts'), PRO_HEADER + pro);
         } else {
-            nodefs.writeFileSync(nodepath.join(src, 'ex.ts'), pro);
+            fs.writeFileSync(path.join(src, 'ex.ts'), pro);
         }
         if (sibling !== undefined) {
-            nodefs.writeFileSync(nodepath.join(src, 'pro', 'derived.ts'), sibling);
+            fs.writeFileSync(path.join(src, 'pro', 'derived.ts'), sibling);
         }
-        return base ? nodepath.join(src, 'pro', 'ex.ts') : nodepath.join(src, 'ex.ts');
+        return base ? path.join(src, 'pro', 'ex.ts') : path.join(src, 'ex.ts');
     };
 
     afterAll(() => {
-        const files = nodefs.readdirSync(nodepath.join(__dirname, 'files'));
+        const files = fs.readdirSync(path.join(__dirname, 'files'));
         for (const entry of files) {
             if (entry.startsWith('tmp-d03-')) {
-                nodefs.rmSync(nodepath.join(__dirname, 'files', entry), { recursive: true, force: true });
+                fs.rmSync(path.join(__dirname, 'files', entry), { recursive: true, force: true });
             }
         }
     });
@@ -7514,7 +7475,7 @@ describe('go GetValue on GetArgMap-bound parameters: element-write values', () =
 });
 
 describe('IsEqual(x, nil) on any locals fed by base safeValue / ws caches', () => {
-    const root = nodepath.join(__dirname, 'files', 'tmp-isequal-x-nil-on-any', 'ts', 'src');
+    const root = path.join(__dirname, 'files', 'tmp-isequal-x-nil-on-any', 'ts', 'src');
     const BASE = "export class Exchange {\n" +
         "    options: any = {};\n" +
         "    safeValue (o: any, k: any, d: any = undefined): any { return d; }\n" +
@@ -7522,16 +7483,16 @@ describe('IsEqual(x, nil) on any locals fed by base safeValue / ws caches', () =
         "    safeString (o: any, k: any, d: any = undefined): string { return d; }\n" +
         "}\n";
     const write = (body: string, extra = ''): string => {
-        nodefs.mkdirSync(nodepath.join(root, 'base'), { recursive: true });
-        nodefs.writeFileSync(nodepath.join(root, 'base', 'Exchange.ts'), BASE);
-        const file = nodepath.join(root, 'ex.ts');
-        nodefs.writeFileSync(file, "import { Exchange } from './base/Exchange';\n" +
+        fs.mkdirSync(path.join(root, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'base', 'Exchange.ts'), BASE);
+        const file = path.join(root, 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange } from './base/Exchange';\n" +
             "class ArrayCache { constructor (n: any) {} }\n" +
             "export class ex extends Exchange {\n" + extra +
             "    f (p: any) {\n" + body + "        return 0;\n    }\n}\n");
         return new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
     };
-    afterAll(() => nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-isequal-x-nil-on-any'), { recursive: true, force: true }));
+    afterAll(() => fs.rmSync(path.join(__dirname, 'files', 'tmp-isequal-x-nil-on-any'), { recursive: true, force: true }));
 
     test('a base safeValue local compares natively', () => {
         const out = write("        const v = this.safeValue (p, 'a');\n        if (v === undefined) { return 1; }\n        if (v !== undefined) { return 2; }\n");
@@ -8097,11 +8058,11 @@ describe('PredictionExchange cache fields declared map[string]any print natively
     });
 });
 
-// FM-A9F L1: the ws caches BaseExchange owns (orderbooks / ohlcvs / trades / fundingRates) are plain Go
+// the ws caches BaseExchange owns (orderbooks / ohlcvs / trades / fundingRates) are plain Go
 // map fields, so a reset through createSafeDictionary prints the map literal, never the sync.Map-backed
 // dictionary a map field cannot hold. Keyed on the checker declaration (a property of the base exchange
 // class), not on the printed field name.
-describe('go ws cache field init (FM-A9F L1)', () => {
+describe('go ws cache field init', () => {
     const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
     test('the four cache fields reset to a map literal', () => {
         const input =
@@ -8235,7 +8196,7 @@ describe('go literal-defaulted safeString locals are strings', () => {
     });
 });
 
-describe('FM-A9F L3: negated lookups hoisted out of an || chain, indexed ws book receivers', () => {
+describe('go negated lookups hoisted out of an || chain, indexed ws book receivers', () => {
     const head = 'type Str = string | undefined;\nclass T {\n    markets_by_id = {};\n    ohlcvs = {};\n    clients = {};\n    safeString (o, k, d = undefined): Str { return o[k]; }\n    safeDict (o, k, d = undefined) { return o[k]; }\n';
     const go = (body: string) => new Transpiler({ verbose: false }).transpileGo(head + body + '}\n').content;
     // the market tables are BaseExchange fields: their nil test is keyed on that declaration
@@ -8292,7 +8253,7 @@ describe('FM-A9F L3: negated lookups hoisted out of an || chain, indexed ws book
     test('a literal-default *string book index is a plain string at the read', () => {
         const output = go("    k (o: any) {\n        const symbol = this.safeString (o, 's', '');\n        const timeframe = this.safeString (o, 'tf');\n        if (timeframe === undefined) {\n            return 0;\n        }\n        if (timeframe in this.ohlcvs[symbol]) {\n            return 1;\n        }\n        return 0;\n    }\n");
         // queue r5 union with the safestring-default-local rule: a literal-defaulted safeString local is a plain Go string,
-        // so the book index reads `symbol` without the deref the *string typing of the A9F-L3 branch needed
+        // so the book index reads `symbol` without the deref the *string typing of the hoisted branch needed
         expect(output).toContain('if _, ok := this.Ohlcvs[symbol][*timeframe]; ok {');
         expect(output).not.toContain('this.Ohlcvs[*symbol]');
     });
@@ -8541,7 +8502,7 @@ describe ('goMarketsAccessorInOp', () => {
 });
 
 describe ('goWsCaches', () => {
-    // FM-CACHE: the ws list caches. A BaseExchange field declared `ArrayCache` is the Go WsArrayCache field and
+    // the ws list caches. A BaseExchange field declared `ArrayCache` is the Go WsArrayCache field and
     // `Dictionary<ArrayCache>` the TradesCache; locals, closures and parameters that provably hold them are typed
     // WsArrayCache, `.append` on such a receiver is the plain interface method (the Appender assertion otherwise),
     // and the cache's own Get / Has / Store and nil compares print instead of the dictionary helpers.
@@ -8579,21 +8540,21 @@ describe ('goWsCaches', () => {
     ].join ('\n');
 
     function print (name: string, pro: string): string {
-        const src = nodepath.join (__dirname, 'files', name, 'ts', 'src');
-        nodefs.mkdirSync (nodepath.join (src, 'base'), { recursive: true });
-        nodefs.mkdirSync (nodepath.join (src, 'pro'), { recursive: true });
-        nodefs.writeFileSync (nodepath.join (src, 'base', 'Exchange.ts'), BASE_FIXTURE);
-        nodefs.writeFileSync (nodepath.join (src, 'pro', 'ex.ts'), HEADER + pro);
+        const src = path.join (__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync (path.join (src, 'base'), { recursive: true });
+        fs.mkdirSync (path.join (src, 'pro'), { recursive: true });
+        fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        fs.writeFileSync (path.join (src, 'pro', 'ex.ts'), HEADER + pro);
         const t = new Transpiler ({ verbose: false, go: {} });
         installCcxtGoHooks (t.goTranspiler);
-        return t.transpileGoByPath (nodepath.join (src, 'pro', 'ex.ts')).content;
+        return t.transpileGoByPath (path.join (src, 'pro', 'ex.ts')).content;
     }
 
     afterAll (() => {
-        const dir = nodepath.join (__dirname, 'files');
-        for (const entry of nodefs.readdirSync (dir)) {
+        const dir = path.join (__dirname, 'files');
+        for (const entry of fs.readdirSync (dir)) {
             if (entry.startsWith ('tmp-fmcache-')) {
-                nodefs.rmSync (nodepath.join (dir, entry), { recursive: true, force: true });
+                fs.rmSync (path.join (dir, entry), { recursive: true, force: true });
             }
         }
     });
@@ -8753,7 +8714,7 @@ describe ('goWsCaches', () => {
         "}",
     ].join ("\n");
 
-    describe ('go ws list caches (FM-CACHE)', () => {
+    describe ('go ws list caches', () => {
         const out = print ('tmp-fmcache-a', TRADES_AND_ORDERS);
         const pruned = print ('tmp-fmcache-b', PRUNE_AND_NILS);
         test ('base cache fields type their locals and nil compares are plain', () => {
@@ -9334,7 +9295,6 @@ describe ('goWsCacheFields', () => {
 });
 
 describe ('goPrintedMapLocalStores', () => {
-    const installCcxtGoHooks = installCcxtGoHooksFromGoModule;
     // a native `m[k] = v` store on a map local the printer declares itself,
     // behind the nil test the helper applied; `(k as string)` keys; Trade / TransferEntry rows boxed to their map;
     // the params slot of a base tuple helper.
@@ -10447,14 +10407,14 @@ describe ('goWsFrameParam', () => {
         "import type { Dict } from '../base/types';\n";
 
     function treeFor (name: string, pro: string): string {
-        const src = nodepath.join (__dirname, 'files', name, 'ts', 'src');
-        nodefs.mkdirSync (nodepath.join (src, 'base', 'ws'), { recursive: true });
-        nodefs.mkdirSync (nodepath.join (src, 'pro'), { recursive: true });
-        nodefs.writeFileSync (nodepath.join (src, 'base', 'Exchange.ts'), BASE_FIXTURE);
-        nodefs.writeFileSync (nodepath.join (src, 'base', 'ws', 'Client.ts'), CLIENT_FIXTURE);
-        nodefs.writeFileSync (nodepath.join (src, 'base', 'types.ts'), TYPES_FIXTURE);
-        nodefs.writeFileSync (nodepath.join (src, 'pro', 'ex.ts'), PRO_HEADER + pro);
-        return nodepath.join (src, 'pro', 'ex.ts');
+        const src = path.join (__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync (path.join (src, 'base', 'ws'), { recursive: true });
+        fs.mkdirSync (path.join (src, 'pro'), { recursive: true });
+        fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        fs.writeFileSync (path.join (src, 'base', 'ws', 'Client.ts'), CLIENT_FIXTURE);
+        fs.writeFileSync (path.join (src, 'base', 'types.ts'), TYPES_FIXTURE);
+        fs.writeFileSync (path.join (src, 'pro', 'ex.ts'), PRO_HEADER + pro);
+        return path.join (src, 'pro', 'ex.ts');
     }
 
     function goPath (name: string, pro: string): string {
@@ -10462,10 +10422,10 @@ describe ('goWsFrameParam', () => {
     }
 
     afterAll (() => {
-        const dir = nodepath.join (__dirname, 'files');
-        for (const entry of nodefs.readdirSync (dir)) {
+        const dir = path.join (__dirname, 'files');
+        for (const entry of fs.readdirSync (dir)) {
             if (entry.startsWith ('tmp-gowsframeparam-')) {
-                nodefs.rmSync (nodepath.join (dir, entry), { recursive: true, force: true });
+                fs.rmSync (path.join (dir, entry), { recursive: true, force: true });
             }
         }
     });
@@ -10756,20 +10716,20 @@ describe ('goNilProvenStringArg', () => {
             "import type { Dict } from '../base/types';\n";
 
         const treeFor = (name: string, pro: string) => {
-            const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
-            nodefs.mkdirSync(nodepath.join(src, 'base', 'ws'), { recursive: true });
-            nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
-            nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
-            nodefs.writeFileSync(nodepath.join(src, 'base', 'ws', 'Client.ts'), 'export class Client { receive () { return undefined; } }\n');
-            nodefs.writeFileSync(nodepath.join(src, 'base', 'types.ts'), 'export type Dict = {[key: string]: any};\n');
-            nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'), PRO_HEADER + pro);
-            return nodepath.join(src, 'pro', 'ex.ts');
+            const src = path.join(__dirname, 'files', name, 'ts', 'src');
+            fs.mkdirSync(path.join(src, 'base', 'ws'), { recursive: true });
+            fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+            fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+            fs.writeFileSync(path.join(src, 'base', 'ws', 'Client.ts'), 'export class Client { receive () { return undefined; } }\n');
+            fs.writeFileSync(path.join(src, 'base', 'types.ts'), 'export type Dict = {[key: string]: any};\n');
+            fs.writeFileSync(path.join(src, 'pro', 'ex.ts'), PRO_HEADER + pro);
+            return path.join(src, 'pro', 'ex.ts');
         };
 
         afterAll(() => {
-            for (const entry of nodefs.readdirSync(nodepath.join(__dirname, 'files'))) {
+            for (const entry of fs.readdirSync(path.join(__dirname, 'files'))) {
                 if (entry.startsWith('tmp-derefStringArg-')) {
-                    nodefs.rmSync(nodepath.join(__dirname, 'files', entry), { recursive: true, force: true });
+                    fs.rmSync(path.join(__dirname, 'files', entry), { recursive: true, force: true });
                 }
             }
         });
@@ -10849,9 +10809,6 @@ describe ('goNilProvenStringArg', () => {
 });
 
 describe ('goToStringNativeArms', () => {
-    const fs = fs__goToStringNativeArms;
-    const os = os__goToStringNativeArms;
-    const path = path__goToStringNativeArms;
     // `x.toString()` prints the native op when the receiver's Go type is one the
     // helper reproduces exactly — int (Itoa), int64 and a non-nil `*int64` (FormatInt), bool
     // (FormatBool), []string (bracket-join) — and the helper call otherwise. The generated
@@ -11219,9 +11176,6 @@ describe ('goRedundantMapTyped', () => {
 });
 
 describe ('goTypedSliceArgs', () => {
-    const fs = fs__goTypedSliceArgs;
-    const os = os__goTypedSliceArgs;
-    const path = path__goTypedSliceArgs;
     // typed array-literal call arguments plus the slice mirror of the string table.
     // `[ sym ]` at a `string[]` slot must print `[]string{sym}` (and `len(symbols)` for its length)
     // instead of a `[]any{...}` box, and the table may only type a method whose declarations and
@@ -11715,8 +11669,8 @@ describe ('goPrinterHooks', () => {
             expect (t.transpileGo (SIGN).content).toContain ('api[0]');
         });
         test.each ([
-            [ 'G06', goNilJoinTypeSelfTest ], [ 'G08', goDynamicCallParamsCheck ], [ 'GB01', goDictParamTypesSelfTest ],
-            [ 'GB05', goParseFrameParamTypesSelfTest ], [ 'GB11', goHandleErrorsCodeSelfTest ],
+            [ 'nil-join types', goNilJoinTypeSelfTest ], [ 'dynamic call params', goDynamicCallParamsCheck ], [ 'dict params', goDictParamTypesSelfTest ],
+            [ 'parse-frame params', goParseFrameParamTypesSelfTest ], [ 'handleErrors code', goHandleErrorsCodeSelfTest ],
         ])('%s self-check (base vs hooked printer) reports no problems', (_name, check) => {
             expect ((check as () => string[]) ()).toEqual ([]);
         });
@@ -11781,19 +11735,19 @@ describe ('goGeneralParamRules', () => {
             expect(out).toContain('GetType(url string)');
         });
         test('a sibling passthrough of a unified-string parameter proves a builder parameter only when the pattern names it', () => {
-            const dir = nodepath.join(__dirname, 'files', 'tmp-rf-go-7', 'ts', 'src');
-            nodefs.mkdirSync(nodepath.join(dir, 'pro'), { recursive: true });
-            nodefs.writeFileSync(nodepath.join(dir, 'ex.ts'),
+            const dir = path.join(__dirname, 'files', 'tmp-rf-go-7', 'ts', 'src');
+            fs.mkdirSync(path.join(dir, 'pro'), { recursive: true });
+            fs.writeFileSync(path.join(dir, 'ex.ts'),
                 'class Exchange {}\nexport class ex extends Exchange {\n    buildRequest (symbol: string): string {\n        return symbol.toUpperCase ();\n    }\n    plain (symbol: string): string {\n        return symbol.toUpperCase ();\n    }\n}\n');
-            nodefs.writeFileSync(nodepath.join(dir, 'pro', 'ex.ts'),
+            fs.writeFileSync(path.join(dir, 'pro', 'ex.ts'),
                 "import ex from '../ex.js';\nexport default class exs extends ex {\n    async createOrderWs (symbol: string, type: string) {\n        const a = this.buildRequest (symbol);\n        const b = this.plain (symbol);\n        return [ a, b ];\n    }\n}\n");
-            const run = (extra: any) => new Transpiler(config(Object.assign({ 'unifiedStringParams': { 'createOrderWs': [ 0, 1 ] } }, extra))).transpileGoByPath(nodepath.join(dir, 'ex.ts')).content;
+            const run = (extra: any) => new Transpiler(config(Object.assign({ 'unifiedStringParams': { 'createOrderWs': [ 0, 1 ] } }, extra))).transpileGoByPath(path.join(dir, 'ex.ts')).content;
             const on = run({ 'siblingStringPassthroughPattern': '^build\\w*Request$' });
             expect(on).toContain('BuildRequest(symbol string)');
             expect(on).toContain('Plain(symbol any)');
             expect(run({})).toContain('BuildRequest(symbol any)');
         });
-        afterAll(() => nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-rf-go-7'), { recursive: true, force: true }));
+        afterAll(() => fs.rmSync(path.join(__dirname, 'files', 'tmp-rf-go-7'), { recursive: true, force: true }));
         test('an uncalled table method types its required string params; a stranger stays boxed', () => {
             const ts = 'class Exchange {}\n' +
                 'class ex extends Exchange {\n' +
@@ -12155,9 +12109,6 @@ describe ('goWatchTickersRow', () => {
 });
 
 describe ('goAnySliceToList', () => {
-    const fs = fs__goAnySliceToList;
-    const os = os__goAnySliceToList;
-    const path = path__goAnySliceToList;
     // An awaited list local that the printer declares `[]any` (goAwaitReceiveUnbox) reads its rows as xs[i]:
     // a `this.xs` field or `{ xs: v }` key of the same name is not a use of the local, and a callee whose
     // channel carries `[]map[string]any` has map rows, never a scalar box.
@@ -12307,9 +12258,6 @@ describe ('goPostPrintRules', () => {
 });
 
 describe ('goEndpointReceiveTypedView', () => {
-    const fs = fs__goEndpointReceiveTypedView;
-    const os = os__goEndpointReceiveTypedView;
-    const path = path__goEndpointReceiveTypedView;
     // a receive from an implicit endpoint whose declared type is the stub's EndpointResult
     // element reads the carrier's typed view (`.Checked()`, hoisted by ccxt's go-err pass to `rN.Value`)
     // instead of converting `.Raw` through MapTyped/ListTyped. The element comes from the receiver's own
@@ -12449,9 +12397,6 @@ describe ('goEndpointReceiveTypedView', () => {
 });
 
 describe ('goBaseMapLocals', () => {
-    const fs = fs__goBaseMapLocals;
-    const os = os__goBaseMapLocals;
-    const path = path__goBaseMapLocals;
     // `var x any = this.<M>(..)` where <M> is a BaseExchange method whose Go signature
     // (base, every override, IDerivedExchange) is `map[string]any` prints `var x map[string]any`. The callee
     // already hands back that map boxed into `any` (a nil map stays a typed nil in the box), so only the
@@ -12809,24 +12754,24 @@ describe ('goDictReturningCalls', () => {
         '}\n';
 
     const baseSignature = (name: string): string => {
-        const dir = nodepath.join(__dirname, 'files', name, 'ts', 'src');
-        nodefs.mkdirSync(nodepath.join(dir, 'base'), { recursive: true });
-        nodefs.writeFileSync(nodepath.join(dir, 'base', 'Exchange.ts'), BASE);
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'), BASE);
         return dir;
     };
 
     const printBase = (name: string, helperSignature: string): string => {
         const dir = baseSignature(name);
-        nodefs.writeFileSync(nodepath.join(dir, 'ex.ts'), venue(helperSignature));
+        fs.writeFileSync(path.join(dir, 'ex.ts'), venue(helperSignature));
         const t = new Transpiler({ verbose: false, go: {} });
         installCcxtGoDictParams(t.goTranspiler);
-        return t.transpileGoByPath(nodepath.join(dir, 'base', 'Exchange.ts')).content;
+        return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
     };
 
     describe('calls to same-tree methods declared : Dict', () => {
         afterAll(() => {
-            nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-calls-to-same-tree-methods-dict'), { recursive: true, force: true });
-            nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-calls-to-same-tree-methods-any'), { recursive: true, force: true });
+            fs.rmSync(path.join(__dirname, 'files', 'tmp-calls-to-same-tree-methods-dict'), { recursive: true, force: true });
+            fs.rmSync(path.join(__dirname, 'files', 'tmp-calls-to-same-tree-methods-any'), { recursive: true, force: true });
         });
 
         test('a call to a method declared : Dict proves the tabled map parameters', () => {
@@ -13696,9 +13641,6 @@ describe ('goUrlsViews', () => {
 });
 
 describe ('goPredictionAwaitedListReads', () => {
-    const fs = fs__rfmG4G21;
-    const os = os__rfmG4G21;
-    const path = path__rfmG4G21;
     // a prediction-tier `list[i]` inside
     // `for (let i = 0; i < list.length; i++)` where `list` is `const list = await this.fetchX (..)`
     // (the printer declares it `[]any` from the receive) and the awaited TS type is an array of
@@ -13806,9 +13748,6 @@ describe ('goPredictionAwaitedListReads', () => {
 });
 
 describe ('goPredictionBoundedListReads', () => {
-    const fs = fs__rfmG4GB08;
-    const os = os__rfmG4GB08;
-    const path = path__rfmG4GB08;
     // a prediction-tier `list[i]` inside `for (let i = 0; i < list.length; i++)` can never
     // leave the slice, so the guard closure (`func() any { if i >= 0 && i < len(list) { return
     // DerefScalar(list[i]) } return nil }()`) prints as the element itself, or as DerefScalar(list[i])
