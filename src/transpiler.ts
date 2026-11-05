@@ -842,5 +842,3 @@ export {
     goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest,
 };
 export type { RustDeclaredDictLocalEntry };
-// the rust final-text passes the ccxt build script runs after its own post-passes
-export { nativeGetValue, nativeInserts, nativeContainerOps, nativeBoolScalars, arrOnlyVecPush, rustTypedLocals, calleeShapeContainerOps, nativeBoolCallee, fieldChainInserts, rustVecPushInline, rustStringNatives, plainDictChains, clientHandleViews, mapParamKind, mapParamDispatchArg, mapParamSplitArgs, refMapParamNames, narrowStrSinkLocals, narrowStrNullLocals, rustSignApiStr, rustIntLocalNullSinkOptionI64, rustStrLiteralLocalNativeString, strLocalReassign, rustBoolKLocalOptionBool, rustBool2LocalOptionBool, rustBoolNLocalOptionBool, rustStr2LocalOptionString, rustNumber2LocalOptionF64, rustInt2IntNLocalOptionI64, rustStrNLocalOptionString, rustNumber2SinkLocalOptionF64R2 } from './rustTranspiler.js';

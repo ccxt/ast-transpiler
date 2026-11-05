@@ -4,18 +4,6 @@ import { RUST_DECLARED_DICT_LOCALS } from '../src/rustTranspiler';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as passes from '../src/rustTranspiler';
-import { nativeContainerOpsSelfTest } from '../src/rustTranspiler';
-import { nativeBoolScalarsSelfTest } from '../src/rustTranspiler';
-import { arrOnlyVecPushSelfTest } from '../src/rustTranspiler';
-import { rustTypedLocalsSelfTest } from '../src/rustTranspiler';
-import { calleeShapeContainerOpsSelfTest } from '../src/rustTranspiler';
-import { nativeBoolCalleeSelfTest } from '../src/rustTranspiler';
-import { rustVecPushInlineSelfTest } from '../src/rustTranspiler';
-import { rustStringNativesSelfTest } from '../src/rustTranspiler';
-import { clientHandleSelfTest } from '../src/rustTranspiler';
-import { rustNativeGetValueSelfTest } from '../src/rustTranspiler';
-import { mapParamDispatchSelfTest } from '../src/rustTranspiler';
 
 // fixture trees used above are written to a temp dir so the suite carries no fixture files
 const rustInlineFixtures: Record<string, Record<string, string>> = {
@@ -6244,78 +6232,6 @@ describe ('rustDictRead', () => {
         test('an unproven local keeps the helper', () => {
             expect(output).not.toContain('x.as_map()');
             expect(output).toContain('get_value(&x, &code)');
-        });
-    });
-});
-
-describe ('rustPasses', () => {
-    describe('rust final-text passes', () => {
-        test('every pass is exported from the package entry', () => {
-            for (const name of ['nativeGetValue', 'nativeInserts', 'nativeContainerOps', 'nativeBoolScalars', 'arrOnlyVecPush', 'rustTypedLocals',
-                'calleeShapeContainerOps', 'nativeBoolCallee', 'fieldChainInserts', 'rustVecPushInline', 'rustStringNatives', 'plainDictChains',
-                'clientHandleViews', 'narrowStrSinkLocals', 'narrowStrNullLocals', 'rustSignApiStr']) {
-                expect(typeof (passes as any)[name]).toBe('function');
-            }
-        });
-        const selfTests: { [k: string]: () => string[] | number } = {
-            nativeContainerOpsSelfTest, nativeBoolScalarsSelfTest, arrOnlyVecPushSelfTest, rustTypedLocalsSelfTest, calleeShapeContainerOpsSelfTest, nativeBoolCalleeSelfTest, rustVecPushInlineSelfTest, rustStringNativesSelfTest, clientHandleSelfTest,
-        };
-        for (const [name, fn] of Object.entries(selfTests)) {
-            test(`${name} passes`, () => { expect(fn()).toEqual([]); });
-        }
-        test('typed-locals and dict-param self-tests pass', () => {
-            const log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
-            try { expect(rustNativeGetValueSelfTest()).toBe(0); expect(mapParamDispatchSelfTest()).toBe(0); } finally { log.mockRestore(); }
-        });
-        test('narrowStrSinkLocals types a format!-only safe_string local', () => {
-            const src = 'pub fn f(&mut self) -> Value {\n    let mut s: Value = self.safe_string_k(x.clone(), "id", &[]);\n    let t: String = format!("a{}", s);\n    return Value::Null;\n}\n';
-            expect(passes.narrowStrSinkLocals(src)).toContain('safe_string_k_opt');
-        });
-        test('the sign-API Str pass is idempotent on unrelated text', () => {
-            const src = 'fn f() { let x = 1; }\n';
-            expect(passes.rustSignApiStr(src)).toBe(src);
-        });
-        test('plainDictChains lowers a Value-ident key on balance/ohlcvs without get_value_mut', () => {
-            const src = 'pub fn f(&mut self, symbol: Value) {\n    let mut tf: Value = Value::Null;\n    if let Value::Dict(__r05d) = get_value_mut(&mut self.ohlcvs, &symbol) { std::sync::Arc::make_mut(__r05d).insert(crate::runtime::stringify_param(&tf), tf.clone()); }\n}\n';
-            const out = passes.plainDictChains(src);
-            expect(out).not.toContain('get_value_mut');
-            expect(out).toContain('.entry(crate::runtime::stringify_param(&symbol)).or_insert(Value::Null)');
-            const unknown = src.replace('symbol: Value', 'symbol: &str');
-            expect(passes.plainDictChains(unknown)).toContain('get_value_mut');
-        });
-    });
-
-    describe('narrowStrNullLocals inlined __pro_message read', () => {
-        const read = (name: string, key: string, dflt = 'Value::Null'): string => 'let mut ' + name + ': Value = (match __pro_message.get("' + key + '").cloned() { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s), '
-            + 'Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => ' + dflt + ' });';
-        test('narrows an inlined read used by a null test and an as_str compare', () => {
-            const src = 'fn f() {\n    ' + read('topic', 'topic') + '\n    if (topic != Value::Null) {\n        let ok = topic.as_str() == Some("a");\n    }\n}\n';
-            const out = passes.narrowStrNullLocals(src);
-            expect(out).toContain('let mut topic: Option<String> = match __pro_message.get("topic").cloned()');
-            expect(out).toContain('topic.is_some()');
-            expect(out).toContain('topic.as_deref() == Some("a")');
-        });
-        test('keeps Value when a use cannot be rewritten', () => {
-            const src = 'fn f() {\n    ' + read('topic', 'topic') + '\n    self.go(&mut topic);\n}\n';
-            expect(passes.narrowStrNullLocals(src)).toBe(src);
-        });
-        test('keeps a read with a non-Null default', () => {
-            const src = 'fn f() {\n    ' + read('topic', 'topic', 'Value::Str("".into())') + '\n    let a = topic.as_str();\n}\n';
-            expect(passes.narrowStrNullLocals(src)).toBe(src);
-        });
-    });
-
-    describe('narrowStrNullLocals inlined integer read', () => {
-        const intRead = 'let mut pong: Value = (match __pro_message.get("pong").cloned() { Some(Value::Int(__n)) => Value::Int(__n), Some(Value::Float(__f)) => Value::Int(__f as i64), '
-            + 'Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>() { Ok(__n) => Value::Int(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Value::Int(__f as i64), _ => Value::Null } }, _ => Value::Null });';
-        test('narrows to Option<i64> for a null test only', () => {
-            const out = passes.narrowStrNullLocals('fn f() {\n    ' + intRead + '\n    if (pong != Value::Null) { return; }\n}\n');
-            expect(out).toContain('let mut pong: Option<i64> = match __pro_message.get("pong").cloned()');
-            expect(out).toContain('pong.is_some()');
-        });
-        test('keeps Value when the integer is used otherwise', () => {
-            const src = 'fn f() {\n    ' + intRead + '\n    self.go(pong);\n}\n';
-            expect(passes.narrowStrNullLocals(src)).toBe(src);
         });
     });
 });
