@@ -26763,6 +26763,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // declared `map[string]any` in go/v4/exchange.go
         'Timeframes': 'map[string]any',
         'Balance': 'map[string]any',
+        'Urls': 'map[string]any',
+        'HttpExceptions': 'map[string]any',
     };
 
     // the market/currency tables are plain `map[string]any` fields of BaseExchange (go/v4/exchange.go),

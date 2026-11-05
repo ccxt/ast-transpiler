@@ -7474,6 +7474,13 @@ describe('`key in dict` as a native two-value map read', () => {
         expect(output).not.toContain('InOp(this.Balance');
         expect(output).not.toContain('InOp(this.Timeframes');
     });
+    test('Urls and HttpExceptions are hand-written maps: a comma-ok read', () => {
+        const output = new Transpiler({ verbose: false }).transpileGo('class T {\n    urls = {};\n    httpExceptions = {};\n    f (code: number) {\n        const codeAsString = \'x\';\n        if (\'test\' in this.urls) {\n            return 1;\n        }\n        if ((code < 400) || !(codeAsString in this.httpExceptions)) {\n            return 2;\n        }\n        return 0;\n    }\n}\n').content;
+        expect(output).toContain('if _, ok := this.Urls["test"]; ok {');
+        expect(output).toContain('this.HttpExceptions[codeAsString]; ');
+        expect(output).not.toContain('InOp(this.Urls');
+        expect(output).not.toContain('InOp(this.HttpExceptions');
+    });
     test('a Balance entry compares natively against undefined', () => {
         const output = new Transpiler({ verbose: false }).transpileGo('class Exchange {\n    balance = {};\n    options = {};\n    f () {\n        const k = \'spot\';\n        if (this.balance[k] === undefined) {\n            this.balance[k] = {};\n        }\n        return (this.balance[k] !== undefined) && (this.options[k] === undefined);\n    }\n}\n').content;
         expect(output).toContain('if this.Balance[k] == nil {');
