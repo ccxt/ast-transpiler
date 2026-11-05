@@ -2002,7 +2002,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const statement = node.parent?.kind === SyntaxKind.ExpressionStatement;
         if (isIdentifier(receiver)) {
             const declaration: any = this.javaDeclarationOfIdentifier(receiver);
-            const cls = declaration !== undefined && isVariableDeclaration(declaration) && declaration.name?.text === receiverText
+            const cls = declaration !== undefined && isVariableDeclaration(declaration) && isIdentifier(declaration.name) && declaration.name.text === receiverText
                 ? this.javaDeclaredTypeOfDeclaration(declaration) : undefined;
             const spec = cls !== undefined ? JAVA_WS_TYPED_METHODS[cls]?.[method] : undefined;
             // WsOrderBook.reset takes one Object: the helper pads an omitted argument with null
