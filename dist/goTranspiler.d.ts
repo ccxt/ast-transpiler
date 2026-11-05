@@ -811,7 +811,6 @@ export declare const GO_BASE_DICT_PARAMS: {
     [method: string]: number[];
 };
 export declare function installCcxtGoDictParams(goTranspiler: any): any;
-export declare function goBaseDictParamFailures(): string[];
 export declare function goDictParamTypesSelfTest(): string[];
 export declare function installCcxtGoGb05ParamTypes(goTranspiler: any): any;
 export declare function goParseFrameParamTypesSelfTest(): string[];
@@ -904,7 +903,6 @@ export declare class GoTranspiler extends BaseTranspiler {
      * whitespace, so an indented *blank* line (only the indentation of a blank source
      * line) must stay empty instead of becoming whitespace-only text.
      */
-    indentLines(lines: string[], identation: number): string[];
     printPropertyAccessModifiers(node: any): string;
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
@@ -1081,32 +1079,32 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBookAccessorRead(initializer: any): boolean;
     goIsBaseMapResultLocal(node: any): boolean;
     goBaseMapResultLocal(initializer: any): boolean;
-    rf6aSafeDictMapLocalCache: Map<any, string>;
-    rf6aSafeDictCall(initializer: any): {
+    goSafeDictMapLocalCache: Map<any, string>;
+    goSafeDictCallArgs(initializer: any): {
         call: any;
         family: 'SafeDict' | 'SafeDict2';
         keys: number;
         fallback: any;
     } | undefined;
-    rf6aContainsThis(node: any): boolean;
-    rf6aIsStructTyped(node: any): boolean;
-    rf6aPlainContainer(container: any, ws: boolean, noDefault: boolean): boolean;
-    rf6aNeverNilDict(call: any, ws: boolean): boolean;
-    rf6aSourceKind(node: any): 'rest' | 'ws' | 'skip';
-    rf6aTopFunction(node: any): any;
-    rf6aGuardsNonNil(condition: any, name: string): boolean;
-    rf6aInsideNonNilBlock(use: any, name: string): boolean;
-    rf6aUseKeepsMap(ref: any, rebinds: Set<any>, noDefault: boolean, ws: boolean, name: string): boolean;
-    rf6aSafeDictMapLocal(declaration: any): string | undefined;
-    rf6aSafeDictMapLocalUncached(declaration: any): string | undefined;
-    rf6aRebindWrites: Map<any, Set<any>>;
-    rf6aSafeDictMapValue(declaration: any, identation: number): string | undefined;
-    rf6aSafeDictRebind(node: any, identation: number): string | undefined;
-    rf6aKeyIsString(key: any, printed: string): boolean;
-    rf6aIsPointerFreeValue(value: any): boolean;
-    rf6aMapWritesArePointerFree(scope: any, name: string): boolean;
-    rf6aNativeMapRead(access: any, baseExpr: any, keyNode: any, keyStr: string): boolean;
-    rf6aAwaitedMapLocal(decl: any): boolean;
+    goNodeContainsThis(node: any): boolean;
+    goIsStructTypedValue(node: any): boolean;
+    goPlainMapContainer(container: any, ws: boolean, noDefault: boolean): boolean;
+    goNeverNilDict(call: any, ws: boolean): boolean;
+    goSourceTreeKind(node: any): 'rest' | 'ws' | 'skip';
+    goTopFunction(node: any): any;
+    goGuardsNonNil(condition: any, name: string): boolean;
+    goInsideNonNilBlock(use: any, name: string): boolean;
+    goMapLocalUseKeepsMap(ref: any, rebinds: Set<any>, noDefault: boolean, ws: boolean, name: string): boolean;
+    goSafeDictMapLocal(declaration: any): string | undefined;
+    goSafeDictMapLocalUncached(declaration: any): string | undefined;
+    goMapLocalRebindWrites: Map<any, Set<any>>;
+    goSafeDictMapValue(declaration: any, identation: number): string | undefined;
+    goSafeDictRebind(node: any, identation: number): string | undefined;
+    goMapLocalKeyIsString(key: any, printed: string): boolean;
+    goIsPointerFreeValue(value: any): boolean;
+    goMapWritesArePointerFree(scope: any, name: string): boolean;
+    goNativeMapLocalRead(access: any, baseExpr: any, keyNode: any, keyStr: string): boolean;
+    goAwaitedMapLocal(decl: any): boolean;
     goMarketCallReturnsDict(initializer: any): boolean;
     goMarketProducerMethods: string[];
     goMarketMapCalls: string[];
@@ -1426,6 +1424,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsPrivateKeyField(arg: any): boolean;
     goPrintedArgType(arg: any): string | undefined;
     goIsClientUrl(arg: any): boolean;
+    goIsClientParameter(node: any): boolean;
     goBoundIdentifierType(arg: any): string | undefined;
     goUncalledStringParameterType(param: any): string | undefined;
     goSiblingPassesUnifiedString(argText: string, fileText: string, at: number | undefined): boolean;
@@ -1449,7 +1448,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goDeclaredTypeCache: Map<any, string>;
     goDeclaredTypeInProgress: Set<any>;
     goDeclaredTypeOfIdentifier(node: any): string | undefined;
-    goIsPointerIdentifier(node: any): boolean;
     goPointerTypeOfExpression(node: any, printedText: string): string | undefined;
     goElementAssignmentContainerType(node: any, printedText: string): string | undefined;
     goFieldContainerTypeNative(node: any): string | undefined;
@@ -1457,6 +1455,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsPlainValuedMapField(node: any): boolean;
     goCacheField(node: any): boolean;
     goCacheNilCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean, lFam: any, rFam: any): string | undefined;
+    goBalanceEntryNilCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean, lFam: any, rFam: any): string | undefined;
     goCacheKeyText(keyNode: any, keyStr: string): string | undefined;
     goIndexBoundedBy(index: any, list: any, use: any): boolean;
     goCacheKeysRange(declaration: any, declaredType: string, varName: string, identation: any): string | undefined;
@@ -1492,14 +1491,14 @@ export declare class GoTranspiler extends BaseTranspiler {
     nativeStoreFields: {
         [tsName: string]: any;
     } | undefined;
-    rfGo6bNeverNilCache: Map<any, Map<string, boolean>>;
-    rfGo6bStoreField(containerNode: any): any;
-    rfGo6bThisCallName(call: any): string | undefined;
-    rfGo6bFieldNeverNil(sourceFile: any, name: string, field: any): boolean;
-    rfGo6bRunsOnMessageLoop(containerNode: any, field: any): boolean;
-    rfGo6bValueIsPlain(valueNode: any, field: any): boolean;
-    rfGo6bEmptyDefaultCall(call: any, field: any): boolean;
-    rfGo6bStoreAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation?: number): string | undefined;
+    goStoreFieldNeverNilCache: Map<any, Map<string, boolean>>;
+    goStoreField(containerNode: any): any;
+    goThisCallName(call: any): string | undefined;
+    goStoreFieldNeverNil(sourceFile: any, name: string, field: any): boolean;
+    goRunsOnMessageLoop(containerNode: any, field: any): boolean;
+    goStoreValueIsPlain(valueNode: any, field: any): boolean;
+    goEmptyDefaultCall(call: any, field: any): boolean;
+    goFieldStoreAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation?: number): string | undefined;
     goWsFieldName(node: any): string | undefined;
     goWsMapFieldType(node: any): string | undefined;
     goWsKey(keyNode: any): {
@@ -1554,21 +1553,21 @@ export declare class GoTranspiler extends BaseTranspiler {
     goStripControlClauseParens(text: string): string;
     goPrintTernaryBranch(node: any, levels: number): string;
     printInlineInOp(dictNode: any, keyNode: any, dictText: string, keyText: string): string | undefined;
-    goL3BookReceiver(node: any): boolean;
-    goL3BookEntryText(node: any): string | undefined;
-    goL3UnderNegation(inNode: any): boolean;
-    goL3MapReceiver(node: any): boolean;
-    goL3DefaultedDictLocal(node: any): boolean;
-    goL3DefaultedDictDeclaration(declaration: any): boolean;
-    goL3DictLocalBacksHoist(declaration: any): boolean;
-    goL3PlainDictContainer(node: any): boolean;
-    goL3DictUseKeepsMap(node: any): boolean;
-    goL3PureLeaf(node: any): boolean;
-    goL3OrHoistTerms(node: any, reads: any[]): boolean;
-    goL3NameIsUsed(scope: any, name: string): boolean;
-    goL3NilMapTermIsRedundant(condition: any, read: any): boolean;
-    goL3HoistShape(node: any): any;
-    goL3OrHoistIf(node: any, identation: any): string | undefined;
+    goBookReceiver(node: any): boolean;
+    goBookEntryText(node: any): string | undefined;
+    goUnderNegation(inNode: any): boolean;
+    goInOpMapReceiver(node: any): boolean;
+    goDefaultedDictLocal(node: any): boolean;
+    goDefaultedDictDeclaration(declaration: any): boolean;
+    goDictLocalBacksHoist(declaration: any): boolean;
+    goPlainDictContainer(node: any): boolean;
+    goDictUseKeepsMap(node: any): boolean;
+    goPureLeaf(node: any): boolean;
+    goOrHoistTerms(node: any, reads: any[]): boolean;
+    goNameIsUsed(scope: any, name: string): boolean;
+    goNilMapTermIsRedundant(condition: any, read: any): boolean;
+    goInOpHoistShape(node: any): any;
+    goOrHoistIf(node: any, identation: any): string | undefined;
     goInOpSubstitution: any;
     GO_IN_OP_SENTINEL: string;
     goInOpSubstitutedText(node: any): string | undefined;
@@ -1664,11 +1663,11 @@ export declare class GoTranspiler extends BaseTranspiler {
         goType: string;
         conv: string;
     } | undefined;
-    goRf6fTupleSlotCache: Map<any, string>;
-    goRf6fTupleSlotPointerType(element: any): string | undefined;
-    goRf6fTupleSlotPointerTypeOf(element: any): string | undefined;
-    goRf6fSlotStoreText(valueNode: any, valueStr: string): string;
-    goRf6fTupleSlotPointerLines(name: string, holder: string, index: number, iden: string): string;
+    goTupleSlotPointerCache: Map<any, string>;
+    goTupleSlotPointerType(element: any): string | undefined;
+    goTupleSlotPointerTypeOf(element: any): string | undefined;
+    goTupleSlotStoreText(valueNode: any, valueStr: string): string;
+    goTupleSlotPointerLines(name: string, holder: string, index: number, iden: string): string;
     goTupleSlotNameIsSafe(nameNode: any, declaration: any): boolean;
     goTupleBindingProducerName(declaration: any): string | undefined;
     goTupleBindingIsSliceHolder(declaration: any): boolean;
@@ -1722,6 +1721,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     isArrayNonSliceTypes: string[];
     goIdentifierUsedElsewhere(nameNode: any): boolean;
     goLocalHoldsOnlyArrays(nameNode: any): boolean;
+    goIsSafeContainerIsArray(call: any): boolean;
+    printNegatedSafeContainerIsArray(operand: any): string | undefined;
+    goSingleWriteSafeContainerKind(nameNode: any): 'list' | 'dict' | undefined;
     printNativeIsArray(node: any, parsedArg: string | undefined): string | undefined;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
@@ -1789,6 +1791,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goClientsDeleteText(node: any): string | undefined;
     goNativeDelete(node: any): string | undefined;
     goDeleteReceiverText(node: any): string | undefined;
+    goDeletableMapField(node: any): string | undefined;
     goDeleteKeyText(keyNode: any): string | undefined;
     printThrowStatement(node: any, identation: any): string;
     goExprDepth: number;
@@ -1937,7 +1940,7 @@ export interface GoTranspiler {
     goConcatDerefableStringOperand(node: any): boolean;
 }
 export interface GoTranspiler {
-    x02CurrencyRow(node: any): boolean;
+    goCurrencyRowLocal(node: any): boolean;
 }
 export interface GoTranspiler {
     goRequiredParameterNativeType(fn: any, param: any, index: number): string | undefined;
@@ -1953,6 +1956,6 @@ export interface GoTranspiler {
     goNumericParameterCandidates(param: any): string[];
 }
 export interface GoTranspiler {
-    goA9fL1CacheField(node: any): string | undefined;
-    goA9fL1CacheInitText(node: any): string | undefined;
+    goBaseCacheField(node: any): string | undefined;
+    goBaseCacheInitText(node: any): string | undefined;
 }

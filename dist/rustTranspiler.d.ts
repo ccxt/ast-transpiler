@@ -1,175 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { type Block, type CallExpression, type Declaration, type Identifier, type Node, type ParameterDeclaration, type VariableDeclaration } from "typescript/unstable/ast";
 import { type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
-export type NativeGetValueStats = {
-    seqLocals: number;
-    seqReads: number;
-    dictLocals: number;
-    dictReads: number;
-};
-/** Native `get_value` on statically pinned receivers. `stats` counts rewritten locals and reads. */
-export declare function nativeGetValue(content: string, stats?: NativeGetValueStats): string;
-export declare function rustNativeGetValueSelfTest(): number;
-/**
- * Rewrite `x[k] = v` / nested `x[a][b] = v` writes on a proven tag-free
- * receiver into the native `insert` the helper performs on one.
- */
-export declare function nativeInserts(content: string): string;
-export declare function nativeContainerOps(content: string): string;
-export declare function nativeContainerOpsSelfTest(): string[];
-export declare function nativeBoolScalars(content: string): string;
-/** Each case: the native text must appear, and the helper must be gone unless the case keeps it. */
-export declare function nativeBoolScalarsSelfTest(): string[];
-export declare function arrOnlyVecPush(content: string): string;
-export declare function arrOnlyVecPushSelfTest(): string[];
-type Shape = 'String' | 'Int' | 'Float' | 'Bool' | 'Vec' | 'Map';
-export type TypedLocalReject = {
-    shape: Shape;
-    name: string;
-    line: number;
-    text: string;
-};
-/** Blocking uses from the last run (diagnostics only). */
-export declare let typedLocalRejects: TypedLocalReject[];
-/** Type the `Value` locals whose initializer pins the variant and whose every use is native. */
-export declare function rustTypedLocals(content: string): string;
-/** One case per rule; each one fails on the base generator (no such pass). */
-export declare function rustTypedLocalsSelfTest(): string[];
-export interface CalleeShapeStats {
-    sites: number;
-}
-/** Rewrite helper calls on a proven callee-shaped local to the native op. */
-export declare function calleeShapeContainerOps(content: string, stats?: CalleeShapeStats): string;
-/** Self-test: the rule fires on a proven callee and leaves an unproven one alone. */
-export declare function calleeShapeContainerOpsSelfTest(): string[];
-export declare function nativeBoolCallee(content: string): string;
-export declare function nativeBoolCalleeSelfTest(): string[];
-export declare function fieldChainInserts(content: string): string;
-export declare function rustVecPushInline(content: string): string;
-export declare function rustVecPushInlineSelfTest(): string[];
-/** Rewrite the family where the operand type is proven; leave every other site as printed. */
-export declare function rustStringNatives(content: string): string;
-/** One case per rule; each fails on the base generator (no such pass). */
-export declare function rustStringNativesSelfTest(): string[];
-export declare function plainDictChains(content: string): string;
-/** Blank out comments and string bodies, keeping every index in place. */
-export declare function clientHandleMask(src: string): string;
-/** `[start, end)` of every top-level `pub fn` body plus its header text. */
-export declare function clientHandleFnBodies(masked: string): Array<{
-    fnStart: number;
-    open: number;
-    close: number;
-    header: string;
-}>;
-export declare function clientHandleViewsMasked(content: string): string;
-/**
- * Same rewrite, driven by line structure instead of a masked character walk.
- * A method starts on a `pub fn …(` line that sits directly inside an `impl`
- * block, and ends where the brace depth returns to that level; brace counting
- * skips comment and string spans per line.
- */
-export declare function clientHandleViews(content: string): string;
-export declare function clientHandleSelfTest(): string[];
-/** `'map'` for a printed native-map parameter, undefined for any other shape. */
-export declare function mapParamKind(printedParam: string): 'map' | undefined;
-/** Dispatch argument for a native-map parameter (position `index` in `args`). The temp is built on the arm's
- *  own line so a generated dispatch arm stays within the 400-char line budget. */
-export declare function mapParamDispatchArg(index: number): string;
-/** Split a printed parameter list on top-level commas: a generic argument list
- *  (`IndexMap<String, Value>`) carries its own. */
-export declare function mapParamSplitArgs(argList: string): string[];
-/** Names a file prints as `&mut IndexMap` parameters. Copying one is the only
- *  way to box it, so a dead-clone pass must not turn that copy into a move. */
-export declare function refMapParamNames(content: string): Set<string>;
-export declare function mapParamDispatchSelfTest(): number;
-/**
- * `let X: Value = self.safe_string*(obj, key, &[default])` whose every later use is its own
- * slot of a `format!` becomes a native `String` through the family's `_opt` twin, which has
- * the same lookup and default rules. Any other use, a `{:?}` sink or a non-`Str` default
- * keeps `Value`.
- */
-export declare function narrowStrSinkLocals(content: string): string;
-/**
- * `let X: Value = self.safe_string*(obj, key, &[])` whose uses are all null tests,
- * `as_str()` compares, `stringify_param` calls or plain `Value` operands becomes
- * `Option<String>` through the `_opt` twin (same lookup and default rules, `None` where
- * the boxed helper yields `Null`). Null tests print `is_none()`/`is_some()`, compares
- * `as_deref()`, `get_value(&X, &Value::Int(0)).as_str() == Some("c")` the `starts_with("c")`
- * of the same first character, `stringify_param(&X)` the text it prints, and a `Value`
- * operand re-boxes through
- * `Value::from`, which builds the `Value::Str` the helper returned. Any other use, a
- * `&mut`, an assignment or a closure keeps `Value`.
- */
-export declare function narrowStrNullLocals(content: string): string;
-export declare function rustSignApiStr(content: string): string;
-/**
- * `let mut X: Value = self.safe_bool_k(obj, "k", &[..])` (or `safe_bool`) whose every later use is a native-able bool
- * read becomes `Option<bool>` (default `&[]`) or `bool` (literal default). Any other use or a closure keeps `Value`.
- */
-export declare function rustBoolKLocalOptionBool(content: string): string;
-/**
- * `let mut X: Value = self.safe_string*(obj, key, &[])` that is assigned again, where every
- * assignment is `X = self.safe_string*(..)` (same family, becomes its `_opt` twin),
- * `X = Value::Str("lit".into())` (becomes `Some("lit".to_string())`) or `X = Value::Null`
- * (becomes `None`), and every other use is a null test, an `as_str()` compare or a `Value`
- * operand (re-boxed with `Value::from`). Any other use keeps `Value`.
- */
-export declare function strLocalReassign(content: string): string;
-/**
- * `let mut X: Value = self.safe_bool2(obj, k1, k2, &[..])` whose every later use is a native-able bool read becomes
- * `Option<bool>` / `bool` (same uses as the bool_k pass); a non-literal default, shadowing or closure keeps `Value`.
- */
-export declare function rustBool2LocalOptionBool(content: string): string;
-/**
- * `let mut X: Value = self.safe_bool_n(obj, Value::from(vec![..]), &[..])` whose every later use is a native-able bool
- * read becomes `Option<bool>` / `bool` (same uses as the bool_k pass). Any other use or a closure keeps `Value`.
- */
-export declare function rustBoolNLocalOptionBool(content: string): string;
-/**
- * `let [mut] X: Value = self.safe_integer2|safe_integer_n(.., &[] | &[Value::Null])` becomes
- * `Option<i64>` (`safe_integer2_opt` / `safe_integer_n_opt`) when every later use of `X` is one of:
- *   `X.clone()` -> `Value::from(X)`           `self.iso8601(X)` / `m.insert("k".to_string(), X);` sinks
- *   `X != / == Value::Null` -> `is_some()` / `is_none()`
- *   `X.as_f64() == / != Some(<n>[.0])` -> `X == / != Some(<n>)`
- *   `X = Value::Null | Value::Int(n) | self.safe_integer*(..);` -> `None` / `Some(n)` / `.as_i64()`
- * Any other use, or a second binding of the name, keeps `Value`.
- */
-export declare function rustInt2IntNLocalOptionI64(content: string): string;
-/**
- * `let mut X: Value = self.safe_integer[_k|2](.., &[] | &[Value::Null] | &[Value::Int(n)])` becomes
- * `Option<i64>` (`.as_i64()`: the reader yields `Int` or its default, so the Option is exact) when
- * every later use of `X` in the block is one of:
- *   `X.clone()` -> `Value::from(X)`           `self.iso8601(X)` / `m.insert("k".to_string(), X);` sinks
- *   `X != / == Value::Null` -> `is_some()` / `is_none()`
- *   `X.as_f64() == / != Some(<n>[.0])` -> `X == / != Some(<n>)`
- *   `X = Value::Null | Value::Int(n) | self.safe_integer*(..);` -> `None` / `Some(n)` / `.as_i64()`
- * Any other use, or a second binding of the name, keeps `Value`.
- */
-export declare function rustIntLocalNullSinkOptionI64(content: string): string;
-/**
- * `let [mut] X: Value = self.safe_number2(o, k1, k2, &[] | &[Value::Null])` becomes
- * `Option<f64>` when every later use of `X` in the fn is `X != / == Value::Null`
- * (-> `is_some()` / `is_none()`) or `X.as_f64() == / != Some(<n>.0)` (-> `X == / != Some(<n>.0)`).
- * Any other use, or a second binding of the name, keeps `Value`.
- */
-export declare function rustNumber2LocalOptionF64(content: string): string;
-/**
- * `let [mut] X: Value = self.safe_number2(o, k1, k2, &[] | &[Value::Null])` becomes `Option<f64>` when each use is
- * `X != / == Value::Null`, `X.as_f64() == / != Some(<n>.0)`, `X.clone()` (-> `Value::from(X)`), or a bare `X`
- * as the last arg of `m.insert("k".to_string(), X);` or `self.price_to_precision(<arg>, X)`.
- */
-export declare function rustNumber2SinkLocalOptionF64R2(content: string): string;
-export declare function rustStr2LocalOptionString(content: string): string;
-/**
- * A literal-backed local whose every write is `Value::Str("lit".into())` and whose every later
- * use is a `format!` slot, `X.as_str()`, `stringify_param(&X)` or a by-value operand becomes a
- * `String`. A by-value operand re-boxes through `Value::from`, which builds the `Value::Str`
- * the literal was. Any other use (`&X`, `&mut`, a closure, a second binding, a write from
- * another expression) keeps `Value`.
- */
-export declare function rustStrLiteralLocalNativeString(content: string): string;
-export declare function rustStrNLocalOptionString(content: string): string;
-export declare const RUST_PLAIN_PLACE: RegExp;
 /** Answer of `RustTranspiler.rustDeclaredLocalTypeResolver` for a local whose
  *  value provably holds a `Value::Dict` at every use. */
 export type RustDeclaredLocalKind = 'dict';
@@ -204,7 +35,7 @@ export interface RustParamShadow {
     name: string;
     declaration: ParameterDeclaration;
 }
-/** Shadow kinds: `&IndexMap<String, Value>` / `&Vec<Value>` (D-25). */
+/** Shadow kinds: `&IndexMap<String, Value>` / `&Vec<Value>`. */
 export type RustParamShadowKind = 'map' | 'list';
 /** Vocabulary of the parameter-shadow table (`RustTranspiler.rustParamShadowOf`). */
 export declare const RUST_PARAM_SHADOWS: {
@@ -255,6 +86,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     constructor(config?: {});
     initConfig(): void;
     quotedStringLiteral(text: string): string;
+    static readonly RUST_NAME_VALUE_IMPORTS: Set<string>;
+    static readonly RUST_NUMBER_CONSTANT_IMPORTS: Set<string>;
+    printIdentifier(node: any): string;
+    /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
+    rustIsImportedValueName(node: any): boolean;
     printStringLiteral(node: any): any;
     printNumericLiteral(node: any): string;
     printBooleanLiteral(node: any): string;
@@ -627,13 +463,34 @@ export declare class RustTranspiler extends BaseTranspiler {
     printFunctionDefinition(node: any, identation: any): string;
     printFunctionDeclaration(node: any, identation: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
+    /** A bare local name (not `self`/`true`/`false`): passing it by value needs a `.clone()`. */
+    static isBareLocal(text: string): boolean;
+    /** `text.clone()` for a bare local, else `otherwise` (default: the text itself). */
+    static cloneIfBareLocal(text: string, otherwise?: string): string;
+    private static readonly RUST_RUNTIME_VARIADIC_ARITY;
+    private static readonly RUST_TEST_VARIADIC_ARITY;
+    printRuntimeVariadicCall(node: any, receiver: string, methodName: string, identation: number, testCrate?: boolean, handleProven?: boolean): string | undefined;
+    printOptionalArgsSliceCall(node: any, receiver: string, methodName: string, fixed: number, identation: number): string | undefined;
+    rustCalleeIsRuntimeBase(node: any): boolean;
+    rustCallsTestExchange(node: any): boolean;
+    rustCallsRuntimeHandle(node: any): boolean;
+    printTranspiledVariadicCall(node: any, receiver: string, methodName: string, identation: number): string | undefined;
+    rustTranspiledCalleeParams(node: any, methodName: string): any[] | undefined;
     printArgsForCallExpression(node: any, identation: any): any;
+    rustPrintedArgs(node: any, identation: any, params?: any[]): string[];
+    private static readonly RUST_PRECISE_TRIMMED;
+    printRustNamespaceCall(node: any, identation: any): string | undefined;
+    printRustSignerCall(node: any, identation: any): string | undefined;
     printCallExpression(node: any, identation: any): string;
+    printDynamicSelfRead(node: any): string | undefined;
+    printDynamicSelfCall(node: any, identation: any): string | undefined;
     printThisKeyword(node: any, identation: any): string;
     private static readonly RUST_ERROR_CONSTRUCTOR_ARGS;
     printErrorConstructorArg(name: string, index: number, node: any, identation: number): string;
     rustErrorConstructorName(className: string): string;
     printNewExpression(node: any, identation: any): any;
+    /** Printed class expression of a `new` whose class is a runtime value, else undefined. */
+    rustDynamicErrorClass(node: any): string | undefined;
     /** `param.member` where `param` is a class-typed parameter, the member is
      *  string-typed and the read is a plain rvalue: `get_value_k(&param, "member")`. */
     printStringMemberOfClassParam(node: any, receiverText: string): string | undefined;
@@ -715,7 +572,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `Str` (`string | undefined`) — the key box is `Value::Str` or Null. */
     rustKeyIsProvenString(node: Node): boolean;
     /** The local/parameter proof of a dynamic-key map read: a parameter whose
-     *  annotation proves a plain dict (B-25), or any local whose checker type
+     *  annotation proves a plain dict, or any local whose checker type
      *  proves a plain map and which nothing in the enclosing function
      *  re-assigns (D2). Returns the proven declaration. */
     rustProvenDynamicMapReceiver(node: Node): Declaration | undefined;
@@ -897,6 +754,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  class is the default export of `ts/src/base/ws/Client.ts`, so its type
      *  symbol is named `default`; the declaration itself carries the name. */
     rustParameterIsClientHandle(declaration: ParameterDeclaration): boolean;
+    /** The ws `Client` class (or a union with it); its type symbol is the file's `default` export. */
+    rustIsWsClientType(type: Type | undefined): boolean;
     /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
      *  `str::parse` would; undefined when the fold is not obviously exact. */
     foldParsedStringLiteral(name: string, text: string): string | undefined;
