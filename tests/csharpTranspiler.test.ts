@@ -3761,6 +3761,22 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
         expect(output).toContain('; i--)');
         expect(output).not.toContain('postFixDecrement');
     });
+    test('a header counter printed with a numeric declaration prints i++', () => {
+        // stands in for the embedding layer's declaration retype (it wraps the same method)
+        const printer: any = transpiler.csharpTranspiler;
+        const own = printer.printVariableDeclarationList;
+        printer.printVariableDeclarationList = function (node, identation) {
+            return own.call(this, node, identation).replace(/^object i = /, 'Int64 i = ');
+        };
+        try {
+            const output = transpiler.transpileCSharp(forLoop('i++', 'let i = markets.length - 1')).content;
+            expect(output).toContain('for (Int64 i = subtract(');
+            expect(output).toContain('; i++)');
+        } finally {
+            printer.printVariableDeclarationList = own;
+        }
+        expect(withKinds({}, forLoop('i++', 'let i = markets.length - 2'))).toContain('postFixIncrement(ref i)');
+    });
     test('a counter the printer cannot name as int keeps the helper', () => {
         // a non-literal start is not a counter the printer proves Int64 itself
         const declaration = 'let i = markets.length';
