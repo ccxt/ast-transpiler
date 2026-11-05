@@ -24514,6 +24514,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return bare ? text : `(${text})`;
     }
 
+    // `this.balance[k] === undefined`: the entry read off the Balance map is a plain `any`, nil when the key is absent
+    goBalanceEntryNilCompare(left, right, leftText: string, rightText: string, isEq: boolean, lFam, rFam): string | undefined {
+        const entry = (rFam === 'nil') ? [left, leftText] : ((lFam === 'nil') ? [right, rightText] : undefined);
+        if ((entry === undefined) || (entry[0]?.kind !== SyntaxKind.ElementAccessExpression)
+            || (this.goA9fL1CacheField(entry[0].expression) !== 'Balance') || !/^this\.Balance\[\w+\]$/.test(entry[1])) {
+            return undefined;
+        }
+        return `(${entry[1]} ${isEq ? '==' : '!='} nil)`;
+    }
+
     // a key the map index takes as is: a Go string (literal / `string` local / string-returning call), or an element
     // of a `[]string` local read at a counter its own `for (let i = 0; i < xs.length; i++)` bounds to that slice
     goCacheKeyText(keyNode, keyStr: string): string | undefined {
@@ -27442,7 +27452,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (rFam === 'nil' && lPtr) {
             return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
         }
-        const cacheNil = this.goCacheNilCompare(left, right, leftText, rightText, isEq, lFam, rFam);
+        const cacheNil = this.goCacheNilCompare(left, right, leftText, rightText, isEq, lFam, rFam)
+            ?? this.goBalanceEntryNilCompare(left, right, leftText, rightText, isEq, lFam, rFam);
         if (cacheNil !== undefined) {
             return cacheNil;
         }

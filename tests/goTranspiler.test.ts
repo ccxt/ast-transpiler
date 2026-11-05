@@ -7474,6 +7474,12 @@ describe('`key in dict` as a native two-value map read', () => {
         expect(output).not.toContain('InOp(this.Balance');
         expect(output).not.toContain('InOp(this.Timeframes');
     });
+    test('a Balance entry compares natively against undefined', () => {
+        const output = new Transpiler({ verbose: false }).transpileGo('class Exchange {\n    balance = {};\n    options = {};\n    f () {\n        const k = \'spot\';\n        if (this.balance[k] === undefined) {\n            this.balance[k] = {};\n        }\n        return (this.balance[k] !== undefined) && (this.options[k] === undefined);\n    }\n}\n').content;
+        expect(output).toContain('if this.Balance[k] == nil {');
+        expect(output).toContain('(this.Balance[k] != nil)');
+        expect(output).not.toContain('IsEqual(this.Balance[k]');
+    });
 });
 
 describe('go GetValue on GetArgMap-bound parameters: element-write values', () => {
