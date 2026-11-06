@@ -5128,6 +5128,26 @@ describe('ws cache class parameters', () => {
         const plain = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any).transpileCSharpByPath(file).content;
         expect(plain).toContain('this.fetchThing(s, x, n);');
     });
+    test('configured typed cores print PascalCase on declarations and this./base. calls, per tier and venue', () => {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cst-'));
+        const file = path.join(dir, 'ts', 'src', 'venue.ts');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, 'class Base {\n    async fetchThing (symbol) {\n        return symbol;\n    }\n    async helper () {\n        return 1;\n    }\n}\nclass venue extends Base {\n    async fetchThing (symbol) {\n        const a = await this.helper ();\n        return await super.fetchThing (symbol);\n    }\n    async other () {\n        return await this.fetchThing ("x");\n    }\n}\n');
+        const config = { 'verbose': false, 'csharp': { 'typedCores': { 'base': { 'fetchThing': 'Order' }, 'venue': { 'venue': { 'helper': 'Int64' } } }, 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+        const output = new Transpiler(config as any).transpileCSharpByPath(file).content;
+        expect(output).toContain('Task<object> FetchThing(object symbol)');
+        expect(output).toContain('return await base.FetchThing(symbol);');
+        expect(output).toContain('return await this.FetchThing("x");');
+        // the per-venue entry answers inside that venue's class only
+        expect(output).toContain('object a = await this.Helper();');
+        expect(output).toContain('Task<object> helper()');
+        const plain = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any).transpileCSharpByPath(file).content;
+        expect(plain).toContain('this.fetchThing("x")');
+        expect(plain).not.toContain('FetchThing');
+    });
     test('a parameter annotated with a ws cache class prints that class', () => {
         const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
         const input = 'class ArrayCache {}\nclass ArrayCacheBySymbolById extends ArrayCache {}\nclass Test {\n    prune (newCache: ArrayCacheBySymbolById, cache: ArrayCache, other) {\n        return newCache;\n    }\n}';
