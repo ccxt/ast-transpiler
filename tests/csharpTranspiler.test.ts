@@ -5096,6 +5096,12 @@ describe('element-access list cast gate on a printed List<object> receiver', () 
 });
 
 describe('ws cache class parameters', () => {
+    test('a configured params bag prints Dictionary<string, object>', () => {
+        const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'dictParamsMethods': [ 'FetchMyBuys' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
+        const output = t.transpileCSharp('class Test {\n    fetchMyBuys (symbol, params = {}) {\n        return params;\n    }\n    other (params = {}) {\n        return params;\n    }\n}').content;
+        expect(output).toContain('fetchMyBuys(object symbol, Dictionary<string, object> parameters = null)');
+        expect(output).toContain('other(object parameters = null)');
+    });
     test('a parameter annotated with a ws cache class prints that class', () => {
         const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
         const input = 'class ArrayCache {}\nclass ArrayCacheBySymbolById extends ArrayCache {}\nclass Test {\n    prune (newCache: ArrayCacheBySymbolById, cache: ArrayCache, other) {\n        return newCache;\n    }\n}';
