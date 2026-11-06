@@ -3571,7 +3571,9 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustPrefetchClassTypes(node);
         this.className = node.name.text;
 
-        // First pass: collect method signatures for optional param handling
+        // First pass: collect method signatures for optional param handling (per class: a signature
+        // leaked from an earlier file would slice-wrap a same-named fixed-arity method)
+        this.methodSignatures = {};
         const methods = node.members.filter(m => m.kind === SyntaxKind.MethodDeclaration);
         methods.forEach((method: any) => {
             const requiredCount = method.parameters.filter(p => !p.initializer && !p.questionToken).length;
