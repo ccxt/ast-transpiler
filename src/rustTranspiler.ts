@@ -3674,6 +3674,10 @@ export class RustTranspiler extends BaseTranspiler {
         const expr = node.expression;
         const args = node.arguments;
 
+        if (expr.expression.kind === SyntaxKind.ThisKeyword) {
+            const implicitApi = this.printImplicitApiCall(node, expr.name.text, identation);
+            if (implicitApi !== undefined) return implicitApi;
+        }
         if (expr.expression.kind === SyntaxKind.ThisKeyword && !this.methodSignatures[expr.name.text]) {
             return this.printRuntimeVariadicCall(node, 'self', expr.name.text, identation)
                 ?? this.printTranspiledVariadicCall(node, 'self', expr.name.text, identation);
@@ -3830,6 +3834,23 @@ export class RustTranspiler extends BaseTranspiler {
         const file = String(decl?.getSourceFile?.()?.fileName ?? '');
         if (/ts[/]src[/]base[/]ws[/](?:Client|Future)\.ts$/.test(file)) return true;
         return node.expression.name.text === 'call' && /lib\.[\w.]*\.d\.ts$/.test(file);
+    }
+
+    // `this.<endpoint>(params)` on an implicit-API method (declared in `ts/src/abstract/[prediction/]<id>.ts`):
+    // the generated `<id>_api.rs` wrapper is `async fn <snake>(&mut self, args: &[Value])`, always awaited.
+    printImplicitApiCall(node, methodName: string, identation: number): string | undefined {
+        let decl: any;
+        try {
+            decl = signatureDeclaration((this.getChecker() as any).getResolvedSignature(node));
+        } catch (e) {
+            return undefined;
+        }
+        decl = decl?.resolve?.() ?? decl;
+        if (decl === undefined || decl.kind !== SyntaxKind.MethodDeclaration) return undefined;
+        if (!/ts[/]src[/]abstract[/]/.test(String(decl.getSourceFile?.()?.fileName ?? ''))) return undefined;
+        const args = this.printArgsForCallExpression(node, identation);
+        const awaited = node.parent?.kind === SyntaxKind.AwaitExpression;
+        return `self.${this.toSnakeCaseName(methodName)}(&[${args}])${awaited ? '' : '.await'}`;
     }
 
     // A call to a transpiled method with optional parameters: its Rust signature is the required
