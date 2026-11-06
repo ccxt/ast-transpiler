@@ -1,7 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { SyntaxKind, NodeFlags, type Node, type ParameterDeclaration } from 'typescript/unstable/ast';
 import { IndexKind, TypeFlags, type Checker, type Program, type Symbol as TsSymbol, type UnionType } from 'typescript/unstable/sync';
-import { isArrayLiteralExpression, isAsExpression, isBinaryExpression, isBlock, isBooleanLiteral, isBreakStatement, isCallExpression, isClassDeclaration, isClassExpression, isClassLikeDeclaration, isContinueStatement, isDeleteExpression, isElementAccessExpression, isExpressionStatement, isForStatement, isFunctionExpression, isIdentifier, isIfStatement, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertySignatureDeclaration, isReturnStatement, isSourceFile, isSpreadAssignment, isSpreadElement, isStringLiteral, isStringLiteralLikeNode, isThrowStatement, isTypeAssertion, isVariableDeclaration, isWhileStatement } from 'typescript/unstable/ast/is';
+import { isArrayLiteralExpression, isAsExpression, isBinaryExpression, isBlock, isBooleanLiteral, isBreakStatement, isCallExpression, isClassDeclaration, isClassExpression, isClassLikeDeclaration, isConditionalExpression, isContinueStatement, isDeleteExpression, isElementAccessExpression, isExpressionStatement, isForStatement, isFunctionExpression, isIdentifier, isIfStatement, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertySignatureDeclaration, isReturnStatement, isSourceFile, isSpreadAssignment, isSpreadElement, isStringLiteral, isStringLiteralLikeNode, isThrowStatement, isTypeAssertion, isVariableDeclaration, isWhileStatement } from 'typescript/unstable/ast/is';
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike } from './tsUtils.js';
 import fs from 'fs';
 import path from 'path';
@@ -837,6 +837,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpMemberWriteCache = new WeakMap<object, Map<string, boolean>>();
     // source file -> next pattern variable number of csharpMemberKeyVariable
     csharpMemberKeyCounters = new WeakMap<object, number>();
+    // source file -> next `inOpDict<N>` pattern variable of csharpDictOrNullInExpression
+    csharpInOpDictCounters = new WeakMap<object, number>();
     // the subset fixed by a base-tier declaration: printed `IList<object> x = null`, the spelling every override shares
     csharpBaseListParamDeclarations = new WeakSet<Node>();
     // variable statements whose `await Promise.all ([...])` prints as typed task
@@ -5834,7 +5836,12 @@ export class CSharpTranspiler extends BaseTranspiler {
         if ((leftType === 'null') || (rightType === 'null')) {
             const [other, otherType, otherText] = (leftType === 'null') ? [right, rightType, rightText] : [left, leftType, leftText];
             if (!this.csharpIsNullComparableType(otherType) || !this.csharpOperandIsNullComparable(other)) {
-                return undefined;
+                // a local whose emitted declaration names a nullable / reference type (sibling blocks may
+                // bind the name again: the checker picks this read's own declaration)
+                if (!this.csharpNullComparisonTypeIsProvable(this.csharpDeclaredNullTestType(other))) {
+                    return undefined;
+                }
+                return isEquality ? `(${otherText} == null)` : `!(${otherText} == null)`;
             }
             return this.csharpNullComparison(otherText, isEquality);
         }
@@ -5873,6 +5880,41 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const declared = this.csharpDeclaredReadType(node) ?? this.csharpDeclaredLocalResolverType(node);
         return (declared === undefined) ? undefined : this.csharpValueEqualityKind(declared);
+    }
+
+    // a parameter the printed signature declares `bool` / `bool?` (csharpPrintedParamType): `==` against another
+    // bool / bool? read is the lifted operator, which answers isEqual's null rows (null == null, null != false)
+    csharpPrintedBoolParamType(node): string | undefined {
+        const printed = this.csharpPrintedParamType(node);
+        return ((printed === 'bool') || (printed === 'bool?')) && !this.csharpParameterWrittenAnywhere(node) ? printed : undefined;
+    }
+
+    // `a === b` / `a !== b` with one side such a parameter and the other a bool / bool? local or parameter
+    csharpPrintedBoolParamEquality(left, right, leftText: string, rightText: string, isEquality: boolean): string | undefined {
+        if (!isIdentifier(left) || !isIdentifier(right)) {
+            return undefined;
+        }
+        const kind = (n) => {
+            const t = this.csharpPrintedBoolParamType(n) ?? this.csharpDeclaredReadType(n) ?? this.csharpDeclaredLocalResolverType(n);
+            return ((t === 'bool') || (t === 'bool?')) ? t : undefined;
+        };
+        const [ l, r ] = [ kind(left), kind(right) ];
+        if ((l === undefined) || (r === undefined) || ((l !== 'bool?') && (r !== 'bool?'))
+            || ((this.csharpPrintedBoolParamType(left) === undefined) && (this.csharpPrintedBoolParamType(right) === undefined))) {
+            return undefined;
+        }
+        return isEquality ? `(${leftText} == ${rightText})` : `!(${leftText} == ${rightText})`;
+    }
+
+    csharpDeclaredNullTestType(node): string | undefined {
+        if (!isIdentifier(node) || (node.text === 'undefined')) {
+            return undefined;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        if ((declaration === undefined) || !isVariableDeclaration(declaration) || ((declaration.parent as any)?.declarations?.length !== 1)) {
+            return undefined;
+        }
+        return this.csharpFinalDeclaredLocalType(declaration);
     }
 
     csharpNullComparison(text: string, isEquality: boolean) {
@@ -6667,6 +6709,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const native = nativeEquality
                     ?? this.csharpNullLiteralEquality(op, left, right, leftText, rightText)
                     ?? this.printInlineEquality(left, right, leftText, rightText, isEquality)
+                    ?? this.csharpPrintedBoolParamEquality(left, right, leftText, rightText, isEquality)
                     ?? this.csharpNativeScalarFieldEquality(left, right, leftText, rightText, isEquality)
                     ?? this.csharpNativeModLiteralEquality(left, right, isEquality)
                     ?? this.csharpNativeArithmeticEquality(left, right, leftText, rightText, isEquality)
@@ -7352,6 +7395,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             const param = node.parameters[index];
             if ((rows[0]?.[index] !== undefined) && (param !== undefined) && this.csharpCoreArgNeedsShadow(node, param, wanted)) {
                 shadows.push(param);
+            } else if ((param !== undefined) && (this.csharpParamTypes.get(param) === 'object')) {
+                this.csharpParamTypes.set(param, wanted); // body reads see the printed type (csharpPrintedParamType)
             }
             return wanted + text.slice('object'.length);
         });
@@ -9057,7 +9102,100 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         // a receiver the embedding build layer retypes AFTER printing: the checker may see
         // `any` on it, so no table above names it (see csharpDeclaredDictInExpression)
-        return this.csharpDeclaredDictInExpression(key, obj);
+        return this.csharpDeclaredDictInExpression(key, obj) ?? this.csharpDictOrNullInExpression(key, obj);
+    }
+
+    // `"k" in x` on an `object` local every write of which is a params bag, a declared dictionary, `this.omit (<such>, ...)`,
+    // a ternary of two such values or slot 1 of a base handleParam* / handleOptionAndParams* tuple: the box is a
+    // Dictionary or null, where inOp's answer is the type test plus ContainsKey (exchange sources only)
+    csharpDictOrNullInExpression(key, obj): string | undefined {
+        if (!isStringLiteralLikeNode(key) || !isIdentifier(obj) || !this.csharpIsExchangeSource(obj)) {
+            return undefined;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(obj)?.valueDeclaration?.resolve();
+        if ((declaration === undefined) || !isVariableDeclaration(declaration) || !this.csharpDictOrNullValue(obj, 0)) {
+            return undefined;
+        }
+        const file: any = obj.getSourceFile?.();
+        const next = (this.csharpInOpDictCounters.get(file) ?? 0);
+        this.csharpInOpDictCounters.set(file, next + 1);
+        return `(${this.printNode(obj, 0)} is IDictionary<string, object> inOpDict${next} && inOpDict${next}.ContainsKey(${this.printNode(key, 0)}))`;
+    }
+
+    csharpIsExchangeSource(node): boolean {
+        const file: string = node.getSourceFile?.()?.fileName ?? '';
+        return file.includes('ts/src/') && !file.includes('ts/src/test/') && !file.includes('examples/');
+    }
+
+    csharpDictOrNullValue(node, depth: number): boolean {
+        while ((node !== undefined) && (isParenthesizedExpression(node) || isAsExpression(node))) {
+            node = node.expression;
+        }
+        if ((node === undefined) || (depth > 6)) {
+            return false;
+        }
+        if (isObjectLiteralExpression(node)) {
+            return true;
+        }
+        if (isConditionalExpression(node)) {
+            return this.csharpDictOrNullValue(node.whenTrue, depth + 1) && this.csharpDictOrNullValue(node.whenFalse, depth + 1);
+        }
+        if (isCallExpression(node) && isPropertyAccessExpression(node.expression) && (node.expression.expression.kind === SyntaxKind.ThisKeyword)
+            && (node.expression.name.text === 'omit') && (node.arguments.length >= 1)) {
+            return this.csharpDictOrNullValue(node.arguments[0], depth + 1);
+        }
+        if (isElementAccessExpression(node)) {
+            return this.csharpDictOrNullTupleSlot(node, depth);
+        }
+        if (!isIdentifier(node)) {
+            return false;
+        }
+        const declared = this.csharpDeclaredReadType(node) ?? this.csharpDeclaredLocalResolverType(node) ?? this.csharpPrintedParamType(node);
+        if ((declared === 'Dictionary<string, object>') || (declared === 'IDictionary<string, object>')) {
+            return true;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        if (declaration === undefined) {
+            return false;
+        }
+        const method: any = this.csharpEnclosingFunction(node);
+        if ((method === undefined) || (this.csharpEnclosingFunction(declaration) !== method)) {
+            return false;
+        }
+        const writes = this.csharpParamWrites(method, declaration);
+        if (isParameterDeclaration(declaration)) {
+            // a `params = {}` bag nothing writes; the request pipeline (sign / fetch2 / ...) forwards other boxes
+            const name = (method.name as any)?.text ?? '';
+            return (writes.length === 0) && (declaration.initializer !== undefined) && isObjectLiteralExpression(declaration.initializer)
+                && [ 'sign', 'request', 'fetch2', 'calculateRateLimiterCost', 'handleErrors' ].indexOf(name) < 0;
+        }
+        if (!isVariableDeclaration(declaration) || ((declaration.parent as any)?.declarations?.length !== 1) || (declaration.initializer === undefined)) {
+            return false;
+        }
+        return [ declaration.initializer, ...writes ].every((value) => this.csharpDictOrNullValue(value, depth + 1));
+    }
+
+    // `tuple[1]` of `const tuple = this.handleParamString (<bag>, ...)` (handleParam* / handleOptionAndParams*, not
+    // overridden by the venue class): the base helpers return the bag or its omit there
+    csharpDictOrNullTupleSlot(node, depth: number): boolean {
+        if (!isIdentifier(node.expression) || !isNumericLiteral(node.argumentExpression) || (node.argumentExpression.text !== '1')) {
+            return false;
+        }
+        const tuple: any = this.checkerOrUndefined()?.getSymbolAtLocation(node.expression)?.valueDeclaration?.resolve();
+        if ((tuple === undefined) || !isVariableDeclaration(tuple) || ((tuple.parent.flags & NodeFlags.Const) === 0)) {
+            return false;
+        }
+        const init: any = tuple.initializer;
+        if ((init === undefined) || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || (init.expression.expression.kind !== SyntaxKind.ThisKeyword)
+            || !/^(?:handleParam(?:String|Integer|Bool)2?|handleOptionAndParams2?)$/.test(init.expression.name.text) || (init.arguments.length < 1)) {
+            return false;
+        }
+        const name = init.expression.name.text;
+        const owner: any = findAncestor(node, (n) => isClassDeclaration(n));
+        if ((owner !== undefined) && owner.members.some((m) => isMethodDeclaration(m) && ((m.name as any)?.text === name))) {
+            return false;
+        }
+        return this.csharpDictOrNullValue(init.arguments[0], depth + 1);
     }
 
     // `key in this.<member>` / `key in client.<member>` where the member's declared C# type is a string-keyed

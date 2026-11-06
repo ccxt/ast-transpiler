@@ -5131,6 +5131,42 @@ describe('hand-written numeric field comparisons', () => {
     });
 });
 
+describe('printed parameter / declaration equality and inOp', () => {
+    const make = () => {
+        const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER, 'coreArgTypes': { 'setMode': { 0: 'bool?' } } } } as any);
+        return t;
+    };
+    test('a bool? signature parameter compares with a bool? local by the lifted operator', () => {
+        const t = make();
+        t.csharpTranspiler.csharpDeclaredLocalTypeResolver = (d) => (d?.name?.text === 'was' ? 'bool?' : undefined);
+        const input = 'class Test {\n    setMode (enable) {\n        const was = this.safeBool ({}, \'x\', false);\n        if (was !== enable) {\n            return 1;\n        }\n        return 0;\n    }\n    safeBool (a, b, c) { return c; }\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).toContain('setMode(bool? enable)');
+        expect(output).toContain('if (!(was == enable))');
+    });
+    test('a local whose final declaration is nullable prints a null test', () => {
+        const t = make();
+        t.csharpTranspiler.csharpFinalDeclaredLocalType = (d) => (d?.name?.text === 'p' ? 'double?' : undefined);
+        const input = 'class Test {\n    f (o: any) {\n        const p: number = o[\'a\'];\n        if (p === undefined) {\n            return 1;\n        }\n        return p;\n    }\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).toContain('if ((p == null))');
+    });
+    test('an object local holding a dictionary or null gets the typed inOp', () => {
+        const t = make();
+        const file = path.join(fs.mkdtempSync(path.join(require('os').tmpdir(), 'inop-')), 'ts', 'src');
+        fs.mkdirSync(file, { recursive: true });
+        const src = path.join(file, 'venue.ts');
+        fs.writeFileSync(src, 'class Test {\n    omit (a, b) { return a; }\n    f (params = {}) {\n        const q: any = (params === undefined) ? this.omit (params, \'x\') : params;\n        if (\'k\' in q) {\n            return 1;\n        }\n        return 0;\n    }\n}');
+        const output = t.transpileCSharpByPath(src).content;
+        expect(output).toContain('(q is IDictionary<string, object> inOpDict0 && inOpDict0.ContainsKey("k"))');
+    });
+    test('the dictionary-or-null inOp stays the helper outside exchange sources', () => {
+        const t = make();
+        const input = 'class Test {\n    f (params = {}) {\n        const q: any = params;\n        return (\'k\' in q);\n    }\n}';
+        expect(t.transpileCSharp(input).content).toContain('inOp(q, "k")');
+    });
+});
+
 describe('dictionary index-write cast elision hook', () => {
     const hookConfig = {
         'verbose': false,
