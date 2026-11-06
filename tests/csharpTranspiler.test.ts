@@ -5112,6 +5112,22 @@ describe('ws cache class parameters', () => {
         expect(output).toContain('sign(string path, object api = null)');
         expect(output).not.toContain('pathVar');
     });
+    test('configured call-site argument types convert this./base. arguments in exchange sources', () => {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csa-'));
+        const file = path.join(dir, 'ts', 'src', 'thing.ts');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, 'class Test {\n    fetchThing (symbol, limit = undefined, amount = undefined, params = {}) {\n        return symbol;\n    }\n    caller (s, x, n) {\n        this.fetchThing (s, x, n);\n        this.fetchThing ("BTC/USDT", 5, 1);\n        return this.fetchThing (s, undefined, x as number);\n    }\n}\n');
+        const config = { 'verbose': false, 'csharp': { 'callSiteArgTypes': { 'fetchThing': { 0: 'string', 1: 'Int64?', 2: 'double' } }, 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+        const output = new Transpiler(config as any).transpileCSharpByPath(file).content;
+        expect(output).toContain('this.fetchThing(((string)s),ccxt.BaseExchange.ToInt64Arg(x),ccxt.BaseExchange.ToDoubleArgRequired(n));');
+        expect(output).toContain('this.fetchThing("BTC/USDT", 5L, 1d);');
+        expect(output).toContain('return this.fetchThing(((string)s), null,ccxt.BaseExchange.ToDoubleArgRequired(x));');
+        const plain = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any).transpileCSharpByPath(file).content;
+        expect(plain).toContain('this.fetchThing(s, x, n);');
+    });
     test('a parameter annotated with a ws cache class prints that class', () => {
         const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
         const input = 'class ArrayCache {}\nclass ArrayCacheBySymbolById extends ArrayCache {}\nclass Test {\n    prune (newCache: ArrayCacheBySymbolById, cache: ArrayCache, other) {\n        return newCache;\n    }\n}';

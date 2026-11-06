@@ -875,6 +875,15 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpCoreArgTypes: Record<string, Record<number, string>> = {};
     // same, for positions retyped without a shadow (config.csharp.signatureArgTypes: sign / handleErrors / ...)
     csharpSignatureArgTypes: Record<string, Record<number, string>> = {};
+    // method name -> argument position -> the C# type the callee's parameter prints (config.csharp.callSiteArgTypes):
+    // a `this.` / `base.` (exchange tests: `exchange.`) call converts an argument that is not already that
+    // type: `((string)x)`, `ToInt64Arg(x)` / `ToDoubleArg(x)` (`Required` for non-nullable), a suffixed
+    // numeric literal (`1L`, `0d`); list targets are left as printed (csharpCallSiteArgs)
+    csharpCallSiteArgTypes: Record<string, Record<number, string>> = {};
+    // the identifiers whose declared `string` makes a string-target argument print bare
+    csharpCallSiteTypedIdentifiers = new Set<string>();
+    // VariableStatement -> the C# type its printed declaration names (csharpCallSiteDeclaredType)
+    csharpPrintedDeclarationTypes = new WeakMap<Node, string>();
     // parameter declaration -> its shadow name while the owning method body prints
     csharpActiveShadows = new Map<Node, string>();
     csharpCoreArgShadowParams = new WeakMap<Node, any[]>();
@@ -960,6 +969,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         this.csharpDictParamsMethods = new Set<string>(Array.isArray(config['dictParamsMethods']) ? config['dictParamsMethods'] : []);
         this.csharpCoreArgTypes = Object.assign({}, config['coreArgTypes'] ?? {});
         this.csharpSignatureArgTypes = Object.assign({}, config['signatureArgTypes'] ?? {});
+        this.csharpCallSiteArgTypes = Object.assign({}, config['callSiteArgTypes'] ?? {});
+        this.csharpCallSiteTypedIdentifiers = new Set<string>(Array.isArray(config['callSiteTypedIdentifiers']) ? config['callSiteTypedIdentifiers'] : []);
     }
 
     initConfig() {
@@ -1631,7 +1642,15 @@ export class CSharpTranspiler extends BaseTranspiler {
     printVariableStatement(node, identation) {
         const plan = this.csharpPromiseAllSites.get(node);
         if (plan === undefined) {
-            return super.printVariableStatement(node, identation);
+            if (this.isCJSRequireStatement(node)) {
+                return "";
+            }
+            const printed = this.printVariableDeclarationList(node.declarationList, identation);
+            const declared = /^\s*([\w<>,.?\[\] ]+?)\s+[A-Za-z_]\w*\s*(?:=[^=]|$)/.exec(printed);
+            if ((declared !== null) && (node.declarationList?.declarations?.length === 1)) {
+                this.csharpPrintedDeclarationTypes.set(node.declarationList.declarations[0], declared[1]);
+            }
+            return this.printNodeCommentsIfAny(node, identation, printed + this.LINE_TERMINATOR);
         }
         return this.printNodeCommentsIfAny(node, identation, this.csharpPromiseAllNativeStatement(plan, identation));
     }
@@ -2486,17 +2505,23 @@ export class CSharpTranspiler extends BaseTranspiler {
     // A call of a base-tier method whose array parameter this rule typed from its declared type: an
     // argument the printer does not hold as a list is converted at the call (toArray)
     printArgsForCallExpression(node, identation) {
+        const printed = this.csharpListParamArgs(node, identation);
+        return this.csharpCallSiteArgs(node, printed);
+    }
+
+    csharpListParamArgs(node, identation): string[] {
+        const plain = () => Array.from((node.arguments ?? []) as any).map((a: any) => this.printNode(a, identation).trim());
         const callee: any = node.expression;
         const fileName = String(node.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
         const exchangeSource = fileName.includes('ts/src/') && !/\/test\//.test(fileName) && !fileName.includes('examples/');
         if (!exchangeSource || node.kind !== SyntaxKind.CallExpression || !isPropertyAccessExpression(callee) || !isIdentifier(callee.name) || node.arguments.length === 0) {
-            return super.printArgsForCallExpression(node, identation);
+            return plain();
         }
         const census = this.csharpListParamCensus();
         const baseKeys = (census === undefined) ? undefined : csharpListParamBaseKeys.get(this.getProgram() as any);
         const name = callee.name.getText().trim();
         if (census === undefined || baseKeys === undefined || !Array.from(baseKeys).some((key) => key.startsWith(name + ':'))) {
-            return super.printArgsForCallExpression(node, identation);
+            return plain();
         }
         const decide = (key: string) => census.get(key) === true;
         return Array.from(node.arguments as any).map((argument: any, index: number) => {
@@ -2522,7 +2547,176 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
             // toArray keeps a List<object> as is and re-boxes a typed list (a hard cast would throw)
             return `this.toArray(${printed})`;
-        }).join(', ');
+        });
+    }
+
+    // ==== call-site argument conversions (config.csharp.callSiteArgTypes) ====
+
+    // which receivers convert their arguments in this source file: `this.` / `base.` in exchange
+    // sources, `exchange.` in the exchange tests (REST tests route awaited calls through the reflective
+    // invoker, so only their non-awaited calls convert); undefined = none
+    csharpCallSiteReceiverTier(node): 'source' | 'restTest' | 'wsTest' | undefined {
+        const fileName = String(node.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if (fileName.includes('ts/src/pro/test/Exchange/')) {
+            return 'wsTest';
+        }
+        if (fileName.includes('ts/src/test/Exchange/')) {
+            return 'restTest';
+        }
+        if (!fileName.includes('ts/src/') || /\/test\//.test(fileName) || fileName.includes('examples/')) {
+            return undefined;
+        }
+        return 'source';
+    }
+
+    // the configured position types of a converting call, or undefined
+    csharpCallSiteRow(node): Record<number, string> | undefined {
+        const callee: any = node?.expression;
+        if ((callee === undefined) || !isPropertyAccessExpression(callee) || !isIdentifier(callee.name)) {
+            return undefined;
+        }
+        const name = callee.name.text;
+        if (!Object.prototype.hasOwnProperty.call(this.csharpCallSiteArgTypes, name)) {
+            return undefined;
+        }
+        const tier = this.csharpCallSiteReceiverTier(node);
+        const receiver = callee.expression;
+        if (tier === 'source') {
+            return ((receiver.kind === SyntaxKind.ThisKeyword) || (receiver.kind === SyntaxKind.SuperKeyword)) ? this.csharpCallSiteArgTypes[name] : undefined;
+        }
+        if ((tier === undefined) || !isIdentifier(receiver) || (receiver.text !== 'exchange')) {
+            return undefined;
+        }
+        if ((tier === 'restTest') && (node.parent?.kind === SyntaxKind.AwaitExpression)) {
+            return undefined;
+        }
+        return this.csharpCallSiteArgTypes[name];
+    }
+
+    // the printed argument list with each configured position converted; a converted argument is
+    // joined to the previous one by a bare `,` (the conversion replaces the leading space)
+    csharpCallSiteArgs(node, printed: string[]): string {
+        const row = this.csharpCallSiteRow(node);
+        if (row === undefined) {
+            return printed.join(', ');
+        }
+        const tier = this.csharpCallSiteReceiverTier(node);
+        let out = '';
+        printed.forEach((text, index) => {
+            const wanted = row[index];
+            const converted = (wanted === undefined || text === '') ? undefined : this.csharpCallSiteArg(node.arguments[index], text, wanted, tier !== 'source');
+            const separator = (index === 0) ? '' : ((converted !== undefined) && converted.tight ? ',' : ', ');
+            out += separator + ((converted === undefined) ? text : converted.text);
+        });
+        return out;
+    }
+
+    csharpCallSiteArg(argument, text: string, wanted: string, test: boolean): { text: string, tight: boolean } | undefined {
+        if (wanted === 'string') {
+            if (text.startsWith('(string)') || text.startsWith('((string)') || text.startsWith('"')) {
+                return undefined;
+            }
+            if (!test && this.csharpCallSiteTypedIdentifiers.has(text) && (this.csharpCallSiteDeclaredType(this.csharpCallSiteOperand(argument), text) === 'string')) {
+                return undefined;
+            }
+            return { text: '((string)' + text + ')', tight: true };
+        }
+        if (wanted === 'IList<object>') {
+            return undefined; // every admitted caller already passes a list, null or nothing
+        }
+        if (wanted.endsWith('Dictionary<string, object>')) {
+            if (text.startsWith('((' + wanted + ')') || text.startsWith('(' + wanted + ')') || text.startsWith('new Dictionary<string, object>') || (text === 'null')) {
+                return undefined;
+            }
+            return { text: '((' + wanted + ')' + text + ')', tight: true };
+        }
+        const helper = (wanted === 'Int64?') ? 'ToInt64Arg' : (wanted === 'Int64') ? 'ToInt64ArgRequired' : (wanted === 'double?') ? 'ToDoubleArg' : 'ToDoubleArgRequired';
+        if (text.startsWith(helper + '(') || text.startsWith('ccxt.BaseExchange.' + helper + '(')) {
+            return undefined;
+        }
+        const identity = test ? '' : this.csharpCallSiteIdentityOperand(argument, wanted, text);
+        if (identity === text) {
+            return undefined;
+        }
+        if (identity !== '') {
+            return { text: identity, tight: false };
+        }
+        if ((text === 'null') && ((helper === 'ToInt64Arg') || (helper === 'ToDoubleArg'))) {
+            return undefined;
+        }
+        const literal = /^(-?)(\d+)(\.\d+)?$/.exec(text);
+        if (literal !== null) {
+            if ((helper === 'ToDoubleArg') || (helper === 'ToDoubleArgRequired')) {
+                return { text: text + 'd', tight: false };
+            }
+            if (literal[3] === undefined) {
+                return { text: text + 'L', tight: false };
+            }
+        }
+        return { text: 'ccxt.BaseExchange.' + helper + '(' + text + ')', tight: true };
+    }
+
+    // the expression an argument prints as: `(x)` and `x as T` print the operand itself
+    csharpCallSiteOperand(argument) {
+        let operand: any = argument;
+        while (isParenthesizedExpression(operand) || isAsExpression(operand)) {
+            operand = operand.expression;
+        }
+        return operand;
+    }
+
+    // a numeric argument already declared in the target's box passes bare; `double? x` into `double`
+    // is `(x ?? 0d)`, a negated `double` passes as printed. '' = convert
+    csharpCallSiteIdentityOperand(argument, wanted: string, text: string): string {
+        if ((wanted !== 'Int64?') && (wanted !== 'Int64') && (wanted !== 'double?') && (wanted !== 'double')) {
+            return '';
+        }
+        const negated = (wanted === 'double') ? /^\(-([A-Za-z_]\w*)\)$/.exec(text) : null;
+        const ident = (negated !== null) ? negated[1] : text;
+        if (!/^[A-Za-z_]\w*$/.test(ident)) {
+            return '';
+        }
+        let operand: any = argument;
+        while (isParenthesizedExpression(operand) || isAsExpression(operand) || (isPrefixUnaryExpression(operand) && (negated !== null))) {
+            operand = isPrefixUnaryExpression(operand) ? operand.operand : operand.expression;
+        }
+        const declared = this.csharpCallSiteDeclaredType(operand, ident);
+        if (negated !== null) {
+            return (declared === 'double') ? text : '';
+        }
+        if ((declared === wanted) || (wanted.endsWith('?') && (declared === wanted.slice(0, -1)))) {
+            return text;
+        }
+        return ((wanted === 'double') && (declared === 'double?')) ? '(' + text + ' ?? 0d)' : '';
+    }
+
+    // the C# type the printed declaration of an identifier argument names: a local's printed
+    // `<type> <name> =` statement, or the enclosing method's printed parameter; a read printed under
+    // another name (the `<name>Var` slot of a written core parameter) is that `object` slot
+    csharpCallSiteDeclaredType(argument, printedName: string): string | undefined {
+        if (!isIdentifier(argument)) {
+            return undefined;
+        }
+        if (argument.text !== printedName) {
+            return 'object';
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(argument)?.valueDeclaration?.resolve();
+        if (declaration === undefined) {
+            return undefined;
+        }
+        if (isVariableDeclaration(declaration)) {
+            return this.csharpPrintedDeclarationTypes.get(declaration);
+        }
+        if (!isParameterDeclaration(declaration) || !isMethodDeclaration(declaration.parent)) {
+            return undefined;
+        }
+        const method: any = declaration.parent;
+        const index = method.parameters.indexOf(declaration);
+        if (this.csharpCoreArgShadows(method).includes(declaration)) {
+            return 'object';
+        }
+        const configured = this.csharpCoreArgRow(method, this.csharpCoreArgTypes)?.[index] ?? this.csharpCoreArgRow(method, this.csharpSignatureArgTypes)?.[index];
+        return configured ?? this.csharpParamTypes.get(declaration);
     }
 
     // whether the method body rebinds the parameter (an assignment or ++/--): the declaration
