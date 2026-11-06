@@ -7959,6 +7959,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpressionExceptionIfAny(node) {
+        // C# never takes the base class's exception path for element access
+        return undefined;
     }
 
     // reads print getValue(recv, key), which yields null for a missing key; a C# indexer

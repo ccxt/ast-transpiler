@@ -485,7 +485,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredReceiverType(node: any): string | undefined;
     csharpReceiverIsDeclaredDictionary(expression: any): boolean;
     csharpDictionaryElementWriteTarget(node: any): string | undefined;
-    printElementAccessExpressionExceptionIfAny(node: any): void;
+    printElementAccessExpressionExceptionIfAny(node: any): any;
     printElementAccessExpression(node: any, identation: any): any;
     csharpNativeElementAccess(node: any): string | undefined;
     csharpIsMarketRowKeyRead(expression: any, argumentExpression: any): boolean;

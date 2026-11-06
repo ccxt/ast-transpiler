@@ -6254,7 +6254,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (!this.javaFreshHashMapValue(container, declaration.initializer)) {
             return false;
         }
-        // every later `x = rhs` must hand the local another fresh map too 
+        // every later `x = rhs` must hand the local another fresh map too
         return !this.javaLocalIsReassigned(container, (rhs) => this.javaFreshHashMapValue(container, rhs));
     }
 

@@ -3685,7 +3685,7 @@ export class RustTranspiler extends BaseTranspiler {
             return this.printRuntimeVariadicCall(node, this.printNode(expr.expression, 0), expr.name.text, identation, false, true);
         }
         // a ws class reaches its REST parent's methods through `self.parent`; REST `super_*` shims are fixed-arity except the network ones
-        if (expr.expression.kind === SyntaxKind.SuperKeyword && (/ts[\/]src[\/]pro[\/]/.test(String(node.getSourceFile().fileName))
+        if (expr.expression.kind === SyntaxKind.SuperKeyword && (/ts[/]src[/]pro[/]/.test(String(node.getSourceFile().fileName))
             || /^network(?:CodeToId|IdToCode)$/.test(expr.name.text))) {
             return this.printRuntimeVariadicCall(node, 'super', expr.name.text, identation)
                 ?? this.printTranspiledVariadicCall(node, 'super', expr.name.text, identation);
@@ -3796,22 +3796,22 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         decl = decl?.resolve?.() ?? decl;
-        if (decl !== undefined && /ts[\/]src[\/]base[\/]/.test(String(decl.getSourceFile?.()?.fileName ?? ''))) return true;
+        if (decl !== undefined && /ts[/]src[/]base[/]/.test(String(decl.getSourceFile?.()?.fileName ?? ''))) return true;
         // `base64ToBinary = base64ToBinary`: the property is declared on the base class, its function elsewhere
         const symbol: any = this.getChecker().getSymbolAtLocation(node.expression.name ?? node.expression);
         const member: any = symbol === undefined ? undefined : symbolDeclarations(symbol)?.[0];
-        return member !== undefined && /ts[\/]src[\/]base[\/]/.test(String(member.getSourceFile?.()?.fileName ?? ''));
+        return member !== undefined && /ts[/]src[/]base[/]/.test(String(member.getSourceFile?.()?.fileName ?? ''));
     }
 
     // `exchange.m(..)` in a test source, the receiver typed as the base `Exchange` class.
     rustCallsTestExchange(node): boolean {
-        if (!/ts[\/]src[\/]test[\/]/.test(String(node.getSourceFile().fileName))) return false;
+        if (!/ts[/]src[/]test[/]/.test(String(node.getSourceFile().fileName))) return false;
         const type: any = this.getChecker().getTypeAtLocation(node.expression.expression);
         // test helpers take the instance as an untyped `exchange: any`
         if (type !== undefined && (type.flags & TypeFlags.Any) !== 0) return node.expression.expression.text === 'exchange';
         const symbol: any = type?.getSymbol?.();
         const decl: any = symbol === undefined ? undefined : symbolDeclarations(symbol)?.[0];
-        return decl !== undefined && /ts[\/]src[\/]base[\/]Exchange\.ts$/.test(String(decl.getSourceFile?.()?.fileName ?? ''));
+        return decl !== undefined && /ts[/]src[/]base[/]Exchange\.ts$/.test(String(decl.getSourceFile?.()?.fileName ?? ''));
     }
 
     // `client.resolve(..)`, `future.resolve(..)`, `method.call(..)`: the callee is a ws handle method,
@@ -3828,7 +3828,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (decl === undefined) return ['resolve', 'reject', 'future', 'call'].includes(node.expression.name.text)
             && (this.getChecker().getTypeAtLocation(node.expression.expression).flags & TypeFlags.Any) !== 0;
         const file = String(decl?.getSourceFile?.()?.fileName ?? '');
-        if (/ts[\/]src[\/]base[\/]ws[\/](?:Client|Future)\.ts$/.test(file)) return true;
+        if (/ts[/]src[/]base[/]ws[/](?:Client|Future)\.ts$/.test(file)) return true;
         return node.expression.name.text === 'call' && /lib\.[\w.]*\.d\.ts$/.test(file);
     }
 
@@ -3858,8 +3858,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const sourceFile = decl.getSourceFile?.();
         const file = String(sourceFile?.fileName ?? '');
-        if (!/ts[\/]src[\/]/.test(file) || /ts[\/]src[\/](?:test|abstract|base[\/]ws)[\/]/.test(file)) return undefined;
-        if (/ts[\/]src[\/]base[\/]/.test(file)) {
+        if (!/ts[/]src[/]/.test(file) || /ts[/]src[/](?:test|abstract|base[/]ws)[/]/.test(file)) return undefined;
+        if (/ts[/]src[/]base[/]/.test(file)) {
             const marker = String(sourceFile.text ?? '').indexOf('METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT');
             if (marker < 0 || decl.end < marker) return undefined;
         }
