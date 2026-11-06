@@ -525,6 +525,7 @@ const CSHARP_NATIVE_BOOL_FIELDS = [
 const CSHARP_SCALAR_FIELD_KINDS: { [name: string]: string } = {
     'rateLimit': 'double',
     'rollingWindowSize': 'double',
+    'fetchHistoryCacheSize': 'int',
 };
 
 // arithmetic prints that still call a runtime helper: such an operand is not native arithmetic,
@@ -6146,8 +6147,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (token === undefined) {
             return undefined;
         }
-        const leftKind = this.csharpExpressionTypeOf(node.left);
-        const rightKind = this.csharpExpressionTypeOf(node.right);
+        const [ leftKind, rightKind ] = this.csharpComparisonOperandKinds(node.left, node.right);
         if ((leftKind === undefined) || (rightKind === undefined)) {
             return undefined;
         }
@@ -6160,7 +6160,30 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const leftText = this.printNode(node.left, 0).trim();
         const rightText = this.printNode(node.right, 0).trim();
+        if ((this.csharpExpressionTypeOf(node.left) === undefined) || (this.csharpExpressionTypeOf(node.right) === undefined)) {
+            return '(' + leftText + ' ' + token + ' ' + rightText + ')'; // a field read: the helper call's own slot
+        }
         return leftText + ' ' + token + ' ' + rightText;
+    }
+
+    // the two operand kinds of an ordered comparison; a hand-written numeric field (CSHARP_SCALAR_FIELD_KINDS)
+    // names its declared kind, and an integer literal beside a double field compares as that double
+    csharpComparisonOperandKinds(left, right): [ string | undefined, string | undefined ] {
+        const fieldKind = (n) => {
+            while (n?.kind === SyntaxKind.ParenthesizedExpression) {
+                n = n.expression;
+            }
+            return (isPropertyAccessExpression(n) && (n.expression?.kind === SyntaxKind.ThisKeyword)
+                && Object.prototype.hasOwnProperty.call(CSHARP_SCALAR_FIELD_KINDS, n.name?.text)) ? CSHARP_SCALAR_FIELD_KINDS[n.name.text] : undefined;
+        };
+        let leftKind = this.csharpExpressionTypeOf(left) ?? fieldKind(left);
+        let rightKind = this.csharpExpressionTypeOf(right) ?? fieldKind(right);
+        if ((fieldKind(left) === 'double') && (rightKind === 'int') && isNumericLiteral(right)) {
+            rightKind = 'double';
+        } else if ((fieldKind(right) === 'double') && (leftKind === 'int') && isNumericLiteral(left)) {
+            leftKind = 'double';
+        }
+        return [ leftKind, rightKind ];
     }
 
     // `Math.min/max (a, b)`: mathMin/mathMax read both boxes via Convert.ToDouble, return an ORIGINAL

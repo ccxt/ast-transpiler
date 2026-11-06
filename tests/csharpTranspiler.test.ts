@@ -5120,6 +5120,17 @@ describe('ws cache class parameters', () => {
     });
 });
 
+describe('hand-written numeric field comparisons', () => {
+    test('an int / double field against an integer literal compares natively', () => {
+        const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': PLAIN_PARSER } } as any);
+        const input = 'class Test {\n    rateLimit: number = 2000;\n    fetchHistoryCacheSize: number = 0;\n    f () {\n        const a = this.fetchHistoryCacheSize > 0;\n        if (this.rateLimit > 0) {\n            return a;\n        }\n        return this.rateLimit < 1;\n    }\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).toContain('bool a = (this.fetchHistoryCacheSize > 0);');
+        expect(output).toContain('if ((this.rateLimit > 0))');
+        expect(output).toContain('isLessThan(this.rateLimit, 1)'); // a double `<` keeps the helper
+    });
+});
+
 describe('dictionary index-write cast elision hook', () => {
     const hookConfig = {
         'verbose': false,
