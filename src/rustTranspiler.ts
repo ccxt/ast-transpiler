@@ -3649,13 +3649,26 @@ export class RustTranspiler extends BaseTranspiler {
         return this.printNodeCommentsIfAny(node, identation, methodDef + body);
     }
 
+    // A free test-helper function with defaulted trailing parameters (`ts/src/[pro/]test/Exchange/`):
+    // they collapse into `optional_args: &[Value]` like a method's, read back as `Value::Null` defaults.
+    rustFreeFnFirstDefault(node): number {
+        if (node?.kind !== SyntaxKind.FunctionDeclaration || node.body === undefined) return -1;
+        if (!/ts[/]src[/](?:pro[/])?test[/]Exchange[/]/.test(String(node.getSourceFile().fileName))) return -1;
+        return Array.from(node.parameters).findIndex((p: any) => p.initializer !== undefined);
+    }
+
     printFunctionDefinition(node, identation) {
         const name = node.name?.text ?? '';
-        const params = node.parameters;
-        const parsedArgs = params.map(p => `${this.printNode(p.name, 0)}: Value`).join(', ');
+        const firstDefault = this.rustFreeFnFirstDefault(node);
+        const params = firstDefault < 0 ? node.parameters : node.parameters.slice(0, firstDefault);
+        let parsedArgs = params.map(p => `${this.printNode(p.name, 0)}: Value`).join(', ');
+        if (firstDefault >= 0) parsedArgs += `${parsedArgs ? ', ' : ''}optional_args: &[Value]`;
         const returnType = this.printRustFunctionType(node);
         const retStr = returnType ? ` -> ${returnType}` : '';
-        return `${this.getIden(identation)}fn ${name}(${parsedArgs})${retStr}`;
+        // an `async function` in a REST exchange test stays `async fn` even when its body never awaits
+        const isAsync = /ts[/]src[/]test[/]Exchange[/]/.test(String(node.getSourceFile().fileName))
+            && (node.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.AsyncKeyword);
+        return `${this.getIden(identation)}${isAsync ? 'async ' : ''}fn ${name}(${parsedArgs})${retStr}`;
     }
 
     printFunctionDeclaration(node, identation) {
@@ -3665,7 +3678,12 @@ export class RustTranspiler extends BaseTranspiler {
             return `|${parameters}| ${body}`;
         }
         const funcDef = this.printFunctionDefinition(node, identation);
-        const funcBody = super.printFunctionBody(node, identation);
+        let funcBody = super.printFunctionBody(node, identation);
+        const firstDefault = this.rustFreeFnFirstDefault(node);
+        if (firstDefault >= 0) {
+            const decls = node.parameters.slice(firstDefault).map((p, i) => `\n${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get_arg(optional_args, ${i}, Value::Null);`).join('');
+            funcBody = funcBody.replace('{', '{' + decls);
+        }
         return this.printNodeCommentsIfAny(node, identation, funcDef + funcBody);
     }
 
@@ -3983,6 +4001,9 @@ export class RustTranspiler extends BaseTranspiler {
         const dynamicCall = this.printDynamicSelfCall(node, identation);
         if (dynamicCall !== undefined) return dynamicCall;
 
+        const freeFnCall = this.printFreeFnDefaultArgsCall(node, identation);
+        if (freeFnCall !== undefined) return freeFnCall;
+
         const outOfOrder = this.printOutOfOrderCallExpressionIfAny(node, identation);
         if (outOfOrder) {
             return this.rustBoxNativeStrCallIfNeeded(node, outOfOrder);
@@ -4010,6 +4031,25 @@ export class RustTranspiler extends BaseTranspiler {
         }
 
         return this.rustBoxNativeStrCallIfNeeded(node, super.printCallExpression(node, identation));
+    }
+
+    // `helper(a, b)` to a free function with defaulted parameters: `helper(a, &[b])`, awaited when async.
+    printFreeFnDefaultArgsCall(node, identation): string | undefined {
+        if (!isIdentifier(node.expression)) return undefined;
+        let decl: any;
+        try {
+            decl = signatureDeclaration((this.getChecker() as any).getResolvedSignature(node));
+        } catch (e) {
+            return undefined;
+        }
+        decl = decl?.resolve?.() ?? decl;
+        const firstDefault = this.rustFreeFnFirstDefault(decl);
+        if (firstDefault < 0) return undefined;
+        const args = this.rustPrintedArgs(node, identation);
+        const fixed = args.slice(0, firstDefault);
+        const isAsync = (decl.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.AsyncKeyword);
+        const awaited = node.parent?.kind === SyntaxKind.AwaitExpression;
+        return `${node.expression.text}(${[...fixed, `&[${args.slice(firstDefault).join(', ')}]`].join(', ')})${isAsync && !awaited ? '.await' : ''}`;
     }
 
     // `this[name]` with a variable key: `self.prop(&name)` resolves the field by name at runtime.
