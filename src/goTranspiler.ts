@@ -10850,6 +10850,27 @@ export function installCcxtGoNilDeclaredValueJoins (goTranspiler) {
         }
         return parsed[1] + 'var ' + parsed[2] + ' ' + scan.joinType;
     };
+    // a bool join is declared `var x bool`, so every consumer reads it as a Go bool
+    const joined = new WeakMap ();
+    const upstreamDeclared = goTranspiler.goDeclaredTypeOfIdentifier.bind (goTranspiler);
+    goTranspiler.goDeclaredTypeOfIdentifier = (node) => {
+        const known = upstreamDeclared (node);
+        if ((known !== undefined) || (node?.kind !== ts.SyntaxKind.Identifier)) {
+            return known;
+        }
+        const declaration: any = goTranspiler.checkerOrUndefined?.()?.getSymbolAtLocation (node)?.valueDeclaration?.resolve?.();
+        if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || !ts.isIdentifier (declaration.name)
+                || !isNilDeclaredInitializer (declaration.initializer) || (declaration.parent?.parent?.kind !== ts.SyntaxKind.VariableStatement)
+                || (declaration.parent.declarations.length !== 1) || (NIL_DECLARED_GUARD_NAMES.indexOf (declaration.name.text) >= 0)) {
+            return undefined;
+        }
+        if (!joined.has (declaration)) {
+            const scan = new GoNilDeclaredValueAssignmentScan (goTranspiler, declaration, declaration.name.text);
+            joined.set (declaration, (scan.run () && (scan.joinType === 'bool')
+                && !goTranspiler.goTypeNameIsShadowed?.(goTranspiler.goEnclosingFunction (declaration), 'bool')) ? 'bool' : undefined);
+        }
+        return joined.get (declaration);
+    };
     goTranspiler.__ccxtGoNilDeclaredValueJoinsInstalled = true;
 }
 

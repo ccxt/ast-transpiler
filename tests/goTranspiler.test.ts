@@ -13937,3 +13937,16 @@ describe ('go async receive at the root tree', () => {
         expect (out).not.toContain ('Recv, _ :=');
     });
 });
+
+describe ('go nil-declared bool join truthiness', () => {
+    test ('a ternary on a nil-declared bool local reads it natively', () => {
+        const x: any = new Transpiler ({ 'go': {} } as any);
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const src = 'type Bool = boolean | undefined;\nclass X {\n    f (a: boolean) {\n        let shouldFail: Bool = undefined;\n        if (a) {\n            shouldFail = false;\n        } else {\n            shouldFail = true;\n        }\n        return shouldFail ? \'x\' : \'y\';\n    }\n}\n';
+        const out = x.transpileGo (src).content;
+        expect (out).toContain ('var shouldFail bool\n');
+        expect (out).toContain ('if shouldFail {');
+        expect (out).not.toContain ('EvalTruthy(shouldFail)');
+        expect (out).not.toContain ('shouldFail == true');
+    });
+});
