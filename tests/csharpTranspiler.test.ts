@@ -8157,3 +8157,26 @@ describe ('csharp PascalCase Int64 task calls', () => {
         expect(output).toContain("await this.nonce()");
     });
 });
+
+describe('ws future settle calls bind the declared Future methods', () => {
+    const input =
+    "class t {\n" +
+    "    settle (client, messageHash, cache, e) {\n" +
+    "        const future = client.futures[messageHash];\n" +
+    "        future.resolve (cache);\n" +
+    "        future.resolve ();\n" +
+    "        future.reject (e);\n" +
+    "        const other = client.futures[messageHash];\n" +
+    "        other.resolve (cache);\n" +
+    "        return future.resolve (cache);\n" +
+    "    }\n" +
+    "}";
+    test('statement-position resolve/reject on `future` print the typed receiver', () => {
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("(future as Future).resolve(cache);");
+        expect(output).toContain("(future as Future).resolve();");
+        expect(output).toContain("((Future)future).reject(e);");
+        expect(output).toContain("other.resolve(cache);");
+        expect(output).not.toContain("return (future as Future)");
+    });
+});

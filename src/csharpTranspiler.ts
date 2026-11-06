@@ -8786,6 +8786,10 @@ export class CSharpTranspiler extends BaseTranspiler {
             && this.csharpCallReturnsString(node.arguments[0]) && this.csharpCalleeResolves(node)) {
             return `JsonHelper.Deserialize((string)${this.printNode(node.arguments[0], 0).trim()})`;
         }
+        const futureSettle = this.csharpFutureSettleCall(node);
+        if (futureSettle !== undefined) {
+            return futureSettle;
+        }
         const printed = super.printCallExpression(node, identation);
         const pascal = this.csharpInt64TaskCallName(node);
         if (pascal !== undefined) {
@@ -8796,6 +8800,33 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
         }
         return printed;
+    }
+
+    // ws `future.resolve (x)` / `future.reject (e)` statements: the local is the ws runtime's Future
+    // (cs/ccxt/ws/Future.cs: void resolve(object) / reject(object)), whose C# declaration may be
+    // `Future` or a `var` bound from an object read, so the call binds the declared method through
+    // the receiver cast `(future as Future).resolve(..)` / `((Future)future).reject(..)`.
+    // Only the ws trees (ts/src/pro, ts/src/prediction) hold that Future; other ccxt trees keep the printer.
+    csharpFutureSettleCall(node): string | undefined {
+        const callee = node?.expression;
+        if (!isPropertyAccessExpression(callee) || !isIdentifier(callee.expression) || (callee.expression.text !== 'future')
+            || (node.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+            return undefined;
+        }
+        const method = callee.name?.text;
+        if ((method !== 'resolve') && (method !== 'reject')) {
+            return undefined;
+        }
+        const fileName = String(node.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if (fileName.includes('ts/src/') && !fileName.includes('ts/src/pro/') && !fileName.includes('ts/src/prediction/')) {
+            return undefined;
+        }
+        const argc = node.arguments?.length ?? 0;
+        if (argc > 1 || ((method === 'reject') && (argc !== 1))) {
+            return undefined;
+        }
+        const args = (node.arguments ?? []).map((arg) => this.printNode(arg, 0).trim()).join(', ');
+        return (method === 'resolve') ? `(future as Future).resolve(${args})` : `((Future)future).reject(${args})`;
     }
 
     // `this.<name> (...)` resolving to an async method whose checker return type is `Promise<int>` /
