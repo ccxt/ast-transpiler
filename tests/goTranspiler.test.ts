@@ -9053,6 +9053,23 @@ describe ('goTupleFirstResultBinds', () => {
         expect (run (undefined)).not.toContain ('OmitDict');
     });
 
+    test('m[k] = p !== undefined ? p : this.sum (a, b) over *int64 p and int64 a, b is a native if/else', () => {
+        const src = BASE.replace ('    options: Dict = {};', '    options: Dict = {};\n    sum (a: any, b: any): any { return a; }\n    safeInteger (o: any, k: string): Int { return undefined; }\n    seconds (): number { return 0; }') .replace ('type Bool', 'type Int = number | undefined;\ntype Bool') + '\nclass Ex extends BaseExchange {\n    g (params: Dict = {}) {\n        const request: Dict = {};\n        const until: Int = this.safeInteger (params, "until");\n        const start = this.seconds ();\n        const w = this.seconds ();\n        request["end"] = (until !== undefined) ? until : this.sum (start, w);\n        return request;\n    }\n}\n';
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const out = x.transpileGo (src).content;
+        expect (out).toContain ('request["end"] = *until');
+        expect (out).toContain ('request["end"] = start + w');
+    });
+
+    test('an `a || k === undefined` exit guard proves the *string key of a markets_by_id lookup', () => {
+        const src = BASE.replace ('    options: Dict = {};', '    options: Dict = {};\n    safeBool (o: any, k: string, d: boolean = undefined): Bool { return d; }\n    safeString (o: any, k: string): Str { return undefined; }') + '\nclass Ex extends BaseExchange {\n    g (o: Dict): Str {\n        const marketId = this.safeString (o, "id");\n        const mode = this.safeBool (this.options, "m", false);\n        if ((!mode) || (marketId === undefined)) {\n            return marketId;\n        }\n        if (marketId in this.markets_by_id) {\n            return marketId;\n        }\n        return undefined;\n    }\n}\n';
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const out = x.transpileGo (src).content;
+        expect (out).toContain ('this.Markets_by_id[*marketId]; ok {');
+    });
+
     describe ('go tuple first-result binds', () => {
         test('direct and held first-result reads bind natively', () => {
             const out = print (SRC);
@@ -11032,6 +11049,21 @@ describe ('goToStringNativeArms', () => {
             expect(res.stdlibImports).toEqual(['strconv', 'strings']);
             expect(res.content).toContain('strconv.Itoa(n)');
             expect(res.content).toContain('strings.Join(ids, ",")');
+        });
+
+        test('a seam file prints indexOf over two Go strings as strings.Index', () => {
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'go-stdlib-imports-indexof-'));
+            try {
+                const src = path.join(tmp, 'ts', 'src', 'base');
+                fs.mkdirSync(src, { recursive: true });
+                const file = path.join(src, 'Exchange.ts');
+                fs.writeFileSync(file, 'export class Exchange {\n    f (): number {\n        const a: string = \'abc\';\n        const b: string = \'b\';\n        return a.indexOf (b);\n    }\n}\n');
+                const res = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 }, 'baseFileStdlibImportSeamPaths': 'base/Exchange\\.ts$' } }).transpileGoByPath(file);
+                expect(res.content).toContain('strings.Index(a, b)');
+                expect(res.stdlibImports).toContain('strings');
+            } finally {
+                fs.rmSync(tmp, { recursive: true, force: true });
+            }
         });
 
         test('a file the writer does not declare imports for lists none and keeps the helper', () => {

@@ -26007,7 +26007,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 continue;
             }
             const test = this.goUnwrapParenthesizedNode(sibling.expression);
-            if (this.goIsNilTestOf(test, ident) && this.goStatementAlwaysExits(sibling.thenStatement)) {
+            if ((this.goIsNilTestOf(test, ident) || this.goOrChainHasNilTestOf(test, ident)) && this.goStatementAlwaysExits(sibling.thenStatement)) {
                 return true;
             }
         }
@@ -29383,12 +29383,48 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return `${line}${character}`;
     }
 
+    // `m['k'] = (p !== undefined) ? p : this.sum (a, b)` over a `*int64` local p and int64 locals a, b: the
+    // nil guard proves `*p` and Sum of two int64 is `a + b`, so the store is a native if/else (no any closure)
+    goInt64TernaryStore(node, identation): string | undefined {
+        const assign: any = node?.expression;
+        if ((assign?.kind !== SyntaxKind.BinaryExpression) || (assign.operatorToken?.kind !== SyntaxKind.EqualsToken)
+            || (assign.left?.kind !== SyntaxKind.ElementAccessExpression) || (assign.left.expression?.kind !== SyntaxKind.Identifier)
+            || (assign.left.argumentExpression?.kind !== SyntaxKind.StringLiteral) || (assign.right?.kind !== SyntaxKind.ConditionalExpression)) {
+            return undefined;
+        }
+        const ternary: any = assign.right;
+        const condition: any = this.goUnwrapParenthesizedNode(ternary.condition);
+        const whenTrue: any = this.goUnwrapParenthesizedNode(ternary.whenTrue);
+        const sum: any = this.goUnwrapParenthesizedNode(ternary.whenFalse);
+        const op = condition?.operatorToken?.kind;
+        if ((condition?.kind !== SyntaxKind.BinaryExpression) || ((op !== SyntaxKind.ExclamationEqualsEqualsToken) && (op !== SyntaxKind.ExclamationEqualsToken))
+            || (whenTrue?.kind !== SyntaxKind.Identifier) || !this.goIsSameSymbol(condition.left, whenTrue) || !this.goIsNilLiteral(condition.right)
+            || (sum?.kind !== SyntaxKind.CallExpression) || (sum.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (sum.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (sum.expression.name?.text !== 'sum') || (sum.arguments?.length !== 2)
+            || !sum.arguments.every((a: any) => (a.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(a) === 'int64'))
+            || (this.goDeclaredTypeOfIdentifier(whenTrue) !== '*int64')) {
+            return undefined;
+        }
+        if (this.goDeclaredTypeOfIdentifier(assign.left.expression) !== 'map[string]any') {
+            return undefined;
+        }
+        const target = `${this.printNode(assign.left.expression, 0)}[${this.printNode(assign.left.argumentExpression, 0)}]`;
+        const ind = this.getIden(identation);
+        const p = this.printNode(whenTrue, 0);
+        const [ a, b ] = sum.arguments.map((x: any) => this.printNode(x, 0));
+        return this.printNodeCommentsIfAny(node, identation, `${ind}if ${p} != nil {\n${ind}\t${target} = *${p}\n${ind}} else {\n${ind}\t${target} = ${a} + ${b}\n${ind}}`);
+    }
+
     printExpressionStatement(node, identation) {
 
         if (node?.expression?.kind === SyntaxKind.AsExpression) {
             node = node.expression;
         }
         if (node.expression.kind !== SyntaxKind.AwaitExpression) {
+            const ternary = this.goInt64TernaryStore(node, identation);
+            if (ternary !== undefined) {
+                return ternary;
+            }
             const printed = this.stripWhitespaceOnlyLines (super.printExpressionStatement(node, identation));
             // the urls views (UrlsApi, UrlsApiSections) are re-derived right after each write of urls
             return ((printed.length > 0) && this.goIsUrlsWrite(node)) ? `${printed}\n${this.getIden(identation)}this.RefreshUrlsViews()` : printed;
@@ -30004,16 +30040,18 @@ ${this.getIden(identation)}${returnStatement}`;
         if (name.includes('\n') || parsedArg.includes('\n')) {
             return undefined;
         }
-        if (!this.goFileKeepsFileLevelImports() || this.goInsideExcisedSpan()) {
+        if (!this.goStdlibImportIsPlaceable()) {
             return undefined;
         }
+        // the base files (stdlib import seam) take only the plain string pair
+        const seamOnly = !this.goFileKeepsFileLevelImports();
         const receiver = this.goUnwrapPrintedAssertions(node?.expression?.expression);
         const target = this.goUnwrapPrintedAssertions(node?.arguments?.[0]);
         if (this.goIndexOfOperandType(target, parsedArg) !== 'string') {
             return undefined; // a nilable/number needle answers -1 in the helper
         }
         // an `(x as string)` receiver is the author's non-null promise: no nil guard needed
-        if (this.goAssertedStringDeref(node?.expression?.expression)) {
+        if (!seamOnly && this.goAssertedStringDeref(node?.expression?.expression)) {
             this.goFileStdlibImports.add('strings');
             return `strings.Index(*${name.trim()}, ${parsedArg})`;
         }
@@ -30023,7 +30061,7 @@ ${this.getIden(identation)}${returnStatement}`;
             return `strings.Index(${name}, ${parsedArg})`;
         }
         // the literal repeats the identifier, so the receiver is still read exactly once
-        if ((receiverType === '*string') && (receiver?.kind === SyntaxKind.Identifier)) {
+        if (!seamOnly && (receiverType === '*string') && (receiver?.kind === SyntaxKind.Identifier)) {
             this.goFileStdlibImports.add('strings');
             const level = this.goStatementLevel;
             const body = this.getIden(level + 1);
