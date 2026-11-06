@@ -7958,6 +7958,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.printNode(expression, 0) + '[' + cast + this.printNode(argumentExpression, 0) + ']';
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
     printElementAccessExpressionExceptionIfAny(node) {
         // C# never takes the base class's exception path for element access
         return undefined;

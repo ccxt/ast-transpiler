@@ -15752,6 +15752,155 @@ const GO_GETARG_NIL_MAP_READERS = [
     'SafeInteger', 'SafeInteger2', 'SafeNumber', 'SafeNumber2', 'SafeFloat', 'SafeBool', 'SafeTimestamp',
 ];
 
+
+// ---------------------------------------------------------------------------------------------
+// Proven return families (config `provenReturnFamilies`): methods whose base and every override
+// return one Go container type. printMethodDeclaration retypes the printed `any` signature and the
+// returned locals of such a method; an unproven def throws (Go interfaces pin one signature).
+// Each family: { names, type, paramWrap, calls, receivers? }; `provenStructToMapCalls` names the
+// package-level struct->map converters a returned expression may start with.
+// ---------------------------------------------------------------------------------------------
+function goProvenSkipLiteral (content: string, index: number): number {
+    const quote = content[index];
+    for (let i = index + 1; i < content.length; i++) {
+        const char = content[i];
+        if (char === '\\' && quote !== '`') {
+            i += 1;
+        } else if (char === quote) {
+            return i;
+        } else if (char === '\n' && quote !== '`') {
+            return i - 1;                 // unterminated: stop at the line end
+        }
+    }
+    return content.length - 1;
+}
+
+// index of the last byte of the comment that starts at `index`
+function goProvenSkipComment (content: string, index: number): number {
+    if (content[index + 1] === '/') {
+        const end = content.indexOf ('\n', index);
+        return end < 0 ? content.length - 1 : end;
+    }
+    const end = content.indexOf ('*/', index + 2);
+    return end < 0 ? content.length - 1 : end + 1;
+}
+
+function goFunctionLevelReturnExprs (body: string): string[] | undefined {
+    const inLiteral: boolean[] = [];
+    const stack: boolean[] = [];
+    let literalOpen = 0;
+    for (let i = 0; i < body.length; i++) {
+        inLiteral[i] = literalOpen > 0;
+        const c = body[i];
+        // block comments too: a doc URL (`https://`) would otherwise open a line comment mid-docblock
+        if ((c === '"') || (c === '`') || (c === "'") || ((c === '/') && ((body[i + 1] === '/') || (body[i + 1] === '*')))) {
+            const end = ((c === '/') && (body[i + 1] === '/')) ? goProvenSkipComment (body, i) - 1 : (c === '/') ? goProvenSkipComment (body, i) : goProvenSkipLiteral (body, i);
+            for (let k = i + 1; k <= end; k++) {
+                inLiteral[k] = literalOpen > 0;
+            }
+            i = end;
+        } else if (c === '{') {
+            const lineStart = body.lastIndexOf ('\n', i - 1) + 1;
+            const isLiteral = /(^|[^\w.])func\s*\([^)]*\)/.test (body.substring (lineStart, i));
+            stack.push (isLiteral);
+            literalOpen += isLiteral ? 1 : 0;
+        } else if (c === '}') {
+            if (!stack.length) {
+                return undefined;
+            }
+            literalOpen -= stack.pop () ? 1 : 0;
+        }
+    }
+    if (stack.length) {
+        return undefined;
+    }
+    const exprs: string[] = [];
+    let offset = 0;
+    for (const line of body.split ('\n')) {
+        const trimmed = line.trim ();
+        if (!inLiteral[offset] && /^return([ \t]|$)/.test (trimmed)) {
+            exprs.push (trimmed.substring ('return'.length).trim ());
+        }
+        offset += line.length + 1;
+    }
+    return exprs;
+}
+
+
+function goBalanceLocalIsMap (body: string, name: string): boolean {
+    if ((body.match (new RegExp ('\\bvar ' + name + '\\b', 'g')) || []).length !== 1) {
+        return false;
+    }
+    if (!new RegExp ('\\n\\t+var ' + name + ' (?:any|map\\[string\\]any) = map\\[string\\]any\\{').test (body)) {
+        return false;
+    }
+    if (new RegExp ('(?<![\\w.])' + name + '\\s*(?:,[^\\n=]*)?:=|\\bfunc\\s*\\([^)]*\\b' + name + ' ').test (body)) {
+        return false;
+    }
+    const writes = body.match (new RegExp ('(^|[^\\w.])' + name + '\\s*[-+*/:]?=[^=][^\\n]*', 'gm')) || [];
+    const keeps = new RegExp ('^[^\\w.]?' + name + ' = (?:MapTyped\\()?this\\.(?:MergeBalanceAccount\\(' + name + ', |SafeBalance\\(' + name + '\\)\\)?$)');
+    return writes.every ((w) => keeps.test (w));
+}
+
+function retypeGoProvenFamily (content: string, names: string[], type: string, paramWrap: string, calls: string[], receivers = '\\w+', converters: string[] = []): string {
+    const literal = type + '{';
+    const provenCall = new RegExp ('^(?:ccxt\\.)?this\\.(?:DerivedExchange\\.|base\\.)?(?:' + calls.join ('|') + ')\\(');
+    // the struct->map converters are package-level functions (no `this.` receiver)
+    const provenConverter = new RegExp ('^(?:ccxt\\.)?(?:' + converters.join ('|') + ')\\(');
+    const proven = (e: string) => e.startsWith (literal) || provenCall.test (e) || provenConverter.test (e);
+    const typeRe = type.replace (/[[\]]/g, '\\$&');
+    const head = new RegExp ('\\nfunc \\(this \\*(' + receivers + ')\\) (' + names.join ('|') + ')\\(([^)\\n]*)\\) any \\{\\n', 'g');
+    let out = '';
+    let cursor = 0;
+    for (let m = head.exec (content); m !== null; m = head.exec (content)) {
+        const open = m.index + m[0].length - 1;
+        const close = content.indexOf ('\n}\n', open);
+        const body = (close < 0) ? '' : content.substring (open, close + 1);
+        const exprs = goFunctionLevelReturnExprs (body);
+        const where = m[1] + '.' + m[2];
+        if ((close < 0) || (exprs === undefined)) {
+            throw new Error ('provenReturnFamilies: cannot scan ' + where);
+        }
+        if (!exprs.length && !/(^|\n)\tpanic\([^\n]*\)\n$/.test (body)) {
+            throw new Error ('provenReturnFamilies: ' + where + ' has no return and does not end in panic');
+        }
+        let newBody = body;
+        const params = m[3].split (',').map ((p) => p.trim ().split (' ')[0]);
+        for (const expr of exprs) {
+            if (proven (expr)) {
+                continue;
+            }
+            const balance = /^this\.SafeBalance\((\w+)\)$/.exec (expr);
+            if ((type === 'map[string]any') && (balance !== null) && goBalanceLocalIsMap (newBody, balance[1])) {
+                newBody = newBody.replace (new RegExp ('\\n(\\t+)return this\\.SafeBalance\\(' + balance[1] + '\\)\\n', 'g'), '\n$1return this.SafeBalance(' + balance[1] + ').(map[string]any)\n');
+                continue;
+            }
+            const local = /^\w+$/.test (expr) ? expr : undefined;
+            if ((local !== undefined) && params.includes (local) && !new RegExp ('\\n\\t+(?:var ' + local + '\\b|' + local + ' :?=)').test (newBody)) {
+                newBody = newBody.replace (new RegExp ('\\n(\\t+)return ' + local + '\\n', 'g'), '\n$1return ' + paramWrap + '(' + local + ')\n');
+                continue;
+            }
+            const declRe = (local === undefined) ? undefined : new RegExp ('\\n(\\t+)var ' + local + ' (any|' + typeRe + ') = ([^\\n]*)');
+            const decl = (declRe === undefined) ? null : declRe.exec (newBody);
+            // the multi-assignment alternative stops at the first `=` and never crosses a call's
+            // parentheses: `GetValue(x, "k"), nil)) && (y !=` is a comparison, not a write of `x`
+            const writes = (local === undefined) ? [] : (newBody.match (new RegExp ('(^|[^\\w.])' + local + '(\\s*[-+*/]?=[^=]|\\s*:=|\\s*,\\s*[A-Za-z_][\\w.[\\]]*\\s*=[^=])', 'gm')) || []);
+            const nilWrites = (local === undefined) ? [] : (newBody.match (new RegExp ('(^|[^\\w.])' + local + ' = nil\\b', 'gm')) || []);
+            const declCount = (local === undefined) ? 0 : (newBody.match (new RegExp ('\\bvar ' + local + '\\b', 'g')) || []).length;
+            // a local the printer already typed `type` compiles whatever its writes; nil writes stay rejected
+            const typedOk = (decl !== null) && (decl[2] === type) && (proven (decl[3]) || (nilWrites.length === 0) && (decl[3] !== 'nil'));
+            const anyOk = (decl !== null) && proven (decl[3]) && (writes.length === 0);
+            if ((decl === null) || (declCount !== 1) || !(typedOk || anyOk)) {
+                throw new Error ('provenReturnFamilies: ' + where + ' returns unproven `' + expr.split ('\n')[0] + '`');
+            }
+            newBody = newBody.replace (declRe, '\n$1var ' + local + ' ' + type + ' = $3');
+        }
+        out += content.substring (cursor, m.index) + m[0].replace (/ any \{\n$/, ' ' + type + ' {') + newBody;
+        cursor = close + 1;
+    }
+    return out + content.substring (cursor);
+}
+
 export class GoTranspiler extends BaseTranspiler {
 
     // scopes are scanned many times per local; walking remote TS7 nodes is costly, so the
@@ -15809,6 +15958,9 @@ export class GoTranspiler extends BaseTranspiler {
     // producer -> index of its default-value argument: an integer-literal default selects the value form,
     // which returns a Go pair instead of the `[]any` holder
     goTupleValueDefaultArg: { [producer: string]: number } = {};
+    // ccxt return families (see retypeGoProvenFamily) and the struct->map converters they may return
+    provenReturnFamilies: any[] = [];
+    provenStructToMapCalls: string[] = [];
     // array literals the current print opens as a Go slice (set by the call-argument rule)
     goSliceLiteralTypes: Map<any, string> = new Map<any, string>();
     // installed by the ccxt build: GetArg alias -> Go types, and the audited consumer table
@@ -15882,6 +16034,8 @@ export class GoTranspiler extends BaseTranspiler {
         this.asyncTickerMapCallees = new Set<string>(config['asyncTickerMapCallees'] ?? []);
         this.goTupleSlotTypes = config['goTupleSlotTypes'] ?? {};
         this.goTupleValueDefaultArg = config['goTupleValueDefaultArg'] ?? {};
+        this.provenReturnFamilies = config['provenReturnFamilies'] ?? [];
+        this.provenStructToMapCalls = config['provenStructToMapCalls'] ?? [];
     }
 
     initConfig() {
@@ -16142,9 +16296,22 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const isAsync = this.isAsyncFunction(node);
         const funcBody = this.printFunctionBody(node, identation, isAsync);
         if (!isAsync) {
-            return methodDef + funcBody;
+            return this.goProvenReturnRetype(node, methodDef + funcBody);
         }
         return this.printAsyncDeclarationPair(node, identation, methodDef, funcBody, true);
+    }
+
+    // a method of a proven return family prints its family type (retypeGoProvenFamily over its own text)
+    goProvenReturnRetype(node, printed: string): string {
+        const name = this.transformMethodNameIfNeeded(String(node.name?.text ?? ''));
+        let out = printed;
+        for (const family of this.provenReturnFamilies) {
+            if (family.names.includes(name)) {
+                const text = retypeGoProvenFamily('\n' + out + '\n', family.names, family.type, family.paramWrap, family.calls, family.receivers ?? '\\w+', this.provenStructToMapCalls);
+                out = text.substring(1, text.length - 1);
+            }
+        }
+        return out;
     }
 
     // Trampoline + body pair, see printAsyncTrampolineBlock. A module-scope `async function`

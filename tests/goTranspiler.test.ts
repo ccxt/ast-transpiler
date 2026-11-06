@@ -13950,3 +13950,19 @@ describe ('go nil-declared bool join truthiness', () => {
         expect (out).not.toContain ('shouldFail == true');
     });
 });
+
+describe('go proven return families (config provenReturnFamilies)', () => {
+    const fam = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 },
+        'provenReturnFamilies': [ { 'names': [ 'ParseOrder', 'ParseThing' ], 'type': 'map[string]any', 'paramWrap': 'MapTyped', 'calls': [ 'Extend' ] } ] } });
+    test('a proven family method prints its family type and types the returned local', () => {
+        const ts = 'class X {\n    parseOrder (order) {\n        const r = { \'id\': order };\n        return r;\n    }\n    other (o) {\n        return o;\n    }\n}\n';
+        const out = fam.transpileGo(ts).content;
+        expect (out).toContain (') ParseOrder(order any) map[string]any {');
+        expect (out).toMatch (/var r map\[string\]any = map\[string\]any\{/);
+        expect (out).toContain (') Other(o any) any {');
+    });
+    test('an unproven family method throws', () => {
+        const ts = 'class X {\n    parseThing (o) {\n        return o.x;\n    }\n}\n';
+        expect (() => fam.transpileGo(ts)).toThrow (/provenReturnFamilies/);
+    });
+});
