@@ -1654,7 +1654,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 return "";
             }
             const printed = this.printVariableDeclarationList(node.declarationList, identation);
-            const declared = /^\s*([\w<>,.?\[\] ]+?)\s+[A-Za-z_]\w*\s*(?:=[^=]|$)/.exec(printed);
+            const declared = /^\s*([\w<>,.?[\] ]+?)\s+[A-Za-z_]\w*\s*(?:=[^=]|$)/.exec(printed);
             if ((declared !== null) && (node.declarationList?.declarations?.length === 1)) {
                 this.csharpPrintedDeclarationTypes.set(node.declarationList.declarations[0], declared[1]);
             }

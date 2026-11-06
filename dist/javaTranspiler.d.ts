@@ -27,6 +27,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaHandlerReads: Set<string>;
     javaHandlerScannedFile: any;
     javaCheckedBoxLocalTypeCache: WeakMap<Node, string | typeof JAVA_MEMO_UNDEFINED>;
+    javaLongLimitLiteralLocalCache: WeakMap<Node, boolean>;
     javaHandBackVisiting: Set<any>;
     javaVenueCalleeInProgress: Set<Node>;
     javaVenueCalleeDeclarations: WeakMap<Node, Node>;
@@ -100,6 +101,9 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaCoreParameterTypes(method: any): string[];
     javaCoreDefaultArgument(param: any, type: string): string;
     javaCoreArgument(type: string, printed: string, node: any): string | undefined;
+    javaArgumentFeedsLongCoreSlot(arg: any): boolean;
+    javaLongLimitLiteralLocal(declaration: any): boolean;
+    javaLongLimitLiteralLocalCached(declaration: any): boolean;
     javaConvertToCoreType(type: string, printed: string, node: any): string;
     javaStringListLiteral(node: any): string | undefined;
     javaStringListElementIsProven(node: any): boolean;

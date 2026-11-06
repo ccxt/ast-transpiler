@@ -40,6 +40,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpListParamDeclarations: WeakSet<Node>;
     csharpMemberWriteCache: WeakMap<object, Map<string, boolean>>;
     csharpMemberKeyCounters: WeakMap<object, number>;
+    csharpInOpDictCounters: WeakMap<object, number>;
     csharpBaseListParamDeclarations: WeakSet<Node>;
     csharpPromiseAllSites: WeakMap<Node, any>;
     csharpPromiseAllTaskDeclarations: WeakSet<Node>;
@@ -55,6 +56,19 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDictParamsMethods: Set<string>;
     csharpCoreArgTypes: Record<string, Record<number, string>>;
     csharpSignatureArgTypes: Record<string, Record<number, string>>;
+    csharpCallSiteArgTypes: Record<string, Record<number, string>>;
+    csharpTypedCoreInMemoryReceiver: string | undefined;
+    csharpTypedCores: {
+        base: Record<string, string>;
+        prediction: Record<string, string>;
+        snapshot: Record<string, {
+            type: string;
+            predictionType?: string;
+        }>;
+        venue: Record<string, Record<string, string>>;
+    } | undefined;
+    csharpCallSiteTypedIdentifiers: Set<string>;
+    csharpPrintedDeclarationTypes: WeakMap<Node, string>;
     csharpActiveShadows: Map<Node, string>;
     csharpCoreArgShadowParams: WeakMap<Node, any[]>;
     stringReceiverTypes: WeakMap<Node, string>;
@@ -159,7 +173,18 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpListParamCensus(): Map<string, boolean> | undefined;
     csharpListParamBodyReadsAsList(parameter: any): boolean;
     csharpArgumentMayBeList(type: any): boolean;
-    printArgsForCallExpression(node: any, identation: any): any;
+    printArgsForCallExpression(node: any, identation: any): string;
+    csharpListParamArgs(node: any, identation: any): string[];
+    csharpCallSiteReceiverTier(node: any): 'source' | 'restTest' | 'wsTest' | undefined;
+    csharpCallSiteRow(node: any): Record<number, string> | undefined;
+    csharpCallSiteArgs(node: any, printed: string[]): string;
+    csharpCallSiteArg(argument: any, text: string, wanted: string, test: boolean): {
+        text: string;
+        tight: boolean;
+    } | undefined;
+    csharpCallSiteOperand(argument: any): any;
+    csharpCallSiteIdentityOperand(argument: any, wanted: string, text: string): string;
+    csharpCallSiteDeclaredType(argument: any, printedName: string): string | undefined;
     csharpListParamIsWritten(parameter: any): boolean;
     csharpListBindingIsWritten(declaration: any): boolean;
     csharpListParamArgumentPrintsList(argument: any, decide?: (key: string) => boolean): boolean;
@@ -379,6 +404,9 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredReadEqualityType(node: any, printerType: string | undefined): string | undefined;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpDeclaredReadEqualityKind(node: any, operandType: string | undefined): string | undefined;
+    csharpPrintedBoolParamType(node: any): string | undefined;
+    csharpPrintedBoolParamEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
+    csharpDeclaredNullTestType(node: any): string | undefined;
     csharpNullComparison(text: string, isEquality: boolean): string;
     csharpNativeNumericCallEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpPrintedArithmeticKind(node: any, text: string): string | undefined;
@@ -395,6 +423,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpOperandIsNumberLiteralUnion(operand: any): boolean;
     csharpOperandIsPlainNumber(operand: any): boolean;
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
+    csharpComparisonOperandKinds(left: any, right: any): [string | undefined, string | undefined];
     csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
     csharpNativeSameKindMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
     csharpMinMaxResultIsPlainValue(node: any): boolean;
@@ -531,6 +560,16 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printTypedDictElementAccessIfAny(node: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     printCallExpression(node: any, identation: any): any;
+    csharpPascalName(name: string): string;
+    csharpTypedCoreTier(node: any): {
+        prediction: boolean;
+        venues: string[];
+    } | undefined;
+    csharpTypedCoreVenues(node: any): string[];
+    csharpTypedCoreType(node: any, name: string): string;
+    csharpTypedCoreTypeIn(name: string, prediction: boolean, venues: string[]): string;
+    csharpTypedCoreCallReceiver(node: any): string | undefined;
+    csharpFutureSettleCall(node: any): string | undefined;
     csharpInt64TaskCallName(node: any): string | undefined;
     csharpNativeStringKey(key: any): string | undefined;
     csharpIsDictionaryType(type: any): boolean;
@@ -543,6 +582,10 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         nullTest?: string;
     } | undefined;
     csharpNativeInExpression(key: any, obj: any): string | undefined;
+    csharpDictOrNullInExpression(key: any, obj: any): string | undefined;
+    csharpIsExchangeSource(node: any): boolean;
+    csharpDictOrNullValue(node: any, depth: number): boolean;
+    csharpDictOrNullTupleSlot(node: any, depth: number): boolean;
     csharpMemberInExpression(key: any, obj: any): string | undefined;
     csharpMemberKeyKind(key: any): 'string' | 'string?' | 'object' | 'param' | undefined;
     csharpMemberKeyVariable(key: any): string;

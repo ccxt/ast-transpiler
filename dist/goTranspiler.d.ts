@@ -858,6 +858,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     };
     provenReturnFamilies: any[];
     provenStructToMapCalls: string[];
+    omitTupleMapMethods: string | undefined;
     goSliceLiteralTypes: Map<any, string>;
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
@@ -1703,6 +1704,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printAwaitExpression(node: any, identation: any): string;
     printInstanceOfExpression(node: BinaryExpression, identation: number): string;
     getLineBasedSuffix(node: any): string;
+    goInt64TernaryStore(node: any, identation: any): string | undefined;
     printExpressionStatement(node: any, identation: any): string;
     isInsideAsyncFunction(returnStatementNode: any): any;
     /**
