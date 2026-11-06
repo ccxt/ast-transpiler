@@ -9038,6 +9038,21 @@ describe ('goTupleFirstResultBinds', () => {
         return out.slice (out.indexOf ('func (this *Ex)'));
     };
 
+    test('a method returning Omit of a tuple params map prints map[string]any (config omitTupleMapMethods)', () => {
+        const src = BASE.replace ('    options: Dict = {};', '    options: Dict = {};\n    omit (x: any, k: any): any { return x; }') + '\nclass Ex extends BaseExchange {\n    route (m: string, params: Dict = {}) {\n        const [ r, rest ] = this.handleMarketTypeAndParams (m, undefined, params);\n        return this.omit (rest, "x");\n    }\n}\n';
+        const run = (methods: string | undefined): string => {
+            const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            installCcxtGoLocalTypes (x.goTranspiler);
+            installFmGo5GP08 (x.goTranspiler);
+            (x.goTranspiler as any).omitTupleMapMethods = methods;
+            return x.transpileGo (src).content;
+        };
+        const out = run ('HandleMarketTypeAndParams');
+        expect (out).toMatch (/\) Route\([^)]*\) map\[string\]any \{/);
+        expect (out).toContain ('return this.OmitDict(rest, "x")');
+        expect (run (undefined)).not.toContain ('OmitDict');
+    });
+
     describe ('go tuple first-result binds', () => {
         test('direct and held first-result reads bind natively', () => {
             const out = print (SRC);

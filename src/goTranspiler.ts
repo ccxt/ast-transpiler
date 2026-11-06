@@ -15902,6 +15902,36 @@ function retypeGoProvenFamily (content: string, names: string[], type: string, p
     return out + content.substring (cursor);
 }
 
+// `a, x := this.HandleXAndParams(..)` binds x as map[string]any; when that is x's only declaration,
+// Omit(x, ..) always yields a map (config `omitTupleMapMethods`: the tuple producers, a regex alternation)
+function goOmitTupleMap (func: string, name: string, methods: string): boolean {
+    const binds = new RegExp ('\\bvar ' + name + '\\b|(?<![\\w.])' + name + '\\s*(?:,\\s*\\w+\\s*)*:=|,\\s*' + name + '\\s*(?:,\\s*\\w+\\s*)*:=|[(,]\\s*' + name + ' [\\w\\[*.]|&' + name + '\\b');
+    const decls = func.split ('\n').filter ((l) => binds.test (l));
+    const tuple = new RegExp ('^\\s*\\w+, ' + name + ' := this\\.(?:Exchange\\.)?(?:' + methods + ')\\(');
+    return (decls.length === 1) && tuple.test (decls[0]);
+}
+
+// a method whose every function-level return is `this.Omit(x, ..)` of a tuple params map returns map[string]any (OmitDict)
+function retypeGoOmitTupleMapReturns (content: string, methods: string): string {
+    const head = /\nfunc \(this \*\w+\) \w+\([^)\n]*\) any \{\n/g;
+    let out = '';
+    let cursor = 0;
+    for (let m = head.exec (content); m !== null; m = head.exec (content)) {
+        const open = m.index + m[0].length - 1;
+        const close = content.indexOf ('\n}\n', open);
+        const body = (close < 0) ? '' : content.substring (open, close + 1);
+        const exprs = (close < 0) ? undefined : goFunctionLevelReturnExprs (body);
+        const omit = /^this\.Omit\((\w+), /;
+        if ((exprs === undefined) || !exprs.length || body.includes ('func(') || !exprs.every ((e) => omit.test (e) && goOmitTupleMap (body, omit.exec (e)[1], methods))) {
+            continue;
+        }
+        out += content.substring (cursor, m.index) + m[0].replace (/\) any \{\n$/, ') map[string]any {\n') + body.replace (/\n(\t+)return this\.Omit\(/g, '\n$1return this.OmitDict(').substring (1);
+        cursor = close + 1;
+        head.lastIndex = cursor;
+    }
+    return out + content.substring (cursor);
+}
+
 export class GoTranspiler extends BaseTranspiler {
 
     // scopes are scanned many times per local; walking remote TS7 nodes is costly, so the
@@ -15962,6 +15992,7 @@ export class GoTranspiler extends BaseTranspiler {
     // ccxt return families (see retypeGoProvenFamily) and the struct->map converters they may return
     provenReturnFamilies: any[] = [];
     provenStructToMapCalls: string[] = [];
+    omitTupleMapMethods: string | undefined = undefined;
     // array literals the current print opens as a Go slice (set by the call-argument rule)
     goSliceLiteralTypes: Map<any, string> = new Map<any, string>();
     // installed by the ccxt build: GetArg alias -> Go types, and the audited consumer table
@@ -16037,6 +16068,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.goTupleValueDefaultArg = config['goTupleValueDefaultArg'] ?? {};
         this.provenReturnFamilies = config['provenReturnFamilies'] ?? [];
         this.provenStructToMapCalls = config['provenStructToMapCalls'] ?? [];
+        this.omitTupleMapMethods = config['omitTupleMapMethods'];
     }
 
     initConfig() {
@@ -16311,6 +16343,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 const text = retypeGoProvenFamily('\n' + out + '\n', family.names, family.type, family.paramWrap, family.calls, family.receivers ?? '\\w+', this.provenStructToMapCalls);
                 out = text.substring(1, text.length - 1);
             }
+        }
+        if (this.omitTupleMapMethods !== undefined) {
+            const text = retypeGoOmitTupleMapReturns('\n' + out + '\n', this.omitTupleMapMethods);
+            out = text.substring(1, text.length - 1);
         }
         return out;
     }
