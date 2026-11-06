@@ -4,11 +4,22 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined")
+    return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
 var __esm = (fn, res) => function __init() {
   return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
 };
-var __commonJS = (cb, mod) => function __require() {
+var __commonJS = (cb, mod) => function __require2() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -40,6 +51,23 @@ var init_esm_shims = __esm({
 });
 
 // src/tsUtils.ts
+var tsUtils_exports = {};
+__export(tsUtils_exports, {
+  ModifierFlags: () => ModifierFlags,
+  canHaveModifiers: () => canHaveModifiers,
+  findAncestor: () => findAncestor,
+  getAllSuperTypeNodes: () => getAllSuperTypeNodes,
+  getCombinedNodeFlags: () => getCombinedNodeFlags,
+  getModifiers: () => getModifiers,
+  isClassLike: () => isClassLike,
+  isFunctionLike: () => isFunctionLike,
+  isStringLiteralLike: () => isStringLiteralLike,
+  signatureDeclaration: () => signatureDeclaration,
+  symbolDeclarations: () => symbolDeclarations,
+  symbolValueDeclaration: () => symbolValueDeclaration,
+  typeParts: () => typeParts,
+  typeTarget: () => typeTarget
+});
 init_esm_shims();
 import { SyntaxKind, ModifierFlags } from "typescript/unstable/ast";
 var FUNCTION_LIKE_KINDS = /* @__PURE__ */ new Set([
@@ -135,6 +163,7 @@ function typeTarget(type) {
 }
 
 export {
+  __require,
   __commonJS,
   __toESM,
   __dirname,
@@ -152,6 +181,7 @@ export {
   symbolValueDeclaration,
   signatureDeclaration,
   typeParts,
-  typeTarget
+  typeTarget,
+  tsUtils_exports
 };
-//# sourceMappingURL=chunk-WD722H3U.js.map
+//# sourceMappingURL=chunk-O5MZOAMZ.js.map

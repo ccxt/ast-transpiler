@@ -1,6 +1,35 @@
 import { Transpiler } from '../src/transpiler';
 import { isElementAccessExpression, isIdentifier } from "typescript/unstable/ast/is";
 import { RUST_DECLARED_DICT_LOCALS } from '../src/rustTranspiler';
+import * as os from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// fixture trees used above are written to a temp dir so the suite carries no fixture files
+const rustInlineFixtures: Record<string, Record<string, string>> = {
+ "bool-params": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['sandbox'] = true;\n        }\n    }\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n    hold (f: any): any {\n        return f;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required `boolean` read only in condition slots -> native `bool`\n    settlementData (isBuy: boolean, amount: any) {\n        if (isBuy) {\n            return -amount;\n        }\n        return amount;\n    }\n    // optional `boolean`: bound with the truthiness the use sites applied\n    starkAmount (amount: any, roundUp: boolean = false) {\n        if (roundUp) {\n            return amount + 1;\n        }\n        return amount;\n    }\n    // a bool parameter forwarded into a native-`bool` slot\n    forwarded (on: boolean) {\n        return this.settlementData (on, 1);\n    }\n    // a `Value` argument coerces at the call site\n    fromValue (raw: any) {\n        return this.settlementData (raw, 2);\n    }\n    // a bool parameter read outside a bool sink keeps the box\n    boxed (flag: boolean) {\n        const held = flag;\n        return held;\n    }\n    // an override keeps the base `Value` signature\n    override setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['demo'] = true;\n        }\n    }\n    // a method reference handed to another call keeps the `Value` signature\n    channelB (flag: boolean) {\n        if (flag) {\n            return 1;\n        }\n        return 2;\n    }\n    holdRef () {\n        return this.hold (this.channelB);\n    }\n}\n"
+ },
+ "free-fn-defaults": {"ts/src/test/Exchange/test.helper.ts": "async function helperTest (exchange: any, symbol: string, params = {}) {\n    return [ exchange, symbol, params ];\n}\nasync function noAwait (exchange: any) {\n    return exchange;\n}\nasync function testHelper (exchange: any, symbol: string) {\n    const a = await helperTest (exchange, symbol);\n    const b = helperTest (exchange, symbol, { 'x': 1 });\n    const c = await noAwait (exchange);\n    return [ a, b, c ];\n}\nexport default testHelper;\n"},
+ "bool-locals": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required bool parameter: the native-`bool` slot a local may flow into\n    settle (isMarket: boolean, amount: any) {\n        if (isMarket) {\n            return -amount;\n        }\n        return amount;\n    }\n    // a bool local from a comparison, read in condition slots AND a native-`bool` slot\n    localIntoBoolSlot (type: string) {\n        const isMarket = (type === 'market');\n        if (!isMarket) {\n            return 0;\n        }\n        if (isMarket && (type === 'x')) {\n            return 1;\n        }\n        return this.settle (isMarket, 2);\n    }\n    // a comparison local read only in conditions stays typed (no regression)\n    localConditionsOnly (type: string) {\n        const isSpot = (type === 'spot');\n        if (isSpot) {\n            return 1;\n        }\n        return 0;\n    }\n    // negative: a Value slot keeps the box\n    localIntoValueSlot (type: string) {\n        const isWide = (type === 'spot');\n        const held = [ isWide ];\n        return held;\n    }\n    // negative: a `Value` read into the bool slot still coerces\n    valueIntoBoolSlot (raw: any) {\n        return this.settle (raw, 3);\n    }\n}\n"
+ },
+ "a15dstrvec": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    options: Dict = {};\n    omit = omit;\n    extend = extend;\n    safeValue (d: any, k: any, dflt: any = undefined): any {\n        return d === undefined ? dflt : d[k];\n    }\n    safeDict (d: any, k: any, dflt: Dict = undefined): Dict {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'object') ? v : dflt;\n    }\n    safeBool (d: any, k: any, dflt: Bool = undefined): Bool {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'boolean') ? v : dflt;\n    }\n    checkOptionBool (methodName: string, optionName: string, value: any): Bool {\n        if (value === undefined) {\n            return undefined;\n        }\n        return value === true;\n    }\n    handleOptionBoolAndParams (params: Dict, methodName: string, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const value = this.safeValue (params, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), params ];\n    }\n    handleTriggerAndParams (params: any): any[] {\n        const isTrigger = this.safeBool (params, 'trigger');\n        return [ isTrigger, params ];\n    }\n    handleOptionAndParams (params: Dict, methodName: string, optionName: string, defaultValue: any = undefined): [any, Dict] {\n        return [ this.safeValue (params, optionName, defaultValue), params ];\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchByIds (ids: string[], symbol: string = undefined, params: Dict = {}) {\n        const request: Dict = { 'txid': ids.join (',') };\n        return request;\n    }\n    async fetchOne (id: string, params: Dict = {}) {\n        return await this.fetchByIds ([ id ], undefined, params);\n    }\n    async fetchIndexed (ids: string[], params: Dict = {}) {\n        const first = ids[0];\n        return ids.join (',') + first;\n    }\n    async fetchOneIndexed (id: string, params: Dict = {}) {\n        return await this.fetchIndexed ([ id ], params);\n    }\n    async fetchComputed (ids: string[], params: Dict = {}) {\n        return ids.join (',');\n    }\n    async fetchComputedCaller (params: Dict = {}) {\n        return await this.fetchComputed (params['ids'], params);\n    }\n    async fetchNoCaller (ids: string[], symbol: string = undefined, params: Dict = {}) {\n        const request: Dict = { 'txid': ids.join (',') };\n        return request;\n    }\n    async fetchChunked (hashes: string[], params: Dict = {}) {\n        const rows = [];\n        const chunk = this.arraySlice (hashes, 0, 2);\n        rows.push (await this.fetchByIds (chunk, undefined, params));\n        return rows;\n    }\n}\n"
+ }
+};
+const rustFixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-'));
+for (const [dir, files] of Object.entries (rustInlineFixtures)) {
+    for (const [rel, text] of Object.entries (files)) {
+        const out = path.join (rustFixtureRoot, dir, rel);
+        fs.mkdirSync (path.dirname (out), { recursive: true });
+        fs.writeFileSync (out, text);
+    }
+}
+afterAll (() => fs.rmSync (rustFixtureRoot, { recursive: true, force: true }));
 
 jest.mock('module',()=>({
     __esModule: true,
@@ -20,6 +49,14 @@ beforeAll(() => {
     }
     transpiler = new Transpiler(config);
 })
+
+// the native dict insert the printer emits for a literal key
+const insert = (receiver: string, key: string, value: string) =>
+    `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+
+// `body` as the method `f(params)` of a class that also declares `parseX`, transpiled to Rust
+const rustInParseXClass = (body: string, params = 'v: any') =>
+    transpiler.transpileRust(`class T {\n    parseX (x) { return x; }\n    f (${params}) {\n${body}\n    }\n}`).content;
 
 describe('rust transpiling tests', () => {
     test('basic variable declaration', () => {
@@ -301,7 +338,7 @@ describe('rust transpiling tests', () => {
         expect(output).not.toContain('Value::Bool(a.as_f64()');
     });
 
-    test('string comparison replicates the helper natively (hx4 R22)', () => {
+    test('string comparison replicates the helper natively', () => {
         const ts =
         "let a = 'x';\n" +
         "let b = 'y';\n" +
@@ -320,7 +357,7 @@ describe('rust transpiling tests', () => {
         "    const x = 1;\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // hx4 R25 inline helper dispatch
+        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // inline helper dispatch
     });
 
     // One number at runtime already pins `<`/`>` to the helper's f64 compare
@@ -359,7 +396,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // hx4 R25
+        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // inline math/comparison dispatch
     });
 
     test('less or equal with a single typed number operand keeps the helper', () => {
@@ -370,7 +407,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // hx4 R25
+        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // inline math/comparison dispatch
     });
 
     // A numeric literal / `.length` / `indexOf` is Int or Float at runtime,
@@ -438,7 +475,7 @@ describe('rust transpiling tests', () => {
 
     // Two strings are the helper's lexical branch — a numeric-string literal
     // goes through the same path, so it must keep the helper.
-    test('string against a numeric-string literal keeps the f64 parse (hx4 R22)', () => {
+    test('string against a numeric-string literal keeps the f64 parse', () => {
         const ts =
         "function f(hex: string) {\n" +
         "    if (hex >= '80') {\n" +
@@ -503,19 +540,19 @@ describe('rust transpiling tests', () => {
     test('subtraction wrapping', () => {
         const ts = 'const c = a - b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // hx4 R25
+        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // inline math/comparison dispatch
     });
 
     test('multiplication wrapping', () => {
         const ts = 'const c = a * b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x * __y),'); // hx4 R25
+        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x * __y),'); // inline math/comparison dispatch
     });
 
     test('division wrapping', () => {
         const ts = 'const c = a / b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(Some(__x), Some(__y)) if __y != 0.0 => Value::Float(__x / __y)'); // hx4 R25
+        expect(output).toContain('(Some(__x), Some(__y)) if __y != 0.0 => Value::Float(__x / __y)'); // inline math/comparison dispatch
     });
 
     test('modulo wrapping', () => {
@@ -528,26 +565,26 @@ describe('rust transpiling tests', () => {
     test('less than wrapping', () => {
         const ts = 'const r = a < b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // hx4 R25 inline helper dispatch
+        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // inline helper dispatch
     });
 
     test('less than or equal wrapping', () => {
         const ts = 'const r = a <= b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('__x < __y'); // hx4 R25
+        expect(output).toContain('__x < __y'); // inline math/comparison dispatch
         expect(output).toContain('(Value::Null, Value::Null) => true');
     });
 
     test('greater than wrapping', () => {
         const ts = 'const r = a > b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('__x > __y'); // hx4 R25
+        expect(output).toContain('__x > __y'); // inline math/comparison dispatch
     });
 
     test('greater than or equal wrapping', () => {
         const ts = 'const r = a >= b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('__x > __y'); // hx4 R25
+        expect(output).toContain('__x > __y'); // inline math/comparison dispatch
     });
 
     // Compound assignment
@@ -560,7 +597,7 @@ describe('rust transpiling tests', () => {
     test('-= assignment', () => {
         const ts = 'x -= 1;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('x = (match (&(x), &(Value::Int(1))) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // hx4 R25
+        expect(output).toContain('x = (match (&(x), &(Value::Int(1))) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // inline math/comparison dispatch
     });
 
     // Postfix unary
@@ -952,13 +989,13 @@ describe('rust transpiling tests', () => {
     test('toUpperCase call', () => {
         const ts = 'const r = s.toUpperCase();'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match &(s) { Value::Str(__s) => Value::Str(__s.to_uppercase().into())');
+        expect(output).toContain('(if let Some(__s) = (s).as_str() { Value::Str(__s.to_uppercase().into()) } else { Value::Null })');
     });
 
     test('toLowerCase call', () => {
         const ts = 'const r = s.toLowerCase();'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(match &(s) { Value::Str(__s) => Value::Str(__s.to_lowercase().into())');
+        expect(output).toContain('(if let Some(__s) = (s).as_str() { Value::Str(__s.to_lowercase().into()) } else { Value::Null })');
     });
 
     test('shift call', () => {
@@ -1015,9 +1052,23 @@ describe('rust transpiling tests', () => {
 
     // this keyword
     test('this keyword becomes self', () => {
-        const ts = "class A { run() { return this; } }";
+        const ts = "class A { x: any; run() { return this.x; } }";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('return self;');
+        expect(output).toContain('self.x');
+    });
+
+    test('a chained return this returns Value::Null', () => {
+        const output = transpiler.transpileRust("class A { run() { return this; } }").content;
+        expect(output).toContain('return Value::Null;');
+        expect(output).not.toContain('return self;');
+    });
+
+    test('proxy-callback calls, setProperty (this, ..) and binaryConcat () print their runtime shapes', () => {
+        const ts = "class A { proxyUrlCallback: any; run (url) { this.setProperty (this, 'rateLimit', 10); const b = this.binaryConcat (); return this.proxyUrlCallback (url); } setProperty (o, k, v = undefined) {} binaryConcat (...a) { return a; } }";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.proxy_url_callback_fn(');
+        expect(output).toContain('self.setProperty(Value::Str("rateLimit".into()), &[Value::Int(10)])');
+        expect(output).toContain('self.binary_concat(Value::Null, &[])');
     });
 
     // Reserved keyword renaming
@@ -1090,7 +1141,7 @@ describe('rust transpiling tests', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut ok: bool = s.as_str().is_some_and(|__s| __s.starts_with("x"));');
+        expect(output).toContain('let mut ok: bool = s.as_str().unwrap_or("").starts_with("x");');
     });
 
     // Rejected shapes: any sink that takes `&Value` keeps the local boxed.
@@ -1393,9 +1444,9 @@ describe('rust checker-typed native container access', () => {
             "    return p;\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut pqVariable = g();');
-        expect(output).toContain('let mut p: Value = pqVariable.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)');
-        expect(output).toContain('let mut q: Value = pqVariable.as_array().and_then(|__arr| __arr.get(1)).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('let pqVariable: Vec<Value> = g().as_array().cloned().unwrap_or_default();');
+        expect(output).toContain('let mut p: Value = pqVariable.get(0).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('let mut q: Value = pqVariable.get(1).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('Value::Int(0)');
     });
 
@@ -1409,7 +1460,7 @@ describe('rust checker-typed native container access', () => {
             "    return p;\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('{ let __destr_tmp = g(); p = __destr_tmp.as_array()');
+        expect(output).toContain('{ let __destr_tmp: Vec<Value> = g().as_array().cloned().unwrap_or_default(); p = __destr_tmp.get(0).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(&__destr_tmp');
     });
 
@@ -1550,7 +1601,7 @@ describe('rust checker-typed native container access', () => {
         expect(output).toContain('add(&a, &b)');
     });
 
-    // hx4 R09: a non-null string side puts `add` on its string branch (stringify_simple == Display).
+    // a non-null string side puts `add` on its string branch (stringify_simple == Display).
     test('number + string emits native concat', () => {
         const ts =
         'const a: number = 1;\n' +
@@ -1561,7 +1612,7 @@ describe('rust checker-typed native container access', () => {
         expect(output).not.toContain('add(&a, &s)');
     });
 
-    // phase-2 rust-19: a `Str` (`string | undefined`) operand holds only a
+    // A `Str` (`string | undefined`) operand holds only a
     // string or the `Value::Null` the helper stringifies as "null" — the same
     // text `Display` produces — so it concatenates natively against an operand
     // the checker proves is ALWAYS a string.
@@ -1636,7 +1687,7 @@ describe('rust checker-typed native container access', () => {
         expect(output).toContain('add(&a, &b)');
     });
 
-    test('always-Str local + any concatenates natively (hx4 R22)', () => {
+    test('always-Str local + any concatenates natively', () => {
         const ts =
         'function h(): any { return 2; }\n' +
         'const a: string = "x";\n' +
@@ -1747,11 +1798,45 @@ describe('rust error constructor message arguments', () => {
         expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" msg".into())))');
     });
 
-    test('a concat message of a post-pass error class also drops its box', () => {
+    test('every ccxt error class constructs through its runtime fn with an unboxed message', () => {
         const ts = "function f(id: string) {\n    throw new BadRequest (id + ' msg');\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('BadRequest::new(format!("{}{}", id, Value::Str(" msg".into())))');
-        expect(output).not.toContain('BadRequest::new(Value::Str(');
+        expect(output).toContain('crate::exchange_errors::bad_request(format!("{}{}", id, Value::Str(" msg".into())))');
+        expect(output).not.toContain('BadRequest::new(');
+    });
+
+    test('imported hash, error-class and precision names used as values print natively', () => {
+        const ts = "import { sha256 } from './hashes.js';\nimport { BadRequest } from './errors.js';\nimport { TICK_SIZE } from './number.js';\n"
+            + "function f(sign: any) {\n    const table = { '1': BadRequest };\n    const mode = TICK_SIZE;\n    return sign ('x', sha256);\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Str("BadRequest".into())');
+        expect(output).toContain('Value::Int(crate::runtime::TICK_SIZE)');
+        expect(output).toContain('Value::Str("sha256".into())');
+    });
+
+    test('Math / Precise calls take their args by reference and Precise trims to its runtime arity', () => {
+        const ts = "class Precise {\n    static stringDiv (a: any, b: any, p: any = 18): any { return a; }\n    static stringAdd (a: any, b: any): any { return a; }\n}\n"
+            + "function f(a: any, b: any) {\n    const x = Precise.stringDiv (a, b, 8);\n    const y = Precise.stringDiv (a, b);\n    return Math.min (x, y);\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::precise::Precise::stringDivPrec(&a, &b, &Value::Int(8))');
+        expect(output).toContain('crate::precise::Precise::stringDiv(&a, &b)');
+        expect(output).toContain('crate::runtime::Math::min(&x, &y)');
+    });
+
+    test('a class picked at runtime constructs by name through create_error', () => {
+        const ts = "function f(table: any, k: any, msg: any) {\n    const e = new table[k] (msg);\n    throw new table[k] (msg);\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('panic!("{}", crate::exchange_errors::create_error(&crate::runtime::stringify_param(&(get_value(&table, &k))), &crate::runtime::stringify_param(&(msg))));');
+        expect(output).toContain('Value::from(crate::exchange_errors::create_error(');
+        expect(output).not.toContain('::new(');
+    });
+
+    test('jwt / rsa calls are printed at the runtime signers\' fixed arity', () => {
+        const ts = "function jwt (r: any, s: any, h: any, isRsa = false, o: any = {}): any { return r; }\nfunction rsa (r: any, s: any, h: any, p = 'pkcs1'): any { return r; }\n"
+            + "function f(a: any, b: any, h: any) {\n    const t = jwt (a, b, h);\n    return rsa (a, b, h, 'pss');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('jwt(a, b, h, Value::Bool(false), Value::Null)');
+        expect(output).toContain('rsa(a, b, h)');
     });
 
     test('an unproven message keeps its box', () => {
@@ -1767,7 +1852,7 @@ describe('rust error constructor message arguments', () => {
     });
 });
 
-// B-31 — the runtime `Value::Str` payload is a `Cow<'static, str>`: a string
+// The runtime `Value::Str` payload is a `Cow<'static, str>`: a string
 // literal borrows its `&'static str` (`Value::Str("lit".into())`, zero
 // allocation) instead of allocating a `String`, so `.clone()` on a literal
 // box is a pointer copy.
@@ -1788,7 +1873,7 @@ describe('rust borrowed string literals (Cow payload)', () => {
     test('a native string slice maps the borrowed payload', () => {
         const ts = "function f(s: string): string {\n    return s.slice(1, 3);\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::Str(__s.into())');
+        expect(output).toContain('.map(Value::from).unwrap_or(Value::Null)');
         expect(output).not.toContain('.map(Value::Str)');
     });
 
@@ -1801,8 +1886,6 @@ describe('rust borrowed string literals (Cow payload)', () => {
 });
 
 describe('rust native dict inserts', () => {
-    const insert = (receiver: string, key: string, value: string) =>
-        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
     const dynamic = (receiver: string, key: string, value: string) =>
         `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert(crate::runtime::stringify_param(&${key}), ${value}); }`;
 
@@ -1856,6 +1939,27 @@ describe('rust native dict inserts', () => {
         const ts = 'const result: any[] = [];\nresult["k"] = 1;';
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('add_element_to_object(&mut result');
+    });
+
+    test('order-book meta fields print set_book_meta', () => {
+        const ts = 'class OrderBook { timestamp: number; datetime: string; }\nfunction f(orderbook: OrderBook, ts: number) { orderbook["timestamp"] = ts; orderbook["datetime"] = "x"; }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('orderbook.set_book_meta("timestamp", ts.clone())');
+        expect(output).toContain('orderbook.set_book_meta("datetime", ');
+        expect(output).not.toContain('add_element_to_object(&mut orderbook');
+    });
+
+    test('safeValue(this.orderbooks, k) local prints set_book_meta', () => {
+        const ts = 'class A { orderbooks: any = {}; safeValue(a: any, b: any): any { return a[b]; }\n    f(symbol: string, ts: number) { let orderbook = this.safeValue(this.orderbooks, symbol); orderbook["timestamp"] = ts; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('orderbook.set_book_meta(\"timestamp\", ts.clone())');
+        expect(output).not.toContain('add_element_to_object(&mut orderbook');
+    });
+
+    test('order-book non-meta keys keep the helper', () => {
+        const ts = 'class OrderBook { foo: number; }\nfunction f(orderbook: OrderBook) { orderbook["foo"] = 1; }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut orderbook');
     });
 
     test('class-typed receivers keep the helper', () => {
@@ -2124,7 +2228,7 @@ describe('rust truthiness sinks take the bare bool', () => {
     });
 });
 
-// B-26: the condition printer's last resort wraps an operand no earlier branch
+// The condition printer's last resort wraps an operand no earlier branch
 // claimed. A parenthesised comparison the checker proved native (or the
 // `Value::Bool(…)` the printer boxes it in for a `Value` slot) is already a Rust
 // `bool`, so `is_true(&(…))` — the identity over `IsTruthy for bool` — is dropped.
@@ -2311,7 +2415,7 @@ describe('rust is_true over a proven boolean Value', () => {
         expect(output).not.toContain('is_true(&self.safeBool2');
     });
 
-    test('a method returning only bool literals tests as_bool natively (hx4 R12)', () => {
+    test('a method returning only bool literals tests as_bool natively', () => {
         const ts = boolClass('        if (this.isLinear(this.options)) { return 1; }');
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('if self.isLinear(self.options).as_bool() == Some(true) {');
@@ -2357,6 +2461,71 @@ describe('rust is_true over a proven boolean Value', () => {
         expect(output).toContain('is_true(&options.as_map().and_then(|__m| __m.get("foo")).cloned().unwrap_or(Value::Null))');
         expect(output).toContain('is_true(&get_value(&options, &i))');
         expect(output).not.toContain('matches!(options');
+    });
+
+    test('a boolean-typed parameter emits the native matches!', () => {
+        const ts =
+            'class D {\n' +
+            '    subscribe(name: string, isPrivate: boolean) {\n' +
+            '        if (isPrivate) { return 1; }\n' +
+            '        if (!isPrivate) { return 2; }\n' +
+            '        return 3;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        // the transpiler prints a call-site-proven `boolean` parameter as a native `bool`, so the condition
+        // is the bare name (the identifier arm applies only while the parameter stays boxed)
+        expect(output).toContain('if isPrivate {');
+        expect(output).toContain('if !isPrivate {');
+        expect(output).not.toContain('is_true(&isPrivate)');
+    });
+
+    test('a boolean-typed local reassigned from a tuple emits the native matches!', () => {
+        const ts =
+            'class E {\n' +
+            '    handleOptionBoolAndParams(params: any, methodName: string, optionName: string, defaultValue?: boolean): [boolean, any] { return [true, params]; }\n' +
+            '    run(params: any) {\n' +
+            '        let uta: boolean = true;\n' +
+            "        [uta, params] = this.handleOptionBoolAndParams(params, 'fetchDepositAddress', 'uta', uta);\n" +
+            '        if (uta) { return 1; }\n' +
+            '        return 2;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut uta: Value = Value::Bool(true);');
+        expect(output).toContain('if uta.as_bool() == Some(true) {');
+        expect(output).not.toContain('is_true(&uta)');
+    });
+
+    test('a local the printer declares native bool keeps the helper', () => {
+        const ts =
+            'class F {\n' +
+            '    safeBool(obj: any, key: any): boolean | undefined { return undefined; }\n' +
+            '    run() {\n' +
+            "        const flag = this.safeBool(this.options, 'a') === true;\n" +
+            '        if (flag) { return 1; }\n' +
+            '        return 2;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut flag: bool =');
+        expect(output).not.toContain('matches!(flag');
+    });
+
+    test('a non-boolean identifier keeps the helper', () => {
+        const ts =
+            'class G {\n' +
+            '    run(name: string, params: any) {\n' +
+            '        if (name) { return 1; }\n' +
+            '        if (params) { return 2; }\n' +
+            '        return 3;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_true(&name)');
+        expect(output).toContain('is_true(&params)');
+        expect(output).not.toContain('matches!(name');
+        expect(output).not.toContain('matches!(params');
     });
 });
 
@@ -2415,8 +2584,12 @@ describe('rust declared-Dict locals', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain(NATIVE('market', 'id'));
+        // the element local is a bare IndexMap, so the read is a map
+        // lookup (`market.as_map()` box would only add the `|__m|` closure).
+        expect(output).toContain('market.get("id").cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('let mut market: indexmap::IndexMap<String, Value> = (if let (Some(__m), Some(__k)) = (self.markets.as_map(), symbol.as_str())');
         expect(output).not.toContain('get_value_k(&market');
+        expect(output).not.toContain(NATIVE('market', 'id'));
     });
 
     // D2: any later write may replace the dict, so the proof is dropped.
@@ -2509,12 +2682,12 @@ describe('rust native string search and slicing', () => {
 
     test('slice keeps the helper for an expression bound', () => {
         const output = transpiler.transpileRust(stringMethod('        return a.slice(0, b);', 'a: string, b: number')).content;
-        expect(output).toContain('(match (&(a), (match &(Value::Int(0)) {');
+        expect(output).toContain('(match (&(a), 0i64,');
     });
 
     test('slice keeps the helper for an unproven receiver', () => {
         const output = transpiler.transpileRust(stringMethod('        return a.slice(0, 2);', 'a: any')).content;
-        expect(output).toContain('(match (&(a), (match &(Value::Int(0)) {');
+        expect(output).toContain('(match (&(a), 0i64,');
     });
 
     test('length on a nullable array or string is native', () => {
@@ -2646,7 +2819,7 @@ describe('rust native equality on declared reads', () => {
     });
 });
 
-describe('rust declared-Dict locals (rust-25)', () => {
+describe('rust declared-Dict locals: table and census', () => {
     // The declared-Dict table answers `rustDeclaredLocalTypeResolver(node)` for a
     // local the printer itself can prove holds a `Value::Dict` at every use: the
     // initialiser is a `safe_dict*` call whose default is itself Dict-proven, or
@@ -2691,6 +2864,7 @@ describe('rust declared-Dict locals (rust-25)', () => {
     });
 
     test('the declaration stays Value (no native HashMap retype)', () => {
+        // a read-only dict local is a bare IndexMap; a written one stays boxed.
         const snippet =
             'class T {\n' +
             '    m(response) {\n' +
@@ -2699,8 +2873,16 @@ describe('rust declared-Dict locals (rust-25)', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(snippet).content;
-        expect(output).toContain('let mut data: Value = self.safeDict(response, Value::Str("data".into()), Value::Map({');
-        expect(output).not.toContain('HashMap<String, Value> = self.safeDict');
+        expect(output).toContain('let mut data: indexmap::IndexMap<String, Value> = self.safeDict(response, Value::Str("data".into()), Value::Map({');
+        const written =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            "        data['a'] = 1;\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        expect(transpiler.transpileRust(written).content).toContain('let mut data: Value = self.safeDict(response, Value::Str("data".into()), Value::Map({');
     });
 
     test('safe_dict without a default may be Value::Null, so no proof', () => {
@@ -3063,7 +3245,7 @@ describe('rust typed-parameter dict reads', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain(
-            'balance.as_map().and_then(|__m| code.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+            '(if let (Some(__m), Some(__k)) = (balance.as_map(), code.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })');
         expect(output).not.toContain('get_value(&balance');
     });
 
@@ -3074,7 +3256,7 @@ describe('rust typed-parameter dict reads', () => {
             "    return balance[code];\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('balance.as_map().and_then(|__m| code.as_str()');
+        expect(output).toContain('(if let (Some(__m), Some(__k)) = (balance.as_map(), code.as_str())');
         expect(output).not.toContain('get_value(&balance');
     });
 
@@ -3132,13 +3314,15 @@ describe('rust typed-parameter dict reads', () => {
     });
 });
 
-describe('rust native container reads (B-28)', () => {
+describe('rust native container reads on typed receivers', () => {
     // A dynamic (non-literal) index into a checker-proven list reads natively,
     // a declared Dict local produced by `this.client(url)` reads its `url`
     // field natively, and a read the ccxt write passes have to see keeps the
     // helper.
 
     const DYNAMIC = '.as_array().and_then(|__arr| match &i { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)';
+    // A list parameter that is shadowed reads its slice directly.
+    const SHADOW_DYNAMIC = '.get((i).as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)';
 
     test('a dynamic index into a proven list reads natively', () => {
         const ts =
@@ -3151,7 +3335,8 @@ describe('rust native container reads (B-28)', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain(`let mut symbol: Value = symbols${DYNAMIC};`);
+        expect(output).toContain(`let mut symbol: Value = symbols${SHADOW_DYNAMIC};`);
+        expect(output).not.toContain(DYNAMIC);
         expect(output).not.toContain('get_value(&symbols, &i)');
     });
 
@@ -3269,12 +3454,13 @@ describe('rust native container reads (B-28)', () => {
         // The fixture lives under a `ws/Client.ts` path, the shape the predicate
         // keys on (the class is the ws client; the port holds it as a Dict).
         const output = transpiler.transpileRustByPath('./tests/files/input/ws/Client.ts').content;
-        expect(output).toContain('client.as_map().and_then(|__m| __m.get("url")).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('client.url()');
+        expect(output).not.toContain('__m.get("url")');
         expect(output).not.toContain('get_value(&client, &Value::Str("url"');
         expect(output).toContain('let mut s: Value = client.subscriptions;');
     });
 
-    test('a bind the next statement mutates keeps the helper (write-back pass)', () => {
+    test('a bind the next statement mutates is the closure-free read the write-back pass recognises', () => {
         const ts =
             'class T {\n' +
             '    m(data: any[]) {\n' +
@@ -3302,7 +3488,7 @@ describe('rust native container reads (B-28)', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut entry: Value = data.as_array().and_then(|__arr| match &i');
+        expect(output).toContain(`let mut entry: Value = data${SHADOW_DYNAMIC};`);
         expect(output).not.toContain('let mut entry: Value = get_value(&data, &i);');
     });
 
@@ -3325,7 +3511,7 @@ describe('rust destructure over an array-returning callee', () => {
 
     test('reassignment destructure over an any-typed tuple callee emits native reads', () => {
         const output = transpiler.transpileRust(ANY_TUPLE_CALLEE).content;
-        expect(output).toContain('{ let __destr_tmp = self.handleWithdrawTagAndParams(tag, params); tag = __destr_tmp.as_array()');
+        expect(output).toContain('{ let __destr_tmp: Vec<Value> = self.handleWithdrawTagAndParams(tag, params).as_array().cloned().unwrap_or_default(); tag = __destr_tmp.get(0).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(&__destr_tmp');
     });
 
@@ -3339,7 +3525,7 @@ describe('rust destructure over an array-returning callee', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut request: Value = requestextraParamsVariable.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('let mut request: Value = requestextraParamsVariable.get(0).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(&requestextraParamsVariable');
     });
 
@@ -3354,7 +3540,7 @@ describe('rust destructure over an array-returning callee', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('a = __destr_tmp.as_array().and_then(|__arr| __arr.get(0))');
+        expect(output).toContain('a = __destr_tmp.get(0).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(&__destr_tmp');
     });
 
@@ -3371,7 +3557,7 @@ describe('rust destructure over an array-returning callee', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('a = __destr_tmp.as_array().and_then(|__arr| __arr.get(0))');
+        expect(output).toContain('a = __destr_tmp.get(0).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(&__destr_tmp');
     });
 
@@ -3384,7 +3570,7 @@ describe('rust destructure over an array-returning callee', () => {
             "    return address;\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('{ let __destr_tmp = split(&addressString');
+        expect(output).toContain('{ let __destr_tmp: Vec<Value> = split(&addressString');
         expect(output).not.toContain('get_value(&__destr_tmp');
     });
 
@@ -3421,7 +3607,7 @@ describe('rust destructure over an array-returning callee', () => {
     });
 });
 
-describe('rust parameter shadows (D-25)', () => {
+describe('rust parameter shadows', () => {
     const DICT_DECL =
         "interface Dictionary<T> { [key: string]: T; }\n" +
         "type Dict = Dictionary<any>;\n";
@@ -3449,7 +3635,7 @@ describe('rust parameter shadows (D-25)', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('let data = data.as_map().unwrap_or(&__data_empty);');
-        expect(output).toContain('code.as_str().and_then(|__k| data.get(__k)).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('(if let Some(__k) = code.as_str() { data.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })');
     });
 
     test('a `this.safeString` read inlines the coercion over the shadow', () => {
@@ -3527,7 +3713,7 @@ describe('rust parameter shadows (D-25)', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).not.toContain('__data_empty');
-        // the boxed write is D-31's native insert on the (unshadowed) Value
+        // the boxed write is the native insert on the (unshadowed) Value
         expect(output).toContain('if let Value::Dict(__d) = &mut data { std::sync::Arc::make_mut(__d).insert("id".into(), Value::Int(1)); };');
     });
 
@@ -3618,7 +3804,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
             "    f (status: any) {\n        const m: any = {};\n" +
             "        m['status'] = this.parseStatus (status);\n        return m;\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('.insert("status".into(), self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null));');
+        expect(output).toContain('.insert("status".into(), self.parseStatus(status).map(Value::from).unwrap_or(Value::Null));');
     });
 
     test('an assignment of a native return boxes', () => {
@@ -3627,7 +3813,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
             "    f (status: any) {\n        let x: any = undefined;\n" +
             "        x = this.parseStatus (status);\n        return x;\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('x = self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null);');
+        expect(output).toContain('x = self.parseStatus(status).map(Value::from).unwrap_or(Value::Null);');
     });
 
     test('a declaration whose uses are not all native sinks stays a Value box', () => {
@@ -3636,7 +3822,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
             "    f (status: any) {\n        const x = this.parseStatus (status);\n" +
             "        const m: any = {};\n        m['status'] = x;\n        return m;\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut x: Value = self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null);');
+        expect(output).toContain('let mut x: Value = self.parseStatus(status).map(Value::from).unwrap_or(Value::Null);');
     });
 
     test('a caller whose uses are all native sinks binds Option<String>', () => {
@@ -3651,7 +3837,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
     });
 });
 
-describe('rust typed-receiver native reads (D-28)', () => {
+describe('rust typed-receiver native reads', () => {
     // A dynamic-key read on a checker-proven map local (not only on an
     // annotated parameter) reads natively, and a local/parameter read stays
     // native inside the args of a `&mut self` call while a `this`-field read
@@ -3669,7 +3855,7 @@ describe('rust typed-receiver native reads (D-28)', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('currencies.as_map().and_then(|__m| code.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('currencies.get(code.as_str().unwrap_or("")).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(&currencies, &code)');
     });
 
@@ -3702,7 +3888,7 @@ describe('rust typed-receiver native reads (D-28)', () => {
         expect(output).toContain('get_value(&currencies, &code)');
     });
 
-    test('a bind the next statement mutates keeps the helper (write-back pass)', () => {
+    test('a bind the next statement mutates is the closure-free read the write-back pass recognises', () => {
         const ts =
             PLAIN +
             'class T {\n' +
@@ -3717,7 +3903,8 @@ describe('rust typed-receiver native reads (D-28)', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut row: Value = get_value(&result, &key);');
+        // the ccxt write-back pass matches the printer's closure-free bind of the same container/key
+        expect(output).toContain('let mut row: Value = (if let (Some(__m), Some(__k)) = (result.as_map(), key.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null });');
         expect(output).not.toContain('row.as_map()');
     });
 
@@ -3732,8 +3919,12 @@ describe('rust typed-receiver native reads (D-28)', () => {
             '    extend(a: any, b: any) { return a; }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('dict.as_map().and_then(|__m| key.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
-        // the List parameter is shadowed (D-25), so the index reads on the borrowed slice
+        // the local is a typed bearer now, so the read is a plain map
+        // lookup and the earlier `this.` argument boxes a clone (no `as_map` chain).
+        expect(output).toContain('dict.get(key.as_str().unwrap_or("")).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('return self.extend(Value::Map(dict.clone()), Value::Map({');
+        expect(output).not.toContain('dict.as_map().and_then(|__m| key.as_str()');
+        // the List parameter is shadowed, so the index reads on the borrowed slice
         expect(output).toContain('items.get(0).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(&dict, &key)');
     });
@@ -3754,11 +3945,11 @@ describe('rust typed-receiver native reads (D-28)', () => {
     });
 });
 
-describe('rust pro-tier handler message shadow (D-27)', () => {
+describe('rust pro-tier handler message shadow', () => {
     // `Client` is a class in the pro tier (base/ws/Client.ts); the shadow is
     // scoped to the `handle_x (client: Client, message: Dict)` shape.
-    // A parameter whose every use is a read gets the D-25 borrowed shadow instead;
-    // the handler view fires when the message is also passed on (a move the D-25
+    // A parameter whose every use is a read gets the borrowed parameter shadow instead;
+    // the handler view fires when the message is also passed on (a move the parameter
     // census rejects), so these fixtures forward the frame to the client.
     const DECLS =
         "interface Dictionary<T> { [key: string]: T; }\n" +
@@ -3837,7 +4028,7 @@ describe('rust pro-tier handler message shadow (D-27)', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        // read-only Dict param: the D-25 shadow prints the read, never the handler view
+        // read-only Dict param: the parameter shadow prints the read, never the handler view
         expect(output).toContain('let message = message.as_map().unwrap_or(&__message_empty);');
         expect(output).not.toContain('__pro_message');
     });
@@ -3936,9 +4127,7 @@ describe('rust order book sides keep the runtime helpers', () => {
     });
 });
 
-describe('hx4 R01 native element writes on plain-dict locals', () => {
-    const insert = (receiver: string, key: string, value: string) =>
-        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+describe('native element writes on plain-dict locals', () => {
     let output = '';
     beforeAll(() => {
         output = transpiler.transpileRustByPath('./tests/files/input/hx4r01/ts/src/venue.ts').content;
@@ -3984,20 +4173,20 @@ describe('hx4 R01 native element writes on plain-dict locals', () => {
     });
 });
 
-describe('rust this-field dynamic dict reads (hx4 R02)', () => {
+describe('rust this-field dynamic dict reads', () => {
     const DECL = 'interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\nclass C { x: number; }\n';
 
     test('a dynamic string key on a Dict-declared field reads natively', () => {
         const ts = DECL + 'class A {\n    balance: Dict = {};\n    f (code: string) {\n        const a = this.balance[code];\n        return a;\n    }\n}\n';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut a: Value = self.balance.as_map().and_then(|__m| code.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null);');
+        expect(output).toContain('let mut a: Value = (if let (Some(__m), Some(__k)) = (self.balance.as_map(), code.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null });');
         expect(output).not.toContain('get_value(&self.balance');
     });
 
     test('a nested read on a Dictionary<Dictionary<T>> field reads natively at both levels', () => {
         const ts = DECL + 'class A {\n    ohlcvs: Dictionary<Dictionary<C>>;\n    f (symbol: string, tf: string) {\n        const a = this.ohlcvs[symbol][tf];\n        return a;\n    }\n}\n';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('self.ohlcvs.as_map().and_then(|__m| symbol.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null).as_map().and_then(|__m| tf.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('(if let (Some(__m), Some(__k)) = (self.ohlcvs.as_map(), symbol.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null }).as_map().and_then(|__m| tf.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(');
     });
 
@@ -4016,7 +4205,7 @@ describe('rust this-field dynamic dict reads (hx4 R02)', () => {
     });
 });
 
-describe('hx4 R04: native Vec push on typed array locals', () => {
+describe('native Vec push on typed array locals', () => {
     const wrap = (body: string) => `class T {\n    parseX (x) { return x; }\n    filterBy (a, b) { return a; }\n    f (items: any[]) {\n${body}\n    }\n}`;
     test('push-only local returned is a Vec<Value> with native push', () => {
         const out = transpiler.transpileRust(wrap('        const result = [];\n        result.push (items[0]);\n        result.push (this.parseX (1));\n        return result;')).content;
@@ -4038,24 +4227,30 @@ describe('hx4 R04: native Vec push on typed array locals', () => {
         const out2 = transpiler.transpileRust(wrap('        const hashes = [];\n        hashes.push (1);\n        const r = this.filterBy (hashes, 1);\n        return r;')).content;
         expect(out2).toContain('self.filterBy(Value::from(hashes), Value::Int(1))');
     });
-    test('negative: alias, non-return argument, element read or non-empty init keep the box', () => {
+    test('a non-empty literal seed types as a Vec with the native literal', () => {
+        const out = transpiler.transpileRust(wrap('        const out = [ 1 ];\n        out.push (2);\n        return out;')).content;
+        expect(out).toContain('let mut out: Vec<Value> = vec![Value::Int(1)];');
+        expect(out).toContain('out.push(Value::Int(2));');
+        expect(out).toContain('return Value::from(out);');
+        expect(out).not.toContain('append_to_array');
+    });
+    test('negative: alias, non-return argument or element read keep the box', () => {
         for (const body of [
             '        const out = [];\n        out.push (1);\n        const other = out;\n        return other;',
             '        const out = [];\n        for (let i = 0; i < 2; i++) {\n            out.push (i);\n            this.parseX (out);\n        }\n        return 1;',
             '        const out = [];\n        out.push (1);\n        return this.filterBy (out, out);',
-            '        const out = [ 1 ];\n        out.push (2);\n        return out;',
             '        const out = [];\n        out.push (out.length);\n        return out;',
             '        let out = [];\n        out.push (1);\n        out = [];\n        return out;',
         ]) {
             const out = transpiler.transpileRust(wrap(body)).content;
-            // the box stays (hx4 R18 may spell its Arr push natively)
+            // the box stays (the Arr push may be spelled natively)
             expect(out).toMatch(/append_to_array\(&mut out|if let Value::Arr\(__a\) = &mut out \{/);
             expect(out).not.toContain('Vec<Value>');
         }
     });
 });
 
-describe('hx4 R05 native IndexMap ops on proven dict receivers', () => {
+describe('native IndexMap ops on proven dict receivers', () => {
     let rest = '';
     let ws = '';
     beforeAll(() => {
@@ -4091,18 +4286,18 @@ describe('hx4 R05 native IndexMap ops on proven dict receivers', () => {
     });
 });
 
-describe('hx4 R06 native string methods on proven strings', () => {
+describe('native string methods on proven strings', () => {
     const m = (body: string, params = 'a: string') => `class A {\n    run(${params}) {\n${body}\n    }\n}`;
     const out = (body: string, params?: string) => transpiler.transpileRust(m(body, params)).content;
 
     test('toUpperCase / toLowerCase', () => {
         const o = out("        const u = a.toUpperCase();\n        const l = a.toLowerCase();\n        return [u, l];");
-        expect(o).toContain('let mut u: Value = a.as_str().map(|__s| Value::Str(__s.to_uppercase().into())).unwrap_or(Value::Null);');
-        expect(o).toContain('let mut l: Value = a.as_str().map(|__s| Value::Str(__s.to_lowercase().into())).unwrap_or(Value::Null);');
+        expect(o).toContain('let mut u: Value = (if let Some(__s) = a.as_str() { Value::Str(__s.to_uppercase().into()) } else { Value::Null });');
+        expect(o).toContain('let mut l: Value = (if let Some(__s) = a.as_str() { Value::Str(__s.to_lowercase().into()) } else { Value::Null });');
         expect(o).not.toContain('to_upper(&');
     });
     test('split with a literal separator', () => {
-        expect(out("        return a.split('-');")).toContain('return Value::Array(a.as_str().map(|__s| __s.split("-").map(|__p| Value::Str(__p.to_string().into())).collect()).unwrap_or_default());');
+        expect(out("        return a.split('-');")).toContain('return Value::Array(if let Some(__s) = a.as_str() { __s.split("-").map(Value::from).collect() } else { Vec::new() });');
     });
     test('replace keeps the receiver for a non-string box', () => {
         expect(out("        return a.replace('x', 'y');")).toContain('return a.as_str().map(|__s| Value::Str(__s.replace("x", "y").into())).unwrap_or_else(|| a.clone());');
@@ -4113,19 +4308,19 @@ describe('hx4 R06 native string methods on proven strings', () => {
     });
     test('startsWith / endsWith in a condition', () => {
         const o = out("        if (a.startsWith('0x') || a.endsWith('%')) {\n            return 1;\n        }\n        return 0;");
-        expect(o).toContain('a.as_str().is_some_and(|__s| __s.starts_with("0x"))');
-        expect(o).toContain('a.as_str().is_some_and(|__s| __s.ends_with("%"))');
+        expect(o).toContain('a.as_str().unwrap_or("").starts_with("0x")');
+        expect(o).toContain('a.as_str().unwrap_or("").ends_with("%")');
         expect(o).not.toContain('starts_with(&a');
     });
     test('indexOf with a proven-string identifier needle', () => {
         expect(out('        return a.indexOf(b);', 'a: string, b: string')).toContain('Value::Int(a.as_str().zip(b.as_str()).and_then(|(__s, __n)| __s.find(__n)).map(|__i| __i as i64).unwrap_or(-1))');
     });
     test('join on a string[]', () => {
-        expect(out("        return xs.join(',');", 'xs: string[]')).toContain('Value::Str(xs.as_array().map(|__a| __a.iter().map(|__v| __v.to_string()).collect::<Vec<String>>().join(",")).unwrap_or_default().into())');
+        expect(out("        return xs.join(',');", 'xs: string[]')).toContain('Value::Str(xs.join(",").into())');
     });
     test('unproven receivers keep the helpers', () => {
         const o = out("        const u = a.toUpperCase();\n        const p = a.split(',');\n        const j = xs.join(',');\n        const r = a.replace('x', 'y');\n        return [u, p, j, r, a.startsWith('x')];", 'a: any, xs: any[]');
-        expect(o).toContain('(match &(a) { Value::Str(__s) => Value::Str(__s.to_uppercase().into())');
+        expect(o).toContain('(if let Some(__s) = (a).as_str() { Value::Str(__s.to_uppercase().into()) } else { Value::Null })');
         expect(o).toContain('split(&a, &Value::Str(",".into()))');
         expect(o).toContain('join(&xs, &Value::Str(",".into()))');
         expect(o).toContain('replace_str(&a,');
@@ -4133,16 +4328,39 @@ describe('hx4 R06 native string methods on proven strings', () => {
     });
     test('non-literal operands keep the helpers', () => {
         const o = out("        return [a.split(s), a.startsWith(s), a.replace(s, 'y')];", 'a: string, s: string');
-        // hx4 R13: a string-variable split delimiter / replace pattern goes native
+        // a string-variable split delimiter / replace pattern goes native
         expect(o).toContain('a.as_str().zip(s.as_str()).map(|(__s, __d)| __s.split(__d)');
-        // hx4 R17: a string-variable affix goes native too
+        // a string-variable affix goes native too
         expect(o).toContain('a.as_str().zip(s.as_str()).is_some_and(|(__s, __p)| __s.starts_with(__p))');
         expect(o).toContain('a.as_str().zip(s.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, \"y\").into()))');
     });
 });
 
-// hx4 R07 — numeric/string helpers go native on checker-proven operands
-describe('rust R07 native numeric/string helpers', () => {
+describe('padEnd / toFixed native arms on proven operands', () => {
+    const m = (body: string, params = 'a: string') => `class A {\n    run(${params}) {\n${body}\n    }\n}`;
+    const out = (body: string, params?: string) => transpiler.transpileRust(m(body, params)).content;
+
+    test('padEnd with a one-char pad and a literal width', () => {
+        expect(out("        return a.padEnd(8, '0');")).toContain('return a.as_str().map(|__s| Value::Str(format!("{:0<8}", __s).into())).unwrap_or(Value::Null);');
+        expect(out("        return a.padEnd(5, ' ');")).toContain('format!("{: <5}", __s)');
+    });
+    test('padEnd keeps the helper for a multi-char pad, a dynamic width or an unproven receiver', () => {
+        expect(out("        return a.padEnd(8, '00');")).toContain('pad_end(&a,');
+        expect(out("        return a.padEnd(w, '0');", 'a: string, w: number')).toContain('pad_end(&a,');
+        expect(out("        return a.padEnd(8, '0');", 'a: any')).toContain('pad_end(&a,');
+    });
+    test('toFixed on a proven number with a literal digit count', () => {
+        expect(out('        return a.toFixed(10);', 'a: number')).toContain('return Value::str(format!("{:.*}", 10, a.as_f64().unwrap_or(0.0)));');
+    });
+    test('toFixed keeps the helper for a string payload, a dynamic count or an any receiver', () => {
+        expect(out('        return a.toFixed(2);', 'a: string')).toContain('to_fixed(&a,');
+        expect(out('        return a.toFixed(d);', 'a: number, d: number')).toContain('to_fixed(&a,');
+        expect(out('        return a.toFixed(2);', 'a: any')).toContain('to_fixed(&a,');
+    });
+});
+
+// numeric/string helpers go native on checker-proven operands
+describe('rust native numeric/string helpers', () => {
     const rust = (ts: string) => transpiler.transpileRust(ts).content;
     test('number toString prints Display format', () => {
         const out = rust('function f(n: number) { const r = n.toString(); return r; }');
@@ -4184,46 +4402,46 @@ describe('rust R07 native numeric/string helpers', () => {
     });
 });
 
-describe('hx4 R09 rust typed-operand is_equal/add/subtract', () => {
-    const r09 = (code: string) => transpiler.transpileRust(code).content;
+describe('rust typed-operand is_equal/add/subtract', () => {
+    const nativeIntResult = (code: string) => transpiler.transpileRust(code).content;
 
     test('string + number and Str + number', () => {
-        const out = r09('function f (n: number, s: string, t: string | undefined) {\n    const a = s + n;\n    const b = t + n;\n    return [ a, b ];\n}\n');
+        const out = nativeIntResult('function f (n: number, s: string, t: string | undefined) {\n    const a = s + n;\n    const b = t + n;\n    return [ a, b ];\n}\n');
         expect(out).toContain('let mut a: Value = Value::Str(format!("{}{}", s, n).into());');
         expect(out).toContain('add(&t, &n)');
     });
 
     test('number + any keeps the helper', () => {
-        const out = r09('function f (n: number, s: string, x: any) {\n    const a = s + x;\n    const b = x + n;\n    return [ a, b ];\n}\n');
+        const out = nativeIntResult('function f (n: number, s: string, x: any) {\n    const a = s + x;\n    const b = x + n;\n    return [ a, b ];\n}\n');
         expect(out).toContain('add(&s, &x)');
         expect(out).toContain('add(&x, &n)');
     });
 
     test('.length on an any receiver minus/plus a number goes native', () => {
-        const out = r09('function f (x: any, n: number) {\n    const a = x.length - 1;\n    const b = x.length + n;\n    return [ a, b ];\n}\n');
+        const out = nativeIntResult('function f (x: any, n: number) {\n    const a = x.length - 1;\n    const b = x.length + n;\n    return [ a, b ];\n}\n');
         expect(out).not.toContain('subtract(');
         expect(out).not.toContain('add(');
         expect(out).toContain('(match (&(get_array_length(&x)), &(Value::Int(1))) { (Value::Int(x), Value::Int(y)) => Value::Int(x - y)');
     });
 
     test('const length local of an any receiver compares natively', () => {
-        const out = r09('function f (x: any, y: any) {\n    const length = x.length;\n    const other = y.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (length === other) {\n        return 2;\n    }\n    return 3;\n}\n');
+        const out = nativeIntResult('function f (x: any, y: any) {\n    const length = x.length;\n    const other = y.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (length === other) {\n        return 2;\n    }\n    return 3;\n}\n');
         expect(out).toContain('if (length.as_f64() == Some(0.0))');
         expect(out).toContain('if (length.as_f64() == other.as_f64())');
         expect(out).not.toContain('is_equal(');
     });
 
     test('let length local, and any vs const length, keep the helpers', () => {
-        const out = r09('function f (x: any, y: any) {\n    let length = x.length;\n    length = y;\n    const l2 = x.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (l2 === y) {\n        return 2;\n    }\n    return l2 - y;\n}\n');
+        const out = nativeIntResult('function f (x: any, y: any) {\n    let length = x.length;\n    length = y;\n    const l2 = x.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (l2 === y) {\n        return 2;\n    }\n    return l2 - y;\n}\n');
         expect(out).toContain('is_equal(&length, &Value::Int(0))');
         expect(out).toContain('is_equal(&l2, &y)');
-        expect(out).toContain('(match (&(l2), &(y)) {'); // hx4 R25
+        expect(out).toContain('(match (&(l2), &(y)) {'); // inline math/comparison dispatch
     });
 });
 
-describe('hx4 R10 native reads on plain-dict locals and Dict parameters', () => {
+describe('native reads on plain-dict locals and Dict parameters', () => {
     const dyn = (receiver: string, key: string) =>
-        `${receiver}.as_map().and_then(|__m| ${key}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+        `(if let (Some(__m), Some(__k)) = (${receiver}.as_map(), ${key}.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
     let output = '';
     beforeAll(() => {
         output = transpiler.transpileRustByPath('./tests/files/input/hx4r10/ts/src/venue.ts').content;
@@ -4246,7 +4464,7 @@ describe('hx4 R10 native reads on plain-dict locals and Dict parameters', () => 
     });
 });
 
-describe('hx4 R11: relaxed Vec locals and native list length', () => {
+describe('relaxed Vec locals and native list length', () => {
     const wrap = (body: string, params = 'items: any[]') => `class T {\n    parseX (x) { return x; }\n    filterBy (a, b) { return a; }\n    f (${params}) {\n${body}\n    }\n}`;
     const rs = (body: string, params?: string) => transpiler.transpileRust(wrap(body, params)).content;
     test('a non-final this-call argument clones into its box', () => {
@@ -4259,7 +4477,7 @@ describe('hx4 R11: relaxed Vec locals and native list length', () => {
     test('index reads on a Vec local use Vec::get', () => {
         const out = rs('        const out = [];\n        out.push (1);\n        for (let i = 0; i < out.length; i++) {\n            const v = out[i];\n            this.parseX (v);\n        }\n        return out[0];');
         expect(out).toContain('let mut out: Vec<Value> = Vec::new();');
-        expect(out).toContain('let mut v: Value = out.get((i).as_i64().map_or(usize::MAX, |__n| __n as usize)).cloned().unwrap_or(Value::Null);');
+        expect(out).toContain('let mut v: Value = out.get((i).as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null);');
         expect(out).toContain('return out.get(0).cloned().unwrap_or(Value::Null);');
     });
     test('negative: in-loop this-call arg, element write, chained read, &mut self callee keep the box', () => {
@@ -4271,14 +4489,15 @@ describe('hx4 R11: relaxed Vec locals and native list length', () => {
             '        const out = [];\n        out.push (1);\n        const k = \'a\';\n        return out[k];',
         ]) {
             const out = rs(body);
-            // the box stays (hx4 R18 may spell its Arr push natively)
+            // the box stays (the Arr push may be spelled natively)
             expect(out).toMatch(/append_to_array\(&mut out|if let Value::Arr\(__a\) = &mut out \{/);
             expect(out).not.toContain('Vec<Value>');
         }
     });
     test('length of a split / array-literal-returning call local is native', () => {
         const out = rs('        const parts = s.split (\'-\');\n        const n = parts.length;\n        return n;', 's');
-        expect(out).toContain('parts.as_array().map_or(Value::Int(0), |__a| Value::Int(__a.len() as i64))');
+        expect(out).toContain('let mut parts: Vec<Value> = split(&s, &Value::Str("-".into())).as_array().cloned().unwrap_or_default()');
+        expect(out).toContain('Value::Int(parts.len() as i64)');
         expect(out).not.toContain('get_array_length');
     });
     test('negative: any-typed and reassigned locals keep get_array_length', () => {
@@ -4287,9 +4506,7 @@ describe('hx4 R11: relaxed Vec locals and native list length', () => {
     });
 });
 
-describe('hx4 R12 safeDict / builder plain dicts and bool-value truthiness', () => {
-    const insert = (receiver: string, key: string, value: string) =>
-        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+describe('safeDict / builder plain dicts and bool-value truthiness', () => {
     let output = '';
     beforeAll(() => {
         output = transpiler.transpileRustByPath('./tests/files/input/hx4r12/ts/src/venue.ts').content;
@@ -4324,7 +4541,7 @@ describe('hx4 R12 safeDict / builder plain dicts and bool-value truthiness', () 
     });
 });
 
-describe('hx4 R13 proven-Str safeString locals: native equality / replace / split / toString / case', () => {
+describe('proven-Str safeString locals: native equality / replace / split / toString / case', () => {
     let replaceOut = '';
     let eqOut = '';
     beforeAll(() => {
@@ -4335,7 +4552,7 @@ describe('hx4 R13 proven-Str safeString locals: native equality / replace / spli
     test('replace / split with a string-variable operand print native str ops', () => {
         expect(replaceOut).toContain('let mut marketId: Value = subscription.as_str().zip(prefix.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, "").into())).unwrap_or_else(|| subscription.clone());');
         expect(replaceOut).toContain('code = code.as_str().zip(net.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, "").into())).unwrap_or_else(|| code.clone());');
-        expect(replaceOut).toContain('let mut parts: Value = Value::Array(code.as_str().zip(id.as_str()).map(|(__s, __d)| __s.split(__d).map(|__p| Value::Str(__p.to_string().into())).collect()).unwrap_or_default());');
+        expect(replaceOut).toContain('let mut parts: Value = Value::Array(code.as_str().zip(id.as_str()).map(|(__s, __d)| __s.split(__d).map(Value::from).collect()).unwrap_or_default());');
         expect(replaceOut).toContain('.as_str().zip((Value::Str(format!("{}{}", Value::Str(".".into()), crate::value::get_value_k(&o, "x")).into())).as_str())');
         expect(replaceOut).toContain('let mut s: Value = Value::Str(format!("{}", id).into());');
         expect(replaceOut).not.toContain('replace_str(');
@@ -4344,7 +4561,7 @@ describe('hx4 R13 proven-Str safeString locals: native equality / replace / spli
     test('two proven-Str `any` locals compare with PartialEq', () => {
         expect(eqOut).toContain('if (a == b) {');
         expect(eqOut).toContain('if (a == c) {');
-        expect(eqOut).toContain('let mut u: Value = g.as_str().map(|__s| Value::Str(__s.to_uppercase().into())).unwrap_or(Value::Null);');
+        expect(eqOut).toContain('let mut u: Value = (if let Some(__s) = g.as_str() { Value::Str(__s.to_uppercase().into()) } else { Value::Null });');
         expect(eqOut).toContain('let mut t: Value = Value::Str(format!("{}", a).into());');
     });
 
@@ -4355,14 +4572,14 @@ describe('hx4 R13 proven-Str safeString locals: native equality / replace / spli
     });
 });
 
-describe('hx4 R14 overloaded base safeDict/safeList/safeBool feed the plain-dict and list proofs', () => {
+describe('overloaded base safeDict/safeList/safeBool feed the plain-dict and list proofs', () => {
     let output = '';
     beforeAll(() => {
         output = transpiler.transpileRustByPath('./tests/files/input/hx4r14/ts/src/venue.ts').content;
     });
 
     test('a dynamic-key read on an overloaded safeDict local with a {} default is native', () => {
-        expect(output).toContain('let mut found: Value = byAlt.as_map().and_then(|__m| id.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null);');
+        expect(output).toContain('let mut found: Value = (if let (Some(__m), Some(__k)) = (byAlt.as_map(), id.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null });');
     });
 
     test('a non-plain default and a write-back bind keep get_value', () => {
@@ -4378,11 +4595,11 @@ describe('hx4 R14 overloaded base safeDict/safeList/safeBool feed the plain-dict
         expect(output).toContain('last = trades.as_array().and_then(|__arr| match &((match (&(numTrades), &(Value::Int(1)))');
         expect(output).toContain('let mut prev: Value = trades.as_array().and_then(|__arr| match &((match (&(i), &(Value::Int(1)))');
         expect(output).toContain('Value::Int(__n) if *__n >= 0 => __arr.get(*__n as usize), _ => None }).cloned().unwrap_or(Value::Null)');
-        expect(output).toContain('get_value(&trades, &(match (&(k), &(Value::Int(1))) {'); // hx4 R25
+        expect(output).toContain('get_value(&trades, &(match (&(k), &(Value::Int(1))) {'); // inline math/comparison dispatch
     });
 });
 
-describe('hx4 R15 Vec<Value> object-literal / join uses and negated bool tuple locals', () => {
+describe('Vec<Value> object-literal / join uses and negated bool tuple locals', () => {
     let output = '';
     beforeAll(() => {
         output = transpiler.transpileRustByPath('./tests/files/input/hx4r15/ts/src/venue.ts').content;
@@ -4409,7 +4626,7 @@ describe('hx4 R15 Vec<Value> object-literal / join uses and negated bool tuple l
     });
 });
 
-describe('hx4 R16 rust math/comparison on structurally numeric operands', () => {
+describe('rust math/comparison on structurally numeric operands', () => {
     const r16 = (code: string) => transpiler.transpileRust(code).content;
     const src = 'class X {\n' +
         '    sum (...xs: any[]): any { return xs[0]; }\n' +
@@ -4450,15 +4667,15 @@ describe('hx4 R16 rust math/comparison on structurally numeric operands', () => 
     });
 
     test('any operands and two nullable sides of <= keep the helpers', () => {
-        expect(out).toContain('(match (&(a), &(bid)) { (__a, __b) =>'); // hx4 R25
-        expect(out).toContain('(match (&(a), &(Value::Int(1))) {'); // hx4 R25
-        expect(out).toContain('(match (&(self.sum(a, Value::Int(1))), &(Value::Int(2))) { (__a, __b) =>'); // hx4 R25
+        expect(out).toContain('(match (&(a), &(bid)) { (__a, __b) =>'); // inline math/comparison dispatch
+        expect(out).toContain('(match (&(a), &(Value::Int(1))) {'); // inline math/comparison dispatch
+        expect(out).toContain('(match (&(self.sum(a, Value::Int(1))), &(Value::Int(2))) { (__a, __b) =>'); // inline math/comparison dispatch
         expect(out).toContain('let mut m: Value = (match ((self.sum(bid, Value::Int(1))).as_f64(), (Value::Int(2)).as_f64())');
-        expect(out).toContain('(match (&(bid), &(limit)) { (__a, __b) =>'); // hx4 R25
+        expect(out).toContain('(match (&(bid), &(limit)) { (__a, __b) =>'); // inline math/comparison dispatch
     });
 });
 
-describe('hx4 R17 string helpers and anchored concat', () => {
+describe('string helpers and anchored concat', () => {
     const src = "type Str = string | undefined;\nclass Precise { constructor (s: string) {} }\nclass A {\n    id: string = 'a';\n    safeString (o: any, k: any, d: any = undefined): Str { return undefined; }\n    run (x: any, code: string, s: Str, n: number) {\n        const h = this.safeString (x, 'h', '');\n        let qs = '';\n        qs = qs.replaceAll ('%2C', ',');\n        const r = code.replace (s, h);\n        const p = new Precise ('1');\n        return [ h.trim (), code.startsWith (s), code.endsWith (h), qs, r, this.id + ' x ' + x, 'n' + n, 'p' + p, x + 'y', x.trim (), x.replaceAll ('a', 'b'), x.startsWith (s) ];\n    }\n}\n";
     let o = '';
     beforeAll(() => { o = transpiler.transpileRust(src).content; });
@@ -4482,7 +4699,7 @@ describe('hx4 R17 string helpers and anchored concat', () => {
     });
 });
 
-describe('hx4 R18 collection helpers on proven plain-dict / Arr-only locals', () => {
+describe('collection helpers on proven plain-dict / Arr-only locals', () => {
     let rest = '';
     let prediction = '';
     beforeAll(() => {
@@ -4491,11 +4708,11 @@ describe('hx4 R18 collection helpers on proven plain-dict / Arr-only locals', ()
     });
 
     test('push on a [] local / length on a toArray local are native', () => {
-        expect(rest).toContain('if let Value::Arr(__a) = &mut out { std::sync::Arc::make_mut(__a).push(rows.as_array()');
+        expect(rest).toContain('if let Value::Arr(__a) = &mut out { std::sync::Arc::make_mut(__a).push(rows.get(');
         expect(rest).toContain('return Value::from(vec![out, count, Value::Int(parsed.len() as i64)]);');
     });
 
-    test('literal-key in on an R10 plain local is contains_key', () => {
+    test('literal-key in on a plain-dict local is contains_key', () => {
         expect(rest).toContain('if (matches!(&account, Value::Dict(__d) if __d.contains_key("free"))) {');
         expect(rest).toContain('in_op(&response, &Value::Str("code".into()))');
     });
@@ -4516,7 +4733,7 @@ describe('hx4 R18 collection helpers on proven plain-dict / Arr-only locals', ()
     });
 });
 
-describe('hx4 R20 bool-call equality and numeric add', () => {
+describe('bool-call equality and numeric add', () => {
     const src = "class A {\n    sbeReadUint (h: string, o: number, l: number): number { return o + l; }\n    sum (...a: any[]): any { return a[0]; }\n    run (requestPath: any, frameHex: string, frameLength: number, x: any, flag: any) {\n        const blockLength = this.sbeReadUint (frameHex, 0, 2);\n        const position = this.sum (blockLength, 8);\n        if (requestPath.endsWith ('login') === true) { return 1; }\n        if (position + 4 > frameLength) { return 0; }\n        const k = x + 1;\n        return [ x.startsWith ('z') !== true, k, flag === true ];\n    }\n}\n";
     let o = '';
     beforeAll(() => { o = transpiler.transpileRust(src).content; });
@@ -4533,7 +4750,7 @@ describe('hx4 R20 bool-call equality and numeric add', () => {
     });
 });
 
-describe('hx4 R21 base-tier enumeration, Arr-only sources and string-method receivers', () => {
+describe('base-tier enumeration, Arr-only sources and string-method receivers', () => {
     let base = '';
     let rest = '';
     beforeAll(() => {
@@ -4541,9 +4758,11 @@ describe('hx4 R21 base-tier enumeration, Arr-only sources and string-method rece
         rest = transpiler.transpileRustByPath('./tests/files/input/hx4r21/ts/src/venue.ts').content;
     });
 
+    // `built` is a literal-built local, so it is a typed bearer now and
+    // enumerates through the map's own iterators (no `as_map` box, no `object_keys`).
     test('Object.keys / Object.values on a base-tier plain local are native; any keeps the helper', () => {
-        expect(base).toContain('let mut keys: Value = Value::Array(built.as_map().map(|__m| __m.keys().map(|__k| Value::Str(__k.clone().into())).collect()).unwrap_or_default());');
-        expect(base).toContain('let mut values: Value = Value::Array(built.as_map().map(|__m| __m.values().cloned().collect()).unwrap_or_default());');
+        expect(base).toContain('let mut keys: Value = Value::Array(built.keys().map(|__k| Value::Str(__k.clone().into())).collect());');
+        expect(base).toContain('let mut values: Value = Value::Array(built.values().cloned().collect());');
         expect(base).toContain('object_keys(&response)');
     });
 
@@ -4554,12 +4773,12 @@ describe('hx4 R21 base-tier enumeration, Arr-only sources and string-method rece
     });
 
     test('a string-typed map read receiving toUpperCase reads natively; an any read keeps get_value', () => {
-        expect(rest).toContain('(currency.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null))');
+        expect(rest).toContain('(currency.get("id").cloned().unwrap_or(Value::Null)).as_str()');
         expect(rest).toMatch(/get_value\(&raw, &Value::Str\("id"\.into\(\)\)\)|get_value_k\(&raw, "id"\)/);
     });
 });
 
-describe('hx4 R22 self-referential numeric writes, always-Str locals, Str ordering', () => {
+describe('self-referential numeric writes, always-Str locals, Str ordering', () => {
     const src = "type Str = string | undefined;\nclass A {\n    sum (...a: any[]): any { return a[0]; }\n    safeString (o: any, k: any, d: any = undefined): Str { return undefined; }\n    json (x: any): string { return ''; }\n    run (blockLength: number, raw: any, snap: any, method: string, path: string, params: any, x: any) {\n        let position = this.sum (blockLength, 8);\n        position = position + 4;\n        let earliest: Str = undefined;\n        const gameTime = this.safeString (raw, 'gameTime');\n        if ((gameTime !== undefined) && ((earliest === undefined) || (gameTime < earliest))) {\n            earliest = gameTime;\n        }\n        const version = this.safeString (snap, 'v', '');\n        const held = this.safeString (snap, 'h', '');\n        const newer = (held !== '') && (version <= held);\n        let body: any = undefined;\n        if (method === 'POST') { body = this.json (params); }\n        let auth = '/' + path;\n        if (body !== undefined) { auth = auth + body; }\n        let maybe = this.safeString (x, 'k');\n        const bad = maybe + body;\n        const loose = x < raw;\n        const anyLe = x <= 'b';\n        return [ position, earliest, newer, auth, bad, loose, anyLe ];\n    }\n}\n";
     let o = '';
     beforeAll(() => { o = transpiler.transpileRust(src).content; });
@@ -4576,12 +4795,12 @@ describe('hx4 R22 self-referential numeric writes, always-Str locals, Str orderi
     });
     test('unproven operands keep the helpers', () => {
         expect(o).toContain('add(&maybe, &body)');
-        expect(o).toContain('(match (&(x), &(raw)) { (__a, __b) =>'); // hx4 R25
-        expect(o).toContain('(match (&(x), &(Value::Str("b".into()))) { (__a, __b) =>'); // hx4 R25
+        expect(o).toContain('(match (&(x), &(raw)) { (__a, __b) =>'); // inline math/comparison dispatch
+        expect(o).toContain('(match (&(x), &(Value::Str("b".into()))) { (__a, __b) =>'); // inline math/comparison dispatch
     });
 });
 
-describe('hx4 R23 plain-dict sources in the base tier and pro files', () => {
+describe('plain-dict sources in the base tier and pro files', () => {
     let base = '';
     let pro = '';
     beforeAll(() => {
@@ -4591,11 +4810,13 @@ describe('hx4 R23 plain-dict sources in the base tier and pro files', () => {
 
     test('base extend copies of locals / typed Dict params insert natively', () => {
         expect(base).toContain('if let Value::Dict(__d) = &mut itemWithKey { std::sync::Arc::make_mut(__d).insert(crate::runtime::stringify_param(&keyName), key.clone()); }');
-        expect(base).toContain('if let Value::Dict(__d) = &mut result { std::sync::Arc::make_mut(__d).insert("swap".into(), Value::Bool(false)); }');
+        // `extend` of a literal + a Dict-typed place declares the bearer.
+        expect(base).toContain('result.insert("swap".into(), Value::Bool(false));');
     });
 
     test('base safeDict(this.options, k, {}) local reads natively', () => {
-        expect(base).toContain('accountsByType.as_map().and_then(|__m| account.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        // the safeDict local is a bearer, so the read is one map lookup.
+        expect(base).toContain('accountsByType.get(account.as_str().unwrap_or("")).cloned().unwrap_or(Value::Null)');
     });
 
     test('base extend of an any parameter keeps the helper', () => {
@@ -4608,11 +4829,13 @@ describe('hx4 R23 plain-dict sources in the base tier and pro files', () => {
     });
 
     test('pro safeDict(this.options, k, {}) local reads natively', () => {
-        expect(pro).toContain('subs.as_map().and_then(|__m| __m.get("a")).cloned().unwrap_or(Value::Null)');
+        // bearer read and write, no helper and no cow_guard.
+        expect(pro).toContain('subs.insert("a".into(), Value::Int(1));');
+        expect(pro).toContain('subs.get("a").cloned().unwrap_or(Value::Null)');
     });
 });
 
-describe('hx4 R25 inline math/comparison dispatch and Str|Null field concat', () => {
+describe('inline math/comparison dispatch and Str|Null field concat', () => {
     const src = "class A {\n    convertToBigIntCustom (x: any) {\n        return parseInt (x);\n    }\n    signHash (hash: any, privateKey: any) {\n        const signature = ecdsa (hash, privateKey);\n        const r = signature['r'];\n        const s = signature['s'];\n        return {\n            'r': r.padStart (64, '0'),\n            's': s.padStart (64, '0'),\n            'v': 27,\n        };\n    }\n    signMessage (message: any, privateKey: any) {\n        return this.signHash (message, privateKey.slice (-64));\n    }\n    signOnboardingAction (): object {\n        const signature = this.signMessage ('x', 'y');\n        return signature;\n    }\n    run (request: any, params: any, config: any, cache: any[], h: any) {\n        const amountMultiplier = this.convertToBigIntCustom ('1000000');\n        const amountInt = request['num_tokens'] * amountMultiplier;\n        const z = this.parseToInt (request['num_tokens'] * amountMultiplier);\n        const limit = params['limit'];\n        const entry = config[0];\n        if (limit <= entry[0]) { return 1; }\n        const signature: any = this.signOnboardingAction ();\n        const pk = this.hashMessage (signature['r'] + signature['s']);\n        const cacheLength = cache.length;\n        const snapshotDelay = this.handleOption ('a', 'b', 25);\n        if (cacheLength === snapshotDelay) { return 2; }\n        if (h === 1) { return 3; }\n        return [ amountInt, z, pk ];\n    }\n}\n";
     let o = '';
     beforeAll(() => { o = transpiler.transpileRust(src).content; });
@@ -4635,9 +4858,7 @@ describe('hx4 R25 inline math/comparison dispatch and Str|Null field concat', ()
     });
 });
 
-describe('hx4 R26 tuple slot-1 params of base handle*AndParams helpers', () => {
-    const insert = (receiver: string, key: string, value: string) =>
-        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+describe('tuple slot-1 params of base handle*AndParams helpers', () => {
     let rest = '';
     let pro = '';
     beforeAll(() => {
@@ -4665,3 +4886,1484 @@ describe('hx4 R26 tuple slot-1 params of base handle*AndParams helpers', () => {
         expect(pro).not.toContain('add_element_to_object(&mut paramsLocal');
     });
 });
+
+describe('typed locals: Vec literal seeds and Arr-only index reads', () => {
+    const wrap = (body: string, params = 'items: any[]') => `class T {
+    parseX (x) { return x; }
+    f (${params}) {
+${body}
+    }
+}`;
+    const rs = (body: string, params?: string) => transpiler.transpileRust(wrap(body, params)).content;
+    test('a non-empty literal seed is a Vec with the native literal', () => {
+        const out = rs("        const out = [ 1 ];\n        out.push (2);\n        return out;");
+        expect(out).toContain('let mut out: Vec<Value> = vec![Value::Int(1)];');
+        expect(out).toContain('out.push(Value::Int(2));');
+        expect(out).toContain('return Value::from(out);');
+        expect(out).not.toContain('append_to_array');
+    });
+    test('a bare local element of a typed literal seed is cloned', () => {
+        const out = rs("        const x = items[0];\n        const out = [ x ];\n        out.push (1);\n        return out;");
+        expect(out).toContain('let mut out: Vec<Value> = vec![x.clone()];');
+        expect(out).toContain('return Value::from(out);');
+    });
+    test('a literal index read on an Arr-only local is native', () => {
+        const out = rs("        const parts = s.split ('-');\n        parts.push ('x');\n        const first = parts[0];\n        return first;", 's: string');
+        expect(out).toContain('parts.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)');
+        expect(out).not.toContain('get_value(&parts');
+    });
+    test('a dynamic index read on an Arr-only local is native', () => {
+        const out = rs("        const parts = s.split ('-');\n        parts.push ('x');\n        for (let i = 0; i < parts.length; i++) {\n            const v = parts[i];\n            if (v !== undefined) { return v; }\n        }\n        return undefined;", 's: string');
+        expect(out).toContain('parts.as_array().map(Vec::as_slice).unwrap_or_default().get(i as usize).cloned().unwrap_or(Value::Null)');
+        expect(out).not.toContain('get_value(&parts');
+    });
+    test('negative: a string receiver or a dict keeps the helper', () => {
+        expect(rs("        const v = items[0];\n        return v;", 'items: string')).toContain('get_value(&items');
+        expect(rs("        const d = { 'a': 1 };\n        return d[0];")).toContain('get_value(&d');
+    });
+});
+
+describe('native `bool` parameters', () => {
+    let base = '';
+    let venue = '';
+    beforeAll(() => {
+        const fresh = new Transpiler({
+            'verbose': false,
+            'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } }
+        } as any);
+        base = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'bool-params', 'ts/src/base/Exchange.ts')).content;
+        venue = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'bool-params', 'ts/src/venue.ts')).content;
+    });
+
+    test('a required `boolean` read only in condition slots prints `bool`', () => {
+        expect(venue).toContain('pub fn settlementData(&self, isBuy: bool, amount: Value) -> Value {');
+        expect(venue).toContain('if isBuy {');
+        expect(venue).not.toContain('is_true(&isBuy)');
+    });
+
+    test('an optional `boolean` binds the truthiness the use sites applied', () => {
+        expect(venue).toContain('let roundUp: bool = get_arg(optional_args, 0, Value::Bool(false)).is_truthy();');
+        expect(venue).toContain('if roundUp {');
+        expect(venue).not.toContain('is_true(&roundUp)');
+    });
+
+    test('a call into a native-`bool` slot passes the bare bool, a `Value` coerces', () => {
+        expect(venue).toContain('return self.settlementData(on, Value::Int(1));');
+        expect(venue).toContain('return self.settlementData(raw.is_truthy(), Value::Int(2));');
+    });
+
+    test('a bool parameter read outside a bool sink keeps the box', () => {
+        expect(venue).toContain('pub fn boxed(&self, flag: Value) -> Value {');
+        expect(venue).toContain('let mut held: Value = flag;');
+    });
+
+    test('the base tier and base overrides keep the `Value` ABI', () => {
+        expect(base).toContain('pub fn setSandboxMode(&self, enabled: Value)');
+        expect(base).toContain('pub fn isPostOnly(&self, isMarketOrder: Value, optional_args: &[Value]) -> Value {');
+        // native truthiness of a boolean-typed `Value` as the `as_bool()` compare,
+        // so the boxed ABI still shows (no bare `if enabled {`)
+        expect(base).toContain('if enabled.as_bool() == Some(true) {');
+        expect(venue).toContain('pub fn setSandboxMode(&self, enabled: Value)');
+    });
+
+    test('a method passed as a value keeps the `Value` signature', () => {
+        expect(venue).toContain('pub fn channelB(&self, flag: Value) -> Value {');
+        // identifier arm: a boolean-typed `Value` prints the native `as_bool()` compare
+        expect(venue).toContain('if flag.as_bool() == Some(true) {');
+    });
+});
+
+describe('typed dict bearers', () => {
+    const rs = rustInParseXClass;
+
+    test('a literal-only dict local is a bare IndexMap with native reads and inserts', () => {
+        const out = rs("        const request = { 'type': 'limit' };\n        request['symbol'] = v;\n        const sym = request['symbol'];\n        return sym;");
+        expect(out).toContain('let mut request: indexmap::IndexMap<String, Value> = ({');
+        expect(out).toContain('request.insert("symbol".into(), v.clone())');
+        expect(out).toContain('request.get("symbol").cloned().unwrap_or(Value::Null)');
+        expect(out).not.toContain('add_element_to_object');
+        expect(out).not.toContain('get_value(&request');
+        expect(out).not.toContain('as_map().and_then');
+    });
+
+    test('the final move is boxed once (return, and a `this.` argument)', () => {
+        const ret = rs("        const res = {};\n        res['a'] = v;\n        return res;");
+        expect(ret).toContain('let mut res: indexmap::IndexMap<String, Value> = ({');
+        expect(ret).toContain('res.insert("a".into(), v.clone())');
+        expect(ret).toContain('return Value::Map(res);');
+        const arg = rs("        const params = {};\n        params['a'] = v;\n        return this.parseX (params);");
+        expect(arg).toContain('return self.parseX(Value::Map(params));');
+    });
+
+    // a boxed key (`v`, `0`) now writes through `stringify_param` — the
+    // helper's own conversion — so the negatives are receivers the bearer proof rejects.
+    test('negative: an element-read receiver or a foreign container keeps the box', () => {
+        const dyn = rs("        const d = {};\n        d[v] = 1;\n        return d['a'];");
+        expect(dyn).toContain('let mut d: indexmap::IndexMap<String, Value> = ({');
+        const elem = rs("        const d = this.parseX (v)[0];\n        d['a'] = 1;\n        return d;");
+        expect(elem).toContain('add_element_to_object(&mut d');
+        const keys = rs("        const d = this.parseX (v);\n        const n = Object.keys (d).length;\n        return n;");
+        expect(keys).toContain('let mut d: Value = self.parseX(v);');
+        expect(keys).toContain('object_keys(&d)');
+    });
+
+    test('a proven string key place reads and writes natively', () => {
+        const out = rs("        const m = {};\n        m[k] = v;\n        return m[k];", 'v: any, k: string');
+        expect(out).toContain('let mut m: indexmap::IndexMap<String, Value> = ({');
+        expect(out).toContain('m.insert(crate::runtime::stringify_param(&k), v.clone())');
+        expect(out).toContain('m.get(k.as_str().unwrap_or("")).cloned().unwrap_or(Value::Null)');
+    });
+
+    test('negative: a numeric key keeps the box', () => {
+        const num = rs("        const d = {};\n        d[0] = v;\n        return d[0];");
+        expect(num).toContain('let mut d: Value = Value::Map({');
+        expect(num).toContain('add_element_to_object(&mut d, &Value::Int(0), v)');
+    });
+
+    test('a chained write on a one-level bearer types the local', () => {
+        const nested = rs("        const d = {};\n        d['a']['b'] = v;\n        return d['a'];");
+        expect(nested).toContain('let mut d: indexmap::IndexMap<String, Value>');
+        expect(nested).toContain('if let Value::Dict(__d) = d.entry("a".into()).or_default()');
+        expect(nested).not.toContain('get_value_mut');
+    });
+});
+
+describe('bool locals into native-`bool` slots', () => {
+    let venue = '';
+    beforeAll(() => {
+        const fresh = new Transpiler({
+            'verbose': false,
+            'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } }
+        } as any);
+        venue = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'bool-locals', 'ts/src/venue.ts')).content;
+    });
+
+    test('a comparison local read in a native-`bool` slot is declared `bool`', () => {
+        expect(venue).toContain('let mut isMarket: bool = type_var.as_str() == Some("market");');
+        expect(venue).toContain('return self.settle(isMarket, Value::Int(2));');
+        expect(venue).not.toContain('isMarket.is_truthy()');
+    });
+
+    test('a comparison local read only in conditions keeps the `bool` declaration', () => {
+        expect(venue).toContain('let mut isSpot: bool = type_var.as_str() == Some("spot");');
+    });
+
+    test('negative: a local read in a `Value` slot keeps the box', () => {
+        expect(venue).toContain('let mut isWide: Value = (Value::Bool(type_var.as_str() == Some("spot")));');
+        expect(venue).not.toContain('let mut isWide: bool');
+    });
+
+    test('negative: a `Value` operand into the bool slot still coerces', () => {
+        expect(venue).toContain('return self.settle(raw.is_truthy(), Value::Int(3));');
+    });
+});
+
+describe('bearer write shapes', () => {
+    const rs = rustInParseXClass;
+
+    test('a string-proven computed key writes the bare map', () => {
+        const out = rs("        const m = {};\n        m['a' + k] = v;\n        return m;", 'v: any, k: string');
+        expect(out).toContain('let mut m: indexmap::IndexMap<String, Value> = ({');
+        expect(out).toContain('m.insert(format!("{}{}", Value::Str("a".into()), k), v.clone())');
+        expect(out).not.toContain('add_element_to_object');
+    });
+
+    test('negative: a computed-key read, or a key naming the receiver, keeps the box', () => {
+        const read = rs("        const m = {};\n        m['a' + k] = v;\n        return m['a' + k];", 'v: any, k: string');
+        expect(read).toContain('let mut m: Value = Value::Map({');
+        expect(read).toContain('add_element_to_object(&mut m,');
+        const self = rs("        const m = {};\n        m['a' + m['z']] = v;\n        return m;");
+        expect(self).toContain('let mut m: Value = Value::Map({');
+        expect(self).toContain('add_element_to_object(&mut m,');
+    });
+
+    test('the final move into a parent object literal is boxed once', () => {
+        const out = rs("        const d = {};\n        d['a'] = v;\n        const t = { 'x': d };\n        return t;");
+        expect(out).toContain('let mut d: indexmap::IndexMap<String, Value> = ({');
+        expect(out).toContain('d.insert("a".into(), v.clone())');
+        expect(out).toContain('m.insert("x".to_string(), Value::Map(d))');
+        expect(out).not.toContain('add_element_to_object');
+    });
+
+    test('a shorthand move keeps the box; a later write stays the map', () => {
+        const shorthand = rs("        const d = {};\n        d['a'] = v;\n        const t = { d };\n        return t;");
+        expect(shorthand).toContain('let mut d: Value = Value::Map({');
+        const late = rs("        const d = {};\n        d['a'] = v;\n        const t = { 'x': d };\n        d['b'] = v;\n        return t;");
+        expect(late).toContain('let mut d: indexmap::IndexMap<String, Value> = ({');
+        expect(late).toContain('m.insert("x".to_string(), Value::Map(d.clone()))');
+        expect(late).toContain('d.insert("b".into(), v.clone())');
+        expect(late).not.toContain('add_element_to_object');
+    });
+
+    test('a bearer handed out twice boxes a clone, then moves', () => {
+        const out = rs("        const d = {};\n        d['a'] = v;\n        this.parseX (d);\n        this.parseX (d);\n        return d;");
+        expect(out).toContain('let mut d: indexmap::IndexMap<String, Value> = ({');
+        expect(out).toContain('self.parseX(Value::Map(d.clone()));\n        self.parseX(Value::Map(d.clone()));');
+        expect(out).toContain('return Value::Map(d);');
+        expect(out).not.toContain('add_element_to_object');
+    });
+
+    test('a bearer rebuilt from a plain literal stays the map', () => {
+        const out = rs("        let d: Dict = {};\n        d['a'] = v;\n        if (v) {\n            d = { 'b': 1 };\n        }\n        return d['b'];");
+        expect(out).toContain('let mut d: indexmap::IndexMap<String, Value> = ({');
+        expect(out).toContain('d = ({');
+        expect(out).toContain('return d.get("b").cloned().unwrap_or(Value::Null);');
+        expect(out).not.toContain('add_element_to_object');
+    });
+
+    test('negative: a rebuild from a call keeps the box', () => {
+        const out = rs("        let d: Dict = {};\n        d['a'] = v;\n        if (v) {\n            d = this.parseX (v);\n        }\n        return d;");
+        expect(out).toContain('let mut d: Value = Value::Map({');
+        expect(out).toContain('add_element_to_object(&mut d,');
+    });
+});
+
+describe('read-only container bearers', () => {
+    const rs = rustInParseXClass;
+
+    test('a split local is a Vec<Value> with closure-free native reads', () => {
+        const out = rs("        const parts = v.split ('-');\n        const a = parts[0];\n        const b = parts[1];\n        return a;");
+        expect(out).toContain('let mut parts: Vec<Value> = split(&v, &Value::Str("-".into())).as_array().cloned().unwrap_or_default();');
+        expect(out).toContain('parts.get(0).cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('parts.get(1).cloned().unwrap_or(Value::Null)');
+        expect(out).not.toContain('get_value(&parts');
+        expect(out).not.toContain('and_then(|__arr|');
+        expect(out).not.toContain('as_map().and_then');
+    });
+
+    test('a loop counter indexes the bearer natively, `.length` is `len()`', () => {
+        const out = rs("        const xs = v.split (',');\n        for (let i = 0; i < xs.length; i++) {\n            const e = xs[i];\n            if (e) { return e; }\n        }\n        return 0;");
+        expect(out).toContain('let mut xs: Vec<Value> = split(&v, &Value::Str(",".into())).as_array().cloned().unwrap_or_default();');
+        expect(out).toContain('i < (xs.len() as i64)');
+        expect(out).toContain('xs.get(i as usize).cloned().unwrap_or(Value::Null)');
+        expect(out).not.toContain('get_array_length(&xs');
+        expect(out).not.toContain('get_value(&xs');
+    });
+
+    test('a safeList local with a list default is a Vec<Value>; Promise.all too', () => {
+        const out = rs("        const xs = this.safeList (v, 'a', []);\n        const b = xs[1];\n        return b;");
+        expect(out).toContain('let mut xs: Vec<Value> = self.safeList(v, Value::Str("a".into()), Value::from(vec![])).as_array().cloned().unwrap_or_default();');
+        expect(out).toContain('xs.get(1).cloned().unwrap_or(Value::Null)');
+        const allOut = rs("        const rs2 = await Promise.all (ps);\n        const b = rs2[0];\n        return b;", 'ps: any');
+        expect(allOut).toContain('let mut rs2: Vec<Value> = promise_all(&ps).await.as_array().cloned().unwrap_or_default();');
+    });
+
+    test('a read-only dict local is a bare IndexMap; literal-key reads are map lookups', () => {
+        const out = rs("        const m = this.safeDict (v, 'k', {});\n        const d = m['decimals'];\n        const e = m['base'];\n        return d;");
+        expect(out).toContain('let mut m: indexmap::IndexMap<String, Value> = self.safeDict(');
+        expect(out).toContain('m.get("decimals").cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('m.get("base").cloned().unwrap_or(Value::Null)');
+        expect(out).not.toContain('get_value(&m');
+        expect(out).not.toContain('as_map().and_then');
+    });
+
+    test('negative: an escape, a push, a write or an unproven key keeps the box', () => {
+        // returned
+        const escaped = rs("        const parts = v.split ('-');\n        const a = parts[0];\n        return parts;");
+        expect(escaped).toContain('let mut parts: Value = split(&v, &Value::Str("-".into()));');
+        expect(escaped).toContain('get_value(&parts, &Value::Int(0))');
+        // pushed
+        const pushed = rs("        const parts = v.split ('-');\n        parts.push (1);\n        return parts[0];");
+        expect(pushed).toContain('let mut parts: Value = split(');
+        expect(pushed).toContain('get_value(&parts, &Value::Int(0))');
+        // written dict
+        const written = rs("        const m = this.safeDict (v, 'k', {});\n        m['a'] = 1;\n        return m['a'];");
+        expect(written).toContain('let mut m: Value = self.safeDict(');
+        // dynamic key
+        const dyn = rs("        const d = this.safeDict (v, 'k', {});\n        const e = d[a];\n        return e;", 'v: any, a: string');
+        expect(dyn).toContain('let mut d: Value = self.safeDict(');
+        expect(dyn).toContain('get_value(&d, &a)');
+        // Object.keys on a list local
+        const keys = rs("        const parts = v.split ('-');\n        const n = Object.keys (parts).length;\n        return n;");
+        expect(keys).toContain('let mut parts: Value = split(');
+    });
+});
+
+describe('two-level dict bearers', () => {
+    const rs = rustInParseXClass;
+
+    test('an object-of-objects local is a nested IndexMap with native write and move', () => {
+        const out = rs("        const request = { 'params': {} };\n        request['params']['limit'] = v;\n        return request;");
+        expect(out).toContain('let mut request: indexmap::IndexMap<String, indexmap::IndexMap<String, Value>> = (');
+        expect(out).toContain('request.entry("params".to_string()).or_default().insert("limit".to_string(), v.clone())');
+        expect(out).toContain('return Value::from(request);');
+        expect(out).not.toContain('get_value_mut');
+        expect(out).not.toContain('add_element_to_object');
+    });
+
+    test('a two-level read is the two map lookups, not a `get_value` on a box', () => {
+        const out = rs("        const d = { 'a': {} };\n        d['a']['b'] = v;\n        return d['a']['b'];");
+        expect(out).toContain('let mut d: indexmap::IndexMap<String, indexmap::IndexMap<String, Value>> = (');
+        expect(out).toContain('d.get("a").and_then(|__n| __n.get("b")).cloned().unwrap_or(Value::Null)');
+        expect(out).not.toContain('get_value(&d');
+    });
+
+    test('a proven string key place reaches the native entry insert', () => {
+        const out = rs("        const d = {};\n        d['a'][k] = v;\n        return d;", 'v: any, k: string');
+        expect(out).toContain('d.entry("a".to_string()).or_default().insert(crate::runtime::stringify_param(&k), v.clone())');
+    });
+
+    test('a bearer with no two-level use keeps the flat map it escapes through', () => {
+        const out = rs("        const request = {};\n        const r = this.postActionRequest(t, request, params);\n        return r;", 't: any, params: any');
+        expect(out).not.toContain('indexmap::IndexMap<String, indexmap::IndexMap');
+        expect(out).toContain('Value::Map(request)');
+    });
+
+    test('a nested literal only used whole keeps the flat map', () => {
+        const out = rs("        const statuses = { 'deposit': { 'New': 'pending' } };\n        const r = this.safeDict(statuses, t);\n        return r;", 't: any');
+        expect(out).not.toContain('indexmap::IndexMap<String, indexmap::IndexMap');
+        expect(out).toContain('Value::Map(statuses)');
+    });
+
+    test('a bucket seeded as `x[k1] = {}` is the inner map itself', () => {
+        const out = rs("        const withdrawFees = {};\n        withdrawFees[code] = {};\n        withdrawFees[code][networkCode] = fee;\n        return { 'withdraw': withdrawFees };", 'code: string, networkCode: string, fee: any');
+        expect(out).toContain('let mut withdrawFees: indexmap::IndexMap<String, indexmap::IndexMap<String, Value>>');
+        expect(out).toContain('or_default()');
+        expect(out).not.toContain('get_value_mut');
+        expect(out).not.toContain('add_element_to_object');
+        expect(out).toContain('Value::from(withdrawFees)');
+    });
+
+    test('a bucket seeded from a non-empty literal writes below the boxed seed natively', () => {
+        const out = rs("        const d = {};\n        d['a'] = { 'b': v };\n        d['a']['c'] = v;\n        return d;");
+        expect(out).toContain('let mut d: indexmap::IndexMap<String, Value>');
+        expect(out).toContain('d.insert("a".into(), Value::Map({');
+        expect(out).toContain('if let Value::Dict(__d) = d.entry("a".into()).or_default()');
+    });
+
+    test('a three-level chain keeps every middle hop on get_value_mut', () => {
+        const out = rs("        const d = {};\n        d['a']['b']['c'] = v;\n        return d;");
+        expect(out).toContain('add_element_to_object(get_value_mut(d.entry("a".into()).or_default(), &Value::Str("b".into())), &Value::Str("c".into()), v);');
+    });
+
+    test('negative: an unproven hop key or a receiver-reading value keeps the box', () => {
+        // the hop key of the chain root is unproven: a numeric literal
+        const num = rs("        const d = {};\n        d[0][1] = v;\n        return d[0];");
+        expect(num).toContain('let mut d: Value = Value::Map({');
+        expect(num).toContain('add_element_to_object(get_value_mut(&mut d, &Value::Int(0)), &Value::Int(1), v);');
+        const self = rs("        const d = {};\n        d['a']['b'] = d['a'];\n        return d;");
+        expect(self).toContain('let mut d: Value = Value::Map({');
+    });
+});
+
+describe('dict bearer from a map-producing call', () => {
+    const wrap = (body: string, params = 'v: any') => `type Dict = { [key: string]: any };
+class T {
+    safeDict (o: Dict, k: string, d: Dict = {}): Dict { return d; }
+    safeString (o: Dict, k: string, d: string = ''): string { return ''; }
+    extend (a: Dict, b: Dict): Dict { return {}; }
+    f (${params}) {
+${body}
+    }
+}`;
+    const rs = (body: string, params?: string) => transpiler.transpileRust(wrap(body, params)).content;
+
+    test('a safeDict local is a bearer: literal-key reads are map lookups', () => {
+        const out = rs("        const data = this.safeDict (o, 'data', {});\n        return data['id'];", 'o: Dict');
+        expect(out).toContain('let mut data: indexmap::IndexMap<String, Value> = (match o.get("data")');
+        expect(out).toContain('data.get("id").cloned().unwrap_or(Value::Null)');
+        expect(out).not.toContain('get_value(&data');
+    });
+
+    test('a produced local that escapes keeps the box', () => {
+        // A helper call would have to re-box the map (`Value::Map(data.clone())`): no helper
+        // falls, and the line grows. The local stays a `Value`.
+        const out = rs("        const data = this.safeDict (o, 'data', {});\n        const t = this.extend (data, { 'id': this.safeString (data, 'id') });\n        return t;", 'o: Dict');
+        expect(out).toContain('let mut data: Value = ');
+        expect(out).not.toContain('Value::Map(data.clone())');
+    });
+
+    test('extend of an untyped parameter keeps the box', () => {
+        const out = rs("        const t = this.extend (v, { 'id': 1 });\n        return t;");
+        expect(out).toContain('let mut t: Value = self.extend(v');
+        expect(out).not.toContain('indexmap::IndexMap');
+    });
+});
+
+describe('rust sign api element', () => {
+    const sign = (body: string, name = 'sign') => transpiler.transpileRust(`class Foo {
+    ${name} (path: string, api: string[] = [ 'public' ], method: string = 'GET', params: any = {}) {
+${body}
+    }
+}`).content;
+
+    test('a local read from api and only compared with literals is an Option<String>', () => {
+        const out = sign("        const apiName = api[0];\n        if (apiName === 'private') { return 1; }\n        return 0;");
+        expect(out).toContain('let mut apiName: Option<String> = api.get(0).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('apiName.as_deref() == Some("private")');
+    });
+
+    test('a use that is not a literal compare keeps the Value', () => {
+        const out = sign("        const apiName = api[0];\n        return this.foo(apiName);");
+        expect(out).toContain('let mut apiName: Value = api.get(0).cloned().unwrap_or(Value::Null);');
+        expect(out).not.toContain('Option<String>');
+    });
+
+    test('a null compare keeps the Value', () => {
+        const out = sign("        const apiName = api[0];\n        if (apiName === 'a' || apiName !== undefined) { return 1; }\n        return 0;");
+        expect(out).toContain('let mut apiName: Value = ');
+    });
+
+    test('a method that is not sign/fetch2/request keeps the Value', () => {
+        const out = sign("        const apiName = api[0];\n        if (apiName === 'private') { return 1; }\n        return 0;", 'other');
+        expect(out).not.toContain('Option<String>');
+    });
+});
+
+describe('rust catch binding', () => {
+    const rs = (body: string) => transpiler.transpileRust(`class Foo {\n    f () {\n${body}\n    }\n}`).content;
+
+    test('a handler that never reads its binding tests is_err', () => {
+        const out = rs("        try { this.foo (); } catch (e) { this.bar (); }");
+        expect(out).toContain('if _try_result.is_err() {');
+        expect(out).not.toContain('Err(_e)');
+    });
+
+    test('a handler that reads its binding keeps the Err pattern', () => {
+        const out = rs("        try { this.foo (); } catch (e) { this.bar (e); }");
+        expect(out).toContain('if let Err(_e) = _try_result {');
+    });
+
+    test('a catch without a binding tests is_err', () => {
+        const out = rs("        try { this.foo (); } catch { this.bar (); }");
+        expect(out).toContain('if _try_result.is_err() {');
+    });
+});
+
+describe('rust string member read off a class-typed parameter', () => {
+    const rs = (body: string) => transpiler.transpileRust(
+        `class Src {\n    id: string = 'x';\n    markets: any = undefined;\n}\nclass Foo {\n    id: string = 'y';\n    f (other: Src) {\n${body}\n    }\n}`).content;
+
+    test('a concat operand reads the member with get_value_k', () => {
+        const out = rs("        return this.id + ' got ' + other.id;");
+        expect(out).toContain('crate::value::get_value_k(&other, \"id\")');
+        expect(out).not.toContain('other.id');
+    });
+
+    test('a non-string member keeps the default shape', () => {
+        const out = rs("        return other.markets;");
+        expect(out).not.toContain('get_value_k(&other, \"markets\")');
+    });
+
+    test('a string member written through the parameter is untouched', () => {
+        const out = rs("        other.id = 'z';");
+        expect(out).not.toContain('get_value_k(&other, \"id\")');
+    });
+});
+
+describe('rust order-book field read', () => {
+    const rs = (body: string) => transpiler.transpileRust(
+        `class OrderBook { bids: any; nonce: number; foo: any; }\nfunction f (orderbook: OrderBook, other: any) {\n${body}\n}`).content;
+
+    test('book bids/nonce print book_field', () => {
+        const out = rs("    const b = orderbook['bids'];\n    const n = orderbook['nonce'];");
+        expect(out).toContain('orderbook.book_field("bids")');
+        expect(out).toContain('orderbook.book_field("nonce")');
+    });
+
+    test('book.cache / nonce property reads print book_field', () => {
+        const out = rs("    const m = orderbook.cache;\n    const n = orderbook.nonce;");
+        expect(out).toContain('orderbook.book_field("cache")');
+        expect(out).toContain('orderbook.book_field("nonce")');
+    });
+
+    test('other keys and untyped receivers keep the default', () => {
+        const out = rs("    const f = orderbook['foo'];\n    const o = other['bids'];");
+        expect(out).not.toContain('book_field("foo")');
+        expect(out).not.toContain('other.book_field');
+    });
+});
+
+describe('rust string[] parameter used only by join', () => {
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'a15dstrvec', 'ts/src/venue.ts')).content;
+    });
+
+    test('a joined-only string[] param is a Vec<String> with the std join and no closure', () => {
+        expect(output).toContain('pub fn fetchByIds(&self, ids: Vec<String>, optional_args: &[Value])');
+        expect(output).toContain('Value::Str(ids.join(",").into())');
+    });
+
+    test('the array-literal caller passes vec![..] of strings', () => {
+        expect(output).toContain('self.fetchByIds(vec![id.to_string()]');
+    });
+
+    test('a public method with no ts caller also prints Vec<String>', () => {
+        expect(output).toContain('fn fetchNoCaller(&self, ids: Vec<String>');
+    });
+
+    test('a plain Value local caller converts with to_str_vec', () => {
+        expect(output).toContain('self.fetchByIds(chunk.to_str_vec()');
+    });
+
+    test('a param that is also indexed keeps the Value box', () => {
+        expect(output).toContain('fn fetchIndexed(&self, ids: Value');
+    });
+
+    test('a caller that is not an array literal keeps the Value box', () => {
+        expect(output).toContain('fn fetchComputed(&self, ids: Value');
+        expect(output).not.toContain('self.fetchComputed(ids.to_str_vec()');
+    });
+});
+
+describe('RF-rust-1 type-keyed closure-free native forms', () => {
+    const body = (stmts: string, params = 'a: string, b: any') =>
+        transpiler.transpileRust(`class A {\n    run(${params}) {\n${stmts}\n    }\n}`).content;
+
+    test('indexOf("lit") >= 0 / > -1 on a string place is a contains test', () => {
+        const o = body("        if (a.indexOf('x') >= 0) { return 1; }\n        if (a.indexOf('y') > -1) { return 2; }\n        return 0;");
+        expect(o).toContain('if a.as_str().unwrap_or("").contains("x") {');
+        expect(o).toContain('if a.as_str().unwrap_or("").contains("y") {');
+        expect(o).not.toContain('__s.find');
+    });
+
+    test('indexOf("lit") < 0 negates; > 0 and an empty needle keep the position', () => {
+        const o = body("        if (a.indexOf('x') < 0) { return 1; }\n        if (a.indexOf('y') > 0) { return 2; }\n        if (a.indexOf('') >= 0) { return 3; }\n        return 0;");
+        expect(o).toContain('if !a.as_str().unwrap_or("").contains("x") {');
+        expect(o).toContain('__s.find("y")');
+        expect(o).toContain('__s.find("")');
+    });
+
+    test('indexOf("lit") >= 0 on an unproven receiver keeps the helper', () => {
+        const o = body("        if (b.indexOf('x') >= 0) { return 1; }\n        return 0;");
+        expect(o).not.toContain('.contains("x")');
+    });
+
+    test('indexOf("lit") >= 0 outside a condition boxes the bool', () => {
+        const o = body("        const f = a.indexOf('x') >= 0;\n        return f;");
+        expect(o).toContain('Value::Bool(a.as_str().unwrap_or("").contains("x"))');
+    });
+
+    test('slice start literal folds its Int cast', () => {
+        const o = body("        return a.slice(0, b);", 'a: any, b: number');
+        expect(o).toContain('(match (&(a), 0i64,');
+        expect(o).not.toContain('unwrap_or(0)');
+    });
+
+    test('toLowerCase on a string place is closure-free', () => {
+        const o = body("        return a.toLowerCase();");
+        expect(o).toContain('(if let Some(__s) = a.as_str() { Value::Str(__s.to_lowercase().into()) } else { Value::Null })');
+        expect(o).not.toContain('|__s|');
+    });
+
+    test('startsWith / split with a non-empty literal on a string place are closure-free', () => {
+        const o = body("        const p = a.split(',');\n        return [p, a.startsWith('0x')];");
+        expect(o).toContain('Value::Array(if let Some(__s) = a.as_str() { __s.split(",").map(Value::from).collect() } else { Vec::new() })');
+        expect(o).toContain('a.as_str().unwrap_or("").starts_with("0x")');
+    });
+
+    test('an empty startsWith literal keeps the closure (an empty prefix matches only a Str)', () => {
+        const o = body("        return a.startsWith('');");
+        expect(o).toContain('a.as_str().is_some_and(|__s| __s.starts_with(""))');
+    });
+});
+
+describe('FM-RS1 L2 integer for-loop counters', () => {
+    const body = (stmts: string, params = 'lim: number, v: any') =>
+        transpiler.transpileRust(`class A {\n    run(${params}) {\n${stmts}\n    }\n    bar(x) {}\n}`).content;
+    const step = (v: string, sign = '+') => new RegExp(`if !__for_first_\\d+ \\{ if let Value::Int\\(n\\) = &mut ${v} \\{ \\*n \\${sign}= 1; \\} \\}`);
+    const matchStep = (v: string, k = 1) => `${v} = (match (&(${v}), &(Value::Int(${k})))`;
+
+    test('i++ / i-- on an int-literal counter bumps the Int payload in place', () => {
+        const o = body("        for (let i = 0; i < lim; i++) { this.bar (lim); }\n        for (let j = 5; j > 0; j--) { this.bar (lim); }");
+        expect(o).toMatch(step('i'));
+        expect(o).toMatch(step('j', '-'));
+        expect(o).not.toContain(matchStep('i'));
+    });
+
+    test('a counter written in the body keeps the printNativeNumeric step', () => {
+        const o = body("        for (let i = 0; i < lim; i++) { i += 2; }\n        for (let j = 0; j < lim; j++) { j = n; }");
+        expect(o).toContain(matchStep('i'));
+        expect(o).toContain(matchStep('j'));
+    });
+
+    test('a non-literal start, a float start or a +=2 step keeps the match', () => {
+        const o = body("        for (let a = lim; a < 9; a++) { }\n        for (let b = 0.5; b < 9; b++) { }\n        for (let c = 0; c < 9; c += 2) { }");
+        expect(o).toContain(matchStep('a'));
+        expect(o).toContain(matchStep('b'));
+        expect(o).toContain(matchStep('c', 2));
+        expect(o).not.toContain('if let Value::Int(n) = &mut');
+    });
+
+    test('a counter that only indexes a list and is passed to this.m() is an i64', () => {
+        const o = body("        const xs = v.split (',');\n        for (let i = 0; i < xs.length; i++) {\n            const e = xs[i];\n            this.bar (i);\n        }");
+        expect(o).toContain('let mut i: i64 = 0;');
+        expect(o).toMatch(/if !__for_first_\d+ \{ i \+= 1; \}/);
+        expect(o).toContain('i < (xs.len() as i64)');
+        expect(o).toContain('xs.get(i as usize).cloned().unwrap_or(Value::Null)');
+        expect(o).toContain('self.bar(Value::Int(i))');
+    });
+
+    test('the step binds __n when the function already uses the name n', () => {
+        const o = body("        for (let i = 0; i < n; i++) { this.bar (n); }", 'n: number');
+        expect(o).toContain('if let Value::Int(__n) = &mut i { *__n += 1; }');
+    });
+
+    test('a counter with any other use stays a Value counter', () => {
+        const o = body("        const xs = v.split (',');\n        for (let i = 0; i < xs.length; i++) {\n            const e = xs[i];\n            if (i === 3) { return e; }\n        }");
+        expect(o).toContain('let mut i: Value = Value::Int(0);');
+        expect(o).toMatch(step('i'));
+        expect(o).not.toContain('i: i64');
+        expect(o).toContain('xs.get(i.as_i64().unwrap_or(-1) as usize)');
+    });
+
+    test('nested counters type independently and number their loop flags once each', () => {
+        const o = body("        const xs = v.split (',');\n        for (let i = 0; i < xs.length; i++) {\n            for (let j = 0; j < xs.length; j++) { const e = xs[j]; this.bar (i); }\n        }");
+        expect(o).toContain('let mut i: i64 = 0;');
+        expect(o).toContain('let mut j: i64 = 0;');
+        expect((o.match(/let mut __for_first_\d+: bool/g) ?? []).length).toBe(2);
+        expect(new Set(o.match(/__for_first_\d+/g)).size).toBe(2);
+    });
+});
+
+describe ('rustCallInitContainerLocals', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    const PRELUDE = 'interface Dictionary<T> { [key: string]: T }\n' +
+        'type Dict = Dictionary<any>;\n' +
+        'type Str = string | undefined;\n' +
+        'interface MarketInterface { id?: string, symbol?: string }\n' +
+        'type Market = MarketInterface | undefined;\n' +
+        'class Base {\n' +
+        '    market (symbol: Str): Market { return undefined; }\n' +
+        '    safeString (o: any, k: any, def: any = undefined): any { return undefined; }\n' +
+        '    safeDict (o: any, k: any, def: any = undefined): Dict { return o[k]; }\n' +
+        '    safeList (o: any, k: any, def: any = undefined): any[] { return []; }\n' +
+        '    extend (a: any, b: any): any { return a; }\n' +
+        '    parseOrderBook (o: any, s: Str): Dict { return { "symbol": s }; }\n' +
+        '    use (x: any): any { return x; }\n' +
+        '}\n' +
+        'class Venue extends Base {\n';
+
+    function rust(body: string): string {
+        return transpiler.transpileRust(PRELUDE + body + '}\n').content;
+    }
+
+    // a local initialised from `this.<m>(…)` is typed as the container
+    // the callee's own returns build, so its reads and writes print the native op.
+    describe('call-init container locals', () => {
+        test('a base method that returns a literal map types the local and its write', () => {
+            const out = rust('    depth (response: any, symbol: Str) {\n'
+                + '        const orderbook = this.parseOrderBook (response, symbol);\n'
+                + "        orderbook['nonce'] = 1;\n"
+                + '        return orderbook;\n'
+                + '    }\n');
+            expect(out).toContain('let mut orderbook: indexmap::IndexMap<String, Value> = self.parseOrderBook(response, symbol).as_map().cloned().unwrap_or_default();');
+            expect(out).toContain('orderbook.insert("nonce".into(), Value::Int(1));');
+            expect(out).not.toContain('add_element_to_object(&mut orderbook');
+            expect(out).not.toContain('if let Value::Dict(__d) = &mut orderbook');
+        });
+
+        test('a literal-key read on the typed local prints the map lookup', () => {
+            const out = rust('    depthNonce (response: any, symbol: Str) {\n'
+                + '        const orderbook = this.parseOrderBook (response, symbol);\n'
+                + "        return orderbook['nonce'];\n"
+                + '    }\n');
+            expect(out).toContain('let mut orderbook: indexmap::IndexMap<String, Value>');
+            expect(out).toContain('orderbook.get("nonce").cloned().unwrap_or(Value::Null)');
+            expect(out).not.toContain('get_value(&orderbook');
+        });
+
+        test('a request builder local rebuilt from its own literal local types too', () => {
+            const out = rust('    orderRequest (symbol: Str, params: Dict) {\n'
+                + '        const request = this.createOrderRequest (symbol, params);\n'
+                + "        request['limit'] = 10;\n"
+                + '        return request;\n'
+                + '    }\n'
+                + '\n'
+                + '    createOrderRequest (symbol: Str, params: Dict): Dict {\n'
+                + "        const request: Dict = { 'symbol': symbol };\n"
+                + "        request['amount'] = 1;\n"
+                + '        return this.extend (request, params);\n'
+                + '    }\n');
+            expect(out).toContain('let mut request: indexmap::IndexMap<String, Value> = self.createOrderRequest(symbol, params).as_map().cloned().unwrap_or_default();');
+            expect(out).toContain('request.insert("limit".into(), Value::Int(10));');
+            expect(out).not.toContain('add_element_to_object(&mut request');
+        });
+
+        test('a pass-through builder of a literal argument types the local', () => {
+            const out = rust('    parsedTicker (t: Dict, m: Market) {\n'
+                + '        const ticker = this.safeTicker ({}, m);\n'
+                + "        ticker['symbol'] = 'BTC/USDT';\n"
+                + '        return ticker;\n'
+                + '    }\n'
+                + '\n'
+                + '    safeTicker (ticker: Dict, market: Market = undefined): Dict {\n'
+                + '        return ticker;\n'
+                + '    }\n');
+            expect(out).toContain('let mut ticker: indexmap::IndexMap<String, Value>');
+            expect(out).toContain('ticker.insert("symbol".into(), Value::Str("BTC/USDT".into()));');
+            expect(out).not.toContain('add_element_to_object(&mut ticker');
+        });
+
+        test('a callee returning a boxed reader keeps the helper', () => {
+            const out = rust('    boxed (response: any) {\n'
+                + '        const orderbook = this.parseOrderBook (response, "BTC/USDT");\n'
+                + '        return orderbook;\n'
+                + '    }\n'
+                + '\n'
+                + '    parseOrderBook (o: any, s: Str): Dict {\n'
+                + "        const data = this.safeDict (o, 'data');\n"
+                + '        return data;\n'
+                + '    }\n');
+            expect(out).toContain('let mut orderbook: Value = self.parseOrderBook(response, Value::Str("BTC/USDT".into()));');
+        });
+
+        test('a callee that also returns an element read keeps the helper', () => {
+            const out = rust('    mixed (rows: any[]) {\n'
+                + '        const first = this.pick (rows);\n'
+                + "        first['seen'] = true;\n"
+                + '        return first;\n'
+                + '    }\n'
+                + '\n'
+                + '    pick (rows: any[]): Dict {\n'
+                + "        if (rows.length > 0) { return rows[0]; }\n"
+                + "        return { 'seen': false };\n"
+                + '    }\n');
+            expect(out).toContain('add_element_to_object(&mut first');
+            expect(out).toContain('let mut first: Value = self.pick(rows)');
+        });
+
+        test('a callee that reassigns its built local keeps the box', () => {
+            const out = rust('    reassigned (symbol: Str) {\n'
+                + '        const request = this.build (symbol);\n'
+                + "        request['limit'] = 5;\n"
+                + '        return request;\n'
+                + '    }\n'
+                + '\n'
+                + '    build (symbol: Str): Dict {\n'
+                + "        let request: Dict = { 'symbol': symbol };\n"
+                + '        request = [ request ] as any;\n'
+                + '        return request;\n'
+                + '    }\n');
+            expect(out).toContain('add_element_to_object(&mut request');
+        });
+
+        test('a produced local that escapes boxes once at the escape, write folded', () => {
+            const out = rust('    escaped (response: any) {\n'
+                + '        const orderbook = this.parseOrderBook (response, "BTC/USDT");\n'
+                + "        orderbook['nonce'] = 1;\n"
+                + '        return this.use (orderbook);\n'
+                + '    }\n');
+            expect(out).toContain('let mut orderbook: indexmap::IndexMap<String, Value>');
+            expect(out).toContain('orderbook.insert("nonce".into(), Value::Int(1));');
+            expect(out).toContain('self.use(Value::Map(orderbook))');
+            expect(out).not.toContain('add_element_to_object(&mut orderbook');
+        });
+
+        test('a produced local that only escapes keeps the box (no helper folds)', () => {
+            const out = rust('    onlyEscaped (response: any) {\n'
+                + '        const orderbook = this.parseOrderBook (response, "BTC/USDT");\n'
+                + '        return this.use (orderbook);\n'
+                + '    }\n');
+            expect(out).toContain('let mut orderbook: Value = self.parseOrderBook(response, Value::Str("BTC/USDT".into()));');
+        });
+
+        test('a local read out of the live ws order cache keeps the helper', () => {
+            const out = rust('    cachedOrders (cached: any, orderId: Str) {\n'
+                + '        const orders = this.safeDict (cached.hashmap (), "BTC/USDT", {});\n'
+                + '        orders[orderId] = 1;\n'
+                + '        return orders;\n'
+                + '    }\n');
+            expect(out).toContain('let mut orders: Value = self.safeDict(cached.hashmap(), Value::Str("BTC/USDT".into())');
+            expect(out).not.toContain('let mut orders: indexmap::IndexMap');
+        });
+
+        test('a callee that stores the container it returns keeps the box', () => {
+            const out = rust('    stored (response: any) {\n'
+                + '        const book = this.seed (response);\n'
+                + "        book['nonce'] = 1;\n"
+                + '        return book;\n'
+                + '    }\n'
+                + '\n'
+                + '    seed (response: any): Dict {\n'
+                + '        const book: Dict = {};\n'
+                + '        this.orderbooks["BTC/USDT"] = book;\n'
+                + '        return book;\n'
+                + '    }\n');
+            expect(out).toContain('add_element_to_object(&mut book');
+        });
+    });
+});
+
+describe ('rustGetValueOnMapLocals', () => {
+    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
+
+    let transpiler: Transpiler;
+    beforeAll(() => {
+        transpiler = new Transpiler({ verbose: false, rust: { parser: { NUM_LINES_END_FILE: 0 } } });
+    });
+
+    // The ws order book is a `Value::Dict` in the rust port even though ts/src declares it
+    // as a class: `order_book()` builds the map and every element read is a plain map read.
+    const HEAD = 'type Dict = { [key: string]: any };\n' +
+        'type Dictionary<T> = { [key: string]: T };\n' +
+        'class OrderBook { bids: any; asks: any; nonce: any; constructor(o: any = undefined) {} }\n' +
+        'class A {\n' +
+        '    orderbooks: Dictionary<OrderBook> = {};\n';
+
+    const rs = (body: string): string => transpiler.transpileRust(HEAD + body + '}\n').content;
+
+    const MAP_READ = (name: string, key: string) => `${name}.get("${key}").cloned().unwrap_or(Value::Null)`;
+    const SHADOW = 'let orderbook = orderbook.as_map().unwrap_or(&__orderbook_empty);';
+
+    describe('get_value on proven map locals (ws order book)', () => {
+        test('an OrderBook parameter is shadowed as a map; literal reads are lookups', () => {
+            const out = rs('    handleBookDelta(orderbook: OrderBook, delta: Dict) {\n' +
+                "        const bids = orderbook['bids'];\n" +
+                "        const asks = orderbook['asks'];\n" +
+                '        return bids;\n' +
+                '    }\n');
+            expect(out).toContain('pub fn handleBookDelta(&self, orderbook: Value, delta: Value)');
+            expect(out).toContain(SHADOW);
+            expect(out).toContain(`let mut bids: Value = ${MAP_READ('orderbook', 'bids')};`);
+            expect(out).toContain(`let mut asks: Value = ${MAP_READ('orderbook', 'asks')};`);
+            expect(out).not.toContain('get_value(&orderbook');
+            expect(out).not.toContain('as_map().and_then');
+        });
+
+        test('a dynamic key keeps the helper (and the box)', () => {
+            const out = rs('    h(orderbook: OrderBook, k: string) {\n        return orderbook[k];\n    }\n');
+            expect(out).not.toContain('__orderbook_empty');
+            expect(out).toContain('get_value(&orderbook, &k)');
+        });
+
+        test('an escaped OrderBook parameter keeps the box', () => {
+            const out = rs('    i(orderbook: OrderBook) {\n        return orderbook;\n    }\n');
+            expect(out).not.toContain('__orderbook_empty');
+            expect(out).toContain('return orderbook;');
+        });
+
+        test('a marker-routed key keeps the helper', () => {
+            const out = rs('    j(orderbook: OrderBook) {\n        return orderbook[\'nonce\'];\n    }\n');
+            expect(out).not.toContain('__orderbook_empty');
+            expect(out).toContain('orderbook.book_field("nonce")');
+        });
+
+        test('a read-only local from this.orderbooks[sym] is a bare IndexMap', () => {
+            const out = rs('    k(sym: string) {\n' +
+                "        const ob = this.orderbooks[sym];\n" +
+                "        const bids = ob['bids'];\n" +
+                '        return bids;\n' +
+                '    }\n');
+            expect(out).toContain('let mut ob: indexmap::IndexMap<String, Value> = (if let (Some(__m), Some(__k)) = (self.orderbooks.as_map(), sym.as_str())');
+            expect(out).toContain(`let mut bids: Value = ${MAP_READ('ob', 'bids')};`);
+            expect(out).not.toContain('get_value(&ob');
+        });
+
+        test('a read-only local from safeValue(container, key) is a bare IndexMap', () => {
+            const out = rs('    l(sym: string) {\n' +
+                '        const ob = this.safeValue (this.orderbooks, sym);\n' +
+                "        const bids = ob['bids'];\n" +
+                '        return bids;\n' +
+                '    }\n');
+            expect(out).toContain('let mut ob: indexmap::IndexMap<String, Value> = self.safeValue(self.orderbooks, sym)');
+            expect(out).toContain(`let mut bids: Value = ${MAP_READ('ob', 'bids')};`);
+            expect(out).not.toContain('get_value(&ob');
+        });
+
+        test('written and escaped locals keep the box and the helper', () => {
+            const written = rs('    m(sym: string, ts: any) {\n' +
+                "        const ob = this.orderbooks[sym];\n" +
+                "        const bids = ob['bids'];\n" +
+                "        ob['nonce'] = ts;\n" +
+                '        return bids;\n' +
+                '    }\n');
+            expect(written).toContain('ob.book_field("bids")');
+            const escaped = rs('    n(sym: string) {\n' +
+                "        const ob = this.orderbooks[sym];\n" +
+                "        const bids = ob['bids'];\n" +
+                '        return ob;\n' +
+                '    }\n');
+            expect(escaped).toContain('let mut ob: Value = (if let (Some(__m), Some(__k)) = (self.orderbooks.as_map(), sym.as_str())');
+            expect(escaped).toContain('ob.book_field("bids")');
+        });
+    });
+});
+
+describe ('rustDictParamBearers', () => {
+        // fixture trees are written to a temp dir so the suite carries no fixture files
+        const inlineFixtures: Record<string, Record<string, string>> = {
+     "owned-map-params": {
+      "ts/src/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    omit (a: any, b: any): any {\n        return a;\n    }\n\n    watch (a: any, b: any, c: any): any {\n        return a;\n    }\n\n    // a `Dict` parameter written by literal key, called only with a\n    // typed dict bearer -> `&mut IndexMap` and a bare `.insert`.\n    orderRequest (method: string, request: Dict, orderParams: Dict, params: Dict = {}): [Dict, Dict] {\n        if (method === 'create') {\n            orderParams['limit_price'] = this.omit (params, []);\n        }\n        orderParams['order_type'] = method;\n        request['params'] = orderParams;\n        const omitted: Dict = this.omit (params, []);\n        return [ request, omitted ];\n    }\n\n    createOrder (type: string, params: Dict = {}) {\n        const orderParams: Dict = {\n            'order_type': type,\n            'order_qty': 1,\n        };\n        const request: Dict = {\n            'method': 'add_order',\n            'params': orderParams,\n        };\n        const [ requestValue, paramsValue ] = this.orderRequest ('create', request, orderParams, params);\n        return this.watch ('url', 'hash', this.omit (requestValue, paramsValue));\n    }\n\n    // A caller that passes a non-bearer keeps the boxed parameter.\n    plainCreate (params: Dict = {}) {\n        const request: Dict = { 'method': 'add_order' };\n        return this.plainOrder ('create', request, params, params);\n    }\n\n    plainOrder (method: string, request: Dict, orderParams: Dict, params: Dict = {}): [Dict, Dict] {\n        orderParams['order_type'] = method;\n        request['params'] = orderParams;\n        return [ request, params ];\n    }\n\n    // A read-only `Dict` parameter keeps the D-25 borrowed shadow.\n    readOnly (orderParams: Dict): any {\n        return orderParams['order_type'];\n    }\n}\n\nclass second {\n    extend (a: any, b: any = undefined): any {\n        return a;\n    }\n\n    safeInteger (a: any, b: any): any {\n        return 1;\n    }\n\n    postAction (operationType: string, sigPayload: Dict, params: Dict): Dict {\n        sigPayload['builder_code'] = operationType;\n        const finalHeaders: Dict = { };\n        finalHeaders['account'] = operationType;\n        const request = this.extend (finalHeaders, sigPayload);\n        return request;\n    }\n\n    caller (type: string, params: Dict = {}) {\n        const sigPayload: Dict = { 'amount': 1 };\n        sigPayload['exclude'] = type;\n        return this.postAction ('op', sigPayload, params);\n    }\n}\n\nclass nested {\n    omit (a: any, b: any): any {\n        return a;\n    }\n\n    build (orderParams: Dict, params: Dict): Dict {\n        orderParams['type'] = 'market';\n        const triggers: Dict = {};\n        triggers['price'] = '1';\n        triggers['price_type'] = 'quote';\n        orderParams['triggers'] = triggers;\n        return this.omit (orderParams, params);\n    }\n\n    caller (params: Dict = {}) {\n        const orderParams: Dict = { 'qty': 1 };\n        const request: Dict = { 'params': orderParams };\n        const [ value, rest ] = [ this.build (orderParams, params), params ];\n        return this.omit (request, rest);\n    }\n}\n"
+     },
+     "owned-map-params-chain": {
+      "ts/src/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    // a key-chain write has no native print on a map parameter, so the parameter stays boxed\n    watchMany (request: Dict, ids: string[]) {\n        request['type'] = 'SUBSCRIBE';\n        request['channels'][0]['codes'] = ids;\n        return request;\n    }\n\n    watch (ids: string[]) {\n        const request: Dict = {\n            'channels': [ {} ],\n        };\n        return this.watchMany (request, ids);\n    }\n}\n\nexport default venue;\n"
+     }
+    };
+        const fixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-'));
+        for (const [dir, files] of Object.entries (inlineFixtures)) {
+            for (const [rel, text] of Object.entries (files)) {
+                const out = path.join (fixtureRoot, dir, rel);
+                fs.mkdirSync (path.dirname (out), { recursive: true });
+                fs.writeFileSync (out, text);
+            }
+        }
+        afterAll (() => fs.rmSync (fixtureRoot, { recursive: true, force: true }));
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    // a `Dict` parameter that only takes map operations and whose every
+    // call site passes a typed dict bearer prints `&mut IndexMap`, so its writes are
+    // plain `.insert` instead of a per-site `Arc::make_mut` guard.
+    describe('owned map parameters', () => {
+        let rust = '';
+
+        beforeAll(() => {
+            rust = transpiler.transpileRustByPath(path.join (fixtureRoot, 'owned-map-params', 'ts/src/venue.ts')).content;
+        });
+
+        test('the proven parameter prints a mutable map reference', () => {
+            expect(rust).toContain('orderParams: &mut indexmap::IndexMap<String, Value>');
+        });
+
+        test('its writes are plain inserts, with no COW guard', () => {
+            expect(rust).toContain('orderParams.insert("limit_price".into(), self.omit(params, Value::from(vec![])))');
+            expect(rust).toContain('orderParams.insert("order_type".into(), method.clone())');
+            const body = rust.slice(rust.indexOf('pub fn orderRequest('), rust.indexOf('pub fn createOrder('));
+            expect(body).not.toContain('= &mut orderParams');
+            expect(body).not.toContain('add_element_to_object');
+        });
+
+        test('the caller passes the bearer by reference', () => {
+            expect(rust).toContain('self.orderRequest(Value::Str("create".into()), Value::Map(request), &mut orderParams, &[params])');
+            expect(rust).toContain('let mut orderParams: indexmap::IndexMap<String, Value> = (');
+        });
+
+        test('publishing the map boxes a clone', () => {
+            expect(rust).toContain('insert("params".into(), Value::Map(orderParams.clone()))');
+        });
+
+        test('a parameter called with a plain `Value` keeps the box and the guard', () => {
+            expect(rust).toContain('pub fn plainOrder(&self, method: Value, request: Value, orderParams: Value');
+            expect(rust).toContain('if let Value::Dict(__d) = &mut orderParams');
+        });
+
+        test('a read-only parameter keeps its borrowed shadow', () => {
+            expect(rust).toContain('let orderParams = orderParams.as_map().unwrap_or(&__orderParams_empty);');
+        });
+    });
+
+    describe('owned map parameters: chained writes', () => {
+        test('a parameter written through a key chain stays boxed', () => {
+            const rust = transpiler.transpileRustByPath(path.join (fixtureRoot, 'owned-map-params-chain', 'ts/src/venue.ts')).content;
+            expect(rust).toContain('pub fn watchMany(&self, request: Value, ids: Value)');
+            expect(rust).not.toContain('request: &mut indexmap::IndexMap<String, Value>');
+        });
+    });
+});
+
+describe ('rustBearerBoxedKeyWrites', () => {
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    const PRELUDE = 'interface Dictionary<T> { [key: string]: T }\n' +
+        'type Dict = Dictionary<any>;\n' +
+        'type Str = string | undefined;\n' +
+        'interface MarketInterface { id?: string, symbol?: string }\n' +
+        'type Market = MarketInterface | undefined;\n' +
+        'class Base {\n' +
+        '    market (symbol: Str): Market { return undefined; }\n' +
+        '    safeString (o: any, k: any, def: any = undefined): any { return undefined; }\n' +
+        '    safeDict (o: any, k: any, def: any = undefined): Dict { return {}; }\n' +
+        '    parseOrderBook (o: any, s: Str): Dict { return {}; }\n' +
+        '    use (x: any): any { return x; }\n' +
+        '}\n' +
+        'class Venue extends Base {\n';
+
+    function rust(body: string): string {
+        return transpiler.transpileRust(PRELUDE + body + '}\n').content;
+    }
+
+    // `x[k] = v` / `k in x` on a typed dict bearer whose key is not a
+    // checker-proven `string`. The helper stores a non-`Str` key through
+    // `stringify_simple` — `stringify_param` is that function — and `in_op` only ever
+    // matches a `Str` key, so both stay exact on the bare `IndexMap`.
+    describe('bearer writes with a boxed key', () => {
+        test('a computed key writes through stringify_param, no helper, no cow guard', () => {
+            const out = rust('    build (values: any[]) {\n'
+                + '        const result: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + '            result[value["id"]] = [ value ];\n'
+                + '        }\n'
+                + '        return result;\n'
+                + '    }\n');
+            expect(out).toContain('let mut result: indexmap::IndexMap<String, Value> = (');
+            expect(out).toContain('result.insert(crate::runtime::stringify_param(&(crate::value::get_value_k(&value, "id"))), Value::from(vec![value]));');
+            expect(out).not.toContain('add_element_to_object(&mut result');
+            expect(out).not.toContain('if let Value::Dict(__d) = &mut result');
+        });
+
+        test('`k in x` on a bearer prints the map lookup behind the helper Str test', () => {
+            const out = rust('    has (values: any[]) {\n'
+                + '        const result: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + "            if (value['id'] in result) {\n"
+                + "                result[value['id']] = value;\n"
+                + '            }\n'
+                + '        }\n'
+                + '        return result;\n'
+                + '    }\n');
+            expect(out).toContain('let mut result: indexmap::IndexMap<String, Value> = (');
+            expect(out).toContain('if (matches!(&crate::value::get_value_k(&value, "id"), Value::Str(__k) if result.contains_key(__k.as_ref()))) {');
+            expect(out).toContain('result.insert(crate::runtime::stringify_param(&(crate::value::get_value_k(&value, "id"))), value.clone());');
+            expect(out).not.toContain('in_op(&result');
+            expect(out).not.toContain('add_element_to_object(&mut result');
+        });
+
+        test('a market member key writes natively and numeric keys stringify like the helper', () => {
+            const out = rust('    byMarket (parsedOrders: any[]) {\n'
+                + '        const marketIds: Dict = {};\n'
+                + '        for (let i = 0; i < parsedOrders.length; i++) {\n'
+                + '            const parsed = parsedOrders[i];\n'
+                + "            const market = this.market (parsed['symbol']);\n"
+                + "            if (market['id'] !== undefined) {\n"
+                + "                marketIds[market['id']] = true;\n"
+                + '            }\n'
+                + '        }\n'
+                + '        return Object.keys (marketIds);\n'
+                + '    }\n');
+            expect(out).toContain('let mut marketIds: indexmap::IndexMap<String, Value> = (');
+            expect(out).toContain('marketIds.insert(crate::runtime::stringify_param(&(market.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null))), Value::Bool(true));');
+            expect(out).toContain('Value::Array(marketIds.keys().map(|__k| Value::Str(__k.clone().into())).collect())');
+            expect(out).not.toContain('add_element_to_object(&mut marketIds');
+        });
+
+        test('a numeric key stringifies exactly like the helper', () => {
+            const out = rust('    indexed (v: any) {\n'
+                + '        const d: Dict = {};\n'
+                + '        d[0] = v;\n'
+                + '        return d;\n'
+                + '    }\n');
+            expect(out).toContain('d.insert(crate::runtime::stringify_param(&(Value::Int(0))), v.clone());');
+            expect(out).not.toContain('add_element_to_object(&mut d');
+        });
+
+        test('Object.keys on a bearer prints the iterators and unlocks the write', () => {
+            const out = rust('    keysOf (values: any[]) {\n'
+                + '        const seen: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + '            seen[value["id"]] = value;\n'
+                + '        }\n'
+                + '        return Object.keys (seen);\n'
+                + '    }\n');
+            expect(out).toContain('let mut seen: indexmap::IndexMap<String, Value> = (');
+            expect(out).toContain('seen.insert(crate::runtime::stringify_param(&(crate::value::get_value_k(&value, "id"))), value.clone());');
+            expect(out).toContain('Value::Array(seen.keys().map(|__k| Value::Str(__k.clone().into())).collect())');
+            expect(out).not.toContain('add_element_to_object(&mut seen');
+            expect(out).not.toContain('object_keys(&seen');
+        });
+
+        test('a proven-string key keeps the shipped key spelling', () => {
+            const out = rust('    keyed (values: any[], key: string) {\n'
+                + '        const result: Dict = {};\n'
+                + '        result[key] = values;\n'
+                + '        return result;\n'
+                + '    }\n');
+            expect(out).toContain('result.insert(crate::runtime::stringify_param(&key), values.clone());');
+        });
+
+        test('a value that reads the receiver still binds first', () => {
+            const out = rust('    self (values: any[]) {\n'
+                + '        const result: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + '            result[value["id"]] = this.use (result);\n'
+                + '        }\n'
+                + '        return result;\n'
+                + '    }\n');
+            expect(out).toContain('{ let __be_tmp = self.use(Value::Map(result.clone())); result.insert(');
+            expect(out).not.toContain('add_element_to_object(&mut result');
+        });
+
+        test('a receiver whose value can be anything keeps the helper', () => {
+            const out = rust('    plain (data: any) {\n'
+                + '        let order: any = this.safeDict (data, "order");\n'
+                + '        order["id"] = 1;\n'
+                + '        return order;\n'
+                + '    }\n');
+            expect(out).toContain('add_element_to_object(&mut order, &Value::Str("id".into()), Value::Int(1));');
+        });
+
+        test('a key with an assignment keeps the helper', () => {
+            const out = rust('    assigned (values: any[]) {\n'
+                + '        const result: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + '            result[(value["id"] = 1)] = value;\n'
+                + '        }\n'
+                + '        return result;\n'
+                + '    }\n');
+            expect(out).toContain('add_element_to_object(&mut result');
+        });
+
+        test('a read with a boxed key keeps the boxed local', () => {
+            const out = rust('    reader (values: any[]) {\n'
+                + '        const result: Dict = {};\n'
+                + '        for (let i = 0; i < values.length; i++) {\n'
+                + '            const value = values[i];\n'
+                + '            result[value["id"]] = value;\n'
+                + '        }\n'
+                + '        return result[values[0]["id"]];\n'
+                + '    }\n');
+            expect(out).toContain('let mut result: Value = Value::Map({');
+            expect(out).toContain('add_element_to_object(&mut result');
+        });
+    });
+});
+
+describe ('rustStringMethodLocals', () => {
+    jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
+
+    const transpiler = new Transpiler({ verbose: false, rust: { parser: { NUM_LINES_END_FILE: 0 } } });
+    const rust = (ts: string) => transpiler.transpileRust(ts).content;
+
+    describe('rust string-method locals print a native String', () => {
+        const cls = (body: string) => `class A extends Exchange { f(params: Dict, side: string): any { ${body} } }`;
+        test('capitalize local boxed only at its object-literal move', () => {
+            const out = rust(cls("const low = this.safeStringLower (params, 'k', 'd'); const tif: string = this.capitalize (low); return { 'tif': tif };"));
+            expect(out).toContain('let mut tif: String = self.capitalize(low');
+            expect(out).toContain('Value::from(tif)');
+        });
+        test('toUpperCase local on a string param, boxed at a request write', () => {
+            const out = rust(cls("const request: Dict = {}; const up: string = side.toUpperCase (); request['s'] = up; return request;"));
+            expect(out).toContain('let mut up: String = side.as_str().map(str::to_uppercase).unwrap_or_default();');
+        });
+        test('another use of the local keeps the Value box', () => {
+            const out = rust(cls("const up: string = side.toLowerCase (); if (up === 'a') { return 1; } return up;"));
+            expect(out).not.toContain('let mut up: String');
+        });
+    });
+});
+
+describe ('rustNativeDelete', () => {
+        // fixture trees are written to a temp dir so the suite carries no fixture files
+        const inlineFixtures: Record<string, Record<string, string>> = {
+     "r05": {
+      "ts/src/pro/venue.ts": "interface Dictionary<T> { [key: string]: T }\ntype Dict = Dictionary<any>;\n\nclass Client { subscriptions: Dictionary<any> = {}; futures: Dictionary<any> = {}; }\n\nexport default class venuews {\n    tickers: Dictionary<any> = {};\n    bidsasks: Dictionary<any> = {};\n    orders: Dictionary<any> = {};\n    options: Dict = {};\n\n    safeDict (obj, key: string, def: any = undefined) { return obj[key] || def; }\n    parsePosition (x) { return { 'a': x }; }\n\n    handle (client: Client, symbol: string, messageHash: string, total: Dict) {\n        delete this.tickers[symbol];\n        delete client.subscriptions[messageHash];\n        const subs = client.subscriptions;\n        delete subs[messageHash];\n        delete total[messageHash];\n        return 1;\n    }\n\n    purge (symbols: Value[], i: number, key: string, params: Dict) {\n        delete this.tickers[symbols[i]];\n        delete this.bidsasks[symbols[i]];\n        const stored = this.safeDict (this.options, 'symbolsByOrderId', {});\n        delete stored[key];\n        const balance: Dict = this.parsePosition (1);\n        delete balance[key];\n        const cache = this.orders;\n        delete cache[key];\n        delete this.tickers[this.options['x']];\n        delete this.tickers[params['x']];\n        return 1;\n    }\n}\n",
+      "ts/src/venue.ts": "interface Dictionary<T> { [key: string]: T }\ntype Dict = Dictionary<any>;\n\nexport default class venue {\n    tickers: Dictionary<any> = {};\n    options: Dict = {};\n\n    safeDict (obj, key: string, def: any = undefined) { return obj[key] || def; }\n\n    purge (symbols: Value[], i: number, key: string) {\n        delete this.tickers[symbols[i]];\n        const stored = this.safeDict (this.options, 'rows', {});\n        delete stored[key];\n        return 1;\n    }\n}\n"
+     }
+    };
+        const fixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-'));
+        for (const [dir, files] of Object.entries (inlineFixtures)) {
+            for (const [rel, text] of Object.entries (files)) {
+                const out = path.join (fixtureRoot, dir, rel);
+                fs.mkdirSync (path.dirname (out), { recursive: true });
+                fs.writeFileSync (out, text);
+            }
+        }
+        afterAll (() => fs.rmSync (fixtureRoot, { recursive: true, force: true }));
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    describe('native `delete` with a computed key on a proven dict receiver', () => {
+        let rest = '';
+        let ws = '';
+        beforeAll(() => {
+            rest = transpiler.transpileRustByPath(path.join (fixtureRoot, 'r05', 'ts/src/venue.ts')).content;
+            ws = transpiler.transpileRustByPath(path.join (fixtureRoot, 'r05', 'ts/src/pro/venue.ts')).content;
+        });
+
+        test('an element-read key borrows beside the field', () => {
+            expect(rest).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut self.tickers, &get_value(&symbols, &i)) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
+            expect(ws).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut self.bidsasks, &get_value(&symbols, &i)) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
+        });
+
+        test('a declared-Dict local is admitted in a ws-capable tier too', () => {
+            expect(ws).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut stored, &key) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
+            expect(rest).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut stored, &key) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
+        });
+
+        test('a key that reads the receiver or a non-proven receiver keeps the helper', () => {
+            expect(ws).toContain('remove(&mut self.tickers, &self.options.as_map().and_then(|__m| __m.get("x")).cloned().unwrap_or(Value::Null))');
+            expect(ws).toContain('remove(&mut client.subscriptions, &messageHash)');
+            expect(ws).toContain('remove(&mut subs, &messageHash)');
+            expect(ws).toContain('remove(&mut total, &messageHash)');
+            expect(ws).toContain('remove(&mut balance, &key)');
+            expect(ws).toContain('remove(&mut cache, &key)');
+        });
+    });
+});
+
+describe ('rustNestedDictParamWrites', () => {
+        // fixture trees are written to a temp dir so the suite carries no fixture files
+        const inlineFixtures: Record<string, Record<string, string>> = {
+     "rp05": {
+      "ts/src/venue.ts": "interface Dictionary<T> { [key: string]: T }\ntype Dict = Dictionary<any>;\n\nexport default class venue {\n    balance: Dict = {};\n    ohlcvs: Dict = {};\n    orderbook: any = {};\n    cache: any = {};\n    tickers: Dict = {};\n\n    omit (x, k) { return x; }\n\n    sign (path: string, params: Dict = {}) {\n        const marks = Object.keys (this.tickers);\n        params['x']['y'] = 5;\n        params['a']['b']['c'] = 8;\n        const code = 'USDT';\n        params[code]['free'] = 4;\n        const request: Dict = { 'a': 1 };\n        request['a']['b'] = 2;\n        const response: Dict = this.omit (params, 'x');\n        response['a']['b'] = 5;\n        this.orderbook['a']['b'] = 6;\n        return [ request, response, code, marks ];\n    }\n\n    dynamic (key: any, params: Dict = {}) {\n        const marks = Object.keys (this.tickers);\n        params[key]['b'] = 1;\n        params['a']['b'] = 2;\n        return [ params, marks ];\n    }\n}\n"
+     }
+    };
+        const fixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-'));
+        for (const [dir, files] of Object.entries (inlineFixtures)) {
+            for (const [rel, text] of Object.entries (files)) {
+                const out = path.join (fixtureRoot, dir, rel);
+                fs.mkdirSync (path.dirname (out), { recursive: true });
+                fs.writeFileSync (out, text);
+            }
+        }
+        afterAll (() => fs.rmSync (fixtureRoot, { recursive: true, force: true }));
+    jest.mock('module',()=>({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    describe('native nested dict writes on proven Dict parameters', () => {
+        let out = '';
+        beforeAll(() => {
+            const config = { 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+            out = new Transpiler(config).transpileRustByPath(path.join (fixtureRoot, 'rp05', 'ts/src/venue.ts')).content;
+        });
+
+        test('a Dict parameter takes the native get_mut hop and insert', () => {
+            expect(out).toContain('if let Value::Dict(__h0) = &mut params { if let Some(Value::Dict(__h1)) = std::sync::Arc::make_mut(__h0).get_mut("x") { std::sync::Arc::make_mut(__h1).insert("y".to_string(), Value::Int(5)); } }');
+        });
+
+        test('one get_mut hop per key, three levels deep', () => {
+            expect(out).toContain('if let Value::Dict(__h0) = &mut params { if let Some(Value::Dict(__h1)) = std::sync::Arc::make_mut(__h0).get_mut("a") { if let Some(Value::Dict(__h2)) = std::sync::Arc::make_mut(__h1).get_mut("b") { std::sync::Arc::make_mut(__h2).insert("c".to_string(), Value::Int(8)); } } }');
+        });
+
+        test('a checker-proven string hop key is stringified', () => {
+            expect(out).toContain('get_mut(&crate::runtime::stringify_param(&code))');
+        });
+
+        test('locals are left to the final-text pass (no churn on its output)', () => {
+            expect(out).toContain('add_element_to_object(get_value_mut(&mut request, &Value::Str("a".into())), &Value::Str("b".into()), Value::Int(2));');
+        });
+
+        test('unproven receivers keep the helpers', () => {
+            // `omit` returns its argument: no plain-build proof, so the hop stays.
+            expect(out).toContain('add_element_to_object(get_value_mut(&mut response, &Value::Str("a".into())), &Value::Str("b".into()), Value::Int(5));');
+            // an `any` key proves no string
+            expect(out).toContain('add_element_to_object(get_value_mut(&mut params, &key), &Value::Str("b".into()), Value::Int(1));');
+        });
+
+        test('tagged handle fields keep the helpers', () => {
+            expect(out).toContain('add_element_to_object(get_value_mut(&mut self.orderbook, &Value::Str("a".into())), &Value::Str("b".into()), Value::Int(6));');
+        });
+    });
+});
+
+describe ('rustDictRead', () => {
+        // fixture trees are written to a temp dir so the suite carries no fixture files
+        const inlineFixtures: Record<string, Record<string, string>> = {
+     "rsdictread": {
+      "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport interface BalanceAccount { free: string | undefined, used: string | undefined, total: string | undefined }\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    options: Dict = {};\n    omit = omit;\n    extend = extend;\n    account (): BalanceAccount {\n        return { 'free': undefined, 'used': undefined, 'total': undefined };\n    }\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        return [ request, params ];\n    }\n    parseOrder (order: Dict): Dict {\n        return order;\n    }\n}\n",
+      "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    plainLocal (code) {\n        let result = undefined;\n        result = { 'a': 1 };\n        const viaCode = result[code];\n        const viaCore = result['core'];\n        const viaMarker = result['symbol'];\n        const has = code in result;\n        return [ viaCode, viaCore, viaMarker, has ];\n    }\n    dictyLocal (code) {\n        const merged = this.extend ({ 'a': 1 }, {});\n        const viaLit = merged['core'];\n        const viaCode = merged[code];\n        const hasCode = code in merged;\n        const hasLit = 'core' in merged;\n        return [ viaLit, viaCode, hasCode, hasLit ];\n    }\n    optionsField (code) {\n        const viaCode = this.options[code];\n        const viaLit = this.options['defaultType'];\n        const has = code in this.options;\n        return [ viaCode, viaLit, has ];\n    }\n    unprovenLocal (a, code) {\n        let x = a;\n        const viaLit = x['core'];\n        return [ viaLit, x[code] ];\n    }\n}\n"
+     }
+    };
+        const fixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-'));
+        for (const [dir, files] of Object.entries (inlineFixtures)) {
+            for (const [rel, text] of Object.entries (files)) {
+                const out = path.join (fixtureRoot, dir, rel);
+                fs.mkdirSync (path.dirname (out), { recursive: true });
+                fs.writeFileSync (out, text);
+            }
+        }
+        afterAll (() => fs.rmSync (fixtureRoot, { recursive: true, force: true }));
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn(),
+    }));
+
+    let output = '';
+
+    beforeAll(() => {
+        const transpiler = new Transpiler({ verbose: false, rust: { parser: { NUM_LINES_END_FILE: 0 } } } as any);
+        output = transpiler.transpileRustByPath(path.join (fixtureRoot, 'rsdictread', 'ts/src/venue.ts')).content;
+    });
+
+    const free = (recv: string, key: string) =>
+        `(if let (Some(__m), Some(__k)) = (${recv}.as_map(), ${key}.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
+
+    describe('rust closure-free dict reads', () => {
+        test('a Str-place key into a fresh-literal local prints the closure-free read', () => {
+            expect(output).toContain(`let mut viaCode: Value = ${free('result', 'code')};`);
+            expect(output).not.toContain('get_value(&result, &code)');
+        });
+
+        test('a literal key into a proven local prints the native read', () => {
+            expect(output).toContain('let mut viaCore: Value = result.as_map().and_then(|__m| __m.get("core")).cloned().unwrap_or(Value::Null);');
+            expect(output).toContain('let mut viaLit: Value = merged.as_map().and_then(|__m| __m.get("core")).cloned().unwrap_or(Value::Null);');
+        });
+
+        test('a dict-only callee local reads a Str-place key closure-free', () => {
+            expect(output).toContain(`let mut viaCode: Value = ${free('merged', 'code')};`);
+        });
+
+        test('membership: a computed key on a dict-callee local keeps in_op (content unproven)', () => {
+            expect(output).toContain('Value::Bool(in_op(&merged, &code))');
+            expect(output).not.toContain('merged.as_map().is_some_and');
+        });
+
+        test('a base runtime-state field reads and tests membership natively', () => {
+            expect(output).toContain(`let mut viaCode: Value = ${free('self.options', 'code')};`);
+        });
+
+        test('an unproven local keeps the helper', () => {
+            expect(output).not.toContain('x.as_map()');
+            expect(output).toContain('get_value(&x, &code)');
+        });
+    });
+});
+
+describe ('rustPredictionBearers', () => {
+        // fixture trees are written to a temp dir so the suite carries no fixture files
+        const inlineFixtures: Record<string, Record<string, string>> = {
+     "prediction-bearers": {
+      "ts/src/prediction/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    extend (a: any, b: any): any {\n        return a;\n    }\n\n    use (a: any): any {\n        return a;\n    }\n\n    parseNestedAction (params: Dict = {}, vault: any = undefined) {\n        const orderAction: Dict = { 'type': 'order' };\n        orderAction['orders'] = [ this.use (params) ];\n        if (vault !== undefined) {\n            orderAction['vault'] = vault;\n        }\n        const signature = this.use (orderAction);\n        return { 'action': orderAction, 'signature': signature };\n    }\n\n    parseSingleMove (params: Dict = {}) {\n        const request: Dict = { 'limit': 10 };\n        request['type'] = 'limit';\n        return this.use (request);\n    }\n\n    parseReassigned (params: Dict = {}) {\n        let query: Dict = { 'limit': 10 };\n        query = this.extend (query, params);\n        return this.use (query);\n    }\n\n    parseCaptured (params: Dict = {}) {\n        const seen: Dict = {};\n        seen['a'] = true;\n        return [ 1, 2 ].map ((x) => this.use (seen) as any);\n    }\n\n    parseShorthand (params: Dict = {}) {\n        const inner: Dict = { 'a': 1 };\n        return { inner };\n    }\n}\n",
+      "ts/src/venue.ts": "interface Dictionary<T> {\n    [key: string]: T;\n}\ntype Dict = Dictionary<any>;\n\nclass venue {\n    extend (a: any, b: any): any {\n        return a;\n    }\n\n    use (a: any): any {\n        return a;\n    }\n\n    parseNestedAction (params: Dict = {}, vault: any = undefined) {\n        const orderAction: Dict = { 'type': 'order' };\n        orderAction['orders'] = [ this.use (params) ];\n        if (vault !== undefined) {\n            orderAction['vault'] = vault;\n        }\n        const signature = this.use (orderAction);\n        return { 'action': orderAction, 'signature': signature };\n    }\n}\n"
+     }
+    };
+        const fixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-'));
+        for (const [dir, files] of Object.entries (inlineFixtures)) {
+            for (const [rel, text] of Object.entries (files)) {
+                const out = path.join (fixtureRoot, dir, rel);
+                fs.mkdirSync (path.dirname (out), { recursive: true });
+                fs.writeFileSync (out, text);
+            }
+        }
+        afterAll (() => fs.rmSync (fixtureRoot, { recursive: true, force: true }));
+    jest.mock('module', () => ({
+        __esModule: true,
+        default: jest.fn()
+    }));
+
+    let transpiler: Transpiler;
+
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+
+    // a prediction venue nests one request map inside another (`{ action: obj }`,
+    // `this.use (obj, …)`), so the typed-bearer proof admits several escapes there, each boxed
+    // as a clone; every other tier keeps the single-final-move rule.
+    describe('prediction-tier multi-escape dict bearers', () => {
+        let prediction = '';
+        let rest = '';
+
+        beforeAll(() => {
+            prediction = transpiler.transpileRustByPath(path.join (fixtureRoot, 'prediction-bearers', 'ts/src/prediction/venue.ts')).content;
+            rest = transpiler.transpileRustByPath(path.join (fixtureRoot, 'prediction-bearers', 'ts/src/venue.ts')).content;
+        });
+
+        test('a nested builder writes natively and boxes a clone per escape', () => {
+            expect(prediction).toContain('let mut orderAction: indexmap::IndexMap<String, Value> = (');
+            expect(prediction).toContain('orderAction.insert("orders".into(), Value::from(vec![self.use(params)]));');
+            expect(prediction).toContain('self.use(Value::Map(orderAction.clone()))');
+            expect(prediction).toContain('m.insert("action".to_string(), Value::Map(orderAction.clone()));');
+            expect(prediction).not.toContain('add_element_to_object(&mut orderAction');
+            expect(prediction).not.toContain('if let Value::Dict(__d) = &mut orderAction');
+        });
+
+        test('a single final move still moves the map', () => {
+            expect(prediction).toContain('let mut request: indexmap::IndexMap<String, Value> = (');
+            expect(prediction).toContain('request.insert("type".into(), Value::Str("limit".into()));');
+            expect(prediction).toContain('return self.use(Value::Map(request));');
+        });
+
+        test('a reassigned local keeps the box', () => {
+            expect(prediction).toContain('let mut query: Value = Value::Map({');
+            expect(prediction).toContain('query = self.extend(query, params);');
+        });
+
+        test('a closure capture keeps the box', () => {
+            expect(prediction).toContain('let mut seen: Value = Value::Map({');
+            expect(prediction).toContain('if let Value::Dict(__d) = &mut seen { std::sync::Arc::make_mut(__d).insert("a".into(), Value::Bool(true)); }');
+        });
+
+        test('a shorthand property keeps the box', () => {
+            expect(prediction).toContain('let mut inner: Value = Value::Map({');
+            expect(prediction).toContain('m.insert("inner".to_string(), inner.clone());');
+        });
+
+        test('outside the prediction tier the bearer rule types it: clone before the last use, move at it', () => {
+            expect(rest).toContain('let mut orderAction: indexmap::IndexMap<String, Value> = (');
+            expect(rest).toContain('self.use(Value::Map(orderAction.clone()))');
+            expect(rest).toContain('Value::Map(orderAction));');
+        });
+    });
+});
+
+describe('rust dynamic self access and optional-argument slices', () => {
+    const base = 'ts/src/base/Exchange.ts';
+    const fixture = (rel: string, text: string): string => {
+        const out = path.join(rustFixtureRoot, 'variadic', rel);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, text);
+        return out;
+    };
+    let venue = '';
+    beforeAll(() => {
+        fixture(base, 'export default class Exchange {\n'
+            + '    safeStringUpperN (o: any, k: any, d: any = undefined): any { return o; }\n'
+            + '    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n'
+            + '    parseLiquidation (order: any, market: any = undefined): any { return order; }\n'
+            + '}\n');
+        const file = fixture('ts/src/venue.ts', "import Exchange from './base/Exchange.js';\n"
+            + 'export default class venue extends Exchange {\n'
+            + '    async run (name: string, key: string, o: any) {\n'
+            + '        const r = await this[name] (o);\n'
+            + '        const v = this[key];\n'
+            + "        const s = this.safeStringUpperN (o, 'id');\n"
+            + '        const p = this.parseLiquidation (o);\n'
+            + '        return [ r, v, s, p ];\n'
+            + '    }\n'
+            + '}\n');
+        venue = transpiler.transpileRustByPath(file).content;
+    });
+    test('this[name](args) dispatches by name with cloned arguments', () => {
+        expect(venue).toContain('self.call_dynamic_checked(name.clone(), vec![(o).clone()])');
+    });
+    test('a this[key] read resolves the field by name', () => {
+        expect(venue).toContain('self.prop(&key)');
+        expect(venue).not.toContain('get_value(&self');
+    });
+    test('a hand-written base helper folds past its runtime arity', () => {
+        expect(venue).toContain('self.safeStringUpperN(o.clone(), Value::Str("id".into()), &[])');
+    });
+    test('a transpiled base method folds its optional parameters', () => {
+        expect(venue).toContain('self.parseLiquidation(o.clone(), &[])');
+    });
+});
+
+describe('rust free test-helper functions', () => {
+    test('defaulted params collapse into optional_args; calls pad the slice and await async helpers', () => {
+        const fresh = new Transpiler({ verbose: false, rust: {} } as any);
+        const out = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'free-fn-defaults', 'ts/src/test/Exchange/test.helper.ts')).content;
+        expect(out).toContain('async fn helperTest(exchange: Value, symbol: Value, optional_args: &[Value])');
+        expect(out).toContain('let mut params: Value = get_arg(optional_args, 0, Value::Null);');
+        expect(out).toContain('helperTest(exchange, symbol, &[]).await');
+        expect(out).toMatch(/let mut b: Value = helperTest\(exchange, symbol, &\[Value::Map\([\s\S]+?\)\]\)\.await;/);
+        expect(out).toContain('async fn noAwait(');
+        expect(out).toContain('noAwait(exchange).await');
+    });
+
+    test('a value-position this.spawn inlines as call_dynamic and drops the await on its local', () => {
+        const ts = "class A { options: any; async negotiate (id) { const urls = {}; let future = urls[id]; if (future !== undefined) { return await future; } urls[id] = this.spawn (this.helper, id); future = urls[id]; return await future; } async helper (id) { return id; } spawn (m, ...a) { return m; } }";
+        const out = new Transpiler({ verbose: false, rust: {} } as any).transpileRust(ts).content;
+        expect(out).toContain('self.call_dynamic("helper", vec![id.clone()]).await');
+        expect(out).not.toContain('future.await');
+    });
+});
+

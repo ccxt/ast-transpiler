@@ -22,6 +22,7 @@ interface IParameterType {
     type: string;
     isOptional: boolean;
     initializer?: string;
+    goType?: string;
 }
 interface IMethodType {
     async: boolean;
@@ -43,6 +44,7 @@ interface ITranspiledFile {
     imports: IFileImport[];
     exports: IFileExport[];
     methodsTypes?: IMethodType[];
+    stdlibImports?: string[];
 }
 declare enum Languages {
     Python = 0,

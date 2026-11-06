@@ -29,6 +29,9 @@ interface IParameterType {
     type: string;
     isOptional: boolean;
     initializer?: string;
+    // the Go type the printer gave a required parameter (Go only), so the generated
+    // public wrapper prints the same signature as the method it delegates to
+    goType?: string;
 }
 
 interface IMethodType {
@@ -54,6 +57,8 @@ interface ITranspiledFile {
     imports: IFileImport[];
     exports: IFileExport[];
     methodsTypes?: IMethodType[];
+    // Go only: the stdlib packages the printed file's native emissions call (sorted)
+    stdlibImports?: string[];
 }
 
 enum Languages {

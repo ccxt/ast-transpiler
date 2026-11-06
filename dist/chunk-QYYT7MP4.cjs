@@ -4,11 +4,22 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined")
+    return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
 var __esm = (fn, res) => function __init() {
   return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
 };
-var __commonJS = (cb, mod) => function __require() {
+var __commonJS = (cb, mod) => function __require2() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -34,6 +45,23 @@ var init_cjs_shims = __esm({
 });
 
 // src/tsUtils.ts
+var tsUtils_exports = {};
+__export(tsUtils_exports, {
+  ModifierFlags: () => _ast.ModifierFlags,
+  canHaveModifiers: () => canHaveModifiers,
+  findAncestor: () => findAncestor,
+  getAllSuperTypeNodes: () => getAllSuperTypeNodes,
+  getCombinedNodeFlags: () => getCombinedNodeFlags,
+  getModifiers: () => getModifiers,
+  isClassLike: () => isClassLike,
+  isFunctionLike: () => isFunctionLike,
+  isStringLiteralLike: () => isStringLiteralLike,
+  signatureDeclaration: () => signatureDeclaration,
+  symbolDeclarations: () => symbolDeclarations,
+  symbolValueDeclaration: () => symbolValueDeclaration,
+  typeParts: () => typeParts,
+  typeTarget: () => typeTarget
+});
 init_cjs_shims();
 var _ast = require('typescript/unstable/ast');
 var FUNCTION_LIKE_KINDS = /* @__PURE__ */ new Set([
@@ -146,5 +174,7 @@ function typeTarget(type) {
 
 
 
-exports.__commonJS = __commonJS; exports.__toESM = __toESM; exports.init_cjs_shims = init_cjs_shims; exports.ModifierFlags = _ast.ModifierFlags; exports.isFunctionLike = isFunctionLike; exports.isClassLike = isClassLike; exports.isStringLiteralLike = isStringLiteralLike; exports.findAncestor = findAncestor; exports.getAllSuperTypeNodes = getAllSuperTypeNodes; exports.getCombinedNodeFlags = getCombinedNodeFlags; exports.canHaveModifiers = canHaveModifiers; exports.getModifiers = getModifiers; exports.symbolDeclarations = symbolDeclarations; exports.symbolValueDeclaration = symbolValueDeclaration; exports.signatureDeclaration = signatureDeclaration; exports.typeParts = typeParts; exports.typeTarget = typeTarget;
-//# sourceMappingURL=chunk-UBXMRIM6.cjs.map
+
+
+exports.__require = __require; exports.__commonJS = __commonJS; exports.__toESM = __toESM; exports.init_cjs_shims = init_cjs_shims; exports.ModifierFlags = _ast.ModifierFlags; exports.isFunctionLike = isFunctionLike; exports.isClassLike = isClassLike; exports.isStringLiteralLike = isStringLiteralLike; exports.findAncestor = findAncestor; exports.getAllSuperTypeNodes = getAllSuperTypeNodes; exports.getCombinedNodeFlags = getCombinedNodeFlags; exports.canHaveModifiers = canHaveModifiers; exports.getModifiers = getModifiers; exports.symbolDeclarations = symbolDeclarations; exports.symbolValueDeclaration = symbolValueDeclaration; exports.signatureDeclaration = signatureDeclaration; exports.typeParts = typeParts; exports.typeTarget = typeTarget; exports.tsUtils_exports = tsUtils_exports;
+//# sourceMappingURL=chunk-QYYT7MP4.cjs.map
