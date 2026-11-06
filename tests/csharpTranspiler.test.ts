@@ -5095,6 +5095,15 @@ describe('element-access list cast gate on a printed List<object> receiver', () 
     });
 });
 
+describe('ws cache class parameters', () => {
+    test('a parameter annotated with a ws cache class prints that class', () => {
+        const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
+        const input = 'class ArrayCache {}\nclass ArrayCacheBySymbolById extends ArrayCache {}\nclass Test {\n    prune (newCache: ArrayCacheBySymbolById, cache: ArrayCache, other) {\n        return newCache;\n    }\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).toContain('prune(ccxt.pro.ArrayCacheBySymbolById newCache, ccxt.pro.ArrayCache cache, object other)');
+    });
+});
+
 describe('dictionary index-write cast elision hook', () => {
     const hookConfig = {
         'verbose': false,

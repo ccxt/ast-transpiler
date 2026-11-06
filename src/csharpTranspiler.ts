@@ -756,6 +756,7 @@ const CSHARP_LENGTH_CAST = /^\(([A-Za-z_][\w.]*(?:<[^<>]*(?:<[^<>]*>)?[^<>]*>)?)
 // declaration types where `isEqual (x, null)` -> `x == null` is the same test: `T?` (`== null`
 // is `!x.HasValue`, the helper's `a == null` guard) and named reference types (reference compare).
 // `object`/`var` and non-nullable scalars are refused (`x == null` won't compile for Int64/bool).
+const CSHARP_WS_CACHE_CLASS_NAMES = [ 'ArrayCache', 'ArrayCacheByTimestamp', 'ArrayCacheBySymbolById', 'ArrayCacheBySymbolBySide', 'ArrayCacheByOutcomeById' ];
 const CSHARP_NULL_COMPARISON_REFERENCE_HEADS = [ 'string', 'IDictionary<', 'Dictionary<', 'IList<', 'List<', 'ConcurrentDictionary<', 'ccxt.pro.', 'ArrayCache', 'IOrderBook', 'Future', 'WebSocketClient', 'Delegates' ];
 
 export class CSharpTranspiler extends BaseTranspiler {
@@ -2609,6 +2610,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (listType !== undefined) {
             return listType;
         }
+        const cacheType = this.csharpWsCacheParamType(node);
+        if (cacheType !== undefined) {
+            return cacheType;
+        }
         const method: any = findAncestor(node, (n) => isMethodDeclaration(n));
         const name = method === undefined || method.name === undefined ? undefined : method.name.getText().trim();
         const row = name === undefined ? undefined : CSHARP_OVERRIDE_PARAM_TYPES[name as string];
@@ -2621,6 +2626,17 @@ export class CSharpTranspiler extends BaseTranspiler {
             return super.printParameterType(node);
         }
         return wanted;
+    }
+
+    // a parameter annotated with a ws cache class prints that class: every caller passes the
+    // cache instance, so the body binds the class's own members (append, getLimit)
+    csharpWsCacheParamType(node): string | undefined {
+        const type = node.type;
+        if ((type === undefined) || (type.kind !== SyntaxKind.TypeReference) || !isIdentifier((type as any).typeName)) {
+            return undefined;
+        }
+        const name = (type as any).typeName.text;
+        return CSHARP_WS_CACHE_CLASS_NAMES.indexOf(name) >= 0 ? 'ccxt.pro.' + name : undefined;
     }
 
     // checker spelling of a parameter the override table covers: a dictionary-shaped type (string
