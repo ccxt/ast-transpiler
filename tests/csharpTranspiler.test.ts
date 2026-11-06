@@ -5102,6 +5102,16 @@ describe('ws cache class parameters', () => {
         expect(output).toContain('fetchMyBuys(object symbol, Dictionary<string, object> parameters = null)');
         expect(output).toContain('other(object parameters = null)');
     });
+    test('configured core argument types print on the signature, a written one reads an object shadow', () => {
+        const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'coreArgTypes': { 'fetchThing': { 0: 'string', 1: 'string', 2: 'Int64?' } }, 'signatureArgTypes': { 'sign': { 0: 'string' } }, 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
+        const input = 'class Test {\n    fetchThing (symbol, timeframe = \'1m\', since = undefined) {\n        // the timeframe stays in comments\n        return [ symbol, timeframe, since ];\n    }\n    sign (path, api = \'public\') {\n        return path;\n    }\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).toContain('fetchThing(string symbol, string timeframe = null, Int64? since = null)');
+        expect(output).toContain('object timeframeVar = timeframe;\n        // the timeframe stays in comments\n        timeframeVar ??= "1m";');
+        expect(output).toContain('new List<object>() {symbol, timeframeVar, since}');
+        expect(output).toContain('sign(string path, object api = null)');
+        expect(output).not.toContain('pathVar');
+    });
     test('a parameter annotated with a ws cache class prints that class', () => {
         const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
         const input = 'class ArrayCache {}\nclass ArrayCacheBySymbolById extends ArrayCache {}\nclass Test {\n    prune (newCache: ArrayCacheBySymbolById, cache: ArrayCache, other) {\n        return newCache;\n    }\n}';

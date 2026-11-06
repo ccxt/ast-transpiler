@@ -759,6 +759,15 @@ const CSHARP_LENGTH_CAST = /^\(([A-Za-z_][\w.]*(?:<[^<>]*(?:<[^<>]*>)?[^<>]*>)?)
 const CSHARP_WS_CACHE_CLASS_NAMES = [ 'ArrayCache', 'ArrayCacheByTimestamp', 'ArrayCacheBySymbolById', 'ArrayCacheBySymbolBySide', 'ArrayCacheByOutcomeById' ];
 const CSHARP_NULL_COMPARISON_REFERENCE_HEADS = [ 'string', 'IDictionary<', 'Dictionary<', 'IList<', 'List<', 'ConcurrentDictionary<', 'ccxt.pro.', 'ArrayCache', 'IOrderBook', 'Future', 'WebSocketClient', 'Delegates' ];
 
+const CSHARP_ASSIGNMENT_TOKENS = new Set<SyntaxKind>([
+    SyntaxKind.EqualsToken, SyntaxKind.PlusEqualsToken, SyntaxKind.MinusEqualsToken, SyntaxKind.AsteriskEqualsToken,
+    SyntaxKind.SlashEqualsToken, SyntaxKind.PercentEqualsToken, SyntaxKind.AsteriskAsteriskEqualsToken,
+    SyntaxKind.QuestionQuestionEqualsToken, SyntaxKind.BarBarEqualsToken, SyntaxKind.AmpersandAmpersandEqualsToken,
+    SyntaxKind.AmpersandEqualsToken, SyntaxKind.BarEqualsToken, SyntaxKind.CaretEqualsToken,
+    SyntaxKind.LessThanLessThanEqualsToken, SyntaxKind.GreaterThanGreaterThanEqualsToken,
+    SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+]);
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -857,6 +866,15 @@ export class CSharpTranspiler extends BaseTranspiler {
     // methods (camel or Pascal name) whose trailing `params` the embedding layer proved a
     // Dictionary on every path (config.csharp.dictParamsMethods)
     csharpDictParamsMethods = new Set<string>();
+    // method name -> parameter position -> the C# type that position prints on every declaration of the
+    // name (config.csharp.coreArgTypes; C# overrides are invariant). A body that writes the parameter keeps
+    // an `object <name>Var = <name>;` slot and reads it instead (csharpCoreArgShadows)
+    csharpCoreArgTypes: Record<string, Record<number, string>> = {};
+    // same, for positions retyped without a shadow (config.csharp.signatureArgTypes: sign / handleErrors / ...)
+    csharpSignatureArgTypes: Record<string, Record<number, string>> = {};
+    // parameter declaration -> its shadow name while the owning method body prints
+    csharpActiveShadows = new Map<Node, string>();
+    csharpCoreArgShadowParams = new WeakMap<Node, any[]>();
     // declaration node -> C# type of the local ('' = the printer prints `object`); see
     // csharpStringReceiverType -- the ccxt classifier asks once per string-method receiver
     stringReceiverTypes = new WeakMap<Node, string>();
@@ -937,6 +955,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         this.csharpNumericArgTypes = Object.assign({}, config['numericArgTypes'] ?? {});
         this.csharpShadowCallees = new Set<string>(Array.isArray(config['coreArgShadowCallees']) ? config['coreArgShadowCallees'] : []);
         this.csharpDictParamsMethods = new Set<string>(Array.isArray(config['dictParamsMethods']) ? config['dictParamsMethods'] : []);
+        this.csharpCoreArgTypes = Object.assign({}, config['coreArgTypes'] ?? {});
+        this.csharpSignatureArgTypes = Object.assign({}, config['signatureArgTypes'] ?? {});
     }
 
     initConfig() {
@@ -1062,6 +1082,12 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printIdentifier(node) {
+        if (this.csharpActiveShadows.size > 0) {
+            const shadow = this.csharpShadowNameOf(node);
+            if (shadow !== undefined) {
+                return shadow;
+            }
+        }
         let idValue = node.text ?? node.text;
 
         if (this.ReservedKeywordsReplacements[idValue]) {
@@ -6766,6 +6792,27 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printFunctionBody(node, identation) {
+        const shadows = this.csharpCoreArgShadows(node);
+        if (shadows.length === 0) {
+            return this.printFunctionBodyUnshadowed(node, identation);
+        }
+        const previous = this.csharpActiveShadows;
+        this.csharpActiveShadows = new Map<Node, string>(previous);
+        for (const param of shadows) {
+            this.csharpActiveShadows.set(param, param.name.text + 'Var');
+        }
+        let body;
+        try {
+            body = this.printFunctionBodyUnshadowed(node, identation);
+        } finally {
+            this.csharpActiveShadows = previous;
+        }
+        const open = this.getBlockOpen(identation);
+        const lines = shadows.map((param) => `${this.getIden(identation + 1)}object ${param.name.text}Var = ${param.name.text};\n`).join('');
+        return body.startsWith(open) ? open + lines + body.slice(open.length) : body;
+    }
+
+    printFunctionBodyUnshadowed(node, identation) {
 
         // a body with parameters prints statement by statement, so the Promise.all plan is made here
         this.csharpPromiseAllPlanBlock(node?.body);
@@ -7235,11 +7282,11 @@ export class CSharpTranspiler extends BaseTranspiler {
                 // parsedArgs = this.printMethodParameters(methodOverride);
                 const currentArgs = node.parameters;
                 const parentArgs = methodOverride.parameters;
-                parsedArgs = parentArgs.map((param, index) => this.printParameteCustomName(param, this.printNode(currentArgs[index].name, 0))).join(", ");
+                parsedArgs = this.csharpCoreArgParams(node, parentArgs.map((param, index) => this.printParameteCustomName(param, this.printNode(currentArgs[index].name, 0)))).join(", ");
             }
         }
 
-        parsedArgs = parsedArgs ? parsedArgs : this.printMethodParameters(node);
+        parsedArgs = parsedArgs ? parsedArgs : this.csharpCoreArgParams(node, node.parameters.map((param) => this.printParameter(param))).join(", ");
 
         returnType = returnType ? returnType + " " : returnType;
 
@@ -7248,6 +7295,135 @@ export class CSharpTranspiler extends BaseTranspiler {
             + "(" + parsedArgs + ")";
 
         return this.printNodeCommentsIfAny(node, identation, methodDef);
+    }
+
+    // ==== configured core argument types (config.csharp.coreArgTypes / signatureArgTypes) ====
+
+    // the configured type of each parameter position of a generated instance method, or undefined
+    csharpCoreArgRow(node, table: Record<string, Record<number, string>>): Record<number, string> | undefined {
+        if (!isMethodDeclaration(node) || !isIdentifier(node.name) || (node.body === undefined) || this.csharpIsStaticMethod(node)) {
+            return undefined;
+        }
+        const name = node.name.text;
+        return Object.prototype.hasOwnProperty.call(table, name) ? table[name] : undefined;
+    }
+
+    csharpIsStaticMethod(node): boolean {
+        return (node.modifiers ?? []).some((m) => m.kind === SyntaxKind.StaticKeyword);
+    }
+
+    // a printed `object <name>...` parameter at a configured position takes the configured type
+    // (the default text is kept as printed: `string timeframe = null`, `Int64? since = null`); a
+    // retyped parameter the body writes is recorded for csharpCoreArgShadows
+    csharpCoreArgParams(node, printed: string[]): string[] {
+        const rows = [ this.csharpCoreArgRow(node, this.csharpCoreArgTypes), this.csharpCoreArgRow(node, this.csharpSignatureArgTypes) ];
+        if ((rows[0] === undefined) && (rows[1] === undefined)) {
+            return printed;
+        }
+        const shadows = [];
+        const out = printed.map((text, index) => {
+            const wanted = rows[0]?.[index] ?? rows[1]?.[index];
+            if ((wanted === undefined) || !text.startsWith('object ')) {
+                return text;
+            }
+            const param = node.parameters[index];
+            if ((rows[0]?.[index] !== undefined) && (param !== undefined) && this.csharpCoreArgNeedsShadow(node, param, wanted)) {
+                shadows.push(param);
+            }
+            return wanted + text.slice('object'.length);
+        });
+        this.csharpCoreArgShadowParams.set(node, shadows);
+        return out;
+    }
+
+    csharpCoreArgShadows(node): any[] {
+        return this.csharpCoreArgShadowParams.get(node) ?? [];
+    }
+
+    // a body write keeps an `object <name>Var` slot seeded from the narrowed parameter and every body
+    // read of the parameter reads the slot. A literal default counts as a write (the `<name> ??= <literal>;`
+    // prologue); a list target whose writes all produce a list keeps no slot
+    csharpCoreArgNeedsShadow(node, param, wanted: string): boolean {
+        if (!isIdentifier(param.name)) {
+            return false;
+        }
+        const init = param.initializer;
+        const literalDefault = (init !== undefined) && (isArrayLiteralExpression(init) || isObjectLiteralExpression(init) || isNumericLiteral(init) || isStringLiteral(init) || isBooleanLiteral(init));
+        const writes = this.csharpParamWrites(node, param);
+        if (!literalDefault && (writes.length === 0)) {
+            return false;
+        }
+        // a list target keeps the parameter when every write (an `[]` default included) produces a list
+        const listDefault = (init === undefined) || isArrayLiteralExpression(init);
+        return !((wanted === 'IList<object>') && listDefault && writes.every((rhs) => this.csharpWriteProducesList(rhs)));
+    }
+
+    // the right-hand sides (undefined for ++/--/compound writes) of every write to the parameter in the body
+    csharpParamWrites(method, param): any[] {
+        const writes = [];
+        const checker: any = this.checkerOrUndefined();
+        const isParam = (n) => isIdentifier(n) && (n.text === param.name.text)
+            && ((checker === undefined) || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() === param));
+        const visit = (n) => {
+            if (isBinaryExpression(n) && CSHARP_ASSIGNMENT_TOKENS.has(n.operatorToken.kind)) {
+                let left: any = n.left;
+                while (isParenthesizedExpression(left)) {
+                    left = left.expression;
+                }
+                if (isParam(left)) {
+                    writes.push(n.operatorToken.kind === SyntaxKind.EqualsToken ? n.right : undefined);
+                } else if ((n.operatorToken.kind === SyntaxKind.EqualsToken) && (left.kind === SyntaxKind.ArrayLiteralExpression)) {
+                    if (left.elements.some((e) => isParam(e))) {
+                        writes.push(undefined);
+                    }
+                }
+            } else if ((isPrefixUnaryExpression(n) || isPostfixUnaryExpression(n)) && isParam(n.operand)
+                    && [ SyntaxKind.PlusPlusToken, SyntaxKind.MinusMinusToken, SyntaxKind.MinusToken, SyntaxKind.PlusToken ].includes(n.operator)) {
+                // `-x` / `+x` print `prefixUnaryNeg(ref x)` / `prefixUnaryPlus(ref x)`: a ref sink needs the object slot
+                writes.push(undefined);
+            }
+            n.forEachChild(visit);
+        };
+        method.body.forEachChild(visit);
+        return writes;
+    }
+
+    // `this.marketSymbols (...)`, an array literal, `this.getActiveSymbols (...)`, `this.symbols`
+    csharpWriteProducesList(rhs): boolean {
+        if (rhs === undefined) {
+            return false;
+        }
+        if (isArrayLiteralExpression(rhs)) {
+            return true;
+        }
+        const callee = isCallExpression(rhs) ? rhs.expression : undefined;
+        if ((callee !== undefined) && isPropertyAccessExpression(callee) && (callee.expression.kind === SyntaxKind.ThisKeyword)) {
+            return [ 'marketSymbols', 'getActiveSymbols' ].indexOf(callee.name.text) >= 0;
+        }
+        return isPropertyAccessExpression(rhs) && (rhs.expression.kind === SyntaxKind.ThisKeyword) && (rhs.name.text === 'symbols');
+    }
+
+    // the shadow slot a read of a shadowed parameter prints, or undefined
+    csharpShadowNameOf(node): string | undefined {
+        if (!isIdentifier(node)) {
+            return undefined;
+        }
+        if (isParameterDeclaration(node.parent) && (node.parent.name === node)) {
+            return this.csharpActiveShadows.get(node.parent); // the `<name> ??= <literal>;` prologue
+        }
+        const parent: any = node.parent;
+        if (parent !== undefined && ((isPropertyAccessExpression(parent) && parent.name === node))) {
+            return undefined;
+        }
+        for (const [ param, alias ] of this.csharpActiveShadows) {
+            if ((param as any).name.text === node.text) {
+                const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+                if (declaration === param) {
+                    return alias;
+                }
+            }
+        }
+        return undefined;
     }
 
     // a `this.<name>(...)` call whose emitted signature is already a string: the printer's own typed
