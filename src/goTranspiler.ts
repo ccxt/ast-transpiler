@@ -10865,6 +10865,7 @@ export function installCcxtGoNilDeclaredValueJoins (goTranspiler) {
             return undefined;
         }
         if (!joined.has (declaration)) {
+            joined.set (declaration, undefined); // the scan re-enters here for the same declaration
             const scan = new GoNilDeclaredValueAssignmentScan (goTranspiler, declaration, declaration.name.text);
             joined.set (declaration, (scan.run () && (scan.joinType === 'bool')
                 && !goTranspiler.goTypeNameIsShadowed?.(goTranspiler.goEnclosingFunction (declaration), 'bool')) ? 'bool' : undefined);
