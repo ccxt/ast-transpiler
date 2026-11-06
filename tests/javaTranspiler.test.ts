@@ -6005,6 +6005,8 @@ describe('java typed parameters', () => {
             "        const o = other;\n" +
             "        this.fetchDepth ('x', 50, m);\n" +
             "        this.fetchDepth ('x', -7, o);\n" +
+            "        const maxLimit = 1500;\n" +
+            "        this.fetchDepth ('x', maxLimit, m);\n" +
             "    }\n" +
                         "    pageRows (limit: Int = undefined, raw = undefined): void {\n" +
             "        limit = raw;\n" +
@@ -6117,6 +6119,15 @@ describe('java typed parameters', () => {
         expect(out).toContain('this.fetchDepth("x", 50L, m);');
         expect(out).toContain('this.fetchDepth("x", -7L, Helpers.toMapArg(o));');
         expect(venueOutput).toContain('this.fetchDepth("x", 50L, Helpers.toMapArg(m));');
+    });
+
+    test('a const int literal local the build layer declares Integer widens with Long.valueOf for a Long slot', () => {
+        const byPath = newJavaTranspiler();
+        const printer: any = (byPath as any).javaTranspiler;
+        printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'maxLimit' ? 'Integer' : undefined);
+        const out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+        expect(out).toContain('this.fetchDepth("x", Long.valueOf(maxLimit), ');
+        expect(venueOutput).toContain('this.fetchDepth("x", Helpers.toLongOrNull(maxLimit), ');
     });
 
     test('an integer default of a Long slot prints as a long literal', () => {

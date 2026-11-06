@@ -1714,6 +1714,13 @@ export class JavaTranspiler extends BaseTranspiler {
             && initializer.name.text === 'length' && this.javaDeclaredTypeOf(node) === 'Integer') {
             return `((long) ${printed})`;
         }
+        // a const int literal the build layer declared Integer: a non-null box, Long.valueOf widens it
+        const literal = initializer !== undefined && isPrefixUnaryExpression(initializer) && initializer.operator === SyntaxKind.MinusToken
+            ? initializer.operand : initializer;
+        if (type === 'Long' && literal !== undefined && isNumericLiteral(literal) && /^\d+$/.test(literal.text)
+            && this.javaDeclaredTypeOf(node) === 'Integer') {
+            return `Long.valueOf(${printed})`;
+        }
         return undefined;
     }
 
