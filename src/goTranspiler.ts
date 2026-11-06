@@ -15844,7 +15844,8 @@ function goBalanceLocalIsMap (body: string, name: string): boolean {
 
 function retypeGoProvenFamily (content: string, names: string[], type: string, paramWrap: string, calls: string[], receivers = '\\w+', converters: string[] = []): string {
     const literal = type + '{';
-    const provenCall = new RegExp ('^(?:ccxt\\.)?this\\.(?:DerivedExchange\\.|base\\.)?(?:' + calls.join ('|') + ')\\(');
+    // a printed super call reads `base.X(` (ccxt qualifies it after printing)
+    const provenCall = new RegExp ('^(?:ccxt\\.)?(?:this\\.(?:DerivedExchange\\.|base\\.)?|base\\.)(?:' + calls.join ('|') + ')\\(');
     // the struct->map converters are package-level functions (no `this.` receiver)
     const provenConverter = new RegExp ('^(?:ccxt\\.)?(?:' + converters.join ('|') + ')\\(');
     const proven = (e: string) => e.startsWith (literal) || provenCall.test (e) || provenConverter.test (e);
