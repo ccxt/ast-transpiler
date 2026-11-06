@@ -6008,6 +6008,18 @@ describe('java typed parameters', () => {
             "        const maxLimit = 1500;\n" +
             "        this.fetchDepth ('x', maxLimit, m);\n" +
             "    }\n" +
+            "    pageDepth (limit: Int = undefined, row: Dict = {}): void {\n" +
+            "        let pageLimit = 100;\n" +
+            "        if (limit === undefined) {\n" +
+            "            pageLimit = 300;\n" +
+            "        }\n" +
+            "        this.fetchDepth ('x', pageLimit, row);\n" +
+            "        const request = {};\n" +
+            "        request['limit'] = Math.min (limit, pageLimit);\n" +
+            "        const shownLimit = 25;\n" +
+            "        this.fetchDepth ('x', shownLimit, row);\n" +
+            "        row['shown'] = shownLimit;\n" +
+            "    }\n" +
                         "    pageRows (limit: Int = undefined, raw = undefined): void {\n" +
             "        limit = raw;\n" +
             "        [ limit, raw ] = [ raw, limit ];\n" +
@@ -6124,10 +6136,22 @@ describe('java typed parameters', () => {
     test('a const int literal local the build layer declares Integer widens with Long.valueOf for a Long slot', () => {
         const byPath = newJavaTranspiler();
         const printer: any = (byPath as any).javaTranspiler;
-        printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'maxLimit' ? 'Integer' : undefined);
+        printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'shownLimit' ? 'Integer' : undefined);
         const out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
-        expect(out).toContain('this.fetchDepth("x", Long.valueOf(maxLimit), ');
-        expect(venueOutput).toContain('this.fetchDepth("x", Helpers.toLongOrNull(maxLimit), ');
+        expect(out).toContain('this.fetchDepth("x", Long.valueOf(shownLimit), ');
+        expect(venueOutput).toContain('this.fetchDepth("x", Helpers.toLongOrNull(shownLimit), ');
+        // a local that only feeds Long slots is the printer's own Long local
+        expect(venueOutput).toContain('Long maxLimit = 1500L;');
+        expect(venueOutput).toContain('this.fetchDepth("x", maxLimit, ');
+    });
+
+    test('an int literal local that only feeds Long core slots prints as a Long local', () => {
+        expect(venueOutput).toContain('Long pageLimit = 100L;');
+        expect(venueOutput).toContain('pageLimit = 300L;');
+        expect(venueOutput).toContain('this.fetchDepth("x", pageLimit, ');
+        // any other use (a map value write) keeps the Integer box and the slot conversion
+        expect(venueOutput).not.toContain('Long shownLimit');
+        expect(venueOutput).toContain('this.fetchDepth("x", Helpers.toLongOrNull(shownLimit), ');
     });
 
     test('an integer default of a Long slot prints as a long literal', () => {

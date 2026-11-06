@@ -896,6 +896,7 @@ export class JavaTranspiler extends BaseTranspiler {
     javaHandlerReads: Set<string> = new Set();
     javaHandlerScannedFile: any = undefined;
     javaCheckedBoxLocalTypeCache: WeakMap<Node, string | typeof JAVA_MEMO_UNDEFINED> = new WeakMap();
+    javaLongLimitLiteralLocalCache: WeakMap<Node, boolean> = new WeakMap();
     javaHandBackVisiting = new Set<any>();
     javaVenueCalleeInProgress: Set<Node> = new Set();
     javaVenueCalleeDeclarations: WeakMap<Node, Node> = new WeakMap();
@@ -1722,6 +1723,107 @@ export class JavaTranspiler extends BaseTranspiler {
             return `Long.valueOf(${printed})`;
         }
         return undefined;
+    }
+
+    // the Long core slot an argument lands in: the printed method's defaulted parameter the
+    // full-arity call path converts with javaConvertToCoreType
+    javaArgumentFeedsLongCoreSlot(arg): boolean {
+        const call: any = arg.parent;
+        const callee: any = call?.expression;
+        if (call === undefined || !isCallExpression(call) || !call.arguments.includes(arg)
+            || callee?.kind !== SyntaxKind.PropertyAccessExpression
+            || callee.expression?.kind === SyntaxKind.SuperKeyword) {
+            return false;
+        }
+        let method;
+        try {
+            method = this.javaMethodImplementation(this.getChecker().getResolvedSignature(call)?.declaration?.resolve())
+                ?? this.javaAnyReceiverBaseMethod(callee);
+        } catch (e) {
+            return false;
+        }
+        if (!this.javaIsPrintedMethod(method) || !this.javaHasOptionalParameter(method)) {
+            return false;
+        }
+        const params = method.parameters;
+        const i = call.arguments.indexOf(arg);
+        if (call.arguments.length > params.length || params.some((p) => p.dotDotDotToken !== undefined)
+            || call.arguments.some((a) => a.kind === SyntaxKind.SpreadElement)) {
+            return false;
+        }
+        return params[i].initializer !== undefined && this.javaCoreParameterTypes(method)[i] === 'Long';
+    }
+
+    // `const x = <int literal>` whose every use is an argument into a Long core slot: the
+    // declaration carries the Long box the slot takes (Helpers.toLongOrNull of an Integer is the
+    // same Long value), so the arguments pass the local itself
+    javaLongLimitLiteralLocal(declaration): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || (declaration.parent as any)?.declarations?.length !== 1
+            || declaration.parent?.parent?.kind === SyntaxKind.ForStatement) {
+            return false;
+        }
+        const intLiteral = (n) => n !== undefined && isNumericLiteral(n) && /^\d+$/.test(n.text) && this.printNumericLiteral(n) === n.text;
+        if (!intLiteral(declaration.initializer)) {
+            return false;
+        }
+        const scope = this.javaEnclosingFunction(declaration);
+        const checker: any = this.checkerOrUndefined();
+        if (scope === undefined || checker === undefined) {
+            return false;
+        }
+        const name = declaration.name.text;
+        const symbol = checker.getSymbolAtLocation(declaration.name);
+        if (symbol === undefined) {
+            return false;
+        }
+        let fed = false;
+        let ok = true;
+        const visit = (n) => {
+            if (!ok) {
+                return;
+            }
+            if (isIdentifier(n) && n !== declaration.name && n.text === name
+                && checker.getSymbolAtLocation(n) === symbol) {
+                const parent: any = n.parent;
+                if (this.javaArgumentFeedsLongCoreSlot(n)) {
+                    fed = true;
+                } else if (isBinaryExpression(parent) && parent.left === n) {
+                    // a later write: another int literal (printed with the L suffix)
+                    ok = parent.operatorToken.kind === SyntaxKind.EqualsToken && intLiteral(parent.right);
+                } else {
+                    // `m[k] = Math.min(x, local)`: the helper hands back one of its operands as a
+                    // serialized map value, where an Integer and a Long box serialize the same
+                    const call: any = parent;
+                    const write: any = call?.parent;
+                    ok = isCallExpression(call) && call.arguments.includes(n) && call.arguments.length === 2
+                        && isPropertyAccessExpression(call.expression) && isIdentifier(call.expression.expression)
+                        && call.expression.expression.text === 'Math' && call.expression.name.text === 'min'
+                        && isBinaryExpression(write) && write.right === call && write.operatorToken.kind === SyntaxKind.EqualsToken
+                        && isElementAccessExpression(write.left);
+                }
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        return ok && fed;
+    }
+
+    javaLongLimitLiteralLocalCached(declaration): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration)) {
+            return false;
+        }
+        let value = this.javaLongLimitLiteralLocalCache.get(declaration);
+        if (value === undefined) {
+            try {
+                value = this.javaLongLimitLiteralLocal(declaration);
+            } catch (e) {
+                value = false;
+            }
+            this.javaLongLimitLiteralLocalCache.set(declaration, value);
+        }
+        return value;
     }
 
     javaConvertToCoreType(type: string, printed: string, node): string {
@@ -4777,6 +4879,9 @@ export class JavaTranspiler extends BaseTranspiler {
     // declarations it retypes itself, and a parameter the printer retypes
     // (javaNativeParameterType) answers for itself, so its element reads go native too
     javaDeclaredTypeOfDeclaration(declaration): string | undefined {
+        if (this.javaLongLimitLiteralLocalCached(declaration)) {
+            return 'Long';
+        }
         if (this.javaDeclaredLocalTypeResolver !== undefined) {
             let type;
             try {
@@ -5227,6 +5332,11 @@ export class JavaTranspiler extends BaseTranspiler {
             const handlerType = this.javaHandlerDeclarationType(declaration);
             if (handlerType !== undefined) {
                 varToken = handlerType + " ";
+            }
+            // an int literal local that only feeds Long core slots prints `Long x = NL`
+            if (this.javaLongLimitLiteralLocalCached(declaration)) {
+                return this.getIden(identation) + "Long " + this.printNode(declaration.name) + " = "
+                    + this.printNode(declaration.initializer, 0).trim() + "L";
             }
         }
 
@@ -7151,6 +7261,11 @@ export class JavaTranspiler extends BaseTranspiler {
             if (typeOfExpression) return typeOfExpression;
         }
 
+        // a write to a Long literal-limit local keeps its Long box
+        if (op === SyntaxKind.EqualsToken && isIdentifier(left) && isNumericLiteral(right)
+            && this.javaLongLimitLiteralLocalCached(this.javaDeclarationOfIdentifier(left))) {
+            return `${this.printNode(left, 0)} = ${this.printNode(right, 0)}L`;
+        }
         // a write to a parameter the printer declared natively casts its right side
         if (op === SyntaxKind.EqualsToken && left.kind === SyntaxKind.Identifier) {
             const assignment = this.javaParameterAssignmentCast(left, right, identation);
