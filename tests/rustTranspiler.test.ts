@@ -11,6 +11,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['sandbox'] = true;\n        }\n    }\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n    hold (f: any): any {\n        return f;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required `boolean` read only in condition slots -> native `bool`\n    settlementData (isBuy: boolean, amount: any) {\n        if (isBuy) {\n            return -amount;\n        }\n        return amount;\n    }\n    // optional `boolean`: bound with the truthiness the use sites applied\n    starkAmount (amount: any, roundUp: boolean = false) {\n        if (roundUp) {\n            return amount + 1;\n        }\n        return amount;\n    }\n    // a bool parameter forwarded into a native-`bool` slot\n    forwarded (on: boolean) {\n        return this.settlementData (on, 1);\n    }\n    // a `Value` argument coerces at the call site\n    fromValue (raw: any) {\n        return this.settlementData (raw, 2);\n    }\n    // a bool parameter read outside a bool sink keeps the box\n    boxed (flag: boolean) {\n        const held = flag;\n        return held;\n    }\n    // an override keeps the base `Value` signature\n    override setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['demo'] = true;\n        }\n    }\n    // a method reference handed to another call keeps the `Value` signature\n    channelB (flag: boolean) {\n        if (flag) {\n            return 1;\n        }\n        return 2;\n    }\n    holdRef () {\n        return this.hold (this.channelB);\n    }\n}\n"
  },
+ "free-fn-defaults": {"ts/src/test/Exchange/test.helper.ts": "async function helperTest (exchange: any, symbol: string, params = {}) {\n    return [ exchange, symbol, params ];\n}\nasync function noAwait (exchange: any) {\n    return exchange;\n}\nasync function testHelper (exchange: any, symbol: string) {\n    const a = await helperTest (exchange, symbol);\n    const b = helperTest (exchange, symbol, { 'x': 1 });\n    const c = await noAwait (exchange);\n    return [ a, b, c ];\n}\nexport default testHelper;\n"},
  "bool-locals": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required bool parameter: the native-`bool` slot a local may flow into\n    settle (isMarket: boolean, amount: any) {\n        if (isMarket) {\n            return -amount;\n        }\n        return amount;\n    }\n    // a bool local from a comparison, read in condition slots AND a native-`bool` slot\n    localIntoBoolSlot (type: string) {\n        const isMarket = (type === 'market');\n        if (!isMarket) {\n            return 0;\n        }\n        if (isMarket && (type === 'x')) {\n            return 1;\n        }\n        return this.settle (isMarket, 2);\n    }\n    // a comparison local read only in conditions stays typed (no regression)\n    localConditionsOnly (type: string) {\n        const isSpot = (type === 'spot');\n        if (isSpot) {\n            return 1;\n        }\n        return 0;\n    }\n    // negative: a Value slot keeps the box\n    localIntoValueSlot (type: string) {\n        const isWide = (type === 'spot');\n        const held = [ isWide ];\n        return held;\n    }\n    // negative: a `Value` read into the bool slot still coerces\n    valueIntoBoolSlot (raw: any) {\n        return this.settle (raw, 3);\n    }\n}\n"
@@ -1051,9 +1052,23 @@ describe('rust transpiling tests', () => {
 
     // this keyword
     test('this keyword becomes self', () => {
-        const ts = "class A { run() { return this; } }";
+        const ts = "class A { x: any; run() { return this.x; } }";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('return self;');
+        expect(output).toContain('self.x');
+    });
+
+    test('a chained return this returns Value::Null', () => {
+        const output = transpiler.transpileRust("class A { run() { return this; } }").content;
+        expect(output).toContain('return Value::Null;');
+        expect(output).not.toContain('return self;');
+    });
+
+    test('proxy-callback calls, setProperty (this, ..) and binaryConcat () print their runtime shapes', () => {
+        const ts = "class A { proxyUrlCallback: any; run (url) { this.setProperty (this, 'rateLimit', 10); const b = this.binaryConcat (); return this.proxyUrlCallback (url); } setProperty (o, k, v = undefined) {} binaryConcat (...a) { return a; } }";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.proxy_url_callback_fn(');
+        expect(output).toContain('self.setProperty(Value::Str("rateLimit".into()), &[Value::Int(10)])');
+        expect(output).toContain('self.binary_concat(Value::Null, &[])');
     });
 
     // Reserved keyword renaming
@@ -6331,3 +6346,24 @@ describe('rust dynamic self access and optional-argument slices', () => {
         expect(venue).toContain('self.parseLiquidation(o.clone(), &[])');
     });
 });
+
+describe('rust free test-helper functions', () => {
+    test('defaulted params collapse into optional_args; calls pad the slice and await async helpers', () => {
+        const fresh = new Transpiler({ verbose: false, rust: {} } as any);
+        const out = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'free-fn-defaults', 'ts/src/test/Exchange/test.helper.ts')).content;
+        expect(out).toContain('async fn helperTest(exchange: Value, symbol: Value, optional_args: &[Value])');
+        expect(out).toContain('let mut params: Value = get_arg(optional_args, 0, Value::Null);');
+        expect(out).toContain('helperTest(exchange, symbol, &[]).await');
+        expect(out).toMatch(/let mut b: Value = helperTest\(exchange, symbol, &\[Value::Map\([\s\S]+?\)\]\)\.await;/);
+        expect(out).toContain('async fn noAwait(');
+        expect(out).toContain('noAwait(exchange).await');
+    });
+
+    test('a value-position this.spawn inlines as call_dynamic and drops the await on its local', () => {
+        const ts = "class A { options: any; async negotiate (id) { const urls = {}; let future = urls[id]; if (future !== undefined) { return await future; } urls[id] = this.spawn (this.helper, id); future = urls[id]; return await future; } async helper (id) { return id; } spawn (m, ...a) { return m; } }";
+        const out = new Transpiler({ verbose: false, rust: {} } as any).transpileRust(ts).content;
+        expect(out).toContain('self.call_dynamic("helper", vec![id.clone()]).await');
+        expect(out).not.toContain('future.await');
+    });
+});
+

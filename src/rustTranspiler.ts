@@ -4001,6 +4001,12 @@ export class RustTranspiler extends BaseTranspiler {
         const dynamicCall = this.printDynamicSelfCall(node, identation);
         if (dynamicCall !== undefined) return dynamicCall;
 
+        const selfCall = this.printSelfCallShape(node, identation);
+        if (selfCall !== undefined) return selfCall;
+
+        const valueSpawn = this.printValueSpawnCall(node, identation);
+        if (valueSpawn !== undefined) return valueSpawn;
+
         const freeFnCall = this.printFreeFnDefaultArgsCall(node, identation);
         if (freeFnCall !== undefined) return freeFnCall;
 
@@ -6365,7 +6371,62 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Rust uses postfix `.await`; the base transpiler defaults to prefix.
     printAwaitExpression(node, identation) {
+        // a local in a method that inlines a value-position spawn holds the spawn's resolved result
+        if (isIdentifier(node.expression) && this.rustInlinesValueSpawn(findAncestor(node, isMethodDeclaration))) {
+            return this.printNode(node.expression, identation);
+        }
         return `${this.printNode(node.expression, identation)}.await`;
+    }
+
+    // `this.<callback>(..)` on a proxy-callback field calls the `<callback>_fn` method (a name can't be
+    // both field and method); `this.setProperty(this, ..)` drops the receiver (`set_property` mutates
+    // `self`); `this.binaryConcat()` passes the empty first chunk of `(first, ...rest)`.
+    printSelfCallShape(node, identation): string | undefined {
+        const callee = node.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const name = callee.name.text;
+        if (RustTranspiler.RUST_PROXY_CALLBACK_FIELDS.has(this.toSnakeCaseName(name))) {
+            return `self.${this.toSnakeCaseName(name)}_fn(${this.printArgsForCallExpression(node, identation)})`;
+        }
+        if (name === 'binaryConcat' && node.arguments.length === 0) return 'self.binary_concat(Value::Null, &[])';
+        if (name === 'setProperty' && node.arguments.length > 0 && node.arguments[0].kind === SyntaxKind.ThisKeyword) {
+            const [prop, ...rest] = node.arguments.slice(1).map((a) => this.printNode(a, 0).trim());
+            return `self.setProperty(${prop}, &[${rest.join(', ')}])`;
+        }
+        return undefined;
+    }
+
+    private static readonly RUST_PROXY_CALLBACK_FIELDS = new Set(['proxy', 'proxy_url_callback', 'http_proxy_callback', 'https_proxy_callback',
+        'socks_proxy_callback', 'ws_proxy_callback', 'wss_proxy_callback', 'ws_socks_proxy_callback']);
+
+    // `this.spawn(this.m, ...args)` used as a value: Rust can't hold a future in a `Value`, so the
+    // spawn runs inline as `self.call_dynamic("m", vec![args]).await`. Statement spawns stay enqueued.
+    rustValueSpawnCall(node): boolean {
+        const callee = node.expression;
+        return isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword && callee.name.text === 'spawn'
+            && node.arguments.length > 0 && isPropertyAccessExpression(node.arguments[0]) && node.arguments[0].expression.kind === SyntaxKind.ThisKeyword
+            && node.parent?.kind !== SyntaxKind.ExpressionStatement;
+    }
+
+    printValueSpawnCall(node, identation): string | undefined {
+        if (!this.rustValueSpawnCall(node)) return undefined;
+        const args = node.arguments.slice(1).map((a) => {
+            const t = this.printNode(a, identation).trim();
+            return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(t) ? `${t}.clone()` : t;
+        });
+        return `self.call_dynamic("${this.toSnakeCaseName(node.arguments[0].name.text)}", vec![${args.join(', ')}]).await`;
+    }
+
+    rustInlinesValueSpawn(method): boolean {
+        if (method === undefined || method.body === undefined) return false;
+        let found = false;
+        const visit = (n) => {
+            if (found) return;
+            if (isCallExpression(n) && this.rustValueSpawnCall(n)) { found = true; return; }
+            n.forEachChild(visit);
+        };
+        method.body.forEachChild(visit);
+        return found;
     }
 
     printMathRoundCall(node, identation, parsedArg = undefined) {
@@ -6492,6 +6553,8 @@ export class RustTranspiler extends BaseTranspiler {
         const exp = node.expression;
         const idn = this.getIden(identation);
         if (!exp) return `${idn}return;`;
+        // a chained `return this` hands back no value: `self` is the `&mut` core, not a `Value`
+        if (exp.kind === SyntaxKind.ThisKeyword) return `${idn}return Value::Null;`;
         // `return X;` inside a native-`Option<String>` method: the printed
         // expression is still the `Value` box, so convert it back to the
         // native payload (a nullish literal is the `None` arm).
