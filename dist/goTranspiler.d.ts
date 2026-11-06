@@ -856,6 +856,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goTupleValueDefaultArg: {
         [producer: string]: number;
     };
+    provenReturnFamilies: any[];
+    provenStructToMapCalls: string[];
     goSliceLiteralTypes: Map<any, string>;
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
@@ -906,6 +908,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printPropertyAccessModifiers(node: any): string;
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
+    goProvenReturnRetype(node: any, printed: string): string;
     printAsyncDeclarationPair(node: any, identation: any, def: string, funcBody: string, isMethod: boolean): string;
     printFunctionDeclaration(node: any, identation: any): string;
     /**

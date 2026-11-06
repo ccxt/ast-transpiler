@@ -474,6 +474,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustCalleeIsRuntimeBase(node: any): boolean;
     rustCallsTestExchange(node: any): boolean;
     rustCallsRuntimeHandle(node: any): boolean;
+    printImplicitApiCall(node: any, methodName: string, identation: number): string | undefined;
     printTranspiledVariadicCall(node: any, receiver: string, methodName: string, identation: number): string | undefined;
     rustTranspiledCalleeParams(node: any, methodName: string): any[] | undefined;
     printArgsForCallExpression(node: any, identation: any): any;

@@ -52,6 +52,11 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpListRouteClasses: WeakMap<Node, boolean>;
     csharpHandlerCallIndex: WeakMap<Node, Map<TsSymbol, boolean>>;
     csharpParamTypes: WeakMap<Node, string>;
+    csharpDictParamsMethods: Set<string>;
+    csharpCoreArgTypes: Record<string, Record<number, string>>;
+    csharpSignatureArgTypes: Record<string, Record<number, string>>;
+    csharpActiveShadows: Map<Node, string>;
+    csharpCoreArgShadowParams: WeakMap<Node, any[]>;
     stringReceiverTypes: WeakMap<Node, string>;
     conditionOperandTypes: WeakMap<Node, string>;
     boolSlotBindings: WeakMap<Node, boolean>;
@@ -159,6 +164,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpListBindingIsWritten(declaration: any): boolean;
     csharpListParamArgumentPrintsList(argument: any, decide?: (key: string) => boolean): boolean;
     printParameterType(node: any): any;
+    csharpWsCacheParamType(node: any): string | undefined;
     csharpOverrideParamSpelling(node: any): string | undefined;
     csharpOverrideParamSpellingOfType(type: any, unionArms?: number): string | undefined;
     csharpBooleanParamType(node: any): string;
@@ -172,6 +178,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpParamIsBooleanTyped(parameter: any): boolean;
     csharpBooleanArgumentProven(call: any, index: any, accepted: any): boolean;
     printParameter(node: any, defaultValue?: boolean): string;
+    csharpIsDictParamsBag(node: any): boolean;
     csharpMissingKeyFieldRead(expression: any, argumentExpression: any, isStringKey: any): string | undefined;
     csharpBaseDictionaryView(node: any): string | undefined;
     csharpBaseDictionaryViewKeyKind(key: any): 'string' | 'object' | undefined;
@@ -424,7 +431,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeNegatedNullableLocal(node: any, leftSide: string): string | undefined;
     csharpGuardedStringConcatRead(node: any): boolean;
     printCustomDefaultValueIfNeeded(node: any): string;
-    printFunctionBody(node: any, identation: any): string;
+    printFunctionBody(node: any, identation: any): any;
+    printFunctionBodyUnshadowed(node: any, identation: any): string;
     csharpStringReturnType(node: any): string | undefined;
     csharpStringCallTyped(node: any): string | undefined;
     csharpPrintedReturnType(declaration: any): string | undefined;
@@ -444,6 +452,14 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpReturnValuePrintsType(expression: any, declared: string): boolean;
     printUnboxedReturnStatement(node: any, identation: any, declaredType: string, forgiving: string): string;
     printMethodDefinition(node: any, identation: any): string;
+    csharpCoreArgRow(node: any, table: Record<string, Record<number, string>>): Record<number, string> | undefined;
+    csharpIsStaticMethod(node: any): boolean;
+    csharpCoreArgParams(node: any, printed: string[]): string[];
+    csharpCoreArgShadows(node: any): any[];
+    csharpCoreArgNeedsShadow(node: any, param: any, wanted: string): boolean;
+    csharpParamWrites(method: any, param: any): any[];
+    csharpWriteProducesList(rhs: any): boolean;
+    csharpShadowNameOf(node: any): string | undefined;
     csharpCallReturnsString(node: any): boolean;
     printJsonParseCall(node: any, identation: any, parsedArg?: any): string;
     printJsonStringifyCall(node: any, identation: any, parsedArg?: any): string;

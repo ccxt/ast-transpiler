@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-AWK6QGCM.js";
+} from "./chunk-O5MZOAMZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -3195,7 +3195,26 @@ function csharpListParamDeclaration(transpiler, expression) {
   return declarations !== void 0 && declaration !== void 0 && declarations.has(declaration) ? declaration : void 0;
 }
 var CSHARP_LENGTH_CAST = /^\(([A-Za-z_][\w.]*(?:<[^<>]*(?:<[^<>]*>)?[^<>]*>)?)\)/;
+var CSHARP_WS_CACHE_CLASS_NAMES = ["ArrayCache", "ArrayCacheByTimestamp", "ArrayCacheBySymbolById", "ArrayCacheBySymbolBySide", "ArrayCacheByOutcomeById"];
 var CSHARP_NULL_COMPARISON_REFERENCE_HEADS = ["string", "IDictionary<", "Dictionary<", "IList<", "List<", "ConcurrentDictionary<", "ccxt.pro.", "ArrayCache", "IOrderBook", "Future", "WebSocketClient", "Delegates"];
+var CSHARP_ASSIGNMENT_TOKENS = /* @__PURE__ */ new Set([
+  SyntaxKind4.EqualsToken,
+  SyntaxKind4.PlusEqualsToken,
+  SyntaxKind4.MinusEqualsToken,
+  SyntaxKind4.AsteriskEqualsToken,
+  SyntaxKind4.SlashEqualsToken,
+  SyntaxKind4.PercentEqualsToken,
+  SyntaxKind4.AsteriskAsteriskEqualsToken,
+  SyntaxKind4.QuestionQuestionEqualsToken,
+  SyntaxKind4.BarBarEqualsToken,
+  SyntaxKind4.AmpersandAmpersandEqualsToken,
+  SyntaxKind4.AmpersandEqualsToken,
+  SyntaxKind4.BarEqualsToken,
+  SyntaxKind4.CaretEqualsToken,
+  SyntaxKind4.LessThanLessThanEqualsToken,
+  SyntaxKind4.GreaterThanGreaterThanEqualsToken,
+  SyntaxKind4.GreaterThanGreaterThanGreaterThanEqualsToken
+]);
 var CSharpTranspiler = class extends BaseTranspiler {
   // ==== configuration, class/method-override lookup and identifiers ====
   constructor(config = {}) {
@@ -3270,6 +3289,18 @@ var CSharpTranspiler = class extends BaseTranspiler {
     // `Dict` -> Dictionary<string, object>), recorded as the signature is printed. Read-only:
     // no printer rule consults it, see csharpPrintedParamType
     this.csharpParamTypes = /* @__PURE__ */ new WeakMap();
+    // methods (camel or Pascal name) whose trailing `params` the embedding layer proved a
+    // Dictionary on every path (config.csharp.dictParamsMethods)
+    this.csharpDictParamsMethods = /* @__PURE__ */ new Set();
+    // method name -> parameter position -> the C# type that position prints on every declaration of the
+    // name (config.csharp.coreArgTypes; C# overrides are invariant). A body that writes the parameter keeps
+    // an `object <name>Var = <name>;` slot and reads it instead (csharpCoreArgShadows)
+    this.csharpCoreArgTypes = {};
+    // same, for positions retyped without a shadow (config.csharp.signatureArgTypes: sign / handleErrors / ...)
+    this.csharpSignatureArgTypes = {};
+    // parameter declaration -> its shadow name while the owning method body prints
+    this.csharpActiveShadows = /* @__PURE__ */ new Map();
+    this.csharpCoreArgShadowParams = /* @__PURE__ */ new WeakMap();
     // declaration node -> C# type of the local ('' = the printer prints `object`); see
     // csharpStringReceiverType -- the ccxt classifier asks once per string-method receiver
     this.stringReceiverTypes = /* @__PURE__ */ new WeakMap();
@@ -3331,6 +3362,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     this.csharpPascalInt64TaskCalls = config["pascalInt64TaskCalls"] === true;
     this.csharpNumericArgTypes = Object.assign({}, config["numericArgTypes"] ?? {});
     this.csharpShadowCallees = new Set(Array.isArray(config["coreArgShadowCallees"]) ? config["coreArgShadowCallees"] : []);
+    this.csharpDictParamsMethods = new Set(Array.isArray(config["dictParamsMethods"]) ? config["dictParamsMethods"] : []);
+    this.csharpCoreArgTypes = Object.assign({}, config["coreArgTypes"] ?? {});
+    this.csharpSignatureArgTypes = Object.assign({}, config["signatureArgTypes"] ?? {});
   }
   initConfig() {
     this.LeftPropertyAccessReplacements = {
@@ -3446,6 +3480,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
     return method;
   }
   printIdentifier(node) {
+    if (this.csharpActiveShadows.size > 0) {
+      const shadow = this.csharpShadowNameOf(node);
+      if (shadow !== void 0) {
+        return shadow;
+      }
+    }
     let idValue = node.text ?? node.text;
     if (this.ReservedKeywordsReplacements[idValue]) {
       idValue = this.ReservedKeywordsReplacements[idValue];
@@ -4828,6 +4868,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (listType !== void 0) {
       return listType;
     }
+    const cacheType = this.csharpWsCacheParamType(node);
+    if (cacheType !== void 0) {
+      return cacheType;
+    }
     const method = findAncestor(node, (n) => isMethodDeclaration2(n));
     const name = method === void 0 || method.name === void 0 ? void 0 : method.name.getText().trim();
     const row = name === void 0 ? void 0 : CSHARP_OVERRIDE_PARAM_TYPES[name];
@@ -4840,6 +4884,16 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return super.printParameterType(node);
     }
     return wanted;
+  }
+  // a parameter annotated with a ws cache class prints that class: every caller passes the
+  // cache instance, so the body binds the class's own members (append, getLimit)
+  csharpWsCacheParamType(node) {
+    const type = node.type;
+    if (type === void 0 || type.kind !== SyntaxKind4.TypeReference || !isIdentifier(type.typeName)) {
+      return void 0;
+    }
+    const name = type.typeName.text;
+    return CSHARP_WS_CACHE_CLASS_NAMES.indexOf(name) >= 0 ? "ccxt.pro." + name : void 0;
   }
   // checker spelling of a parameter the override table covers: a dictionary-shaped type (string
   // index signature, never a class instance or a callable) or an array of any/dictionary cells
@@ -5105,6 +5159,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     let type = handlerType !== void 0 ? handlerType : this.printParameterType(node);
     type = type ? type : "";
+    if (defaultValue && type === "object" && this.csharpIsDictParamsBag(node)) {
+      this.csharpParamTypes.set(node, "Dictionary<string, object>");
+      return "Dictionary<string, object> " + name + this.SPACE_DEFAULT_PARAM + "=" + this.SPACE_DEFAULT_PARAM + "null";
+    }
     this.csharpParamTypes.set(node, type);
     if (defaultValue) {
       if (initializer) {
@@ -5117,6 +5175,16 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return type + " " + name;
     }
     return name;
+  }
+  // the trailing `params = {}` of a method listed in csharpDictParamsMethods
+  csharpIsDictParamsBag(node) {
+    const method = node.parent;
+    if (this.csharpDictParamsMethods.size === 0 || !isMethodDeclaration2(method) || method.parameters[method.parameters.length - 1] !== node || !isIdentifier(node.name) || node.name.text !== "params" || node.initializer === void 0) {
+      return false;
+    }
+    const camel = method.name?.text ?? "";
+    const pascal = camel.charAt(0).toUpperCase() + camel.slice(1);
+    return this.csharpDictParamsMethods.has(camel) || this.csharpDictParamsMethods.has(pascal);
   }
   // ==== hand-written runtime members, base fields and their views ====
   // a read of a hand-written BaseExchange dictionary member whose key may be absent: the key
@@ -8506,6 +8574,27 @@ var CSharpTranspiler = class extends BaseTranspiler {
     return void 0;
   }
   printFunctionBody(node, identation) {
+    const shadows = this.csharpCoreArgShadows(node);
+    if (shadows.length === 0) {
+      return this.printFunctionBodyUnshadowed(node, identation);
+    }
+    const previous = this.csharpActiveShadows;
+    this.csharpActiveShadows = new Map(previous);
+    for (const param of shadows) {
+      this.csharpActiveShadows.set(param, param.name.text + "Var");
+    }
+    let body;
+    try {
+      body = this.printFunctionBodyUnshadowed(node, identation);
+    } finally {
+      this.csharpActiveShadows = previous;
+    }
+    const open = this.getBlockOpen(identation);
+    const lines = shadows.map((param) => `${this.getIden(identation + 1)}object ${param.name.text}Var = ${param.name.text};
+`).join("");
+    return body.startsWith(open) ? open + lines + body.slice(open.length) : body;
+  }
+  printFunctionBodyUnshadowed(node, identation) {
     this.csharpPromiseAllPlanBlock(node?.body);
     this.csharpPromiseAllTypedPlanFunction(node);
     const funcParams = node.parameters;
@@ -8914,14 +9003,130 @@ var CSharpTranspiler = class extends BaseTranspiler {
       if (firstType === void 0) {
         const currentArgs = node.parameters;
         const parentArgs = methodOverride.parameters;
-        parsedArgs = parentArgs.map((param, index) => this.printParameteCustomName(param, this.printNode(currentArgs[index].name, 0))).join(", ");
+        parsedArgs = this.csharpCoreArgParams(node, parentArgs.map((param, index) => this.printParameteCustomName(param, this.printNode(currentArgs[index].name, 0)))).join(", ");
       }
     }
-    parsedArgs = parsedArgs ? parsedArgs : this.printMethodParameters(node);
+    parsedArgs = parsedArgs ? parsedArgs : this.csharpCoreArgParams(node, node.parameters.map((param) => this.printParameter(param))).join(", ");
     returnType = returnType ? returnType + " " : returnType;
     const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
     const methodDef = this.getIden(identation) + modifiers + returnType + methodToken + name + "(" + parsedArgs + ")";
     return this.printNodeCommentsIfAny(node, identation, methodDef);
+  }
+  // ==== configured core argument types (config.csharp.coreArgTypes / signatureArgTypes) ====
+  // the configured type of each parameter position of a generated instance method, or undefined
+  csharpCoreArgRow(node, table) {
+    if (!isMethodDeclaration2(node) || !isIdentifier(node.name) || node.body === void 0 || this.csharpIsStaticMethod(node)) {
+      return void 0;
+    }
+    const name = node.name.text;
+    return Object.prototype.hasOwnProperty.call(table, name) ? table[name] : void 0;
+  }
+  csharpIsStaticMethod(node) {
+    return (node.modifiers ?? []).some((m) => m.kind === SyntaxKind4.StaticKeyword);
+  }
+  // a printed `object <name>...` parameter at a configured position takes the configured type
+  // (the default text is kept as printed: `string timeframe = null`, `Int64? since = null`); a
+  // retyped parameter the body writes is recorded for csharpCoreArgShadows
+  csharpCoreArgParams(node, printed) {
+    const rows = [this.csharpCoreArgRow(node, this.csharpCoreArgTypes), this.csharpCoreArgRow(node, this.csharpSignatureArgTypes)];
+    if (rows[0] === void 0 && rows[1] === void 0) {
+      return printed;
+    }
+    const shadows = [];
+    const out = printed.map((text, index) => {
+      const wanted = rows[0]?.[index] ?? rows[1]?.[index];
+      if (wanted === void 0 || !text.startsWith("object ")) {
+        return text;
+      }
+      const param = node.parameters[index];
+      if (rows[0]?.[index] !== void 0 && param !== void 0 && this.csharpCoreArgNeedsShadow(node, param, wanted)) {
+        shadows.push(param);
+      }
+      return wanted + text.slice("object".length);
+    });
+    this.csharpCoreArgShadowParams.set(node, shadows);
+    return out;
+  }
+  csharpCoreArgShadows(node) {
+    return this.csharpCoreArgShadowParams.get(node) ?? [];
+  }
+  // a body write keeps an `object <name>Var` slot seeded from the narrowed parameter and every body
+  // read of the parameter reads the slot. A literal default counts as a write (the `<name> ??= <literal>;`
+  // prologue); a list target whose writes all produce a list keeps no slot
+  csharpCoreArgNeedsShadow(node, param, wanted) {
+    if (!isIdentifier(param.name)) {
+      return false;
+    }
+    const init = param.initializer;
+    const literalDefault = init !== void 0 && (isArrayLiteralExpression2(init) || isObjectLiteralExpression2(init) || isNumericLiteral2(init) || isStringLiteral(init) || isBooleanLiteral2(init));
+    const writes = this.csharpParamWrites(node, param);
+    if (!literalDefault && writes.length === 0) {
+      return false;
+    }
+    const listDefault = init === void 0 || isArrayLiteralExpression2(init);
+    return !(wanted === "IList<object>" && listDefault && writes.every((rhs) => this.csharpWriteProducesList(rhs)));
+  }
+  // the right-hand sides (undefined for ++/--/compound writes) of every write to the parameter in the body
+  csharpParamWrites(method, param) {
+    const writes = [];
+    const checker = this.checkerOrUndefined();
+    const isParam = (n) => isIdentifier(n) && n.text === param.name.text && (checker === void 0 || checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() === param);
+    const visit = (n) => {
+      if (isBinaryExpression2(n) && CSHARP_ASSIGNMENT_TOKENS.has(n.operatorToken.kind)) {
+        let left = n.left;
+        while (isParenthesizedExpression(left)) {
+          left = left.expression;
+        }
+        if (isParam(left)) {
+          writes.push(n.operatorToken.kind === SyntaxKind4.EqualsToken ? n.right : void 0);
+        } else if (n.operatorToken.kind === SyntaxKind4.EqualsToken && left.kind === SyntaxKind4.ArrayLiteralExpression) {
+          if (left.elements.some((e) => isParam(e))) {
+            writes.push(void 0);
+          }
+        }
+      } else if ((isPrefixUnaryExpression(n) || isPostfixUnaryExpression(n)) && isParam(n.operand) && [SyntaxKind4.PlusPlusToken, SyntaxKind4.MinusMinusToken, SyntaxKind4.MinusToken, SyntaxKind4.PlusToken].includes(n.operator)) {
+        writes.push(void 0);
+      }
+      n.forEachChild(visit);
+    };
+    method.body.forEachChild(visit);
+    return writes;
+  }
+  // `this.marketSymbols (...)`, an array literal, `this.getActiveSymbols (...)`, `this.symbols`
+  csharpWriteProducesList(rhs) {
+    if (rhs === void 0) {
+      return false;
+    }
+    if (isArrayLiteralExpression2(rhs)) {
+      return true;
+    }
+    const callee = isCallExpression3(rhs) ? rhs.expression : void 0;
+    if (callee !== void 0 && isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind4.ThisKeyword) {
+      return ["marketSymbols", "getActiveSymbols"].indexOf(callee.name.text) >= 0;
+    }
+    return isPropertyAccessExpression(rhs) && rhs.expression.kind === SyntaxKind4.ThisKeyword && rhs.name.text === "symbols";
+  }
+  // the shadow slot a read of a shadowed parameter prints, or undefined
+  csharpShadowNameOf(node) {
+    if (!isIdentifier(node)) {
+      return void 0;
+    }
+    if (isParameterDeclaration(node.parent) && node.parent.name === node) {
+      return this.csharpActiveShadows.get(node.parent);
+    }
+    const parent = node.parent;
+    if (parent !== void 0 && (isPropertyAccessExpression(parent) && parent.name === node)) {
+      return void 0;
+    }
+    for (const [param, alias] of this.csharpActiveShadows) {
+      if (param.name.text === node.text) {
+        const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        if (declaration === param) {
+          return alias;
+        }
+      }
+    }
+    return void 0;
   }
   // a `this.<name>(...)` call whose emitted signature is already a string: the printer's own typed
   // returns, or a `string` the hand-written base declares (cs/ccxt/base, resolved callee only)
@@ -9544,6 +9749,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const cast = isStringLiteralLikeNode2(argumentExpression) ? "" : "(string)";
     return this.printNode(expression, 0) + "[" + cast + this.printNode(argumentExpression, 0) + "]";
   }
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   printElementAccessExpressionExceptionIfAny(node) {
     return void 0;
   }
@@ -20106,6 +20312,24 @@ function installCcxtGoNilDeclaredValueJoins(goTranspiler) {
     }
     return parsed[1] + "var " + parsed[2] + " " + scan.joinType;
   };
+  const joined = /* @__PURE__ */ new WeakMap();
+  const upstreamDeclared = goTranspiler.goDeclaredTypeOfIdentifier.bind(goTranspiler);
+  goTranspiler.goDeclaredTypeOfIdentifier = (node) => {
+    const known = upstreamDeclared(node);
+    if (known !== void 0 || node?.kind !== ts.SyntaxKind.Identifier) {
+      return known;
+    }
+    const declaration = goTranspiler.checkerOrUndefined?.()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+    if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || !ts.isIdentifier(declaration.name) || !isNilDeclaredInitializer(declaration.initializer) || declaration.parent?.parent?.kind !== ts.SyntaxKind.VariableStatement || declaration.parent.declarations.length !== 1 || NIL_DECLARED_GUARD_NAMES.indexOf(declaration.name.text) >= 0) {
+      return void 0;
+    }
+    if (!joined.has(declaration)) {
+      joined.set(declaration, void 0);
+      const scan = new GoNilDeclaredValueAssignmentScan(goTranspiler, declaration, declaration.name.text);
+      joined.set(declaration, scan.run() && scan.joinType === "bool" && !goTranspiler.goTypeNameIsShadowed?.(goTranspiler.goEnclosingFunction(declaration), "bool") ? "bool" : void 0);
+    }
+    return joined.get(declaration);
+  };
   goTranspiler.__ccxtGoNilDeclaredValueJoinsInstalled = true;
 }
 var CCXT_GO_PARSE_NUMBER_JOIN_ROW_BUILDERS_REJECTED = ["safeMarketStructure", "safeCurrencyStructure"];
@@ -24868,6 +25092,135 @@ var GO_GETARG_NIL_MAP_READERS = [
   "SafeBool",
   "SafeTimestamp"
 ];
+function goProvenSkipLiteral(content, index) {
+  const quote = content[index];
+  for (let i = index + 1; i < content.length; i++) {
+    const char = content[i];
+    if (char === "\\" && quote !== "`") {
+      i += 1;
+    } else if (char === quote) {
+      return i;
+    } else if (char === "\n" && quote !== "`") {
+      return i - 1;
+    }
+  }
+  return content.length - 1;
+}
+function goProvenSkipComment(content, index) {
+  if (content[index + 1] === "/") {
+    const end2 = content.indexOf("\n", index);
+    return end2 < 0 ? content.length - 1 : end2;
+  }
+  const end = content.indexOf("*/", index + 2);
+  return end < 0 ? content.length - 1 : end + 1;
+}
+function goFunctionLevelReturnExprs(body) {
+  const inLiteral = [];
+  const stack = [];
+  let literalOpen = 0;
+  for (let i = 0; i < body.length; i++) {
+    inLiteral[i] = literalOpen > 0;
+    const c = body[i];
+    if (c === '"' || c === "`" || c === "'" || c === "/" && (body[i + 1] === "/" || body[i + 1] === "*")) {
+      const end = c === "/" && body[i + 1] === "/" ? goProvenSkipComment(body, i) - 1 : c === "/" ? goProvenSkipComment(body, i) : goProvenSkipLiteral(body, i);
+      for (let k = i + 1; k <= end; k++) {
+        inLiteral[k] = literalOpen > 0;
+      }
+      i = end;
+    } else if (c === "{") {
+      const lineStart = body.lastIndexOf("\n", i - 1) + 1;
+      const isLiteral = /(^|[^\w.])func\s*\([^)]*\)/.test(body.substring(lineStart, i));
+      stack.push(isLiteral);
+      literalOpen += isLiteral ? 1 : 0;
+    } else if (c === "}") {
+      if (!stack.length) {
+        return void 0;
+      }
+      literalOpen -= stack.pop() ? 1 : 0;
+    }
+  }
+  if (stack.length) {
+    return void 0;
+  }
+  const exprs = [];
+  let offset = 0;
+  for (const line of body.split("\n")) {
+    const trimmed = line.trim();
+    if (!inLiteral[offset] && /^return([ \t]|$)/.test(trimmed)) {
+      exprs.push(trimmed.substring("return".length).trim());
+    }
+    offset += line.length + 1;
+  }
+  return exprs;
+}
+function goBalanceLocalIsMap(body, name) {
+  if ((body.match(new RegExp("\\bvar " + name + "\\b", "g")) || []).length !== 1) {
+    return false;
+  }
+  if (!new RegExp("\\n\\t+var " + name + " (?:any|map\\[string\\]any) = map\\[string\\]any\\{").test(body)) {
+    return false;
+  }
+  if (new RegExp("(?<![\\w.])" + name + "\\s*(?:,[^\\n=]*)?:=|\\bfunc\\s*\\([^)]*\\b" + name + " ").test(body)) {
+    return false;
+  }
+  const writes = body.match(new RegExp("(^|[^\\w.])" + name + "\\s*[-+*/:]?=[^=][^\\n]*", "gm")) || [];
+  const keeps = new RegExp("^[^\\w.]?" + name + " = (?:MapTyped\\()?this\\.(?:MergeBalanceAccount\\(" + name + ", |SafeBalance\\(" + name + "\\)\\)?$)");
+  return writes.every((w) => keeps.test(w));
+}
+function retypeGoProvenFamily(content, names, type, paramWrap, calls, receivers = "\\w+", converters = []) {
+  const literal2 = type + "{";
+  const provenCall = new RegExp("^(?:ccxt\\.)?(?:this\\.(?:DerivedExchange\\.|base\\.)?|base\\.)(?:" + calls.join("|") + ")\\(");
+  const provenConverter = new RegExp("^(?:ccxt\\.)?(?:" + converters.join("|") + ")\\(");
+  const proven = (e) => e.startsWith(literal2) || provenCall.test(e) || provenConverter.test(e);
+  const typeRe = type.replace(/[[\]]/g, "\\$&");
+  const head = new RegExp("\\nfunc \\(this \\*(" + receivers + ")\\) (" + names.join("|") + ")\\(([^)\\n]*)\\) any \\{\\n", "g");
+  let out = "";
+  let cursor = 0;
+  for (let m = head.exec(content); m !== null; m = head.exec(content)) {
+    const open = m.index + m[0].length - 1;
+    const close = content.indexOf("\n}\n", open);
+    const body = close < 0 ? "" : content.substring(open, close + 1);
+    const exprs = goFunctionLevelReturnExprs(body);
+    const where = m[1] + "." + m[2];
+    if (close < 0 || exprs === void 0) {
+      throw new Error("provenReturnFamilies: cannot scan " + where);
+    }
+    if (!exprs.length && !/(^|\n)\tpanic\([^\n]*\)\n$/.test(body)) {
+      throw new Error("provenReturnFamilies: " + where + " has no return and does not end in panic");
+    }
+    let newBody = body;
+    const params = m[3].split(",").map((p) => p.trim().split(" ")[0]);
+    for (const expr of exprs) {
+      if (proven(expr)) {
+        continue;
+      }
+      const balance = /^this\.SafeBalance\((\w+)\)$/.exec(expr);
+      if (type === "map[string]any" && balance !== null && goBalanceLocalIsMap(newBody, balance[1])) {
+        newBody = newBody.replace(new RegExp("\\n(\\t+)return this\\.SafeBalance\\(" + balance[1] + "\\)\\n", "g"), "\n$1return this.SafeBalance(" + balance[1] + ").(map[string]any)\n");
+        continue;
+      }
+      const local = /^\w+$/.test(expr) ? expr : void 0;
+      if (local !== void 0 && params.includes(local) && !new RegExp("\\n\\t+(?:var " + local + "\\b|" + local + " :?=)").test(newBody)) {
+        newBody = newBody.replace(new RegExp("\\n(\\t+)return " + local + "\\n", "g"), "\n$1return " + paramWrap + "(" + local + ")\n");
+        continue;
+      }
+      const declRe = local === void 0 ? void 0 : new RegExp("\\n(\\t+)var " + local + " (any|" + typeRe + ") = ([^\\n]*)");
+      const decl = declRe === void 0 ? null : declRe.exec(newBody);
+      const writes = local === void 0 ? [] : newBody.match(new RegExp("(^|[^\\w.])" + local + "(\\s*[-+*/]?=[^=]|\\s*:=|\\s*,\\s*[A-Za-z_][\\w.[\\]]*\\s*=[^=])", "gm")) || [];
+      const nilWrites = local === void 0 ? [] : newBody.match(new RegExp("(^|[^\\w.])" + local + " = nil\\b", "gm")) || [];
+      const declCount = local === void 0 ? 0 : (newBody.match(new RegExp("\\bvar " + local + "\\b", "g")) || []).length;
+      const typedOk = decl !== null && decl[2] === type && (proven(decl[3]) || nilWrites.length === 0 && decl[3] !== "nil");
+      const anyOk = decl !== null && proven(decl[3]) && writes.length === 0;
+      if (decl === null || declCount !== 1 || !(typedOk || anyOk)) {
+        throw new Error("provenReturnFamilies: " + where + " returns unproven `" + expr.split("\n")[0] + "`");
+      }
+      newBody = newBody.replace(declRe, "\n$1var " + local + " " + type + " = $3");
+    }
+    out += content.substring(cursor, m.index) + m[0].replace(/ any \{\n$/, " " + type + " {") + newBody;
+    cursor = close + 1;
+  }
+  return out + content.substring(cursor);
+}
 var GoTranspiler = class extends BaseTranspiler {
   // stdlib packages the printed source file references. A Go import must precede the first
   // declaration, so the file-level print (printSourceFileStatements) collects names here and
@@ -24906,6 +25259,9 @@ var GoTranspiler = class extends BaseTranspiler {
     // producer -> index of its default-value argument: an integer-literal default selects the value form,
     // which returns a Go pair instead of the `[]any` holder
     this.goTupleValueDefaultArg = {};
+    // ccxt return families (see retypeGoProvenFamily) and the struct->map converters they may return
+    this.provenReturnFamilies = [];
+    this.provenStructToMapCalls = [];
     // array literals the current print opens as a Go slice (set by the call-argument rule)
     this.goSliceLiteralTypes = /* @__PURE__ */ new Map();
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
@@ -25269,6 +25625,8 @@ var GoTranspiler = class extends BaseTranspiler {
     this.asyncTickerMapCallees = new Set(config["asyncTickerMapCallees"] ?? []);
     this.goTupleSlotTypes = config["goTupleSlotTypes"] ?? {};
     this.goTupleValueDefaultArg = config["goTupleValueDefaultArg"] ?? {};
+    this.provenReturnFamilies = config["provenReturnFamilies"] ?? [];
+    this.provenStructToMapCalls = config["provenStructToMapCalls"] ?? [];
   }
   goDescendantsOf(scope) {
     let list = this.goScopeDescendants.get(scope);
@@ -25494,9 +25852,21 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const isAsync = this.isAsyncFunction(node);
     const funcBody = this.printFunctionBody(node, identation, isAsync);
     if (!isAsync) {
-      return methodDef + funcBody;
+      return this.goProvenReturnRetype(node, methodDef + funcBody);
     }
     return this.printAsyncDeclarationPair(node, identation, methodDef, funcBody, true);
+  }
+  // a method of a proven return family prints its family type (retypeGoProvenFamily over its own text)
+  goProvenReturnRetype(node, printed) {
+    const name = this.transformMethodNameIfNeeded(String(node.name?.text ?? ""));
+    let out = printed;
+    for (const family of this.provenReturnFamilies) {
+      if (family.names.includes(name)) {
+        const text = retypeGoProvenFamily("\n" + out + "\n", family.names, family.type, family.paramWrap, family.calls, family.receivers ?? "\\w+", this.provenStructToMapCalls);
+        out = text.substring(1, text.length - 1);
+      }
+    }
+    return out;
   }
   // Trampoline + body pair, see printAsyncTrampolineBlock. A module-scope `async function`
   // has no receiver: its body is a package-level sibling with the same trampoline contract.
@@ -41387,6 +41757,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === "Long" && initializer !== void 0 && isPropertyAccessExpression2(initializer) && initializer.name.text === "length" && this.javaDeclaredTypeOf(node) === "Integer") {
       return `((long) ${printed})`;
     }
+    const literal2 = initializer !== void 0 && isPrefixUnaryExpression2(initializer) && initializer.operator === SyntaxKind6.MinusToken ? initializer.operand : initializer;
+    if (type === "Long" && literal2 !== void 0 && isNumericLiteral3(literal2) && /^\d+$/.test(literal2.text) && this.javaDeclaredTypeOf(node) === "Integer") {
+      return `Long.valueOf(${printed})`;
+    }
     return void 0;
   }
   javaConvertToCoreType(type, printed, node) {
@@ -53225,6 +53599,8 @@ ${this.getIden(identation + 1)}}
       const requiredCount = method.parameters.filter((p) => !p.initializer && !p.questionToken).length;
       if (requiredCount < method.parameters.length) {
         this.methodSignatures[method.name.text] = { requiredCount };
+      } else if (method.body !== void 0) {
+        delete this.methodSignatures[method.name.text];
       }
     });
     const struct = this.printStruct(node, identation);
@@ -53309,6 +53685,11 @@ ${classMethods}
     }
     const expr = node.expression;
     const args = node.arguments;
+    if (expr.expression.kind === SyntaxKind7.ThisKeyword) {
+      const implicitApi = this.printImplicitApiCall(node, expr.name.text, identation);
+      if (implicitApi !== void 0)
+        return implicitApi;
+    }
     if (expr.expression.kind === SyntaxKind7.ThisKeyword && !this.methodSignatures[expr.name.text]) {
       return this.printRuntimeVariadicCall(node, "self", expr.name.text, identation) ?? this.printTranspiledVariadicCall(node, "self", expr.name.text, identation);
     }
@@ -53403,6 +53784,24 @@ ${classMethods}
     if (/ts[/]src[/]base[/]ws[/](?:Client|Future)\.ts$/.test(file))
       return true;
     return node.expression.name.text === "call" && /lib\.[\w.]*\.d\.ts$/.test(file);
+  }
+  // `this.<endpoint>(params)` on an implicit-API method (declared in `ts/src/abstract/[prediction/]<id>.ts`):
+  // the generated `<id>_api.rs` wrapper is `async fn <snake>(&mut self, args: &[Value])`, always awaited.
+  printImplicitApiCall(node, methodName, identation) {
+    let decl;
+    try {
+      decl = signatureDeclaration(this.getChecker().getResolvedSignature(node));
+    } catch (e) {
+      return void 0;
+    }
+    decl = decl?.resolve?.() ?? decl;
+    if (decl === void 0 || decl.kind !== SyntaxKind7.MethodDeclaration)
+      return void 0;
+    if (!/ts[/]src[/]abstract[/]/.test(String(decl.getSourceFile?.()?.fileName ?? "")))
+      return void 0;
+    const args = this.printArgsForCallExpression(node, identation);
+    const awaited = node.parent?.kind === SyntaxKind7.AwaitExpression;
+    return `self.${this.toSnakeCaseName(methodName)}(&[${args}])${awaited ? "" : ".await"}`;
   }
   // A call to a transpiled method with optional parameters: its Rust signature is the required
   // parameters plus `optional_args: &[Value]`. Hand-written base helpers keep their own ABI.
