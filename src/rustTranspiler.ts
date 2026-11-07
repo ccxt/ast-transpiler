@@ -3649,20 +3649,20 @@ export class RustTranspiler extends BaseTranspiler {
         return { params, ret };
     }
 
-    // The typed arguments lower to `Value` (`__args`, the derived-dispatch payload), rebind as the body's
-    // `Value` parameters, and the body runs as an `async move` block; `call_typed` turns its panics into `Err`.
+    // The typed arguments lower to `Value` (`__args`, the derived-dispatch payload) and feed the `Value` body as
+    // closure parameters; `call_typed` turns its panics into `Err` and the result decodes through `types::FromRaw`.
     rustTypedBody(node, typed, identation: number, inner: string): string {
         const required = typed.params.filter(p => !p.optional);
         const lowered = [...required, ...typed.params.filter(p => p.optional)].map(p => p.toValue).join(', ');
+        const closureParams = [...required.map(p => `${p.name}: Value`), '__optional_args: Vec<Value>'].join(', ');
+        const callArgs = [...required.map(() => '__it.next().unwrap_or_default()'), '__it.collect()'].join(', ');
         const i1 = this.getIden(identation + 1);
         const i2 = this.getIden(identation + 2);
-        const binds = required.map(p => `${i2}let mut ${p.name}: Value = __it.next().unwrap_or_default();\n`).join('');
         return ` {\n${i2}let __args: Vec<Value> = vec![${lowered}];\n`
-            + `${i2}let mut __it = __args.into_iter();\n${binds}`
-            + `${i2}let __optional_args: Vec<Value> = __it.collect();\n`
-            + `${i2}Ok(crate::types::FromRaw::from_raw(crate::runtime::call_typed(async move {\n`
+            + `${i2}let mut __it = __args.into_iter();\n`
+            + `${i2}Ok(crate::types::FromRaw::from_raw(crate::runtime::call_typed((move |${closureParams}| async move {\n`
             + `${i2}let optional_args: &[Value] = &__optional_args;\n${inner}\n${i2}Value::Null\n`
-            + `${i2}}).await?))\n${i1}}`;
+            + `${i2}})(${callArgs})).await?))\n${i1}}`;
     }
 
     // `await this.<typed unified>(args)` inside a `Value` body: bind each argument, call the typed method and
