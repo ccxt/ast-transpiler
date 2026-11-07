@@ -473,6 +473,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     } | undefined;
     rustTypedBody(node: any, typed: any, identation: number, inner: string): string;
     printTypedUnifiedCall(node: any): string | undefined;
+    private static rustTypedLiteralArg;
     printRustFunctionType(node: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     rustFreeFnFirstDefault(node: any): number;

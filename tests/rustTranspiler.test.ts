@@ -17,8 +17,8 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required bool parameter: the native-`bool` slot a local may flow into\n    settle (isMarket: boolean, amount: any) {\n        if (isMarket) {\n            return -amount;\n        }\n        return amount;\n    }\n    // a bool local from a comparison, read in condition slots AND a native-`bool` slot\n    localIntoBoolSlot (type: string) {\n        const isMarket = (type === 'market');\n        if (!isMarket) {\n            return 0;\n        }\n        if (isMarket && (type === 'x')) {\n            return 1;\n        }\n        return this.settle (isMarket, 2);\n    }\n    // a comparison local read only in conditions stays typed (no regression)\n    localConditionsOnly (type: string) {\n        const isSpot = (type === 'spot');\n        if (isSpot) {\n            return 1;\n        }\n        return 0;\n    }\n    // negative: a Value slot keeps the box\n    localIntoValueSlot (type: string) {\n        const isWide = (type === 'spot');\n        const held = [ isWide ];\n        return held;\n    }\n    // negative: a `Value` read into the bool slot still coerces\n    valueIntoBoolSlot (raw: any) {\n        return this.settle (raw, 3);\n    }\n}\n"
  },
  "typed-unified": {
-  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Strings = string[] | undefined;\nexport interface Ticker { symbol: string }\nexport type Tickers = Dict;\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    async fetchTickers (symbols: Strings = undefined, params: Dict = {}): Promise<Tickers> {\n        return {};\n    }\n}\n",
-  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Ticker } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchTicker (symbol: string, params: Dict = {}): Promise<Ticker> {\n        const tickers = await this.fetchTickers ([ symbol ], params);\n        return tickers[symbol];\n    }\n    async fetchTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any[]> {\n        return [];\n    }\n}\n"
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Strings = string[] | undefined;\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport type OrderType = string;\nexport type OrderSide = string;\nexport interface Order { id: string }\nexport interface Ticker { symbol: string }\nexport type Tickers = Dict;\nexport interface Position { symbol: string }\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    async fetchTickers (symbols: Strings = undefined, params: Dict = {}): Promise<Tickers> {\n        return {};\n    }\n    async fetchPositions (symbols: Strings = undefined, params: Dict = {}): Promise<Position[]> {\n        return [];\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Num, Order, OrderSide, OrderType, Str, Ticker } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchTicker (symbol: string, params: Dict = {}): Promise<Ticker> {\n        const tickers = await this.fetchTickers ([ symbol ], params);\n        return tickers[symbol];\n    }\n    async fetchTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any[]> {\n        return [];\n    }\n    async createOrder (symbol: string, type: OrderType, side: OrderSide, amount: number, price: Num = undefined, params: Dict = {}): Promise<Order> {\n        return {} as any;\n    }\n    async cancelOrder (id: string, symbol: Str = undefined, params: Dict = {}): Promise<Order> {\n        return {} as any;\n    }\n    async cancelOrders (ids: string[], symbol: Str = undefined, params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    async createMarketBuyOrder (symbol: string, cost: number, params: Dict = {}) {\n        return await this.createOrder (symbol, 'market', 'buy', cost, undefined, params);\n    }\n    async fetchOHLCV (symbol: string, timeframe = '1m', since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any[]> {\n        return [];\n    }\n    async fetchOrder (id: string, symbol: Str = undefined, params: Dict = {}): Promise<any> {\n        return {};\n    }\n    async fetchCandles (symbol: string, tf: string, params: Dict = {}): Promise<any[]> {\n        return await this.fetchOHLCV (symbol, tf, undefined, undefined, params);\n    }\n    async fetchBoth (symbol: string, params: Dict = {}): Promise<any[]> {\n        const [ a, b ] = await Promise.all ([ this.fetchOrder ('1', symbol, params), this.fetchOrder ('2', symbol, params) ]);\n        return [ a, b ];\n    }\n    async loadSnapshot () {\n        const all = await Promise.all ([ this.fetchPositions () ]);\n        const again = await this.fetchPositions (undefined);\n        return all;\n    }\n    async watchOrders (symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any[]> {\n        return [];\n    }\n    async watchMyOrders (symbol: Str = undefined, params: Dict = {}) {\n        return await this.watchOrders (symbol, undefined, undefined, params);\n    }\n}\n"
  },
  "a15dstrvec": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    options: Dict = {};\n    omit = omit;\n    extend = extend;\n    safeValue (d: any, k: any, dflt: any = undefined): any {\n        return d === undefined ? dflt : d[k];\n    }\n    safeDict (d: any, k: any, dflt: Dict = undefined): Dict {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'object') ? v : dflt;\n    }\n    safeBool (d: any, k: any, dflt: Bool = undefined): Bool {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'boolean') ? v : dflt;\n    }\n    checkOptionBool (methodName: string, optionName: string, value: any): Bool {\n        if (value === undefined) {\n            return undefined;\n        }\n        return value === true;\n    }\n    handleOptionBoolAndParams (params: Dict, methodName: string, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const value = this.safeValue (params, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), params ];\n    }\n    handleTriggerAndParams (params: any): any[] {\n        const isTrigger = this.safeBool (params, 'trigger');\n        return [ isTrigger, params ];\n    }\n    handleOptionAndParams (params: Dict, methodName: string, optionName: string, defaultValue: any = undefined): [any, Dict] {\n        return [ this.safeValue (params, optionName, defaultValue), params ];\n    }\n}\n",
@@ -5381,7 +5381,7 @@ describe('rust order-book field read', () => {
 describe('rust typed unified-method signatures', () => {
     let output = '';
     beforeAll(() => {
-        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTicker', 'fetchTickers', 'fetchTrades'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTicker', 'fetchTickers', 'fetchTrades', 'fetchOHLCV', 'fetchOrder', 'createOrder', 'cancelOrder', 'cancelOrders', 'fetchPositions', 'watchOrders'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
         output = typed.transpileRustByPath(path.join (rustFixtureRoot, 'typed-unified', 'ts/src/venue.ts')).content;
     });
 
@@ -5397,6 +5397,40 @@ describe('rust typed unified-method signatures', () => {
 
     test('an intra-core call to a typed method lowers its arguments and boxes the result', () => {
         expect(output).toContain('crate::types::IntoRaw::into_raw(self.fetch_tickers((Value::from(vec![symbol])).to_opt_str_vec(), params.clone()).await)');
+    });
+
+    test('an optional string parameter prints Option<&str> and lowers to Null when absent', () => {
+        expect(output).toContain('pub fn fetchOHLCV(&self, symbol: &str, timeframe: Option<&str>, since: Option<i64>, limit: Option<i64>, params: impl Into<crate::Params> + Send) -> crate::Result<Vec<crate::types::OHLCV>>');
+        expect(output).toContain('pub fn fetchOrder(&self, id: &str, symbol: Option<&str>, params: impl Into<crate::Params> + Send) -> crate::Result<crate::types::Order>');
+        expect(output).toContain('symbol.map(Value::from).unwrap_or_default()');
+        expect(output).toContain('self.fetch_ohlcv(symbol.as_str().unwrap_or_default(), tf.as_str(), None, None, params.clone()).await');
+    });
+
+    test('a typed call inside an awaited Promise.all boxes its result', () => {
+        expect(output).toContain('crate::types::IntoRaw::into_raw(self.fetch_order("1", symbol.as_str(), params.clone()).await)');
+    });
+
+    test('order writes print typed f64 / Option<f64> / Option<&str> / Vec<String> parameters', () => {
+        expect(output).toContain('pub fn createOrder(&self, symbol: &str, type_var: &str, side: &str, amount: f64, price: Option<f64>, params: impl Into<crate::Params> + Send) -> crate::Result<crate::types::Order>');
+        expect(output).toContain('pub fn cancelOrder(&self, id: &str, symbol: Option<&str>, params: impl Into<crate::Params> + Send) -> crate::Result<crate::types::Order>');
+        expect(output).toContain('pub fn cancelOrders(&self, ids: Vec<String>, symbol: Option<&str>, params: impl Into<crate::Params> + Send) -> crate::Result<Vec<crate::types::Order>>');
+    });
+
+    test('literal arguments of a typed call print in the native parameter type', () => {
+        expect(output).toContain('self.create_order(symbol.as_str().unwrap_or_default(), "market", "buy", cost.as_f64().unwrap_or_default(), None, ');
+    });
+
+    test('a Promise.all element call to a typed method boxes the result', () => {
+        expect(output).toContain('promise_all(&Value::from(vec![crate::types::IntoRaw::into_raw(self.fetch_positions(None, Value::Null).await)]))');
+        expect(output).toContain('crate::types::IntoRaw::into_raw(self.fetch_positions(None, Value::Null).await).as_array()');
+        expect(output).not.toContain('None.clone()');
+    });
+
+    test('an optional Str parameter prints Option<&str> and a watch return decodes typed', () => {
+        expect(output).toContain('pub fn watchOrders(&self, symbol: Option<&str>, since: Option<i64>, limit: Option<i64>, params: impl Into<crate::Params> + Send) -> crate::Result<Vec<crate::types::Order>>');
+        // explicit undefined arguments print as the absent default (sibling order/account rule)
+        expect(output).toContain('crate::types::IntoRaw::into_raw(self.watch_orders(symbol.as_str(), None, None, params.clone()).await)');
+        expect(output).not.toContain('(Value::Null).as_i64()');
     });
 
     test('without the config entry the method keeps the Value signature', () => {

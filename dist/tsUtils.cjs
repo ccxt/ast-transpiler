@@ -13,7 +13,7 @@
 
 
 
-var _chunkQYYT7MP4cjs = require('./chunk-QYYT7MP4.cjs');
+var _chunkJ6A3OGXOcjs = require('./chunk-J6A3OGXO.cjs');
 
 
 
@@ -29,5 +29,5 @@ var _chunkQYYT7MP4cjs = require('./chunk-QYYT7MP4.cjs');
 
 
 
-exports.ModifierFlags = _chunkQYYT7MP4cjs.ModifierFlags; exports.canHaveModifiers = _chunkQYYT7MP4cjs.canHaveModifiers; exports.findAncestor = _chunkQYYT7MP4cjs.findAncestor; exports.getAllSuperTypeNodes = _chunkQYYT7MP4cjs.getAllSuperTypeNodes; exports.getCombinedNodeFlags = _chunkQYYT7MP4cjs.getCombinedNodeFlags; exports.getModifiers = _chunkQYYT7MP4cjs.getModifiers; exports.isClassLike = _chunkQYYT7MP4cjs.isClassLike; exports.isFunctionLike = _chunkQYYT7MP4cjs.isFunctionLike; exports.isStringLiteralLike = _chunkQYYT7MP4cjs.isStringLiteralLike; exports.signatureDeclaration = _chunkQYYT7MP4cjs.signatureDeclaration; exports.symbolDeclarations = _chunkQYYT7MP4cjs.symbolDeclarations; exports.symbolValueDeclaration = _chunkQYYT7MP4cjs.symbolValueDeclaration; exports.typeParts = _chunkQYYT7MP4cjs.typeParts; exports.typeTarget = _chunkQYYT7MP4cjs.typeTarget;
+exports.ModifierFlags = _chunkJ6A3OGXOcjs.ModifierFlags; exports.canHaveModifiers = _chunkJ6A3OGXOcjs.canHaveModifiers; exports.findAncestor = _chunkJ6A3OGXOcjs.findAncestor; exports.getAllSuperTypeNodes = _chunkJ6A3OGXOcjs.getAllSuperTypeNodes; exports.getCombinedNodeFlags = _chunkJ6A3OGXOcjs.getCombinedNodeFlags; exports.getModifiers = _chunkJ6A3OGXOcjs.getModifiers; exports.isClassLike = _chunkJ6A3OGXOcjs.isClassLike; exports.isFunctionLike = _chunkJ6A3OGXOcjs.isFunctionLike; exports.isStringLiteralLike = _chunkJ6A3OGXOcjs.isStringLiteralLike; exports.signatureDeclaration = _chunkJ6A3OGXOcjs.signatureDeclaration; exports.symbolDeclarations = _chunkJ6A3OGXOcjs.symbolDeclarations; exports.symbolValueDeclaration = _chunkJ6A3OGXOcjs.symbolValueDeclaration; exports.typeParts = _chunkJ6A3OGXOcjs.typeParts; exports.typeTarget = _chunkJ6A3OGXOcjs.typeTarget;
 //# sourceMappingURL=tsUtils.cjs.map
