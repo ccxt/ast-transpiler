@@ -16,6 +16,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required bool parameter: the native-`bool` slot a local may flow into\n    settle (isMarket: boolean, amount: any) {\n        if (isMarket) {\n            return -amount;\n        }\n        return amount;\n    }\n    // a bool local from a comparison, read in condition slots AND a native-`bool` slot\n    localIntoBoolSlot (type: string) {\n        const isMarket = (type === 'market');\n        if (!isMarket) {\n            return 0;\n        }\n        if (isMarket && (type === 'x')) {\n            return 1;\n        }\n        return this.settle (isMarket, 2);\n    }\n    // a comparison local read only in conditions stays typed (no regression)\n    localConditionsOnly (type: string) {\n        const isSpot = (type === 'spot');\n        if (isSpot) {\n            return 1;\n        }\n        return 0;\n    }\n    // negative: a Value slot keeps the box\n    localIntoValueSlot (type: string) {\n        const isWide = (type === 'spot');\n        const held = [ isWide ];\n        return held;\n    }\n    // negative: a `Value` read into the bool slot still coerces\n    valueIntoBoolSlot (raw: any) {\n        return this.settle (raw, 3);\n    }\n}\n"
  },
+ "typed-unified": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Strings = string[] | undefined;\nexport interface Ticker { symbol: string }\nexport type Tickers = Dict;\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    async fetchTickers (symbols: Strings = undefined, params: Dict = {}): Promise<Tickers> {\n        return {};\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Ticker } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchTicker (symbol: string, params: Dict = {}): Promise<Ticker> {\n        const tickers = await this.fetchTickers ([ symbol ], params);\n        return tickers[symbol];\n    }\n    async fetchTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any[]> {\n        return [];\n    }\n}\n"
+ },
  "a15dstrvec": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    options: Dict = {};\n    omit = omit;\n    extend = extend;\n    safeValue (d: any, k: any, dflt: any = undefined): any {\n        return d === undefined ? dflt : d[k];\n    }\n    safeDict (d: any, k: any, dflt: Dict = undefined): Dict {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'object') ? v : dflt;\n    }\n    safeBool (d: any, k: any, dflt: Bool = undefined): Bool {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'boolean') ? v : dflt;\n    }\n    checkOptionBool (methodName: string, optionName: string, value: any): Bool {\n        if (value === undefined) {\n            return undefined;\n        }\n        return value === true;\n    }\n    handleOptionBoolAndParams (params: Dict, methodName: string, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const value = this.safeValue (params, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), params ];\n    }\n    handleTriggerAndParams (params: any): any[] {\n        const isTrigger = this.safeBool (params, 'trigger');\n        return [ isTrigger, params ];\n    }\n    handleOptionAndParams (params: Dict, methodName: string, optionName: string, defaultValue: any = undefined): [any, Dict] {\n        return [ this.safeValue (params, optionName, defaultValue), params ];\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchByIds (ids: string[], symbol: string = undefined, params: Dict = {}) {\n        const request: Dict = { 'txid': ids.join (',') };\n        return request;\n    }\n    async fetchOne (id: string, params: Dict = {}) {\n        return await this.fetchByIds ([ id ], undefined, params);\n    }\n    async fetchIndexed (ids: string[], params: Dict = {}) {\n        const first = ids[0];\n        return ids.join (',') + first;\n    }\n    async fetchOneIndexed (id: string, params: Dict = {}) {\n        return await this.fetchIndexed ([ id ], params);\n    }\n    async fetchComputed (ids: string[], params: Dict = {}) {\n        return ids.join (',');\n    }\n    async fetchComputedCaller (params: Dict = {}) {\n        return await this.fetchComputed (params['ids'], params);\n    }\n    async fetchNoCaller (ids: string[], symbol: string = undefined, params: Dict = {}) {\n        const request: Dict = { 'txid': ids.join (',') };\n        return request;\n    }\n    async fetchChunked (hashes: string[], params: Dict = {}) {\n        const rows = [];\n        const chunk = this.arraySlice (hashes, 0, 2);\n        rows.push (await this.fetchByIds (chunk, undefined, params));\n        return rows;\n    }\n}\n"
@@ -5371,6 +5375,33 @@ describe('rust order-book field read', () => {
         const out = rs("    const f = orderbook['foo'];\n    const o = other['bids'];");
         expect(out).not.toContain('book_field("foo")');
         expect(out).not.toContain('other.book_field');
+    });
+});
+
+describe('rust typed unified-method signatures', () => {
+    let output = '';
+    beforeAll(() => {
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTicker', 'fetchTickers', 'fetchTrades'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = typed.transpileRustByPath(path.join (rustFixtureRoot, 'typed-unified', 'ts/src/venue.ts')).content;
+    });
+
+    test('a listed unified method prints its typed public signature', () => {
+        expect(output).toContain('pub fn fetchTicker(&self, symbol: &str, params: impl Into<crate::Params> + Send) -> crate::Result<crate::types::Ticker>');
+        expect(output).toContain('pub fn fetchTrades(&self, symbol: &str, since: Option<i64>, limit: Option<i64>, params: impl Into<crate::Params> + Send) -> crate::Result<Vec<crate::types::Trade>>');
+    });
+
+    test('the Value body runs in a closure over the lowered arguments', () => {
+        expect(output).toContain('let __args: Vec<Value> = vec![Value::from(symbol), params.into().into_value()];');
+        expect(output).toContain('crate::runtime::call_typed((move |symbol: Value, __optional_args: Vec<Value>| async move {');
+    });
+
+    test('an intra-core call to a typed method lowers its arguments and boxes the result', () => {
+        expect(output).toContain('crate::types::IntoRaw::into_raw(self.fetch_tickers((Value::from(vec![symbol])).to_opt_str_vec(), params.clone()).await)');
+    });
+
+    test('without the config entry the method keeps the Value signature', () => {
+        const plain = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'typed-unified', 'ts/src/venue.ts')).content;
+        expect(plain).toContain('pub fn fetchTicker(&self, symbol: Value, optional_args: &[Value]) -> Value');
     });
 });
 
