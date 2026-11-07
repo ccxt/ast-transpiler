@@ -5392,7 +5392,8 @@ describe('rust typed unified-method signatures', () => {
 
     test('the Value body runs in a closure over the lowered arguments', () => {
         expect(output).toContain('let __args: Vec<Value> = vec![Value::from(symbol), params.into().into_value()];');
-        expect(output).toContain('crate::runtime::call_typed((move |symbol: Value, __optional_args: Vec<Value>| async move {');
+        expect(output).toContain('let mut symbol: Value = __it.next().unwrap_or_default();');
+        expect(output).toContain('crate::runtime::call_typed(async move {');
     });
 
     test('an intra-core call to a typed method lowers its arguments and boxes the result', () => {
