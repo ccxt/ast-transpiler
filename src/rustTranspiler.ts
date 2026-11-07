@@ -3628,6 +3628,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (ts === 'Num' && optional) return { rustType: 'Option<f64>', toValue: `Value::from(${name})` };
         if (ts === 'string[]' && !optional) return { rustType: 'Vec<String>', toValue: `Value::from(Some(${name}))` };
         if (ts === 'string[][]' && !optional) return { rustType: 'Vec<Vec<String>>', toValue: `Value::from(Some(${name}))` };
+        if ((ts === 'OrderRequest[]' || ts === 'PredictionOrderRequest[]') && !optional) return { rustType: 'Vec<crate::types::OrderRequest>', toValue: `crate::types::IntoRaw::into_raw(${name})` };
         return undefined;
     }
 
@@ -3648,6 +3649,34 @@ export class RustTranspiler extends BaseTranspiler {
         cancelOrder: 'crate::types::Order',
         cancelOrders: 'Vec<crate::types::Order>',
         cancelAllOrders: 'Vec<crate::types::Order>',
+        fetchOpenOrder: 'crate::types::Order',
+        fetchClosedOrder: 'crate::types::Order',
+        fetchCanceledOrders: 'Vec<crate::types::Order>',
+        fetchCanceledAndClosedOrders: 'Vec<crate::types::Order>',
+        fetchOrderTrades: 'Vec<crate::types::Trade>',
+        createOrders: 'Vec<crate::types::Order>',
+        editOrders: 'Vec<crate::types::Order>',
+        createLimitOrder: 'crate::types::Order',
+        createMarketOrder: 'crate::types::Order',
+        createLimitBuyOrder: 'crate::types::Order',
+        createLimitSellOrder: 'crate::types::Order',
+        createMarketBuyOrder: 'crate::types::Order',
+        createMarketSellOrder: 'crate::types::Order',
+        createMarketOrderWithCost: 'crate::types::Order',
+        createMarketBuyOrderWithCost: 'crate::types::Order',
+        createMarketSellOrderWithCost: 'crate::types::Order',
+        createPostOnlyOrder: 'crate::types::Order',
+        createReduceOnlyOrder: 'crate::types::Order',
+        createStopOrder: 'crate::types::Order',
+        createStopLimitOrder: 'crate::types::Order',
+        createStopMarketOrder: 'crate::types::Order',
+        createStopLossOrder: 'crate::types::Order',
+        createTakeProfitOrder: 'crate::types::Order',
+        createTriggerOrder: 'crate::types::Order',
+        createTrailingAmountOrder: 'crate::types::Order',
+        createTrailingPercentOrder: 'crate::types::Order',
+        createOrderWithTakeProfitAndStopLoss: 'crate::types::Order',
+        createTwapOrder: 'crate::types::Order',
         fetchBalance: 'crate::types::Balances',
         fetchMarkets: 'Vec<crate::types::Market>',
         fetchCurrencies: 'crate::types::Currencies',
@@ -3842,6 +3871,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (p.rustType === 'Vec<String>') return `${recv}.to_str_vec()`;
             if (p.rustType === 'Vec<Vec<String>>') return `${recv}.to_str_vec_vec()`;
             if (p.rustType === 'Option<Vec<String>>') return `${recv}.to_opt_str_vec()`;
+            if (p.rustType === 'Vec<crate::types::OrderRequest>') return `crate::types::FromRaw::from_raw(${RustTranspiler.cloneIfBareLocal(v)})`;
             return RustTranspiler.cloneIfBareLocal(v);
         });
         return `crate::types::IntoRaw::into_raw(self.${this.toSnakeCaseName(callee.name.text)}(${printed.join(', ')}).await)`;
@@ -5178,6 +5208,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.isRustValueIndexKey(key)) return undefined;
         const place = this.printNode(key, 0).trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(place)) return undefined;
+        // a typed `i64` loop counter indexes the slice directly
+        if (this.rustI64CounterOf(this.rustSkipWrappers(key)) !== undefined) return `${shadow.name}.get(${place} as usize).cloned().unwrap_or(Value::Null)`;
         return `${shadow.name}.get((${place}).as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)`;
     }
 

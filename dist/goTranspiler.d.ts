@@ -1401,9 +1401,9 @@ export declare class GoTranspiler extends BaseTranspiler {
         name: string;
         params: string[];
     } | undefined;
-    goArrayLiteralSliceType(node: any, depth?: number): string | undefined;
+    goArrayLiteralSliceType(node: any, depth?: number, want?: string): string | undefined;
     goSliceElementIsString(node: any): boolean;
-    goSliceArgumentType(arg: any): string | undefined;
+    goSliceArgumentType(arg: any, want?: string): string | undefined;
     goResolvedCallParameter(node: any, index: number): any;
     goCallSliceArgumentType(node: any, calleeName: string, index: number): string | undefined;
     goSliceCallArgs(node: any, identation: any): string | undefined;

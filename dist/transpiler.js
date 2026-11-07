@@ -20905,7 +20905,45 @@ function ccxtGoTernaryLiftArm(goTranspiler, armNode, armText) {
     return { type: armType };
   }
   const lift = CCXT_GO_TERNARY_LIFT[armType];
+  const address = armType === "string" ? ccxtGoStringParamAddress(goTranspiler, node) : void 0;
+  if (address !== void 0) {
+    return { type: lift[0], wrap: "&", address };
+  }
   return lift === void 0 ? void 0 : { type: lift[0], wrap: lift[1], call: node };
+}
+function ccxtGoStringParamAddress(goTranspiler, node) {
+  let n = node;
+  while (n?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+    n = n.expression;
+  }
+  if (n?.kind !== ts.SyntaxKind.Identifier) {
+    return void 0;
+  }
+  let param;
+  try {
+    const symbol = goTranspiler.getChecker().getSymbolAtLocation(n);
+    param = symbol?.valueDeclaration?.resolve?.() ?? symbol?.valueDeclaration;
+  } catch (e) {
+    return void 0;
+  }
+  const fn = param?.parent;
+  if (param?.kind !== ts.SyntaxKind.Parameter || param.name?.kind !== ts.SyntaxKind.Identifier || fn?.body === void 0 || param.initializer !== void 0 || param.dotDotDotToken !== void 0 || goTranspiler.goNativeParameterType(param) !== "string") {
+    return void 0;
+  }
+  const name = param.name.text;
+  let written = false;
+  const visit = (x) => {
+    if (written) {
+      return;
+    }
+    if (x.kind === ts.SyntaxKind.BinaryExpression && x.left?.kind === ts.SyntaxKind.Identifier && x.left.text === name && x.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && x.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      written = true;
+      return;
+    }
+    x.forEachChild(visit);
+  };
+  fn.body.forEachChild(visit);
+  return written ? void 0 : "&" + goTranspiler.printNode(n, 0).trim();
 }
 function ccxtGoTernaryLiftJoin(goTranspiler, declaration, literal2) {
   const initializer = declaration?.initializer;
@@ -20941,7 +20979,7 @@ function ccxtGoTernaryLiftJoin(goTranspiler, declaration, literal2) {
   if (unproven || goTranspiler.goTypeNameIsShadowed(scope, joinType) || !goTranspiler.goLocalIsSafeToType(scope, declaration, varName, joinType)) {
     return void 0;
   }
-  const lifted = (arm, text) => arm.wrap === void 0 ? text : arm.wrap + "(" + text + ")";
+  const lifted = (arm, text) => arm.wrap === void 0 ? text : arm.address ?? arm.wrap + "(" + text + ")";
   const hoisted = arms.map((arm, i) => arm.wrap === "SafeStringPtr" && typeof goTranspiler.goStringCallLocalName === "function" ? goTranspiler.goStringCallLocalName(arm.call) : void 0);
   return {
     joinType,
@@ -22341,7 +22379,7 @@ function installStringPtrParams(goTranspiler) {
     const depth = this.goExprDepth + (args.length > 1 ? 1 : 0);
     return args.map((a, i) => {
       const text = this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
-      return wrap[i] ? "SafeStringPtr(" + text + ")" : text;
+      return wrap[i] ? ccxtGoStringParamAddress(this, a) ?? "SafeStringPtr(" + text + ")" : text;
     }).join(", ");
   };
 }
@@ -32367,12 +32405,12 @@ ${iden}}`;
     while (text.startsWith("(") && text.endsWith(")")) {
       text = text.substring(1, text.length - 1).trim();
     }
-    if (text.length < 3 || !text.startsWith("[") || !text.endsWith("]")) {
+    if (text.length < 2 || !text.startsWith("[") || !text.endsWith("]")) {
       return false;
     }
     const inner = text.substring(1, text.length - 1).trim();
     if (inner === "") {
-      return false;
+      return true;
     }
     const elements = goBalancedSliceArgs("(" + inner + ")", 0);
     if (elements === void 0) {
@@ -32454,13 +32492,13 @@ ${iden}}`;
   // the Go slice type an array literal prints: every element a Go string makes `[]string`, every
   // element itself such a literal makes `[][]string`. A spread, an empty or a mixed literal keeps
   // the box, so the rule never widens a `[]any{...}` that the target slot did not ask for.
-  goArrayLiteralSliceType(node, depth = 0) {
+  goArrayLiteralSliceType(node, depth = 0, want) {
     if (node?.kind !== SyntaxKind5.ArrayLiteralExpression || depth > 2) {
       return void 0;
     }
     const elements = node.elements ?? [];
     if (elements.length === 0) {
-      return void 0;
+      return depth === 0 ? want : void 0;
     }
     let element;
     for (const node2 of elements) {
@@ -32500,9 +32538,9 @@ ${iden}}`;
     return initializer?.kind === SyntaxKind5.StringLiteral || initializer?.kind === SyntaxKind5.NoSubstitutionTemplateLiteral;
   }
   // the type a call-site argument is proven to print at a slice parameter slot
-  goSliceArgumentType(arg) {
+  goSliceArgumentType(arg, want) {
     if (arg?.kind === SyntaxKind5.ArrayLiteralExpression) {
-      return this.goArrayLiteralSliceType(arg);
+      return this.goArrayLiteralSliceType(arg, 0, want);
     }
     const printed = this.goPrintedArgType(arg);
     return printed === "[]string" || printed === "[][]string" ? printed : void 0;
@@ -32557,7 +32595,7 @@ ${iden}}`;
         continue;
       }
       const goType = this.goCallSliceArgumentType(node, name, i);
-      if (goType === void 0 || this.goArrayLiteralSliceType(arg) !== goType) {
+      if (goType === void 0 || this.goArrayLiteralSliceType(arg, 0, goType) !== goType) {
         continue;
       }
       this.goSliceLiteralTypes.set(arg, goType);
@@ -32833,7 +32871,7 @@ ${iden}}`;
         return false;
       }
       const tableSlot = (goType === "[]string" || goType === "[][]string") && this.goIsUnifiedSliceParameter(name, index);
-      const argType = tableSlot ? this.goSliceArgumentType(arg) : this.goPrintedArgType(arg);
+      const argType = tableSlot ? this.goSliceArgumentType(arg, goType) : this.goPrintedArgType(arg);
       if (argType !== goType && !(goType === "string" && call.runner === void 0 && this.goNilProvenStringPtrArg(arg))) {
         return false;
       }
@@ -54292,6 +54330,8 @@ ${classMethods}
       return { rustType: "Vec<String>", toValue: `Value::from(Some(${name}))` };
     if (ts2 === "string[][]" && !optional)
       return { rustType: "Vec<Vec<String>>", toValue: `Value::from(Some(${name}))` };
+    if ((ts2 === "OrderRequest[]" || ts2 === "PredictionOrderRequest[]") && !optional)
+      return { rustType: "Vec<crate::types::OrderRequest>", toValue: `crate::types::IntoRaw::into_raw(${name})` };
     return void 0;
   }
   // The typed signature of a unified method listed in `config.typedUnified`, when every parameter maps;
@@ -54386,6 +54426,8 @@ ${i1}}`;
         return `${recv}.to_str_vec_vec()`;
       if (p.rustType === "Option<Vec<String>>")
         return `${recv}.to_opt_str_vec()`;
+      if (p.rustType === "Vec<crate::types::OrderRequest>")
+        return `crate::types::FromRaw::from_raw(${_RustTranspiler.cloneIfBareLocal(v)})`;
       return _RustTranspiler.cloneIfBareLocal(v);
     });
     return `crate::types::IntoRaw::into_raw(self.${this.toSnakeCaseName(callee.name.text)}(${printed.join(", ")}).await)`;
@@ -55572,6 +55614,8 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const place = this.printNode(key, 0).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(place))
       return void 0;
+    if (this.rustI64CounterOf(this.rustSkipWrappers(key)) !== void 0)
+      return `${shadow.name}.get(${place} as usize).cloned().unwrap_or(Value::Null)`;
     return `${shadow.name}.get((${place}).as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)`;
   }
   /** `'k' in x` on a shadowed dict parameter. */
@@ -60715,6 +60759,34 @@ _RustTranspiler.RUST_TYPED_RETURNS = {
   cancelOrder: "crate::types::Order",
   cancelOrders: "Vec<crate::types::Order>",
   cancelAllOrders: "Vec<crate::types::Order>",
+  fetchOpenOrder: "crate::types::Order",
+  fetchClosedOrder: "crate::types::Order",
+  fetchCanceledOrders: "Vec<crate::types::Order>",
+  fetchCanceledAndClosedOrders: "Vec<crate::types::Order>",
+  fetchOrderTrades: "Vec<crate::types::Trade>",
+  createOrders: "Vec<crate::types::Order>",
+  editOrders: "Vec<crate::types::Order>",
+  createLimitOrder: "crate::types::Order",
+  createMarketOrder: "crate::types::Order",
+  createLimitBuyOrder: "crate::types::Order",
+  createLimitSellOrder: "crate::types::Order",
+  createMarketBuyOrder: "crate::types::Order",
+  createMarketSellOrder: "crate::types::Order",
+  createMarketOrderWithCost: "crate::types::Order",
+  createMarketBuyOrderWithCost: "crate::types::Order",
+  createMarketSellOrderWithCost: "crate::types::Order",
+  createPostOnlyOrder: "crate::types::Order",
+  createReduceOnlyOrder: "crate::types::Order",
+  createStopOrder: "crate::types::Order",
+  createStopLimitOrder: "crate::types::Order",
+  createStopMarketOrder: "crate::types::Order",
+  createStopLossOrder: "crate::types::Order",
+  createTakeProfitOrder: "crate::types::Order",
+  createTriggerOrder: "crate::types::Order",
+  createTrailingAmountOrder: "crate::types::Order",
+  createTrailingPercentOrder: "crate::types::Order",
+  createOrderWithTakeProfitAndStopLoss: "crate::types::Order",
+  createTwapOrder: "crate::types::Order",
   fetchBalance: "crate::types::Balances",
   fetchMarkets: "Vec<crate::types::Market>",
   fetchCurrencies: "crate::types::Currencies",

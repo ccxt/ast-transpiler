@@ -10993,7 +10993,51 @@ function ccxtGoTernaryLiftArm (goTranspiler, armNode, armText) {
         return { type: armType };
     }
     const lift = CCXT_GO_TERNARY_LIFT[armType];
+    const address = (armType === 'string') ? ccxtGoStringParamAddress (goTranspiler, node) : undefined;
+    if (address !== undefined) {
+        return { type: lift[0], wrap: '&', address: address };
+    }
     return (lift === undefined) ? undefined : { type: lift[0], wrap: lift[1], call: node };
+}
+
+// `&id` for an identifier naming a Go `string` parameter its body never writes: the address of
+// the unchanged value is what SafeStringPtr(id) builds
+function ccxtGoStringParamAddress (goTranspiler, node) {
+    let n = node;
+    while (n?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        n = n.expression;
+    }
+    if (n?.kind !== ts.SyntaxKind.Identifier) {
+        return undefined;
+    }
+    let param;
+    try {
+        const symbol = goTranspiler.getChecker ().getSymbolAtLocation (n);
+        param = symbol?.valueDeclaration?.resolve?.() ?? symbol?.valueDeclaration;
+    } catch (e) {
+        return undefined;
+    }
+    const fn = param?.parent;
+    if ((param?.kind !== ts.SyntaxKind.Parameter) || (param.name?.kind !== ts.SyntaxKind.Identifier) || (fn?.body === undefined)
+        || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
+        || (goTranspiler.goNativeParameterType (param) !== 'string')) {
+        return undefined;
+    }
+    const name = param.name.text;
+    let written = false;
+    const visit = (x) => {
+        if (written) {
+            return;
+        }
+        if ((x.kind === ts.SyntaxKind.BinaryExpression) && (x.left?.kind === ts.SyntaxKind.Identifier) && (x.left.text === name)
+            && (x.operatorToken.kind >= ts.SyntaxKind.FirstAssignment) && (x.operatorToken.kind <= ts.SyntaxKind.LastAssignment)) {
+            written = true;
+            return;
+        }
+        x.forEachChild (visit);
+    };
+    fn.body.forEachChild (visit);
+    return written ? undefined : '&' + goTranspiler.printNode (n, 0).trim ();
 }
 
 // { joinType, whenTrue, whenFalse } with the lifted arm texts, or undefined when unproven
@@ -11032,7 +11076,7 @@ export function ccxtGoTernaryLiftJoin (goTranspiler, declaration, literal) {
     if (unproven || goTranspiler.goTypeNameIsShadowed (scope, joinType) || !goTranspiler.goLocalIsSafeToType (scope, declaration, varName, joinType)) {
         return undefined;
     }
-    const lifted = (arm, text) => ((arm.wrap === undefined) ? text : arm.wrap + '(' + text + ')');
+    const lifted = (arm, text) => ((arm.wrap === undefined) ? text : (arm.address ?? (arm.wrap + '(' + text + ')')));
     // a string-returning `this.<name>(..)` arm is not boxed: its value is kept in a typed local the
     // arm returns the address of (the arm node order is the source order the local names count in)
     const hoisted = arms.map ((arm, i) => ((arm.wrap === 'SafeStringPtr') && (typeof goTranspiler.goStringCallLocalName === 'function'))
@@ -12663,7 +12707,7 @@ function installStringPtrParams (goTranspiler) {
         const depth = this.goExprDepth + ((args.length > 1) ? 1 : 0);
         return args.map ((a, i) => {
             const text = this.goWithExprDepth (depth, () => this.printNode (a, identation)).trim ();
-            return wrap[i] ? ('SafeStringPtr(' + text + ')') : text;
+            return wrap[i] ? (ccxtGoStringParamAddress (this, a) ?? ('SafeStringPtr(' + text + ')')) : text;
         }).join (', ');
     };
 }
@@ -23340,12 +23384,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         while (text.startsWith('(') && text.endsWith(')')) {
             text = text.substring(1, text.length - 1).trim();
         }
-        if ((text.length < 3) || !text.startsWith('[') || !text.endsWith(']')) {
+        if ((text.length < 2) || !text.startsWith('[') || !text.endsWith(']')) {
             return false;
         }
         const inner = text.substring(1, text.length - 1).trim();
         if (inner === '') {
-            return false;
+            return true; // printed as the slot's own empty slice
         }
         const elements = goBalancedSliceArgs('(' + inner + ')', 0);
         if (elements === undefined) {
@@ -23436,13 +23480,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // the Go slice type an array literal prints: every element a Go string makes `[]string`, every
     // element itself such a literal makes `[][]string`. A spread, an empty or a mixed literal keeps
     // the box, so the rule never widens a `[]any{...}` that the target slot did not ask for.
-    goArrayLiteralSliceType(node, depth = 0): string | undefined {
+    goArrayLiteralSliceType(node, depth = 0, want?: string): string | undefined {
         if ((node?.kind !== SyntaxKind.ArrayLiteralExpression) || (depth > 2)) {
             return undefined;
         }
         const elements = node.elements ?? [];
         if (elements.length === 0) {
-            return undefined;
+            // an empty literal opens as whatever slice its slot asks for
+            return (depth === 0) ? want : undefined;
         }
         let element: string | undefined;
         for (const node2 of elements) {
@@ -23486,9 +23531,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     // the type a call-site argument is proven to print at a slice parameter slot
-    goSliceArgumentType(arg): string | undefined {
+    goSliceArgumentType(arg, want?: string): string | undefined {
         if (arg?.kind === SyntaxKind.ArrayLiteralExpression) {
-            return this.goArrayLiteralSliceType(arg);
+            return this.goArrayLiteralSliceType(arg, 0, want);
         }
         const printed = this.goPrintedArgType(arg);
         return ((printed === '[]string') || (printed === '[][]string')) ? printed : undefined;
@@ -23546,7 +23591,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 continue;
             }
             const goType = this.goCallSliceArgumentType(node, name, i);
-            if ((goType === undefined) || (this.goArrayLiteralSliceType(arg) !== goType)) {
+            if ((goType === undefined) || (this.goArrayLiteralSliceType(arg, 0, goType) !== goType)) {
                 continue;
             }
             this.goSliceLiteralTypes.set(arg, goType);
@@ -23867,7 +23912,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // not the `[]any` box the default print opens. Every other parameter keeps the
             // printer's own argument type, so no existing `[]any` slot changes shape.
             const tableSlot = ((goType === '[]string') || (goType === '[][]string')) && this.goIsUnifiedSliceParameter(name, index);
-            const argType = tableSlot ? this.goSliceArgumentType(arg) : this.goPrintedArgType(arg);
+            const argType = tableSlot ? this.goSliceArgumentType(arg, goType) : this.goPrintedArgType(arg);
             if ((argType !== goType)
                 && !((goType === 'string') && (call.runner === undefined) && this.goNilProvenStringPtrArg(arg))) {
                 return false;
