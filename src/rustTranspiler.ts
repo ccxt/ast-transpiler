@@ -3686,7 +3686,8 @@ export class RustTranspiler extends BaseTranspiler {
         const lowered = [...required, ...typed.params.filter(p => p.optional)].map(p => p.toValue).join(', ');
         const i1 = this.getIden(identation + 1);
         const i2 = this.getIden(identation + 2);
-        const binds = required.map(p => `${i2}let mut ${p.name}: Value = __it.next().unwrap_or_default();\n`).join('');
+        // the required parameters rebind by position (each is a `Value`, as the untyped signature declared it)
+        const binds = required.map(p => `${i2}let mut ${p.name} = __it.next().unwrap_or_default();\n`).join('');
         return ` {\n${i2}let __args: Vec<Value> = vec![${lowered}];\n`
             + `${i2}let mut __it = __args.into_iter();\n`
             + binds

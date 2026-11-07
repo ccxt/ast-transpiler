@@ -5392,7 +5392,7 @@ describe('rust typed unified-method signatures', () => {
 
     test('the Value body runs in an async block over the lowered arguments', () => {
         expect(output).toContain('let __args: Vec<Value> = vec![Value::from(symbol), params.into().into_value()];');
-        expect(output).toContain('let mut symbol: Value = __it.next().unwrap_or_default();');
+        expect(output).toContain('let mut symbol = __it.next().unwrap_or_default();');
         expect(output).toContain('let __optional_args: Vec<Value> = __it.collect();');
         expect(output).toContain('crate::runtime::call_typed(async move {');
         expect(output).not.toContain('call_typed((move |');
