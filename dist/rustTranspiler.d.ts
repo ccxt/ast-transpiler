@@ -83,6 +83,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The handler `message` parameter a shadow is being printed for (set only
      *  while its method body is printed). */
     rustProHandlerShadowParam: ParameterDeclaration | undefined;
+    /** Unified methods printed with a typed public signature (`config.typedUnified`, TS names). */
+    rustTypedUnified: Set<string>;
     constructor(config?: {});
     initConfig(): void;
     quotedStringLiteral(text: string): string;
@@ -458,6 +460,19 @@ export declare class RustTranspiler extends BaseTranspiler {
     printNewMethod(node: any, identation: any): string;
     printClass(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any): string;
+    private static rustTypedParam;
+    private static readonly RUST_TYPED_RETURNS;
+    rustTypedSignature(node: any): {
+        params: Array<{
+            name: string;
+            rustType: string;
+            toValue: string;
+            optional: boolean;
+        }>;
+        ret: string;
+    } | undefined;
+    rustTypedBody(node: any, typed: any, identation: number, inner: string): string;
+    printTypedUnifiedCall(node: any): string | undefined;
     printRustFunctionType(node: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     rustFreeFnFirstDefault(node: any): number;

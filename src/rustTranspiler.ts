@@ -264,9 +264,13 @@ export class RustTranspiler extends BaseTranspiler {
      *  while its method body is printed). */
     rustProHandlerShadowParam: ParameterDeclaration | undefined;
 
+    /** Unified methods printed with a typed public signature (`config.typedUnified`, TS names). */
+    rustTypedUnified: Set<string>;
+
     constructor(config = {}) {
         config['parser'] = Object.assign({}, parserConfig, config['parser'] ?? {});
         super(config);
+        this.rustTypedUnified = new Set(config['typedUnified'] ?? []);
 
         this.requiresParameterType = true;
         this.requiresReturnType = false;
@@ -3591,6 +3595,11 @@ export class RustTranspiler extends BaseTranspiler {
 
     printMethodDefinition(node, identation) {
         const name = (node.name as any).text;
+        const typed = this.rustTypedSignature(node);
+        if (typed !== undefined) {
+            const args = ['&self', ...typed.params.map(p => `${p.name}: ${p.rustType}`)].join(', ');
+            return `${this.getIden(identation + 1)}pub fn ${name}(${args}) -> crate::Result<${typed.ret}>`;
+        }
         const params = node.parameters;
         const requiredParams = params.filter(p => !p.initializer && !p.questionToken);
         let parsedArgs = ['&self', ...requiredParams.map(p => `${this.printNode(p.name, 0)}: ${this.rustParamType(p)}`)].join(', ');
@@ -3600,6 +3609,91 @@ export class RustTranspiler extends BaseTranspiler {
         const returnType = this.printRustFunctionType(node);
         const retStr = returnType ? ` -> ${returnType}` : '';
         return `${this.getIden(identation + 1)}pub fn ${name}(${parsedArgs})${retStr}`;
+    }
+
+    // Typed public parameter for a unified-method TS parameter, with its lowering back to `Value`.
+    private static rustTypedParam(p: any, name: string): { rustType: string, toValue: string } | undefined {
+        const ts = String(p.type?.getText?.() ?? '').replace(/\s+/g, '');
+        const optional = p.initializer !== undefined || p.questionToken !== undefined;
+        if (ts === 'Dict' && optional) return { rustType: 'impl Into<crate::Params> + Send', toValue: `${name}.into().into_value()` };
+        if (ts === 'string' && !optional) return { rustType: '&str', toValue: `Value::from(${name})` };
+        if (ts === 'Int' && optional) return { rustType: 'Option<i64>', toValue: `Value::from(${name})` };
+        if (ts === 'Strings' && optional) return { rustType: 'Option<Vec<String>>', toValue: `Value::from(${name})` };
+        return undefined;
+    }
+
+    // Unified return kind -> Rust type; the body's `Value` result decodes through `types::FromRaw`.
+    private static readonly RUST_TYPED_RETURNS: Record<string, string> = {
+        fetchTicker: 'crate::types::Ticker',
+        fetchTickers: 'crate::types::Tickers',
+        fetchOrderBook: 'crate::types::OrderBook',
+        fetchTrades: 'Vec<crate::types::Trade>',
+    };
+
+    // The typed signature of a unified method listed in `config.typedUnified`, when every parameter maps;
+    // the same shape for the base, prediction-base and every override, so the trait and inherents agree.
+    rustTypedSignature(node): { params: Array<{ name: string, rustType: string, toValue: string, optional: boolean }>, ret: string } | undefined {
+        if (node?.kind !== SyntaxKind.MethodDeclaration || node.body === undefined) return undefined;
+        const name = String(node.name?.text ?? '');
+        const ret = RustTranspiler.RUST_TYPED_RETURNS[name];
+        if (ret === undefined || !this.rustTypedUnified.has(name)) return undefined;
+        const file = String(node.getSourceFile?.()?.fileName ?? '');
+        if (!/ts[/]src[/]/.test(file) || /ts[/]src[/]test[/]/.test(file)) return undefined;
+        const params: Array<{ name: string, rustType: string, toValue: string, optional: boolean }> = [];
+        for (const p of Array.from(node.parameters) as any[]) {
+            const printed = this.printNode(p.name, 0).replace(/^mut\s+/, '');
+            const t = RustTranspiler.rustTypedParam(p, printed);
+            if (t === undefined) return undefined;
+            params.push({ name: printed, optional: p.initializer !== undefined || p.questionToken !== undefined, ...t });
+        }
+        return { params, ret };
+    }
+
+    // The `Value` body runs in a closure over the lowered arguments (`__args`, required first); `call_typed`
+    // turns its panics into `Err` and the result decodes through `types::FromRaw`.
+    rustTypedBody(node, typed, identation: number, inner: string): string {
+        const required = typed.params.filter(p => !p.optional);
+        const lowered = [...required, ...typed.params.filter(p => p.optional)].map(p => p.toValue).join(', ');
+        const closureParams = [...required.map(p => `${p.name}: Value`), '__optional_args: Vec<Value>'].join(', ');
+        const callArgs = [...required.map(() => '__it.next().unwrap_or_default()'), '__it.collect()'].join(', ');
+        const i1 = this.getIden(identation + 1);
+        const i2 = this.getIden(identation + 2);
+        return ` {\n${i2}let __args: Vec<Value> = vec![${lowered}];\n`
+            + `${i2}let mut __it = __args.into_iter();\n`
+            + `${i2}Ok(crate::types::FromRaw::from_raw(crate::runtime::call_typed((move |${closureParams}| async move {\n`
+            + `${i2}let optional_args: &[Value] = &__optional_args;\n${inner}\n${i2}Value::Null\n`
+            + `${i2}})(${callArgs})).await?))\n${i1}}`;
+    }
+
+    // `await this.<typed unified>(args)` inside a `Value` body: bind each argument, call the typed method and
+    // box the `Result` back to `Value` (an `Err` re-raises as the panic the untyped call raised).
+    printTypedUnifiedCall(node): string | undefined {
+        const callee = node.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (!this.rustTypedUnified.has(callee.name.text) || node.parent?.kind !== SyntaxKind.AwaitExpression) return undefined;
+        let decl: any;
+        try {
+            decl = signatureDeclaration((this.getChecker() as any).getResolvedSignature(node));
+        } catch (e) {
+            return undefined;
+        }
+        decl = decl?.resolve?.() ?? decl;
+        if (decl !== undefined && decl.body === undefined) {
+            decl = decl.parent?.members?.find((m: any) => m.kind === SyntaxKind.MethodDeclaration && m.body !== undefined && m.name?.text === callee.name.text);
+        }
+        const typed = this.rustTypedSignature(decl);
+        if (typed === undefined) return undefined;
+        const args = Array.from(node.arguments) as any[];
+        const printed = typed.params.map((p, i) => {
+            if (args[i] === undefined) return p.rustType.startsWith('impl') ? 'Value::Null' : 'None';
+            const v = this.printNode(args[i], 0).trim();
+            const recv = /^[A-Za-z_][A-Za-z0-9_.]*$/.test(v) ? v : `(${v})`;
+            if (p.rustType === '&str') return `${recv}.as_str().unwrap_or_default()`;
+            if (p.rustType === 'Option<i64>') return `${recv}.as_i64()`;
+            if (p.rustType === 'Option<Vec<String>>') return `${recv}.to_opt_str_vec()`;
+            return RustTranspiler.cloneIfBareLocal(v);
+        });
+        return `crate::types::IntoRaw::into_raw(self.${this.toSnakeCaseName(callee.name.text)}(${printed.join(', ')}).await)`;
     }
 
     printRustFunctionType(node): string {
@@ -3644,6 +3738,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (shadowPlan !== undefined) this.rustProHandlerShadowParam = shadowPlan.param;
         const statements = node.body.statements.map(s => this.printNode(s, identation + 2)).join('\n');
         this.rustProHandlerShadowParam = savedShadowParam;
+        const typed = this.rustTypedSignature(node);
+        if (typed !== undefined) {
+            return this.printNodeCommentsIfAny(node, identation, methodDef + this.rustTypedBody(node, typed, identation, optionalInits + shadows + (shadowPlan?.lines ?? '') + statements));
+        }
         const body = blockOpen + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements + blockClose;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef + body);
@@ -3997,6 +4095,9 @@ export class RustTranspiler extends BaseTranspiler {
                 return `println_val(${argParts})`;
             }
         }
+
+        const typedCall = this.printTypedUnifiedCall(node);
+        if (typedCall !== undefined) return typedCall;
 
         const dynamicCall = this.printDynamicSelfCall(node, identation);
         if (dynamicCall !== undefined) return dynamicCall;
@@ -6371,6 +6472,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Rust uses postfix `.await`; the base transpiler defaults to prefix.
     printAwaitExpression(node, identation) {
+        const typedCall = isCallExpression(node.expression) ? this.printTypedUnifiedCall(node.expression) : undefined;
+        if (typedCall !== undefined) return typedCall;
         // a local in a method that inlines a value-position spawn holds the spawn's resolved result
         if (isIdentifier(node.expression) && this.rustInlinesValueSpawn(findAncestor(node, isMethodDeclaration))) {
             return this.printNode(node.expression, identation);
