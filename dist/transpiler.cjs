@@ -54273,7 +54273,7 @@ ${classMethods}
     if (ts2 === "string" && !optional)
       return { rustType: "&str", toValue: `Value::from(${name})` };
     const strDefault = ts2 === "" && _optionalChain([p, 'access', _8596 => _8596.initializer, 'optionalAccess', _8597 => _8597.kind]) === _ast.SyntaxKind.StringLiteral;
-    if ((ts2 === "Str" || ts2 === "string" || strDefault) && optional)
+    if ((ts2 === "Str" || ts2 === "string" || strDefault) && optional || ts2 === "Str")
       return { rustType: "Option<&str>", toValue: `${name}.map(Value::from).unwrap_or_default()` };
     if (ts2 === "Int" && optional)
       return { rustType: "Option<i64>", toValue: `Value::from(${name})` };

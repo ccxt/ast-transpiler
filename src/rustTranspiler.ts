@@ -3619,7 +3619,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (ts === 'string' && !optional) return { rustType: '&str', toValue: `Value::from(${name})` };
         // an optional string (`Str`, `string = '1m'`, untyped `= '1m'`) is `None` for the declared default
         const strDefault = ts === '' && p.initializer?.kind === SyntaxKind.StringLiteral;
-        if ((ts === 'Str' || ts === 'string' || strDefault) && optional) return { rustType: 'Option<&str>', toValue: `${name}.map(Value::from).unwrap_or_default()` };
+        if (((ts === 'Str' || ts === 'string' || strDefault) && optional) || ts === 'Str') return { rustType: 'Option<&str>', toValue: `${name}.map(Value::from).unwrap_or_default()` };
         if (ts === 'Int' && optional) return { rustType: 'Option<i64>', toValue: `Value::from(${name})` };
         if (ts === 'Strings' && optional) return { rustType: 'Option<Vec<String>>', toValue: `Value::from(${name})` };
         if ((ts === 'OrderType' || ts === 'OrderSide') && !optional) return { rustType: '&str', toValue: `Value::from(${name})` };
