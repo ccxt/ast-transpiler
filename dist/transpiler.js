@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-LFDADZX5.js";
+} from "./chunk-AWK6QGCM.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -54332,6 +54332,10 @@ ${classMethods}
       return { rustType: "Vec<Vec<String>>", toValue: `Value::from(Some(${name}))` };
     if ((ts2 === "OrderRequest[]" || ts2 === "PredictionOrderRequest[]") && !optional)
       return { rustType: "Vec<crate::types::OrderRequest>", toValue: `crate::types::IntoRaw::into_raw(${name})` };
+    if (ts2 === "CancellationRequest[]" && !optional)
+      return { rustType: "Vec<crate::types::CancellationRequest>", toValue: `crate::types::IntoRaw::into_raw(${name})` };
+    if (ts2 === "Order" && !optional)
+      return { rustType: "crate::types::Order", toValue: `crate::types::IntoRaw::into_raw(${name})` };
     return void 0;
   }
   // The typed signature of a unified method listed in `config.typedUnified`, when every parameter maps;
@@ -54426,7 +54430,7 @@ ${i1}}`;
         return `${recv}.to_str_vec_vec()`;
       if (p.rustType === "Option<Vec<String>>")
         return `${recv}.to_opt_str_vec()`;
-      if (p.rustType === "Vec<crate::types::OrderRequest>")
+      if (p.rustType.startsWith("crate::types::") || p.rustType.startsWith("Vec<crate::types::"))
         return `crate::types::FromRaw::from_raw(${_RustTranspiler.cloneIfBareLocal(v)})`;
       return _RustTranspiler.cloneIfBareLocal(v);
     });
@@ -60888,6 +60892,96 @@ _RustTranspiler.RUST_TYPED_RETURNS = {
   fetchEvents: "Vec<crate::types::PredictionEvent>",
   fetchEvent: "crate::types::PredictionEvent",
   fetchSettlements: "Vec<crate::types::PredictionSettlement>",
+  // round 4 (group I): the remaining unified methods that still had a per-exchange wrapper, and the *Ws order writes
+  fetchAccounts: "Vec<crate::types::Account>",
+  fetchCrossBorrowRates: "crate::types::CrossBorrowRates",
+  fetchIsolatedBorrowRates: "crate::types::IsolatedBorrowRates",
+  fetchFundingIntervals: "crate::types::FundingRates",
+  createDepositAddress: "crate::types::DepositAddress",
+  setMargin: "crate::types::MarginModification",
+  fetchLongShortRatio: "crate::types::LongShortRatio",
+  fetchLongShortRatioHistory: "Vec<crate::types::LongShortRatio>",
+  fetchMarginAdjustmentHistory: "Vec<crate::types::MarginModification>",
+  fetchDepositAddressesByNetwork: "crate::types::DepositAddresses",
+  fetchOpenInterests: "crate::types::OpenInterests",
+  repayCrossMargin: "crate::types::MarginLoan",
+  repayIsolatedMargin: "crate::types::MarginLoan",
+  borrowCrossMargin: "crate::types::MarginLoan",
+  borrowIsolatedMargin: "crate::types::MarginLoan",
+  borrowMargin: "crate::types::MarginLoan",
+  repayMargin: "crate::types::MarginLoan",
+  fetchSpotOHLCV: "Vec<crate::types::OHLCV>",
+  fetchContractOHLCV: "Vec<crate::types::OHLCV>",
+  fetchBorrowInterest: "Vec<crate::types::BorrowInterest>",
+  fetchLedgerEntry: "crate::types::LedgerEntry",
+  fetchPartialBalance: "crate::types::Balances",
+  fetchFreeBalance: "crate::types::Balances",
+  fetchUsedBalance: "crate::types::Balances",
+  fetchTotalBalance: "crate::types::Balances",
+  fetchDepositWithdrawFee: "crate::types::DepositWithdrawFee",
+  fetchCrossBorrowRate: "crate::types::BorrowRate",
+  fetchIsolatedBorrowRate: "crate::types::IsolatedBorrowRate",
+  fetchSpotTickers: "crate::types::Tickers",
+  fetchContractTickers: "crate::types::Tickers",
+  fetchOrderBooks: "crate::types::OrderBooks",
+  createConvertTrade: "crate::types::Conversion",
+  fetchConvertTrade: "crate::types::Conversion",
+  fetchConvertTradeHistory: "Vec<crate::types::Conversion>",
+  fetchPositionMode: "crate::types::PositionModeInfo",
+  fetchADLRank: "crate::types::ADL",
+  fetchPositionsADLRank: "Vec<crate::types::ADL>",
+  fetchPositionADLRank: "crate::types::ADL",
+  createSpotOrders: "Vec<crate::types::Order>",
+  createContractOrders: "Vec<crate::types::Order>",
+  cancelSpotOrder: "crate::types::Order",
+  cancelContractOrder: "crate::types::Order",
+  cancelAllSpotOrders: "Vec<crate::types::Order>",
+  cancelAllContractOrders: "Vec<crate::types::Order>",
+  cancelOrdersForSymbols: "Vec<crate::types::Order>",
+  fetchAllGreeks: "crate::types::AllGreeks",
+  fetchConvertQuote: "crate::types::Conversion",
+  fetchContractDepositAddress: "crate::types::DepositAddress",
+  fetchConvertCurrencies: "crate::types::Currencies",
+  fetchFundingInterval: "crate::types::FundingRate",
+  fetchMarkOHLCV: "Vec<crate::types::OHLCV>",
+  fetchIndexOHLCV: "Vec<crate::types::OHLCV>",
+  fetchPremiumIndexOHLCV: "Vec<crate::types::OHLCV>",
+  fetchTransfer: "crate::types::Transfer",
+  fetchPositionHistory: "Vec<crate::types::Position>",
+  fetchPositionsRisk: "Vec<crate::types::Position>",
+  fetchPositionsForSymbol: "Vec<crate::types::Position>",
+  fetchL3OrderBook: "crate::types::OrderBookL3",
+  editLimitBuyOrder: "crate::types::Order",
+  editLimitSellOrder: "crate::types::Order",
+  editLimitOrder: "crate::types::Order",
+  editOrderWithClientOrderId: "crate::types::Order",
+  fetchOrderWithClientOrderId: "crate::types::Order",
+  fetchOrderStatus: "Option<String>",
+  fetchUnifiedOrder: "crate::types::Order",
+  cancelOrderWithClientOrderId: "crate::types::Order",
+  cancelOrdersWithClientOrderIds: "Vec<crate::types::Order>",
+  cancelUnifiedOrder: "crate::types::Order",
+  createOrdersWs: "Vec<crate::types::Order>",
+  cancelOrdersWs: "Vec<crate::types::Order>",
+  withdrawWs: "crate::types::Transaction",
+  createLimitOrderWs: "crate::types::Order",
+  createMarketOrderWs: "crate::types::Order",
+  createLimitBuyOrderWs: "crate::types::Order",
+  createLimitSellOrderWs: "crate::types::Order",
+  createMarketBuyOrderWs: "crate::types::Order",
+  createMarketSellOrderWs: "crate::types::Order",
+  createMarketOrderWithCostWs: "crate::types::Order",
+  createPostOnlyOrderWs: "crate::types::Order",
+  createReduceOnlyOrderWs: "crate::types::Order",
+  createStopOrderWs: "crate::types::Order",
+  createStopLimitOrderWs: "crate::types::Order",
+  createStopMarketOrderWs: "crate::types::Order",
+  createStopLossOrderWs: "crate::types::Order",
+  createTakeProfitOrderWs: "crate::types::Order",
+  createTriggerOrderWs: "crate::types::Order",
+  createTrailingAmountOrderWs: "crate::types::Order",
+  createTrailingPercentOrderWs: "crate::types::Order",
+  createOrderWithTakeProfitAndStopLossWs: "crate::types::Order",
   // unsubscribe acks are untyped (`Promise<any>`)
   unWatchBidsAsks: "crate::Value",
   unWatchFundingRate: "crate::Value",
