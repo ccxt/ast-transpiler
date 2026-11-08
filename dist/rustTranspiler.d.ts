@@ -461,6 +461,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printClass(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any): string;
     private static rustTypedParam;
+    private static readonly RUST_TYPED_STR_PARAMS;
     private static readonly RUST_TYPED_RETURNS;
     rustTypedSignature(node: any): {
         params: Array<{

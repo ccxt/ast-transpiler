@@ -3615,8 +3615,11 @@ export class RustTranspiler extends BaseTranspiler {
     private static rustTypedParam(p: any, name: string): { rustType: string, toValue: string } | undefined {
         const ts = String(p.type?.getText?.() ?? '').replace(/\s+/g, '');
         const optional = p.initializer !== undefined || p.questionToken !== undefined;
-        if ((ts === 'Dict' || ts === 'fetchEventsParams') && optional) return { rustType: 'impl Into<crate::Params> + Send', toValue: `${name}.into().into_value()` };
+        if ((ts === 'Dict' || ts === 'object' || ts === 'fetchEventsParams') && optional) return { rustType: 'impl Into<crate::Params> + Send', toValue: `${name}.into().into_value()` };
         if (ts === 'string' && !optional) return { rustType: '&str', toValue: `Value::from(${name})` };
+        // `boolean` (or an untyped `= false`) is a plain flag; an absent optional one takes its declared default
+        const boolDefault = ts === '' && (p.initializer?.kind === SyntaxKind.TrueKeyword || p.initializer?.kind === SyntaxKind.FalseKeyword);
+        if (ts === 'boolean' || boolDefault) return { rustType: 'bool', toValue: `Value::from(${name})` };
         // an optional string (`Str`, `string = '1m'`, untyped `= '1m'`) is `None` for the declared default
         const strDefault = ts === '' && p.initializer?.kind === SyntaxKind.StringLiteral;
         if (((ts === 'Str' || ts === 'string' || strDefault) && optional) || ts === 'Str') return { rustType: 'Option<&str>', toValue: `${name}.map(Value::from).unwrap_or_default()` };
@@ -3633,6 +3636,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (ts === 'Order' && !optional) return { rustType: 'crate::types::Order', toValue: `crate::types::IntoRaw::into_raw(${name})` };
         return undefined;
     }
+
+    // Unified methods whose `Str` parameter is a required base-spec `string` (`market (symbol: Str)` keeps `Str`
+    // so its callers may pass one; the typed signature takes the symbol itself).
+    private static readonly RUST_TYPED_STR_PARAMS: Set<string> = new Set([ 'market' ]);
 
     // Unified return kind -> Rust type; the body's `Value` result decodes through `types::FromRaw`.
     private static readonly RUST_TYPED_RETURNS: Record<string, string> = {
@@ -3681,6 +3688,9 @@ export class RustTranspiler extends BaseTranspiler {
         createTwapOrder: 'crate::types::Order',
         fetchBalance: 'crate::types::Balances',
         fetchMarkets: 'Vec<crate::types::Market>',
+        loadMarkets: 'crate::types::Markets',
+        market: 'crate::types::Market',
+        setSandboxMode: '()',
         fetchCurrencies: 'crate::types::Currencies',
         fetchPositions: 'Vec<crate::types::Position>',
         fetchPosition: 'crate::types::Position',
@@ -3901,7 +3911,9 @@ export class RustTranspiler extends BaseTranspiler {
         const params: Array<{ name: string, rustType: string, toValue: string, optional: boolean }> = [];
         for (const p of Array.from(node.parameters) as any[]) {
             const printed = this.printNode(p.name, 0).replace(/^mut\s+/, '');
-            const t = RustTranspiler.rustTypedParam(p, printed);
+            const t = RustTranspiler.RUST_TYPED_STR_PARAMS.has(name) && String(p.type?.getText?.() ?? '') === 'Str'
+                ? { rustType: '&str', toValue: `Value::from(${printed})` }
+                : RustTranspiler.rustTypedParam(p, printed);
             if (t === undefined) return undefined;
             params.push({ name: printed, optional: p.initializer !== undefined || p.questionToken !== undefined, ...t });
         }
@@ -3915,25 +3927,35 @@ export class RustTranspiler extends BaseTranspiler {
         const lowered = [...required, ...typed.params.filter(p => p.optional)].map(p => p.toValue).join(', ');
         const i1 = this.getIden(identation + 1);
         const i2 = this.getIden(identation + 2);
+        // a sync method (`market`, `setSandboxMode`) runs the same body block, polled once: it never awaits
+        const isAsync = this.isAsyncFunction(node);
         // the required parameters rebind by position (each is a `Value`, as the untyped signature declared it)
         const binds = required.map(p => `${i2}let mut ${p.name} = __it.next().unwrap_or_default();\n`).join('');
         return ` {\n${i2}let __args: Vec<Value> = vec![${lowered}];\n`
             + `${i2}let mut __it = __args.into_iter();\n`
             + binds
             + `${i2}let __optional_args: Vec<Value> = __it.collect();\n`
-            + `${i2}Ok(crate::types::FromRaw::from_raw(crate::runtime::call_typed(async move {\n`
+            + `${i2}Ok(crate::types::FromRaw::from_raw(${isAsync ? '' : 'futures::FutureExt::now_or_never('}crate::runtime::call_typed(async move {\n`
             + `${i2}let optional_args: &[Value] = &__optional_args;\n${inner}\n${i2}Value::Null\n`
-            + `${i2}}).await?))\n${i1}}`;
+            + `${i2}})${isAsync ? '.await' : ').expect("a sync body never awaits")'}?))\n${i1}}`;
     }
 
     // `await this.<typed unified>(args)` inside a `Value` body: bind each argument, call the typed method and
     // box the `Result` back to `Value` (an `Err` re-raises as the panic the untyped call raised).
     printTypedUnifiedCall(node): string | undefined {
         const callee = node.expression;
-        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (!isPropertyAccessExpression(callee)) return undefined;
+        // a ws class reaches its REST parent through `self.parent` (ccxt rewrites `self.super_X(`), so its `super.X()` is typed too
+        const viaSuper = callee.expression.kind === SyntaxKind.SuperKeyword && /ts[/]src[/]pro[/]/.test(String(node.getSourceFile().fileName));
+        // a base test's own `const x = new ccxt.Exchange (..)` (a real exchange core, not the live-dispatch handle)
+        const localRef: any = isIdentifier(callee.expression) ? this.getChecker().getSymbolAtLocation(callee.expression)?.valueDeclaration : undefined;
+        const local: any = localRef?.resolve?.() ?? localRef;
+        const testCore = local?.kind === SyntaxKind.VariableDeclaration && local.initializer?.kind === SyntaxKind.NewExpression
+            && this.rustCallsTestExchange(node);
+        if (callee.expression.kind !== SyntaxKind.ThisKeyword && !viaSuper && !testCore) return undefined;
         // awaited directly, or an element of an awaited `Promise.all ([..])` array (each element is awaited in turn)
         const awaited = node.parent?.kind === SyntaxKind.AwaitExpression || node.parent?.kind === SyntaxKind.ArrayLiteralExpression;
-        if (!this.rustTypedUnified.has(callee.name.text) || !awaited) return undefined;
+        if (!this.rustTypedUnified.has(callee.name.text)) return undefined;
         let decl: any;
         try {
             decl = signatureDeclaration((this.getChecker() as any).getResolvedSignature(node));
@@ -3946,10 +3968,22 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const typed = this.rustTypedSignature(decl);
         if (typed === undefined) return undefined;
+        const isAsync = this.isAsyncFunction(decl);
+        if (isAsync && !awaited) return undefined;
         const args = Array.from(node.arguments) as any[];
+        const declParams = Array.from(decl.parameters) as any[];
         const printed = typed.params.map((p, i) => {
             const absent = args[i] === undefined || args[i].kind === SyntaxKind.UndefinedKeyword || (isIdentifier(args[i]) && args[i].text === 'undefined');
+            if (absent && p.rustType === 'bool') return declParams[i]?.initializer?.kind === SyntaxKind.TrueKeyword ? 'true' : 'false';
             if (absent) return p.rustType.startsWith('impl') ? 'Value::Null' : 'None';
+            if (p.rustType === 'bool') {
+                if (args[i].kind === SyntaxKind.TrueKeyword) return 'true';
+                if (args[i].kind === SyntaxKind.FalseKeyword) return 'false';
+                // a native-`bool` parameter passes through; any other flag reads its `Value::Bool`
+                const argRef: any = isIdentifier(args[i]) ? this.getChecker().getSymbolAtLocation(args[i])?.valueDeclaration : undefined;
+                const argDecl: any = argRef?.resolve?.() ?? argRef;
+                if (argDecl?.kind === SyntaxKind.Parameter && argDecl.parent !== undefined && this.rustParamPrintsBool(argDecl)) return this.printNode(args[i], 0).trim();
+            }
             const lit = RustTranspiler.rustTypedLiteralArg(args[i], p.rustType);
             if (lit !== undefined) return lit;
             const v = this.printNode(args[i], 0).trim();
@@ -3960,13 +3994,16 @@ export class RustTranspiler extends BaseTranspiler {
             if (p.rustType === 'i64') return `${recv}.as_i64().unwrap_or_default()`;
             if (p.rustType === 'f64') return `${recv}.as_f64().unwrap_or_default()`;
             if (p.rustType === 'Option<f64>') return `${recv}.as_f64()`;
+            if (p.rustType === 'bool') return `${recv}.as_bool().unwrap_or_default()`;
             if (p.rustType === 'Vec<String>') return `${recv}.to_str_vec()`;
             if (p.rustType === 'Vec<Vec<String>>') return `${recv}.to_str_vec_vec()`;
             if (p.rustType === 'Option<Vec<String>>') return `${recv}.to_opt_str_vec()`;
             if (p.rustType.startsWith('crate::types::') || p.rustType.startsWith('Vec<crate::types::')) return `crate::types::FromRaw::from_raw(${RustTranspiler.cloneIfBareLocal(v)})`;
             return RustTranspiler.cloneIfBareLocal(v);
         });
-        return `crate::types::IntoRaw::into_raw(self.${this.toSnakeCaseName(callee.name.text)}(${printed.join(', ')}).await)`;
+        const receiver = testCore ? this.printNode(callee.expression, 0) : 'self';
+        // the test harness is its own crate over `ccxt`
+        return `${testCore ? 'ccxt' : 'crate'}::types::IntoRaw::into_raw(${receiver}.${viaSuper ? 'super_' : ''}${this.toSnakeCaseName(callee.name.text)}(${printed.join(', ')})${isAsync ? '.await' : ''})`;
     }
 
     // A literal argument of a typed unified call printed in the parameter's native type (`'market'` -> `"market"`).

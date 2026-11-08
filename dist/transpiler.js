@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-AWK6QGCM.js";
+} from "./chunk-O5MZOAMZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -54307,10 +54307,13 @@ ${classMethods}
   static rustTypedParam(p, name) {
     const ts2 = String(p.type?.getText?.() ?? "").replace(/\s+/g, "");
     const optional = p.initializer !== void 0 || p.questionToken !== void 0;
-    if ((ts2 === "Dict" || ts2 === "fetchEventsParams") && optional)
+    if ((ts2 === "Dict" || ts2 === "object" || ts2 === "fetchEventsParams") && optional)
       return { rustType: "impl Into<crate::Params> + Send", toValue: `${name}.into().into_value()` };
     if (ts2 === "string" && !optional)
       return { rustType: "&str", toValue: `Value::from(${name})` };
+    const boolDefault = ts2 === "" && (p.initializer?.kind === SyntaxKind7.TrueKeyword || p.initializer?.kind === SyntaxKind7.FalseKeyword);
+    if (ts2 === "boolean" || boolDefault)
+      return { rustType: "bool", toValue: `Value::from(${name})` };
     const strDefault = ts2 === "" && p.initializer?.kind === SyntaxKind7.StringLiteral;
     if ((ts2 === "Str" || ts2 === "string" || strDefault) && optional || ts2 === "Str")
       return { rustType: "Option<&str>", toValue: `${name}.map(Value::from).unwrap_or_default()` };
@@ -54353,7 +54356,7 @@ ${classMethods}
     const params = [];
     for (const p of Array.from(node.parameters)) {
       const printed = this.printNode(p.name, 0).replace(/^mut\s+/, "");
-      const t = _RustTranspiler.rustTypedParam(p, printed);
+      const t = _RustTranspiler.RUST_TYPED_STR_PARAMS.has(name) && String(p.type?.getText?.() ?? "") === "Str" ? { rustType: "&str", toValue: `Value::from(${printed})` } : _RustTranspiler.rustTypedParam(p, printed);
       if (t === void 0)
         return void 0;
       params.push({ name: printed, optional: p.initializer !== void 0 || p.questionToken !== void 0, ...t });
@@ -54367,27 +54370,34 @@ ${classMethods}
     const lowered = [...required, ...typed.params.filter((p) => p.optional)].map((p) => p.toValue).join(", ");
     const i1 = this.getIden(identation + 1);
     const i2 = this.getIden(identation + 2);
+    const isAsync = this.isAsyncFunction(node);
     const binds = required.map((p) => `${i2}let mut ${p.name} = __it.next().unwrap_or_default();
 `).join("");
     return ` {
 ${i2}let __args: Vec<Value> = vec![${lowered}];
 ${i2}let mut __it = __args.into_iter();
 ` + binds + `${i2}let __optional_args: Vec<Value> = __it.collect();
-${i2}Ok(crate::types::FromRaw::from_raw(crate::runtime::call_typed(async move {
+${i2}Ok(crate::types::FromRaw::from_raw(${isAsync ? "" : "futures::FutureExt::now_or_never("}crate::runtime::call_typed(async move {
 ${i2}let optional_args: &[Value] = &__optional_args;
 ${inner}
 ${i2}Value::Null
-${i2}}).await?))
+${i2}})${isAsync ? ".await" : ').expect("a sync body never awaits")'}?))
 ${i1}}`;
   }
   // `await this.<typed unified>(args)` inside a `Value` body: bind each argument, call the typed method and
   // box the `Result` back to `Value` (an `Err` re-raises as the panic the untyped call raised).
   printTypedUnifiedCall(node) {
     const callee = node.expression;
-    if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+    if (!isPropertyAccessExpression3(callee))
+      return void 0;
+    const viaSuper = callee.expression.kind === SyntaxKind7.SuperKeyword && /ts[/]src[/]pro[/]/.test(String(node.getSourceFile().fileName));
+    const localRef = isIdentifier3(callee.expression) ? this.getChecker().getSymbolAtLocation(callee.expression)?.valueDeclaration : void 0;
+    const local = localRef?.resolve?.() ?? localRef;
+    const testCore = local?.kind === SyntaxKind7.VariableDeclaration && local.initializer?.kind === SyntaxKind7.NewExpression && this.rustCallsTestExchange(node);
+    if (callee.expression.kind !== SyntaxKind7.ThisKeyword && !viaSuper && !testCore)
       return void 0;
     const awaited = node.parent?.kind === SyntaxKind7.AwaitExpression || node.parent?.kind === SyntaxKind7.ArrayLiteralExpression;
-    if (!this.rustTypedUnified.has(callee.name.text) || !awaited)
+    if (!this.rustTypedUnified.has(callee.name.text))
       return void 0;
     let decl;
     try {
@@ -54402,11 +54412,27 @@ ${i1}}`;
     const typed = this.rustTypedSignature(decl);
     if (typed === void 0)
       return void 0;
+    const isAsync = this.isAsyncFunction(decl);
+    if (isAsync && !awaited)
+      return void 0;
     const args = Array.from(node.arguments);
+    const declParams = Array.from(decl.parameters);
     const printed = typed.params.map((p, i) => {
       const absent = args[i] === void 0 || args[i].kind === SyntaxKind7.UndefinedKeyword || isIdentifier3(args[i]) && args[i].text === "undefined";
+      if (absent && p.rustType === "bool")
+        return declParams[i]?.initializer?.kind === SyntaxKind7.TrueKeyword ? "true" : "false";
       if (absent)
         return p.rustType.startsWith("impl") ? "Value::Null" : "None";
+      if (p.rustType === "bool") {
+        if (args[i].kind === SyntaxKind7.TrueKeyword)
+          return "true";
+        if (args[i].kind === SyntaxKind7.FalseKeyword)
+          return "false";
+        const argRef = isIdentifier3(args[i]) ? this.getChecker().getSymbolAtLocation(args[i])?.valueDeclaration : void 0;
+        const argDecl = argRef?.resolve?.() ?? argRef;
+        if (argDecl?.kind === SyntaxKind7.Parameter && argDecl.parent !== void 0 && this.rustParamPrintsBool(argDecl))
+          return this.printNode(args[i], 0).trim();
+      }
       const lit = _RustTranspiler.rustTypedLiteralArg(args[i], p.rustType);
       if (lit !== void 0)
         return lit;
@@ -54424,6 +54450,8 @@ ${i1}}`;
         return `${recv}.as_f64().unwrap_or_default()`;
       if (p.rustType === "Option<f64>")
         return `${recv}.as_f64()`;
+      if (p.rustType === "bool")
+        return `${recv}.as_bool().unwrap_or_default()`;
       if (p.rustType === "Vec<String>")
         return `${recv}.to_str_vec()`;
       if (p.rustType === "Vec<Vec<String>>")
@@ -54434,7 +54462,8 @@ ${i1}}`;
         return `crate::types::FromRaw::from_raw(${_RustTranspiler.cloneIfBareLocal(v)})`;
       return _RustTranspiler.cloneIfBareLocal(v);
     });
-    return `crate::types::IntoRaw::into_raw(self.${this.toSnakeCaseName(callee.name.text)}(${printed.join(", ")}).await)`;
+    const receiver = testCore ? this.printNode(callee.expression, 0) : "self";
+    return `${testCore ? "ccxt" : "crate"}::types::IntoRaw::into_raw(${receiver}.${viaSuper ? "super_" : ""}${this.toSnakeCaseName(callee.name.text)}(${printed.join(", ")})${isAsync ? ".await" : ""})`;
   }
   // A literal argument of a typed unified call printed in the parameter's native type (`'market'` -> `"market"`).
   static rustTypedLiteralArg(arg, rustType) {
@@ -60746,6 +60775,9 @@ _RustTranspiler.RUST_SIGN_API_METHODS = /* @__PURE__ */ new Set(["sign", "fetch2
 // `ts/src/base/**` — the shared `Exchange` / `PredictionExchange` classes
 // (the transpiler synthesises variants like `.__ExchangeNoOverloads.ts`).
 _RustTranspiler.RUST_BASE_TIER_FILE = /ts[\\/]src[\\/]base[\\/]/;
+// Unified methods whose `Str` parameter is a required base-spec `string` (`market (symbol: Str)` keeps `Str`
+// so its callers may pass one; the typed signature takes the symbol itself).
+_RustTranspiler.RUST_TYPED_STR_PARAMS = /* @__PURE__ */ new Set(["market"]);
 // Unified return kind -> Rust type; the body's `Value` result decodes through `types::FromRaw`.
 _RustTranspiler.RUST_TYPED_RETURNS = {
   fetchTicker: "crate::types::Ticker",
@@ -60793,6 +60825,9 @@ _RustTranspiler.RUST_TYPED_RETURNS = {
   createTwapOrder: "crate::types::Order",
   fetchBalance: "crate::types::Balances",
   fetchMarkets: "Vec<crate::types::Market>",
+  loadMarkets: "crate::types::Markets",
+  market: "crate::types::Market",
+  setSandboxMode: "()",
   fetchCurrencies: "crate::types::Currencies",
   fetchPositions: "Vec<crate::types::Position>",
   fetchPosition: "crate::types::Position",
