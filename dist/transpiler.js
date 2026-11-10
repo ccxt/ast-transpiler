@@ -51346,9 +51346,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustScalarDecisions = /* @__PURE__ */ new Map();
     this.rustScalarCandidates = /* @__PURE__ */ new WeakMap();
     this.rustScalarUseForms = /* @__PURE__ */ new WeakMap();
-    /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
-     *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
-    this.rustScalarViaExpressionUse = 0;
     // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
     //
     // An internal, non-override, non-async method declared `: Str`
@@ -51763,6 +51760,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       case SyntaxKind7.CallExpression:
         return !_RustTranspiler.BOOL_PRODUCING_CALLS.has(this.callExpressionName(node));
       case SyntaxKind7.Identifier:
+        if (this.rustScalarLocalOf(node) !== void 0)
+          return false;
+        return !this.isClassInstanceType(this.getChecker().getTypeAtLocation(node));
       case SyntaxKind7.PropertyAccessExpression:
       case SyntaxKind7.ElementAccessExpression:
         return !this.isClassInstanceType(this.getChecker().getTypeAtLocation(node));
@@ -54211,32 +54211,20 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const widened = kind !== seeded || this.rustScalarExpressionKind(declaration.initializer) !== void 0;
     const boxed = [];
     let expressionUses = false;
-    const seededKeys = /* @__PURE__ */ new Set([...this.rustScalarDecisions.keys(), ...this.rustNilLocalDecisions.keys()]);
-    this.rustScalarDecisions.set(declaration, kind);
     const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
       if (this.rustIdentifierIsPropertyName(n))
         return n.parent?.kind !== SyntaxKind7.ShorthandPropertyAssignment;
       if (this.rustEnclosingFunction(n) !== scope)
         return false;
-      const expressionCalls = this.rustScalarViaExpressionUse;
       const form = this.rustScalarUseForm(n, kind);
       this.rustScalarUseForms.set(n, form);
-      if (form === "box" || form === "err")
+      if (form === "box" || form === "xbox" || form === "err")
         boxed.push(n);
-      if (form !== void 0 && this.rustScalarViaExpressionUse !== expressionCalls)
+      if (form === "xbox" || form === "native" || form === "targ" || form === "err")
         expressionUses = true;
       return form !== void 0;
     });
-    const accepted = ok && !((widened || expressionUses) && this.rustScalarBoxesOverflow(declaration, [declaration.name, ...boxed], kind));
-    if (!accepted) {
-      for (const key of [...this.rustScalarDecisions.keys()])
-        if (!seededKeys.has(key))
-          this.rustScalarDecisions.delete(key);
-      for (const key of [...this.rustNilLocalDecisions.keys()])
-        if (!seededKeys.has(key))
-          this.rustNilLocalDecisions.delete(key);
-    }
-    this.rustScalarDecisions.set(declaration, null);
+    const accepted = ok && !((widened || expressionUses) && this.rustScalarBoxesOverflow(declaration, boxed, kind));
     return accepted ? kind : void 0;
   }
   /** Integer literal text (`5`, `-5`) that fits an `i64`, else undefined. */
@@ -54473,7 +54461,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return super.printIdentifier(node);
     if (form === "err")
       return `${super.printIdentifier(node)}.clone()`;
-    if (form !== "box")
+    if (form !== "box" && form !== "xbox")
       return void 0;
     const name = super.printIdentifier(node);
     const moved = isReturnStatement4(node.parent) ? name : `${name}.clone()`;
@@ -54494,7 +54482,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (isConditionalExpression4(node)) {
       const whenTrue = this.rustScalarNativeText(kind, node.whenTrue);
       const whenFalse = this.rustScalarNativeText(kind, node.whenFalse);
-      return whenTrue === void 0 || whenFalse === void 0 ? void 0 : `(if ${this.printCondition(node.condition, 0).trim()} { ${whenTrue} } else { ${whenFalse} })`;
+      if (whenTrue === void 0 || whenFalse === void 0)
+        return void 0;
+      return `(if ${this.printCondition(node.condition, 0).trim()} { ${whenTrue} } else { ${whenFalse} })`;
     }
     if (isIdentifier3(node) && this.rustScalarLocalOf(node)?.kind === kind) {
       const name = super.printIdentifier(node);
@@ -54886,7 +54876,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!this.rustScalarOwnsOperand(node.left) && !this.rustScalarOwnsOperand(node.right))
       return void 0;
     const kind = this.rustScalarExpressionKind(node);
-    const text = kind === void 0 ? void 0 : this.rustScalarExpressionText(kind, node);
+    if (kind !== "int" && kind !== "num" && kind !== "bool")
+      return void 0;
+    const text = this.rustScalarExpressionText(kind, node);
     return text === void 0 ? void 0 : this.rustScalarBoxText(kind, text, node);
   }
   /** `s += <string>` (`push_str`) on a `String` local, `n += <int>` / `n -= <int>` on an `i64` local. */
@@ -54979,43 +54971,32 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const long = [...roots].filter(([root]) => String(root.getText?.() ?? "").replace(/\s+/g, " ").length >= 40);
     if (long.length === 0)
       return false;
-    let overflow = false;
-    for (const [root] of long) {
-      if (isStatement(root) && root.kind !== SyntaxKind7.ExpressionStatement && root.kind !== SyntaxKind7.VariableStatement && root.kind !== SyntaxKind7.ReturnStatement && root.kind !== SyntaxKind7.ThrowStatement)
-        continue;
-      const id = String(declaration.name.text);
-      const name = new RegExp(`\\b${id}\\b`);
-      const unboxed = (l) => l.split(`${id}.clone().map(Value::from).unwrap_or(Value::Null)`).join(id).split(`Value::from(${id}.clone())`).join(id).split(`Value::from(${id})`).join(id).split(`Value::Bool(${id})`).join(id);
-      const text = String(root.getSourceFile?.()?.text ?? "");
+    const growth = kind === "ostr" ? 46 : kind === "str" ? 23 : 14;
+    const text = String(declaration.getSourceFile?.()?.text ?? "");
+    const overflow = long.some(([root, count]) => {
       const start = typeof root.getStart === "function" ? root.getStart() : root.pos;
       const indent = start - text.lastIndexOf("\n", start - 1) - 1;
-      let lines = [];
-      try {
-        lines = this.printNode(root, 0).split("\n").filter((l) => name.test(l)).map((l) => l.trim());
-      } catch (e) {
-        overflow = true;
-      }
-      const native = (l) => unboxed(l).replace(/\.as_(?:str|i64|f64|bool)\(\)(?:\.map\(str::to_owned\)|\.unwrap_or\([^()]*\)(?:\.to_string\(\))?)?;/, ";");
-      if (overflow || lines.some((l) => indent + l.length > 400 && indent + native(l).length <= 400)) {
-        overflow = true;
-        break;
-      }
-    }
+      const source = String(root.getText?.() ?? "").replace(/\s+/g, " ").length;
+      const expression = root.kind === SyntaxKind7.ExpressionStatement ? root.expression : root;
+      const destructure = isBinaryExpression5(expression) && isArrayLiteralExpression4(expression.left);
+      return indent + source * (destructure ? 3.3 : 2.3) + count * growth > 330;
+    });
     return overflow;
   }
+  /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
+   *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
   rustScalarExpressionUseForm(n, kind) {
-    this.rustScalarViaExpressionUse++;
     const parent = n.parent;
     if (isParenthesizedExpression3(parent) || parent.kind === SyntaxKind7.AsExpression) {
       const outer = this.rustScalarUseForm(parent, kind);
-      return outer === "box" || outer === "native" && isParenthesizedExpression3(parent) ? outer : void 0;
+      return outer === "box" || outer === "xbox" || outer === "native" && isParenthesizedExpression3(parent) ? outer : void 0;
     }
     if (isBinaryExpression5(parent)) {
       const op = parent.operatorToken.kind;
       if (op === SyntaxKind7.PlusEqualsToken || op === SyntaxKind7.MinusEqualsToken)
         return this.rustScalarCompoundText(parent, true) !== void 0 ? "native" : void 0;
       if (op === SyntaxKind7.EqualsToken && parent.right === n && parent.parent?.kind === SyntaxKind7.ExpressionStatement) {
-        return this.rustScalarPlainValueTarget(parent.left) ? "box" : void 0;
+        return this.rustScalarPlainValueTarget(parent.left) ? "xbox" : void 0;
       }
       if (_RustTranspiler.RUST_SCALAR_ARITH_OPS.has(op) && this.rustScalarExpressionKind(parent) !== void 0)
         return "native";
@@ -55036,10 +55017,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       }
       return void 0;
     }
-    if (isElementAccessExpression4(parent) && parent.argumentExpression === n) {
-      const write = parent.parent;
-      return kind === "str" && isBinaryExpression5(write) && write.left === parent && write.operatorToken.kind === SyntaxKind7.EqualsToken && !isElementAccessExpression4(parent.expression) ? "box" : void 0;
-    }
     if (isCallExpression6(parent) && parent.expression !== n) {
       const at = parent.arguments.indexOf(n);
       const paramType = this.rustScalarTypedParamType(parent, at);
@@ -55047,16 +55024,16 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return this.rustScalarTypedArgText(n, paramType, true) !== void 0 ? "targ" : void 0;
       const callee = parent.expression;
       const push = isPropertyAccessExpression3(callee) && callee.name.text === "push" && callee.expression.kind !== SyntaxKind7.ThisKeyword && parent.arguments.length === 1;
-      return push ? "box" : void 0;
+      return push ? "xbox" : void 0;
     }
     if (parent.kind === SyntaxKind7.NewExpression && isIdentifier3(parent.expression) && (kind === "str" || kind === "ostr")) {
       const ctor = _RustTranspiler.RUST_ERROR_CONSTRUCTOR_ARGS[this.rustErrorConstructorName(String(parent.expression.text))];
       if (ctor?.[parent.arguments.indexOf(n)] !== "msg" || parent.parent?.kind !== SyntaxKind7.ThrowStatement)
         return void 0;
-      return kind === "str" ? "err" : "box";
+      return kind === "str" ? "err" : "xbox";
     }
-    if (isVariableDeclaration3(parent) && parent.initializer === n && isIdentifier3(parent.name))
-      return "box";
+    if (isVariableDeclaration3(parent) && parent.initializer === n && isIdentifier3(parent.name) && kind !== "bool")
+      return "xbox";
     return void 0;
   }
   /** Call hook: a string method of a typed string local, boxed back to `Value`. */
@@ -61401,6 +61378,8 @@ ${this.getIden(identation)}}`;
       return true;
     if (isBinaryExpression5(inner) && inner.operatorToken.kind === SyntaxKind7.PlusToken)
       return this.alwaysStr(inner.left) || this.alwaysStr(inner.right);
+    if (isIdentifier3(inner) && this.rustScalarLocalOf(inner)?.kind === "str")
+      return true;
     return isCallExpression6(inner) && isPropertyAccessExpression3(inner.expression) && inner.expression.name.text === "toString" && (inner.arguments?.length ?? 0) === 0 && this.printsValueExpression(inner.expression.expression);
   }
   concatOperandSafe(node, type) {

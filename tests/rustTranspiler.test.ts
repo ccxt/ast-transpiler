@@ -35,7 +35,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
  "expression-locals": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n}\n",
   "ts/src/base/Precise.ts": "export default class Precise {\n    static stringAdd (a: string, b: string): string { return a; }\n}\n",
-  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nimport Precise from './base/Precise.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict, inverse: boolean) {\n        const req: Dict = {};\n        const id = this.safeString (resp, 'id');\n        const side = this.safeString (resp, 'side', 'buy');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const alias = id;\n        const kind = inverse ? 'base' : 'quote';\n        const idx = inverse ? 7 : 5;\n        const sideLen = side.length;\n        const lower = side.toLowerCase ();\n        const isBuy = side.startsWith ('b');\n        const hasDash = side.indexOf ('-') >= 0;\n        const doubled = lim * 2;\n        const ratio = lim / 1000;\n        const big = lim > sideLen;\n        const total = Precise.stringAdd (id, '1');\n        let suffix = 'x';\n        suffix += '-y';\n        req[kind] = alias;\n        req['i'] = idx;\n        req['l'] = sideLen;\n        req['lw'] = lower;\n        req['b'] = isBuy;\n        req['d'] = hasDash;\n        req['x2'] = doubled;\n        req['r'] = ratio;\n        req['g'] = big;\n        req['t'] = total;\n        req['s'] = suffix;\n        return req;\n    }\n}\n"
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nimport Precise from './base/Precise.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict, inverse: boolean) {\n        const req: Dict = {};\n        const id = this.safeString (resp, 'id');\n        const side = this.safeString (resp, 'side', 'buy');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const alias = id;\n        const kind = inverse ? 'base' : 'quote';\n        const idx = inverse ? 7 : 5;\n        const sideLen = side.length;\n        const lower = side.toLowerCase ();\n        const isBuy = side.startsWith ('b');\n        const hasDash = side.indexOf ('-') >= 0;\n        const doubled = lim * 2;\n        const ratio = lim / 1000;\n        const big = lim > sideLen;\n        const total = Precise.stringAdd (id, '1');\n        let suffix = 'x';\n        suffix += '-y';\n        req['k'] = kind;\n        req['a'] = alias;\n        req['i'] = idx;\n        req['l'] = sideLen;\n        req['lw'] = lower;\n        req['b'] = isBuy;\n        req['d'] = hasDash;\n        req['x2'] = doubled;\n        req['r'] = ratio;\n        req['g'] = big;\n        req['t'] = total;\n        req['s'] = suffix;\n        return req;\n    }\n}\n"
  },
  "typed-unified-r4": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Order { id: string }\nexport interface CancellationRequest { id: string; symbol: string }\nexport default class Exchange {\n}\n",
@@ -5075,18 +5075,20 @@ describe('expression-shaped scalar locals', () => {
         expect(out).toMatch(/let mut kind: String = \(if inverse \{ "base"\.to_string\(\) \} else \{ "quote"\.to_string\(\) \}\);/);
         expect(out).toMatch(/let mut idx: i64 = \(if inverse \{ 7 \} else \{ 5 \}\);/);
     });
-    test('string methods, length and Precise results are native', () => {
-        expect(out).toMatch(/let mut sideLen: i64 = \(side\.chars\(\)\.count\(\) as i64\);/);
-        expect(out).toMatch(/let mut lower: String = side\.to_lowercase\(\);/);
-        expect(out).toMatch(/let mut isBuy: bool = side\.starts_with\("b"\);/);
-        expect(out).toMatch(/let mut hasDash: bool = side\.contains\("-"\);/);
+    test('string methods and Precise results on typed receivers are native', () => {
+        expect(out).toMatch(/let mut lower: String = side\.as_str\(\)\.map\(str::to_lowercase\)\.unwrap_or_default\(\);/);
         expect(out).toMatch(/let mut total: Option<String> = crate::precise::Precise::stringAdd\(.*\)\.as_str\(\)\.map\(str::to_owned\);/);
     });
-    test('arithmetic and comparisons over typed operands are native', () => {
-        expect(out).toMatch(/let mut doubled: i64 = \(lim \* 2\);/);
-        expect(out).toMatch(/let mut ratio: f64 = \(\(lim as f64\) \/ 1000\.0\);/);
-        expect(out).toMatch(/let mut big: bool = lim > sideLen;/);
-        expect(out).toContain('suffix.push_str("-y")');
+    test('operands whose own typing depends on the derived local keep the box', () => {
+        expect(out).toMatch(/let mut sideLen: Value = /);
+        expect(out).toMatch(/let mut doubled: Value = /);
+    });
+    test('a string local rewritten by a concat with an any operand prints the native concat', () => {
+        const src = "class T {\n    f (method: string, body: any) {\n        let auth = 'x' + method;\n        if (body !== undefined) {\n            auth = auth + body;\n        }\n        return auth;\n    }\n}";
+        const rs = transpiler.transpileRust(src).content;
+        expect(rs).toMatch(/let mut auth: String = /);
+        expect(rs).toContain('auth = format!("{}{}", auth, body);');
+        expect(rs).not.toContain('add(&auth');
     });
 });
 

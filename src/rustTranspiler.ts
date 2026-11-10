@@ -720,6 +720,8 @@ export class RustTranspiler extends BaseTranspiler {
         case SyntaxKind.PrefixUnaryExpression: return node.operator !== SyntaxKind.ExclamationToken;
         case SyntaxKind.CallExpression: return !RustTranspiler.BOOL_PRODUCING_CALLS.has(this.callExpressionName(node));
         case SyntaxKind.Identifier:
+            if (this.rustScalarLocalOf(node) !== undefined) return false;
+            return !this.isClassInstanceType(this.getChecker().getTypeAtLocation(node));
         case SyntaxKind.PropertyAccessExpression:
         case SyntaxKind.ElementAccessExpression:
             return !this.isClassInstanceType(this.getChecker().getTypeAtLocation(node));
@@ -3447,26 +3449,17 @@ export class RustTranspiler extends BaseTranspiler {
         const widened = kind !== seeded || this.rustScalarExpressionKind(declaration.initializer) !== undefined;
         const boxed: any[] = [];
         let expressionUses = false;
-        // the uses are checked with the candidate kind seeded; decisions taken meanwhile are dropped on a rejection
-        const seededKeys = new Set([ ...this.rustScalarDecisions.keys(), ...this.rustNilLocalDecisions.keys() ]);
-        this.rustScalarDecisions.set(declaration, kind);
         const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             if (this.rustEnclosingFunction(n) !== scope) return false;
-            const expressionCalls = this.rustScalarViaExpressionUse;
             const form = this.rustScalarUseForm(n, kind);
             this.rustScalarUseForms.set(n, form);
-            if (form === 'box' || form === 'err') boxed.push(n);
-            if (form !== undefined && this.rustScalarViaExpressionUse !== expressionCalls) expressionUses = true;
+            if (form === 'box' || form === 'xbox' || form === 'err') boxed.push(n);
+            if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
         // the guard covers only the locals the expression shapes admit
-        const accepted = ok && !((widened || expressionUses) && this.rustScalarBoxesOverflow(declaration, [ declaration.name, ...boxed ], kind));
-        if (!accepted) {
-            for (const key of [ ...this.rustScalarDecisions.keys() ]) if (!seededKeys.has(key)) this.rustScalarDecisions.delete(key);
-            for (const key of [ ...this.rustNilLocalDecisions.keys() ]) if (!seededKeys.has(key)) this.rustNilLocalDecisions.delete(key);
-        }
-        this.rustScalarDecisions.set(declaration, null);
+        const accepted = ok && !((widened || expressionUses) && this.rustScalarBoxesOverflow(declaration, boxed, kind));
         return accepted ? kind : undefined;
     }
 
@@ -3674,7 +3667,7 @@ export class RustTranspiler extends BaseTranspiler {
         const form = local === undefined ? undefined : this.rustScalarUseForms.get(node);
         if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
-        if (form !== 'box') return undefined;
+        if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
         // only a direct `return x` moves: ccxt hoists call arguments ahead of their statement
         const moved = isReturnStatement(node.parent) ? name : `${name}.clone()`;
@@ -3693,8 +3686,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isConditionalExpression(node)) {
             const whenTrue = this.rustScalarNativeText(kind, node.whenTrue);
             const whenFalse = this.rustScalarNativeText(kind, node.whenFalse);
-            return whenTrue === undefined || whenFalse === undefined ? undefined
-                : `(if ${this.printCondition(node.condition, 0).trim()} { ${whenTrue} } else { ${whenFalse} })`;
+            if (whenTrue === undefined || whenFalse === undefined) return undefined;
+            return `(if ${this.printCondition(node.condition, 0).trim()} { ${whenTrue} } else { ${whenFalse} })`;
         }
         if (isIdentifier(node) && this.rustScalarLocalOf(node)?.kind === kind) {
             const name = super.printIdentifier(node);
@@ -4032,7 +4025,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (!RustTranspiler.RUST_SCALAR_ARITH_OPS.has(op) || this.isEqualityOp(op)) return undefined;
         if (!this.rustScalarOwnsOperand(node.left) && !this.rustScalarOwnsOperand(node.right)) return undefined;
         const kind = this.rustScalarExpressionKind(node);
-        const text = kind === undefined ? undefined : this.rustScalarExpressionText(kind, node);
+        if (kind !== 'int' && kind !== 'num' && kind !== 'bool') return undefined;
+        const text = this.rustScalarExpressionText(kind, node);
         return text === undefined ? undefined : this.rustScalarBoxText(kind, text, node);
     }
 
@@ -4119,48 +4113,35 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const long = [ ...roots ].filter(([ root ]) => String(root.getText?.() ?? '').replace(/\s+/g, ' ').length >= 40);
         if (long.length === 0) return false;
-        let overflow = false;
-        for (const [ root ] of long) {
-            if (isStatement(root) && root.kind !== SyntaxKind.ExpressionStatement && root.kind !== SyntaxKind.VariableStatement
-                && root.kind !== SyntaxKind.ReturnStatement && root.kind !== SyntaxKind.ThrowStatement) continue;
-            const id = String(declaration.name.text);
-            const name = new RegExp(`\\b${id}\\b`);
-            const unboxed = (l: string) => l.split(`${id}.clone().map(Value::from).unwrap_or(Value::Null)`).join(id)
-                .split(`Value::from(${id}.clone())`).join(id).split(`Value::from(${id})`).join(id).split(`Value::Bool(${id})`).join(id);
-            const text = String(root.getSourceFile?.()?.text ?? '');
+        // estimated from the source (printing here would cache decisions taken with this one open):
+        // a printed line runs about 2.3x its source plus the box text of each typed use
+        const growth = kind === 'ostr' ? 46 : (kind === 'str' ? 23 : 14);
+        const text = String(declaration.getSourceFile?.()?.text ?? '');
+        const overflow = long.some(([ root, count ]) => {
             const start = typeof root.getStart === 'function' ? root.getStart() : root.pos;
             const indent = start - text.lastIndexOf('\n', start - 1) - 1;
-            let lines: string[] = [];
-            try {
-                lines = this.printNode(root, 0).split('\n').filter((l) => name.test(l)).map((l) => l.trim());
-            } catch (e) {
-                overflow = true;
-            }
-            const native = (l: string) => unboxed(l).replace(/\.as_(?:str|i64|f64|bool)\(\)(?:\.map\(str::to_owned\)|\.unwrap_or\([^()]*\)(?:\.to_string\(\))?)?;/, ';');
-            if (overflow || lines.some((l) => indent + l.length > 400 && indent + native(l).length <= 400)) {
-                overflow = true;
-                break;
-            }
-        }
+            const source = String(root.getText?.() ?? '').replace(/\s+/g, ' ').length;
+            // a destructuring write prints its tuple temp and every slot on the same line
+            const expression: any = root.kind === SyntaxKind.ExpressionStatement ? root.expression : root;
+            const destructure = isBinaryExpression(expression) && isArrayLiteralExpression(expression.left);
+            return indent + source * (destructure ? 3.3 : 2.3) + count * growth > 330;
+        });
         return overflow;
     }
 
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
-    private rustScalarViaExpressionUse = 0;
-
     rustScalarExpressionUseForm(n, kind: string): string | undefined {
-        this.rustScalarViaExpressionUse++;
         const parent: any = n.parent;
         if (isParenthesizedExpression(parent) || parent.kind === SyntaxKind.AsExpression) {
             const outer = this.rustScalarUseForm(parent, kind);
-            return outer === 'box' || (outer === 'native' && isParenthesizedExpression(parent)) ? outer : undefined;
+            return outer === 'box' || outer === 'xbox' || (outer === 'native' && isParenthesizedExpression(parent)) ? outer : undefined;
         }
         if (isBinaryExpression(parent)) {
             const op = parent.operatorToken.kind;
             if (op === SyntaxKind.PlusEqualsToken || op === SyntaxKind.MinusEqualsToken) return this.rustScalarCompoundText(parent, true) !== undefined ? 'native' : undefined;
             if (op === SyntaxKind.EqualsToken && parent.right === n && parent.parent?.kind === SyntaxKind.ExpressionStatement) {
-                return this.rustScalarPlainValueTarget(parent.left) ? 'box' : undefined;
+                return this.rustScalarPlainValueTarget(parent.left) ? 'xbox' : undefined;
             }
             if (RustTranspiler.RUST_SCALAR_ARITH_OPS.has(op) && this.rustScalarExpressionKind(parent) !== undefined) return 'native';
             return undefined;
@@ -4176,26 +4157,21 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return undefined;
         }
-        // a key of a one-level `a[k] = v` write (the insert stringifies it); reads keep their native key forms
-        if (isElementAccessExpression(parent) && parent.argumentExpression === n) {
-            const write: any = parent.parent;
-            return kind === 'str' && isBinaryExpression(write) && write.left === parent && write.operatorToken.kind === SyntaxKind.EqualsToken
-                && !isElementAccessExpression(parent.expression) ? 'box' : undefined;
-        }
         if (isCallExpression(parent) && parent.expression !== n) {
             const at = parent.arguments.indexOf(n);
             const paramType = this.rustScalarTypedParamType(parent, at);
             if (paramType !== undefined) return this.rustScalarTypedArgText(n, paramType, true) !== undefined ? 'targ' : undefined;
             const callee: any = parent.expression;
             const push = isPropertyAccessExpression(callee) && callee.name.text === 'push' && callee.expression.kind !== SyntaxKind.ThisKeyword && parent.arguments.length === 1;
-            return push ? 'box' : undefined;
+            return push ? 'xbox' : undefined;
         }
         if (parent.kind === SyntaxKind.NewExpression && isIdentifier(parent.expression) && (kind === 'str' || kind === 'ostr')) {
             const ctor = (RustTranspiler as any).RUST_ERROR_CONSTRUCTOR_ARGS[this.rustErrorConstructorName(String(parent.expression.text))];
             if (ctor?.[parent.arguments.indexOf(n)] !== 'msg' || parent.parent?.kind !== SyntaxKind.ThrowStatement) return undefined;
-            return kind === 'str' ? 'err' : 'box';
+            return kind === 'str' ? 'err' : 'xbox';
         }
-        if (isVariableDeclaration(parent) && parent.initializer === n && isIdentifier(parent.name)) return 'box';
+        // an alias initializer (a `bool` alias is the bool-initializer rule's)
+        if (isVariableDeclaration(parent) && parent.initializer === n && isIdentifier(parent.name) && kind !== 'bool') return 'xbox';
         return undefined;
     }
 
@@ -11067,6 +11043,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (inner === undefined) return false;
         if (isStringLiteral(inner) || isNoSubstitutionTemplateLiteral(inner)) return true;
         if (isBinaryExpression(inner) && inner.operatorToken.kind === SyntaxKind.PlusToken) return this.alwaysStr(inner.left) || this.alwaysStr(inner.right);
+        // a typed `String` scalar local is a `format!` operand as-is
+        if (isIdentifier(inner) && this.rustScalarLocalOf(inner)?.kind === 'str') return true;
         return isCallExpression(inner) && isPropertyAccessExpression(inner.expression) && inner.expression.name.text === 'toString'
             && (inner.arguments?.length ?? 0) === 0 && this.printsValueExpression(inner.expression.expression);
     }

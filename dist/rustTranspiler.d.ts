@@ -490,7 +490,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarBoxesOverflow(declaration: any, uses: any[], kind: string): boolean;
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
-    private rustScalarViaExpressionUse;
     rustScalarExpressionUseForm(n: any, kind: string): string | undefined;
     /** Call hook: a string method of a typed string local, boxed back to `Value`. */
     printRustScalarMethodCall(node: any): string | undefined;
