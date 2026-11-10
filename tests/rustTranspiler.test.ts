@@ -24,6 +24,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { symbol: string }\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    markets: Dict = {};\n    options: Dict = {};\n    async loadMarkets (reload: boolean = false, params: object = {}): Promise<Dictionary<Market>> {\n        return this.markets;\n    }\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    setSandboxMode (enabled: boolean) {\n        this.options['sandboxMode'] = enabled;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Market, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    override async loadMarkets (reload = false, params: Dict = {}) {\n        const markets = await super.loadMarkets (reload, params);\n        return markets;\n    }\n    override market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    override setSandboxMode (enable: boolean) {\n        this.options['sandboxMode'] = enable;\n    }\n    async fetchSomething (symbol: string, params = {}) {\n        await this.loadMarkets ();\n        await this.loadMarkets (true);\n        const market = this.market (symbol);\n        this.setSandboxMode (true);\n        return market;\n    }\n}\n"
  },
+ "typed-market-local": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; spot: boolean; swap: boolean; stock?: boolean; linear: boolean | undefined; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    safeString (d: any, k: any): Str {\n        return d[k];\n    }\n    hold (m: any): any {\n        return m;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchOne (symbol: string, params: Dict = {}) {\n        const market = this.market (symbol);\n        const request: Dict = { 'pair': market['id'] };\n        if (market['swap'] || market['linear']) {\n            request['info'] = market['info'];\n        }\n        request['s'] = this.safeString (market, 'symbol');\n        return this.hold (market);\n    }\n    fetchTwo (symbol: string) {\n        let market = this.market (symbol);\n        market = this.market ('x');\n        return market['id'];\n    }\n    fetchThree (symbol: string) {\n        const market = this.market (symbol);\n        const isStock = market['stock'];\n        const isStockSpot = isStock && (market['spot'] === true);\n        if (isStockSpot || (market['spot'] !== true)) {\n            return market['id'];\n        }\n        return market['symbol'];\n    }\n}\n"
+ },
  "typed-unified-r4": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Order { id: string }\nexport interface CancellationRequest { id: string; symbol: string }\nexport default class Exchange {\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { CancellationRequest, Dict, Order, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async cancelOrdersForSymbols (orders: CancellationRequest[], params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    async cancelUnifiedOrder (order: Order, params: Dict = {}): Promise<Order> {\n        const orders = await this.cancelOrdersForSymbols ([ order ], params);\n        return orders[0];\n    }\n    async fetchOrderStatus (id: string, symbol: Str = undefined, params: Dict = {}): Promise<Str> {\n        return 'open';\n    }\n}\n"
@@ -1204,6 +1208,69 @@ describe('rust transpiling tests', () => {
     // A local holding a `safeString*` result is declared `Option<String>` when
     // the checker proves the string and every use is a native sink (null test,
     // string-literal compare); the helper call stays as its producer.
+
+    describe('nil-declared locals', () => {
+        const cls = (body: string) => `class Precise { static stringAdd(a: string, b: string): string { return a; } }
+class A {
+    safeString(o: any, k: any, d: string = undefined): string { return undefined as any; }
+    safeInteger(o: any, k: any, d: number = undefined): number { return undefined as any; }
+    hold(x: any): any { return x; }
+    run(o: any, kind: string) {
+${body}
+    }
+}`;
+
+        test('string writes join to Option<String> with exact unwraps', () => {
+            const out = transpiler.transpileRust(cls(`        let side: string = undefined;
+        if (kind === 'a') { side = 'buy'; } else if (kind === 'b') { side = this.safeString(o, 'side'); } else { side = Precise.stringAdd('1', '2'); }
+        if (side === 'buy') { return 1; }
+        return this.hold(side);`)).content;
+            expect(out).toContain('let mut side: Option<String> = None;');
+            expect(out).toContain('side = Some("buy".to_string());');
+            expect(out).toContain('side = self.safeString(o, Value::Str("side".into()), &[]).as_str().map(str::to_owned);');
+            expect(out).toContain('side.as_deref() == Some("buy")');
+            expect(out).toContain('self.hold(side.clone().map(Value::from).unwrap_or(Value::Null))');
+            expect(out).not.toContain('side: Value');
+        });
+
+        test('bool and int writes join to Option<bool> / Option<i64>', () => {
+            const out = transpiler.transpileRust(cls(`        let flag: boolean = undefined;
+        if (kind === 'x') { flag = true; } else { flag = (kind === 'y'); }
+        let n = undefined;
+        if (flag) { n = this.safeInteger(o, 'n'); }
+        if (n === undefined) { return 0; }
+        return { 'n': n, 'flag': flag };`)).content;
+            expect(out).toContain('let mut flag: Option<bool> = None;');
+            expect(out).toContain('flag = Some(true);');
+            expect(out).toContain('if (flag == Some(true)) {');
+            expect(out).toContain('let mut n: Option<i64> = None;');
+            expect(out).toContain('n = self.safeInteger(o, Value::Str("n".into()), &[]).as_i64();');
+            expect(out).toContain('if (n.is_none()) {');
+            expect(out).toContain('m.insert("n".to_string(), Value::from(n));');
+            expect(out).toContain('m.insert("flag".to_string(), flag.map(Value::from).unwrap_or(Value::Null));');
+        });
+
+        test('mixed or unproven writes keep the Value box', () => {
+            const out = transpiler.transpileRust(cls(`        let a = undefined;
+        if (kind === 'x') { a = 'str'; } else { a = 1; }
+        let b = undefined;
+        b = this.hold(o);
+        let c = undefined;
+        c = this.safeInteger(o, 'c', 1.5);
+        return [ a, b, c ];`)).content;
+            expect(out).toContain('let mut a: Value = Value::Null;');
+            expect(out).toContain('let mut b: Value = Value::Null;');
+            expect(out).toContain('let mut c: Value = Value::Null;');
+        });
+
+        test('a read outside the proven sinks keeps the Value box', () => {
+            const out = transpiler.transpileRust(cls(`        let s = undefined;
+        s = 'x';
+        const t = s + 'y';
+        return t;`)).content;
+            expect(out).toContain('let mut s: Value = Value::Null;');
+        });
+    });
 
     describe('typed string locals', () => {
         const withHelper = (helper: string, body: string) =>
@@ -4561,7 +4628,9 @@ describe('safeDict / builder plain dicts and bool-value truthiness', () => {
     });
 
     test('bool tuple elements and bool-returning methods test truthiness natively', () => {
-        expect(output).toContain('if paginate.as_bool() == Some(true) {');
+        // a boolean tuple slot read only in conditions is declared `bool`
+        expect(output).toContain('let mut paginate: bool = ');
+        expect(output).toContain('if paginate {');
         expect(output).toContain('if isTrigger.as_bool() == Some(true) {');
         expect(output).toContain('if !(self.isConditionalOrder(&[params]).as_bool() == Some(true)) {');
     });
@@ -4915,6 +4984,39 @@ describe('tuple slot-1 params of base handle*AndParams helpers', () => {
     test('pro: a parameter source keeps the helper, a plain local source goes native', () => {
         expect(pro).toContain('add_element_to_object(&mut paramsStock');
         expect(pro).not.toContain('add_element_to_object(&mut paramsLocal');
+    });
+});
+
+describe('rust typed tuple-destructure slots', () => {
+    const src = `class T {
+    pick (params: any): [string, any] { return [ 'spot', params ]; }
+    flag (params: any): [boolean, any] { return [ true, params ]; }
+    f (params: any) {
+        const [ marketType, query ] = this.pick (params);
+        const [ paginate, rest ] = this.flag (query);
+        if (paginate) {
+            return 1;
+        }
+        if (marketType === 'swap') {
+            return rest;
+        }
+        const [ kept, other ] = this.pick (params);
+        return marketType === undefined ? kept : other;
+    }
+}`;
+    let out: string;
+    beforeAll(() => { out = transpiler.transpileRust(src).content; });
+    test('a string slot read only by literal / null compares is Option<String>', () => {
+        expect(out).toContain('let mut marketType: Option<String> = marketTypequeryVariable.get(0).and_then(Value::as_str).map(str::to_owned)');
+        expect(out).toContain('marketType.as_deref() == Some("swap")');
+    });
+    test('a boolean slot read only in conditions is bool', () => {
+        expect(out).toContain('let mut paginate: bool = paginaterestVariable.get(0).and_then(Value::as_bool) == Some(true)');
+        expect(out).toMatch(/if paginate \{/);
+    });
+    test('a slot with another use stays Value', () => {
+        expect(out).toContain('let mut kept: Value = keptotherVariable.get(0).cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('let mut query: Value = marketTypequeryVariable.get(1).cloned().unwrap_or(Value::Null)');
     });
 });
 
@@ -6533,5 +6635,34 @@ describe('rust typed setup methods (loadMarkets / market / setSandboxMode)', () 
         expect(output).toContain('crate::types::IntoRaw::into_raw(self.market(symbol.as_str().unwrap_or_default()))');
         expect(output).toContain('crate::types::IntoRaw::into_raw(self.set_sandbox_mode(true))');
         expect(output).not.toContain('self.set_sandbox_mode(true).await');
+    });
+});
+
+describe('rust typed Market locals', () => {
+    let output = '';
+    beforeAll(() => {
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = typed.transpileRustByPath(path.join (rustFixtureRoot, 'typed-market-local', 'ts/src/venue.ts')).content;
+    });
+
+    test('a read-only market local keeps the struct and reads listed fields natively', () => {
+        expect(output).toContain('let mut market: crate::types::Market = (match self.market(');
+        expect(output).toContain('Value::from((market).id.clone())');
+        expect(output).toContain('(market).swap || (market.linear == Some(true))'.replace('market.linear', '(market).linear'));
+        expect(output).toContain('(market).raw.as_map().and_then(|__m| __m.get("info"))');
+        expect(output).toContain('Value::from((market).symbol.clone())');
+        expect(output).toContain('self.hold((market).raw.clone())');
+    });
+
+    test('a reassigned market local stays a Value', () => {
+        expect(output).toContain('let mut market: Value = crate::types::IntoRaw::into_raw(self.market(');
+    });
+
+    test('flag reads off a market struct print plain bools, never is_true', () => {
+        expect(output).toContain('let mut isStock: Value = (market).raw.as_map().and_then(|__m| __m.get("stock"))');
+        expect(output).toContain('isStock.as_bool() == Some(true) && ((market).spot)');
+        expect(output).toContain('!(market).spot');
+        expect(output).not.toContain('is_true(&isStock)');
+        expect(output).not.toContain('Value::Bool((market).spot)');
     });
 });

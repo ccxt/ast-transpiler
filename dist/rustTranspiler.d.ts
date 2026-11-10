@@ -254,6 +254,38 @@ export declare class RustTranspiler extends BaseTranspiler {
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printVariableDeclarationList(node: any, identation: any): string;
+    private static readonly RUST_NIL_INT_HELPERS;
+    private static readonly RUST_NIL_BOOL_HELPERS;
+    private static readonly RUST_NIL_PRECISE_STR;
+    private rustNilLocalDecisions;
+    /** `'str' | 'int' | 'bool'` when the nil-declared local prints `Option<..>`, else undefined. */
+    rustNilLocalKind(declaration: any): string | undefined;
+    private rustNilCandidateNames;
+    rustNilLocalOfIdentifier(node: any): {
+        declaration: any;
+        kind: string;
+    } | undefined;
+    rustNilLocalKindUncached(declaration: any): string | undefined;
+    /** Static kind of a write's right-hand side: `null`, or the `Option` payload it yields exactly. */
+    rustNilWriteKind(rhs: any): string | undefined;
+    rustNilSelfHelperName(call: any): string | undefined;
+    /** Integer literal text (`5`, `-5`), else undefined. */
+    rustNilIntLiteral(node: any): string | undefined;
+    /** How a read of a typed nil local prints: `'test'` (null / literal compare), `'cond'` (bool
+     *  condition slot) or `'box'` (a `Value` argument, field, element, return or plain copy). */
+    rustNilReadForm(n: any, kind: string): string | undefined;
+    /** Box reads go only into plain `Value` slots: no `&mut` receivers, no native-typed callee slots. */
+    rustNilBoxCallOk(call: any, at: number): boolean;
+    /** Native text of `x == <literal>` for a typed nil local of `kind`; undefined when not exact. */
+    rustNilLiteralTest(kind: string, other: any): string | undefined;
+    /** Equality hook: `x.is_none()`, `x.as_deref() == Some("lit")`, `x == Some(5)`. */
+    printRustNilLocalEquality(left: any, right: any, op: any): string | undefined;
+    /** Condition hook: a bool nil local is truthy exactly when it holds `Some(true)`. */
+    printRustNilLocalCondition(node: any): string | undefined;
+    /** Identifier hook: a box read converts with the standard `From` impls. */
+    printRustNilLocalRead(node: any): string | undefined;
+    /** Assignment hook: `x = <rhs>` with the right-hand side unwrapped to the local's payload. */
+    printRustNilLocalWrite(left: any, right: any): string | undefined;
     private static readonly RUST_BOOL_RESULT_HELPERS;
     private static readonly RUST_BOOL_RESULT_CALLEES;
     rustCallPrintsBool(node: any): boolean;
@@ -474,6 +506,32 @@ export declare class RustTranspiler extends BaseTranspiler {
     } | undefined;
     rustTypedBody(node: any, typed: any, identation: number, inner: string): string;
     printTypedUnifiedCall(node: any): string | undefined;
+    private static readonly RUST_MARKET_STR_FIELDS;
+    private static readonly RUST_MARKET_BOOL_FIELDS;
+    private static readonly RUST_MARKET_OPT_BOOL_FIELDS;
+    private static readonly RUST_MARKET_SAFE_READERS;
+    private rustMarketLocalDecisions;
+    /** `this.market (x)` printed through the typed core. */
+    rustIsTypedMarketCall(node: any): boolean;
+    /** The literal key of a struct-local read `m['k']` / `m.k` (not written, not called). */
+    rustMarketReadKey(n: any): string | undefined;
+    /** The listed field a `this.safeString|safeBool (m, 'k')` call reads (no default, or a `false` default for a flag). */
+    rustMarketSafeReadField(call: any): string | undefined;
+    /** A whole-value hand-off: a call argument, an array element, a dict value or a returned value. */
+    rustMarketValueUse(n: any): boolean;
+    rustMarketLocalIsTyped(declaration: any): boolean;
+    rustMarketLocalIsTypedUncached(declaration: any): boolean;
+    /** The struct local behind an identifier use (never the declaration name). */
+    rustTypedMarketLocalOf(node: any): any;
+    /** `let mut market: crate::types::Market = …` — the typed call, its `Err` re-raised as the untyped call did. */
+    printTypedMarketLocal(declaration: any, indent: string, varName: string): string | undefined;
+    /** A read off a struct local: a listed field natively, any other key off `raw`; `asBool` for a condition slot. */
+    printTypedMarketRead(node: any, asBool?: boolean): string | undefined;
+    private static readonly RUST_MARKET_FLAG_KEYS;
+    /** `const f = m['stock']` off a struct local, tested as a condition: `f.as_bool() == Some(true)`. */
+    printTypedMarketFlagLocalCondition(node: any): string | undefined;
+    /** A whole-value hand-off of a struct local: the `Value` the untyped local held. */
+    printTypedMarketValueUse(node: any): string | undefined;
     private static rustTypedLiteralArg;
     printRustFunctionType(node: any): string;
     printMethodDeclaration(node: any, identation: any): string;
@@ -562,6 +620,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     printNativeListIndex(receiverText: string, index: number, receiverNode?: Node): string;
     /** Element read of a `Vec<Value>` binding (a destructuring temp the printer declares typed). */
     printTypedVecElementRead(name: string, index: number): string;
+    private rustTupleSlotDecisions;
+    rustTupleSlotKind(element: any): string | undefined;
+    private rustTupleSlotKindUncached;
+    /** `let mut a: Option<String> | bool = <temp>.get(i)..` for a typed tuple slot, else undefined. */
+    printRustTupleSlotLocal(element: any, printedName: string, temp: string, index: number, nativeList: boolean, indent: string): string | undefined;
     /** Native read for one chain level, or undefined to keep `get_value`. */
     printNativeBookFieldRead(receiverText: string, receiverNode: Node, keyText: string, viaStore?: boolean): string | undefined;
     printNativeContainerAccess(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
