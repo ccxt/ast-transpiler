@@ -30,7 +30,12 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
  },
  "scalar-locals": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeTimestamp (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    safeBool (o: any, k: any, d: boolean): boolean { return o; }\n    parseNumber (x: any, d: any = undefined): any { return x; }\n    milliseconds (): number { return 1; }\n}\n",
-  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict) {\n        const id = this.safeString (resp, 'id');\n        const ts = this.safeInteger (resp, 'ts');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const price = this.safeNumber (resp, 'price');\n        const flag = this.safeBool (resp, 'flag', false);\n        const side = this.safeString (resp, 'side', 'buy');\n        let spot = true;\n        let name = 'abc';\n        let page = 1;\n        const fee = 0.25;\n        const req: Dict = {};\n        if (id === undefined) {\n            return undefined;\n        }\n        if (flag) {\n            req['f'] = 1;\n        }\n        if (name === 'x') {\n            name = 'y';\n            page = 2;\n            spot = false;\n        }\n        req['id'] = id;\n        req['ts'] = ts;\n        req['lim'] = lim;\n        req['p'] = price;\n        req['spot'] = spot;\n        req['side'] = side;\n        req['page'] = page;\n        req['fee'] = fee;\n        const kept = this.safeString (resp, 'kept');\n        const len = kept.length;\n        return [ req, name, len ];\n    }\n}\n"
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict) {\n        const id = this.safeString (resp, 'id');\n        const ts = this.safeInteger (resp, 'ts');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const price = this.safeNumber (resp, 'price');\n        const flag = this.safeBool (resp, 'flag', false);\n        const side = this.safeString (resp, 'side', 'buy');\n        let spot = true;\n        let name = 'abc';\n        let page = 1;\n        const fee = 0.25;\n        const req: Dict = {};\n        if (id === undefined) {\n            return undefined;\n        }\n        if (flag) {\n            req['f'] = 1;\n        }\n        if (name === 'x') {\n            name = 'y';\n            page = 2;\n            spot = false;\n        }\n        req['id'] = id;\n        req['ts'] = ts;\n        req['lim'] = lim;\n        req['p'] = price;\n        req['spot'] = spot;\n        req['side'] = side;\n        req['page'] = page;\n        req['fee'] = fee;\n        const kept = this.safeString (resp, 'kept');\n        const len = kept.length;\n        const other2 = kept.split ('-');\n        return [ req, name, len, other2 ];\n    }\n}\n"
+ },
+ "expression-locals": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n}\n",
+  "ts/src/base/Precise.ts": "export default class Precise {\n    static stringAdd (a: string, b: string): string { return a; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nimport Precise from './base/Precise.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict, inverse: boolean) {\n        const req: Dict = {};\n        const id = this.safeString (resp, 'id');\n        const side = this.safeString (resp, 'side', 'buy');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const alias = id;\n        const kind = inverse ? 'base' : 'quote';\n        const idx = inverse ? 7 : 5;\n        const sideLen = side.length;\n        const lower = side.toLowerCase ();\n        const isBuy = side.startsWith ('b');\n        const hasDash = side.indexOf ('-') >= 0;\n        const doubled = lim * 2;\n        const ratio = lim / 1000;\n        const big = lim > sideLen;\n        const total = Precise.stringAdd (id, '1');\n        let suffix = 'x';\n        suffix += '-y';\n        req[kind] = alias;\n        req['i'] = idx;\n        req['l'] = sideLen;\n        req['lw'] = lower;\n        req['b'] = isBuy;\n        req['d'] = hasDash;\n        req['x2'] = doubled;\n        req['r'] = ratio;\n        req['g'] = big;\n        req['t'] = total;\n        req['s'] = suffix;\n        return req;\n    }\n}\n"
  },
  "typed-unified-r4": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Order { id: string }\nexport interface CancellationRequest { id: string; symbol: string }\nexport default class Exchange {\n}\n",
@@ -5057,6 +5062,31 @@ describe('scalar locals from base safe readers and literals', () => {
     });
     test('a local with another use stays Value', () => {
         expect(out).toMatch(/let mut kept: Value = /);
+    });
+});
+
+describe('expression-shaped scalar locals', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'expression-locals', 'ts/src/venue.ts')).content;
+    });
+    test('aliases and ternaries take the typed kind', () => {
+        expect(out).toMatch(/let mut alias: Option<String> = id\.clone\(\);/);
+        expect(out).toMatch(/let mut kind: String = \(if inverse \{ "base"\.to_string\(\) \} else \{ "quote"\.to_string\(\) \}\);/);
+        expect(out).toMatch(/let mut idx: i64 = \(if inverse \{ 7 \} else \{ 5 \}\);/);
+    });
+    test('string methods, length and Precise results are native', () => {
+        expect(out).toMatch(/let mut sideLen: i64 = \(side\.chars\(\)\.count\(\) as i64\);/);
+        expect(out).toMatch(/let mut lower: String = side\.to_lowercase\(\);/);
+        expect(out).toMatch(/let mut isBuy: bool = side\.starts_with\("b"\);/);
+        expect(out).toMatch(/let mut hasDash: bool = side\.contains\("-"\);/);
+        expect(out).toMatch(/let mut total: Option<String> = crate::precise::Precise::stringAdd\(.*\)\.as_str\(\)\.map\(str::to_owned\);/);
+    });
+    test('arithmetic and comparisons over typed operands are native', () => {
+        expect(out).toMatch(/let mut doubled: i64 = \(lim \* 2\);/);
+        expect(out).toMatch(/let mut ratio: f64 = \(\(lim as f64\) \/ 1000\.0\);/);
+        expect(out).toMatch(/let mut big: bool = lim > sideLen;/);
+        expect(out).toContain('suffix.push_str("-y")');
     });
 });
 

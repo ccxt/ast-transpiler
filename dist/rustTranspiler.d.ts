@@ -439,6 +439,63 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustScalarLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
     /** Assignment hook: `x = <rhs>` in the local's native type. */
     printRustScalarLocalWrite(left: any, right: any): string | undefined;
+    private static readonly RUST_SCALAR_ARITH_OPS;
+    /** Kind of a typed local an identifier reads: a scalar local, or a typed `Option<String>|Option<i64>` of another rule. */
+    rustScalarIdentifierKind(node: any): string | undefined;
+    /** `{ method, kind }` of a native string method on a typed string local receiver, else undefined. */
+    rustScalarStrMethod(node: any, syntactic?: boolean): {
+        recv: any;
+        recvKind: string;
+        method: string;
+        kind: string;
+    } | undefined;
+    /** `Precise.string<Add|Sub|..>(..)`: a `string | undefined` result. */
+    rustScalarPreciseCall(node: any): boolean;
+    /** `s.length` on a typed string local. */
+    rustScalarLengthRecv(node: any): any;
+    /** Non-optional numeric operand kind (`int|num`), optional (`oint|onum`), or undefined. */
+    rustScalarNumericKind(node: any): string | undefined;
+    /** The exact kind an expression shape yields over typed operands, else undefined. */
+    rustScalarExpressionKind(expr: any): string | undefined;
+    rustScalarJoinKinds(a: string | undefined, b: string | undefined): string | undefined;
+    /** Joins the initializer kind with every `x = <rhs>` write: a nullish write makes the local optional. */
+    rustScalarWidenedKind(declaration: any, kind: string): string;
+    /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */
+    rustScalarCompareText(node: any, dry: boolean): string | undefined;
+    rustScalarCompareKind(node: any): string | undefined;
+    /** `s.indexOf("lit") >= 0` / `> -1` / `!== -1` (contains) and `< 0` / `=== -1` (absent) on a typed string. */
+    rustScalarContainsTest(node: any, dry: boolean): string | undefined;
+    /** An operand printed by this rule: a scalar local, or a `.length` / string-method / `indexOf` of one. */
+    rustScalarOwnsOperand(node: any): boolean;
+    rustScalarHasTypedOperand(node: any): boolean;
+    /** Native text of an operand in `kind` (an `int` operand of an `f64` expression is cast). */
+    rustScalarOperandText(kind: string, node: any): string;
+    /** Native text of an expression shape for a local of `kind`, else undefined. */
+    rustScalarExpressionText(kind: string, node: any): string | undefined;
+    /** The `Value` box of a native scalar text. */
+    rustScalarBoxText(kind: string, text: string, node: any): string;
+    /** Binary hook: arithmetic/ordered comparisons over typed operands, and `+=`/`-=` on a typed local. */
+    printRustScalarBinary(node: any): string | undefined;
+    /** `s += <string>` (`push_str`) on a `String` local, `n += <int>` / `n -= <int>` on an `i64` local. */
+    rustScalarCompoundText(node: any, dry: boolean): string | undefined;
+    /** Pair equality of two typed operands (or a typed expression and a literal). */
+    rustScalarPairEquality(left: any, right: any, op: any): string | undefined;
+    /** Typed-signature argument text for a scalar local (`&str`, `Option<&str>`, `i64`, ..), else undefined. */
+    rustScalarTypedArgText(arg: any, rustType: string, dry?: boolean): string | undefined;
+    /** The typed-signature param type of a `this.<typed unified>(..)` argument slot the call prints natively. */
+    rustScalarTypedParamType(call: any, at: number): string | undefined;
+    /** A plain `Value` assignment target (no typed-local rule claims it). */
+    rustScalarPlainValueTarget(left: any): boolean;
+    /** Re-boxing an optional local lengthens each use: keep a line under the 400-char limit it was under. */
+    rustScalarBoxesOverflow(declaration: any, uses: any[], kind: string): boolean;
+    /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
+     *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
+    private rustScalarViaExpressionUse;
+    rustScalarExpressionUseForm(n: any, kind: string): string | undefined;
+    /** Call hook: a string method of a typed string local, boxed back to `Value`. */
+    printRustScalarMethodCall(node: any): string | undefined;
+    /** `.length` hook: the char count of a typed string local. */
+    rustScalarLengthText(node: any, boxed: boolean): string | undefined;
     private rustNativeStrReturnDecisions;
     private static readonly RUST_BASE_TIER_FILE;
     /** `'str'` when the method is emitted `-> Option<String>`, else undefined. */
