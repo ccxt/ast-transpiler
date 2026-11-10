@@ -51343,6 +51343,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // native `String` when every use is a boxing move (return, object value, `this.` arg, `m[k] = x`).
     this.rustStringMethodLocalDecisions = /* @__PURE__ */ new WeakMap();
     this.rustStringLocalDecisions = /* @__PURE__ */ new Map();
+    this.rustScalarDecisions = /* @__PURE__ */ new Map();
+    this.rustScalarCandidates = /* @__PURE__ */ new WeakMap();
+    this.rustScalarUseForms = /* @__PURE__ */ new WeakMap();
     // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
     //
     // An internal, non-override, non-async method declared `: Str`
@@ -51539,7 +51542,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (_RustTranspiler.RUST_NUMBER_CONSTANT_IMPORTS.has(name) && this.rustIsImportedValueName(node)) {
       return `Value::Int(crate::runtime::${name})`;
     }
-    return this.printRustNilLocalRead(node) ?? super.printIdentifier(node);
+    return this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? super.printIdentifier(node);
   }
   /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
   rustIsImportedValueName(node) {
@@ -51840,6 +51843,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const nilLocal = this.printRustNilLocalEquality(left, right, op);
     if (nilLocal !== void 0)
       return nilLocal;
+    const scalarLocal = this.printRustScalarLocalEquality(left, right, op);
+    if (scalarLocal !== void 0)
+      return scalarLocal;
     const nativeIntResult = this.rustLengthEquality(left, right, op);
     if (nativeIntResult !== void 0)
       return nativeIntResult;
@@ -52750,6 +52756,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const nilWrite = isAssign && isIdentifier3(left) ? this.printRustNilLocalWrite(left, right) : void 0;
     if (nilWrite !== void 0)
       return nilWrite;
+    const scalarWrite = isAssign && isIdentifier3(left) ? this.printRustScalarLocalWrite(left, right) : void 0;
+    if (scalarWrite !== void 0)
+      return scalarWrite;
     if (isAssign && left.kind === SyntaxKind7.ElementAccessExpression) {
       const keys = [];
       let baseExpr = left;
@@ -52860,6 +52869,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!declaration.initializer) {
       return `${indent}let mut ${varName}: Value = Value::Null`;
     }
+    const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) : void 0;
+    if (scalarDecl !== void 0)
+      return scalarDecl;
     const parsedValue = this.printNode(declaration.initializer, identation).trim();
     if (declaration.initializer.kind === SyntaxKind7.NewExpression) {
       return `${indent}let mut ${varName} = ${parsedValue}`;
@@ -54108,6 +54120,388 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     }
     return peeled ?? inner;
+  }
+  /** The Rust kind (`ostr|oint|onum|str|int|num|bool`) a scalar local is declared with, else undefined. */
+  rustScalarLocalKind(declaration) {
+    if (declaration === void 0 || !isVariableDeclaration3(declaration))
+      return void 0;
+    let kind = this.rustScalarDecisions.get(declaration);
+    if (kind === void 0) {
+      this.rustScalarDecisions.set(declaration, null);
+      try {
+        kind = this.rustScalarLocalKindUncached(declaration) ?? null;
+      } catch (e) {
+        kind = null;
+      }
+      this.rustScalarDecisions.set(declaration, kind);
+    }
+    return kind ?? void 0;
+  }
+  /** The scalar local an identifier reads (never its own declaration name). */
+  rustScalarLocalOf(node) {
+    if (node === void 0 || !isIdentifier3(node) || this.checkerOrUndefined() === void 0)
+      return void 0;
+    const src = node.getSourceFile();
+    let names = this.rustScalarCandidates.get(src);
+    if (names === void 0) {
+      names = /* @__PURE__ */ new Set();
+      for (const n of this.rustScopeIndex(src).nodes) {
+        if (isVariableDeclaration3(n) && isIdentifier3(n.name) && this.rustScalarInitShape(n.initializer))
+          names.add(String(n.name.text));
+      }
+      this.rustScalarCandidates.set(src, names);
+    }
+    if (!names.has(String(node.text)))
+      return void 0;
+    const declaration = this.rustDeclaredNode(node);
+    if (declaration === void 0 || declaration.name === node)
+      return void 0;
+    const kind = this.rustScalarLocalKind(declaration);
+    return kind === void 0 ? void 0 : { declaration, kind };
+  }
+  /** Syntactic pre-filter: a literal, a `+` chain, or a `this.safe<Scalar>(..)` call. */
+  rustScalarInitShape(init) {
+    const node = this.unwrapParens(init);
+    if (node === void 0)
+      return false;
+    if (this.literalKindOfNode(node) !== void 0 || this.rustScalarIntLiteral(node) !== void 0 || this.rustScalarFloatLiteral(node) !== void 0)
+      return true;
+    if (isBinaryExpression5(node))
+      return node.operatorToken.kind === SyntaxKind7.PlusToken;
+    if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || node.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const name = String(node.expression.name.text);
+    return _RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(name) || _RustTranspiler.RUST_SCALAR_INT_HELPERS[name] !== void 0 || _RustTranspiler.RUST_SCALAR_NUM_HELPERS[name] !== void 0 || _RustTranspiler.RUST_SCALAR_BOOL_HELPERS[name] !== void 0;
+  }
+  rustScalarLocalKindUncached(declaration) {
+    if (!this.rustScalarInitShape(declaration.initializer))
+      return void 0;
+    const list = declaration.parent;
+    if (!isIdentifier3(declaration.name) || list?.kind !== SyntaxKind7.VariableDeclarationList || list.declarations.length !== 1 || list.parent?.kind !== SyntaxKind7.VariableStatement)
+      return void 0;
+    if (/[\\/]test[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? "")))
+      return void 0;
+    const scope = this.rustEnclosingFunction(declaration);
+    if (scope === void 0 || isSourceFile5(scope))
+      return void 0;
+    const kind = this.rustScalarValueKind(declaration.initializer, true);
+    if (kind === void 0 || kind === "null")
+      return void 0;
+    if (this.rustSafeStringLocalIsTyped(declaration) || this.rustStringMethodLocalInit(declaration) !== void 0 || kind === "bool" && this.getRustBoolLocalInitializer(declaration, this.printNode(declaration.initializer, 0)) !== void 0)
+      return void 0;
+    const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
+    const expected = kind === "ostr" || kind === "str" ? "string" : kind === "bool" ? "boolean" : "number";
+    if (checked !== expected)
+      return void 0;
+    const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (this.rustIdentifierIsPropertyName(n))
+        return n.parent?.kind !== SyntaxKind7.ShorthandPropertyAssignment;
+      if (this.rustEnclosingFunction(n) !== scope)
+        return false;
+      const form = this.rustScalarUseForm(n, kind);
+      this.rustScalarUseForms.set(n, form);
+      return form !== void 0;
+    });
+    return ok ? kind : void 0;
+  }
+  /** Integer literal text (`5`, `-5`) that fits an `i64`, else undefined. */
+  rustScalarIntLiteral(node) {
+    const inner = this.unwrapParens(node);
+    if (inner === void 0)
+      return void 0;
+    if (isNumericLiteral4(inner) && /^\d{1,15}$/.test(String(inner.text)))
+      return String(inner.text);
+    if (isPrefixUnaryExpression3(inner) && inner.operator === SyntaxKind7.MinusToken && isNumericLiteral4(inner.operand) && /^\d{1,15}$/.test(String(inner.operand.text)))
+      return `-${inner.operand.text}`;
+    return void 0;
+  }
+  /** Decimal float literal text (`1.5`, `-0.25`, `1e8`), else undefined. */
+  rustScalarFloatLiteral(node) {
+    const inner = this.unwrapParens(node);
+    if (inner === void 0)
+      return void 0;
+    const neg = isPrefixUnaryExpression3(inner) && inner.operator === SyntaxKind7.MinusToken;
+    const lit = neg ? inner.operand : inner;
+    if (!isNumericLiteral4(lit) || !/^\d{1,15}(?:\.\d{1,15})?(?:e[+-]?\d{1,3})?$/i.test(String(lit.text)))
+      return void 0;
+    const text = String(lit.text);
+    const f = /[.eE]/.test(text) ? text : `${text}.0`;
+    return neg ? `-${f}` : f;
+  }
+  /** The scalar kind an expression yields exactly (`null` for nullish); `fresh` admits the
+   *  non-null literal kinds (`str|int|num|bool`) a declaration may seed. */
+  rustScalarValueKind(expr, fresh) {
+    const node = this.unwrapParens(expr);
+    if (node === void 0)
+      return void 0;
+    const literal2 = this.literalKindOfNode(node);
+    if (literal2 === "null")
+      return "null";
+    if (fresh && literal2 === "string")
+      return node.text in this.StringLiteralReplacements ? void 0 : "str";
+    if (fresh && literal2 === "boolean")
+      return "bool";
+    if (fresh && this.rustScalarIntLiteral(node) !== void 0)
+      return "int";
+    if (fresh && this.rustScalarFloatLiteral(node) !== void 0)
+      return "num";
+    if (fresh && isBinaryExpression5(node) && node.operatorToken.kind === SyntaxKind7.PlusToken && this.rustScalarFormatText(node) !== void 0)
+      return "str";
+    if (!isCallExpression6(node))
+      return void 0;
+    const callee = node.expression;
+    if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+      return void 0;
+    const name = String(callee.name.text);
+    const args = Array.from(node.arguments ?? []);
+    const declaration = this.rustScalarCallee(node);
+    if (declaration === void 0 || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName)))
+      return void 0;
+    if (_RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(name)) {
+      const base = name.endsWith("2") ? 3 : 2;
+      if (args.length === base)
+        return "ostr";
+      return args.length === base + 1 && this.literalKindOfNode(args[base]) === "string" && !(args[base].text in this.StringLiteralReplacements) ? "str" : void 0;
+    }
+    const intBase = _RustTranspiler.RUST_SCALAR_INT_HELPERS[name];
+    if (intBase !== void 0) {
+      if (args.length === intBase)
+        return "oint";
+      return args.length === intBase + 1 && this.rustScalarIntLiteral(args[intBase]) !== void 0 ? "int" : void 0;
+    }
+    if (_RustTranspiler.RUST_SCALAR_NUM_HELPERS[name] !== void 0)
+      return args.length === _RustTranspiler.RUST_SCALAR_NUM_HELPERS[name] ? "onum" : void 0;
+    const boolBase = _RustTranspiler.RUST_SCALAR_BOOL_HELPERS[name];
+    if (fresh && boolBase !== void 0)
+      return args.length === boolBase + 1 && this.literalKindOfNode(args[boolBase]) === "boolean" ? "bool" : void 0;
+    return void 0;
+  }
+  rustScalarCallee(call) {
+    let declaration = this.rustCallDeclarations.get(call);
+    if (declaration === void 0) {
+      try {
+        declaration = signatureDeclaration(this.getChecker().getResolvedSignature(call)) ?? null;
+      } catch (e) {
+        return void 0;
+      }
+      this.rustCallDeclarations.set(call, declaration);
+    }
+    return declaration === null ? void 0 : declaration.resolve?.() ?? declaration;
+  }
+  /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
+  rustScalarFormatText(node) {
+    const text = this.stripOuterParens(this.printNode(node, 0).trim());
+    const peeled = this.peelValueStrBox(text);
+    if (peeled === void 0 || !peeled.startsWith("format!(") || !peeled.endsWith(".into()"))
+      return void 0;
+    const body = peeled.slice(0, -".into()".length);
+    let depth = 0;
+    for (let i = "format!".length; i < body.length; i++) {
+      const char = body[i];
+      if (char === '"')
+        i = this.rustSkipStringLiteral(body, i);
+      else if (char === "(")
+        depth++;
+      else if (char === ")" && --depth === 0)
+        return i === body.length - 1 ? body : void 0;
+    }
+    return void 0;
+  }
+  /** How a use of a scalar local prints: `test` (literal/null compare), `cond` (bool condition),
+   *  `write` (same-kind assignment statement), `concat` (a `format!` operand) or `box` (a by-value `Value` slot). */
+  rustScalarUseForm(n, kind) {
+    const parent = n.parent;
+    if (parent === void 0)
+      return void 0;
+    if (isBinaryExpression5(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind7.EqualsToken) {
+      if (parent.parent?.kind !== SyntaxKind7.ExpressionStatement)
+        return void 0;
+      return this.rustScalarWriteOk(kind, parent.right, 0) ? "write" : void 0;
+    }
+    if (isBinaryExpression5(parent) && this.isEqualityOp(parent.operatorToken.kind)) {
+      const other = parent.left === n ? parent.right : parent.left;
+      if (this.rustScalarLiteralTest(kind, other) !== void 0)
+        return "test";
+    }
+    if (kind === "bool" && this.rustIdentifierUseIsCondition(n))
+      return "cond";
+    if (this.rustScalarInNestedWrite(n))
+      return void 0;
+    if (isCallExpression6(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
+      return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) ? "box" : void 0;
+    }
+    if (parent.kind === SyntaxKind7.PropertyAssignment && parent.initializer === n)
+      return "box";
+    if (isArrayLiteralExpression4(parent) && !(isBinaryExpression5(parent.parent) && parent.parent.left === parent))
+      return "box";
+    if (this.rustDictWriteValue(n))
+      return "box";
+    if (isReturnStatement4(parent) && parent.expression === n) {
+      return this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike)) === "str" ? void 0 : "box";
+    }
+    if (isBinaryExpression5(parent) && parent.operatorToken.kind === SyntaxKind7.PlusToken) {
+      if (kind !== "str" && kind !== "ostr")
+        return void 0;
+      return kind === "str" && this.printNode(parent, 0).trim().startsWith("Value::Str(format!(") ? "concat" : "box";
+    }
+    if (isConditionalExpression4(parent) && parent.condition !== n)
+      return "box";
+    return void 0;
+  }
+  rustScalarInNestedWrite(n) {
+    let current = n;
+    while (current.parent !== void 0 && !isStatement(current.parent))
+      current = current.parent;
+    const write = isBinaryExpression5(current) ? current : void 0;
+    return write !== void 0 && write.operatorToken.kind === SyntaxKind7.EqualsToken && isElementAccessExpression4(write.left) && (isElementAccessExpression4(write.left.expression) || isPropertyAccessExpression3(write.left.expression));
+  }
+  /** A write source the local's type holds exactly: a same-kind value, a typed scalar local of the
+   *  same kind, or a ternary of those (its condition printed as a bool). */
+  rustScalarWriteOk(kind, rhs, depth) {
+    const node = this.unwrapParens(rhs);
+    if (node === void 0 || depth > 3)
+      return false;
+    if (isConditionalExpression4(node))
+      return this.rustScalarWriteOk(kind, node.whenTrue, depth + 1) && this.rustScalarWriteOk(kind, node.whenFalse, depth + 1);
+    if (isIdentifier3(node) && node.text !== "undefined")
+      return this.rustScalarLocalOf(node)?.kind === kind;
+    const value = this.rustScalarValueKind(node, true);
+    const optional = kind.startsWith("o");
+    return value === kind || optional && (value === "null" || value === kind.slice(1));
+  }
+  /** Plain `Value` argument slots: `this.`/`super.` methods without a native-typed slot, and `Precise.*`. */
+  rustNilBoxSlotOk(call, at) {
+    const callee = call.expression;
+    if (!isPropertyAccessExpression3(callee))
+      return false;
+    if (callee.expression.kind === SyntaxKind7.ThisKeyword || callee.expression.kind === SyntaxKind7.SuperKeyword) {
+      if (this.rustTypedUnified.has(String(callee.name.text)))
+        return false;
+      const params = this.rustCalleeParams(call);
+      return params === void 0 || this.rustNativeMapArgumentSlot(params, at) === void 0 && !this.rustNativeStrVecArgumentSlot(params, at) && !this.rustNativeBoolArgumentSlot(params, at);
+    }
+    return isIdentifier3(callee.expression) && callee.expression.text === "Precise";
+  }
+  /** Native right-hand side of `x == <literal>` for a scalar local of `kind`; undefined when not exact. */
+  rustScalarLiteralTest(kind, other) {
+    const node = this.unwrapParens(other);
+    const literal2 = this.literalKindOfNode(node);
+    const optional = kind.startsWith("o");
+    if (literal2 === "null")
+      return optional ? "null" : void 0;
+    const base = optional ? kind.slice(1) : kind;
+    let text;
+    if (base === "str" && literal2 === "string" && !(node.text in this.StringLiteralReplacements))
+      text = this.quotedStringLiteral(node.text);
+    else if (base === "bool" && literal2 === "boolean")
+      text = node.kind === SyntaxKind7.TrueKeyword ? "true" : "false";
+    else if (base === "int")
+      text = this.rustScalarIntLiteral(node);
+    else if (base === "num")
+      text = this.rustScalarFloatLiteral(node);
+    if (text === void 0)
+      return void 0;
+    return optional ? `Some(${text})` : text;
+  }
+  /** Equality hook: `x.is_none()`, `x.as_deref() == Some("lit")`, `n == 5`. */
+  printRustScalarLocalEquality(left, right, op) {
+    const leftLocal = this.rustScalarLocalOf(this.unwrapParens(left));
+    const rightLocal = leftLocal === void 0 ? this.rustScalarLocalOf(this.unwrapParens(right)) : void 0;
+    const local = leftLocal ?? rightLocal;
+    if (local === void 0)
+      return void 0;
+    const [self, other] = leftLocal !== void 0 ? [this.unwrapParens(left), right] : [this.unwrapParens(right), left];
+    const test = this.rustScalarLiteralTest(local.kind, other);
+    if (test === void 0)
+      return void 0;
+    const name = super.printIdentifier(self);
+    const equal = op === SyntaxKind7.EqualsEqualsToken || op === SyntaxKind7.EqualsEqualsEqualsToken;
+    if (test === "null")
+      return `${name}.${equal ? "is_none" : "is_some"}()`;
+    return `${local.kind === "ostr" ? `${name}.as_deref()` : name} ${equal ? "==" : "!="} ${test}`;
+  }
+  /** Condition hook: a `bool` scalar local is its own condition. */
+  printRustScalarLocalCondition(node) {
+    const inner = this.unwrapParens(node);
+    return this.rustScalarLocalOf(inner)?.kind === "bool" ? super.printIdentifier(inner) : void 0;
+  }
+  /** Identifier hook: a `box` use converts with the standard `From` impls (scalars are `Copy`). */
+  printRustScalarLocalRead(node) {
+    const local = this.rustScalarLocalOf(node);
+    const form = local === void 0 ? void 0 : this.rustScalarUseForms.get(node);
+    if (form === "cond" || form === "concat")
+      return super.printIdentifier(node);
+    if (form !== "box")
+      return void 0;
+    const name = super.printIdentifier(node);
+    const moved = isReturnStatement4(node.parent) ? name : `${name}.clone()`;
+    if (local.kind === "ostr")
+      return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
+    if (local.kind === "str")
+      return `Value::from(${moved})`;
+    return local.kind === "bool" ? `Value::Bool(${name})` : `Value::from(${name})`;
+  }
+  /** The native value of a scalar expression for a local of `kind` (`Some(..)` for optional kinds). */
+  rustScalarNativeText(kind, expr) {
+    const node = this.unwrapParens(expr);
+    const optional = kind.startsWith("o");
+    const base = optional ? kind.slice(1) : kind;
+    const wrap = (t) => optional ? `Some(${t})` : t;
+    if (this.literalKindOfNode(node) === "null")
+      return optional ? "None" : void 0;
+    if (isConditionalExpression4(node)) {
+      const whenTrue = this.rustScalarNativeText(kind, node.whenTrue);
+      const whenFalse = this.rustScalarNativeText(kind, node.whenFalse);
+      return whenTrue === void 0 || whenFalse === void 0 ? void 0 : `(if ${this.printCondition(node.condition, 0).trim()} { ${whenTrue} } else { ${whenFalse} })`;
+    }
+    if (isIdentifier3(node) && this.rustScalarLocalOf(node)?.kind === kind) {
+      const name = super.printIdentifier(node);
+      return kind === "str" || kind === "ostr" ? `${name}.clone()` : name;
+    }
+    if (base === "str" && this.literalKindOfNode(node) === "string")
+      return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
+    if (base === "bool" && this.literalKindOfNode(node) === "boolean")
+      return node.kind === SyntaxKind7.TrueKeyword ? "true" : "false";
+    const int = base === "int" ? this.rustScalarIntLiteral(node) : void 0;
+    if (int !== void 0)
+      return wrap(int);
+    const float = base === "num" && !isCallExpression6(node) ? this.rustScalarFloatLiteral(node) : void 0;
+    if (float !== void 0)
+      return wrap(float);
+    if (base === "str" && isBinaryExpression5(node)) {
+      const format = this.rustScalarFormatText(node);
+      return format === void 0 ? void 0 : wrap(format);
+    }
+    if (!isCallExpression6(node))
+      return void 0;
+    const text = this.printNode(node, 0).trim();
+    const fallback = node.arguments[node.arguments.length - 1];
+    const defaulted = this.rustScalarValueKind(node, true) === base;
+    if (kind === "str" && defaulted)
+      return `${text}.as_str().unwrap_or(${this.quotedStringLiteral(fallback.text)}).to_string()`;
+    if (kind === "int" && defaulted)
+      return `${text}.as_i64().unwrap_or(${this.rustScalarIntLiteral(fallback)})`;
+    if (kind === "ostr")
+      return `${text}.as_str().map(str::to_owned)`;
+    if (kind === "oint")
+      return `${text}.as_i64()`;
+    if (kind === "onum")
+      return `${text}.as_f64()`;
+    if (kind === "bool")
+      return `${text}.as_bool().unwrap_or(${fallback.kind === SyntaxKind7.TrueKeyword ? "true" : "false"})`;
+    return void 0;
+  }
+  /** Declaration hook: `let mut x: <scalar> = <native init>`, else undefined. */
+  printRustScalarLocalDeclaration(declaration, varName, indent) {
+    const kind = this.rustScalarLocalKind(declaration);
+    const init = kind === void 0 ? void 0 : this.rustScalarNativeText(kind, declaration.initializer);
+    return init === void 0 ? void 0 : `${indent}let mut ${varName}: ${_RustTranspiler.RUST_SCALAR_TYPES[kind]} = ${init}`;
+  }
+  /** Assignment hook: `x = <rhs>` in the local's native type. */
+  printRustScalarLocalWrite(left, right) {
+    const local = this.rustScalarLocalOf(left);
+    const text = local === void 0 ? void 0 : this.rustScalarNativeText(local.kind, right);
+    return text === void 0 ? void 0 : `${super.printIdentifier(left)} = ${text}`;
   }
   /** `'str'` when the method is emitted `-> Option<String>`, else undefined. */
   rustNativeStrReturnKind(node) {
@@ -57304,6 +57698,9 @@ ${idn}}`;
     const marketFlagLocal = this.printTypedMarketFlagLocalCondition(node);
     if (marketFlagLocal !== void 0)
       return idn + marketFlagLocal;
+    const scalarCondition = this.printRustScalarLocalCondition(node);
+    if (scalarCondition !== void 0)
+      return idn + scalarCondition;
     if (this.rustCallPrintsBool(node))
       return idn + this.printNode(node, 0);
     const nativeTruthiness = this.printNativeTruthiness(node);
@@ -61351,6 +61748,35 @@ _RustTranspiler.RUST_STRING_LOCAL_HELPERS = /* @__PURE__ */ new Set([
   "safeStringUpperN"
 ]);
 _RustTranspiler.RUST_SIGN_API_METHODS = /* @__PURE__ */ new Set(["sign", "fetch2", "request"]);
+// ── scalar locals (`let x = this.safeString|safeInteger|safeNumber|safeBool(..)` / scalar literals) ──
+// Kind from the initializer and the checker type; every later use must be a literal/null test,
+// a bool condition, a same-kind write, or a by-value `Value` slot that re-boxes with `From`.
+_RustTranspiler.RUST_SCALAR_INT_HELPERS = {
+  safeInteger: 2,
+  safeInteger2: 3,
+  safeIntegerN: 2,
+  safeTimestamp: 2,
+  safeTimestamp2: 3,
+  safeTimestampN: 2
+};
+_RustTranspiler.RUST_SCALAR_NUM_HELPERS = {
+  safeNumber: 2,
+  safeNumber2: 3,
+  safeNumberN: 2,
+  safeFloat: 2,
+  safeFloat2: 3,
+  safeFloatN: 2
+};
+_RustTranspiler.RUST_SCALAR_BOOL_HELPERS = { safeBool: 2, safeBool2: 3, safeBoolN: 2 };
+_RustTranspiler.RUST_SCALAR_TYPES = {
+  ostr: "Option<String>",
+  oint: "Option<i64>",
+  onum: "Option<f64>",
+  str: "String",
+  int: "i64",
+  num: "f64",
+  bool: "bool"
+};
 // `ts/src/base/**` — the shared `Exchange` / `PredictionExchange` classes
 // (the transpiler synthesises variants like `.__ExchangeNoOverloads.ts`).
 _RustTranspiler.RUST_BASE_TIER_FILE = /ts[\\/]src[\\/]base[\\/]/;

@@ -389,6 +389,56 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustIdentifierIsPropertyName(node: any): boolean;
     rustStringLocalIdentifierIsTyped(node: any): boolean;
     getRustBoolLocalInitializer(declaration: any, printedValue: string): string | undefined;
+    private static readonly RUST_SCALAR_INT_HELPERS;
+    private static readonly RUST_SCALAR_NUM_HELPERS;
+    private static readonly RUST_SCALAR_BOOL_HELPERS;
+    private static readonly RUST_SCALAR_TYPES;
+    private rustScalarDecisions;
+    private rustScalarCandidates;
+    private rustScalarUseForms;
+    /** The Rust kind (`ostr|oint|onum|str|int|num|bool`) a scalar local is declared with, else undefined. */
+    rustScalarLocalKind(declaration: any): string | undefined;
+    /** The scalar local an identifier reads (never its own declaration name). */
+    rustScalarLocalOf(node: any): {
+        declaration: any;
+        kind: string;
+    } | undefined;
+    /** Syntactic pre-filter: a literal, a `+` chain, or a `this.safe<Scalar>(..)` call. */
+    rustScalarInitShape(init: any): boolean;
+    rustScalarLocalKindUncached(declaration: any): string | undefined;
+    /** Integer literal text (`5`, `-5`) that fits an `i64`, else undefined. */
+    rustScalarIntLiteral(node: any): string | undefined;
+    /** Decimal float literal text (`1.5`, `-0.25`, `1e8`), else undefined. */
+    rustScalarFloatLiteral(node: any): string | undefined;
+    /** The scalar kind an expression yields exactly (`null` for nullish); `fresh` admits the
+     *  non-null literal kinds (`str|int|num|bool`) a declaration may seed. */
+    rustScalarValueKind(expr: any, fresh: boolean): string | undefined;
+    rustScalarCallee(call: any): any;
+    /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
+    rustScalarFormatText(node: any): string | undefined;
+    /** How a use of a scalar local prints: `test` (literal/null compare), `cond` (bool condition),
+     *  `write` (same-kind assignment statement), `concat` (a `format!` operand) or `box` (a by-value `Value` slot). */
+    rustScalarUseForm(n: any, kind: string): string | undefined;
+    rustScalarInNestedWrite(n: any): boolean;
+    /** A write source the local's type holds exactly: a same-kind value, a typed scalar local of the
+     *  same kind, or a ternary of those (its condition printed as a bool). */
+    rustScalarWriteOk(kind: string, rhs: any, depth: number): boolean;
+    /** Plain `Value` argument slots: `this.`/`super.` methods without a native-typed slot, and `Precise.*`. */
+    rustNilBoxSlotOk(call: any, at: number): boolean;
+    /** Native right-hand side of `x == <literal>` for a scalar local of `kind`; undefined when not exact. */
+    rustScalarLiteralTest(kind: string, other: any): string | undefined;
+    /** Equality hook: `x.is_none()`, `x.as_deref() == Some("lit")`, `n == 5`. */
+    printRustScalarLocalEquality(left: any, right: any, op: any): string | undefined;
+    /** Condition hook: a `bool` scalar local is its own condition. */
+    printRustScalarLocalCondition(node: any): string | undefined;
+    /** Identifier hook: a `box` use converts with the standard `From` impls (scalars are `Copy`). */
+    printRustScalarLocalRead(node: any): string | undefined;
+    /** The native value of a scalar expression for a local of `kind` (`Some(..)` for optional kinds). */
+    rustScalarNativeText(kind: string, expr: any): string | undefined;
+    /** Declaration hook: `let mut x: <scalar> = <native init>`, else undefined. */
+    printRustScalarLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
+    /** Assignment hook: `x = <rhs>` in the local's native type. */
+    printRustScalarLocalWrite(left: any, right: any): string | undefined;
     private rustNativeStrReturnDecisions;
     private static readonly RUST_BASE_TIER_FILE;
     /** `'str'` when the method is emitted `-> Option<String>`, else undefined. */

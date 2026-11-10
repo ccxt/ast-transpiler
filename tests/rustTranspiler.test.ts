@@ -28,6 +28,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; spot: boolean; swap: boolean; stock?: boolean; linear: boolean | undefined; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    safeString (d: any, k: any): Str {\n        return d[k];\n    }\n    hold (m: any): any {\n        return m;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchOne (symbol: string, params: Dict = {}) {\n        const market = this.market (symbol);\n        const request: Dict = { 'pair': market['id'] };\n        if (market['swap'] || market['linear']) {\n            request['info'] = market['info'];\n        }\n        request['s'] = this.safeString (market, 'symbol');\n        return this.hold (market);\n    }\n    fetchTwo (symbol: string) {\n        let market = this.market (symbol);\n        market = this.market ('x');\n        return market['id'];\n    }\n    fetchThree (symbol: string) {\n        const market = this.market (symbol);\n        const isStock = market['stock'];\n        const isStockSpot = isStock && (market['spot'] === true);\n        if (isStockSpot || (market['spot'] !== true)) {\n            return market['id'];\n        }\n        return market['symbol'];\n    }\n}\n"
  },
+ "scalar-locals": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeTimestamp (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    safeBool (o: any, k: any, d: boolean): boolean { return o; }\n    parseNumber (x: any, d: any = undefined): any { return x; }\n    milliseconds (): number { return 1; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict) {\n        const id = this.safeString (resp, 'id');\n        const ts = this.safeInteger (resp, 'ts');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const price = this.safeNumber (resp, 'price');\n        const flag = this.safeBool (resp, 'flag', false);\n        const side = this.safeString (resp, 'side', 'buy');\n        let spot = true;\n        let name = 'abc';\n        let page = 1;\n        const fee = 0.25;\n        const req: Dict = {};\n        if (id === undefined) {\n            return undefined;\n        }\n        if (flag) {\n            req['f'] = 1;\n        }\n        if (name === 'x') {\n            name = 'y';\n            page = 2;\n            spot = false;\n        }\n        req['id'] = id;\n        req['ts'] = ts;\n        req['lim'] = lim;\n        req['p'] = price;\n        req['spot'] = spot;\n        req['side'] = side;\n        req['page'] = page;\n        req['fee'] = fee;\n        const kept = this.safeString (resp, 'kept');\n        const len = kept.length;\n        return [ req, name, len ];\n    }\n}\n"
+ },
  "typed-unified-r4": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Order { id: string }\nexport interface CancellationRequest { id: string; symbol: string }\nexport default class Exchange {\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { CancellationRequest, Dict, Order, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async cancelOrdersForSymbols (orders: CancellationRequest[], params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    async cancelUnifiedOrder (order: Order, params: Dict = {}): Promise<Order> {\n        const orders = await this.cancelOrdersForSymbols ([ order ], params);\n        return orders[0];\n    }\n    async fetchOrderStatus (id: string, symbol: Str = undefined, params: Dict = {}): Promise<Str> {\n        return 'open';\n    }\n}\n"
@@ -2395,7 +2399,7 @@ describe('rust numeric literals', () => {
         const output = transpiler.transpileRust(input).content;
         expect(output).toContain('x.g(Value::Float(1e-7))');
         expect(output).toContain('x.g(Value::Float(-1e-7))');
-        expect(output).toContain('Value::Int(-5)');
+        expect(output).toContain('let mut c: i64 = -5;');
         expect(output).not.toContain('Value::Int(1e-7)');
     });
 });
@@ -4505,7 +4509,7 @@ describe('rust typed-operand is_equal/add/subtract', () => {
 
     test('string + number and Str + number', () => {
         const out = nativeIntResult('function f (n: number, s: string, t: string | undefined) {\n    const a = s + n;\n    const b = t + n;\n    return [ a, b ];\n}\n');
-        expect(out).toContain('let mut a: Value = Value::Str(format!("{}{}", s, n).into());');
+        expect(out).toContain('let mut a: String = format!("{}{}", s, n);');
         expect(out).toContain('add(&t, &n)');
     });
 
@@ -4688,7 +4692,8 @@ describe('overloaded base safeDict/safeList/safeBool feed the plain-dict and lis
     });
 
     test('an overloaded safeBool with a bool default tests truthiness natively', () => {
-        expect(output).toContain('if flag.as_bool() == Some(true) {');
+        expect(output).toContain('let mut flag: bool = ');
+        expect(output).toContain('if flag {');
     });
 
     test('list reads at counter/length arithmetic indices are native; an any-typed operand keeps get_value', () => {
@@ -4891,7 +4896,7 @@ describe('self-referential numeric writes, always-Str locals, Str ordering', () 
         expect(o).toContain('(held.as_str() != Some("")) && ((match (version.as_str(), held.as_str()) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p < __q, _ => __x < __y }) || __x == __y, (None, None) => true, _ => false })));');
     });
     test('a local whose every write is always-Str anchors a native concat', () => {
-        expect(o).toContain('auth = Value::Str(format!("{}{}", auth, body).into());');
+        expect(o).toContain('auth = format!("{}{}", auth, body);');
     });
     test('unproven operands keep the helpers', () => {
         expect(o).toContain('add(&maybe, &body)');
@@ -5017,6 +5022,41 @@ describe('rust typed tuple-destructure slots', () => {
     test('a slot with another use stays Value', () => {
         expect(out).toContain('let mut kept: Value = keptotherVariable.get(0).cloned().unwrap_or(Value::Null)');
         expect(out).toContain('let mut query: Value = marketTypequeryVariable.get(1).cloned().unwrap_or(Value::Null)');
+    });
+});
+
+describe('scalar locals from base safe readers and literals', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'scalar-locals', 'ts/src/venue.ts')).content;
+    });
+    test('nullable readers are Option<String|i64|f64>, tested and re-boxed natively', () => {
+        expect(out).toMatch(/let mut id: Option<String> = .*\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out).toMatch(/let mut ts: Option<i64> = .*\.as_i64\(\);/);
+        expect(out).toMatch(/let mut price: Option<f64> = .*\.as_f64\(\);/);
+        expect(out).toContain('if (id.is_none()) {');
+        expect(out).toContain('.insert("ts".into(), Value::from(ts)); }');
+        expect(out).toContain('.insert("id".into(), id.clone().map(Value::from).unwrap_or(Value::Null)); }');
+    });
+    test('a literal default makes the reader a bare String / i64 / bool', () => {
+        expect(out).toMatch(/let mut lim: i64 = .*\.as_i64\(\)\.unwrap_or\(100\);/);
+        expect(out).toMatch(/let mut side: String = .*\.as_str\(\)\.unwrap_or\("buy"\)\.to_string\(\);/);
+        expect(out).toMatch(/let mut flag: bool = .*\.as_bool\(\)\.unwrap_or\(false\);/);
+        expect(out).toContain('if flag {');
+    });
+    test('scalar literals are native and written natively', () => {
+        expect(out).toContain('let mut spot: bool = true;');
+        expect(out).toContain('let mut name: String = "abc".to_string();');
+        expect(out).toContain('let mut page: i64 = 1;');
+        expect(out).toContain('let mut fee: f64 = 0.25;');
+        expect(out).toContain('if (name == "x") {');
+        expect(out).toContain('name = "y".to_string();');
+        expect(out).toContain('page = 2;');
+        expect(out).toContain('spot = false;');
+        expect(out).toContain('.insert("spot".into(), Value::Bool(spot)); }');
+    });
+    test('a local with another use stays Value', () => {
+        expect(out).toMatch(/let mut kept: Value = /);
     });
 });
 
