@@ -28,6 +28,14 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; spot: boolean; swap: boolean; stock?: boolean; linear: boolean | undefined; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    safeString (d: any, k: any): Str {\n        return d[k];\n    }\n    hold (m: any): any {\n        return m;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchOne (symbol: string, params: Dict = {}) {\n        const market = this.market (symbol);\n        const request: Dict = { 'pair': market['id'] };\n        if (market['swap'] || market['linear']) {\n            request['info'] = market['info'];\n        }\n        request['s'] = this.safeString (market, 'symbol');\n        return this.hold (market);\n    }\n    fetchTwo (symbol: string) {\n        let market = this.market (symbol);\n        market = this.market ('x');\n        return market['id'];\n    }\n    fetchThree (symbol: string) {\n        const market = this.market (symbol);\n        const isStock = market['stock'];\n        const isStockSpot = isStock && (market['spot'] === true);\n        if (isStockSpot || (market['spot'] !== true)) {\n            return market['id'];\n        }\n        return market['symbol'];\n    }\n}\n"
  },
+ "typed-call-results": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; type: string; settle: Str; linear: boolean | undefined; info: any }\nexport interface Order { id: string; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    async loadMarkets (reload = false, params: Dict = {}): Promise<Dict> {\n        return this.markets;\n    }\n    async fetchOrders (symbol: Str = undefined, params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchA (symbol: Str = undefined, params: Dict = {}) {\n        await this.loadMarkets ();\n        let market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n        }\n        return this.hold (params, market);\n    }\n    async fetchB (symbol: string, params: Dict = {}) {\n        let market = this.market (symbol);\n        if (market['type'] === 'swap') {\n            market = this.market ('x');\n        }\n        return this.hold ({ 'k': market['settle'], 'l': market['linear'], 'b': market['baseId'] }, market);\n    }\n    async fetchC (symbol: string, params: Dict = {}) {\n        const orders = await this.fetchOrders (symbol, params);\n        return this.hold (orders);\n    }\n}\n"
+ },
+ "base-scalar-returns": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Currency { code: Str }\nexport default class Exchange {\n    currencies: Dict = {};\n    safeCurrency (currencyId: Str, currency: Currency = undefined): Currency {\n        return this.currencies[currencyId];\n    }\n    safeCurrencyCode (currencyId: Str, currency: Currency = undefined): Str {\n        const c: Currency = this.safeCurrency (currencyId, currency);\n        return c['code'];\n    }\n    milliseconds (): number {\n        return 0;\n    }\n    hold (x: any): any {\n        return x;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseEntry (entry: Dict) {\n        const code = this.safeCurrencyCode (entry['c']);\n        if (code === undefined) {\n            return undefined;\n        }\n        const now = this.milliseconds ();\n        const kept = this.safeCurrencyCode (entry['d']);\n        kept['x'] = 1;\n        return { 'code': code, 'ts': now, 'k': kept };\n    }\n}\n"
+ },
  "scalar-locals": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeTimestamp (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    safeBool (o: any, k: any, d: boolean): boolean { return o; }\n    parseNumber (x: any, d: any = undefined): any { return x; }\n    milliseconds (): number { return 1; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict) {\n        const id = this.safeString (resp, 'id');\n        const ts = this.safeInteger (resp, 'ts');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const price = this.safeNumber (resp, 'price');\n        const flag = this.safeBool (resp, 'flag', false);\n        const side = this.safeString (resp, 'side', 'buy');\n        let spot = true;\n        let name = 'abc';\n        let page = 1;\n        const fee = 0.25;\n        const req: Dict = {};\n        if (id === undefined) {\n            return undefined;\n        }\n        if (flag) {\n            req['f'] = 1;\n        }\n        if (name === 'x') {\n            name = 'y';\n            page = 2;\n            spot = false;\n        }\n        req['id'] = id;\n        req['ts'] = ts;\n        req['lim'] = lim;\n        req['p'] = price;\n        req['spot'] = spot;\n        req['side'] = side;\n        req['page'] = page;\n        req['fee'] = fee;\n        const kept = this.safeString (resp, 'kept');\n        const len = kept.length;\n        const other2 = kept.split ('-');\n        return [ req, name, len, other2 ];\n    }\n}\n"
@@ -5030,6 +5038,23 @@ describe('rust typed tuple-destructure slots', () => {
     });
 });
 
+describe('scalar locals from base methods with a concrete return', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'base-scalar-returns', 'ts/src/venue.ts')).content;
+    });
+    test('a Str / number base return is an Option local, tested and re-boxed natively', () => {
+        expect(out).toMatch(/let mut code: Option<String> = self\.safeCurrencyCode\(.*\)\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out).toMatch(/let mut now: Option<i64> = self\.milliseconds\(\)\.as_i64\(\);/);
+        expect(out).toContain('if (code.is_none()) {');
+        expect(out).toContain('code.clone().map(Value::from).unwrap_or(Value::Null)');
+        expect(out).toContain('Value::from(now)');
+    });
+    test('a local written through keeps its Value box', () => {
+        expect(out).toMatch(/let mut kept: Value = self\.safeCurrencyCode\(/);
+    });
+});
+
 describe('scalar locals from base safe readers and literals', () => {
     let out: string;
     beforeAll(() => {
@@ -5320,6 +5345,38 @@ describe('bearer write shapes', () => {
         const out = rs("        let d: Dict = {};\n        d['a'] = v;\n        if (v) {\n            d = this.parseX (v);\n        }\n        return d;");
         expect(out).toContain('let mut d: Value = Value::Map({');
         expect(out).toContain('add_element_to_object(&mut d,');
+    });
+});
+
+describe('container locals with boxing uses', () => {
+    const rs = rustInParseXClass;
+
+    test('a defaulted safeList / safeDict local is typed; reads stay native, Value slots box a clone', () => {
+        const out = rs("        const xs = this.safeList (v, 'a', []);\n        const m = this.safeDict (v, 'k', {});\n        const b = xs[1];\n        const d = m['decimals'];\n        this.parseX (xs);\n        this.parseX (m);\n        return [ b, d, m ];");
+        expect(out).toContain('let mut xs: Vec<Value> = self.safeList(');
+        expect(out).toContain('let mut m: indexmap::IndexMap<String, Value> = self.safeDict(');
+        expect(out).toContain('xs.get(1).cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('m.get("decimals").cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('self.parseX(xs.clone().into())');
+        expect(out).toContain('self.parseX(m.clone().into())');
+        expect(out).toContain('Value::Map(m.clone())]');
+        expect(out).not.toContain('xs: Value');
+        expect(out).not.toContain('m: Value');
+    });
+
+    test('a returned non-null container moves into its box', () => {
+        const out = rs("        const xs = this.safeList (v, 'a', []);\n        const n = xs.length;\n        return xs;");
+        expect(out).toContain('let mut xs: Vec<Value> = ');
+        expect(out).toContain('return Value::from(xs);');
+    });
+
+    test('negative: a nullable local escaping beyond safe readers, a write or a reassignment keeps the box', () => {
+        const nullable = rs("        const m = this.safeDict (v, 'k');\n        return m;");
+        expect(nullable).toContain('let mut m: Value = self.safeDict(');
+        const written = rs("        const m = this.safeDict (v, 'k', {});\n        m['a'] = 1;\n        this.parseX (m);\n        return 1;");
+        expect(written).toContain('let mut m: Value = self.safeDict(');
+        const reassigned = rs("        let xs = this.safeList (v, 'a', []);\n        this.parseX (xs);\n        xs = [];\n        return 1;");
+        expect(reassigned).toContain('let mut xs: Value = self.safeList(');
     });
 });
 
@@ -5632,7 +5689,7 @@ describe('rust typed unified-method signatures', () => {
 
     test('a Promise.all element call to a typed method boxes the result', () => {
         expect(output).toContain('promise_all(&Value::from(vec![crate::types::IntoRaw::into_raw(self.fetch_positions(None, Value::Null).await)]))');
-        expect(output).toContain('crate::types::IntoRaw::into_raw(self.fetch_positions(None, Value::Null).await).as_array()');
+        expect(output).toContain('let mut again: Vec<crate::types::Position> = (match self.fetch_positions(None, Value::Null).await {');
         expect(output).not.toContain('None.clone()');
     });
 
@@ -6702,10 +6759,10 @@ describe('rust typed setup methods (loadMarkets / market / setSandboxMode)', () 
     });
 
     test('internal calls convert at the call site (defaulted flag, literal flag, no await on a sync callee)', () => {
-        expect(output).toContain('crate::types::IntoRaw::into_raw(self.load_markets(false, Value::Null).await)');
-        expect(output).toContain('crate::types::IntoRaw::into_raw(self.load_markets(true, Value::Null).await)');
+        expect(output).toContain('if let Err(__e) = self.load_markets(false, Value::Null).await { panic!("{}", __e) }');
+        expect(output).toContain('if let Err(__e) = self.load_markets(true, Value::Null).await { panic!("{}", __e) }');
         expect(output).toContain('crate::types::IntoRaw::into_raw(self.market(symbol.as_str().unwrap_or_default()))');
-        expect(output).toContain('crate::types::IntoRaw::into_raw(self.set_sandbox_mode(true))');
+        expect(output).toContain('if let Err(__e) = self.set_sandbox_mode(true) { panic!("{}", __e) }');
         expect(output).not.toContain('self.set_sandbox_mode(true).await');
     });
 });
@@ -6726,8 +6783,9 @@ describe('rust typed Market locals', () => {
         expect(output).toContain('self.hold((market).raw.clone())');
     });
 
-    test('a reassigned market local stays a Value', () => {
-        expect(output).toContain('let mut market: Value = crate::types::IntoRaw::into_raw(self.market(');
+    test('a market local re-written by this.market stays the struct', () => {
+        expect(output).toContain('market = (match self.market("x") { Ok(__mk) => __mk, Err(__e) => panic!("{}", __e) })');
+        expect(output).not.toContain('IntoRaw::into_raw(self.market(');
     });
 
     test('flag reads off a market struct print plain bools, never is_true', () => {
@@ -6736,5 +6794,39 @@ describe('rust typed Market locals', () => {
         expect(output).toContain('!(market).spot');
         expect(output).not.toContain('is_true(&isStock)');
         expect(output).not.toContain('Value::Bool((market).spot)');
+    });
+});
+
+describe('rust typed core call results', () => {
+    let output = '';
+    beforeAll(() => {
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market', 'loadMarkets', 'fetchOrders'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = typed.transpileRustByPath(path.join (rustFixtureRoot, 'typed-call-results', 'ts/src/venue.ts')).content;
+    });
+
+    test('a discarded typed call re-raises its Err without boxing the result', () => {
+        expect(output).toContain('if let Err(__e) = self.load_markets(false, Value::Null).await { panic!("{}", __e) }');
+        expect(output).not.toContain('IntoRaw::into_raw(self.load_markets');
+    });
+
+    test('an empty local written only by this.market is an Option<Market>', () => {
+        expect(output).toContain('let mut market: Option<crate::types::Market> = None');
+        expect(output).toContain('market = Some(match self.market(');
+        expect(output).toContain('market.clone().map(crate::types::IntoRaw::into_raw).unwrap_or_default()');
+    });
+
+    test('a reassigned market local stays a struct and reads declared keys as fields', () => {
+        expect(output).toContain('let mut market: crate::types::Market = (match self.market(');
+        expect(output).toContain('market = (match self.market(');
+        expect(output).toContain('Value::from((market).market_type.clone())');
+        expect(output).toContain('Value::from((market).settle.as_deref())');
+        expect(output).toContain('(market).linear.map(Value::Bool).unwrap_or_default()');
+        expect(output).toContain('Value::from((market).base_id.clone())');
+        expect(output).not.toContain('IntoRaw::into_raw(self.market(');
+    });
+
+    test('a typed call result handed off keeps its struct type', () => {
+        expect(output).toContain('let mut orders: Vec<crate::types::Order> = (match self.fetch_orders(');
+        expect(output).toContain('self.hold(crate::types::IntoRaw::into_raw(orders.clone())');
     });
 });
