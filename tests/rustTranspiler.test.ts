@@ -68,6 +68,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleParamString (params: Dict, paramName: string, defaultValue: Str = undefined): [Str, Dict] {\n        const value = this.safeString (params, paramName, defaultValue);\n        const paramsOmitted = (value !== undefined) ? this.omit (params, paramName) : params;\n        return [ value, paramsOmitted ];\n    }\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        const until = this.safeString (params, 'until');\n        if (until !== undefined) {\n            request[key] = until;\n        }\n        const paramsOmitted = (until !== undefined) ? this.omit (params, 'until') : params;\n        return [ request, paramsOmitted ];\n    }\n    handleWrittenParams (params: Dict): [Str, Dict] {\n        params['seen'] = true;\n        return [ undefined, params ];\n    }\n    handleOverriddenParams (params: Dict): [Str, Dict] {\n        return [ this.safeString (params, 'x'), params ];\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ tag, paramsTag ] = this.handleParamString (params, 'tag');\n        const [ requestUntil, paramsUntil ] = this.handleUntilOption ('end', { 'tag': tag }, paramsTag);\n        return this.extend (requestUntil, paramsUntil);\n    }\n    handleOverriddenParams (params: Dict): [Str, Dict] {\n        return [ undefined, params ];\n    }\n}\ntype Str = string | undefined;\n"
  },
+ "record-lookup": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    outcomes: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    outcome (s: Str): Dict { return this.outcomes[s]; }\n    safeOutcome (s: Str, o: any = undefined): Dict { return this.outcomes[s]; }\n    hold (x: any): any { return x; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (handle: Str) {\n        const obj = this.outcome (handle);\n        const info = this.safeDict (obj, 'info', {});\n        return this.hold ({ 'id': this.safeString (obj, 'id'), 'm': this.safeString (info, 'm') });\n    }\n    fetchKept (handle: Str) {\n        const kept = this.safeOutcome (handle);\n        return this.hold (kept);\n    }\n}\n"
+ },
  "handed-dict": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    handleMarketTypeAndParams (m: string, market: any = undefined, params: Dict = {}): [string, Dict] { return [ m, params ]; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ marketType, query ] = this.handleMarketTypeAndParams ('fetchThing', undefined, params);\n        const rest = this.omit (query, 'x');\n        const s = this.safeString (query, 's');\n        const request: Dict = { 'type': marketType, 's': s };\n        return this.hold (this.extend (request, rest));\n    }\n    fetchKept (params: Dict = {}) {\n        const kept = this.omit (params, 'x');\n        return this.hold (kept);\n    }\n    fetchPicked (until: Str = undefined, params: Dict = {}) {\n        const picked = (until !== undefined) ? this.omit (params, 'until') : params;\n        const s = this.safeString (picked, 's');\n        const request: Dict = { 's': s };\n        return this.hold (this.extend (request, picked));\n    }\n    fetchPickedBack (until: Str = undefined, params: Dict = {}) {\n        const back = (until !== undefined) ? this.omit (params, 'until') : params;\n        return this.hold (back);\n    }\n}\n"
@@ -5556,6 +5560,20 @@ describe('optional params slots', () => {
     test('negative: a string slot written into a dict inside a loop keeps its box', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'optional-params-slots', 'ts/src/venue.ts')).content;
         expect(out).toMatch(/let mut kind: Value = /);
+    });
+});
+
+describe('record lookup locals', () => {
+    test('an outcome record read only by key holds the shared map and lends it to the readers', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'record-lookup', 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut obj: crate::value::Dict = self\.outcome\(handle(\.clone\(\))?\)\.into_dict\(\);/);
+        expect(out).toContain('self.safe_string_k(&obj, "id", &[])');
+        expect(out).not.toContain('obj: Value');
+    });
+
+    test('negative: an outcome record handed on whole keeps its Value', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'record-lookup', 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut kept: Value = /);
     });
 });
 

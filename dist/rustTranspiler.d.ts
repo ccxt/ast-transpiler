@@ -1475,6 +1475,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     printBorrowedReaderArg(node: any, text: string): string | undefined;
     /** A base `safeDict*` / `extend` / `omit` call, or an implicit-API endpoint call. */
     rustBorrowedDictSource(call: any): boolean;
+    private static readonly RUST_RECORD_LOOKUP_SOURCES;
+    rustRecordLookupSource(call: any): boolean;
     /** Rust `_k` reader name of a base `this.safeX(obj, 'literal'[, default])` call, else undefined. */
     rustBorrowedDictReader(call: any): string | undefined;
     /** `self.safe_X_k(&x, "k", &[..])` when `x` is a borrowed dict local or a typed container local. */

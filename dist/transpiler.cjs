@@ -61409,7 +61409,11 @@ ${iden}}`;
     const file = String(_nullishCoalesce(_optionalChain([declaration, 'optionalAccess', _9069 => _9069.getSourceFile, 'optionalCall', _9070 => _9070(), 'optionalAccess', _9071 => _9071.fileName]), () => ( "")));
     if (/ts[\\/]src[\\/]abstract[\\/]/.test(file))
       return declaration.kind === _ast.SyntaxKind.MethodDeclaration;
-    return _RustTranspiler.RUST_BORROWED_DICT_SOURCES.has(String(callee.name.text)) && _RustTranspiler.RUST_BASE_TIER_FILE.test(file);
+    return (_RustTranspiler.RUST_BORROWED_DICT_SOURCES.has(String(callee.name.text)) || this.rustRecordLookupSource(call)) && _RustTranspiler.RUST_BASE_TIER_FILE.test(file);
+  }
+  rustRecordLookupSource(call) {
+    const callee = call.expression;
+    return _is.isPropertyAccessExpression.call(void 0, callee) && _RustTranspiler.RUST_RECORD_LOOKUP_SOURCES.has(String(callee.name.text));
   }
   /** Rust `_k` reader name of a base `this.safeX(obj, 'literal'[, default])` call, else undefined. */
   rustBorrowedDictReader(call) {
@@ -65105,6 +65109,9 @@ _RustTranspiler.RUST_BORROWED_DICT_SOURCES = /* @__PURE__ */ new Set(["safeDict"
 _RustTranspiler.RUST_BORROWED_LIST_SOURCES = /* @__PURE__ */ new Set(["safeList", "safeList2", "safeListN"]);
 // Hand-written readers whose container argument takes a map or list by reference, any key.
 _RustTranspiler.RUST_BORROWED_ANY_KEY_READERS = /^safe(?:Value|String(?:Lower|Upper)?|Integer|Float|Timestamp|IntegerProduct)(?:2|N)?$/;
+// ── rustRecordLookupSource: base record lookups (market / outcome resolvers) held as a shared map ──
+// Each returns a cached record map (or nothing); read only by key, the map form reads the same.
+_RustTranspiler.RUST_RECORD_LOOKUP_SOURCES = /* @__PURE__ */ new Set(["outcome", "safeOutcome", "loadOutcome", "getMarketFromSymbols"]);
 // ── optional list locals ─────────────────────────────────────────────────
 // A list local whose source may yield `undefined` (the permissive `marketSymbols`, `marketIds`, a `safeList*`
 // with no default) holds `Option<crate::value::List>` (`into_opt_list` moves the shared list out of the box).
