@@ -5066,7 +5066,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** `{ method, kind }` of a native string method on a typed string local receiver, else undefined. */
-    rustScalarStrMethod(node, syntactic = false): { recv: any, recvKind: string, method: string, kind: string } | undefined {
+    rustScalarStrMethod(node, syntactic = false, params = false): { recv: any, recvKind: string, method: string, kind: string } | undefined {
         const call: any = this.unwrapParens(node);
         if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression)) return undefined;
         const recv: any = call.expression.expression;
@@ -5082,7 +5082,7 @@ export class RustTranspiler extends BaseTranspiler {
         else if (method === 'indexOf' && args.length === 1 && this.rustStrFindNeedle(args[0], true) !== undefined) shape = 'find';
         if (shape === undefined) return undefined;
         if (syntactic) return { recv, recvKind: '', method, kind: '' };
-        const recvKind = this.rustScalarIdentifierKind(recv);
+        const recvKind = this.rustScalarIdentifierKind(recv) ?? (params ? this.rustScalarParamRead(recv)?.kind : undefined);
         if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
         if (shape === 'affix') return { recv, recvKind, method, kind: 'bool' };
         if (shape === 'find') return this.rustStrFindNeedle(args[0], false) === undefined ? undefined : { recv, recvKind, method, kind: 'int' };
@@ -5180,10 +5180,10 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** `s.length` on a typed string local. */
-    rustScalarLengthRecv(node): any {
+    rustScalarLengthRecv(node, params = false): any {
         const inner: any = this.unwrapParens(node);
         if (inner === undefined || !isPropertyAccessExpression(inner) || !isIdentifier(inner.name) || inner.name.text !== 'length') return undefined;
-        const kind = this.rustScalarIdentifierKind(inner.expression);
+        const kind = this.rustScalarIdentifierKind(inner.expression) ?? (params ? this.rustScalarParamRead(inner.expression)?.kind : undefined);
         return kind === 'str' || kind === 'ostr' ? inner.expression : undefined;
     }
 
@@ -5224,8 +5224,8 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return this.rustScalarCompareText(node, true) !== undefined ? 'bool' : undefined;
         }
-        if (this.rustScalarLengthRecv(node) !== undefined) return 'int';
-        const method = this.rustScalarStrMethod(node);
+        if (this.rustScalarLengthRecv(node, true) !== undefined) return 'int';
+        const method = this.rustScalarStrMethod(node, false, true);
         if (method !== undefined) return method.kind;
         return this.rustScalarPreciseCall(node) ? 'ostr' : undefined;
     }
@@ -5366,6 +5366,25 @@ export class RustTranspiler extends BaseTranspiler {
         return `${super.printIdentifier(node)}.${RustTranspiler.RUST_PARAM_READ[own]}`;
     }
 
+    // ── typed scalar parameters as operands (rustScalarParamRead / rustScalarRecvName / rustScalarParamOperand) ──
+    // A typed parameter that is not a typed local is read back once through its own `Value` rebinding,
+    // so the string-method, comparison and ternary rules can take it as a native operand.
+    rustScalarParamRead(node): { kind: string, text: string } | undefined {
+        const inner: any = this.unwrapParens(node);
+        if (inner === undefined || !isIdentifier(inner) || this.rustScalarIdentifierKind(inner) !== undefined) return undefined;
+        const kind = this.rustOptParamKind(inner);
+        return kind === undefined ? undefined : { kind, text: `${super.printIdentifier(inner)}.${RustTranspiler.RUST_PARAM_READ[kind]}` };
+    }
+
+    rustScalarRecvName(node): string {
+        return this.rustScalarParamRead(node)?.text ?? super.printIdentifier(this.unwrapParens(node));
+    }
+
+    rustScalarParamOperand(node): boolean {
+        const inner: any = this.unwrapParens(node);
+        return this.rustScalarParamRead(inner) !== undefined || this.rustScalarLengthRecv(inner, true) !== undefined || this.rustScalarStrMethod(inner, false, true) !== undefined;
+    }
+
     /** `p === undefined ? d : p` (or `p !== undefined ? p : d`) over a typed optional parameter `p` and a
      *  literal or typed local `d`: never `Null`, printed `p.as_i64().unwrap_or(d)`. */
     rustOptParamDefault(node): { kind: string, text: string } | undefined {
@@ -5428,7 +5447,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (symbol === undefined && !equality) return undefined;
         const contains = this.rustScalarContainsTest(node, dry);
         if (contains !== undefined) return contains;
-        if (!this.rustScalarHasTypedOperand(node.left) && !this.rustScalarHasTypedOperand(node.right)) return undefined;
+        if (!this.rustScalarHasTypedOperand(node.left) && !this.rustScalarHasTypedOperand(node.right)
+            && !this.rustScalarParamOperand(node.left) && !this.rustScalarParamOperand(node.right)) return undefined;
         const left: any = this.unwrapParens(node.left);
         const right: any = this.unwrapParens(node.right);
         const text = (k: string, n) => dry ? '_' : this.rustScalarOperandText(k, n);
@@ -5470,7 +5490,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarCompareKind(node): string | undefined {
         if (this.literalKindOfNode(node) === 'string') return node.text in this.StringLiteralReplacements ? undefined : 'slit';
         if (this.literalKindOfNode(node) !== undefined && this.literalKindOfNode(node) !== 'number') return undefined;
-        return this.rustScalarNumericKind(node) ?? this.rustScalarExpressionKind(node);
+        return this.rustScalarNumericKind(node) ?? this.rustScalarExpressionKind(node) ?? this.rustScalarParamRead(node)?.kind;
     }
 
     /** `s.indexOf("lit") >= 0` / `> -1` / `!== -1` (contains) and `< 0` / `=== -1` (absent) on a typed string. */
@@ -5478,7 +5498,7 @@ export class RustTranspiler extends BaseTranspiler {
         const left: any = this.unwrapParens(node.left);
         if (!isCallExpression(left) || !isPropertyAccessExpression(left.expression) || left.expression.name.text !== 'indexOf' || left.arguments.length !== 1) return undefined;
         const recv: any = left.expression.expression;
-        const kind = this.rustScalarIdentifierKind(recv);
+        const kind = this.rustScalarIdentifierKind(recv) ?? this.rustScalarParamRead(recv)?.kind;
         const needle: any = left.arguments[0];
         if ((kind !== 'str' && kind !== 'ostr') || this.rustNativeStringLiteralArg(needle) === undefined || needle.text === '') return undefined;
         const bound = this.rustScalarIntLiteral(node.right);
@@ -5489,7 +5509,7 @@ export class RustTranspiler extends BaseTranspiler {
         else if (bound === '-1' && this.isEqualityOp(op)) present = op === SyntaxKind.ExclamationEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken;
         if (present === undefined) return undefined;
         if (dry) return '_';
-        const name = super.printIdentifier(recv);
+        const name = this.rustScalarRecvName(recv);
         const hay = kind === 'str' ? name : `${name}.as_deref().unwrap_or_default()`;
         return `${present ? '' : '!'}${hay}.contains("${this.rustNativeStringLiteralArg(needle)}")`;
     }
@@ -5524,8 +5544,8 @@ export class RustTranspiler extends BaseTranspiler {
             return kind === 'int' ? this.rustScalarIntLiteral(inner) : this.rustScalarFloatLiteral(inner);
         }
         if (isIdentifier(inner)) {
-            const own = this.rustScalarIdentifierKind(inner);
-            const name = super.printIdentifier(inner);
+            const own = this.rustScalarIdentifierKind(inner) ?? this.rustScalarParamRead(inner)?.kind;
+            const name = this.rustScalarRecvName(inner);
             return kind === 'num' && own === 'int' ? `(${name} as f64)` : name;
         }
         const call = (kind === 'int' || kind === 'num') ? this.rustArithCallText(kind, inner) : undefined; if (call !== undefined) return `(${call})`;
@@ -5552,14 +5572,14 @@ export class RustTranspiler extends BaseTranspiler {
             const text = `(${this.rustScalarOperandText(own, node.left)} ${sign} ${this.rustScalarOperandText(own, node.right)})`;
             return kind === 'num' && own === 'int' ? `(${text} as f64)` : wrap(text);
         }
-        const length = this.rustScalarLengthRecv(node);
+        const length = this.rustScalarLengthRecv(node, true);
         if (length !== undefined) {
-            const name = super.printIdentifier(length);
-            return wrap(`(${this.rustScalarIdentifierKind(length) === 'str' ? name : `${name}.as_deref().unwrap_or_default()`}.chars().count() as i64)`);
+            const name = this.rustScalarRecvName(length);
+            return wrap(`(${(this.rustScalarIdentifierKind(length) ?? this.rustScalarParamRead(length)?.kind) === 'str' ? name : `${name}.as_deref().unwrap_or_default()`}.chars().count() as i64)`);
         }
-        const method = this.rustScalarStrMethod(node);
+        const method = this.rustScalarStrMethod(node, false, true);
         if (method !== undefined) {
-            const name = super.printIdentifier(method.recv);
+            const name = this.rustScalarRecvName(method.recv);
             const args: any[] = Array.from(node.arguments ?? []);
             const arg = (i: number) => this.rustNativeStringLiteralArg(args[i]);
             if (method.method === 'startsWith' || method.method === 'endsWith') {
@@ -5576,7 +5596,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (method.method === 'trim') return wrap(`${name}.trim().to_string()`);
             if (method.method === 'toString') {
                 const local = this.rustScalarLocalOf(method.recv);
-                return wrap(local !== undefined && this.rustLocalLastUse(method.recv, local.declaration) ? name : `${name}.clone()`);
+                const moved = this.rustScalarParamRead(method.recv) !== undefined || (local !== undefined && this.rustLocalLastUse(method.recv, local.declaration));
+                return wrap(moved ? name : `${name}.clone()`);
             }
             return wrap(`${name}.${fn}()`);
         }

@@ -8385,3 +8385,40 @@ describe('rust cache limit polls with typed arguments', () => {
         expect(text).not.toContain('let mut limitResolved: Value');
     });
 });
+
+describe('rust string-method and comparison locals over typed parameters', () => {
+    const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTrades'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    let n = 0;
+    const run = (body: string) => {
+        const file = path.join (rustFixtureRoot, 'param-operands', String (n++), 'ts/src/venue.ts');
+        fs.mkdirSync (path.dirname (file), { recursive: true });
+        fs.writeFileSync (file, "type Int = number;\ntype Trade = any;\ninterface Dict { [key: string]: any }\nclass C {\n" +
+            "    async fetchTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<Trade[]> {\n" +
+            body + "    }\n}\n");
+        return typed.transpileRustByPath (file).content;
+    };
+
+    test('a case conversion of a required string parameter is a native String', () => {
+        const output = run((
+            "        const upper = symbol.toUpperCase ();\n" +
+            "        if (upper === 'BTC') {\n" +
+            "            return [] as any;\n" +
+            "        }\n" +
+            "        return { 'symbol': upper } as any;\n"));
+        expect(output).toContain('let mut upper: String = symbol.as_str().unwrap_or_default().to_string().to_uppercase();');
+        expect(output).toContain('(upper == "BTC")');
+        expect(output).not.toContain('let mut upper: Value');
+    });
+
+    test('a comparison of a typed parameter read with a typed local is native', () => {
+        const output = run((
+            "        const upper = symbol.toUpperCase ();\n" +
+            "        const same = symbol === upper;\n" +
+            "        if (same) {\n" +
+            "            return [] as any;\n" +
+            "        }\n" +
+            "        return { 'symbol': upper } as any;\n"));
+        expect(output).toContain('let mut same: bool = ');
+        expect(output).not.toContain('let mut upper: Value');
+    });
+});

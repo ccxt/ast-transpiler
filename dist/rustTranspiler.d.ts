@@ -628,7 +628,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Kind of a typed local an identifier reads: a scalar local, or a typed `Option<String>|Option<i64>` of another rule. */
     rustScalarIdentifierKind(node: any): string | undefined;
     /** `{ method, kind }` of a native string method on a typed string local receiver, else undefined. */
-    rustScalarStrMethod(node: any, syntactic?: boolean): {
+    rustScalarStrMethod(node: any, syntactic?: boolean, params?: boolean): {
         recv: any;
         recvKind: string;
         method: string;
@@ -651,7 +651,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `Precise.string<Add|Sub|..>(..)`: a `string | undefined` result. */
     rustScalarPreciseCall(node: any): boolean;
     /** `s.length` on a typed string local. */
-    rustScalarLengthRecv(node: any): any;
+    rustScalarLengthRecv(node: any, params?: boolean): any;
     /** Non-optional numeric operand kind (`int|num`), optional (`oint|onum`), or undefined. */
     rustScalarNumericKind(node: any): string | undefined;
     /** The exact kind an expression shape yields over typed operands, else undefined. */
@@ -673,6 +673,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOptParamKind(expr: any): string | undefined;
     private static readonly RUST_PARAM_READ;
     rustOptParamText(kind: string, node: any): string | undefined;
+    rustScalarParamRead(node: any): {
+        kind: string;
+        text: string;
+    } | undefined;
+    rustScalarRecvName(node: any): string;
+    rustScalarParamOperand(node: any): boolean;
     /** `p === undefined ? d : p` (or `p !== undefined ? p : d`) over a typed optional parameter `p` and a
      *  literal or typed local `d`: never `Null`, printed `p.as_i64().unwrap_or(d)`. */
     rustOptParamDefault(node: any): {
