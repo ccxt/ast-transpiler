@@ -54411,7 +54411,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const guarded = (widened || expressionUses) && boxed > 0;
     const storeOnly = guarded && nativeUses === 0 && boxed === 1;
     const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer);
-    if (!ok || unused || storeOnly || guarded && scope.kind !== _ast.SyntaxKind.MethodDeclaration)
+    const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
+    if (!ok || unused || storeOnly || clientOnce || guarded && scope.kind !== _ast.SyntaxKind.MethodDeclaration)
       return void 0;
     if (guarded)
       this.rustScalarGuarded.add(declaration);
@@ -54602,7 +54603,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (kind === "str" && this.rustScalarInsertKeyUse(n))
       return "key";
     if (_is.isCallExpression.call(void 0, parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
-      return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) ? "box" : this.rustScalarExpressionUseForm(n, kind);
+      return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? "box" : this.rustScalarExpressionUseForm(n, kind);
     }
     if (parent.kind === _ast.SyntaxKind.PropertyAssignment && parent.initializer === n)
       return "box";
@@ -54621,6 +54622,46 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (_is.isConditionalExpression.call(void 0, parent) && parent.condition !== n)
       return "box";
     return this.rustScalarExpressionUseForm(n, kind);
+  }
+  rustWsClientCallArg(call, kind) {
+    const callee = call.expression;
+    if (kind !== "str" && kind !== "ostr" || !_is.isPropertyAccessExpression.call(void 0, callee) || !_is.isIdentifier.call(void 0, callee.expression))
+      return false;
+    if (!_RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS.has(String(callee.name.text)))
+      return false;
+    return this.rustIsWsClientType(this.typeOfNodeIfAny(callee.expression));
+  }
+  rustWsClientOnlyUse(declaration) {
+    let hits = 0;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (_is.isCallExpression.call(void 0, n.parent) && n.parent.expression !== n && this.rustWsClientCallArg(n.parent, "str"))
+        hits++;
+      return true;
+    });
+    return hits > 0;
+  }
+  // A string local's final read inside a ws client call statement moves (that call is never hoisted):
+  // no later use, no other use in the statement, no loop or closure between it and the declaration.
+  rustWsClientLastUse(node, declaration) {
+    let statement = node;
+    while (statement.parent !== void 0 && !_is.isStatement.call(void 0, statement))
+      statement = statement.parent;
+    const call = statement.kind === _ast.SyntaxKind.ExpressionStatement ? this.unwrapParens(statement.expression) : void 0;
+    if (call === void 0 || !_is.isCallExpression.call(void 0, call) || !this.rustWsClientCallArg(call, "str"))
+      return false;
+    let last = true;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (n !== node && (n.pos > node.pos || n.pos >= statement.pos && n.end <= statement.end))
+        last = false;
+      return true;
+    });
+    if (!last)
+      return false;
+    for (let up = node.parent; up !== void 0 && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+      if (_chunkQYYT7MP4cjs.isFunctionLike.call(void 0, up) || up.kind === _ast.SyntaxKind.ForStatement || up.kind === _ast.SyntaxKind.ForOfStatement || up.kind === _ast.SyntaxKind.ForInStatement || up.kind === _ast.SyntaxKind.WhileStatement || up.kind === _ast.SyntaxKind.DoStatement)
+        return false;
+    }
+    return true;
   }
   rustScalarInNestedWrite(n) {
     let current = n;
@@ -54712,7 +54753,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (form !== "box" && form !== "xbox")
       return void 0;
     const name = super.printIdentifier(node);
-    const moved = _is.isReturnStatement.call(void 0, node.parent) ? name : `${name}.clone()`;
+    const moved = _is.isReturnStatement.call(void 0, node.parent) || this.rustWsClientLastUse(node, local.declaration) ? name : `${name}.clone()`;
     if (local.kind === "ostr")
       return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
     if (local.kind === "str")
@@ -63062,6 +63103,9 @@ _RustTranspiler.RUST_BASE_SCALAR_RETURNS = {
   milliseconds: "oint",
   seconds: "oint"
 };
+// rustWsClientCallArg: `client.resolve|reject|future|reusableFuture|send(.., x)` on a ws `Client`
+// receiver takes its arguments as plain `Value`s, so a string local boxes there.
+_RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS = /* @__PURE__ */ new Set(["resolve", "reject", "future", "reusableFuture", "send"]);
 // Expression-shaped scalar locals: aliases, ternaries, arithmetic/comparisons over typed operands,
 // string-method and `.length` results of typed strings, and `Precise.string*` results.
 _RustTranspiler.RUST_SCALAR_ARITH_OPS = /* @__PURE__ */ new Set([

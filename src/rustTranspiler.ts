@@ -3621,7 +3621,9 @@ export class RustTranspiler extends BaseTranspiler {
         const storeOnly = guarded && nativeUses === 0 && boxed === 1;
         // a derived call result needs at least one native use to be worth typing
         const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer);
-        if (!ok || unused || storeOnly || (guarded && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
+        // a string handed once to a ws client call and nothing else stays a `Value`
+        const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
+        if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
         if (guarded) this.rustScalarGuarded.add(declaration);
         return kind;
     }
@@ -3791,7 +3793,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
-            return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
+            return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
         }
         if (parent.kind === SyntaxKind.PropertyAssignment && parent.initializer === n) return 'box';
         if (isArrayLiteralExpression(parent) && !(isBinaryExpression(parent.parent) && parent.parent.left === parent)) return 'box';
@@ -3806,6 +3808,46 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (isConditionalExpression(parent) && parent.condition !== n) return 'box';
         return this.rustScalarExpressionUseForm(n, kind);
+    }
+
+    // rustWsClientCallArg: `client.resolve|reject|future|reusableFuture|send(.., x)` on a ws `Client`
+    // receiver takes its arguments as plain `Value`s, so a string local boxes there.
+    private static readonly RUST_WS_CLIENT_VALUE_METHODS = new Set([ 'resolve', 'reject', 'future', 'reusableFuture', 'send' ]);
+
+    rustWsClientCallArg(call, kind: string): boolean {
+        const callee: any = call.expression;
+        if ((kind !== 'str' && kind !== 'ostr') || !isPropertyAccessExpression(callee) || !isIdentifier(callee.expression)) return false;
+        if (!RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS.has(String(callee.name.text))) return false;
+        return this.rustIsWsClientType(this.typeOfNodeIfAny(callee.expression));
+    }
+
+    rustWsClientOnlyUse(declaration): boolean {
+        let hits = 0;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (isCallExpression(n.parent) && n.parent.expression !== n && this.rustWsClientCallArg(n.parent, 'str')) hits++;
+            return true;
+        });
+        return hits > 0;
+    }
+
+    // A string local's final read inside a ws client call statement moves (that call is never hoisted):
+    // no later use, no other use in the statement, no loop or closure between it and the declaration.
+    rustWsClientLastUse(node, declaration): boolean {
+        let statement: any = node;
+        while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
+        const call: any = statement.kind === SyntaxKind.ExpressionStatement ? this.unwrapParens(statement.expression) : undefined;
+        if (call === undefined || !isCallExpression(call) || !this.rustWsClientCallArg(call, 'str')) return false;
+        let last = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (n !== node && (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end))) last = false;
+            return true;
+        });
+        if (!last) return false;
+        for (let up: any = node.parent; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
     }
 
     rustScalarInNestedWrite(n): boolean {
@@ -3890,7 +3932,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
         // only a direct `return x` moves: ccxt hoists call arguments ahead of their statement
-        const moved = isReturnStatement(node.parent) ? name : `${name}.clone()`;
+        const moved = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration) ? name : `${name}.clone()`;
         if (local.kind === 'ostr') return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
         if (local.kind === 'str') return `Value::from(${moved})`;
         return local.kind === 'bool' ? `Value::Bool(${name})` : `Value::from(${name})`;
