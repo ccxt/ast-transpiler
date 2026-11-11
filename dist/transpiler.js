@@ -51405,6 +51405,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustContainerBoxUses = /* @__PURE__ */ new WeakMap();
     this.rustBorrowedDictDecisions = /* @__PURE__ */ new WeakMap();
     this.rustBorrowedKinds = /* @__PURE__ */ new WeakMap();
+    this.rustOptContainerLocals = /* @__PURE__ */ new WeakSet();
     this.rustHandedDictDecisions = /* @__PURE__ */ new WeakMap();
     // Two-level dict bearers: an object literal whose every value is an object literal is declared
     // `IndexMap<String, IndexMap<String, Value>>`, so `x[k1][k2] = v` is one `entry(k1)..insert(k2, v)` and
@@ -51864,6 +51865,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const nilLocal = this.printRustNilLocalEquality(left, right, op);
     if (nilLocal !== void 0)
       return nilLocal;
+    const optContainer = this.printOptContainerNullTest(left, right, op);
+    if (optContainer !== void 0)
+      return optContainer;
     const optMarket = this.printOptMarketNullTest(left, right, op);
     if (optMarket !== void 0)
       return optMarket;
@@ -52790,6 +52794,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const marketWrite = isAssign ? this.printTypedMarketWrite(left, right) : void 0;
     if (marketWrite !== void 0)
       return marketWrite;
+    const optContainerWrite = isAssign && isIdentifier3(left) ? this.printOptContainerWrite(left, right) : void 0;
+    if (optContainerWrite !== void 0)
+      return optContainerWrite;
     const nilWrite = isAssign && isIdentifier3(left) ? this.printRustNilLocalWrite(left, right) : void 0;
     if (nilWrite !== void 0)
       return nilWrite;
@@ -52906,6 +52913,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (nilKind !== void 0) {
       return `${indent}let mut ${varName}: Option<${nilKind === "str" ? "String" : nilKind === "int" ? "i64" : "bool"}> = None`;
     }
+    const optContainer = node.declarations.length === 1 ? this.printOptContainerDeclaration(declaration, varName, indent) : void 0;
+    if (optContainer !== void 0)
+      return optContainer;
     const optMarket = node.declarations.length === 1 && (this.rustMarketLocalKind(declaration) === "opt" || this.rustMarketLocalKind(declaration) === "call") ? this.printTypedMarketLocal(declaration, indent, varName) : void 0;
     if (optMarket !== void 0)
       return optMarket;
@@ -60613,39 +60623,129 @@ ${iden}}`;
     let init = this.rustSkipWrappers(declaration.initializer);
     if (init?.kind === SyntaxKind7.AwaitExpression)
       init = this.rustSkipWrappers(init.expression);
-    const from = isCallExpression6(init) ? this.rustBorrowedSourceKind(init) : void 0;
-    if (from === void 0)
+    const nilDeclared = (init === void 0 || this.literalKindOfNode(init) === "null") && (list.flags & NodeFlags4.Const) === 0 && list.parent?.kind === SyntaxKind7.VariableStatement;
+    let from = isCallExpression6(init) ? this.rustBorrowedSourceKind(init) : void 0;
+    if (from === void 0 && !nilDeclared)
       return void 0;
     const name = String(declaration.name.text);
     const fn = this.rustEnclosingFunction(declaration);
-    if (fn === void 0 || isSourceFile5(fn) || this.rustLocalIsReassigned(declaration, name))
+    if (fn === void 0 || isSourceFile5(fn))
       return void 0;
     if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration) || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustNilLocalKind(declaration) !== void 0 || this.rustScalarLocalKind(declaration) !== void 0)
       return void 0;
-    if (String(declaration.initializer.getText()).split("\n")[0].length > 240)
+    if (declaration.initializer !== void 0 && String(declaration.initializer.getText()).split("\n")[0].length > 240)
       return void 0;
-    const anyKey = from !== "api";
     let reads = 0;
+    let nullTests = 0;
+    let writes = 0;
+    let lengths = 0;
+    let mixed = false;
     const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
       if (this.rustIdentifierIsPropertyName(n))
         return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
       if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
         return false;
       const up = n.parent;
-      if (from === "list" && isPropertyAccessExpression3(up) && up.expression === n && String(up.name.text) === "length") {
+      if (isBinaryExpression5(up) && this.isEqualityOp(up.operatorToken.kind)) {
+        if (this.literalKindOfNode(this.unwrapParens(up.left === n ? up.right : up.left)) !== "null")
+          return false;
+        nullTests++;
+        return true;
+      }
+      if (isBinaryExpression5(up) && up.left === n && up.operatorToken.kind === SyntaxKind7.EqualsToken) {
+        if (up.parent?.kind !== SyntaxKind7.ExpressionStatement)
+          return false;
+        const rhs = this.rustSkipWrappers(up.right);
+        writes++;
+        if (this.literalKindOfNode(rhs) === "null")
+          return true;
+        const kind = isCallExpression6(rhs) ? this.rustBorrowedSourceKind(rhs) : void 0;
+        if (kind === void 0 || kind === "api" || !this.rustOptContainerSourceOk(rhs, kind))
+          return false;
+        if (from !== void 0 && from !== kind)
+          mixed = true;
+        from = from ?? kind;
+        return String(rhs.getText()).split("\n")[0].length <= 240;
+      }
+      if (isPropertyAccessExpression3(up) && up.expression === n && String(up.name.text) === "length") {
+        lengths++;
         const use = up.parent;
         return use?.kind !== SyntaxKind7.PrefixUnaryExpression && use?.kind !== SyntaxKind7.PostfixUnaryExpression && !(isBinaryExpression5(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
       }
       if (!isCallExpression6(up) || up.arguments[0] !== n)
         return false;
-      if (this.rustBorrowedDictReader(up) === void 0 && !(anyKey && this.rustBorrowedAnyKeyReader(up)))
+      if (this.rustBorrowedDictReader(up) === void 0 && !(from !== "api" && this.rustBorrowedAnyKeyReader(up)))
         return false;
       reads++;
       return true;
     });
-    if (!safe || reads === 0)
+    if (!safe || reads === 0 || mixed || from === void 0)
       return void 0;
+    const optional = nilDeclared || nullTests > 0 || writes > 0;
+    if (lengths > 0 && (from !== "list" || optional))
+      return void 0;
+    if (optional) {
+      if (from === "api" || nilDeclared && writes === 0 || !nilDeclared && !this.rustOptContainerSourceOk(init, from))
+        return void 0;
+      this.rustOptContainerLocals.add(declaration);
+    }
     return from === "list" ? "list" : "dict";
+  }
+  /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
+  rustOptContainerSourceOk(call, kind) {
+    if (kind === "api" || !isCallExpression6(call))
+      return false;
+    const name = String(call.expression?.name?.text ?? "");
+    if (!/^safe(?:Dict|List)(?:2|N)?$/.test(name))
+      return _RustTranspiler.RUST_BORROWED_DICT_SOURCES.has(name);
+    const at = name.endsWith("2") ? 3 : 2;
+    const dflt = call.arguments.length > at ? this.rustSkipWrappers(call.arguments[at]) : void 0;
+    if (dflt === void 0 || this.literalKindOfNode(dflt) === "null")
+      return true;
+    return kind === "dict" ? isObjectLiteralExpression4(dflt) && dflt.properties.length === 0 : isArrayLiteralExpression4(dflt) && dflt.elements.length === 0;
+  }
+  /** The optional form's local behind an identifier, else undefined. */
+  rustOptContainerOf(node) {
+    if (node === void 0 || !isIdentifier3(node))
+      return void 0;
+    const declaration = this.rustDeclarationOfIdentifier(node);
+    if (declaration === void 0 || declaration.name === node)
+      return void 0;
+    const kind = this.rustBorrowedLocalKind(declaration);
+    return kind !== void 0 && this.rustOptContainerLocals.has(declaration) ? { declaration, kind } : void 0;
+  }
+  /** `let mut x: Option<crate::value::Dict> = <init>.into_opt_dict()` (`None` when declared empty). */
+  printOptContainerDeclaration(declaration, varName, indent) {
+    const kind = this.rustBorrowedLocalKind(declaration);
+    if (kind === void 0 || !this.rustOptContainerLocals.has(declaration))
+      return void 0;
+    const type = kind === "list" ? "crate::value::List" : "crate::value::Dict";
+    const init = this.rustSkipWrappers(declaration.initializer);
+    if (init === void 0 || this.literalKindOfNode(init) === "null")
+      return `${indent}let mut ${varName}: Option<${type}> = None`;
+    return `${indent}let mut ${varName}: Option<${type}> = ${this.printNode(declaration.initializer, 0).trim()}.into_opt_${kind}()`;
+  }
+  /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
+  printOptContainerWrite(left, right) {
+    const local = this.rustOptContainerOf(left);
+    if (local === void 0)
+      return void 0;
+    const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
+    const rhs = this.rustSkipWrappers(right);
+    if (this.literalKindOfNode(rhs) === "null")
+      return `${name} = None`;
+    return `${name} = ${this.printNode(right, 0).trim()}.into_opt_${local.kind}()`;
+  }
+  /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */
+  printOptContainerNullTest(left, right, op) {
+    const l = this.unwrapParens(left);
+    const r = this.unwrapParens(right);
+    const self = this.rustOptContainerOf(l) !== void 0 ? l : this.rustOptContainerOf(r) !== void 0 ? r : void 0;
+    if (self === void 0 || this.literalKindOfNode(self === l ? r : l) !== "null")
+      return void 0;
+    const name = super.transformIdentifier(self, this.ReservedKeywordsReplacements[self.text] ?? self.text);
+    const equal = op === SyntaxKind7.EqualsEqualsToken || op === SyntaxKind7.EqualsEqualsEqualsToken;
+    return `${name}.${equal ? "is_none" : "is_some"}()`;
   }
   rustBorrowedListUse(node) {
     const declaration = isIdentifier3(node) ? this.rustDeclarationOfIdentifier(node) : void 0;
