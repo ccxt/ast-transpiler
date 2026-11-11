@@ -55521,8 +55521,10 @@ ${binding(plan.indent)}` : ""), head: "" };
         return wrap(`${name}.as_deref().map(str::${fn})`);
       if (method.method === "trim")
         return wrap(`${name}.trim().to_string()`);
-      if (method.method === "toString")
-        return wrap(`${name}.clone()`);
+      if (method.method === "toString") {
+        const local = this.rustScalarLocalOf(method.recv);
+        return wrap(local !== void 0 && this.rustTestLastUse(method.recv, local.declaration) ? name : `${name}.clone()`);
+      }
       if (method.method === "replace")
         return wrap(`${name}.replace("${arg(0)}", "${arg(1)}")`);
       return wrap(`${name}.${fn}()`);
@@ -60781,6 +60783,8 @@ ${iden}}`;
       this.rustReadBearerDecisions.set(declaration, false);
       try {
         decision = this.rustReadBearerKindUncached(declaration) || this.rustContainerLocalKind(declaration);
+        if (decision === "list" && this.rustTestTierSource(declaration) && this.bearerEnum(declaration.initializer, "keys") !== void 0)
+          decision = false;
       } catch (e) {
         decision = false;
       }

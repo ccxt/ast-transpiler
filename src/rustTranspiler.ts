@@ -4597,7 +4597,10 @@ export class RustTranspiler extends BaseTranspiler {
             const fn = method.method === 'toLowerCase' ? 'to_lowercase' : 'to_uppercase';
             if (method.recvKind === 'ostr') return wrap(`${name}.as_deref().map(str::${fn})`);
             if (method.method === 'trim') return wrap(`${name}.trim().to_string()`);
-            if (method.method === 'toString') return wrap(`${name}.clone()`);
+            if (method.method === 'toString') {
+                const local = this.rustScalarLocalOf(method.recv);
+                return wrap(local !== undefined && this.rustTestLastUse(method.recv, local.declaration) ? name : `${name}.clone()`);
+            }
             if (method.method === 'replace') return wrap(`${name}.replace("${arg(0)}", "${arg(1)}")`);
             return wrap(`${name}.${fn}()`);
         }
@@ -10381,6 +10384,8 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustReadBearerDecisions.set(declaration, false); // re-entrancy guard
             try {
                 decision = this.rustReadBearerKindUncached(declaration) || this.rustContainerLocalKind(declaration);
+                // a test list of a map's keys copies each key where the helper lent the map
+                if (decision === 'list' && this.rustTestTierSource(declaration) && this.bearerEnum(declaration.initializer, 'keys') !== undefined) decision = false;
             } catch (e) {
                 decision = false; // no proof -> the local keeps its `Value` box
             }
