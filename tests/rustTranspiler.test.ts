@@ -7942,9 +7942,16 @@ describe('rust map list elements', () => {
         expect(rows).not.toContain('row.clone()');
     });
 
-    test('negative: an element handed on whole or null-tested keeps its box', () => {
+    test('an element also handed on whole shares the map at a plain slot', () => {
         const text = out();
-        expect(text.slice(text.indexOf('fn parseHanded'))).toMatch(/let mut row: Value = /);
+        const handed = text.slice(text.indexOf('fn parseHanded'), text.indexOf('fn parseNullable'));
+        expect(handed).toContain('let mut row: crate::value::Dict = ');
+        expect(handed).toMatch(/Value::(from\(&row\)|Dict\(row\))/);
+        expect(handed).not.toContain('row.clone()');
+    });
+
+    test('negative: a null-tested map element keeps its box', () => {
+        const text = out();
         expect(text.slice(text.indexOf('fn parseNullable'))).toMatch(/let mut row: Value = /);
     });
 });

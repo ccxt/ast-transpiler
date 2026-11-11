@@ -51426,6 +51426,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustBorrowedDictDecisions = /* @__PURE__ */ new WeakMap();
     this.rustBorrowedKinds = /* @__PURE__ */ new WeakMap();
     this.rustOptContainerLocals = /* @__PURE__ */ new WeakSet();
+    this.rustDictElementBoxes = /* @__PURE__ */ new WeakMap();
     // ── empty-declared endpoint responses (`let response = undefined; response = await this.<endpoint> (..)`) ──
     // An endpoint may answer a list, a map or a scalar. Read only through literal-key readers, every variant
     // reads the same as the optional map `into_opt_dict` keeps (a list or scalar has no string keys), so the
@@ -61143,7 +61144,7 @@ ${iden}}`;
     const optList = this.printOptListIdentifier(node, text);
     if (optList !== void 0)
       return optList;
-    const borrowedArg = _nullishCoalesce(_nullishCoalesce(this.printBorrowedReaderArg(node, text), () => ( this.printLentParamsArg(node, text))), () => ( this.printOptionalParamsArg(node, text)));
+    const borrowedArg = _nullishCoalesce(_nullishCoalesce(_nullishCoalesce(this.printBorrowedReaderArg(node, text), () => ( this.printLentParamsArg(node, text))), () => ( this.printOptionalParamsArg(node, text))), () => ( this.printDictElementBox(node, text)));
     if (borrowedArg !== void 0)
       return borrowedArg;
     const containerBox = this.printRustContainerLocalBox(node, text);
@@ -62200,6 +62201,7 @@ ${iden}}`;
     let indexLikeReads = 0;
     let keyReads = 0;
     let mixed = false;
+    const boxedElementUses = [];
     const accept = (n) => {
       if (this.rustIdentifierIsPropertyName(n))
         return !(_optionalChain([n, 'access', _9148 => _9148.parent, 'optionalAccess', _9149 => _9149.kind]) === _ast.SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
@@ -62237,13 +62239,14 @@ ${iden}}`;
         reads++;
         return true;
       }
+      const handed = () => this.rustDictElementBoxUse(n, init) && boxedElementUses.push(n) > 0;
       if (!_is.isCallExpression.call(void 0, up) || up.arguments[0] !== n)
-        return false;
+        return handed();
       const keyArgs = up.arguments.slice(1, _is.isPropertyAccessExpression.call(void 0, up.expression) && /2$/.test(String(up.expression.name.text)) ? 3 : 2).map((a) => this.rustSkipWrappers(a));
       const stringKey = keyArgs.every((k) => k !== void 0 && _is.isStringLiteralLikeNode.call(void 0, k) && !/^\d+$/.test(String(k.text)) && !(String(k.text) in this.StringLiteralReplacements));
       const literalKey = this.rustBorrowedDictReader(up) !== void 0;
       if (!literalKey && !((from !== "api" || stringKey) && this.rustBorrowedAnyKeyReader(up)))
-        return false;
+        return handed();
       if (!stringKey)
         indexLikeReads++;
       reads++;
@@ -62262,6 +62265,8 @@ ${iden}}`;
         return void 0;
       this.rustOptContainerLocals.add(declaration);
     }
+    for (const n of boxedElementUses)
+      this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) ? "move" : "share");
     return from === "list" ? "list" : "dict";
   }
   // ── rustDictElementSource: `xs[i]` over a list whose checker element type is a string-keyed map ──
@@ -62280,6 +62285,25 @@ ${iden}}`;
     if (element === void 0 || (element.flags & (_sync.TypeFlags.Any | _sync.TypeFlags.Unknown | _sync.TypeFlags.Union)) !== 0)
       return false;
     return this.primitiveKindOfType(element) === void 0 && this.getChecker().getIndexTypeOfType(element, _sync.IndexKind.String) !== void 0 && !this.getChecker().isArrayType(element);
+  }
+  /** A whole-value hand-off of a map element local: a plain `Value` argument of a `this.` method or an object literal value. */
+  rustDictElementBoxUse(n, init) {
+    const up = n.parent;
+    if (!this.rustDictElementSource(init) || up === void 0 || this.rustScalarInNestedWrite(n))
+      return false;
+    if (up.kind === _ast.SyntaxKind.PropertyAssignment)
+      return up.initializer === n;
+    if (!_is.isCallExpression.call(void 0, up) || up.expression === n || !_is.isPropertyAccessExpression.call(void 0, up.expression) || up.expression.expression.kind !== _ast.SyntaxKind.ThisKeyword)
+      return false;
+    const callee = String(up.expression.name.text);
+    if (_RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || _RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee))
+      return false;
+    return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+  }
+  /** `Value::Dict(x)` at the last use (moved), else `Value::from(&x)` (the Arc bump the copied `Value` paid). */
+  printDictElementBox(node, text) {
+    const form = this.rustDictElementBoxes.get(node);
+    return form === void 0 ? void 0 : form === "move" ? `Value::Dict(${text})` : `Value::from(&${text})`;
   }
   // ── rustDictKeyReadUse / printDictKeyRead: direct literal-key reads (`m['k']`, `m.k`) on a dict local ──
   // The shared map (or its optional form) reads through the reader trait the `safe_*_k` readers use:
