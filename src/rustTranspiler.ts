@@ -8001,11 +8001,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (method === undefined || method.body === undefined || !isBlock(method.body) || !isClassDeclaration(method.parent)) return false;
         // every declaration of the name is this one (no venue override changes the slot)
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
-        const root = file.search(/\/ts\/src\//);
+        const root = file.search(/(?:^|\/)ts\/src\//);
         if (root < 0) return false;
-        const own = (method.parent.members ?? []).filter((m: any) => m.kind === SyntaxKind.MethodDeclaration && m.name?.text === name).length;
-        const base = RustTranspiler.RUST_BASE_TIER_FILE.test(file);
-        if (this.rustVenueMethodDeclCounts(file.slice(0, root) + '/ts/src').get(name) !== own * (base ? 2 : 1)) return false;
+        const srcRoot = file.slice(0, file.indexOf('ts/src/', root)) + 'ts/src';
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(file) ? this.rustVenueMethodNames(srcRoot).has(name) : !this.rustVenueLocalMethod(method, name)) return false;
         let returns = 0;
         let all = true;
         const visit = (node: any) => {

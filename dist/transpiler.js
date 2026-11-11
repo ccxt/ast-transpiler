@@ -58686,12 +58686,11 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     if (method === void 0 || method.body === void 0 || !isBlock4(method.body) || !isClassDeclaration4(method.parent))
       return false;
     const file = String(method.getSourceFile().fileName).replace(/\\/g, "/");
-    const root = file.search(/\/ts\/src\//);
+    const root = file.search(/(?:^|\/)ts\/src\//);
     if (root < 0)
       return false;
-    const own = (method.parent.members ?? []).filter((m) => m.kind === SyntaxKind7.MethodDeclaration && m.name?.text === name).length;
-    const base = _RustTranspiler.RUST_BASE_TIER_FILE.test(file);
-    if (this.rustVenueMethodDeclCounts(file.slice(0, root) + "/ts/src").get(name) !== own * (base ? 2 : 1))
+    const srcRoot = file.slice(0, file.indexOf("ts/src/", root)) + "ts/src";
+    if (_RustTranspiler.RUST_BASE_TIER_FILE.test(file) ? this.rustVenueMethodNames(srcRoot).has(name) : !this.rustVenueLocalMethod(method, name))
       return false;
     let returns = 0;
     let all = true;
