@@ -56126,8 +56126,7 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (!math && recv.kind !== SyntaxKind7.ThisKeyword)
       return void 0;
     if (!math) {
-      const declaration = this.rustScalarCallee(node);
-      if (declaration === void 0 || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? "")))
+      if (!this.rustArithBaseCallee(node, name))
         return void 0;
       if (!this.rustCalleeIsRuntimeBase(node) || this.rustVenueReturnTypesHas(node, name))
         return void 0;
@@ -56142,6 +56141,13 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (kinds.some((k) => k !== "int" && k !== "num"))
       return void 0;
     return kinds.every((k) => k === "int") ? "int" : args.length === 2 ? "num" : void 0;
+  }
+  /** The clock is a base property bound to `Date.now`, so its signature resolves outside the base tier. */
+  rustArithBaseCallee(node, name) {
+    if ((name === "milliseconds" || name === "seconds") && node.arguments.length === 0)
+      return true;
+    const declaration = this.rustScalarCallee(node);
+    return declaration !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ""));
   }
   /** An operand's numeric kind; a never-null integer call (e.g. a literal-defaulted reader) prints natively too. */
   rustArithOperandKind(node) {

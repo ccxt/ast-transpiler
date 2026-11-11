@@ -5122,8 +5122,7 @@ export class RustTranspiler extends BaseTranspiler {
         const math = isIdentifier(recv) && recv.text === 'Math' && (name === 'min' || name === 'max') && args.length === 2;
         if (!math && recv.kind !== SyntaxKind.ThisKeyword) return undefined;
         if (!math) {
-            const declaration: any = this.rustScalarCallee(node);
-            if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return undefined;
+            if (!this.rustArithBaseCallee(node, name)) return undefined;
             // a venue override of the callee is dispatched in place of the runtime helper
             if (!this.rustCalleeIsRuntimeBase(node) || this.rustVenueReturnTypesHas(node, name)) return undefined;
             if (RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name)) return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'number' ? 'int' : undefined;
@@ -5134,6 +5133,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (kinds.some((k) => k !== 'int' && k !== 'num')) return undefined;
         // the helper folds left through Int sums before a Float joins; only two operands are exactly one f64 op
         return kinds.every((k) => k === 'int') ? 'int' : (args.length === 2 ? 'num' : undefined);
+    }
+
+    /** The clock is a base property bound to `Date.now`, so its signature resolves outside the base tier. */
+    rustArithBaseCallee(node, name: string): boolean {
+        if ((name === 'milliseconds' || name === 'seconds') && node.arguments.length === 0) return true;
+        const declaration: any = this.rustScalarCallee(node);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
     }
 
     /** An operand's numeric kind; a never-null integer call (e.g. a literal-defaulted reader) prints natively too. */
