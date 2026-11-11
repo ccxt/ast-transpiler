@@ -504,6 +504,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsStrKey(node: any): boolean;
     /** A key slot's text: `x.as_str()` / `x.as_deref()` for a string local, else the `Value` by reference. */
     rustWsKeyText(node: any): string;
+    rustWsKeySharesStatement(node: any): boolean;
     printWsSettleCall(node: any, receiver: string, identation: number): string;
     printWsFlightCall(node: any, receiver: string, identation: number): string;
     private static readonly RUST_CLIENT_HANDLE_TYPE;

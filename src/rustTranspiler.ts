@@ -4236,11 +4236,29 @@ export class RustTranspiler extends BaseTranspiler {
     /** A key slot's text: `x.as_str()` / `x.as_deref()` for a string local, else the `Value` by reference. */
     rustWsKeyText(node): string {
         const inner: any = this.unwrapParens(node);
-        if (this.rustWsStrKey(inner)) return `${super.printIdentifier(inner)}.${this.rustScalarLocalOf(inner).kind === 'str' ? 'as_str' : 'as_deref'}()`;
+        if (this.rustWsStrKey(inner)) {
+            const name = super.printIdentifier(inner);
+            const str = this.rustScalarLocalOf(inner).kind === 'str';
+            // a borrow next to another read of the local in its statement is spelled `&x` so ccxt keeps that read's clone
+            if (!this.rustWsKeySharesStatement(inner)) return `${name}.${str ? 'as_str' : 'as_deref'}()`;
+            return str ? `&${name}[..]` : `(&${name}).as_deref()`;
+        }
         if (inner !== undefined && isStringLiteral(inner) && !(inner.text in this.StringLiteralReplacements)) return this.quotedStringLiteral(inner.text);
         const text = this.printNode(node, 0).trim();
         const bare = isIdentifier(inner) || isCallExpression(inner) || isPropertyAccessExpression(inner) || isElementAccessExpression(inner) || this.literalKindOfNode(inner) !== undefined;
         return bare ? `&${text}` : `&(${text})`;
+    }
+
+    rustWsKeySharesStatement(node): boolean {
+        const declaration: any = this.rustScalarLocalOf(node)?.declaration;
+        let top: any = node;
+        while (top.parent !== undefined && !isStatement(top.parent)) top = top.parent;
+        let shared = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (n !== node && n.pos >= top.pos && n.end <= top.end) shared = true;
+            return true;
+        });
+        return shared;
     }
 
     printWsSettleCall(node, receiver: string, identation: number): string {

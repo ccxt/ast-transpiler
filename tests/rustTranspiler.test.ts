@@ -7281,7 +7281,9 @@ describe('rust message-hash string locals handed to the ws client', () => {
         expect(out).toContain('client.reusable_future(messageHash.as_str())');
         expect(out).toContain('client.future(messageHash.as_str())');
         expect(out).toContain('let mut url: String = format!(');
-        expect(out).toContain('self.watch(url.as_str(), messageHash.as_str(), &[');
+        // a hash also read in the optional slice is lent as `&x[..]`, which keeps that read's clone
+        expect(out).toContain('self.watch(url.as_str(), &messageHash[..], &[');
+        expect(out).toContain('Value::from(messageHash.clone())]).await;');
     });
     test('negative: no hash or url local of these shapes keeps its box', () => {
         expect(out).not.toMatch(/let mut (messageHash|url): Value/);

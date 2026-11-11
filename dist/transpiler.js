@@ -55140,13 +55140,31 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   /** A key slot's text: `x.as_str()` / `x.as_deref()` for a string local, else the `Value` by reference. */
   rustWsKeyText(node) {
     const inner = this.unwrapParens(node);
-    if (this.rustWsStrKey(inner))
-      return `${super.printIdentifier(inner)}.${this.rustScalarLocalOf(inner).kind === "str" ? "as_str" : "as_deref"}()`;
+    if (this.rustWsStrKey(inner)) {
+      const name = super.printIdentifier(inner);
+      const str = this.rustScalarLocalOf(inner).kind === "str";
+      if (!this.rustWsKeySharesStatement(inner))
+        return `${name}.${str ? "as_str" : "as_deref"}()`;
+      return str ? `&${name}[..]` : `(&${name}).as_deref()`;
+    }
     if (inner !== void 0 && isStringLiteral3(inner) && !(inner.text in this.StringLiteralReplacements))
       return this.quotedStringLiteral(inner.text);
     const text = this.printNode(node, 0).trim();
     const bare2 = isIdentifier3(inner) || isCallExpression6(inner) || isPropertyAccessExpression3(inner) || isElementAccessExpression4(inner) || this.literalKindOfNode(inner) !== void 0;
     return bare2 ? `&${text}` : `&(${text})`;
+  }
+  rustWsKeySharesStatement(node) {
+    const declaration = this.rustScalarLocalOf(node)?.declaration;
+    let top = node;
+    while (top.parent !== void 0 && !isStatement(top.parent))
+      top = top.parent;
+    let shared = false;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (n !== node && n.pos >= top.pos && n.end <= top.end)
+        shared = true;
+      return true;
+    });
+    return shared;
   }
   printWsSettleCall(node, receiver, identation) {
     const args = Array.from(node.arguments);
