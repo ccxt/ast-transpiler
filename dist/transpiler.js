@@ -52919,7 +52919,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     if (op === SyntaxKind7.InKeyword) {
       const shadow = this.rustParamShadowOf(right);
-      return this.printFieldKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== void 0 ? this.printShadowInOperator(shadow, left) : void 0) ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right) ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right) ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
+      return this.printBorrowedInOp(left, right) ?? this.printFieldKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== void 0 ? this.printShadowInOperator(shadow, left) : void 0) ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right) ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right) ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
     }
     if ((op === SyntaxKind7.PlusEqualsToken || op === SyntaxKind7.MinusEqualsToken) && left.kind !== SyntaxKind7.ElementAccessExpression) {
       const isPlus = op === SyntaxKind7.PlusEqualsToken;
@@ -54515,9 +54515,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return true;
     if (isBinaryExpression5(node))
       return _RustTranspiler.RUST_SCALAR_ARITH_OPS.has(node.operatorToken.kind);
-    if (isIdentifier3(node) || isConditionalExpression4(node) || this.rustScalarStrMethod(node, true) !== void 0 || this.rustScalarPreciseCall(node))
+    if (isIdentifier3(node) || isConditionalExpression4(node) || this.rustScalarStrMethod(node, true) !== void 0 || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node))
       return true;
-    if (this.rustStrCastCall(node) !== void 0 || this.rustClockString(node) || this.rustSumShape(node))
+    if (this.rustStrCastCall(node) !== void 0 || this.rustClockString(node))
       return true;
     if (isPropertyAccessExpression3(node))
       return isIdentifier3(node.name) && node.name.text === "length" && isIdentifier3(node.expression);
@@ -54561,7 +54561,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
     const expected = kind === "ostr" || kind === "str" ? "string" : kind === "bool" || kind === "obool" ? "boolean" : "number";
-    if (checked !== expected && !(kind === "int" && this.rustIntSumArgs(this.unwrapParens(declaration.initializer)) !== void 0))
+    if (checked !== expected && !(kind === "int" && this.rustArithCombinator(this.unwrapParens(declaration.initializer)) && this.rustArithCallKind(declaration.initializer) === "int"))
       return void 0;
     const seeded = kind;
     kind = this.rustScalarWidenedKind(declaration, kind);
@@ -54687,6 +54687,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return this.rustScalarValueKind(cast, fresh) === "ostr" ? "ostr" : void 0;
     if (fresh && this.rustClockString(node))
       return "str";
+    if (this.rustArithCombinator(node))
+      return this.rustArithCallKind(node);
     if (fresh && isBinaryExpression5(node) && node.operatorToken.kind === SyntaxKind7.PlusToken && this.rustScalarFormatText(node) !== void 0)
       return "str";
     if (this.rustElementReadScalarKind(node) !== void 0)
@@ -54699,8 +54701,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const name = String(callee.name.text);
     const args = Array.from(node.arguments ?? []);
     if (this.rustClockCall(node))
-      return "int";
-    if (this.rustIntSumArgs(node) !== void 0)
       return "int";
     const baseReturn = this.rustBaseReturnScalarKind(node, name);
     if (baseReturn !== void 0)
@@ -54749,12 +54749,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // The runtime `milliseconds()`/`seconds()` always return `Value::Int`, so with no venue override the
   // result is an `i64` exactly; `this.m(..) as string` keeps the call's own `Option<String>` kind.
   rustClockCall(node) {
-    if (!isCallExpression6(node) || node.arguments.length !== 0 || !isPropertyAccessExpression3(node.expression) || node.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+    if (!isCallExpression6(node) || node.arguments.length !== 0 || !isPropertyAccessExpression3(node.expression))
       return false;
     const name = String(node.expression.name.text);
-    if (name !== "milliseconds" && name !== "seconds" || !this.rustCalleeIsRuntimeBase(node))
-      return false;
-    return !this.rustVenueReturnTypesHas(node, name);
+    return (name === "milliseconds" || name === "seconds") && this.rustArithCallKind(node) === "int";
   }
   rustVenueReturnTypesHas(node, name) {
     const file = String(node.getSourceFile?.()?.fileName ?? "");
@@ -54769,27 +54767,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     return this.rustClockCall(this.unwrapParens(node.expression.expression));
   }
-  /** Base `sum(a, b, ..)` over operands that are all `i64`: the runtime adds two `Int`s to an `Int`. */
+  /** A base `sum(a, b, ..)` call shape; whether it is native is decided by rustArithCallKind. */
   rustSumShape(node) {
     return isCallExpression6(node) && isPropertyAccessExpression3(node.expression) && node.expression.expression.kind === SyntaxKind7.ThisKeyword && node.expression.name.text === "sum" && node.arguments.length >= 2;
-  }
-  rustIntSumArgs(node) {
-    if (!this.rustSumShape(node) || !this.rustCalleeIsRuntimeBase(node) || this.rustVenueReturnTypesHas(node, "sum"))
-      return void 0;
-    const args = Array.from(node.arguments);
-    return args.every((a) => this.rustIntOperand(a)) ? args : void 0;
-  }
-  rustIntOperand(node) {
-    const inner = this.unwrapParens(node);
-    if (inner === void 0 || inner.kind === SyntaxKind7.SpreadElement)
-      return false;
-    if (this.rustScalarIntLiteral(inner) !== void 0)
-      return true;
-    if (isIdentifier3(inner))
-      return this.rustScalarIdentifierKind(inner) === "int";
-    if (isCallExpression6(inner))
-      return this.rustScalarValueKind(inner, true) === "int" && this.rustScalarNativeText("int", inner) !== void 0;
-    return this.rustScalarExpressionKind(inner) === "int";
   }
   /** A cast, clock-string or `sum` local must earn a native use, and a string one never copies where the `Value` moved. */
   rustNewShapeCostly(init, typedUses, copied) {
@@ -55179,6 +55159,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return "key";
     if (kind === "ostr" && this.rustOkeyLocal(n) && this.rustOkeyReadUse(n))
       return "okey";
+    if (isCallExpression6(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== void 0)
+      return "native";
     if (isCallExpression6(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
       return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? "box" : this.rustScalarExpressionUseForm(n, kind);
     }
@@ -55877,14 +55859,14 @@ ${binding(plan.indent)}` : ""), head: "" };
       return kind === "ostr" ? this.rustScalarNativeText(kind, cast) : void 0;
     if (!isCallExpression6(node))
       return void 0;
+    if (this.rustArithCombinator(node))
+      return this.rustArithCallText(kind, node);
     const text = this.printNode(node, 0).trim();
     if (this.rustClockCall(node))
       return kind === "int" || kind === "oint" ? wrap(`${text}.as_i64().unwrap_or_default()`) : void 0;
-    if (base === "str" && this.rustClockString(node))
-      return wrap(`format!("{}", ${this.rustScalarNativeText("int", node.expression.expression)})`);
-    const summed = this.rustIntSumArgs(node);
-    if (summed !== void 0)
-      return base === "int" ? wrap(`(${summed.map((a) => this.rustScalarOperandText("int", a)).join(" + ")})`) : void 0;
+    const clock = base === "str" && this.rustClockString(node) && isPropertyAccessExpression3(node.expression) ? node.expression.expression : void 0;
+    if (clock !== void 0)
+      return wrap(`format!("{}", ${this.rustScalarNativeText("int", clock)})`);
     const fallback = node.arguments[node.arguments.length - 1];
     const defaulted = this.rustScalarValueKind(node, true) === base;
     if (kind === "int" && this.rustVenueIntCall(node))
@@ -56088,8 +56070,9 @@ ${binding(plan.indent)}` : ""), head: "" };
       return "int";
     if (this.rustScalarFloatLiteral(inner) !== void 0)
       return "num";
-    if (isCallExpression6(inner) && this.rustClockCall(inner))
-      return "int";
+    const call = this.rustArithCallKind(inner);
+    if (call !== void 0)
+      return call;
     const kind = this.rustScalarExpressionKind(inner);
     return kind === "int" || kind === "num" || kind === "oint" || kind === "onum" ? kind : void 0;
   }
@@ -56131,6 +56114,79 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (method !== void 0)
       return method.kind;
     return this.rustScalarPreciseCall(node) ? "ostr" : void 0;
+  }
+  rustArithCallKind(expr) {
+    const node = this.unwrapParens(expr);
+    if (node === void 0 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
+      return void 0;
+    const recv = node.expression.expression;
+    const name = String(node.expression.name.text);
+    const args = Array.from(node.arguments ?? []);
+    const math = isIdentifier3(recv) && recv.text === "Math" && (name === "min" || name === "max") && args.length === 2;
+    if (!math && recv.kind !== SyntaxKind7.ThisKeyword)
+      return void 0;
+    if (!math) {
+      const declaration = this.rustScalarCallee(node);
+      if (declaration === void 0 || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? "")))
+        return void 0;
+      if (!this.rustCalleeIsRuntimeBase(node) || this.rustVenueReturnTypesHas(node, name))
+        return void 0;
+      if (_RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name))
+        return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === "number" ? "int" : void 0;
+      if (_RustTranspiler.RUST_SCALAR_INT_HELPERS[name] !== void 0)
+        return this.rustScalarValueKind(node, true) === "int" ? "int" : void 0;
+      if (name !== "sum" || args.length < 2)
+        return void 0;
+    }
+    const kinds = args.map((a) => this.rustArithOperandKind(a));
+    if (kinds.some((k) => k !== "int" && k !== "num"))
+      return void 0;
+    return kinds.every((k) => k === "int") ? "int" : args.length === 2 ? "num" : void 0;
+  }
+  /** An operand's numeric kind; a never-null integer call (e.g. a literal-defaulted reader) prints natively too. */
+  rustArithOperandKind(node) {
+    const inner = this.unwrapParens(node);
+    if (inner === void 0 || inner.kind === SyntaxKind7.SpreadElement)
+      return void 0;
+    const kind = this.rustScalarNumericKind(inner);
+    if (kind !== void 0)
+      return kind;
+    return isCallExpression6(inner) && this.rustScalarValueKind(inner, true) === "int" && this.rustScalarNativeText("int", inner) !== void 0 ? "int" : void 0;
+  }
+  /** A combinator over a typed operand prints native and boxes its result once. */
+  printRustArithCall(node) {
+    if (!this.rustArithCombinator(node) || !Array.from(node.arguments).some((a) => this.rustScalarHasTypedOperand(a)))
+      return void 0;
+    const kind = this.rustArithCallKind(node);
+    const text = kind === void 0 ? void 0 : this.rustArithCallText(kind, node);
+    return text === void 0 ? void 0 : this.rustScalarBoxText(kind, text, node);
+  }
+  /** `this.sum(..)` / `Math.min|max(a, b)`: a call whose own kind comes from its operands. */
+  rustArithCombinator(node) {
+    if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
+      return false;
+    const name = String(node.expression.name.text);
+    const recv = node.expression.expression;
+    return name === "sum" && recv.kind === SyntaxKind7.ThisKeyword || (name === "min" || name === "max") && isIdentifier3(recv) && recv.text === "Math";
+  }
+  rustArithCallText(kind, expr) {
+    const node = this.unwrapParens(expr);
+    const own = this.rustArithCallKind(node);
+    if (own === void 0 || kind !== own && kind !== `o${own}` && !(kind === "num" && own === "int"))
+      return void 0;
+    const name = String(node.expression.name.text);
+    let text;
+    if (_RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name))
+      text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or_default()`;
+    else if (_RustTranspiler.RUST_SCALAR_INT_HELPERS[name] !== void 0)
+      text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or(${this.rustScalarIntLiteral(node.arguments[node.arguments.length - 1])})`;
+    else {
+      const parts = Array.from(node.arguments).map((a) => this.rustScalarOperandText(own, a));
+      text = name === "sum" ? `(${parts.join(" + ")})` : `${own === "int" ? "i64" : "f64"}::${name}(${parts[0]}, ${parts[1]})`;
+    }
+    if (kind === "num" && own === "int")
+      return `((${text}) as f64)`;
+    return kind === own ? text : `Some(${text})`;
   }
   rustScalarJoinKinds(a, b) {
     if (a === void 0 || b === void 0)
@@ -56389,6 +56445,9 @@ ${binding(plan.indent)}` : ""), head: "" };
       const name = super.printIdentifier(inner);
       return kind === "num" && own2 === "int" ? `(${name} as f64)` : name;
     }
+    const call = kind === "int" || kind === "num" ? this.rustArithCallText(kind, inner) : void 0;
+    if (call !== void 0)
+      return `(${call})`;
     const own = this.rustScalarExpressionKind(inner) ?? kind;
     const text = this.rustScalarNativeText(own, inner) ?? this.printNode(inner, 0);
     return kind === "num" && own === "int" ? `((${text}) as f64)` : `(${text})`;
@@ -58159,6 +58218,9 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const scalarMethod = this.printRustScalarMethodCall(node);
     if (scalarMethod !== void 0)
       return scalarMethod;
+    const arithCall = this.printRustArithCall(node);
+    if (arithCall !== void 0)
+      return arithCall;
     const marketRead = this.printTypedMarketRead(node);
     if (marketRead !== void 0)
       return marketRead;
@@ -58717,7 +58779,8 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
   rustExactSlotKindUncached(element) {
     const pattern = element.parent;
     const owner = pattern?.parent;
-    if (pattern?.kind !== SyntaxKind7.ArrayBindingPattern || owner === void 0 || !isVariableDeclaration3(owner) || owner.name !== pattern || owner.parent?.declarations?.[0] !== owner || element.dotDotDotToken !== void 0 || element.initializer !== void 0 || !isIdentifier3(element.name))
+    const list = owner?.parent;
+    if (pattern?.kind !== SyntaxKind7.ArrayBindingPattern || owner === void 0 || !isVariableDeclaration3(owner) || owner.name !== pattern || list?.declarations?.[0] !== owner || element.dotDotDotToken !== void 0 || element.initializer !== void 0 || !isIdentifier3(element.name))
       return void 0;
     if (owner.initializer === void 0 || !this.rustNativeListSource(owner.initializer) || this.rustTestTierSource(element))
       return void 0;
@@ -58837,8 +58900,11 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     if (declaration === void 0 || this.rustEnclosingFunction(declaration) !== method)
       return false;
     if (isParameterDeclaration3(declaration)) {
-      const type = String(declaration.type?.getText?.() ?? "");
-      return (want === "bool" ? /^(?:Bool|boolean)$/ : /^(?:Int|number)$/).test(type) && (declaration.initializer === void 0 || this.rustExactScalarExpr(declaration.initializer, want, method, depth + 1));
+      const type = declaration.type;
+      const keyword = want === "bool" ? SyntaxKind7.BooleanKeyword : SyntaxKind7.NumberKeyword;
+      const alias = type?.kind === SyntaxKind7.TypeReference && isIdentifier3(type.typeName) && type.typeArguments === void 0 ? type.typeName.text : void 0;
+      const exact = type?.kind === keyword || alias === (want === "bool" ? "Bool" : "Int");
+      return exact && (declaration.initializer === void 0 || this.rustExactScalarExpr(declaration.initializer, want, method, depth + 1));
     }
     if (!isVariableDeclaration3(declaration) || !isIdentifier3(declaration.name) || declaration.initializer === void 0 || !this.rustExactScalarExpr(declaration.initializer, want, method, depth + 1))
       return false;
@@ -60746,10 +60812,10 @@ ${this.getIden(identation)}}`;
     return `Value::Bool(${this.nativeValuePredicateText("array", node?.arguments?.[0], parsedArg) ?? `is_array(&${parsedArg})`})`;
   }
   printObjectKeysCall(node, identation, parsedArg = void 0) {
-    return this.bearerEnum(node, "keys") ?? this.provenDictFieldEnum(node, parsedArg, "keys") ?? this.predictionEnum(node, parsedArg, "keys") ?? this.baseEnum(node, parsedArg, "keys") ?? `object_keys(&${parsedArg})`;
+    return this.printBorrowedKeys(node, "keys") ?? this.bearerEnum(node, "keys") ?? this.provenDictFieldEnum(node, parsedArg, "keys") ?? this.predictionEnum(node, parsedArg, "keys") ?? this.baseEnum(node, parsedArg, "keys") ?? `object_keys(&${parsedArg})`;
   }
   printObjectValuesCall(node, identation, parsedArg = void 0) {
-    return this.bearerEnum(node, "values") ?? this.provenDictFieldEnum(node, parsedArg, "values") ?? this.predictionEnum(node, parsedArg, "values") ?? this.baseEnum(node, parsedArg, "values") ?? `object_values(&${parsedArg})`;
+    return this.printBorrowedKeys(node, "values") ?? this.bearerEnum(node, "values") ?? this.provenDictFieldEnum(node, parsedArg, "values") ?? this.predictionEnum(node, parsedArg, "values") ?? this.baseEnum(node, parsedArg, "values") ?? `object_values(&${parsedArg})`;
   }
   /** `Object.keys/values(x)` on a typed bearer — the map's own iterators. A bearer is built
    *  from an object literal, so the helper's ws/tag filters have nothing to strip. */
@@ -62465,6 +62531,7 @@ ${iden}}`;
     let lengths = 0;
     let indexLikeReads = 0;
     let keyReads = 0;
+    let keySets = 0;
     let mixed = false;
     const boxedElementUses = [];
     const accept = (n) => {
@@ -62504,6 +62571,11 @@ ${iden}}`;
         reads++;
         return true;
       }
+      if (this.rustBorrowedKeySetUse(n)) {
+        keyReads++;
+        keySets++;
+        return true;
+      }
       const handed = () => this.rustDictElementBoxUse(n, init) && boxedElementUses.push(n) > 0;
       if (!isCallExpression6(up) || up.arguments[0] !== n)
         return handed();
@@ -62523,6 +62595,8 @@ ${iden}}`;
     if ((keyReads > 0 || init !== void 0 && isCallExpression6(init) && this.rustRecordLookupSource(init)) && !this.rustDictKeyReadLineOk(declaration, name))
       return void 0;
     const optional = nilDeclared || nullTests > 0 || writes > 0;
+    if (keySets > 0 && (from !== "dict" || optional || init !== void 0 && this.rustInitReadsTaggedStore(init)))
+      return void 0;
     if (lengths > 0 && (from !== "list" || optional))
       return void 0;
     if (optional) {
@@ -62569,6 +62643,50 @@ ${iden}}`;
   printDictElementBox(node, text) {
     const form = this.rustDictElementBoxes.get(node);
     return form === void 0 ? void 0 : form === "move" ? `Value::Dict(${text})` : `Value::from(&${text})`;
+  }
+  // ── rustBorrowedKeySetUse / printBorrowedKeys / printBorrowedInOp: key sets of a shared dict local ──
+  // `Object.keys/values(m)` lists the map's own entries (`Value::from` per key, no closure) and `k in m` is
+  // `contains_key`, `in_op`'s Dict arm. A map read from a tagged store keeps the box (ws tags are filtered there).
+  rustBorrowedKeySetUse(n) {
+    const up = n.parent;
+    if (isCallExpression6(up) && this.bearerEnumArg(up) === n)
+      return up.arguments[0] === n;
+    if (!isBinaryExpression5(up) || up.operatorToken.kind !== SyntaxKind7.InKeyword || up.right !== n)
+      return false;
+    return this.rustBorrowedInOpKey(up.left) !== void 0;
+  }
+  /** The key operand of `k in m`: a literal as `"k"`, else the boxed key text `bearerInOp` tests. */
+  rustBorrowedInOpKey(key) {
+    const node = this.rustSkipWrappers(key);
+    if (node !== void 0 && isStringLiteral3(node)) {
+      const literal2 = this.rustStringLiteralOf(this.printStringLiteral(node));
+      return literal2 === void 0 ? void 0 : { literal: true, text: literal2 };
+    }
+    const text = this.bearerInOpKeyText(key);
+    return text === void 0 ? void 0 : { literal: false, text };
+  }
+  rustBorrowedDictName(node) {
+    const recv = this.rustSkipWrappers(node);
+    if (recv === void 0 || !isIdentifier3(recv))
+      return void 0;
+    const declaration = this.rustDeclarationOfIdentifier(recv);
+    if (declaration === void 0 || declaration.name === recv || this.rustBorrowedLocalKind(declaration) !== "dict" || this.rustOptContainerLocals.has(declaration))
+      return void 0;
+    return super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+  }
+  printBorrowedKeys(node, kind) {
+    const arg = this.bearerEnumArg(node);
+    const name = arg === void 0 ? void 0 : this.rustBorrowedDictName(arg);
+    if (name === void 0)
+      return void 0;
+    return kind === "keys" ? `Value::Array(${name}.keys().cloned().map(Value::from).collect())` : `Value::Array(${name}.values().cloned().collect())`;
+  }
+  printBorrowedInOp(key, obj) {
+    const name = this.rustBorrowedDictName(obj);
+    const k = name === void 0 ? void 0 : this.rustBorrowedInOpKey(key);
+    if (k === void 0)
+      return void 0;
+    return k.literal ? `Value::Bool(${name}.contains_key(${k.text}))` : `Value::Bool(matches!(&${k.text}, Value::Str(__k) if ${name}.contains_key(__k.as_ref())))`;
   }
   // ── rustDictKeyReadUse / printDictKeyRead: direct literal-key reads (`m['k']`, `m.k`) on a dict local ──
   // The shared map (or its optional form) reads through the reader trait the `safe_*_k` readers use:
@@ -66147,6 +66265,11 @@ _RustTranspiler.RUST_SCALAR_ARITH_OPS = /* @__PURE__ */ new Set([
   SyntaxKind7.ExclamationEqualsToken,
   SyntaxKind7.ExclamationEqualsEqualsToken
 ]);
+// ── numeric calls over typed operands (rustArithCallKind / rustArithCallText) ──
+// Base calls whose runtime always answers `Int` (milliseconds, seconds, parseTimeframe), a literal-defaulted
+// integer reader, and `this.sum` / two-operand `Math.min|max` over int/num operands: the native i64 / f64 result
+// equals the helper's (Int with Int stays Int, any Float operand gives Float).
+_RustTranspiler.RUST_ALWAYS_INT_CALLS = /* @__PURE__ */ new Set(["milliseconds", "seconds", "parseTimeframe"]);
 /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
 _RustTranspiler.RUST_CACHE_CTORS = /* @__PURE__ */ new Set(["ArrayCache", "ArrayCacheByTimestamp", "ArrayCacheBySymbolById", "ArrayCacheBySymbolBySide", "ArrayCacheByOutcomeById"]);
 // `ts/src/base/**` — the shared `Exchange` / `PredictionExchange` classes

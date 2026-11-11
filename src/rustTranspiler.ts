@@ -4893,7 +4893,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustArithCombinator(node)) return this.rustArithCallText(kind, node);
         const text = this.printNode(node, 0).trim();
         if (this.rustClockCall(node)) return kind === 'int' || kind === 'oint' ? wrap(`${text}.as_i64().unwrap_or_default()`) : undefined;
-        if (base === 'str' && this.rustClockString(node)) return wrap(`format!("{}", ${this.rustScalarNativeText('int', node.expression.expression)})`);
+        const clock: any = base === 'str' && this.rustClockString(node) && isPropertyAccessExpression(node.expression) ? node.expression.expression : undefined;
+        if (clock !== undefined) return wrap(`format!("{}", ${this.rustScalarNativeText('int', clock)})`);
         const fallback: any = node.arguments[node.arguments.length - 1];
         const defaulted = this.rustScalarValueKind(node, true) === base;
         if (kind === 'int' && this.rustVenueIntCall(node)) return `${text}.as_i64().unwrap_or_default()`;
@@ -8084,8 +8085,9 @@ export class RustTranspiler extends BaseTranspiler {
     private rustExactSlotKindUncached(element: any): string | undefined {
         const pattern: any = element.parent;
         const owner: any = pattern?.parent;
+        const list: any = owner?.parent;
         if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || owner === undefined || !isVariableDeclaration(owner) || owner.name !== pattern
-            || (owner.parent as any)?.declarations?.[0] !== owner || element.dotDotDotToken !== undefined || element.initializer !== undefined || !isIdentifier(element.name)) return undefined;
+            || list?.declarations?.[0] !== owner || element.dotDotDotToken !== undefined || element.initializer !== undefined || !isIdentifier(element.name)) return undefined;
         if (owner.initializer === undefined || !this.rustNativeListSource(owner.initializer) || this.rustTestTierSource(element)) return undefined;
         const scope: any = this.rustEnclosingFunction(owner);
         if (scope === undefined || isSourceFile(scope) || scope.kind !== SyntaxKind.MethodDeclaration) return undefined;
@@ -8180,8 +8182,11 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclaredNode(node);
         if (declaration === undefined || this.rustEnclosingFunction(declaration) !== method) return false;
         if (isParameterDeclaration(declaration)) {
-            const type = String(declaration.type?.getText?.() ?? '');
-            return (want === 'bool' ? /^(?:Bool|boolean)$/ : /^(?:Int|number)$/).test(type) && (declaration.initializer === undefined || this.rustExactScalarExpr(declaration.initializer, want, method, depth + 1));
+            const type: any = declaration.type;
+            const keyword = want === 'bool' ? SyntaxKind.BooleanKeyword : SyntaxKind.NumberKeyword;
+            const alias = type?.kind === SyntaxKind.TypeReference && isIdentifier(type.typeName) && type.typeArguments === undefined ? type.typeName.text : undefined;
+            const exact = type?.kind === keyword || alias === (want === 'bool' ? 'Bool' : 'Int');
+            return exact && (declaration.initializer === undefined || this.rustExactScalarExpr(declaration.initializer, want, method, depth + 1));
         }
         if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.initializer === undefined
             || !this.rustExactScalarExpr(declaration.initializer, want, method, depth + 1)) return false;

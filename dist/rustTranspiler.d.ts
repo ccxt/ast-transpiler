@@ -458,10 +458,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueReturnTypesHas(node: any, name: string): boolean;
     /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
     rustClockString(node: any): boolean;
-    /** Base `sum(a, b, ..)` over operands that are all `i64`: the runtime adds two `Int`s to an `Int`. */
+    /** A base `sum(a, b, ..)` call shape; whether it is native is decided by rustArithCallKind. */
     rustSumShape(node: any): boolean;
-    rustIntSumArgs(node: any): any[] | undefined;
-    rustIntOperand(node: any): boolean;
     /** A cast, clock-string or `sum` local must earn a native use, and a string one never copies where the `Value` moved. */
     rustNewShapeCostly(init: any, typedUses: number, copied: number): boolean;
     rustStrCastCall(node: any): any;
@@ -647,6 +645,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarExpressionKind(expr: any): string | undefined;
     private static readonly RUST_ALWAYS_INT_CALLS;
     rustArithCallKind(expr: any): string | undefined;
+    /** An operand's numeric kind; a never-null integer call (e.g. a literal-defaulted reader) prints natively too. */
+    rustArithOperandKind(node: any): string | undefined;
     /** A combinator over a typed operand prints native and boxes its result once. */
     printRustArithCall(node: any): string | undefined;
     /** `this.sum(..)` / `Math.min|max(a, b)`: a call whose own kind comes from its operands. */
@@ -1586,6 +1586,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustDictElementBoxUse(n: any, init: any): boolean;
     /** `Value::Dict(x)` at the last use (moved), else `Value::from(&x)` (the Arc bump the copied `Value` paid). */
     printDictElementBox(node: any, text: string): string | undefined;
+    rustBorrowedKeySetUse(n: any): boolean;
+    /** The key operand of `k in m`: a literal as `"k"`, else the boxed key text `bearerInOp` tests. */
+    rustBorrowedInOpKey(key: any): {
+        literal: boolean;
+        text: string;
+    } | undefined;
+    rustBorrowedDictName(node: any): string | undefined;
+    printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined;
+    printBorrowedInOp(key: any, obj: any): string | undefined;
     /** A read of `n['literal']` / `n.name` (not a write target, call receiver, length or digit key). */
     rustDictKeyReadUse(n: any): boolean;
     /** The typed declaration line (`: crate::value::Dict = .. .into_dict()`, about 40 chars more) stays within 400 chars. */
