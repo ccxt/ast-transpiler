@@ -1552,6 +1552,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueMethodNamesByRoot;
     /** Method names declared by the venue sources under `srcRoot` (REST, pro, prediction). */
     rustVenueMethodNames(srcRoot: string): Set<string>;
+    /** A method declared in exactly one venue source (REST, pro or prediction) and nowhere in the base tier: every
+     *  call site is in that venue or its ws subclass, and its by-name dispatch arm passes a `Value`, which still fits. */
+    rustVenueLocalMethod(method: any, name: string): boolean;
+    private rustVenueMethodDeclCountsByRoot;
+    /** Class-member method declarations per name over the base tier and the venue sources (base counts twice). */
+    rustVenueMethodDeclCounts(srcRoot: string): Map<string, number>;
     /** The callee parameter a call argument lands in, when that parameter takes a lent dict. */
     rustLentParamsSlot(call: any, arg: any): boolean;
     /** `&x` for a handed dict local lent to a lent-params slot. */

@@ -51435,6 +51435,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustLentParamDecisions = /* @__PURE__ */ new WeakMap();
     this.rustLentOverrideNames = /* @__PURE__ */ new WeakMap();
     this.rustVenueMethodNamesByRoot = /* @__PURE__ */ new Map();
+    this.rustVenueMethodDeclCountsByRoot = /* @__PURE__ */ new Map();
     // Two-level dict bearers: an object literal whose every value is an object literal is declared
     // `IndexMap<String, IndexMap<String, Value>>`, so `x[k1][k2] = v` is one `entry(k1)..insert(k2, v)` and
     // `x[k1][k2]` a two-step lookup. Any other shape keeps the box.
@@ -62166,18 +62167,21 @@ ${iden}}`;
     if ((_nullishCoalesce(method.modifiers, () => ( []))).some((m) => m.kind === _ast.SyntaxKind.StaticKeyword))
       return false;
     const name = String(method.name.text);
-    if (!/^handle\w+$/.test(name) || this.rustTypedSignature(method) !== void 0)
+    if (this.rustTypedSignature(method) !== void 0)
       return false;
     const file = param.getSourceFile();
-    if (!_RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName)))
+    if (!_RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName))) {
+      if (!this.rustVenueLocalMethod(method, name))
+        return false;
+    } else if (!/^handle\w+$/.test(name))
       return false;
     const marker = String(_nullishCoalesce(file.text, () => ( ""))).indexOf("METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT");
-    if (marker < 0 || (_nullishCoalesce(_optionalChain([method, 'access', _9160 => _9160.getStart, 'optionalCall', _9161 => _9161()]), () => ( method.pos))) < marker)
+    if (_RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName)) && (marker < 0 || (_nullishCoalesce(_optionalChain([method, 'access', _9160 => _9160.getStart, 'optionalCall', _9161 => _9161()]), () => ( method.pos))) < marker))
       return false;
     const declared = String(_nullishCoalesce(_optionalChain([param, 'access', _9162 => _9162.type, 'optionalAccess', _9163 => _9163.getText, 'optionalCall', _9164 => _9164()]), () => ( ""))).replace(/\s+/g, "");
     if (declared !== "Dict" && declared !== "object" && declared !== "any")
       return false;
-    if (this.rustMethodReferencedAsValue(method) || this.rustLentOverridden(name))
+    if (this.rustMethodReferencedAsValue(method) || _RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName)) && this.rustLentOverridden(name))
       return false;
     if (this.rustLocalIsReassigned(param, "params"))
       return false;
@@ -62246,6 +62250,40 @@ ${iden}}`;
     }
     this.rustVenueMethodNamesByRoot.set(srcRoot, names);
     return names;
+  }
+  /** A method declared in exactly one venue source (REST, pro or prediction) and nowhere in the base tier: every
+   *  call site is in that venue or its ws subclass, and its by-name dispatch arm passes a `Value`, which still fits. */
+  rustVenueLocalMethod(method, name) {
+    const file = String(method.getSourceFile().fileName).replace(/\\/g, "/");
+    const at = file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/);
+    if (at < 0 || !_is.isClassDeclaration.call(void 0, method.parent))
+      return false;
+    if ((_nullishCoalesce(method.modifiers, () => ( []))).some((m) => m.kind === _ast.SyntaxKind.OverrideKeyword))
+      return false;
+    const counts = this.rustVenueMethodDeclCounts(file.slice(0, at) + "/ts/src");
+    return counts.get(name) === 1;
+  }
+  /** Class-member method declarations per name over the base tier and the venue sources (base counts twice). */
+  rustVenueMethodDeclCounts(srcRoot) {
+    let counts = this.rustVenueMethodDeclCountsByRoot.get(srcRoot);
+    if (counts !== void 0)
+      return counts;
+    counts = /* @__PURE__ */ new Map();
+    const declared = /^ {4}(?:(?:override|async|public|protected|private|static)\s+)*([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(/gm;
+    for (const [dir, weight] of [["", 1], ["/pro", 1], ["/prediction", 1], ["/base", 2]]) {
+      let entries = [];
+      try {
+        entries = fs3.readdirSync(srcRoot + dir).filter((f) => f.endsWith(".ts"));
+      } catch (e) {
+        continue;
+      }
+      for (const f of entries) {
+        for (const m of fs3.readFileSync(`${srcRoot}${dir}/${f}`, "utf8").matchAll(declared))
+          counts.set(m[1], (_nullishCoalesce(counts.get(m[1]), () => ( 0))) + weight);
+      }
+    }
+    this.rustVenueMethodDeclCountsByRoot.set(srcRoot, counts);
+    return counts;
   }
   /** The callee parameter a call argument lands in, when that parameter takes a lent dict. */
   rustLentParamsSlot(call, arg) {
