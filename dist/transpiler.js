@@ -52919,7 +52919,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     if (op === SyntaxKind7.InKeyword) {
       const shadow = this.rustParamShadowOf(right);
-      return this.printBorrowedInOp(left, right) ?? this.printFieldKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== void 0 ? this.printShadowInOperator(shadow, left) : void 0) ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right) ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right) ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
+      return this.printBorrowedInOp(left, right) ?? this.printFieldKeyInOp(left, right) ?? this.printElemKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== void 0 ? this.printShadowInOperator(shadow, left) : void 0) ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right) ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right) ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
     }
     if ((op === SyntaxKind7.PlusEqualsToken || op === SyntaxKind7.MinusEqualsToken) && left.kind !== SyntaxKind7.ElementAccessExpression) {
       const isPlus = op === SyntaxKind7.PlusEqualsToken;
@@ -54590,7 +54590,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
           copied++;
       } else if (form !== void 0 && !this.rustIdentifierIsPropertyName(n))
         nativeUses++;
-      if (form === "test" || form === "cond" || form === "concat" || form === "native" || form === "targ" || form === "okey" || form === "fin" || form === "frd")
+      if (form === "test" || form === "cond" || form === "concat" || form === "native" || form === "targ" || form === "okey" || form === "fin" || form === "frd" || form === "kin" || form === "key" && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))
         typedUses++;
       if (form === "xbox" || form === "native" || form === "targ" || form === "err")
         expressionUses = true;
@@ -54601,7 +54601,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const storeOnly = guarded && nativeUses === 0 && boxed === 1;
     const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer);
     const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
-    if (!ok || unused || storeOnly || clientOnce || guarded && scope.kind !== SyntaxKind7.MethodDeclaration || this.rustOkeyBoxed(declaration, boxed))
+    if (!ok || unused || storeOnly || clientOnce || guarded && scope.kind !== SyntaxKind7.MethodDeclaration || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration))
       return void 0;
     if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration)))
       return void 0;
@@ -55161,6 +55161,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return "key";
     if (kind === "ostr" && this.rustOkeyLocal(n) && this.rustOkeyReadUse(n))
       return "okey";
+    if (kind === "ostr" && this.rustOkeyLocal(n) && this.rustElemKeyInUse(n))
+      return "kin";
     if (isCallExpression6(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== void 0)
       return "native";
     if (isCallExpression6(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
@@ -55701,6 +55703,56 @@ ${binding(plan.indent)}` : ""), head: "" };
     const test = kind === "str" ? `matches!(&self.${field}, Value::Dict(__d) if __d.contains_key(${name}.as_str()))` : `matches!((&self.${field}, ${name}.as_deref()), (Value::Dict(__d), Some(__k)) if __d.contains_key(__k))`;
     return `Value::Bool(${test})`;
   }
+  // ── string element keys in `in` tests (rustElemKeyInUse / printElemKeyInOp) ──
+  // `k in m` with `k` an `Option<String>` element local and `m` a single dict-shaped `Value` place:
+  // `in_op`'s Dict arm on the borrowed key; a `None` key (the boxed `Null`) is never contained.
+  rustElemKeyInUse(n) {
+    const test = n.parent;
+    if (!isBinaryExpression5(test) || test.operatorToken.kind !== SyntaxKind7.InKeyword || test.left !== n || this.isTestSource(n))
+      return false;
+    const recv = this.rustStripWrappers(test.right);
+    if (recv === void 0 || !this.isShallowValueReceiver(recv))
+      return false;
+    const own = isIdentifier3(recv) ? this.rustDeclarationOfIdentifier(recv) : void 0;
+    if (own === void 0 && isIdentifier3(recv))
+      return false;
+    if (own !== void 0 && (!isVariableDeclaration3(own) || own.initializer === void 0 || isObjectLiteralExpression4(this.rustSkipWrappers(own.initializer))))
+      return false;
+    if (this.rustBorrowedDictName(recv) !== void 0 || this.rustParamShadowOf(recv) !== void 0 || this.rustFieldKeyReceiver(recv) !== void 0 || this.rustClientHandleAccess(recv) !== void 0 || isPropertyAccessExpression3(recv) && _RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(recv.name.text)))
+      return false;
+    return this.isDictShapedType(this.typeOfNodeIfAny(test.right)) || this.rustDictLocalProof(recv) === "plain";
+  }
+  /** An `in`-keyed element local stays `Value` when a boxed use would copy where the `Value` moved or was lent. */
+  rustElemKeyInCostly(declaration) {
+    if (!isIdentifier3(declaration.name))
+      return false;
+    let keyed = false;
+    let copied = false;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      const form = this.rustScalarUseForms.get(n);
+      if (form === "kin")
+        keyed = true;
+      const up = n.parent;
+      const argCopy = isCallExpression6(up) && up.expression !== n && (form === "box" || form === "xbox");
+      if (form === "err" || form === "key" || (form === "box" || form === "xbox") && !argCopy && !this.rustScalarBoxMoves(n, form, declaration))
+        copied = true;
+      return true;
+    });
+    return keyed && copied;
+  }
+  /** `m[k] = v` as a statement: the element key of a native insert. */
+  rustElemInsertKey(n) {
+    const access = n.parent;
+    const write = access?.parent;
+    return isElementAccessExpression4(access) && access.argumentExpression === n && isBinaryExpression5(write) && write.left === access && write.operatorToken.kind === SyntaxKind7.EqualsToken && write.parent?.kind === SyntaxKind7.ExpressionStatement;
+  }
+  printElemKeyInOp(key, obj) {
+    const inner = this.rustStripWrappers(key);
+    if (!isIdentifier3(inner) || this.rustScalarUseForms.get(inner) !== "kin" || this.rustScalarLocalOf(inner)?.kind !== "ostr")
+      return void 0;
+    const recv = this.printNode(this.rustStripWrappers(obj), 0).trim();
+    return `Value::Bool(matches!((&${recv}, ${super.printIdentifier(inner)}.as_deref()), (Value::Dict(__d), Some(__k)) if __d.contains_key(__k)))`;
+  }
   rustScalarInNestedWrite(n) {
     let current = n;
     while (current.parent !== void 0 && !isStatement(current.parent))
@@ -55793,7 +55845,7 @@ ${binding(plan.indent)}` : ""), head: "" };
       return `(${super.printIdentifier(node)} == Some(true))`;
     if (form === "targ" && (local.kind === "str" || local.kind === "ostr") && this.rustWsKeyUse(node))
       return this.rustWsKeyText(node);
-    if (form === "cond" || form === "concat" || form === "native" || form === "targ" || form === "key" || form === "okey" || form === "fin" || form === "frd")
+    if (form === "cond" || form === "concat" || form === "native" || form === "targ" || form === "key" || form === "okey" || form === "fin" || form === "frd" || form === "kin")
       return super.printIdentifier(node);
     if (form === "err")
       return `${super.printIdentifier(node)}.clone()`;
