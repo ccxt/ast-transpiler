@@ -438,6 +438,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBaseReturnScalarKind(call: any, name: string): string | undefined;
     rustDerivedScalarKind(call: any): string | undefined;
     rustElementReadScalarKind(node: any): string | undefined;
+    rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
+    private static readonly RUST_SCALAR_COUNTER_COND;
+    rustScalarCounterCond(name: string, condStr: string): string | undefined;
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
     rustScalarNeedsNativeUse(init: any): boolean;
     rustScalarCallee(call: any): any;

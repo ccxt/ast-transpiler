@@ -3625,7 +3625,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustScalarSeeding) return kind;
         const previous = this.rustScalarDecisions.get(declaration);
         this.rustScalarDecisions.set(declaration, kind);
-        const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+        const ok = this.rustScalarUsesAll(declaration, String(declaration.name.text), (n) => {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             if (this.rustEnclosingFunction(n) !== scope) return false;
             const form = this.rustScalarUseForm(n, kind);
@@ -3761,6 +3761,49 @@ export class RustTranspiler extends BaseTranspiler {
         const listType: any = this.typeOfNodeIfAny(node.expression);
         if (listType === undefined || !this.getChecker().isArrayType(listType)) return undefined;
         return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'string' ? 'ostr' : undefined;
+    }
+
+    // ── scalar sibling bindings (rustScalarUsesAll) ──
+    // `rustLocalUsesAll` for a scalar `let`/`const`: a same-named block-scoped binding in a sibling
+    // block is another symbol (Rust scopes it to its own block too), so its uses are skipped.
+    rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean {
+        const own: any = this.rustSymbolOf(declaration.name);
+        const scope = this.rustEnclosingFunction(declaration);
+        if (own === undefined || scope === undefined || (declaration.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) === 0) return this.rustLocalUsesAll(declaration, name, false, acceptUse);
+        const nodes = this.rustScopeNameNodes(scope, name) as any[];
+        const siblings = nodes.filter((n) => n !== declaration && this.rustBindsName(n, name));
+        if (siblings.length === 0) return this.rustLocalUsesAll(declaration, name, false, acceptUse);
+        for (const n of siblings) {
+            if (!isVariableDeclaration(n) || (n.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) === 0 || this.rustEnclosingFunction(n) !== scope
+                || this.isNodeInsideNode(declaration, n.parent?.parent ?? n) || this.isNodeInsideNode(n, declaration.parent?.parent ?? declaration)) return false;
+        }
+        for (const n of nodes) {
+            if (n.kind !== SyntaxKind.Identifier || n === declaration.name) continue;
+            if (n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment && !this.rustIdentifierIsPropertyName(n)) {
+                const symbol = this.rustSymbolOf(n);
+                if (symbol === undefined) return false;
+                if (symbol !== own) continue;
+            } else if (!this.isNodeInsideNode(n, declaration.parent?.parent?.parent ?? declaration)) continue;
+            if (!acceptUse(n)) return false;
+            // a string re-boxed at a by-value slot copies where the `Value` moved: keep those boxed
+            const trial = this.rustScalarDecisions.get(declaration);
+            const form = this.rustScalarUseForms.get(n);
+            if ((trial === 'str' || trial === 'ostr') && (form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !isReturnStatement(n.parent)) return false;
+        }
+        return true;
+    }
+
+    // ── scalar loop counters (rustScalarCounterCond) ──
+    // `i < n` over an `Int`-literal counter whose bound is any other numeric operand: the counter's
+    // `Value::Int` payload compares as `i.as_f64()`, which on an `i64` is exactly `(i as f64)`.
+    // The marked result is the whole rewritten condition (the bound side prints unchanged).
+    private static readonly RUST_SCALAR_COUNTER_COND = '\u0007';
+
+    rustScalarCounterCond(name: string, condStr: string): string | undefined {
+        const head = `${name}.as_f64().unwrap_or(f64::NAN) `;
+        const match = /^(<=?|>=?) (.+)$/.exec(condStr.startsWith(head) ? condStr.slice(head.length) : '');
+        if (match === null || new RegExp(`(?<![\\w.])${name}(?![\\w])`).test(match[2])) return undefined;
+        return `${RustTranspiler.RUST_SCALAR_COUNTER_COND}(${name} as f64) ${match[1]} ${match[2]}`;
     }
 
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
@@ -8613,7 +8656,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (typed && counter !== undefined && bound !== undefined) {
                 initStr = initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
-                condStr = `${counter.name} < (${bound}.len() as i64)`;
+                condStr = bound.startsWith(RustTranspiler.RUST_SCALAR_COUNTER_COND) ? bound.slice(1) : `${counter.name} < (${bound}.len() as i64)`;
                 step = `${counter.name} += 1;`;
             }
             const cond = `{ if !${flag} { ${step} } ${flag} = false; ${condStr} }`;
@@ -8674,7 +8717,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** The place `X` of a `i < X.length` condition over this counter, when its uses are all admissible. */
     rustI64CounterPlan(node, counter: { name: string, symbol: any }, condStr: string): string | undefined {
         const printed = new RegExp(`^${counter.name}\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\) < Value::Int\\((self\\.\\w+|\\w+)\\.len\\(\\) as i64\\)\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\)$`).exec(condStr);
-        const bound = printed?.[1] ?? this.rustOptListCounterBound(node, counter.name, condStr); if (bound === undefined) return undefined;
+        const bound = printed?.[1] ?? this.rustOptListCounterBound(node, counter.name, condStr) ?? this.rustScalarCounterCond(counter.name, condStr); if (bound === undefined) return undefined;
         for (const id of this.rustScopeNameNodes(node.statement, counter.name) as any[]) {
             if (id.kind !== SyntaxKind.Identifier || this.rustIdentifierIsPropertyName(id) || this.rustSymbolOf(id) !== counter.symbol) continue;
             const up: any = id.parent;

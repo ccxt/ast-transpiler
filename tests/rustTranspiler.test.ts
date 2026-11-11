@@ -7301,3 +7301,60 @@ describe('rust optional list locals', () => {
         expect(out).toContain('let mut passed: Value = ');
     });
 });
+
+describe('rust scalar residual locals', () => {
+    const transpiler = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+
+    test('an int-literal counter bounded by a numeric local is an i64', () => {
+        const ts =
+            "class C {\n" +
+            "    f (rows: string[], count: any): any {\n" +
+            "        const out = [];\n" +
+            "        for (let i = 0; i < count; i++) {\n" +
+            "            out.push (this.g (rows[i]));\n" +
+            "        }\n" +
+            "        return out;\n" +
+            "    }\n" +
+            "    g (x: any): any { return x; }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut i: i64 = 0;');
+        expect(output).toContain('(i as f64) < count.as_f64().unwrap_or(f64::NAN)');
+        expect(output).toContain('i += 1;');
+    });
+
+    test('a counter written in its body keeps the Value box', () => {
+        const ts =
+            "class C {\n" +
+            "    f (rows: any, count: any): any {\n" +
+            "        for (let i = 0; i < count; i++) {\n" +
+            "            if (rows[i] === undefined) { i = count; }\n" +
+            "        }\n" +
+            "        return rows;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut i: Value = Value::Int(0);');
+    });
+
+    test('a same-named local in a sibling block does not block a native scalar', () => {
+        const ts =
+            "class C {\n" +
+            "    f (a: any): any {\n" +
+            "        if (a) {\n" +
+            "            let flag = false;\n" +
+            "            if (a['x']) { flag = true; }\n" +
+            "            if (flag) { return 1; }\n" +
+            "        } else {\n" +
+            "            let flag = true;\n" +
+            "            if (flag) { return 2; }\n" +
+            "        }\n" +
+            "        return 3;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut flag: bool = false;');
+        expect(output).toContain('let mut flag: bool = true;');
+        expect(output).not.toContain('let mut flag: Value');
+    });
+});
