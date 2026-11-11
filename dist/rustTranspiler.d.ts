@@ -1178,6 +1178,25 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVecLocalDeclarationOf(node: any): any;
     printRustVecPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined;
     transformIdentifier(node: any, identifier: any): string;
+    private literalKeyHits;
+    /** Same-named sibling bindings `literalLocalUsesAll` skipped for the local being decided. */
+    private literalSiblingBindings;
+    /** `rustLocalUsesAll` for a literal-initialised `let`/`const`: a same-named
+     *  block-scoped binding elsewhere in the function is another symbol, so its
+     *  uses are skipped instead of rejecting this local. */
+    literalLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
+    literalKeyWidened(keyArg: string | undefined): boolean;
+    /** `return x`, bare or under a cast: the statement leaves the function, so the box moves. */
+    rustReturnOperand(node: any): boolean;
+    /** `return x as T` / `return (x)`: the cast only narrows the TS type, the
+     *  statement still moves `x` out once. */
+    rustCastReturnOperand(node: any): boolean;
+    /** The key of `x[k]` on a bearer built from an object literal, when `k` is a
+     *  `string` local that prints as a plain `Value` (no typed-local rule claimed it). */
+    rustLiteralBearerKeyArg(receiver: any, keyNode: any): string | undefined;
+    /** A `string` key local that prints as a plain `Value`: the helper's own
+     *  `stringify` of the key is the map key. */
+    rustValueKeyLocalArg(key: any, text: string, receiverName: string): string | undefined;
     private rustDictBearerDecisions;
     /** Bearers whose escapes all box a clone (the prediction-tier multi-escape rule). */
     private rustDictBearerCloned;

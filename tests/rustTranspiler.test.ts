@@ -61,6 +61,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    handleMarketTypeAndParams (m: string, market: any = undefined, params: Dict = {}): [string, Dict] { return [ m, params ]; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ marketType, query ] = this.handleMarketTypeAndParams ('fetchThing', undefined, params);\n        const rest = this.omit (query, 'x');\n        const s = this.safeString (query, 's');\n        const request: Dict = { 'type': marketType, 's': s };\n        return this.hold (this.extend (request, rest));\n    }\n    fetchKept (params: Dict = {}) {\n        const kept = this.omit (params, 'x');\n        return this.hold (kept);\n    }\n}\n"
  },
+ "literal-handoff": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    parseFee (o: any): Dict { return o; }\n    hold (o: any): any { return o; }\n    extend (...args: any[]): any { return args[0]; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    feesBySymbol (fees: any[]) {\n        const result: Dict = {};\n        for (let i = 0; i < fees.length; i++) {\n            const fee = this.parseFee (fees[i]);\n            const symbol = this.safeString (fee, 'symbol');\n            if (symbol !== undefined) {\n                result[symbol] = fee;\n            }\n        }\n        return result;\n    }\n    seenOnce (ids: string[]) {\n        const seen: Dict = {};\n        for (let i = 0; i < ids.length; i++) {\n            const id = ids[i];\n            if (!(id in seen)) {\n                seen[id] = true;\n            }\n        }\n        return seen as any;\n    }\n    tiersList (info: any[]) {\n        const tiers = [];\n        for (let i = 0; i < info.length; i++) {\n            tiers.push ({ 'tier': i });\n        }\n        return tiers as any[];\n    }\n    branchRequests (a: boolean, params: Dict) {\n        if (a) {\n            const request: Dict = { 'x': 1 };\n            request['y'] = 2;\n            return this.hold (this.extend (request, params));\n        } else {\n            const request: Dict = { 'z': 1 };\n            return this.hold (this.extend (request, params));\n        }\n    }\n    sharedList (a: boolean) {\n        const out = [];\n        out.push (1);\n        this.hold (out);\n        return out as any[];\n    }\n}\n"
+ },
  "borrowed-dict": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    extend (...args: any[]): any { return args[0]; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, params: Dict) {\n        const data = this.safeDict (resp, 'data');\n        const id = this.safeString (data, 'id');\n        const n = this.safeInteger (data, 'n', 1);\n        const merged = this.extend (resp, params);\n        const s = this.safeString (merged, 's');\n        const kept = this.safeDict (resp, 'kept');\n        const k = this.safeString (kept, 'k');\n        return this.hold ([ id, n, s, k, kept ]);\n    }\n}\n"
@@ -7005,5 +7009,41 @@ describe('rust typed core call results', () => {
     test('a typed call result handed off keeps its struct type', () => {
         expect(output).toContain('let mut orders: Vec<crate::types::Order> = (match self.fetch_orders(');
         expect(output).toContain('self.hold(crate::types::IntoRaw::into_raw(orders.clone())');
+    });
+});
+
+describe('rust literal containers handed off by move', () => {
+    let output = '';
+    beforeAll(() => {
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = typed.transpileRustByPath(path.join (rustFixtureRoot, 'literal-handoff', 'ts/src/venue.ts')).content;
+    });
+
+    test('a map keyed by a Value-printed string local inserts natively and moves into the return', () => {
+        expect(output).toContain('let mut result: indexmap::IndexMap<String, Value> = (');
+        expect(output).toContain('result.insert(crate::runtime::stringify_param(&symbol), ');
+        expect(output).toContain('return Value::Map(result);');
+    });
+
+    test('an in-check on such a key reads the map and a cast return still moves', () => {
+        expect(output).toContain('let mut seen: indexmap::IndexMap<String, Value> = (');
+        expect(output).toContain('seen.contains_key(__k.as_ref())');
+        expect(output).not.toContain('&seen, &id');
+        expect(output).toContain('return Value::Map(seen);');
+    });
+
+    test('a pushed list returned under a cast is a Vec moved out once', () => {
+        expect(output).toContain('let mut tiers: Vec<Value> = Vec::new();');
+        expect(output).toContain('tiers.push(');
+        expect(output).toContain('return Value::from(tiers);');
+    });
+
+    test('same-named block-scoped requests are decided one by one', () => {
+        expect(output).toContain('request.insert("y".into(), Value::Int(2))');
+        expect(output).toContain('Value::Map(request)');
+    });
+
+    test('a list handed out before a cast return keeps the Value box', () => {
+        expect(output).toContain('let mut out: Value = Value::from(vec![]);');
     });
 });
