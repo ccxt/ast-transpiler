@@ -54410,7 +54410,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const guarded = (widened || expressionUses) && boxed > 0;
     const storeOnly = guarded && nativeUses === 0 && boxed === 1;
     const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer);
-    if (!ok || unused || storeOnly || guarded && scope.kind !== _ast.SyntaxKind.MethodDeclaration)
+    const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
+    if (!ok || unused || storeOnly || clientOnce || guarded && scope.kind !== _ast.SyntaxKind.MethodDeclaration)
       return void 0;
     if (guarded)
       this.rustScalarGuarded.add(declaration);
@@ -54600,8 +54601,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     if (kind === "str" && this.rustScalarInsertKeyUse(n))
       return "key";
+    if (this.rustWsClientInKey(n, kind))
+      return "box";
     if (_is.isCallExpression.call(void 0, parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
-      return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) ? "box" : this.rustScalarExpressionUseForm(n, kind);
+      return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? "box" : this.rustScalarExpressionUseForm(n, kind);
     }
     if (parent.kind === _ast.SyntaxKind.PropertyAssignment && parent.initializer === n)
       return "box";
@@ -54620,6 +54623,31 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (_is.isConditionalExpression.call(void 0, parent) && parent.condition !== n)
       return "box";
     return this.rustScalarExpressionUseForm(n, kind);
+  }
+  rustWsClientCallArg(call, kind) {
+    const callee = call.expression;
+    if (kind !== "str" && kind !== "ostr" || !_is.isPropertyAccessExpression.call(void 0, callee) || !_is.isIdentifier.call(void 0, callee.expression))
+      return false;
+    if (!_RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS.has(String(callee.name.text)))
+      return false;
+    return this.rustIsWsClientType(this.typeOfNodeIfAny(callee.expression));
+  }
+  // `x in client.subscriptions|futures` on a ws `Client`: the key boxes into the `in_op` slot.
+  rustWsClientInKey(n, kind) {
+    const parent = n.parent;
+    if (kind !== "str" && kind !== "ostr" || !_is.isBinaryExpression.call(void 0, parent) || parent.left !== n || parent.operatorToken.kind !== _ast.SyntaxKind.InKeyword)
+      return false;
+    const right = this.unwrapParens(parent.right);
+    return _is.isPropertyAccessExpression.call(void 0, right) && _is.isIdentifier.call(void 0, right.expression) && this.rustIsWsClientType(this.typeOfNodeIfAny(right.expression));
+  }
+  rustWsClientOnlyUse(declaration) {
+    let hits = 0;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (_is.isCallExpression.call(void 0, n.parent) && n.parent.expression !== n && this.rustWsClientCallArg(n.parent, "str"))
+        hits++;
+      return true;
+    });
+    return hits > 0;
   }
   rustScalarInNestedWrite(n) {
     let current = n;
@@ -62989,6 +63017,9 @@ _RustTranspiler.RUST_BASE_SCALAR_RETURNS = {
   milliseconds: "oint",
   seconds: "oint"
 };
+// rustWsClientCallArg: `client.resolve|reject|future|reusableFuture|send(.., x)` on a ws `Client`
+// receiver takes its arguments as plain `Value`s, so a string local boxes there.
+_RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS = /* @__PURE__ */ new Set(["resolve", "reject", "future", "reusableFuture", "send"]);
 // Expression-shaped scalar locals: aliases, ternaries, arithmetic/comparisons over typed operands,
 // string-method and `.length` results of typed strings, and `Precise.string*` results.
 _RustTranspiler.RUST_SCALAR_ARITH_OPS = /* @__PURE__ */ new Set([
