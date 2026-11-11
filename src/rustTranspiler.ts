@@ -10995,14 +10995,29 @@ export class RustTranspiler extends BaseTranspiler {
         });
         // A list that is only handed on would trade each box for a handle box.
         if (!safe || natives === 0) return false;
-        for (const [n, form] of boxes) this.rustOptListBoxes.set(n, form);
+        // The only read inside a `return` statement moves the list (nothing runs after it).
+        const finals = new Map<any, number>();
+        for (const [n] of boxes) {
+            const ret: any = findAncestor(n, (a: any) => isReturnStatement(a) || isFunctionLike(a));
+            if (ret !== undefined && isReturnStatement(ret)) finals.set(ret, (finals.get(ret) ?? 0) + 1);
+        }
+        for (const [n, form] of boxes) {
+            const ret: any = findAncestor(n, (a: any) => isReturnStatement(a) || isFunctionLike(a));
+            const sole = form === 'clone' && ret !== undefined && isReturnStatement(ret) && finals.get(ret) === 1
+                && !(this.rustScopeNameNodes(ret, name) as any[]).some((m: any) => m !== n && m.kind === SyntaxKind.Identifier && this.rustIdentifierRefersToDeclaration(m, declaration));
+            this.rustOptListBoxes.set(n, sole ? 'move' : form);
+        }
         return true;
     }
 
     /** `xs[N]` on a `string[]` parameter the body re-binds as its slice (`xs.get(N)`). */
     rustOptListParamRead(node: any): boolean {
         const key: any = this.rustSkipWrappers(node.argumentExpression);
-        return key !== undefined && isNumericLiteral(key) && /^\d+$/.test(String(key.text)) && this.rustParamShadowOf(node.expression)?.kind === 'list';
+        if (key === undefined || !isNumericLiteral(key) || !/^\d+$/.test(String(key.text)) || this.rustParamShadowOf(node.expression)?.kind !== 'list') return false;
+        // A string operand reads the box by reference; the optional form would re-box a copy there.
+        const declaration: any = node.parent;
+        if (!isVariableDeclaration(declaration) || declaration.initializer !== node || !isIdentifier(declaration.name)) return true;
+        return this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => !(isBinaryExpression(n.parent) && n.parent.operatorToken.kind === SyntaxKind.PlusToken));
     }
 
     rustOptListParamInit(init: any): boolean {

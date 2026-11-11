@@ -61406,14 +61406,28 @@ ${iden}}`;
     });
     if (!safe || natives === 0)
       return false;
-    for (const [n, form] of boxes)
-      this.rustOptListBoxes.set(n, form);
+    const finals = /* @__PURE__ */ new Map();
+    for (const [n] of boxes) {
+      const ret = findAncestor(n, (a) => isReturnStatement4(a) || isFunctionLike(a));
+      if (ret !== void 0 && isReturnStatement4(ret))
+        finals.set(ret, (finals.get(ret) ?? 0) + 1);
+    }
+    for (const [n, form] of boxes) {
+      const ret = findAncestor(n, (a) => isReturnStatement4(a) || isFunctionLike(a));
+      const sole = form === "clone" && ret !== void 0 && isReturnStatement4(ret) && finals.get(ret) === 1 && !this.rustScopeNameNodes(ret, name).some((m) => m !== n && m.kind === SyntaxKind7.Identifier && this.rustIdentifierRefersToDeclaration(m, declaration));
+      this.rustOptListBoxes.set(n, sole ? "move" : form);
+    }
     return true;
   }
   /** `xs[N]` on a `string[]` parameter the body re-binds as its slice (`xs.get(N)`). */
   rustOptListParamRead(node) {
     const key = this.rustSkipWrappers(node.argumentExpression);
-    return key !== void 0 && isNumericLiteral4(key) && /^\d+$/.test(String(key.text)) && this.rustParamShadowOf(node.expression)?.kind === "list";
+    if (key === void 0 || !isNumericLiteral4(key) || !/^\d+$/.test(String(key.text)) || this.rustParamShadowOf(node.expression)?.kind !== "list")
+      return false;
+    const declaration = node.parent;
+    if (!isVariableDeclaration3(declaration) || declaration.initializer !== node || !isIdentifier3(declaration.name))
+      return true;
+    return this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => !(isBinaryExpression5(n.parent) && n.parent.operatorToken.kind === SyntaxKind7.PlusToken));
   }
   rustOptListParamInit(init) {
     const node = this.unwrapParens(init);

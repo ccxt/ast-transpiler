@@ -7214,7 +7214,7 @@ describe('rust optional list locals', () => {
         expect(out).toContain('if (normalized.is_some()) {');
         expect(out).toContain('normalized.as_deref().map(Vec::as_slice).unwrap_or_default().get(i as usize)');
         expect(out).toContain('self.safeString(&normalized, ');
-        expect(out).toContain('self.parseTickers(rows, normalized.clone().map_or(Value::Null, Value::Arr))');
+        expect(out).toContain('return self.parseTickers(rows, normalized.map_or(Value::Null, Value::Arr));');
         expect(out).toContain('let mut data: Option<crate::value::List> = ');
         expect(out).toContain('if (data.is_some()) {');
         expect(out).toContain('data.as_deref().map(Vec::as_slice).unwrap_or_default().len() as i64');

@@ -61405,14 +61405,28 @@ ${iden}}`;
     });
     if (!safe || natives === 0)
       return false;
-    for (const [n, form] of boxes)
-      this.rustOptListBoxes.set(n, form);
+    const finals = /* @__PURE__ */ new Map();
+    for (const [n] of boxes) {
+      const ret = _chunkQYYT7MP4cjs.findAncestor.call(void 0, n, (a) => _is.isReturnStatement.call(void 0, a) || _chunkQYYT7MP4cjs.isFunctionLike.call(void 0, a));
+      if (ret !== void 0 && _is.isReturnStatement.call(void 0, ret))
+        finals.set(ret, (_nullishCoalesce(finals.get(ret), () => ( 0))) + 1);
+    }
+    for (const [n, form] of boxes) {
+      const ret = _chunkQYYT7MP4cjs.findAncestor.call(void 0, n, (a) => _is.isReturnStatement.call(void 0, a) || _chunkQYYT7MP4cjs.isFunctionLike.call(void 0, a));
+      const sole = form === "clone" && ret !== void 0 && _is.isReturnStatement.call(void 0, ret) && finals.get(ret) === 1 && !this.rustScopeNameNodes(ret, name).some((m) => m !== n && m.kind === _ast.SyntaxKind.Identifier && this.rustIdentifierRefersToDeclaration(m, declaration));
+      this.rustOptListBoxes.set(n, sole ? "move" : form);
+    }
     return true;
   }
   /** `xs[N]` on a `string[]` parameter the body re-binds as its slice (`xs.get(N)`). */
   rustOptListParamRead(node) {
     const key = this.rustSkipWrappers(node.argumentExpression);
-    return key !== void 0 && _is.isNumericLiteral.call(void 0, key) && /^\d+$/.test(String(key.text)) && _optionalChain([this, 'access', _9086 => _9086.rustParamShadowOf, 'call', _9087 => _9087(node.expression), 'optionalAccess', _9088 => _9088.kind]) === "list";
+    if (key === void 0 || !_is.isNumericLiteral.call(void 0, key) || !/^\d+$/.test(String(key.text)) || _optionalChain([this, 'access', _9086 => _9086.rustParamShadowOf, 'call', _9087 => _9087(node.expression), 'optionalAccess', _9088 => _9088.kind]) !== "list")
+      return false;
+    const declaration = node.parent;
+    if (!_is.isVariableDeclaration.call(void 0, declaration) || declaration.initializer !== node || !_is.isIdentifier.call(void 0, declaration.name))
+      return true;
+    return this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => !(_is.isBinaryExpression.call(void 0, n.parent) && n.parent.operatorToken.kind === _ast.SyntaxKind.PlusToken));
   }
   rustOptListParamInit(init) {
     const node = this.unwrapParens(init);
