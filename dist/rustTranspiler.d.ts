@@ -466,6 +466,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  write of that field) or write, a `resolve|reject|send|future|reusableFuture` call, or a hand-off
      *  (`client.as_value()`) as a call argument or the returned value. */
     rustClientHandleTypedLocal(plan: any, refs: any[]): boolean;
+    /** The ws `Client` class or a class extending it (`WsClient`, what `this.client(url)` returns). */
+    rustClientHandleClassType(type: any): boolean;
     /** `client.<field>` on the planned handle: its plan, field and whether it is written; undefined
      *  when the access is not on the handle or reads a field after the method wrote it. */
     rustClientHandleAccess(node: any): {

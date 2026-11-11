@@ -7082,7 +7082,8 @@ describe('rust message-hash string locals handed to the ws client', () => {
 describe('rust ws client handle', () => {
     const files: Record<string, string> = {
         'ts/src/base/ws/Client.ts': 'export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    resolve (result: any, messageHash: string): any { return result; }\n    send (message: any): any { return message; }\n}\n',
-        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport default class Exchange {\n    client (url: string): Client { return new Client (); }\n    safeValue (obj: any, key: any): any { return obj[key]; }\n}\n",
+        'ts/src/base/ws/WsClient.ts': "import Client from './Client.js';\nexport default class WsClient extends Client {\n}\n",
+        'ts/src/base/Exchange.ts': "import WsClient from './ws/WsClient.js';\nexport default class Exchange {\n    client (url: string): WsClient { return new WsClient (); }\n    safeValue (obj: any, key: any): any { return obj[key]; }\n}\n",
         'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n" +
             "    subscribe (url: string, messageHash: string) {\n        const client = this.client (url);\n        if (!(messageHash in client.subscriptions)) {\n            client.subscriptions[messageHash] = true;\n        }\n        const future = this.safeValue (client.futures, messageHash);\n        client.send ({ 'op': 'sub' });\n        return future;\n    }\n" +
             "    handleUnsub (client: Client, messageHash: string) {\n        if (messageHash in client.subscriptions) {\n            delete client.subscriptions[messageHash];\n        }\n        if (messageHash in client.futures) {\n            client.resolve (true, messageHash);\n        }\n    }\n" +

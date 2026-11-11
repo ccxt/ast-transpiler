@@ -3931,7 +3931,7 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         const type: any = this.getCheckedTypeOf(decl.name);
-        if (!this.rustIsWsClientType(type) && (type === undefined || (type.flags & TypeFlags.Any) === 0)) return undefined;
+        if (!this.rustClientHandleClassType(type) && (type === undefined || (type.flags & TypeFlags.Any) === 0)) return undefined;
         const keys = RustTranspiler.RUST_CLIENT_HANDLE_KEYS;
         const firstWrite = new Map<string, number>();
         let mut = false;
@@ -3973,6 +3973,20 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return isReturnStatement(p) && p.expression === r;
         });
+    }
+
+    /** The ws `Client` class or a class extending it (`WsClient`, what `this.client(url)` returns). */
+    rustClientHandleClassType(type: any): boolean {
+        if (this.rustIsWsClientType(type)) return true;
+        const decl: any = symbolDeclarations(this.typeSymbolOf(type)).find((d: any) => isClassDeclaration(d));
+        let parent: any = decl === undefined ? undefined : getAllSuperTypeNodes(decl)[0];
+        for (let hops = 0; parent !== undefined && hops < 4; hops++) {
+            const parentType: any = this.getChecker().getTypeAtLocation(parent);
+            if (this.rustIsWsClientType(parentType)) return true;
+            const parentDecl: any = symbolDeclarations(this.typeSymbolOf(parentType)).find((d: any) => isClassDeclaration(d));
+            parent = parentDecl === undefined ? undefined : getAllSuperTypeNodes(parentDecl)[0];
+        }
+        return false;
     }
 
     /** `client.<field>` on the planned handle: its plan, field and whether it is written; undefined

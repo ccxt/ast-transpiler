@@ -54758,7 +54758,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     }
     const type = this.getCheckedTypeOf(decl.name);
-    if (!this.rustIsWsClientType(type) && (type === void 0 || (type.flags & _sync.TypeFlags.Any) === 0))
+    if (!this.rustClientHandleClassType(type) && (type === void 0 || (type.flags & _sync.TypeFlags.Any) === 0))
       return void 0;
     const keys = _RustTranspiler.RUST_CLIENT_HANDLE_KEYS;
     const firstWrite = /* @__PURE__ */ new Map();
@@ -54805,6 +54805,21 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       }
       return _is.isReturnStatement.call(void 0, p) && p.expression === r;
     });
+  }
+  /** The ws `Client` class or a class extending it (`WsClient`, what `this.client(url)` returns). */
+  rustClientHandleClassType(type) {
+    if (this.rustIsWsClientType(type))
+      return true;
+    const decl = _chunkQYYT7MP4cjs.symbolDeclarations.call(void 0, this.typeSymbolOf(type)).find((d) => _is.isClassDeclaration.call(void 0, d));
+    let parent = decl === void 0 ? void 0 : _chunkQYYT7MP4cjs.getAllSuperTypeNodes.call(void 0, decl)[0];
+    for (let hops = 0; parent !== void 0 && hops < 4; hops++) {
+      const parentType = this.getChecker().getTypeAtLocation(parent);
+      if (this.rustIsWsClientType(parentType))
+        return true;
+      const parentDecl = _chunkQYYT7MP4cjs.symbolDeclarations.call(void 0, this.typeSymbolOf(parentType)).find((d) => _is.isClassDeclaration.call(void 0, d));
+      parent = parentDecl === void 0 ? void 0 : _chunkQYYT7MP4cjs.getAllSuperTypeNodes.call(void 0, parentDecl)[0];
+    }
+    return false;
   }
   /** `client.<field>` on the planned handle: its plan, field and whether it is written; undefined
    *  when the access is not on the handle or reads a field after the method wrote it. */
