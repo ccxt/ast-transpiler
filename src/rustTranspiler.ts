@@ -4015,7 +4015,9 @@ export class RustTranspiler extends BaseTranspiler {
         const access = this.rustClientHandleAccess(node);
         if (access === undefined || (top && !access.plan.typed)) return undefined;
         const recv = this.rustClientHandleReceiver(access.plan, true);
-        return access.write ? `${recv}.${access.key}` : `${recv}.${access.key}.clone()`;
+        // a method receiver (`client.url.indexOf(..)`) reads the snapshot field in place
+        const receiver = isPropertyAccessExpression(node.parent) && node.parent.expression === node;
+        return access.write || receiver ? `${recv}.${access.key}` : `${recv}.${access.key}.clone()`;
     }
 
     /** `k in client.subscriptions|futures` as the handle's key test (`bare`: a Rust bool). */

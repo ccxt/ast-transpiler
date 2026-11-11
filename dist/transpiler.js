@@ -54852,7 +54852,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (access === void 0 || top && !access.plan.typed)
       return void 0;
     const recv = this.rustClientHandleReceiver(access.plan, true);
-    return access.write ? `${recv}.${access.key}` : `${recv}.${access.key}.clone()`;
+    const receiver = isPropertyAccessExpression3(node.parent) && node.parent.expression === node;
+    return access.write || receiver ? `${recv}.${access.key}` : `${recv}.${access.key}.clone()`;
   }
   /** `k in client.subscriptions|futures` as the handle's key test (`bare`: a Rust bool). */
   printClientHandleInOp(key, obj, bare2) {

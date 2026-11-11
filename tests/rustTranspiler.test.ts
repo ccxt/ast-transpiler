@@ -7087,6 +7087,7 @@ describe('rust ws client handle', () => {
         'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n" +
             "    subscribe (url: string, messageHash: string) {\n        const client = this.client (url);\n        if (!(messageHash in client.subscriptions)) {\n            client.subscriptions[messageHash] = true;\n        }\n        const future = this.safeValue (client.futures, messageHash);\n        client.send ({ 'op': 'sub' });\n        return future;\n    }\n" +
             "    handleUnsub (client: Client, messageHash: string) {\n        if (messageHash in client.subscriptions) {\n            delete client.subscriptions[messageHash];\n        }\n        if (messageHash in client.futures) {\n            client.resolve (true, messageHash);\n        }\n    }\n" +
+            "    isSpot (client: Client) {\n        return client.url.indexOf ('spot') >= 0;\n    }\n" +
             "    handleAfterWrite (client: Client, messageHash: string) {\n        delete client.subscriptions[messageHash];\n        const left = client.subscriptions;\n        return left;\n    }\n}\n",
     };
     let out: string;
@@ -7109,6 +7110,9 @@ describe('rust ws client handle', () => {
         expect(out).toMatch(/let mut __ch = crate::pro::ws_client::ClientHandle::from_value\(client\.clone\(\)\);\n\s*if \(__ch\.has_subscription\(&messageHash\)\) \{/);
         expect(out).toContain('__ch.remove_subscription(&messageHash)');
         expect(out).toContain('if (__ch.has_future(&messageHash)) {');
+    });
+    test('a handle field used as a method receiver is read in place', () => {
+        expect(out).toContain('__ch.url.as_str().unwrap_or("").contains("spot")');
     });
     test('a field read after a write of that field keeps the live lookup', () => {
         expect(out).toContain('let mut __ch = crate::pro::ws_client::ClientHandle::from_value(client.clone());');
