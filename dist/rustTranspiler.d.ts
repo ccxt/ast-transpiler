@@ -597,6 +597,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarInsertKeyUse(n: any): boolean;
     /** The insert key of a `String` scalar local, else undefined. */
     rustScalarInsertKeyArg(keyNode: any): string | undefined;
+    rustScalarOptKeyUse(n: any): boolean;
+    rustScalarOptKeyArg(key: any): string | undefined;
+    rustScalarOptKeyCount(declaration: any): number;
+    rustScalarOptKeyCostly(declaration: any, kind: string): boolean;
+    rustScalarOptKeyText(key: any): string;
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
     rustScalarExpressionUseForm(n: any, kind: string): string | undefined;

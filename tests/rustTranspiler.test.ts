@@ -43,7 +43,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
  },
  "base-scalar-returns": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Currency { code: Str }\nexport default class Exchange {\n    currencies: Dict = {};\n    safeCurrency (currencyId: Str, currency: Currency = undefined): Currency {\n        return this.currencies[currencyId];\n    }\n    safeCurrencyCode (currencyId: Str, currency: Currency = undefined): Str {\n        const c: Currency = this.safeCurrency (currencyId, currency);\n        return c['code'];\n    }\n    milliseconds (): number {\n        return 0;\n    }\n    hold (x: any): any {\n        return x;\n    }\n}\n",
-  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseEntry (entry: Dict) {\n        const code = this.safeCurrencyCode (entry['c']);\n        if (code === undefined) {\n            return undefined;\n        }\n        const now = this.milliseconds ();\n        const kept = this.safeCurrencyCode (entry['d']);\n        kept['x'] = 1;\n        return { 'code': code, 'ts': now, 'k': kept };\n    }\n}\n"
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseEntry (entry: Dict) {\n        const code = this.safeCurrencyCode (entry['c']);\n        if (code === undefined) {\n            return undefined;\n        }\n        const now = this.milliseconds ();\n        const kept = this.safeCurrencyCode (entry['d']);\n        kept['x'] = 1;\n        return { 'code': code, 'ts': now, 'k': kept };\n    }\n    parseBalances (entries: Dict[]) {\n        const result: Dict = {};\n        for (let i = 0; i < entries.length; i++) {\n            const entry = entries[i];\n            const code = this.safeCurrencyCode (entry['c']);\n            result[code] = entry;\n        }\n        return result;\n    }\n    parseHeld (entries: Dict[]) {\n        const result: Dict = {};\n        for (let i = 0; i < entries.length; i++) {\n            const entry = entries[i];\n            const held = this.safeCurrencyCode (entry['c']);\n            result[held] = entry;\n            this.hold (held);\n        }\n        return result;\n    }\n}\n"
  },
  "scalar-locals": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeTimestamp (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    safeBool (o: any, k: any, d: boolean): boolean { return o; }\n    parseNumber (x: any, d: any = undefined): any { return x; }\n    milliseconds (): number { return 1; }\n}\n",
@@ -5172,6 +5172,14 @@ describe('scalar locals from base methods with a concrete return', () => {
     test('a local written through keeps its Value box', () => {
         expect(out).toMatch(/let mut kept: Value = self\.safeCurrencyCode\(/);
     });
+    test('an optional string used as a dynamic map key is typed and keys the insert with its string or "null"', () => {
+        expect(out).toMatch(/let mut code: Option<String> = self\.safeCurrencyCode\(entry[^;]*\)\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out).toContain('code.as_deref().unwrap_or("null").to_string()');
+        expect(out).not.toContain('stringify_param(&code)');
+    });
+    test('negative: a key local that is also moved into a Value slot keeps its box', () => {
+        expect(out).toMatch(/let mut held: Value = self\.safeCurrencyCode\(/);
+    });
 });
 
 describe('scalar locals from declared callee returns and string-list element reads', () => {
@@ -7157,7 +7165,7 @@ describe('rust literal containers handed off by move', () => {
 
     test('a map keyed by a Value-printed string local inserts natively and moves into the return', () => {
         expect(output).toContain('let mut result: indexmap::IndexMap<String, Value> = (');
-        expect(output).toContain('result.insert(crate::runtime::stringify_param(&symbol), ');
+        expect(output).toContain('result.insert(symbol.as_deref().unwrap_or("null").to_string(), ');
         expect(output).toContain('return Value::Map(result);');
     });
 

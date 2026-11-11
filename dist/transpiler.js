@@ -54492,6 +54492,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration)))
       return void 0;
+    if (this.rustScalarOptKeyCostly(declaration, kind))
+      return void 0;
+    if (this.rustScalarOptKeyCostly(declaration, kind) === false && kind === "ostr" && this.rustScalarOptKeyCount(declaration) > 0)
+      this.rustScalarGuarded.add(declaration);
     if (guarded)
       this.rustScalarGuarded.add(declaration);
     return kind;
@@ -54775,6 +54779,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (this.rustScalarInNestedWrite(n))
       return void 0;
     if (kind === "str" && this.rustScalarInsertKeyUse(n))
+      return "key";
+    if (kind === "ostr" && this.rustScalarOptKeyUse(n))
       return "key";
     if (isCallExpression6(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
       return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? "box" : this.rustScalarExpressionUseForm(n, kind);
@@ -55770,7 +55776,73 @@ ${binding(plan.indent)}` : ""), head: "" };
   /** The insert key of a `String` scalar local, else undefined. */
   rustScalarInsertKeyArg(keyNode) {
     const key = this.rustSkipWrappers(keyNode);
-    return isIdentifier3(key) && this.rustScalarLocalOf(key)?.kind === "str" && this.rustScalarUseForms.get(key) === "key" ? `${super.printIdentifier(key)}.clone()` : void 0;
+    const kind = isIdentifier3(key) && this.rustScalarUseForms.get(key) === "key" ? this.rustScalarLocalOf(key)?.kind : void 0;
+    if (kind === "ostr")
+      return this.rustScalarOptKeyText(key);
+    return kind === "str" ? `${super.printIdentifier(key)}.clone()` : void 0;
+  }
+  // rustScalarOptKeyText: an `Option<String>` local as a dynamic insert key. `stringify_param` of the
+  // boxed local is its string, or `"null"` for `Null`; the borrowed `Option` gives the same text.
+  // An object-literal receiver is the typed-bearer rule's: its key proof wants a `Value` key, so an
+  // optional key there would turn the map back into a `Value`.
+  rustScalarOptKeyUse(n) {
+    const local = this.rustDeclaredNode(n);
+    if (local === void 0 || !isVariableDeclaration3(local) || local.initializer === void 0 || this.literalKindOfNode(local.initializer) === "null")
+      return false;
+    const access = n.parent;
+    if (!isElementAccessExpression4(access) || access.argumentExpression !== n || !isIdentifier3(access.expression))
+      return false;
+    const declaration = this.rustDeclarationOfIdentifier(access.expression);
+    const init = declaration !== void 0 && isVariableDeclaration3(declaration) && declaration.initializer !== void 0 ? this.rustSkipWrappers(declaration.initializer) : void 0;
+    if (declaration === void 0)
+      return false;
+    if (init !== void 0 && isObjectLiteralExpression4(init)) {
+      const name = String(access.expression.text);
+      let enumerated = false;
+      this.rustLocalUsesAll(declaration, name, false, (u) => {
+        if (this.bearerEnumArg(u.parent) === u || this.bearerEnumArg(u.parent?.parent) === u)
+          enumerated = true;
+        return true;
+      });
+      if (enumerated)
+        return false;
+      return this.rustBearerWriteKeyOk(n, name) || this.rustScalarInsertKeyUse(n);
+    }
+    return this.rustScalarInsertKeyUse(n);
+  }
+  rustScalarOptKeyArg(key) {
+    if (!isIdentifier3(key) || String(key.text) === "self")
+      return void 0;
+    return this.rustScalarLocalOf(key)?.kind === "ostr" ? this.rustScalarOptKeyText(key) : void 0;
+  }
+  // An optional local admitted for a map-key use boxes a copy at every other `Value` slot where the
+  // `Value` local was moved: it is typed only when no such boxed use remains (a direct return moves).
+  rustScalarOptKeyCount(declaration) {
+    let keys = 0;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (this.rustScalarUseForms.get(n) === "key")
+        keys++;
+      return true;
+    });
+    return keys;
+  }
+  rustScalarOptKeyCostly(declaration, kind) {
+    if (kind !== "ostr")
+      return false;
+    let keys = 0;
+    let boxed = 0;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      const form = this.rustScalarUseForms.get(n);
+      if (form === "key")
+        keys++;
+      else if ((form === "box" || form === "xbox") && !isReturnStatement4(n.parent))
+        boxed++;
+      return true;
+    });
+    return keys > 0 && boxed > 0;
+  }
+  rustScalarOptKeyText(key) {
+    return `${super.printIdentifier(key)}.as_deref().unwrap_or("null").to_string()`;
   }
   /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
    *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
@@ -60836,7 +60908,7 @@ ${iden}}`;
       return void 0;
     if (this.placeKeyNative(key) === true)
       return `${String(key.text)}.clone().unwrap_or_default()`;
-    const scalarKey = this.rustScalarInsertKeyArg(key);
+    const scalarKey = this.rustScalarInsertKeyArg(key) ?? this.rustScalarOptKeyArg(key);
     if (scalarKey !== void 0)
       return scalarKey;
     const text = String(keyText).trim();
