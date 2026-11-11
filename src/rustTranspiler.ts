@@ -3634,6 +3634,7 @@ export class RustTranspiler extends BaseTranspiler {
         // a string handed once to a ws client call and nothing else stays a `Value`
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
+        if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration))) return undefined;
         if (guarded) this.rustScalarGuarded.add(declaration);
         return kind;
     }
@@ -3683,6 +3684,8 @@ export class RustTranspiler extends BaseTranspiler {
         const args: any[] = Array.from(node.arguments ?? []);
         const baseReturn = this.rustBaseReturnScalarKind(node, name);
         if (baseReturn !== undefined) return baseReturn;
+        if (this.rustVenueInitializer(node) && this.rustVenueStrCall(node)) return 'ostr';
+        if (fresh && this.rustVenueInitializer(node) && this.rustVenueIntCall(node)) return 'int';
         const declaration: any = this.rustScalarCallee(node);
         if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return undefined;
         // a literal default is returned for every missing key, so the reader is never `Null`
@@ -3751,7 +3754,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
     rustScalarNeedsNativeUse(init): boolean {
         const node: any = this.unwrapParens(init);
-        if (this.rustElementReadScalarKind(node) !== undefined) return true;
+        if (this.rustElementReadScalarKind(node) !== undefined || this.rustVenueIntCall(node) || this.rustVenueStrCall(node)) return true;
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return false;
         return RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(node.expression.name.text)] === undefined && this.rustDerivedScalarKind(node) !== undefined;
     }
@@ -3767,6 +3770,106 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustCallDeclarations.set(call, declaration);
         }
         return declaration === null ? undefined : (declaration.resolve?.() ?? declaration);
+    }
+
+    // ── venue string-method results (rustVenueStrCall / rustVenueReturnTypes) ──
+    // A call to a venue method already printed `-> Option<String>` is an optional-string source as it
+    // stands, when every venue declaration of that name (REST, pro, prediction) declares a string return.
+    private rustVenueReturnTypesByRoot = new Map<string, Map<string, Set<string>>>();
+
+    rustVenueStrCall(node): boolean {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)
+            || node.expression.expression.kind !== SyntaxKind.ThisKeyword || this.rustNativeStrCalleeKind(node) !== 'str') return false;
+        const file = String(this.rustScalarCallee(node)?.getSourceFile?.()?.fileName ?? '');
+        const at = file.search(/[/\\]ts[/\\]src[/\\]/);
+        if (at < 0) return false;
+        const types = this.rustVenueReturnTypes(file.slice(0, at) + '/ts/src').get(String(node.expression.name.text));
+        return types !== undefined && [ ...types ].every((t) => t === 'string' || t === 'Str');
+    }
+
+    /** A sync venue method (not a base one) every venue declaration of which returns `int`: it keeps its
+     *  `-> Value` signature and dispatch arm, and its result holds an `Int`, read once as an `i64`. */
+    rustVenueIntCall(node): boolean {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)
+            || node.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const declaration: any = this.rustScalarCallee(node);
+        if (declaration === undefined || !isMethodDeclaration(declaration) || this.isAsyncFunction(declaration)) return false;
+        const file = String(declaration.getSourceFile?.()?.fileName ?? '');
+        const at = file.search(/[/\\]ts[/\\]src[/\\]/);
+        if (at < 0 || RustTranspiler.RUST_BASE_TIER_FILE.test(file) || this.getMethodOverride(declaration) !== undefined) return false;
+        const types = this.rustVenueReturnTypes(file.slice(0, at) + '/ts/src').get(String(node.expression.name.text));
+        return types !== undefined && [ ...types ].every((t) => t === 'int');
+    }
+
+    /** A venue string-method result: typed only when no use boxes it back or hands it to another local
+     *  (each would copy the `String`). */
+    rustVenueScalarSource(init): boolean {
+        return this.rustVenueStrCall(this.unwrapParens(init));
+    }
+
+    rustVenueLocalHandedOn(declaration): boolean {
+        let handed = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            let top: any = n;
+            while (isParenthesizedExpression(top.parent)) top = top.parent;
+            const parent: any = top.parent;
+            if ((isBinaryExpression(parent) && parent.right === top && parent.operatorToken.kind === SyntaxKind.EqualsToken)
+                || (isVariableDeclaration(parent) && parent.initializer === top) || isConditionalExpression(parent)) handed = true;
+            return true;
+        });
+        return handed;
+    }
+
+    /** The whole initializer of a `let`/`const` (writes and ternary arms keep their `Value`). */
+    rustVenueInitializer(node): boolean {
+        let current: any = node;
+        while (isParenthesizedExpression(current.parent)) current = current.parent;
+        return isVariableDeclaration(current.parent) && current.parent.initializer === current;
+    }
+
+    /** `x.toString()` on an `i64` local: it prints `format!("{}", x)`, the same text `Display` gives the `Int` box. */
+    rustVenueIntToString(call, access): boolean {
+        return call !== undefined && isCallExpression(call) && call.expression === access && call.arguments.length === 0
+            && String(access.name.text) === 'toString' && this.primitiveKindOfType(this.typeOfNodeIfAny(access.expression)) === 'number';
+    }
+
+    /** The `toString()` print of an `i64` scalar local receiver, else undefined. */
+    printRustVenueIntToString(node, name: string): string | undefined {
+        const receiver: any = node?.expression?.expression;
+        if (receiver === undefined || !isIdentifier(receiver) || this.rustScalarLocalOf(receiver)?.kind !== 'int') return undefined;
+        return `Value::Str(format!("{}", ${name}).into())`;
+    }
+
+    /** Declared return type texts per method name over the venue sources under `srcRoot`. */
+    rustVenueReturnTypes(srcRoot: string): Map<string, Set<string>> {
+        let table = this.rustVenueReturnTypesByRoot.get(srcRoot);
+        if (table !== undefined) return table;
+        table = new Map();
+        const header = /^\s+(?:(?:override|async|public|protected|private|static)\s+)*([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?::\s*([^{;]+?))?\s*\{\s*$/gm;
+        for (const dir of [ '', '/pro', '/prediction' ]) {
+            let entries: string[] = [];
+            try {
+                entries = fs.readdirSync(srcRoot + dir).filter((f) => f.endsWith('.ts'));
+            } catch (e) {
+                continue;
+            }
+            for (const f of entries) {
+                for (const m of fs.readFileSync(`${srcRoot}${dir}/${f}`, 'utf8').matchAll(header)) {
+                    const types = table.get(m[1]) ?? new Set<string>();
+                    types.add(String(m[3] ?? '').trim());
+                    table.set(m[1], types);
+                }
+            }
+        }
+        this.rustVenueReturnTypesByRoot.set(srcRoot, table);
+        return table;
+    }
+
+    /** The `Option<String>` text of a venue string-method call (the box a `Value` position adds is left off). */
+    rustVenueStrCallText(node): string {
+        const text = this.printNode(node, 0).trim();
+        const box = '.map(Value::from).unwrap_or(Value::Null)';
+        return text.endsWith(box) ? text.slice(0, -box.length) : text;
     }
 
     /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
@@ -4263,8 +4366,10 @@ export class RustTranspiler extends BaseTranspiler {
         const text = this.printNode(node, 0).trim();
         const fallback: any = node.arguments[node.arguments.length - 1];
         const defaulted = this.rustScalarValueKind(node, true) === base;
+        if (kind === 'int' && this.rustVenueIntCall(node)) return `${text}.as_i64().unwrap_or_default()`;
         if (kind === 'str' && defaulted) return `${text}.as_str().unwrap_or(${this.quotedStringLiteral(fallback.text)}).to_string()`;
         if (kind === 'int' && defaulted) return `${text}.as_i64().unwrap_or(${this.rustScalarIntLiteral(fallback)})`;
+        if (kind === 'ostr' && this.rustVenueStrCall(node)) return this.rustVenueStrCallText(node);
         if (kind === 'ostr') return `${text}.as_str().map(str::to_owned)`;
         if (kind === 'oint') return `${text}.as_i64()`;
         if (kind === 'onum') return `${text}.as_f64()`;
@@ -4727,6 +4832,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (isPropertyAccessExpression(parent) && parent.expression === n) {
             if (this.rustScalarLengthRecv(parent) !== undefined) return 'native';
             const call: any = parent.parent;
+            if (kind === 'int' && this.rustVenueIntToString(call, parent)) return 'native';
             if (isCallExpression(call) && call.expression === parent) {
                 if (this.rustScalarStrMethod(call) !== undefined) return 'native';
                 let top: any = call;
@@ -8995,7 +9101,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printToStringCall(node, identation, name = undefined) {
-        return this.printRustNativeToString(node, name) ?? this.printRustToString(node, name) ?? `to_string_val(&${name})`;
+        return this.printRustVenueIntToString(node, name) ?? this.printRustNativeToString(node, name) ?? this.printRustToString(node, name) ?? `to_string_val(&${name})`;
     }
 
     printToUpperCaseCall(node, identation, name = undefined) {
