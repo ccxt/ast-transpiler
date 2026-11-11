@@ -1584,6 +1584,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustDictElementBoxes;
     /** A whole-value hand-off of a map element local: a plain `Value` argument of a `this.` method or an object literal value. */
     rustDictElementBoxUse(n: any, init: any): boolean;
+    rustWsFieldRead(init: any): 'dict' | 'list' | undefined;
+    /** A plain `Value` argument of a `this.` method or an object literal value, for a message field read local. */
+    rustWsFieldBoxUse(n: any, init: any): boolean;
+    /** `m.get("k").cloned().unwrap_or_default()` for a `safeDict`/`safeList` read off a borrowed message map whose default
+     *  is absent, null or the empty literal (`into_dict`/`into_list` already map every other variant to that default). */
+    rustWsFieldGetText(init: any, optional: boolean): string | undefined;
+    /** `Value::Arr(x)` (moved) / `Value::Arr(x.clone())` at a list hand-off; dict hand-offs print through `printDictElementBox`. */
+    printWsFieldBox(node: any, text: string): string | undefined;
     /** `Value::Dict(x)` at the last use (moved), else `Value::from(&x)` (the Arc bump the copied `Value` paid). */
     printDictElementBox(node: any, text: string): string | undefined;
     rustBorrowedKeySetUse(n: any): boolean;

@@ -2043,7 +2043,7 @@ export class RustTranspiler extends BaseTranspiler {
         const readBearer = node.declarations.length === 1 ? this.rustReadBearerKindOfDeclaration(declaration) : false;
         if (readBearer === 'list') {
             const handleKeys = this.printClientHandleKeys(declaration.initializer); if (handleKeys !== undefined) return `${indent}let mut ${varName}: Vec<Value> = ${handleKeys}`;
-            if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(declaration.initializer))) return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
+            if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(declaration.initializer))) return `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
             return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
         }
         if (readBearer === 'map') {
@@ -2066,8 +2066,8 @@ export class RustTranspiler extends BaseTranspiler {
             const block = this.rustObjectLiteralBlock(this.rustSkipWrappers(declaration.initializer), identation);
             return `${indent}let mut ${varName}: indexmap::IndexMap<String, Value> = (${block})`;
         }
-        if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
+        if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue; return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
         if (boolValue !== undefined) {
@@ -10851,7 +10851,7 @@ export class RustTranspiler extends BaseTranspiler {
     transformIdentifier(node, identifier) {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text); if (optList !== undefined) return optList;
-        const borrowedArg = this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printDictElementBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -11989,7 +11989,7 @@ export class RustTranspiler extends BaseTranspiler {
                 keySets++;
                 return true;
             }
-            const handed = () => this.rustDictElementBoxUse(n, init) && boxedElementUses.push(n) > 0;
+            const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init)) && boxedElementUses.push(n) > 0;
             if (!isCallExpression(up) || up.arguments[0] !== n) return handed();
             // An endpoint response may be a list or a map: only string-key reads agree for both.
             const keyArgs: any[] = up.arguments.slice(1, isPropertyAccessExpression(up.expression) && /2$/.test(String(up.expression.name.text)) ? 3 : 2).map((a: any) => this.rustSkipWrappers(a));
@@ -12007,6 +12007,7 @@ export class RustTranspiler extends BaseTranspiler {
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
         if ((keyReads > 0 || (init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init))) && !this.rustDictKeyReadLineOk(declaration, name)) return undefined;
         const optional = nilDeclared || nullTests > 0 || writes > 0;
+        if (optional && boxedElementUses.length > 0 && this.rustWsFieldRead(init) !== undefined) return undefined;
         if (keySets > 0 && (from !== 'dict' || optional || (init !== undefined && this.rustInitReadsTaggedStore(init)))) return undefined;
         if (lengths > 0 && (from !== 'list' || optional)) return undefined;
         if (optional) {
@@ -12046,6 +12047,77 @@ export class RustTranspiler extends BaseTranspiler {
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
         return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+    }
+
+    // ── rustWsFieldRead / rustWsFieldBoxUse / printWsFieldBox: a message field read handed on whole ──
+    // `safeDict(msg, 'k', {})` / `safeList(msg, 'k', [])` off a ws handler message or a shadowed dict parameter is
+    // always the container; a whole-value hand-off moves the shared handle at the last use, else bumps the Arc.
+    rustWsFieldRead(init: any): 'dict' | 'list' | undefined {
+        if (init === undefined || !isCallExpression(init) || init.arguments.length !== 3) return undefined;
+        const callee: any = init.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const name = String(callee.name.text);
+        const dflt: any = this.rustSkipWrappers(init.arguments[2]);
+        const kind = name === 'safeDict' && isObjectLiteralExpression(dflt) && dflt.properties.length === 0 ? 'dict'
+            : (name === 'safeList' && isArrayLiteralExpression(dflt) && dflt.elements.length === 0 ? 'list' : undefined);
+        const recv: any = this.rustSkipWrappers(init.arguments[0]);
+        if (kind === undefined || recv === undefined || !isIdentifier(recv) || !isStringLiteral(this.rustSkipWrappers(init.arguments[1]))) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(recv);
+        if (declaration === undefined || !isParameterDeclaration(declaration)) return undefined;
+        const fn: any = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || fn !== this.rustEnclosingFunction(init)) return undefined;
+        const shadowed = this.rustParamShadowTable(fn).get(String(recv.text))?.declaration === declaration;
+        return shadowed || this.rustProHandlerMessageParam(fn) === declaration ? kind : undefined;
+    }
+
+    /** A plain `Value` argument of a `this.` method or an object literal value, for a message field read local. */
+    rustWsFieldBoxUse(n: any, init: any): boolean {
+        const up: any = n.parent;
+        if (this.rustWsFieldRead(init) === undefined || up === undefined || this.rustScalarInNestedWrite(n)) return false;
+        if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
+        if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const callee = String(up.expression.name.text);
+        if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
+        return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+    }
+
+    /** `m.get("k").cloned().unwrap_or_default()` for a `safeDict`/`safeList` read off a borrowed message map whose default
+     *  is absent, null or the empty literal (`into_dict`/`into_list` already map every other variant to that default). */
+    rustWsFieldGetText(init: any, optional: boolean): string | undefined {
+        if (init === undefined || !isCallExpression(init) || init.arguments.length < 2 || init.arguments.length > 3) return undefined;
+        const callee: any = init.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const name = String(callee.name.text);
+        if (name !== 'safeDict' && name !== 'safeList') return undefined;
+        const dflt: any = init.arguments.length === 3 ? this.rustSkipWrappers(init.arguments[2]) : undefined;
+        const empty = dflt === undefined || this.literalKindOfNode(dflt) === 'null' ? 'null'
+            : ((isObjectLiteralExpression(dflt) && dflt.properties.length === 0 && name === 'safeDict') || (isArrayLiteralExpression(dflt) && dflt.elements.length === 0 && name === 'safeList') ? 'literal' : undefined);
+        if (empty === undefined || (optional && empty !== 'null')) return undefined;
+        const key: any = this.rustSkipWrappers(init.arguments[1]);
+        if (key === undefined || !isStringLiteral(key) || !this.rustShadowKeyLiteral(String(key.text)) || this.rustNodeIsKeyUnsafePlace(String(key.text))) return undefined;
+        const recv: any = this.rustSkipWrappers(init.arguments[0]);
+        const callDecl: any = this.rustScalarCallee(init);
+        if (recv === undefined || !isIdentifier(recv) || callDecl === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(callDecl.getSourceFile().fileName))) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(recv);
+        const shadow = this.rustParamShadowOf(recv);
+        const map = shadow?.kind === RUST_PARAM_SHADOWS.MAP ? shadow.name
+            : (declaration !== undefined && declaration === this.rustProHandlerShadowParam ? RustTranspiler.PRO_HANDLER_SHADOW_NAME : undefined);
+        return map === undefined ? undefined : `${map}.get("${String(key.text)}").cloned().unwrap_or_default()`;
+    }
+
+    /** `Value::Arr(x)` (moved) / `Value::Arr(x.clone())` at a list hand-off; dict hand-offs print through `printDictElementBox`. */
+    printWsFieldBox(node: any, text: string): string | undefined {
+        const form = this.rustDictElementBoxes.get(node);
+        if (form === undefined) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || this.rustWsFieldRead(this.rustSkipWrappers(declaration.initializer)) === undefined) return undefined;
+        // the declaration printed boxed: the hand-off stays the plain `Value` argument
+        if (!this.rustBorrowedDictLocal(declaration)) {
+            this.rustDictElementBoxes.delete(node);
+            return undefined;
+        }
+        if (this.rustBorrowedLocalKind(declaration) !== 'list') return undefined;
+        return form === 'move' ? `Value::Arr(${text})` : `Value::Arr(${text}.clone())`;
     }
 
     /** `Value::Dict(x)` at the last use (moved), else `Value::from(&x)` (the Arc bump the copied `Value` paid). */
@@ -12231,7 +12303,7 @@ export class RustTranspiler extends BaseTranspiler {
         const type = kind === 'list' ? 'crate::value::List' : 'crate::value::Dict';
         const init: any = this.rustSkipWrappers(declaration.initializer);
         if (init === undefined || this.literalKindOfNode(init) === 'null') return `${indent}let mut ${varName}: Option<${type}> = None`;
-        return `${indent}let mut ${varName}: Option<${type}> = ${this.printNode(declaration.initializer, 0).trim()}.into_opt_${kind}()`;
+        return `${indent}let mut ${varName}: Option<${type}> = ${this.rustWsFieldGetText(init, true) ?? this.printNode(declaration.initializer, 0).trim()}.into_opt_${kind}()`;
     }
 
     /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
