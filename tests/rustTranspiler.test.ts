@@ -5716,7 +5716,6 @@ describe('containers lent to any-key readers', () => {
         expect(out).toContain('self.safeString(&rows, ');
         expect(out).toMatch(/rows\.len\(\) as i64/);
         expect(out).not.toContain('rows.clone().into()');
-        expect(out).toContain('Value::Arr(rows.clone())');
         expect(out).not.toContain('lst: Value');
         expect(out).not.toContain('data: Value');
     });

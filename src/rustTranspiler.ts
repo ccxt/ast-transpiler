@@ -5630,7 +5630,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** True when this identifier is a use of the given declaration's binding.
      *  Without a checker answer the callers stay conservative (reject). */
-    private rustIdentifierRefersToDeclaration(node: Identifier, declaration: VariableDeclaration): boolean {
+    private rustIdentifierRefersToDeclaration(node: Identifier, declaration: VariableDeclaration | ParameterDeclaration): boolean {
         const symbol = this.rustSymbolOf(node);
         return symbol !== undefined && symbol === this.rustSymbolOf(declaration.name as Identifier);
     }
@@ -11421,7 +11421,7 @@ export class RustTranspiler extends BaseTranspiler {
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
         for (const n of this.rustScopeNameNodes(fn, String(declaration.name.text)) as any[]) {
-            if (n === declaration.name || !this.rustIdentifierRefersToDeclaration(n, declaration as any)) continue;
+            if (n === declaration.name || !this.rustIdentifierRefersToDeclaration(n, declaration)) continue;
             const up: any = n.parent;
             if (up?.kind === SyntaxKind.PrefixUnaryExpression || up?.kind === SyntaxKind.PostfixUnaryExpression) return false;
             if (!isBinaryExpression(up) || up.left !== n || !rustIsAssignmentOperator(up.operatorToken.kind)) continue;

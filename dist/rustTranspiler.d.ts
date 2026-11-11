@@ -235,6 +235,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNumericOperandKind(node: any): string | undefined;
     orderedComparisonOperand(node: any): any;
     printNativeOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
+    /** True when the operands prove the helper's answer, so the comparison runs on `as_f64` unwraps. */
+    rustOrderedOperandsProven(op: any, left: any, right: any): boolean;
     printNativeIndexOfLiteralTest(node: any, op: any, left: any, right: any): string | undefined;
     nativeIndexOfLiteralTestText(op: any, left: any, right: any): string | undefined;
     rustTypeFlagsAll(type: any, flags: Set<number>): boolean;
@@ -442,9 +444,24 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBaseReturnScalarKind(call: any, name: string): string | undefined;
     rustDerivedScalarKind(call: any): string | undefined;
     rustElementReadScalarKind(node: any): string | undefined;
+    rustReaderDefaultKind(name: string, args: any[], fresh: boolean): string | undefined;
+    rustReaderFallbackKind(fallback: any): string | undefined;
+    /** The checker scalar of a default that is a field, parameter or local (never a call: its `Value` may differ). */
+    rustReaderFallbackChecked(fallback: any): string | undefined;
+    rustReaderDeclTooLong(declaration: any, kind: string): boolean;
+    /** True when the initializer or any `x = ..` write is a reader this block admits. */
+    rustReaderDefaultTouched(declaration: any): boolean;
+    /** A string local that is the source of another local's write: that local then copies at its own uses. */
+    rustReaderStrHandedOn(declaration: any): boolean;
+    /** True when the initializer is a reader this block admits (its kind comes from `rustReaderDefaultKind`). */
+    rustReaderDefaultInit(init: any): boolean;
+    /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */
+    rustReaderIntDefaultNum(init: any): boolean;
     rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
-    private static readonly RUST_SCALAR_COUNTER_COND;
-    rustScalarCounterCond(name: string, condStr: string): string | undefined;
+    rustScalarCounterCond(node: any, name: string): string | undefined;
+    rustScalarCounterPlan(node: any, name: string): {
+        cond: string;
+    } | undefined;
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
     rustScalarNeedsNativeUse(init: any): boolean;
     rustScalarCallee(call: any): any;
@@ -530,6 +547,13 @@ export declare class RustTranspiler extends BaseTranspiler {
         statements: string;
         head: string;
     };
+    rustFieldKeyReceiver(expr: any): string | undefined;
+    rustFieldKeyUseForm(n: any): string | undefined;
+    /** Element-access hook: `this.f[k]` read with a typed string key. */
+    printFieldKeyRead(node: any): string | undefined;
+    /** A local keyed on a field and re-boxed anywhere but a direct `return` would copy where the `Value` moved. */
+    rustFieldKeyCostly(declaration: any): boolean;
+    printFieldKeyInOp(key: any, obj: any): string | undefined;
     rustScalarInNestedWrite(n: any): boolean;
     /** A write source the local's type holds exactly: a same-kind value, a typed scalar local of the
      *  same kind, or a ternary of those (its condition printed as a bool). */
@@ -624,6 +648,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
     rustScalarExpressionUseForm(n: any, kind: string): string | undefined;
+    /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
+    private static readonly RUST_CACHE_CTORS;
+    /** An integer local as the size argument of `new ArrayCache*(limit)`: passed natively (`i64` / `Option<i64>` into `impl Into<Value>`). */
+    rustCacheCtorLimitArg(n: any, kind: string): boolean;
+    /** The size argument is the local's last use, outside any loop or closure below its declaration (a bare move). */
+    rustCacheCtorFinalUse(node: any): boolean;
     /** Call hook: a string method of a typed string local, boxed back to `Value`. */
     printRustScalarMethodCall(node: any): string | undefined;
     /** `.length` hook: the char count of a typed string local. */
@@ -1150,7 +1180,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustI64CounterPlan(node: any, counter: {
         name: string;
         symbol: any;
-    }, condStr: string): string | undefined;
+    }, condStr: string): string | {
+        cond: string;
+    } | undefined;
     /** A bare counter use that is an argument of a `this.m(..)` call or the value of an `x[k] = i` write. */
     rustI64BoxedUse(id: any): boolean;
     /** The registered counter's symbol when `node` is a use of it, else undefined. */
@@ -1318,6 +1350,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustDictBearerDeclaration(node: any): any | undefined;
     rustDictLocalIsTyped(declaration: any): boolean;
     rustDictLocalIsTypedUncached(declaration: any): boolean;
+    private rustReaderTables;
+    rustReaderTableLocal(declaration: any, literal: any): boolean;
+    /** Base `toArray(x)` / `arrayConcat(a, b)`: the hand-written runtime answers a `Value::Arr` on every
+     *  path (a cache's entries, the list itself, a dict's values, `[]` for anything else). */
+    rustAlwaysListProducer(call: any): boolean;
     /** A call that builds a fresh plain map — the request/params builders, `parseJson`, and the `handle*` family.
      *  The checker proves the result Dict-shaped and every copied map operand plain, so the bearer may be declared
      *  from the call and the box is cloned out once. */
@@ -1456,6 +1493,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    /** A read of `n['literal']` / `n.name` (not a write target, call receiver, length or digit key). */
+    rustDictKeyReadUse(n: any): boolean;
+    /** The typed declaration line (`: crate::value::Dict = .. .into_dict()`, about 40 chars more) stays within 400 chars. */
+    rustDictKeyReadLineOk(declaration: any, name: string): boolean;
+    /** `crate::value::KeyRead::key_read(&&m, "k")` for a direct read on a dict-typed local, else undefined. */
+    printDictKeyRead(node: any): string | undefined;
     rustDictTernaryInit(init: any): boolean;
     /** An arm that is always a map: a base `extend`/`deepExtend`/`omit` call, or a local / `params = {}`
      *  parameter whose initializer and every write are such calls. */
@@ -1552,6 +1595,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueMethodNamesByRoot;
     /** Method names declared by the venue sources under `srcRoot` (REST, pro, prediction). */
     rustVenueMethodNames(srcRoot: string): Set<string>;
+    /** A method declared in exactly one venue source (REST, pro or prediction) and nowhere in the base tier: every
+     *  call site is in that venue or its ws subclass, and its by-name dispatch arm passes a `Value`, which still fits. */
+    rustVenueLocalMethod(method: any, name: string): boolean;
+    private rustVenueMethodDeclCountsByRoot;
+    /** Class-member method declarations per name over the base tier and the venue sources (base counts twice). */
+    rustVenueMethodDeclCounts(srcRoot: string): Map<string, number>;
     /** The callee parameter a call argument lands in, when that parameter takes a lent dict. */
     rustLentParamsSlot(call: any, arg: any): boolean;
     /** `&x` for a handed dict local lent to a lent-params slot. */
