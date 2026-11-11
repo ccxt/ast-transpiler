@@ -1562,6 +1562,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    rustDictElementSource(init: any): boolean;
+    private rustDictElementBoxes;
+    /** A whole-value hand-off of a map element local: a plain `Value` argument of a `this.` method or an object literal value. */
+    rustDictElementBoxUse(n: any, init: any): boolean;
+    /** `Value::Dict(x)` at the last use (moved), else `Value::from(&x)` (the Arc bump the copied `Value` paid). */
+    printDictElementBox(node: any, text: string): string | undefined;
     /** A read of `n['literal']` / `n.name` (not a write target, call receiver, length or digit key). */
     rustDictKeyReadUse(n: any): boolean;
     /** The typed declaration line (`: crate::value::Dict = .. .into_dict()`, about 40 chars more) stays within 400 chars. */

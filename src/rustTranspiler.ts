@@ -10644,7 +10644,7 @@ export class RustTranspiler extends BaseTranspiler {
     transformIdentifier(node, identifier) {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text); if (optList !== undefined) return optList;
-        const borrowedArg = this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printOptionalParamsArg(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printDictElementBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -11727,7 +11727,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A `let` declared empty is filled later by container writes only (the optional form).
         const nilDeclared = (init === undefined || this.literalKindOfNode(init) === 'null') && (list.flags & NodeFlags.Const) === 0
             && list.parent?.kind === SyntaxKind.VariableStatement;
-        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? this.rustBorrowedSourceKind(init) : undefined;
+        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? this.rustBorrowedSourceKind(init) : (this.rustDictElementSource(init) ? 'dict' : undefined);
         if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
@@ -11744,6 +11744,7 @@ export class RustTranspiler extends BaseTranspiler {
         let indexLikeReads = 0;
         let keyReads = 0;
         let mixed = false;
+        const boxedElementUses: any[] = [];
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
@@ -11775,12 +11776,13 @@ export class RustTranspiler extends BaseTranspiler {
                 reads++;
                 return true;
             }
-            if (!isCallExpression(up) || up.arguments[0] !== n) return false;
+            const handed = () => this.rustDictElementBoxUse(n, init) && boxedElementUses.push(n) > 0;
+            if (!isCallExpression(up) || up.arguments[0] !== n) return handed();
             // An endpoint response may be a list or a map: only string-key reads agree for both.
             const keyArgs: any[] = up.arguments.slice(1, isPropertyAccessExpression(up.expression) && /2$/.test(String(up.expression.name.text)) ? 3 : 2).map((a: any) => this.rustSkipWrappers(a));
             const stringKey = keyArgs.every((k: any) => k !== undefined && isStringLiteralLikeNode(k) && !/^\d+$/.test(String(k.text)) && !(String(k.text) in this.StringLiteralReplacements));
             const literalKey = this.rustBorrowedDictReader(up) !== undefined;
-            if (!literalKey && !((from !== 'api' || stringKey) && this.rustBorrowedAnyKeyReader(up))) return false;
+            if (!literalKey && !((from !== 'api' || stringKey) && this.rustBorrowedAnyKeyReader(up))) return handed();
             // a list answer reads a digit key as an index, the optional map reads nothing
             if (!stringKey) indexLikeReads++;
             reads++;
@@ -11789,7 +11791,7 @@ export class RustTranspiler extends BaseTranspiler {
         // an endpoint response may share its name with a `let`/`const` in a sibling block (another Rust binding)
         const safe = from === 'api' && !nilDeclared ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
         if (!safe || reads === 0 || mixed || from === undefined
-            || ((this.rustNilResponseLocals.has(declaration) || from === 'api') && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
+            || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
         if ((keyReads > 0 || (init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init))) && !this.rustDictKeyReadLineOk(declaration, name)) return undefined;
         const optional = nilDeclared || nullTests > 0 || writes > 0;
         if (lengths > 0 && (from !== 'list' || optional)) return undefined;
@@ -11798,10 +11800,45 @@ export class RustTranspiler extends BaseTranspiler {
             if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !this.rustOptContainerSourceOk(init, from))) return undefined;
             this.rustOptContainerLocals.add(declaration);
         }
+        for (const n of boxedElementUses) this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) ? 'move' : 'share');
         return from === 'list' ? 'list' : 'dict';
     }
 
     private rustOptContainerLocals = new WeakSet<any>();
+
+    // ── rustDictElementSource: `xs[i]` over a list whose checker element type is a string-keyed map ──
+    // The element leaves its copied box as the shared map (the same Arc bump the copy paid). A missing
+    // element reads as an empty map, so the borrowed rule keeps it only for null-safe key reads.
+    rustDictElementSource(init: any): boolean {
+        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression) || this.checkerOrUndefined() === undefined) return false;
+        const key: any = this.rustSkipWrappers(init.argumentExpression);
+        if (key === undefined || (!isNumericLiteral(key) && this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== 'number')) return false;
+        const listType: any = this.typeOfNodeIfAny(init.expression);
+        if (listType === undefined || !this.getChecker().isArrayType(listType)) return false;
+        const element: any = this.typeOfNodeIfAny(init);
+        if (element === undefined || (element.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Union)) !== 0) return false;
+        return this.primitiveKindOfType(element) === undefined && this.getChecker().getIndexTypeOfType(element, IndexKind.String) !== undefined
+            && !this.getChecker().isArrayType(element);
+    }
+
+    private rustDictElementBoxes = new WeakMap<any, 'move' | 'share'>();
+
+    /** A whole-value hand-off of a map element local: a plain `Value` argument of a `this.` method or an object literal value. */
+    rustDictElementBoxUse(n: any, init: any): boolean {
+        const up: any = n.parent;
+        if (!this.rustDictElementSource(init) || up === undefined || this.rustScalarInNestedWrite(n)) return false;
+        if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
+        if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const callee = String(up.expression.name.text);
+        if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
+        return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+    }
+
+    /** `Value::Dict(x)` at the last use (moved), else `Value::from(&x)` (the Arc bump the copied `Value` paid). */
+    printDictElementBox(node: any, text: string): string | undefined {
+        const form = this.rustDictElementBoxes.get(node);
+        return form === undefined ? undefined : (form === 'move' ? `Value::Dict(${text})` : `Value::from(&${text})`);
+    }
 
     // ── rustDictKeyReadUse / printDictKeyRead: direct literal-key reads (`m['k']`, `m.k`) on a dict local ──
     // The shared map (or its optional form) reads through the reader trait the `safe_*_k` readers use:
