@@ -44,6 +44,11 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    requestId (): int {\n        const requestId = this.sum (this.safeInteger (this.options, 'requestId', 0), 1);\n        this.options['requestId'] = requestId;\n        return requestId;\n    }\n    topicName (symbol: Str): Str {\n        if (symbol === undefined) {\n            return undefined;\n        }\n        return 'topic:' + symbol;\n    }\n    mixedId (): int {\n        return 1;\n    }\n    subscribe (symbol: Str) {\n        const requestId = this.requestId ();\n        const request: Dict = { 'id': requestId.toString () };\n        const topic = this.topicName (symbol);\n        if (topic === undefined) {\n            return request;\n        }\n        const other = this.mixedId ();\n        return this.hold ([ request, other.toString () ]);\n    }\n}\n",
   "ts/src/other.ts": "import Exchange from './base/Exchange.js';\nexport default class other extends Exchange {\n    mixedId (): string {\n        return 'a';\n    }\n}\n"
  },
+ "clock-bound-function": {
+  "ts/src/base/functions/time.ts": "// @ts-nocheck\nconst now = Date.now;\nconst milliseconds = now;\nconst seconds = () => Math.floor (now () / 1000);\nexport { milliseconds, seconds };\n",
+  "ts/src/base/Exchange.ts": "import { milliseconds, seconds } from './functions/time.js';\nexport default class Exchange {\n    milliseconds = milliseconds;\n    seconds = seconds;\n    hold (x: any): any { return x; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    window (since: number) {\n        const now = this.milliseconds ();\n        const start = now - 1000;\n        const stamp = this.seconds ().toString ();\n        if (since > start) {\n            return this.hold (stamp + 'x');\n        }\n        return start;\n    }\n}\n"
+ },
  "clock-sum-locals": {
   "ts/src/base/Exchange.ts": "export type Str = string | undefined;\nconst sum = (...xs: any[]) => xs[0];\nexport default class Exchange {\n    sum = sum;\n    milliseconds (): number { return 1; }\n    seconds (): number { return 1; }\n    numberToString (x: any): Str { return x; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    window (since: number) {\n        const now = this.milliseconds ();\n        const start = now - 1000;\n        const stamp = this.milliseconds ().toString ();\n        const signed = stamp + 'x';\n        const next = this.sum (start, 1);\n        const id = this.numberToString (next) as string;\n        if (id === '5') {\n            return this.hold (signed);\n        }\n        if (next > 10) {\n            return start;\n        }\n        return now;\n    }\n}\n"
@@ -5201,6 +5206,18 @@ describe('scalar locals from the clock, int sums and string casts', () => {
         expect(out).toContain('let mut stamp: String = format!("{}", self.milliseconds().as_i64().unwrap_or_default());');
         expect(out).toContain('let mut next: i64 = (start + 1);');
         expect(out).toMatch(/let mut id: Option<String> = self\.numberToString\(Value::from\(next\)\)\.as_str\(\)\.map\(str::to_owned\);/);
+    });
+});
+
+describe('clock locals bound to the base time functions', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'clock-bound-function', 'ts/src/venue.ts')).content;
+    });
+    test('a base property bound to Date.now is still an i64 clock', () => {
+        expect(out).toContain('let mut now: i64 = self.milliseconds().as_i64().unwrap_or_default();');
+        expect(out).toContain('(now - 1000)');
+        expect(out).toContain('let mut stamp: String = format!("{}", self.seconds().as_i64().unwrap_or_default());');
     });
 });
 

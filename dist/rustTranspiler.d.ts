@@ -645,6 +645,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarExpressionKind(expr: any): string | undefined;
     private static readonly RUST_ALWAYS_INT_CALLS;
     rustArithCallKind(expr: any): string | undefined;
+    /** The clock is a base property bound to `Date.now`, so its signature resolves outside the base tier. */
+    rustArithBaseCallee(node: any, name: string): boolean;
     /** An operand's numeric kind; a never-null integer call (e.g. a literal-defaulted reader) prints natively too. */
     rustArithOperandKind(node: any): string | undefined;
     /** A combinator over a typed operand prints native and boxes its result once. */
