@@ -445,6 +445,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarReceiver(node: any): boolean;
     rustScalarLocalKindUncached(declaration: any): string | undefined;
     rustParamAliasSeedKind(declaration: any): string | undefined;
+    rustLimitCall(expr: any): boolean;
+    rustLimitArgUse(n: any, kind: string): boolean;
+    rustLimitArgText(arg: any, at: number): string;
+    rustLimitCallText(expr: any): string | undefined;
     /** Integer literal text (`5`, `-5`) that fits an `i64`, else undefined. */
     rustScalarIntLiteral(node: any): string | undefined;
     /** Decimal float literal text (`1.5`, `-0.25`, `1e8`), else undefined. */
