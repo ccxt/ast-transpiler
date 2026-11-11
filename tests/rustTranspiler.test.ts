@@ -7995,3 +7995,51 @@ describe('rust map list elements', () => {
         expect(text.slice(text.indexOf('fn parseNullable'))).toMatch(/let mut row: Value = /);
     });
 });
+
+describe('rust native arithmetic over numeric base calls', () => {
+    const tr = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, 'arith-calls');
+    const base = path.join (root, 'ts/src/base/Exchange.ts');
+    fs.mkdirSync (path.dirname (base), { recursive: true });
+    fs.writeFileSync (base, "export class Exchange {\n" +
+        "    sum (...args: any[]): any { return args[0]; }\n" +
+        "    parseTimeframe (timeframe: string): number { return 60; }\n" +
+        "    milliseconds (): number { return 0; }\n" +
+        "    g (x: any): any { return x; }\n}\n");
+    let n = 0;
+    const run = (body: string) => {
+        const file = path.join (root, 'ts/src', `venue${n++}.ts`);
+        fs.writeFileSync (file, "import { Exchange } from './base/Exchange.js';\nexport class V extends Exchange {\n" +
+            "    f (timeframe: string, s: string): any {\n" + body + "    }\n}\n");
+        return tr.transpileRustByPath (file).content;
+    };
+
+    test('sum, Math.max and parseTimeframe over typed operands print i64 arithmetic', () => {
+        const output = run((
+            "        let next = 0;\n" +
+            "        next = this.sum (next, 2);\n" +
+            "        const digits = Math.max (5, next);\n" +
+            "        const duration = this.parseTimeframe (timeframe) * 1000;\n" +
+            "        if (duration > digits) {\n" +
+            "            return this.g (duration);\n" +
+            "        }\n" +
+            "        return this.g ([ next, digits ]);\n"));
+        expect(output).toContain('let mut next: i64 = 0;');
+        expect(output).toContain('next = (next + 2);');
+        expect(output).toContain('let mut digits: i64 = i64::max(5, next);');
+        expect(output).toContain('let mut duration: i64 = ((self.parseTimeframe(timeframe).as_i64().unwrap_or_default()) * 1000);');
+        expect(output).not.toContain('Value::Int(x * y)');
+    });
+
+    test('a Float operand keeps the f64 result and an untyped operand keeps the helper', () => {
+        const output = run((
+            "        const half = Math.min (0.5, 2);\n" +
+            "        const other = this.sum (this.g (s), 1);\n" +
+            "        if (half > 0.1) {\n" +
+            "            return this.g (half);\n" +
+            "        }\n" +
+            "        return this.g (other);\n"));
+        expect(output).toContain('let mut half: f64 = f64::min(0.5, 2.0);');
+        expect(output).toContain('let mut other: Value = self.sum(');
+    });
+});
