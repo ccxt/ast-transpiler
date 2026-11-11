@@ -1684,6 +1684,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     printOptListElement(receiverNode: any, keyNode: any): string | undefined;
     /** `&x` at an any-key reader, the shared handle at a `Value` slot, a move at `return x`. */
     printOptListIdentifier(node: any, text: string): string | undefined;
+    /** `[..]` without spread is always a list, so `into_opt_list` keeps exactly what the box held. */
+    rustOptListLiteralWrite(node: any): boolean;
+    rustOptListExtraUse(n: any, declaration: any): 'join' | 'move' | 'clone' | undefined;
+    printOptListJoin(node: any): string | undefined;
     private static readonly RUST_HANDED_DICT_SOURCES;
     private rustHandedDictDecisions;
     rustHandedDictLocal(declaration: any): boolean;
