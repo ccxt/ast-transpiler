@@ -623,8 +623,8 @@ export declare class RustTranspiler extends BaseTranspiler {
         text: string;
     } | undefined;
     rustOptParamWriteOk(kind: string, node: any): boolean;
-    /** An expression JS always evaluates to a boolean: a comparison, `!x`, or `&&`/`||` over such operands. */
-    rustBoolValuedExpression(expr: any): boolean;
+    /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
+    rustBoolNativeText(expr: any): string | undefined;
     /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */
     rustScalarCompareText(node: any, dry: boolean): string | undefined;
     rustScalarCompareKind(node: any): string | undefined;

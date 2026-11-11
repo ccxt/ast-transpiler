@@ -4756,7 +4756,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const expressionText = this.rustScalarExpressionText(kind, node);
         if (expressionText !== undefined) return expressionText;
-        if (kind === 'bool' && this.literalKindOfNode(node) !== 'boolean' && this.rustBoolValuedExpression(node)) return this.printCondition(node, 0).trim();
+        const boolText = kind === 'bool' && this.literalKindOfNode(node) !== 'boolean' ? this.rustBoolNativeText(node) : undefined; if (boolText !== undefined) return boolText;
         if (base === 'str' && this.literalKindOfNode(node) === 'string') return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
         if (base === 'bool' && this.literalKindOfNode(node) === 'boolean') return wrap(node.kind === SyntaxKind.TrueKeyword ? 'true' : 'false');
         const int = base === 'int' ? this.rustScalarIntLiteral(node) : undefined;
@@ -4984,19 +4984,31 @@ export class RustTranspiler extends BaseTranspiler {
             if (narrowed !== undefined) return narrowed === kind || `o${narrowed}` === kind;
         }
         if (isIdentifier(node) && this.rustOptParamKind(node) === kind) return true;
-        return kind === 'bool' && this.rustBoolValuedExpression(node);
+        return kind === 'bool' && this.rustBoolNativeText(node) !== undefined;
     }
 
-    /** An expression JS always evaluates to a boolean: a comparison, `!x`, or `&&`/`||` over such operands. */
-    rustBoolValuedExpression(expr): boolean {
+    /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
+    rustBoolNativeText(expr): string | undefined {
         const node: any = this.unwrapParens(expr);
-        if (node === undefined) return false;
-        if (node.kind === SyntaxKind.TrueKeyword || node.kind === SyntaxKind.FalseKeyword) return true;
-        if (isPrefixUnaryExpression(node)) return node.operator === SyntaxKind.ExclamationToken;
-        if (!isBinaryExpression(node)) return false;
+        if (node === undefined) return undefined;
+        if (node.kind === SyntaxKind.TrueKeyword || node.kind === SyntaxKind.FalseKeyword) return node.kind === SyntaxKind.TrueKeyword ? 'true' : 'false';
+        if (isIdentifier(node)) return this.rustScalarLocalOf(node)?.kind === 'bool' ? super.printIdentifier(node) : undefined;
+        if (isPrefixUnaryExpression(node)) {
+            const inner = node.operator === SyntaxKind.ExclamationToken ? this.rustBoolNativeText(node.operand) : undefined;
+            return inner === undefined ? undefined : `!(${inner})`;
+        }
+        if (!isBinaryExpression(node)) return undefined;
         const op = node.operatorToken.kind;
-        if (op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken) return this.rustBoolValuedExpression(node.left) && this.rustBoolValuedExpression(node.right);
-        return RustTranspiler.COMPARISON_OPS.has(op);
+        if (op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken) {
+            const left = this.rustBoolNativeText(node.left);
+            const right = left === undefined ? undefined : this.rustBoolNativeText(node.right);
+            return right === undefined ? undefined : `(${left} ${op === SyntaxKind.AmpersandAmpersandToken ? '&&' : '||'} ${right})`;
+        }
+        if (!RustTranspiler.COMPARISON_OPS.has(op)) return undefined;
+        const equality = this.nativeEqualityText(node);
+        if (equality !== undefined) return `(${equality})`;
+        const compare = this.rustScalarHasTypedOperand(node.left) || this.rustScalarHasTypedOperand(node.right) ? this.rustScalarCompareText(node, false) : undefined;
+        return compare === undefined ? undefined : `(${compare})`;
     }
 
     /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */

@@ -55692,8 +55692,9 @@ ${binding(plan.indent)}` : ""), head: "" };
     const expressionText = this.rustScalarExpressionText(kind, node);
     if (expressionText !== void 0)
       return expressionText;
-    if (kind === "bool" && this.literalKindOfNode(node) !== "boolean" && this.rustBoolValuedExpression(node))
-      return this.printCondition(node, 0).trim();
+    const boolText = kind === "bool" && this.literalKindOfNode(node) !== "boolean" ? this.rustBoolNativeText(node) : void 0;
+    if (boolText !== void 0)
+      return boolText;
     if (base === "str" && this.literalKindOfNode(node) === "string")
       return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
     if (base === "bool" && this.literalKindOfNode(node) === "boolean")
@@ -55957,23 +55958,36 @@ ${binding(plan.indent)}` : ""), head: "" };
     }
     if (isIdentifier3(node) && this.rustOptParamKind(node) === kind)
       return true;
-    return kind === "bool" && this.rustBoolValuedExpression(node);
+    return kind === "bool" && this.rustBoolNativeText(node) !== void 0;
   }
-  /** An expression JS always evaluates to a boolean: a comparison, `!x`, or `&&`/`||` over such operands. */
-  rustBoolValuedExpression(expr) {
+  /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
+  rustBoolNativeText(expr) {
     const node = this.unwrapParens(expr);
     if (node === void 0)
-      return false;
+      return void 0;
     if (node.kind === SyntaxKind7.TrueKeyword || node.kind === SyntaxKind7.FalseKeyword)
-      return true;
-    if (isPrefixUnaryExpression3(node))
-      return node.operator === SyntaxKind7.ExclamationToken;
+      return node.kind === SyntaxKind7.TrueKeyword ? "true" : "false";
+    if (isIdentifier3(node))
+      return this.rustScalarLocalOf(node)?.kind === "bool" ? super.printIdentifier(node) : void 0;
+    if (isPrefixUnaryExpression3(node)) {
+      const inner = node.operator === SyntaxKind7.ExclamationToken ? this.rustBoolNativeText(node.operand) : void 0;
+      return inner === void 0 ? void 0 : `!(${inner})`;
+    }
     if (!isBinaryExpression5(node))
-      return false;
+      return void 0;
     const op = node.operatorToken.kind;
-    if (op === SyntaxKind7.AmpersandAmpersandToken || op === SyntaxKind7.BarBarToken)
-      return this.rustBoolValuedExpression(node.left) && this.rustBoolValuedExpression(node.right);
-    return _RustTranspiler.COMPARISON_OPS.has(op);
+    if (op === SyntaxKind7.AmpersandAmpersandToken || op === SyntaxKind7.BarBarToken) {
+      const left = this.rustBoolNativeText(node.left);
+      const right = left === void 0 ? void 0 : this.rustBoolNativeText(node.right);
+      return right === void 0 ? void 0 : `(${left} ${op === SyntaxKind7.AmpersandAmpersandToken ? "&&" : "||"} ${right})`;
+    }
+    if (!_RustTranspiler.COMPARISON_OPS.has(op))
+      return void 0;
+    const equality = this.nativeEqualityText(node);
+    if (equality !== void 0)
+      return `(${equality})`;
+    const compare = this.rustScalarHasTypedOperand(node.left) || this.rustScalarHasTypedOperand(node.right) ? this.rustScalarCompareText(node, false) : void 0;
+    return compare === void 0 ? void 0 : `(${compare})`;
   }
   /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */
   rustScalarCompareText(node, dry) {
