@@ -1315,9 +1315,22 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustContainerLocalBox(node: any, text: string): string | undefined;
     private static readonly RUST_BORROWED_DICT_READERS;
     private static readonly RUST_BORROWED_DICT_SOURCES;
+    private static readonly RUST_BORROWED_LIST_SOURCES;
+    private static readonly RUST_BORROWED_ANY_KEY_READERS;
     private rustBorrowedDictDecisions;
     rustBorrowedDictLocal(declaration: any): boolean;
     rustBorrowedDictLocalUncached(declaration: any): boolean;
+    /** `'dict' | 'list'` for a local that holds the shared container and lends it to every read, else undefined. */
+    rustBorrowedLocalKind(declaration: any): 'dict' | 'list' | undefined;
+    private rustBorrowedKinds;
+    rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
+    rustBorrowedListUse(node: any): boolean;
+    /** A base hand-written reader (`safeString`, `safeValue2`, `safeIntegerN`, ..) with any key. */
+    rustBorrowedAnyKeyReader(call: any): boolean;
+    /** `'dict' | 'list' | 'api'` for a container source the local may hold by reference. */
+    rustBorrowedSourceKind(call: any): 'dict' | 'list' | 'api' | undefined;
+    /** `&x` for a borrowed local (or a typed container local) passed to a hand-written any-key reader. */
+    printBorrowedReaderArg(node: any, text: string): string | undefined;
     /** A base `safeDict*` / `extend` / `omit` call, or an implicit-API endpoint call. */
     rustBorrowedDictSource(call: any): boolean;
     /** Rust `_k` reader name of a base `this.safeX(obj, 'literal'[, default])` call, else undefined. */
