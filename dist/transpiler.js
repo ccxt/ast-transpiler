@@ -54655,6 +54655,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const form = this.rustScalarUseForms.get(n);
       if ((trial === "str" || trial === "ostr") && (form === "box" || form === "xbox" || form === "err" || form === "key") && !isReturnStatement4(n.parent))
         return false;
+      const push = findAncestor(n, (m) => isStatement(m) || isCallExpression6(m) && isPropertyAccessExpression3(m.expression) && m.expression.name.text === "push");
+      if (push !== void 0 && isCallExpression6(push))
+        return false;
     }
     return true;
   }

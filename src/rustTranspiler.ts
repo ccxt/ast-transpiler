@@ -3789,6 +3789,9 @@ export class RustTranspiler extends BaseTranspiler {
             const trial = this.rustScalarDecisions.get(declaration);
             const form = this.rustScalarUseForms.get(n);
             if ((trial === 'str' || trial === 'ostr') && (form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !isReturnStatement(n.parent)) return false;
+            // a `.push(..)` argument: ccxt's native-push pass keys on the boxed operand text
+            const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
+            if (push !== undefined && isCallExpression(push)) return false;
         }
         return true;
     }

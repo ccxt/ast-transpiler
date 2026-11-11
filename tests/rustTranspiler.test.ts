@@ -7357,4 +7357,32 @@ describe('rust scalar residual locals', () => {
         expect(output).toContain('let mut flag: bool = true;');
         expect(output).not.toContain('let mut flag: Value');
     });
+    test('negative: a sibling-path string pushed into a list keeps its box', () => {
+        const write = (rel: string, text: string): string => {
+            const out = path.join(rustFixtureRoot, 'scalar-sibling', rel);
+            fs.mkdirSync(path.dirname(out), { recursive: true });
+            fs.writeFileSync(out, text);
+            return out;
+        };
+        write('ts/src/base/Exchange.ts', 'export default class Exchange {\n'
+            + '    safeString (o: any, k: any, d: any = undefined): string { return o; }\n'
+            + '}\n');
+        const file = write('ts/src/venue.ts', "import Exchange from './base/Exchange.js';\n"
+            + 'export default class venue extends Exchange {\n'
+            + '    f (a: any, b: any): any {\n'
+            + '        const out = [];\n'
+            + '        if (a) {\n'
+            + "            const id = this.safeString (b, 'x');\n"
+            + '            if (id !== undefined) { out.push (id.toUpperCase ()); }\n'
+            + '        } else {\n'
+            + "            const id = this.safeString (b, 'y');\n"
+            + '            if (id !== undefined) { return id.toUpperCase (); }\n'
+            + '        }\n'
+            + '        return out;\n'
+            + '    }\n'
+            + '}\n');
+        const output = transpiler.transpileRustByPath(file).content;
+        expect(output).toContain('let mut id: Value = ');
+        expect(output).toContain('let mut id: Option<String> = ');
+    });
 });
