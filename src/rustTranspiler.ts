@@ -2401,8 +2401,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             if (this.rustEnclosingFunction(n) !== scope) return false;
             // an optional string has no native `+`: the concat would fall back to the `add` helper
-            if (kind === 'ostr' && isBinaryExpression(n.parent) && n.parent.operatorToken.kind === SyntaxKind.PlusToken) return false;
-            const form = this.rustNilSlotWrite(n) ? 'slot' : this.rustScalarUseForm(n, kind);
+            if (kind === 'ostr' && isBinaryExpression(n.parent) && n.parent.operatorToken.kind === SyntaxKind.PlusToken && !this.rustNilOptStrConcatUse(n)) return false;
+            const optConcat = kind === 'ostr' && this.rustNilOptStrConcatUse(n);
+            const form = this.rustNilSlotWrite(n) ? 'slot' : (optConcat ? 'concat' : this.rustScalarUseForm(n, kind));
             this.rustScalarUseForms.set(n, form);
             if (form === 'box' || form === 'xbox' || form === 'err') boxed.push(n);
             if (RustTranspiler.RUST_NIL_SCALAR_NATIVE_FORMS.has(form)) native++;
@@ -2413,6 +2414,22 @@ export class RustTranspiler extends BaseTranspiler {
         // boxed uses are checked against the printed method lines
         if (boxed.length > 0) this.rustScalarGuarded.add(declaration);
         return kind;
+    }
+
+    // An optional string joins a `format!` concat whose other operand is always a string: the
+    // operand prints as `as_deref().unwrap_or("null")`, the text `Display` gives the boxed form.
+    rustNilOptStrConcatUse(n): boolean {
+        const parent: any = n.parent;
+        if (!isBinaryExpression(parent) || parent.operatorToken.kind !== SyntaxKind.PlusToken) return false;
+        const other: any = parent.left === n ? parent.right : parent.left;
+        if (!this.alwaysStr(other) || this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== 'string') return false;
+        if (!this.isNativeStringConcatPair(this.typeOfNodeIfAny(parent.left), this.typeOfNodeIfAny(parent.right))) return false;
+        // the unwrap lengthens the printed statement: it must stay within the 400-char line budget
+        const statement: any = findAncestor(parent, (a: any) => isStatement(a));
+        if (statement === undefined || isBlock(statement)) return false;
+        const column = statement.getStart() - String(statement.getSourceFile().text).lastIndexOf('\n', statement.getStart()) - 1;
+        const longest = Math.max(...this.printNode(statement, 0).split('\n').map((l: string) => l.trim().length));
+        return column + longest + '.as_deref().unwrap_or("null")'.length <= 400;
     }
 
     /** A write that decodes a `Value` result (a call, or a ternary over one). */
@@ -4943,6 +4960,7 @@ export class RustTranspiler extends BaseTranspiler {
         // an optional key that reaches a helper write (no native insert) takes the helper's boxed key
         if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}${this.rustLocalLastUse(node, local.declaration) ? '' : '.clone()'}.map(Value::from).unwrap_or(Value::Null)`;
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
+        if (form === 'concat' && local.kind === 'ostr') return `${super.printIdentifier(node)}.as_deref().unwrap_or("null")`;
         if (form === 'targ' && (local.kind === 'str' || local.kind === 'ostr') && this.rustWsKeyUse(node)) return this.rustWsKeyText(node);
         if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;

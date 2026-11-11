@@ -1394,14 +1394,25 @@ ${body}
             expect(out).toContain('if (n.is_none()) {');
         });
 
-        test('a nil-declared string used as a concat operand stays Value', () => {
+        test('a nil-declared string concatenated with an always-string operand joins Option<String>', () => {
             const out = transpiler.transpileRust(cls(`        let body = undefined;
         if (kind === 'a') { body = 'x'; } else { body = 'y'; }
         let auth = 'k' + kind;
         if (body !== undefined) { auth = auth + body; }
         return auth;`)).content;
-            expect(out).toContain('let mut body: Value = Value::Null;');
+            expect(out).toContain('let mut body: Option<String> = None;');
+            expect(out).toContain('auth = format!("{}{}", auth, body.as_deref().unwrap_or("null"));');
             expect(out).not.toContain('add(&auth');
+        });
+
+        test('negative: two optional strings concatenated keep the Value box', () => {
+            const out = transpiler.transpileRust(cls(`        let a = undefined;
+        let b = undefined;
+        if (kind === 'x') { a = 'p'; b = 'q'; }
+        if (a !== undefined) { return a + b; }
+        return kind;`)).content;
+            expect(out).toContain('let mut a: Value = Value::Null;');
+            expect(out).toContain('let mut b: Value = Value::Null;');
         });
 
         test('a tuple-slot write of a string joins Option<String>', () => {
@@ -1436,7 +1447,7 @@ ${body}
         test('a read outside the proven sinks keeps the Value box', () => {
             const out = transpiler.transpileRust(cls(`        let s = undefined;
         s = 'x';
-        const t = s + 'y';
+        const t = s + kind;
         return t;`)).content;
             expect(out).toContain('let mut s: Value = Value::Null;');
         });
