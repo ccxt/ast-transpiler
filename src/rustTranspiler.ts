@@ -1943,7 +1943,7 @@ export class RustTranspiler extends BaseTranspiler {
         // `in` — wrapped as Value so it composes in any context
         if (op === SyntaxKind.InKeyword) {
             const shadow = this.rustParamShadowOf(right);
-            return this.printBorrowedInOp(left, right) ?? this.printFieldKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
+            return this.printBorrowedInOp(left, right) ?? this.printFieldKeyInOp(left, right) ?? this.printElemKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
                 ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right)
                 ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right)
                 ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
@@ -3721,7 +3721,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' || !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'okey' || form === 'fin' || form === 'frd') typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || (form === 'key' && this.rustOkeyLocal(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -3734,7 +3734,7 @@ export class RustTranspiler extends BaseTranspiler {
         const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer);
         // a string handed once to a ws client call and nothing else stays a `Value`
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
-        if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed)) return undefined;
+        if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration)) return undefined;
         if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration))) return undefined;
         if (typedUses === 0 && this.rustTestTierSource(declaration)) return undefined;
         if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined) return undefined;
@@ -4241,6 +4241,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
         if (kind === 'ostr' && this.rustScalarOptKeyUse(n)) return 'key';
         if (kind === 'ostr' && this.rustOkeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
+        if (kind === 'ostr' && this.rustOkeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
         if (isCallExpression(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== undefined) return 'native';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
@@ -4757,6 +4758,47 @@ export class RustTranspiler extends BaseTranspiler {
         return `Value::Bool(${test})`;
     }
 
+    // ── string element keys in `in` tests (rustElemKeyInUse / printElemKeyInOp) ──
+    // `k in m` with `k` an `Option<String>` element local and `m` a single dict-shaped `Value` place:
+    // `in_op`'s Dict arm on the borrowed key; a `None` key (the boxed `Null`) is never contained.
+    rustElemKeyInUse(n: any): boolean {
+        const test: any = n.parent;
+        if (!isBinaryExpression(test) || test.operatorToken.kind !== SyntaxKind.InKeyword || test.left !== n || this.isTestSource(n)) return false;
+        const recv: any = this.rustStripWrappers(test.right);
+        if (recv === undefined || !this.isShallowValueReceiver(recv)) return false;
+        // an object-literal local may be a typed map whose own proof wants the `Value` key
+        const own: any = isIdentifier(recv) ? this.rustDeclarationOfIdentifier(recv) : undefined;
+        if (own === undefined && isIdentifier(recv)) return false;
+        if (own !== undefined && (!isVariableDeclaration(own) || own.initializer === undefined || isObjectLiteralExpression(this.rustSkipWrappers(own.initializer)))) return false;
+        if (this.rustBorrowedDictName(recv) !== undefined || this.rustParamShadowOf(recv) !== undefined || this.rustFieldKeyReceiver(recv) !== undefined
+            || this.rustClientHandleAccess(recv) !== undefined || (isPropertyAccessExpression(recv) && RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(recv.name.text)))) return false;
+        return this.isDictShapedType(this.typeOfNodeIfAny(test.right)) || this.rustDictLocalProof(recv) === 'plain';
+    }
+
+    /** An `in`-keyed element local stays `Value` when a boxed use would copy where the `Value` moved or was lent. */
+    rustElemKeyInCostly(declaration: any): boolean {
+        if (!isIdentifier(declaration.name)) return false;
+        let keyed = false;
+        let copied = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const form = this.rustScalarUseForms.get(n);
+            if (form === 'kin') keyed = true;
+            const up: any = n.parent;
+            // a call argument already copied the `Value`; other slots moved or borrowed it
+            const argCopy = isCallExpression(up) && up.expression !== n && (form === 'box' || form === 'xbox');
+            if (form === 'err' || form === 'key' || ((form === 'box' || form === 'xbox') && !argCopy && !this.rustScalarBoxMoves(n, form, declaration))) copied = true;
+            return true;
+        });
+        return keyed && copied;
+    }
+
+    printElemKeyInOp(key: any, obj: any): string | undefined {
+        const inner: any = this.rustStripWrappers(key);
+        if (!isIdentifier(inner) || this.rustScalarUseForms.get(inner) !== 'kin' || this.rustScalarLocalOf(inner)?.kind !== 'ostr') return undefined;
+        const recv = this.printNode(this.rustStripWrappers(obj), 0).trim();
+        return `Value::Bool(matches!((&${recv}, ${super.printIdentifier(inner)}.as_deref()), (Value::Dict(__d), Some(__k)) if __d.contains_key(__k)))`;
+    }
+
     rustScalarInNestedWrite(n): boolean {
         let current: any = n;
         while (current.parent !== undefined && !isStatement(current.parent)) current = current.parent;
@@ -4840,7 +4882,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}${this.rustLocalLastUse(node, local.declaration) ? '' : '.clone()'}.map(Value::from).unwrap_or(Value::Null)`;
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form === 'targ' && (local.kind === 'str' || local.kind === 'ostr') && this.rustWsKeyUse(node)) return this.rustWsKeyText(node);
-        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd') return super.printIdentifier(node);
+        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);

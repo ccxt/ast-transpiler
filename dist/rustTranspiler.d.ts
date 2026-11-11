@@ -591,6 +591,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A local keyed on a field and re-boxed anywhere but a moving use would copy where the `Value` moved. */
     rustFieldKeyCostly(declaration: any): boolean;
     printFieldKeyInOp(key: any, obj: any): string | undefined;
+    rustElemKeyInUse(n: any): boolean;
+    /** An `in`-keyed element local stays `Value` when a boxed use would copy where the `Value` moved or was lent. */
+    rustElemKeyInCostly(declaration: any): boolean;
+    printElemKeyInOp(key: any, obj: any): string | undefined;
     rustScalarInNestedWrite(n: any): boolean;
     /** A write source the local's type holds exactly: a same-kind value, a typed scalar local of the
      *  same kind, or a ternary of those (its condition printed as a bool). */
