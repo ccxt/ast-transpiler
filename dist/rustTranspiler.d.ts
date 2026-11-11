@@ -450,6 +450,57 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsClientCallArg(call: any, kind: string): boolean;
     rustWsClientOnlyUse(declaration: any): boolean;
     rustWsClientLastUse(node: any, declaration: any): boolean;
+    private static readonly RUST_CLIENT_HANDLE_TYPE;
+    private static readonly RUST_CLIENT_HANDLE_KEYS;
+    private static readonly RUST_CLIENT_HANDLE_NAMES;
+    private static readonly RUST_CLIENT_HANDLE_METHODS;
+    private static readonly RUST_CLIENT_HANDLE_MARK;
+    private rustClientHandlePlans;
+    private rustClientHandleDeclPrinting;
+    /** Line of a node's first token (statements print one per line, so this orders reads and writes). */
+    rustClientHandleLine(node: any): number;
+    /** The handle plan of the method enclosing `node`, or undefined. */
+    rustClientHandlePlan(node: any): any;
+    rustClientHandlePlanUncached(method: any): any;
+    /** A `this.client(url)` local whose every use the handle serves: a handle field read (not after a
+     *  write of that field) or write, a `resolve|reject|send|future|reusableFuture` call, or a hand-off
+     *  (`client.as_value()`) as a call argument or the returned value. */
+    rustClientHandleTypedLocal(plan: any, refs: any[]): boolean;
+    /** `client.<field>` on the planned handle: its plan, field and whether it is written; undefined
+     *  when the access is not on the handle or reads a field after the method wrote it. */
+    rustClientHandleAccess(node: any): {
+        plan: any;
+        key: string;
+        write: boolean;
+    } | undefined;
+    rustClientHandleReceiver(plan: any, field: boolean): string;
+    /** `client.<field>` as the handle's field (`top`: only for a local declared as the handle, ahead of
+     *  the native map reads; otherwise the last resort of the property printer). */
+    printClientHandleField(node: any, top: boolean): string | undefined;
+    /** `k in client.subscriptions|futures` as the handle's key test (`bare`: a Rust bool). */
+    printClientHandleInOp(key: any, obj: any, bare: boolean): string | undefined;
+    /** A condition that is a handle key test, printed as a Rust bool. */
+    printClientHandleCondition(node: any): string | undefined;
+    rustClientHandleIsInTest(node: any): boolean;
+    /** `client.subscriptions|futures[k]` read with a plain local key: the handle's keyed read. */
+    printClientHandleKeyedRead(node: any): string | undefined;
+    /** `Object.keys(client.subscriptions|futures)` bound to a key list: the handle's key list. */
+    printClientHandleKeys(init: any): string | undefined;
+    /** `delete client.subscriptions[k]`: the handle drops the live entry and its snapshot entry. */
+    printClientHandleDelete(node: any): string | undefined;
+    /** `client.subscriptions[k] = v`: the handle writes the live client and its snapshot. */
+    printClientHandleSubscriptionWrite(left: any, right: any): string | undefined;
+    /** A bare use of a local declared as the handle hands the `Value` handle on. */
+    printClientHandleUse(node: any): string | undefined;
+    /** The planned `client` local: declared as the handle, or printed as usual with a mark where the
+     *  handle binding goes. */
+    printClientHandleDeclaration(node: any, identation: number): string | undefined;
+    /** After a method body printed: the handle binding of a touched `client` param (returned, for the
+     *  body head) or local (spliced at its mark). */
+    rustClientHandleFinish(method: any, statements: string, identation: number): {
+        statements: string;
+        head: string;
+    };
     rustScalarInNestedWrite(n: any): boolean;
     /** A write source the local's type holds exactly: a same-kind value, a typed scalar local of the
      *  same kind, or a ternary of those (its condition printed as a bool). */

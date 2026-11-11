@@ -389,7 +389,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_NUMBER_CONSTANT_IMPORTS.has(name) && this.rustIsImportedValueName(node)) {
             return `Value::Int(crate::runtime::${name})`;
         }
-        return this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? super.printIdentifier(node);
+        return this.printClientHandleUse(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? super.printIdentifier(node);
     }
 
     /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
@@ -1863,6 +1863,7 @@ export class RustTranspiler extends BaseTranspiler {
         const scalarWrite = isAssign && isIdentifier(left) ? this.printRustScalarLocalWrite(left, right) : undefined;
         if (scalarWrite !== undefined) return scalarWrite;
         const scalarBinary = this.printRustScalarBinary(node); if (scalarBinary !== undefined) return scalarBinary;
+        const handleWrite = isAssign ? this.printClientHandleSubscriptionWrite(left, right) : undefined; if (handleWrite !== undefined) return handleWrite;
         // Element access assignment: a[b] = v → add_element_to_object(&mut a, &b, v)
         if (isAssign && left.kind === SyntaxKind.ElementAccessExpression) {
             const keys: any[] = [];
@@ -1922,7 +1923,7 @@ export class RustTranspiler extends BaseTranspiler {
         // `in` — wrapped as Value so it composes in any context
         if (op === SyntaxKind.InKeyword) {
             const shadow = this.rustParamShadowOf(right);
-            return (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
+            return this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
                 ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right)
                 ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right)
                 ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
@@ -1980,6 +1981,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printVariableDeclarationList(node, identation) {
+        const handleDecl = this.printClientHandleDeclaration(node, identation); if (handleDecl !== undefined) return handleDecl;
         const declaration = node.declarations[0];
         const indent = this.getIden(identation);
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
@@ -2018,6 +2020,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A read-only container bearer carries the container itself.
         const readBearer = node.declarations.length === 1 ? this.rustReadBearerKindOfDeclaration(declaration) : false;
         if (readBearer === 'list') {
+            const handleKeys = this.printClientHandleKeys(declaration.initializer); if (handleKeys !== undefined) return `${indent}let mut ${varName}: Vec<Value> = ${handleKeys}`;
             return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
         }
         if (readBearer === 'map') {
@@ -3848,6 +3851,265 @@ export class RustTranspiler extends BaseTranspiler {
                 || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
         }
         return true;
+    }
+
+    // ── ws client handle (rustClientHandlePlan / printClientHandle*) ──────────
+    // A method's `client` (its `client` parameter, or its one `client` local) reads the four handle
+    // fields through the typed `ClientHandle` the hand-written runtime keeps: a field read is the
+    // handle's snapshot field, a key test / keyed read / key list / subscription write is the handle's
+    // own method. A read that follows a write of the same field keeps the live `get_value` lookup.
+    // A `this.client(url)` local whose every use the handle serves is declared as the handle itself.
+    private static readonly RUST_CLIENT_HANDLE_TYPE = 'crate::pro::ws_client::ClientHandle';
+    private static readonly RUST_CLIENT_HANDLE_KEYS = new Set([ 'subscriptions', 'futures', 'rejections', 'url' ]);
+    private static readonly RUST_CLIENT_HANDLE_NAMES: { [k: string]: string } = { subscriptions: 'subscription', futures: 'future' };
+    private static readonly RUST_CLIENT_HANDLE_METHODS = new Set([ 'resolve', 'reject', 'send', 'future', 'reusableFuture' ]);
+    private static readonly RUST_CLIENT_HANDLE_MARK = '\u0006client-handle\u0006';
+    private rustClientHandlePlans = new WeakMap<Node, any>();
+    private rustClientHandleDeclPrinting = false;
+
+    /** Line of a node's first token (statements print one per line, so this orders reads and writes). */
+    rustClientHandleLine(node: any): number {
+        const file: any = node.getSourceFile();
+        let starts: number[] = file.__rustLineStarts;
+        if (starts === undefined) {
+            const text = String(file.text ?? '');
+            starts = [ 0 ];
+            for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+            file.__rustLineStarts = starts;
+        }
+        const pos = node.getStart();
+        let lo = 0;
+        let hi = starts.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (starts[mid] <= pos) lo = mid; else hi = mid - 1;
+        }
+        return lo;
+    }
+
+    /** The handle plan of the method enclosing `node`, or undefined. */
+    rustClientHandlePlan(node: any): any {
+        const method: any = isMethodDeclaration(node) ? node : findAncestor(node, (n) => isMethodDeclaration(n));
+        if (method === undefined || method.body === undefined) return undefined;
+        let plan = this.rustClientHandlePlans.get(method);
+        if (plan === undefined) {
+            plan = this.rustClientHandlePlanUncached(method) ?? null;
+            this.rustClientHandlePlans.set(method, plan);
+        }
+        return plan ?? undefined;
+    }
+
+    rustClientHandlePlanUncached(method: any): any {
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        if (!/ts\/src\//.test(file) || /ts\/src\/(?:.*\/)?(?:base|test)\//.test(file)) return undefined;
+        const nodes: any[] = this.rustScopeNameNodes(method, 'client');
+        const params = Array.from(method.parameters).filter((p: any) => isIdentifier(p.name) && p.name.text === 'client');
+        const decls = nodes.filter((n) => isVariableDeclaration(n) && isIdentifier(n.name));
+        const refs = nodes.filter((n) => {
+            if (n.kind !== SyntaxKind.Identifier) return false;
+            const p: any = n.parent;
+            if (p === undefined) return false;
+            if (isPropertyAccessExpression(p) && p.name === n) return false;
+            if (p.kind === SyntaxKind.PropertyAssignment && p.name === n) return false;
+            if ((isVariableDeclaration(p) || isParameterDeclaration(p)) && p.name === n) return false;
+            return true;
+        });
+        const reassigned = refs.some((r) => isBinaryExpression(r.parent) && r.parent.left === r && rustIsAssignmentOperator(r.parent.operatorToken.kind));
+        if (reassigned) return undefined;
+        let kind: string;
+        let decl: any;
+        let bindPos: number;
+        if (params.length === 1 && decls.length === 0) {
+            kind = 'param';
+            decl = params[0];
+            bindPos = method.body.pos;
+        } else if (params.length === 0 && decls.length === 1 && decls[0].initializer !== undefined && decls[0].parent?.declarations?.length === 1) {
+            kind = 'local';
+            decl = decls[0];
+            bindPos = decl.parent.parent.end;
+        } else {
+            return undefined;
+        }
+        const keys = RustTranspiler.RUST_CLIENT_HANDLE_KEYS;
+        const firstWrite = new Map<string, number>();
+        let mut = false;
+        for (const r of refs) {
+            const p: any = r.parent;
+            if (r.pos < bindPos || !isPropertyAccessExpression(p) || p.expression !== r || !keys.has(String(p.name.text))) continue;
+            if (!this.isNativeWriteTargetBase(p)) continue;
+            mut = true;
+            const line = this.rustClientHandleLine(p);
+            const key = String(p.name.text);
+            if (!firstWrite.has(key) || line < firstWrite.get(key)) firstWrite.set(key, line);
+        }
+        const plan: any = { kind, decl, bindPos, firstWrite, mut, typed: false, touched: false, declOk: kind === 'param' };
+        if (kind === 'local') plan.typed = this.rustClientHandleTypedLocal(plan, refs);
+        return plan;
+    }
+
+    /** A `this.client(url)` local whose every use the handle serves: a handle field read (not after a
+     *  write of that field) or write, a `resolve|reject|send|future|reusableFuture` call, or a hand-off
+     *  (`client.as_value()`) as a call argument or the returned value. */
+    rustClientHandleTypedLocal(plan: any, refs: any[]): boolean {
+        const init: any = this.unwrapParens(plan.decl.initializer);
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || init.expression.name.text !== 'client') return false;
+        return refs.every((r) => {
+            const p: any = r.parent;
+            if (isPropertyAccessExpression(p) && p.expression === r) {
+                const name = String(p.name.text);
+                if (RustTranspiler.RUST_CLIENT_HANDLE_KEYS.has(name)) {
+                    if (isPropertyAccessExpression(p.parent) && p.parent.expression === p) return false;
+                    const first = plan.firstWrite.get(name);
+                    return this.isNativeWriteTargetBase(p) || first === undefined || this.rustClientHandleLine(p) < first;
+                }
+                return RustTranspiler.RUST_CLIENT_HANDLE_METHODS.has(name) && isCallExpression(p.parent) && p.parent.expression === p;
+            }
+            if (isCallExpression(p) && p.expression !== r && p.arguments.some((a) => a === r)) {
+                const callee: any = p.expression;
+                return !(isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword && (callee.name.text === 'spawn' || callee.name.text === 'delay'));
+            }
+            return isReturnStatement(p) && p.expression === r;
+        });
+    }
+
+    /** `client.<field>` on the planned handle: its plan, field and whether it is written; undefined
+     *  when the access is not on the handle or reads a field after the method wrote it. */
+    rustClientHandleAccess(node: any): { plan: any, key: string, write: boolean } | undefined {
+        if (node === undefined || !isPropertyAccessExpression(node) || !isIdentifier(node.expression) || node.expression.text !== 'client') return undefined;
+        const key = String(node.name.text);
+        if (!RustTranspiler.RUST_CLIENT_HANDLE_KEYS.has(key)) return undefined;
+        const plan = this.rustClientHandlePlan(node);
+        if (plan === undefined || node.pos < plan.bindPos || (!plan.typed && !plan.declOk)) return undefined;
+        const write = this.isNativeWriteTargetBase(node);
+        const first = plan.firstWrite.get(key);
+        if (!write && first !== undefined && this.rustClientHandleLine(node) >= first) return undefined;
+        return { plan, key, write };
+    }
+
+    rustClientHandleReceiver(plan: any, field: boolean): string {
+        if (plan.typed) return field ? '(client)' : 'client';
+        plan.touched = true;
+        return '__ch';
+    }
+
+    /** `client.<field>` as the handle's field (`top`: only for a local declared as the handle, ahead of
+     *  the native map reads; otherwise the last resort of the property printer). */
+    printClientHandleField(node: any, top: boolean): string | undefined {
+        const access = this.rustClientHandleAccess(node);
+        if (access === undefined || (top && !access.plan.typed)) return undefined;
+        const recv = this.rustClientHandleReceiver(access.plan, true);
+        return access.write ? `${recv}.${access.key}` : `${recv}.${access.key}.clone()`;
+    }
+
+    /** `k in client.subscriptions|futures` as the handle's key test (`bare`: a Rust bool). */
+    printClientHandleInOp(key: any, obj: any, bare: boolean): string | undefined {
+        const access = this.rustClientHandleAccess(this.unwrapParens(obj) ?? obj);
+        const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
+        if (name === undefined) return undefined;
+        const call = `${this.rustClientHandleReceiver(access.plan, false)}.has_${name}(&${this.printNode(key, 0).trim()})`;
+        return bare ? call : `Value::Bool(${call})`;
+    }
+
+    /** A condition that is a handle key test, printed as a Rust bool. */
+    printClientHandleCondition(node: any): string | undefined {
+        const inner: any = this.unwrapParens(node) ?? node;
+        if (inner !== node && isPrefixUnaryExpression(inner) && inner.operator === SyntaxKind.ExclamationToken) {
+            const negated = this.printClientHandleCondition(inner.operand);
+            return negated === undefined ? undefined : `(!${negated})`;
+        }
+        if (!isBinaryExpression(inner) || inner.operatorToken.kind !== SyntaxKind.InKeyword) return undefined;
+        const call = this.printClientHandleInOp(inner.left, inner.right, true);
+        return call === undefined ? undefined : `(${call})`;
+    }
+
+    rustClientHandleIsInTest(node: any): boolean {
+        if (!isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.InKeyword) return false;
+        const access = this.rustClientHandleAccess(this.unwrapParens(node.right) ?? node.right);
+        return access !== undefined && !access.write && RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key] !== undefined;
+    }
+
+    /** `client.subscriptions|futures[k]` read with a plain local key: the handle's keyed read. */
+    printClientHandleKeyedRead(node: any): string | undefined {
+        const access = this.rustClientHandleAccess(node.expression);
+        const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
+        if (name === undefined || this.isNativeWriteTargetBase(node)) return undefined;
+        const key = this.printNode(node.argumentExpression, 0).trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return undefined;
+        return `${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(&${key})`;
+    }
+
+    /** `Object.keys(client.subscriptions|futures)` bound to a key list: the handle's key list. */
+    printClientHandleKeys(init: any): string | undefined {
+        const call: any = this.unwrapParens(init);
+        if (!isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
+            || call.expression.getText().replace(/\s+/g, '') !== 'Object.keys') return undefined;
+        const access = this.rustClientHandleAccess(call.arguments[0]);
+        const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
+        return name === undefined ? undefined : `${this.rustClientHandleReceiver(access.plan, false)}.${name}_keys()`;
+    }
+
+    /** `delete client.subscriptions[k]`: the handle drops the live entry and its snapshot entry. */
+    printClientHandleDelete(node: any): string | undefined {
+        const target: any = node.expression;
+        if (!isElementAccessExpression(target)) return undefined;
+        const access = this.rustClientHandleAccess(target.expression);
+        if (access === undefined || access.key !== 'subscriptions') return undefined;
+        return `${this.rustClientHandleReceiver(access.plan, false)}.remove_subscription(&${this.printNode(target.argumentExpression, 0).trim()})`;
+    }
+
+    /** `client.subscriptions[k] = v`: the handle writes the live client and its snapshot. */
+    printClientHandleSubscriptionWrite(left: any, right: any): string | undefined {
+        if (!isElementAccessExpression(left)) return undefined;
+        const access = this.rustClientHandleAccess(left.expression);
+        if (access === undefined || access.key !== 'subscriptions') return undefined;
+        const value = this.printNode(right, 0).trim();
+        const moved = /^[A-Za-z_][A-Za-z0-9_]*$/.test(value) && value !== 'self' && value !== 'true' && value !== 'false' ? `${value}.clone()` : value;
+        return `${this.rustClientHandleReceiver(access.plan, false)}.add_subscription(&${this.printNode(left.argumentExpression, 0).trim()}, ${moved})`;
+    }
+
+    /** A bare use of a local declared as the handle hands the `Value` handle on. */
+    printClientHandleUse(node: any): string | undefined {
+        if (node.text !== 'client') return undefined;
+        const p: any = node.parent;
+        if (p === undefined || (isPropertyAccessExpression(p) && (p.expression === node || p.name === node))
+            || ((isVariableDeclaration(p) || isParameterDeclaration(p)) && p.name === node) || (p.kind === SyntaxKind.PropertyAssignment && p.name === node)) return undefined;
+        const plan = this.rustClientHandlePlan(node);
+        return plan !== undefined && plan.typed && node.pos >= plan.bindPos ? 'client.as_value()' : undefined;
+    }
+
+    /** The planned `client` local: declared as the handle, or printed as usual with a mark where the
+     *  handle binding goes. */
+    printClientHandleDeclaration(node: any, identation: number): string | undefined {
+        if (this.rustClientHandleDeclPrinting || node.declarations.length !== 1) return undefined;
+        const declaration: any = node.declarations[0];
+        if (!isIdentifier(declaration.name) || declaration.name.text !== 'client') return undefined;
+        const plan = this.rustClientHandlePlan(declaration);
+        if (plan === undefined || plan.kind !== 'local' || plan.decl !== declaration) return undefined;
+        const indent = this.getIden(identation);
+        const type = RustTranspiler.RUST_CLIENT_HANDLE_TYPE;
+        if (plan.typed) return `${indent}let mut client: ${type} = ${type}::from_value(${this.printNode(declaration.initializer, 0).trim()})`;
+        this.rustClientHandleDeclPrinting = true;
+        let text: string;
+        try {
+            text = this.printVariableDeclarationList(node, identation);
+        } finally {
+            this.rustClientHandleDeclPrinting = false;
+        }
+        plan.declOk = text.startsWith(`${indent}let mut client: Value = `) && !text.includes('\n');
+        plan.indent = indent;
+        return plan.declOk ? text + RustTranspiler.RUST_CLIENT_HANDLE_MARK : text;
+    }
+
+    /** After a method body printed: the handle binding of a touched `client` param (returned, for the
+     *  body head) or local (spliced at its mark). */
+    rustClientHandleFinish(method: any, statements: string, identation: number): { statements: string, head: string } {
+        const mark = RustTranspiler.RUST_CLIENT_HANDLE_MARK;
+        const plan = this.rustClientHandlePlan(method);
+        const binding = (indent: string) => `${indent}let ${plan.mut ? 'mut ' : ''}__ch = ${RustTranspiler.RUST_CLIENT_HANDLE_TYPE}::from_value(client.clone())`;
+        if (plan === undefined || plan.typed) return { statements, head: '' };
+        if (plan.kind === 'param') return { statements, head: plan.touched ? `${binding(this.getIden(identation + 2))};\n` : '' };
+        return { statements: statements.split(mark).join(plan.touched ? `;\n${binding(plan.indent)}` : ''), head: '' };
     }
 
     rustScalarInNestedWrite(n): boolean {
@@ -5768,13 +6030,14 @@ export class RustTranspiler extends BaseTranspiler {
         const shadowPlan = this.rustProHandlerShadowPlan(node, identation);
         const savedShadowParam = this.rustProHandlerShadowParam;
         if (shadowPlan !== undefined) this.rustProHandlerShadowParam = shadowPlan.param;
-        const statements = this.printRustScalarGuardedBody(node, () => node.body.statements.map(s => this.printNode(s, identation + 2)).join('\n'));
+        const handle = this.rustClientHandleFinish(node, this.printRustScalarGuardedBody(node, () => node.body.statements.map(s => this.printNode(s, identation + 2)).join('\n')), identation);
+        const statements = handle.statements;
         this.rustProHandlerShadowParam = savedShadowParam;
         const typed = this.rustTypedSignature(node);
         if (typed !== undefined) {
-            return this.printNodeCommentsIfAny(node, identation, methodDef + this.rustTypedBody(node, typed, identation, optionalInits + shadows + (shadowPlan?.lines ?? '') + statements));
+            return this.printNodeCommentsIfAny(node, identation, methodDef + this.rustTypedBody(node, typed, identation, handle.head + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements));
         }
-        const body = blockOpen + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements + blockClose;
+        const body = blockOpen + handle.head + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements + blockClose;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef + body);
     }
@@ -6333,6 +6596,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printPropertyAccessExpression(node, identation) {
+        const handleField = this.printClientHandleField(node, true); if (handleField !== undefined) return handleField;
         const marketRead = this.printTypedMarketRead(node);
         if (marketRead !== undefined) return marketRead;
         const transformedProperty = this.transformPropertyAcessExpressionIfNeeded(node);
@@ -6370,6 +6634,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A string-typed data member read off a class-typed parameter (a `Value`
         // in Rust, e.g. `sourceExchange.id`) is the `&str`-key lookup itself; the
         // ccxt field-access pass would turn the bare `x.id` into `get_value`.
+        const handleRead = this.printClientHandleField(node, false); if (handleRead !== undefined) return handleRead;
         const stringMember = this.printStringMemberOfClassParam(node, leftExpr);
         if (stringMember !== undefined) return stringMember;
 
@@ -8034,6 +8299,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpression(node, identation) {
+        const handleRead = this.printClientHandleKeyedRead(node); if (handleRead !== undefined) return handleRead;
         const marketRead = this.printTypedMarketRead(node);
         if (marketRead !== undefined) return marketRead;
         const special = this.printElementAccessExpressionExceptionIfAny(node);
@@ -8262,6 +8528,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.kind === SyntaxKind.PrefixUnaryExpression && node.operator === SyntaxKind.ExclamationToken) {
             return this.printPrefixUnaryExpression(node, identation);
         }
+        const handleCondition = this.printClientHandleCondition(node); if (handleCondition !== undefined) return idn + handleCondition;
         const nilCondition = this.printRustNilLocalCondition(node);
         if (nilCondition !== undefined) return idn + nilCondition;
         // A bare identifier of native-`bool` type: `is_true(&x)` is the identity.
@@ -8386,7 +8653,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (inner.kind === SyntaxKind.PrefixUnaryExpression && inner.operator === SyntaxKind.ExclamationToken) {
             return this.hasNativeComparisonOperand(inner.operand);
         }
-        if (this.nativeEqualityText(inner) !== undefined) return true;
+        if (this.nativeEqualityText(inner) !== undefined || this.rustClientHandleIsInTest(inner)) return true;
         if (this.printTypedMarketRead(inner, true) !== undefined) return true; // a typed market flag is a bool
         if (inner.kind === SyntaxKind.BinaryExpression && this.nativeIndexOfLiteralTestText(inner.operatorToken.kind, inner.left, inner.right) !== undefined) return true;
         if (inner.kind === SyntaxKind.BinaryExpression && this.rustScalarOwnsOperand(inner) && this.rustScalarCompareText(inner, true) !== undefined) return true;
@@ -8474,7 +8741,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printDeleteExpression(node, identation) {
-        return this.provenDictFieldDelete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
+        return this.printClientHandleDelete(node) ?? this.provenDictFieldDelete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
     }
 
     printInstanceOfExpression(node, identation) {
