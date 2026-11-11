@@ -4680,6 +4680,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarWriteOk(kind: string, rhs, depth: number): boolean {
         const node: any = this.unwrapParens(rhs);
         if (node === undefined || depth > 3) return false;
+        if (this.rustOptParamWriteOk(kind, node)) return true;
         if (isConditionalExpression(node)) return this.rustScalarWriteOk(kind, node.whenTrue, depth + 1) && this.rustScalarWriteOk(kind, node.whenFalse, depth + 1);
         const optional = kind.startsWith('o');
         if (isIdentifier(node) && node.text !== 'undefined') {
@@ -4768,6 +4769,7 @@ export class RustTranspiler extends BaseTranspiler {
         const base = optional ? kind.slice(1) : kind;
         const wrap = (t: string) => optional ? `Some(${t})` : t;
         if (this.literalKindOfNode(node) === 'null') return optional ? 'None' : undefined;
+        const paramText = this.rustOptParamText(kind, node); if (paramText !== undefined) return paramText;
         if (isConditionalExpression(node)) {
             const whenTrue = this.rustScalarNativeText(kind, node.whenTrue);
             const whenFalse = this.rustScalarNativeText(kind, node.whenFalse);
@@ -4780,6 +4782,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const expressionText = this.rustScalarExpressionText(kind, node);
         if (expressionText !== undefined) return expressionText;
+        const boolText = kind === 'bool' && this.literalKindOfNode(node) !== 'boolean' ? this.rustBoolNativeText(node) : undefined; if (boolText !== undefined) return boolText;
         if (base === 'str' && this.literalKindOfNode(node) === 'string') return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
         if (base === 'bool' && this.literalKindOfNode(node) === 'boolean') return wrap(node.kind === SyntaxKind.TrueKeyword ? 'true' : 'false');
         const int = base === 'int' ? this.rustScalarIntLiteral(node) : undefined;
@@ -4981,8 +4984,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (node === undefined) return undefined;
         if (isIdentifier(node)) return this.rustScalarIdentifierKind(node);
         if (isConditionalExpression(node)) {
-            const a = this.rustScalarValueKind(node.whenTrue, true);
-            const b = this.rustScalarValueKind(node.whenFalse, true);
+            const narrowed = this.rustOptParamDefault(node)?.kind; if (narrowed !== undefined) return narrowed;
+            const a = this.rustScalarValueKind(node.whenTrue, true) ?? this.rustOptParamKind(node.whenTrue);
+            const b = this.rustScalarValueKind(node.whenFalse, true) ?? this.rustOptParamKind(node.whenFalse);
             const joined = this.rustScalarJoinKinds(a, b);
             return joined === 'null' ? undefined : joined;
         }
@@ -5025,11 +5029,94 @@ export class RustTranspiler extends BaseTranspiler {
             const parent: any = n.parent;
             if (!isIdentifier(n) || !isBinaryExpression(parent) || parent.left !== n || parent.operatorToken.kind !== SyntaxKind.EqualsToken) continue;
             const write = isIdentifier(this.unwrapParens(parent.right)) && this.literalKindOfNode(this.unwrapParens(parent.right)) !== 'null'
-                ? this.rustScalarIdentifierKind(this.unwrapParens(parent.right)) : this.rustScalarValueKind(parent.right, true);
+                ? this.rustScalarIdentifierKind(this.unwrapParens(parent.right)) ?? this.rustOptParamKind(parent.right) : this.rustScalarValueKind(parent.right, true);
             const next = write === undefined ? undefined : this.rustScalarJoinKinds(joined, write);
             if (next !== undefined && (next === joined || next === `o${joined}`)) joined = next;
         }
         return joined;
+    }
+
+    // Optional parameters of a typed-signature method: the body rebinds them from the lowered typed
+    // argument, so an unwritten `Option<i64>`/`Option<f64>` parameter holds only that variant or `Null`.
+    rustOptParamKind(expr): string | undefined {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || !isIdentifier(node) || node.text === 'undefined') return undefined;
+        const param: any = this.rustDeclaredNode(node);
+        if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || !isMethodDeclaration(param.parent)) return undefined;
+        const typed = this.rustTypedSignature(param.parent);
+        const entry = typed?.params[Array.from(param.parent.parameters).indexOf(param)];
+        const kind = entry?.optional ? ({ 'Option<i64>': 'oint', 'Option<f64>': 'onum' })[entry.rustType] : undefined;
+        if (kind === undefined) return undefined;
+        for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text)) as any[]) {
+            if (n === param.name || !isIdentifier(n)) continue;
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return undefined;
+            if ((up.kind === SyntaxKind.PrefixUnaryExpression || up.kind === SyntaxKind.PostfixUnaryExpression)
+                && (up.operator === SyntaxKind.PlusPlusToken || up.operator === SyntaxKind.MinusMinusToken)) return undefined;
+            if (isArrayLiteralExpression(up) || up.kind === SyntaxKind.ShorthandPropertyAssignment) return undefined;
+        }
+        return kind;
+    }
+
+    rustOptParamText(kind: string, node): string | undefined {
+        const narrowed = isConditionalExpression(node) ? this.rustOptParamDefault(node) : undefined;
+        if (narrowed !== undefined && (narrowed.kind === kind || `o${narrowed.kind}` === kind)) return kind === narrowed.kind ? narrowed.text : `Some(${narrowed.text})`;
+        const own = this.rustOptParamKind(node);
+        if (own === undefined || own !== kind) return undefined;
+        return `${super.printIdentifier(node)}.${own === 'oint' ? 'as_i64' : 'as_f64'}()`;
+    }
+
+    /** `p === undefined ? d : p` (or `p !== undefined ? p : d`) over a typed optional parameter `p` and a
+     *  literal or typed local `d`: never `Null`, printed `p.as_i64().unwrap_or(d)`. */
+    rustOptParamDefault(node): { kind: string, text: string } | undefined {
+        const cond: any = this.unwrapParens(node.condition);
+        if (!isBinaryExpression(cond) || !this.isEqualityOp(cond.operatorToken.kind)) return undefined;
+        const [ tested, nil ] = this.literalKindOfNode(this.unwrapParens(cond.right)) === 'null' ? [ cond.left, cond.right ] : [ cond.right, cond.left ];
+        if (this.literalKindOfNode(this.unwrapParens(nil)) !== 'null') return undefined;
+        const positive = cond.operatorToken.kind === SyntaxKind.ExclamationEqualsToken || cond.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken;
+        const [ present, fallback ]: any[] = positive ? [ node.whenTrue, node.whenFalse ] : [ node.whenFalse, node.whenTrue ];
+        const param: any = this.unwrapParens(tested);
+        const kind = this.rustOptParamKind(param);
+        const same: any = this.unwrapParens(present);
+        if (kind === undefined || !isIdentifier(same) || this.rustDeclaredNode(same) !== this.rustDeclaredNode(param)) return undefined;
+        const d: any = this.unwrapParens(fallback);
+        const dk = this.rustScalarIntLiteral(d) !== undefined ? 'int' : (this.rustScalarFloatLiteral(d) !== undefined ? 'num' : (isIdentifier(d) ? this.rustScalarLocalOf(d)?.kind : undefined));
+        const base = kind.slice(1);
+        if (dk !== base && !(base === 'num' && dk === 'int')) return undefined;
+        return { kind: base, text: `${super.printIdentifier(param)}.${kind === 'oint' ? 'as_i64' : 'as_f64'}().unwrap_or(${this.rustScalarOperandText(base, d)})` };
+    }
+
+    rustOptParamWriteOk(kind: string, node): boolean {
+        if (isConditionalExpression(node)) {
+            const narrowed = this.rustOptParamDefault(node)?.kind;
+            if (narrowed !== undefined) return narrowed === kind || `o${narrowed}` === kind;
+        }
+        if (isIdentifier(node) && this.rustOptParamKind(node) === kind) return true;
+        return kind === 'bool' && this.rustBoolNativeText(node) !== undefined;
+    }
+
+    /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
+    rustBoolNativeText(expr): string | undefined {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined) return undefined;
+        if (node.kind === SyntaxKind.TrueKeyword || node.kind === SyntaxKind.FalseKeyword) return node.kind === SyntaxKind.TrueKeyword ? 'true' : 'false';
+        if (isIdentifier(node)) return this.rustScalarLocalOf(node)?.kind === 'bool' ? super.printIdentifier(node) : undefined;
+        if (isPrefixUnaryExpression(node)) {
+            const inner = node.operator === SyntaxKind.ExclamationToken ? this.rustBoolNativeText(node.operand) : undefined;
+            return inner === undefined ? undefined : `!(${inner})`;
+        }
+        if (!isBinaryExpression(node)) return undefined;
+        const op = node.operatorToken.kind;
+        if (op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken) {
+            const left = this.rustBoolNativeText(node.left);
+            const right = left === undefined ? undefined : this.rustBoolNativeText(node.right);
+            return right === undefined ? undefined : `(${left} ${op === SyntaxKind.AmpersandAmpersandToken ? '&&' : '||'} ${right})`;
+        }
+        if (!RustTranspiler.COMPARISON_OPS.has(op)) return undefined;
+        const equality = this.nativeEqualityText(node);
+        if (equality !== undefined) return `(${equality})`;
+        const compare = this.rustScalarHasTypedOperand(node.left) || this.rustScalarHasTypedOperand(node.right) ? this.rustScalarCompareText(node, false) : undefined;
+        return compare === undefined ? undefined : `(${compare})`;
     }
 
     /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */

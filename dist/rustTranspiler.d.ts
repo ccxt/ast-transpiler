@@ -632,6 +632,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarJoinKinds(a: string | undefined, b: string | undefined): string | undefined;
     /** Joins the initializer kind with every `x = <rhs>` write: a nullish write makes the local optional. */
     rustScalarWidenedKind(declaration: any, kind: string): string;
+    rustOptParamKind(expr: any): string | undefined;
+    rustOptParamText(kind: string, node: any): string | undefined;
+    /** `p === undefined ? d : p` (or `p !== undefined ? p : d`) over a typed optional parameter `p` and a
+     *  literal or typed local `d`: never `Null`, printed `p.as_i64().unwrap_or(d)`. */
+    rustOptParamDefault(node: any): {
+        kind: string;
+        text: string;
+    } | undefined;
+    rustOptParamWriteOk(kind: string, node: any): boolean;
+    /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
+    rustBoolNativeText(expr: any): string | undefined;
     /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */
     rustScalarCompareText(node: any, dry: boolean): string | undefined;
     rustScalarCompareKind(node: any): string | undefined;

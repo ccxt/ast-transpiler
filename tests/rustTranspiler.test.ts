@@ -7806,3 +7806,51 @@ describe('rust string locals read by string methods', () => {
         expect(out).toContain('url.push_str(&');
     });
 });
+
+describe('rust optional typed parameter defaults and boolean writes', () => {
+    const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTrades'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    let n = 0;
+    const run = (body: string) => {
+        const file = path.join (rustFixtureRoot, 'opt-param-defaults', String (n++), 'ts/src/venue.ts');
+        fs.mkdirSync (path.dirname (file), { recursive: true });
+        fs.writeFileSync (file, "type Int = number;\ntype Trade = any;\ninterface Dict { [key: string]: any }\nclass C {\n" +
+            "    async fetchTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<Trade[]> {\n" +
+            body + "    }\n    g (x: any): any { return x; }\n}\n");
+        return typed.transpileRustByPath (file).content;
+    };
+
+    test('a literal default over an optional Int parameter is a native i64', () => {
+        const output = run((
+            "        const limitResolved = (limit === undefined) ? 100 : limit;\n" +
+            "        const request = { 'limit': limitResolved };\n" +
+            "        if (limitResolved > 1000) {\n" +
+            "            return [] as any;\n" +
+            "        }\n" +
+            "        return request as any;\n"));
+        expect(output).toContain('let mut limitResolved: i64 = limit.as_i64().unwrap_or(100);');
+        expect(output).not.toContain('let mut limitResolved: Value');
+    });
+
+    test('a written parameter keeps the boxed conditional', () => {
+        const output = run((
+            "        limit = this.g (limit);\n" +
+            "        const limitResolved = (limit === undefined) ? 100 : limit;\n" +
+            "        const request = { 'limit': limitResolved };\n" +
+            "        return request as any;\n"));
+        expect(output).not.toContain('unwrap_or(100)');
+    });
+
+    test('a boolean literal local joins comparison writes', () => {
+        const output = run((
+            "        let found = false;\n" +
+            "        if (symbol !== undefined) {\n" +
+            "            found = (symbol === 'BTC/USDT') || (limit === undefined);\n" +
+            "        }\n" +
+            "        if (found) {\n" +
+            "            return [] as any;\n" +
+            "        }\n" +
+            "        return undefined;\n"));
+        expect(output).toContain('let mut found: bool = false;');
+        expect(output).toContain('if found {');
+    });
+});
