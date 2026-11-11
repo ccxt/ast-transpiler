@@ -1943,7 +1943,7 @@ export class RustTranspiler extends BaseTranspiler {
         // `in` — wrapped as Value so it composes in any context
         if (op === SyntaxKind.InKeyword) {
             const shadow = this.rustParamShadowOf(right);
-            return this.printFieldKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
+            return this.printBorrowedInOp(left, right) ?? this.printFieldKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
                 ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right)
                 ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right)
                 ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
@@ -9852,11 +9852,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
-        return this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
+        return this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
-        return this.bearerEnum(node, 'values') ?? this.provenDictFieldEnum(node, parsedArg, 'values') ?? this.predictionEnum(node, parsedArg, 'values') ?? this.baseEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
+        return this.printBorrowedKeys(node, 'values') ?? this.bearerEnum(node, 'values') ?? this.provenDictFieldEnum(node, parsedArg, 'values') ?? this.predictionEnum(node, parsedArg, 'values') ?? this.baseEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
     }
 
     /** `Object.keys/values(x)` on a typed bearer — the map's own iterators. A bearer is built
@@ -11664,6 +11664,7 @@ export class RustTranspiler extends BaseTranspiler {
         let lengths = 0;
         let indexLikeReads = 0;
         let keyReads = 0;
+        let keySets = 0;
         let mixed = false;
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
@@ -11696,6 +11697,11 @@ export class RustTranspiler extends BaseTranspiler {
                 reads++;
                 return true;
             }
+            if (this.rustBorrowedKeySetUse(n)) {
+                keyReads++;
+                keySets++;
+                return true;
+            }
             if (!isCallExpression(up) || up.arguments[0] !== n) return false;
             // An endpoint response may be a list or a map: only string-key reads agree for both.
             const keyArgs: any[] = up.arguments.slice(1, isPropertyAccessExpression(up.expression) && /2$/.test(String(up.expression.name.text)) ? 3 : 2).map((a: any) => this.rustSkipWrappers(a));
@@ -11713,6 +11719,7 @@ export class RustTranspiler extends BaseTranspiler {
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api') && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
         if ((keyReads > 0 || (init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init))) && !this.rustDictKeyReadLineOk(declaration, name)) return undefined;
         const optional = nilDeclared || nullTests > 0 || writes > 0;
+        if (keySets > 0 && (from !== 'dict' || optional || (init !== undefined && this.rustInitReadsTaggedStore(init)))) return undefined;
         if (lengths > 0 && (from !== 'list' || optional)) return undefined;
         if (optional) {
             // Null stays distinct from an empty container: the local holds `Option<Dict>` / `Option<List>`.
@@ -11723,6 +11730,49 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustOptContainerLocals = new WeakSet<any>();
+
+    // ── rustBorrowedKeySetUse / printBorrowedKeys / printBorrowedInOp: key sets of a shared dict local ──
+    // `Object.keys/values(m)` lists the map's own entries (`Value::from` per key, no closure) and `k in m` is
+    // `contains_key`, `in_op`'s Dict arm. A map read from a tagged store keeps the box (ws tags are filtered there).
+    rustBorrowedKeySetUse(n: any): boolean {
+        const up: any = n.parent;
+        if (isCallExpression(up) && this.bearerEnumArg(up) === n) return up.arguments[0] === n;
+        if (!isBinaryExpression(up) || up.operatorToken.kind !== SyntaxKind.InKeyword || up.right !== n) return false;
+        return this.rustBorrowedInOpKey(up.left) !== undefined;
+    }
+
+    /** The key operand of `k in m`: a literal as `"k"`, else the boxed key text `bearerInOp` tests. */
+    rustBorrowedInOpKey(key: any): { literal: boolean, text: string } | undefined {
+        const node: any = this.rustSkipWrappers(key);
+        if (node !== undefined && isStringLiteral(node)) {
+            const literal = this.rustStringLiteralOf(this.printStringLiteral(node));
+            return literal === undefined ? undefined : { literal: true, text: literal };
+        }
+        const text = this.bearerInOpKeyText(key);
+        return text === undefined ? undefined : { literal: false, text };
+    }
+
+    rustBorrowedDictName(node: any): string | undefined {
+        const recv: any = this.rustSkipWrappers(node);
+        if (recv === undefined || !isIdentifier(recv)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(recv);
+        if (declaration === undefined || declaration.name === recv || this.rustBorrowedLocalKind(declaration) !== 'dict' || this.rustOptContainerLocals.has(declaration)) return undefined;
+        return super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+    }
+
+    printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined {
+        const arg = this.bearerEnumArg(node);
+        const name = arg === undefined ? undefined : this.rustBorrowedDictName(arg);
+        if (name === undefined) return undefined;
+        return kind === 'keys' ? `Value::Array(${name}.keys().cloned().map(Value::from).collect())` : `Value::Array(${name}.values().cloned().collect())`;
+    }
+
+    printBorrowedInOp(key: any, obj: any): string | undefined {
+        const name = this.rustBorrowedDictName(obj);
+        const k = name === undefined ? undefined : this.rustBorrowedInOpKey(key);
+        if (k === undefined) return undefined;
+        return k.literal ? `Value::Bool(${name}.contains_key(${k.text}))` : `Value::Bool(matches!(&${k.text}, Value::Str(__k) if ${name}.contains_key(__k.as_ref())))`;
+    }
 
     // ── rustDictKeyReadUse / printDictKeyRead: direct literal-key reads (`m['k']`, `m.k`) on a dict local ──
     // The shared map (or its optional form) reads through the reader trait the `safe_*_k` readers use:

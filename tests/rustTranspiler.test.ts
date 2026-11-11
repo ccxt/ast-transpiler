@@ -7929,3 +7929,31 @@ describe('rust boolean members read as conditions', () => {
         expect(out).toMatch(/let mut postOnly: Value = self\.isPostOnly\(/);
     });
 });
+
+describe('rust shared dict locals read through their key set', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: any = {};\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n}\n',
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    pick (code: string) {\n        const byType = this.safeDict (this.options, 'accountsByType', {});\n        const keys = Object.keys (byType);\n        if ('spot' in byType) {\n            return this.hold (keys);\n        }\n        return this.safeString (byType, 'margin');\n    }\n" +
+            "    kept (code: string) {\n        const raw = this.safeDict (this.options, 'raw', {});\n        const keys = Object.keys (raw);\n        return this.hold ([ raw, keys ]);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-keyset-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('Object.keys and in on a shared dict local print the map\'s own keys and contains_key', () => {
+        expect(out).toContain('let mut byType: crate::value::Dict = self.safeDict(');
+        expect(out).toContain('Value::Array(byType.keys().cloned().map(Value::from).collect())');
+        expect(out).toContain('byType.contains_key("spot")');
+        expect(out).not.toContain('byType: Value');
+    });
+    test('negative: a dict local handed on whole keeps its box', () => {
+        expect(out).toMatch(/let mut raw: Value = /);
+    });
+});

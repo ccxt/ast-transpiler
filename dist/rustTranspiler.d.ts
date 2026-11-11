@@ -1550,6 +1550,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    rustBorrowedKeySetUse(n: any): boolean;
+    /** The key operand of `k in m`: a literal as `"k"`, else the boxed key text `bearerInOp` tests. */
+    rustBorrowedInOpKey(key: any): {
+        literal: boolean;
+        text: string;
+    } | undefined;
+    rustBorrowedDictName(node: any): string | undefined;
+    printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined;
+    printBorrowedInOp(key: any, obj: any): string | undefined;
     /** A read of `n['literal']` / `n.name` (not a write target, call receiver, length or digit key). */
     rustDictKeyReadUse(n: any): boolean;
     /** The typed declaration line (`: crate::value::Dict = .. .into_dict()`, about 40 chars more) stays within 400 chars. */
