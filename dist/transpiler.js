@@ -55215,6 +55215,8 @@ ${binding(plan.indent)}` : ""), head: "" };
   printRustScalarLocalRead(node) {
     const local = this.rustScalarLocalOf(node);
     const form = local === void 0 ? void 0 : this.rustScalarUseForms.get(node);
+    if (form === "key" && local.kind === "ostr")
+      return `${super.printIdentifier(node)}.clone().map(Value::from).unwrap_or(Value::Null)`;
     if (form === "cond" || form === "concat" || form === "native" || form === "targ" || form === "key")
       return super.printIdentifier(node);
     if (form === "err")
@@ -55795,6 +55797,9 @@ ${binding(plan.indent)}` : ""), head: "" };
     const declaration = this.rustDeclarationOfIdentifier(access.expression);
     const init = declaration !== void 0 && isVariableDeclaration3(declaration) && declaration.initializer !== void 0 ? this.rustSkipWrappers(declaration.initializer) : void 0;
     if (declaration === void 0)
+      return false;
+    const receiverType = isVariableDeclaration3(declaration) || isParameterDeclaration3(declaration) ? this.typeOfNodeIfAny(declaration.name) : void 0;
+    if (receiverType === void 0 || (receiverType.flags & TypeFlags6.Union) !== 0)
       return false;
     if (init !== void 0 && isObjectLiteralExpression4(init)) {
       const name = String(access.expression.text);

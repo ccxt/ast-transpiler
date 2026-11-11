@@ -4333,6 +4333,8 @@ export class RustTranspiler extends BaseTranspiler {
     printRustScalarLocalRead(node): string | undefined {
         const local = this.rustScalarLocalOf(node);
         const form = local === undefined ? undefined : this.rustScalarUseForms.get(node);
+        // an optional key that reaches a helper write (no native insert) takes the helper's boxed key
+        if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}.clone().map(Value::from).unwrap_or(Value::Null)`;
         if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
         if (form !== 'box' && form !== 'xbox') return undefined;
@@ -4839,6 +4841,9 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(access.expression);
         const init: any = declaration !== undefined && isVariableDeclaration(declaration) && declaration.initializer !== undefined ? this.rustSkipWrappers(declaration.initializer) : undefined;
         if (declaration === undefined) return false;
+        // a receiver that may hold a non-map (`Num | Dict`) keeps the helper write and its boxed key
+        const receiverType: any = isVariableDeclaration(declaration) || isParameterDeclaration(declaration) ? this.typeOfNodeIfAny((declaration as any).name) : undefined;
+        if (receiverType === undefined || (receiverType.flags & TypeFlags.Union) !== 0) return false;
         if (init !== undefined && isObjectLiteralExpression(init)) {
             // the map's own key iterators print a closure; keep those bearers on their `Value` key
             const name = String(access.expression.text);
