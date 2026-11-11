@@ -110,6 +110,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    options: Dict = {};\n    omit = omit;\n    extend = extend;\n    safeValue (d: any, k: any, dflt: any = undefined): any {\n        return d === undefined ? dflt : d[k];\n    }\n    safeDict (d: any, k: any, dflt: Dict = undefined): Dict {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'object') ? v : dflt;\n    }\n    safeBool (d: any, k: any, dflt: Bool = undefined): Bool {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'boolean') ? v : dflt;\n    }\n    checkOptionBool (methodName: string, optionName: string, value: any): Bool {\n        if (value === undefined) {\n            return undefined;\n        }\n        return value === true;\n    }\n    handleOptionBoolAndParams (params: Dict, methodName: string, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const value = this.safeValue (params, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), params ];\n    }\n    handleTriggerAndParams (params: any): any[] {\n        const isTrigger = this.safeBool (params, 'trigger');\n        return [ isTrigger, params ];\n    }\n    handleOptionAndParams (params: Dict, methodName: string, optionName: string, defaultValue: any = undefined): [any, Dict] {\n        return [ this.safeValue (params, optionName, defaultValue), params ];\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchByIds (ids: string[], symbol: string = undefined, params: Dict = {}) {\n        const request: Dict = { 'txid': ids.join (',') };\n        return request;\n    }\n    async fetchOne (id: string, params: Dict = {}) {\n        return await this.fetchByIds ([ id ], undefined, params);\n    }\n    async fetchIndexed (ids: string[], params: Dict = {}) {\n        const first = ids[0];\n        return ids.join (',') + first;\n    }\n    async fetchOneIndexed (id: string, params: Dict = {}) {\n        return await this.fetchIndexed ([ id ], params);\n    }\n    async fetchComputed (ids: string[], params: Dict = {}) {\n        return ids.join (',');\n    }\n    async fetchComputedCaller (params: Dict = {}) {\n        return await this.fetchComputed (params['ids'], params);\n    }\n    async fetchNoCaller (ids: string[], symbol: string = undefined, params: Dict = {}) {\n        const request: Dict = { 'txid': ids.join (',') };\n        return request;\n    }\n    async fetchChunked (hashes: string[], params: Dict = {}) {\n        const rows = [];\n        const chunk = this.arraySlice (hashes, 0, 2);\n        rows.push (await this.fetchByIds (chunk, undefined, params));\n        return rows;\n    }\n}\n"
  },
+  "last-use-move": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    trades: any = {};\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    hold (x: any, y: any = undefined): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleA (message: any) {\n        const moved = this.safeString (message, 's', '');\n        this.trades[moved] = message;\n        this.hold (message, moved);\n        return message;\n    }\n    handleB (message: any) {\n        const twice = this.safeString (message, 's', '');\n        this.trades[twice] = message;\n        this.hold (twice, message);\n        return this.hold (twice);\n    }\n    handleC (message: any, list: any[]) {\n        const looped = this.safeString (message, 's', '');\n        this.trades[looped] = message;\n        for (let i = 0; i < list.length; i++) {\n            this.hold (looped);\n        }\n    }\n    handleD (message: any) {\n        const same = this.safeString (message, 's', '');\n        this.trades[same] = message;\n        return this.hold (same, same);\n    }\n}\n"},
   "field-string-key": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    orderbooks: any = {};\n    trades: any = {};\n    tickers: any = {};\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    orderBook (): any { return {}; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleTicker (message: any) {\n        const symbol = this.safeString (message, 's');\n        this.tickers[symbol] = message;\n    }\n    handleBook (message: any) {\n        const symbol = this.safeString (message, 's', '');\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = this.orderBook ();\n        }\n        const book = this.orderbooks[symbol];\n        return book;\n    }\n    handleTrade (message: any) {\n        const symbol = this.safeString (message, 's', '');\n        this.trades[symbol] = message;\n        return this.hold (symbol);\n    }\n}\n"}
 };
 const rustFixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-'));
@@ -5180,7 +5181,7 @@ describe('scalar locals from base methods with a concrete return', () => {
         expect(out).toMatch(/let mut code: Option<String> = self\.safeCurrencyCode\(.*\)\.as_str\(\)\.map\(str::to_owned\);/);
         expect(out).toMatch(/let mut now: Option<i64> = self\.milliseconds\(\)\.as_i64\(\);/);
         expect(out).toContain('if (code.is_none()) {');
-        expect(out).toContain('code.clone().map(Value::from).unwrap_or(Value::Null)');
+        expect(out).toContain('m.insert("code".to_string(), code.map(Value::from).unwrap_or(Value::Null));');
         expect(out).toContain('Value::from(now)');
     });
     test('a local written through keeps its Value box', () => {
@@ -5191,8 +5192,9 @@ describe('scalar locals from base methods with a concrete return', () => {
         expect(out).toContain('code.as_deref().unwrap_or("null").to_string()');
         expect(out).not.toContain('stringify_param(&code)');
     });
-    test('negative: a key local that is also moved into a Value slot keeps its box', () => {
-        expect(out).toMatch(/let mut held: Value = self\.safeCurrencyCode\(/);
+    test('a key local boxed into a Value slot at its last use is typed and moves there', () => {
+        expect(out).toMatch(/let mut held: Option<String> = self\.safeCurrencyCode\(/);
+        expect(out).toContain('self.hold(held.map(Value::from).unwrap_or(Value::Null));');
     });
 });
 
@@ -5225,7 +5227,7 @@ describe('scalar locals from base safe readers and literals', () => {
         expect(out).toMatch(/let mut price: Option<f64> = .*\.as_f64\(\);/);
         expect(out).toContain('if (id.is_none()) {');
         expect(out).toContain('.insert("ts".into(), Value::from(ts)); }');
-        expect(out).toContain('.insert("id".into(), id.clone().map(Value::from).unwrap_or(Value::Null)); }');
+        expect(out).toContain('.insert("id".into(), id.map(Value::from).unwrap_or(Value::Null)); }');
     });
     test('a literal default makes the reader a bare String / i64 / bool', () => {
         expect(out).toMatch(/let mut lim: i64 = .*\.as_i64\(\)\.unwrap_or\(100\);/);
@@ -7516,9 +7518,10 @@ describe('rust string key elements', () => {
         expect(out).toContain('(if let (Some(__m), Some(__k)) = (response.as_map(), key.as_deref()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })');
     });
 
-    test('negative: a key that is also boxed at its last use keeps its box', () => {
+    test('a key that is also boxed at its last use is typed and moves into that slot', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'string-key-element', 'ts/src/venue.ts')).content;
-        expect(out).toContain('let mut id: Value = ids.get(i as usize).cloned().unwrap_or(Value::Null);');
+        expect(out).toContain('let mut id: Option<String> = ids.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('result.push(self.safeMarket(&[id.map(Value::from).unwrap_or(Value::Null)]));');
     });
 });
 
@@ -7548,10 +7551,28 @@ describe('rust string keys on plain cache fields', () => {
         expect(out).toContain('(if let (Some(__m), Some(__k)) = (self.orderbooks.as_map(), Some(symbol.as_str())) {');
     });
 
-    test('negative: a field key that is also boxed at a call argument keeps its box', () => {
+    test('a field key boxed at a call argument as its last use moves there', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'field-string-key', 'ts/src/venue.ts')).content;
         const trade = out.slice(out.indexOf('fn handleTrade'));
-        expect(trade).toMatch(/let mut symbol: Value =/);
+        expect(trade).toMatch(/let mut symbol: String =/);
+        expect(trade).toContain('return self.hold(Value::from(symbol));');
+    });
+});
+
+describe('rust string locals moved at their last use', () => {
+    const out = () => transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'last-use-move', 'ts/src/venue.ts')).content;
+    const fn = (name: string) => { const text = out(); const at = text.indexOf(`fn ${name}`); return text.slice(at, text.indexOf('\n    }', at)); };
+
+    test('a string boxed into a call argument as its final read moves without a copy', () => {
+        expect(fn('handleA')).toMatch(/let mut moved: String =/);
+        expect(fn('handleA')).toContain('Value::from(moved)');
+        expect(fn('handleA')).not.toContain('moved.clone()');
+    });
+
+    test('negative: an earlier box, a box inside a loop, or two reads in one statement keep the local a Value', () => {
+        expect(fn('handleB')).toMatch(/let mut twice: Value =/);
+        expect(fn('handleC')).toMatch(/let mut looped: Value =/);
+        expect(fn('handleD')).toMatch(/let mut same: Value =/);
     });
 });
 

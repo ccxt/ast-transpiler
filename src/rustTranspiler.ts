@@ -3651,7 +3651,7 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustScalarUseForms.set(n, form);
             if (form === 'box' || form === 'xbox' || form === 'err') {
                 boxed++;
-                if (form === 'err' || !(isReturnStatement(n.parent) || this.rustTestLastUse(n, declaration))) copied++;
+                if (form === 'err' || !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
             if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'okey' || form === 'fin' || form === 'frd') typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
@@ -3919,7 +3919,7 @@ export class RustTranspiler extends BaseTranspiler {
             // a string re-boxed at a by-value slot copies where the `Value` moved: keep those boxed
             const trial = this.rustScalarDecisions.get(declaration);
             const form = this.rustScalarUseForms.get(n);
-            if ((trial === 'str' || trial === 'ostr') && (form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !isReturnStatement(n.parent)) return false;
+            if ((trial === 'str' || trial === 'ostr') && (form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)) return false;
             // a `.push(..)` argument: ccxt's native-push pass keys on the boxed operand text
             const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
             if (push !== undefined && isCallExpression(push)) return false;
@@ -4168,18 +4168,21 @@ export class RustTranspiler extends BaseTranspiler {
         return true;
     }
 
-    // In a test source a string local's final read moves: no later use, no other use in its statement,
-    // no loop or closure between it and the declaration (a hoisted argument is then still the last read).
-    rustTestLastUse(node, declaration): boolean {
-        if (!this.rustTestTierSource(declaration)) return false;
+    // A string local's final read moves: no later use, no other use in its statement, no loop or
+    // closure between it and the declaration (a hoisted argument is then still the last read).
+    rustLocalLastUse(node, declaration): boolean {
         let statement: any = node;
         while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
-        let last = true;
-        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
-            if (n !== node && (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end))) last = false;
-            return true;
-        });
-        if (!last) return false;
+        // every name node in the function counts unless the checker binds it to another symbol
+        const own = this.rustSymbolOf(node);
+        const scope = this.rustEnclosingFunction(declaration);
+        if (own === undefined || scope === undefined) return false;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text)) as any[]) {
+            if (n === node || n === declaration.name || n.kind !== SyntaxKind.Identifier || this.rustIdentifierIsPropertyName(n)) continue;
+            const symbol = this.rustSymbolOf(n);
+            if (symbol !== undefined && symbol !== own) continue;
+            if (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end)) return false;
+        }
         for (let up: any = node.parent; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
             if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
                 || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
@@ -4503,14 +4506,19 @@ export class RustTranspiler extends BaseTranspiler {
         return `(if let (Some(__m), Some(__k)) = (self.${field}.as_map(), ${kind === 'str' ? `Some(${name}.as_str())` : `${name}.as_deref()`}) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
     }
 
-    /** A local keyed on a field and re-boxed anywhere but a direct `return` would copy where the `Value` moved. */
+    /** A boxed use that takes the local by move (a `return`, or its last use); `err` always copies. */
+    rustScalarBoxMoves(n: any, form: string, declaration: any): boolean {
+        return form !== 'err' && (isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration));
+    }
+
+    /** A local keyed on a field and re-boxed anywhere but a moving use would copy where the `Value` moved. */
     rustFieldKeyCostly(declaration: any): boolean {
         let field = false;
         let boxed = false;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             const form = this.rustScalarUseForms.get(n);
             if (form === 'fin' || form === 'frd' || (form === 'key' && this.rustFieldKeyReceiver(n.parent?.expression) !== undefined)) field = true;
-            else if ((form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !isReturnStatement(n.parent)) boxed = true;
+            else if ((form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)) boxed = true;
             return true;
         });
         return field && boxed;
@@ -4608,15 +4616,14 @@ export class RustTranspiler extends BaseTranspiler {
         const local = this.rustScalarLocalOf(node);
         const form = local === undefined ? undefined : this.rustScalarUseForms.get(node);
         // an optional key that reaches a helper write (no native insert) takes the helper's boxed key
-        if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}.clone().map(Value::from).unwrap_or(Value::Null)`;
+        if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}${this.rustLocalLastUse(node, local.declaration) ? '' : '.clone()'}.map(Value::from).unwrap_or(Value::Null)`;
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
-        // only a direct `return x` moves: ccxt hoists call arguments ahead of their statement
         const moved = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration)
-            || this.rustTestLastUse(node, local.declaration) ? name : `${name}.clone()`;
+            || this.rustLocalLastUse(node, local.declaration) ? name : `${name}.clone()`;
         if (local.kind === 'ostr') return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
         if (local.kind === 'str') return `Value::from(${moved})`;
         if (local.kind === 'obool') return `${name}.map_or(Value::Null, Value::Bool)`;
@@ -4962,7 +4969,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (method.method === 'trim') return wrap(`${name}.trim().to_string()`);
             if (method.method === 'toString') {
                 const local = this.rustScalarLocalOf(method.recv);
-                return wrap(local !== undefined && this.rustTestLastUse(method.recv, local.declaration) ? name : `${name}.clone()`);
+                return wrap(local !== undefined && this.rustLocalLastUse(method.recv, local.declaration) ? name : `${name}.clone()`);
             }
             if (method.method === 'replace') return wrap(`${name}.replace("${arg(0)}", "${arg(1)}")`);
             return wrap(`${name}.${fn}()`);
@@ -5165,7 +5172,7 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             const form = this.rustScalarUseForms.get(n);
             if (form === 'key') keys++;
-            else if ((form === 'box' || form === 'xbox') && !isReturnStatement(n.parent)) boxed++;
+            else if ((form === 'box' || form === 'xbox') && !this.rustScalarBoxMoves(n, form, declaration)) boxed++;
             return true;
         });
         return keys > 0 && boxed > 0;
@@ -5199,13 +5206,13 @@ export class RustTranspiler extends BaseTranspiler {
             if (form === 'okey') keyed = true;
             if (!this.rustIdentifierIsPropertyName(n) && (last === undefined || n.pos > last.pos)) last = n;
             const up: any = n.parent;
-            if ((form === 'box' || form === 'xbox') && ((up.kind === SyntaxKind.PropertyAssignment && up.initializer === n)
+            if ((form === 'box' || form === 'xbox') && !this.rustLocalLastUse(n, declaration) && ((up.kind === SyntaxKind.PropertyAssignment && up.initializer === n)
                 || (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken)
                 || (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.PlusToken))) moved = true;
             return true;
         });
         const lastForm = last === undefined ? undefined : this.rustScalarUseForms.get(last);
-        return keyed && (moved || lastForm === 'box' || lastForm === 'xbox');
+        return keyed && (moved || ((lastForm === 'box' || lastForm === 'xbox') && !this.rustLocalLastUse(last, declaration)));
     }
 
     /** 'map' for a typed map receiver, 'value' for a proven-dict `Value` receiver, else undefined. */
