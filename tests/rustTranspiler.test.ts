@@ -69,6 +69,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleParamString (params: Dict, paramName: string, defaultValue: Str = undefined): [Str, Dict] {\n        const value = this.safeString (params, paramName, defaultValue);\n        const paramsOmitted = (value !== undefined) ? this.omit (params, paramName) : params;\n        return [ value, paramsOmitted ];\n    }\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        const until = this.safeString (params, 'until');\n        if (until !== undefined) {\n            request[key] = until;\n        }\n        const paramsOmitted = (until !== undefined) ? this.omit (params, 'until') : params;\n        return [ request, paramsOmitted ];\n    }\n    handleWrittenParams (params: Dict): [Str, Dict] {\n        params['seen'] = true;\n        return [ undefined, params ];\n    }\n    handleOverriddenParams (params: Dict): [Str, Dict] {\n        return [ this.safeString (params, 'x'), params ];\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ tag, paramsTag ] = this.handleParamString (params, 'tag');\n        const [ requestUntil, paramsUntil ] = this.handleUntilOption ('end', { 'tag': tag }, paramsTag);\n        return this.extend (requestUntil, paramsUntil);\n    }\n    handleOverriddenParams (params: Dict): [Str, Dict] {\n        return [ undefined, params ];\n    }\n}\ntype Str = string | undefined;\n"
  },
+ "venue-lent-params": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nexport default class Exchange {\n    omit = omit;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleParamString (params: Dict, paramName: string, defaultValue: Str = undefined): [Str, Dict] {\n        const value = this.safeString (params, paramName, defaultValue);\n        const paramsOmitted = (value !== undefined) ? this.omit (params, paramName) : params;\n        return [ value, paramsOmitted ];\n    }\n    handleShared (params: Dict): Str {\n        return this.safeString (params, 'x');\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ tag, paramsTag ] = this.handleParamString (params, 'tag');\n        const [ kind, paramsKind ] = this.handleParamString (params, 'kind');\n        const [ shared, paramsShared ] = this.handleParamString (params, 'shared');\n        return [ tag, kind, shared, this.venueFlag (paramsTag, 'fetchThing'), this.venueWritten (paramsKind), this.handleShared (paramsShared) ];\n    }\n    venueFlag (params: Dict, methodName: string): Str {\n        return this.safeString (params, methodName);\n    }\n    venueWritten (params: Dict): Str {\n        params['seen'] = true;\n        return this.safeString (params, 'seen');\n    }\n    handleShared (params: Dict): Str {\n        return undefined;\n    }\n}\n"
+ },
  "record-lookup": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    outcomes: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    outcome (s: Str): Dict { return this.outcomes[s]; }\n    safeOutcome (s: Str, o: any = undefined): Dict { return this.outcomes[s]; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (handle: Str) {\n        const obj = this.outcome (handle);\n        const info = this.safeDict (obj, 'info', {});\n        return this.hold ({ 'id': this.safeString (obj, 'id'), 'm': this.safeString (info, 'm') });\n    }\n    fetchKept (handle: Str) {\n        const kept = this.safeOutcome (handle);\n        return this.hold (kept);\n    }\n}\n"
@@ -5544,6 +5548,24 @@ describe('lent params dicts', () => {
         const base = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'lent-params', 'ts/src/base/Exchange.ts')).content;
         expect(base).toMatch(/fn handleWrittenParams\(&self, params: Value\)/);
         expect(base).toMatch(/fn handleOverriddenParams\(&self, params: Value\)/);
+    });
+});
+
+describe('venue-local params dicts', () => {
+    test('a read-only params dict of a method declared in one venue only is lent by reference from typed dict locals', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'venue-lent-params', 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/fn venueFlag\(&self, params: impl Into<crate::Value>, methodName: Value\)/);
+        expect(out).toContain('let mut params: Value = params.into();');
+        expect(out).toMatch(/let mut paramsTag: crate::value::Dict = /);
+        expect(out).toContain('self.venueFlag(&paramsTag, ');
+        expect(out).not.toContain('paramsTag: Value');
+    });
+
+    test('negative: a written or base-declared params dict keeps its Value parameter', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'venue-lent-params', 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/fn venueWritten\(&self, params: Value\)/);
+        expect(out).toMatch(/fn handleShared\(&self, params: Value\)/);
+        expect(out).toMatch(/let mut paramsKind: Value = /);
     });
 });
 

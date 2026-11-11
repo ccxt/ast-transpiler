@@ -12025,14 +12025,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (param.initializer !== undefined || param.questionToken !== undefined) return false;
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
         const name = String(method.name.text);
-        if (!/^handle\w+$/.test(name) || this.rustTypedSignature(method) !== undefined) return false;
+        if (this.rustTypedSignature(method) !== undefined) return false;
         const file: any = param.getSourceFile();
-        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName))) return false;
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName))) {
+            if (!this.rustVenueLocalMethod(method, name)) return false;
+        } else if (!/^handle\w+$/.test(name)) return false;
         const marker = String(file.text ?? '').indexOf('METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT');
-        if (marker < 0 || (method.getStart?.() ?? method.pos) < marker) return false;
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName)) && (marker < 0 || (method.getStart?.() ?? method.pos) < marker)) return false;
         const declared = String(param.type?.getText?.() ?? '').replace(/\s+/g, '');
         if (declared !== 'Dict' && declared !== 'object' && declared !== 'any') return false;
-        if (this.rustMethodReferencedAsValue(method) || this.rustLentOverridden(name)) return false;
+        if (this.rustMethodReferencedAsValue(method) || RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName)) && this.rustLentOverridden(name)) return false;
         // read-only: never re-bound, never an element write target, never deleted from
         if (this.rustLocalIsReassigned(param, 'params')) return false;
         return this.rustLocalUsesAll(param, 'params', true, (n: any) => {
@@ -12098,6 +12100,40 @@ export class RustTranspiler extends BaseTranspiler {
         }
         this.rustVenueMethodNamesByRoot.set(srcRoot, names);
         return names;
+    }
+
+    /** A method declared in exactly one venue source (REST, pro or prediction) and nowhere in the base tier: every
+     *  call site is in that venue or its ws subclass, and its by-name dispatch arm passes a `Value`, which still fits. */
+    rustVenueLocalMethod(method: any, name: string): boolean {
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const at = file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/);
+        if (at < 0 || !isClassDeclaration(method.parent)) return false;
+        if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword)) return false;
+        const counts = this.rustVenueMethodDeclCounts(file.slice(0, at) + '/ts/src');
+        return counts.get(name) === 1;
+    }
+
+    private rustVenueMethodDeclCountsByRoot = new Map<string, Map<string, number>>();
+
+    /** Class-member method declarations per name over the base tier and the venue sources (base counts twice). */
+    rustVenueMethodDeclCounts(srcRoot: string): Map<string, number> {
+        let counts = this.rustVenueMethodDeclCountsByRoot.get(srcRoot);
+        if (counts !== undefined) return counts;
+        counts = new Map<string, number>();
+        const declared = /^ {4}(?:(?:override|async|public|protected|private|static)\s+)*([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(/gm;
+        for (const [dir, weight] of [ [ '', 1 ], [ '/pro', 1 ], [ '/prediction', 1 ], [ '/base', 2 ] ] as [string, number][]) {
+            let entries: string[] = [];
+            try {
+                entries = fs.readdirSync(srcRoot + dir).filter((f) => f.endsWith('.ts'));
+            } catch (e) {
+                continue;
+            }
+            for (const f of entries) {
+                for (const m of fs.readFileSync(`${srcRoot}${dir}/${f}`, 'utf8').matchAll(declared)) counts.set(m[1], (counts.get(m[1]) ?? 0) + weight);
+            }
+        }
+        this.rustVenueMethodDeclCountsByRoot.set(srcRoot, counts);
+        return counts;
     }
 
     /** The callee parameter a call argument lands in, when that parameter takes a lent dict. */
