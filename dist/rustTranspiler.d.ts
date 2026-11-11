@@ -1719,6 +1719,20 @@ export declare class RustTranspiler extends BaseTranspiler {
     printHandedDictExtend(node: any, identation: number): string | undefined;
     /** `let mut x: crate::value::Dict = <slot read>.into_dict()` for a handed params slot. */
     printRustHandedDictSlot(element: any, printedName: string, read: string, indent: string): string | undefined;
+    /** `n` is the first operand of a two-operand base `this.extend (n, x)`. */
+    rustExtendHeadUse(n: any): boolean;
+    private static readonly RUST_EXTEND_HEAD_CALLS;
+    private rustUntilHeadDecisions;
+    rustUntilHeadSlot(element: any): boolean;
+    /** Slot 0 of `const [ x, p ] = this.handleUntilOption (k, r, ..)` with `r` a map literal or a typed map local,
+     *  used only as an extend head or written at literal keys (`Arc::make_mut(&mut x).insert(..)`). */
+    rustUntilHeadSlotUncached(element: any): boolean;
+    /** `x` (moved at its last use) or `&x` for a shared-map local as the head of a base `extend`, else undefined. */
+    printExtendHeadArg(node: any, text: string): string | undefined;
+    /** The literal key of a statement write `n['k'] = v` (one level, not a book-meta or replaced key). */
+    rustUntilHeadKeyWrite(n: any): string | undefined;
+    /** `std::sync::Arc::make_mut(&mut x).insert("k".into(), v)` for a literal-key write on a typed request slot. */
+    printUntilHeadKeyWrite(left: any, valueText: string): string | undefined;
     private rustLentParamDecisions;
     private rustLentOverrideNames;
     rustParamIsLentDict(param: any): boolean;
