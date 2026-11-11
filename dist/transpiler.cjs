@@ -61535,6 +61535,8 @@ ${iden}}`;
       return false;
     if (use.kind === _ast.SyntaxKind.PrefixUnaryExpression || use.kind === _ast.SyntaxKind.PostfixUnaryExpression)
       return false;
+    if (_is.isElementAccessExpression.call(void 0, use) && use.argumentExpression === up)
+      return false;
     return true;
   }
   /** The typed declaration line (`: crate::value::Dict = .. .into_dict()`, about 40 chars more) stays within 400 chars. */

@@ -11096,6 +11096,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (use === undefined || ((isPropertyAccessExpression(use) || isCallExpression(use) || isElementAccessExpression(use)) && use.expression === up)) return false;
         if (isDeleteExpression(use) || (isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind))) return false;
         if (use.kind === SyntaxKind.PrefixUnaryExpression || use.kind === SyntaxKind.PostfixUnaryExpression) return false;
+        // a key of another map access keeps the boxed read the typed map bearers key on
+        if (isElementAccessExpression(use) && use.argumentExpression === up) return false;
         return true;
     }
 
