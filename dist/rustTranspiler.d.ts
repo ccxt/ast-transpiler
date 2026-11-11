@@ -1582,6 +1582,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean;
     rustDictElementSource(init: any): boolean;
     private rustDictElementBoxes;
     /** A whole-value hand-off of a map element local: a plain `Value` argument of a `this.` method or an object literal value. */

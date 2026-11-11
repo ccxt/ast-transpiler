@@ -12009,7 +12009,7 @@ export class RustTranspiler extends BaseTranspiler {
         };
         // an endpoint response may share its name with a `let`/`const` in a sibling block (another Rust binding)
         const safe = from === 'api' && !nilDeclared ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
-        if (!safe || reads === 0 || mixed || from === undefined
+        if (!safe || (reads === 0 && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
         if ((keyReads > 0 || (init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init))) && !this.rustDictKeyReadLineOk(declaration, name)) return undefined;
         const optional = nilDeclared || nullTests > 0 || writes > 0;
@@ -12026,6 +12026,13 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustOptContainerLocals = new WeakSet<any>();
+
+    // ── rustNullTestedDictLocal: a base `safeDict*` result that is only tested against null ──
+    // The optional map answers the test natively (`is_some()` / `is_none()`); a non-map reads as `None`, as the reader does.
+    rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean {
+        if (nullTests === 0 || writes > 0 || init === undefined || !isCallExpression(init)) return false;
+        return /^safeDict(?:2|N)?$/.test(String((init.expression as any)?.name?.text ?? '')) && this.rustOptContainerSourceOk(init, 'dict');
+    }
 
     // ── rustDictElementSource: `xs[i]` over a list whose checker element type is a string-keyed map ──
     // The element leaves its copied box as the shared map (the same Arc bump the copy paid). A missing

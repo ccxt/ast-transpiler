@@ -124,7 +124,8 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
  },
   "last-use-move": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    trades: any = {};\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    hold (x: any, y: any = undefined): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleA (message: any) {\n        const moved = this.safeString (message, 's', '');\n        this.trades[moved] = message;\n        this.hold (message, moved);\n        return message;\n    }\n    handleB (message: any) {\n        const twice = this.safeString (message, 's', '');\n        this.trades[twice] = message;\n        this.hold (twice, message);\n        return this.hold (twice);\n    }\n    handleC (message: any, list: any[]) {\n        const looped = this.safeString (message, 's', '');\n        this.trades[looped] = message;\n        for (let i = 0; i < list.length; i++) {\n            this.hold (looped);\n        }\n    }\n    handleD (message: any) {\n        const same = this.safeString (message, 's', '');\n        this.trades[same] = message;\n        return this.hold (same, same);\n    }\n}\n"},
   "optional-list-join": {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Strings = string[] | undefined;\nexport default class Exchange {\n    marketIds (symbols: Strings = undefined): Strings { return symbols; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchA (symbols: string[] = undefined) {\n        const ids = this.marketIds (symbols);\n        const request: Dict = { 'symbols': ids.join (',') };\n        return this.hold (request);\n    }\n    fetchB (params: Dict) {\n        let rows = this.safeList (params, 'rows');\n        if (rows === undefined) {\n            rows = [ 'x' ];\n        }\n        const request: Dict = { 'rows': rows };\n        return this.hold (request);\n    }\n}\n"},
-  "field-string-key": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    orderbooks: any = {};\n    trades: any = {};\n    tickers: any = {};\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    orderBook (): any { return {}; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleTicker (message: any) {\n        const symbol = this.safeString (message, 's');\n        this.tickers[symbol] = message;\n    }\n    handleBook (message: any) {\n        const symbol = this.safeString (message, 's', '');\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = this.orderBook ();\n        }\n        const book = this.orderbooks[symbol];\n        return book;\n    }\n    handleTrade (message: any) {\n        const symbol = this.safeString (message, 's', '');\n        this.trades[symbol] = message;\n        return this.hold (symbol);\n    }\n}\n"}
+  "field-string-key": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    orderbooks: any = {};\n    trades: any = {};\n    tickers: any = {};\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    orderBook (): any { return {}; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleTicker (message: any) {\n        const symbol = this.safeString (message, 's');\n        this.tickers[symbol] = message;\n    }\n    handleBook (message: any) {\n        const symbol = this.safeString (message, 's', '');\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = this.orderBook ();\n        }\n        const book = this.orderbooks[symbol];\n        return book;\n    }\n    handleTrade (message: any) {\n        const symbol = this.safeString (message, 's', '');\n        this.trades[symbol] = message;\n        return this.hold (symbol);\n    }\n}\n"},
+  "null-tested-dicts": {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    loadThing (resp: Dict, reload: boolean) {\n        const cached = this.safeDict (this.options, 'cached');\n        if (cached === undefined || reload) {\n            this.hold (reload);\n        }\n        const stop = this.safeDict (resp, 'stop');\n        const hasStop = stop !== undefined;\n        const boxed = this.safeDict (resp, 'boxed');\n        if (boxed === undefined) {\n            return this.hold (boxed);\n        }\n        const filled = this.safeDict (resp, 'filled', { 'x': 1 });\n        return hasStop && (filled !== undefined);\n    }\n}\n"}
 };
 const rustFixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-'));
 for (const [dir, files] of Object.entries (rustInlineFixtures)) {
@@ -5768,6 +5769,24 @@ describe('optional dict and list locals', () => {
         expect(out).toContain('let mut lost: Value = ');
         expect(out).toContain('let mut kept: Value = ');
         expect(out).not.toContain('Option<crate::value::Dict> = self.safeDict(resp.clone(), "filled"');
+    });
+});
+
+describe('dict locals only tested against null', () => {
+    test('a base safeDict result tested against null holds Option of the shared map', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'null-tested-dicts', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut cached: Option<crate::value::Dict> = ');
+        expect(out).toContain('cached.is_none()');
+        expect(out).toContain('let mut stop: Option<crate::value::Dict> = ');
+        expect(out).toContain('stop.is_some()');
+        expect(out).not.toContain('cached: Value');
+        expect(out).not.toContain('stop: Value');
+    });
+
+    test('negative: a whole-value hand-off or a non-empty default keeps the box', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'null-tested-dicts', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut boxed: Value = ');
+        expect(out).toContain('let mut filled: Value = ');
     });
 });
 
