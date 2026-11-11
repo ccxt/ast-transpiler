@@ -7601,6 +7601,7 @@ describe('rust list reads with an empty list default', () => {
             "    parseRows (response: any) {\n        const rows = this.safeList (response, 'data', []);\n        const result = [];\n        for (let i = 0; i < rows.length; i++) {\n            result.push (rows[i]);\n        }\n        return result;\n    }\n" +
             "    readIds (response: any) {\n        const rows = this.safeList (response, 'data', []);\n        let id = undefined;\n        for (let i = 0; i < rows.length; i++) {\n            id = this.safeString (rows, i);\n        }\n        return id;\n    }\n" +
             "    handOn (response: any) {\n        const rows = this.safeList (response, 'data', []);\n        return this.hold (rows);\n    }\n" +
+            "    firstOf (response: any) {\n        const items = this.safeList (response, 'data', []);\n        if (items.length > 0) {\n            return this.safeDict (items, 0);\n        }\n        return undefined;\n    }\n" +
             "    readMaybe (response: any) {\n        const rows = this.safeList (response, 'data');\n        return rows[0];\n    }\n}\n",
     };
     let out: string;
@@ -7621,6 +7622,10 @@ describe('rust list reads with an empty list default', () => {
     });
     test('a list lent to an any-key reader passes a reference', () => {
         expect(out).toContain('self.safeString(&rows, Value::Int(i), &[])');
+    });
+    test('a list also handed to a Value slot boxes its shared handle', () => {
+        expect(out).toContain('let mut items: crate::value::List = ');
+        expect(out).toContain('self.safeDict(Value::Arr(items.clone()), Value::Int(0), &[])');
     });
     test('negative: a list only handed on, or one that may be undefined, keeps its box', () => {
         expect(out).toContain('return self.hold(rows);');
