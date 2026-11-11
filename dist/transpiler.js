@@ -51452,6 +51452,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustOptListDecisions = /* @__PURE__ */ new WeakMap();
     this.rustOptListBoxes = /* @__PURE__ */ new WeakMap();
     this.rustHandedDictDecisions = /* @__PURE__ */ new WeakMap();
+    // ── lent list containers (rustParamIsLentList / rustLentListSlot / printLentListArg) ──
+    // The response list of a base `parse*` method declared `List` takes `impl Into<crate::Value>`, in the base and in
+    // every override: a `Value` still passes (dispatch arms too) and a shared list local is lent as `&x`, no copy.
+    this.rustLentListParamDecisions = /* @__PURE__ */ new WeakMap();
+    this.rustLentListNamesByRoot = /* @__PURE__ */ new Map();
     // ── lent params dicts ────────────────────────────────────────────────────
     // A base `handle*` method whose required `params` dict is only read (key reads, omit, handed on, returned)
     // and never overridden takes it as `impl Into<crate::Value>`: a `Value` still passes (the by-name dispatch arms
@@ -53735,7 +53740,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   rustParamType(param) {
     if (this.rustParamPrintsBool(param))
       return "bool";
-    if (this.rustParamIsLentDict(param))
+    if (this.rustParamIsLentDict(param) || this.rustParamIsLentList(param))
       return "impl Into<crate::Value>";
     if (this.rustParamPrintsMap(param))
       return "&mut indexmap::IndexMap<String, Value>";
@@ -61535,7 +61540,7 @@ ${iden}}`;
     const optList = this.printOptListIdentifier(node, text);
     if (optList !== void 0)
       return optList;
-    const borrowedArg = this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text);
+    const borrowedArg = this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text);
     if (borrowedArg !== void 0)
       return borrowedArg;
     const containerBox = this.printRustContainerLocalBox(node, text);
@@ -63209,6 +63214,10 @@ ${iden}}`;
         boxes.push([n, "move"]);
         return true;
       }
+      if (at === n && this.rustLentListSlot(up, n)) {
+        natives++;
+        return true;
+      }
       if (isCallExpression6(up) && up.expression !== n && up.arguments.some((a) => a === n)) {
         const callee = up.expression;
         if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n)))
@@ -63707,6 +63716,92 @@ ${iden}}`;
   printRustHandedDictSlot(element, printedName, read, indent) {
     return this.rustHandedDictLocal(element) ? `${indent}let mut ${printedName}: crate::value::Dict = ${read}.into_dict()` : void 0;
   }
+  rustParamIsLentList(param) {
+    if (param?.kind !== SyntaxKind7.Parameter)
+      return false;
+    let decision = this.rustLentListParamDecisions.get(param);
+    if (decision === void 0) {
+      try {
+        decision = this.rustParamIsLentListUncached(param);
+      } catch (e) {
+        decision = false;
+      }
+      this.rustLentListParamDecisions.set(param, decision);
+    }
+    return decision;
+  }
+  rustParamIsLentListUncached(param) {
+    const method = param.parent;
+    if (!isMethodDeclaration5(method) || method.body === void 0 || !isIdentifier3(method.name) || method.parameters?.[0] !== param)
+      return false;
+    const name = String(method.name.text);
+    if (!/^parse[A-Z]\w*s$/.test(name) || param.name?.kind !== SyntaxKind7.Identifier || param.initializer !== void 0 || param.questionToken !== void 0)
+      return false;
+    if (!_RustTranspiler.RUST_LENT_LIST_TYPES.has(String(param.type?.getText?.() ?? "").replace(/\s+/g, "")) || !isClassDeclaration4(method.parent))
+      return false;
+    if ((method.modifiers ?? []).some((m) => m.kind === SyntaxKind7.StaticKeyword) || this.rustTypedSignature(method) !== void 0 || this.rustMethodReferencedAsValue(method))
+      return false;
+    const file = String(method.getSourceFile().fileName).replace(/\\/g, "/");
+    const at = file.search(/\/ts\/src\/(?:base\/|pro\/|prediction\/)?[^/]+\.ts$/);
+    if (at < 0)
+      return false;
+    if (_RustTranspiler.RUST_BASE_TIER_FILE.test(file)) {
+      const marker = String(method.getSourceFile().text ?? "").indexOf("METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT");
+      if (marker < 0 || (method.getStart?.() ?? method.pos) < marker)
+        return false;
+    } else if (!(method.modifiers ?? []).some((m) => m.kind === SyntaxKind7.OverrideKeyword))
+      return false;
+    return this.rustLentListMethodNames(file.slice(0, at) + "/ts/src").has(name);
+  }
+  /** Base `parse*s` methods whose first parameter every declaration (base and overrides) types `List`. */
+  rustLentListMethodNames(srcRoot) {
+    let names = this.rustLentListNamesByRoot.get(srcRoot);
+    if (names !== void 0)
+      return names;
+    names = /* @__PURE__ */ new Set();
+    const declared = /^ {4}(?:(?:override|async|public|protected|private)\s+)*(parse[A-Z]\w*s)\s*\(\s*\w+\s*(?::\s*([^,=)]+))?/gm;
+    const seen = /* @__PURE__ */ new Map();
+    for (const dir of ["/base", "", "/pro", "/prediction"]) {
+      let entries = [];
+      try {
+        entries = fs3.readdirSync(srcRoot + dir).filter((f) => f.endsWith(".ts") && (dir !== "/base" || f === "Exchange.ts"));
+      } catch (e) {
+        continue;
+      }
+      for (const f of entries) {
+        for (const m of fs3.readFileSync(`${srcRoot}${dir}/${f}`, "utf8").matchAll(declared)) {
+          const listed = _RustTranspiler.RUST_LENT_LIST_TYPES.has(String(m[2] ?? "").replace(/\s+/g, ""));
+          if (dir === "/base")
+            seen.set(m[1], (seen.get(m[1]) ?? true) && listed);
+          else if (seen.has(m[1]) && !listed)
+            seen.set(m[1], false);
+        }
+      }
+    }
+    for (const [n, ok] of seen)
+      if (ok)
+        names.add(n);
+    this.rustLentListNamesByRoot.set(srcRoot, names);
+    return names;
+  }
+  /** A call argument landing in a lent list parameter of the callee. */
+  rustLentListSlot(call, arg) {
+    if (!isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    if (call.arguments?.[0] !== arg)
+      return false;
+    const params = this.rustTranspiledCalleeParams(call, String(call.expression.name.text));
+    return params !== void 0 && params.length > 0 && this.rustParamIsLentList(params[0]);
+  }
+  /** `&x` for a shared list local lent to a lent list parameter. */
+  printLentListArg(node, text) {
+    if (!isIdentifier3(node) || !this.rustLentListSlot(node.parent, node))
+      return void 0;
+    const declaration = this.rustDeclarationOfIdentifier(node);
+    if (declaration === void 0 || declaration === node || declaration.name === node || !this.rustLentListLocal(declaration))
+      return void 0;
+    return `&${text}`;
+  }
   rustParamIsLentDict(param) {
     if (param?.kind !== SyntaxKind7.Parameter)
       return false;
@@ -63878,7 +63973,7 @@ ${iden}}`;
   }
   /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
   rustLentParamsBinding(node, identation) {
-    const lent = Array.from(node.parameters ?? []).filter((p) => this.rustParamIsLentDict(p));
+    const lent = Array.from(node.parameters ?? []).filter((p) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p));
     return lent.map((p) => {
       const name = this.printNode(p.name, 0);
       return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();
@@ -67026,6 +67121,7 @@ _RustTranspiler.RUST_OPT_LIST_SOURCES = /* @__PURE__ */ new Set(["marketSymbols"
 _RustTranspiler.RUST_HANDED_DICT_SOURCES = /* @__PURE__ */ new Set(["extend", "omit", "indexBy", "groupBy"]);
 _RustTranspiler.RUST_HANDED_DICT_OMIT = /* @__PURE__ */ new Set(["omit"]);
 _RustTranspiler.RUST_HANDED_DICT_EXTEND = /* @__PURE__ */ new Set(["extend", "deepExtend"]);
+_RustTranspiler.RUST_LENT_LIST_TYPES = /* @__PURE__ */ new Set(["List", "NullableList"]);
 // Plain-dict sources from base `safeDict*` reads of unshared dicts and same-file
 // sync request builders; native truthiness / bool equality on operands proven `Value::Bool`
 // or `Value::Null` at runtime (bool tuple elements, bool-returning exchange methods).

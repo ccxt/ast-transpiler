@@ -1719,6 +1719,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     printHandedDictExtend(node: any, identation: number): string | undefined;
     /** `let mut x: crate::value::Dict = <slot read>.into_dict()` for a handed params slot. */
     printRustHandedDictSlot(element: any, printedName: string, read: string, indent: string): string | undefined;
+    private rustLentListParamDecisions;
+    rustParamIsLentList(param: any): boolean;
+    private static readonly RUST_LENT_LIST_TYPES;
+    rustParamIsLentListUncached(param: any): boolean;
+    private rustLentListNamesByRoot;
+    /** Base `parse*s` methods whose first parameter every declaration (base and overrides) types `List`. */
+    rustLentListMethodNames(srcRoot: string): Set<string>;
+    /** A call argument landing in a lent list parameter of the callee. */
+    rustLentListSlot(call: any, arg: any): boolean;
+    /** `&x` for a shared list local lent to a lent list parameter. */
+    printLentListArg(node: any, text: string): string | undefined;
     private rustLentParamDecisions;
     private rustLentOverrideNames;
     rustParamIsLentDict(param: any): boolean;

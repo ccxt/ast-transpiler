@@ -2790,7 +2790,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** Native type text of a parameter in the emitted signature. */
     rustParamType(param): string {
         if (this.rustParamPrintsBool(param)) return 'bool';
-        if (this.rustParamIsLentDict(param)) return 'impl Into<crate::Value>';
+        if (this.rustParamIsLentDict(param) || this.rustParamIsLentList(param)) return 'impl Into<crate::Value>';
         if (this.rustParamPrintsMap(param)) return '&mut indexmap::IndexMap<String, Value>';
         if (this.rustParamPrintsStrVec(param)) return 'Vec<String>';
         return 'Value';
@@ -10907,7 +10907,7 @@ export class RustTranspiler extends BaseTranspiler {
     transformIdentifier(node, identifier) {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text); if (optList !== undefined) return optList;
-        const borrowedArg = this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -12581,6 +12581,10 @@ export class RustTranspiler extends BaseTranspiler {
                 boxes.push([n, 'move']);
                 return true;
             }
+            if (at === n && this.rustLentListSlot(up, n)) {
+                natives++;
+                return true;
+            }
             if (isCallExpression(up) && up.expression !== n && up.arguments.some((a: any) => a === n)) {
                 const callee: any = up.expression;
                 if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
@@ -13086,6 +13090,90 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustHandedDictLocal(element) ? `${indent}let mut ${printedName}: crate::value::Dict = ${read}.into_dict()` : undefined;
     }
 
+    // ── lent list containers (rustParamIsLentList / rustLentListSlot / printLentListArg) ──
+    // The response list of a base `parse*` method declared `List` takes `impl Into<crate::Value>`, in the base and in
+    // every override: a `Value` still passes (dispatch arms too) and a shared list local is lent as `&x`, no copy.
+
+    private rustLentListParamDecisions = new WeakMap<any, boolean>();
+
+    rustParamIsLentList(param: any): boolean {
+        if (param?.kind !== SyntaxKind.Parameter) return false;
+        let decision = this.rustLentListParamDecisions.get(param);
+        if (decision === undefined) {
+            try {
+                decision = this.rustParamIsLentListUncached(param);
+            } catch (e) {
+                decision = false;
+            }
+            this.rustLentListParamDecisions.set(param, decision);
+        }
+        return decision;
+    }
+
+    private static readonly RUST_LENT_LIST_TYPES = new Set([ 'List', 'NullableList' ]);
+
+    rustParamIsLentListUncached(param: any): boolean {
+        const method: any = param.parent;
+        if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || method.parameters?.[0] !== param) return false;
+        const name = String(method.name.text);
+        if (!/^parse[A-Z]\w*s$/.test(name) || param.name?.kind !== SyntaxKind.Identifier || param.initializer !== undefined || param.questionToken !== undefined) return false;
+        if (!RustTranspiler.RUST_LENT_LIST_TYPES.has(String(param.type?.getText?.() ?? '').replace(/\s+/g, '')) || !isClassDeclaration(method.parent)) return false;
+        if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword) || this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const at = file.search(/\/ts\/src\/(?:base\/|pro\/|prediction\/)?[^/]+\.ts$/);
+        if (at < 0) return false;
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(file)) {
+            const marker = String(method.getSourceFile().text ?? '').indexOf('METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT');
+            if (marker < 0 || (method.getStart?.() ?? method.pos) < marker) return false;
+        } else if (!(method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword)) return false;
+        return this.rustLentListMethodNames(file.slice(0, at) + '/ts/src').has(name);
+    }
+
+    private rustLentListNamesByRoot = new Map<string, Set<string>>();
+
+    /** Base `parse*s` methods whose first parameter every declaration (base and overrides) types `List`. */
+    rustLentListMethodNames(srcRoot: string): Set<string> {
+        let names = this.rustLentListNamesByRoot.get(srcRoot);
+        if (names !== undefined) return names;
+        names = new Set<string>();
+        const declared = /^ {4}(?:(?:override|async|public|protected|private)\s+)*(parse[A-Z]\w*s)\s*\(\s*\w+\s*(?::\s*([^,=)]+))?/gm;
+        const seen = new Map<string, boolean>();
+        for (const dir of [ '/base', '', '/pro', '/prediction' ]) {
+            let entries: string[] = [];
+            try {
+                entries = fs.readdirSync(srcRoot + dir).filter((f) => f.endsWith('.ts') && (dir !== '/base' || f === 'Exchange.ts'));
+            } catch (e) {
+                continue;
+            }
+            for (const f of entries) {
+                for (const m of fs.readFileSync(`${srcRoot}${dir}/${f}`, 'utf8').matchAll(declared)) {
+                    const listed = RustTranspiler.RUST_LENT_LIST_TYPES.has(String(m[2] ?? '').replace(/\s+/g, ''));
+                    if (dir === '/base') seen.set(m[1], (seen.get(m[1]) ?? true) && listed);
+                    else if (seen.has(m[1]) && !listed) seen.set(m[1], false);
+                }
+            }
+        }
+        for (const [n, ok] of seen) if (ok) names.add(n);
+        this.rustLentListNamesByRoot.set(srcRoot, names);
+        return names;
+    }
+
+    /** A call argument landing in a lent list parameter of the callee. */
+    rustLentListSlot(call: any, arg: any): boolean {
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (call.arguments?.[0] !== arg) return false;
+        const params = this.rustTranspiledCalleeParams(call, String(call.expression.name.text));
+        return params !== undefined && params.length > 0 && this.rustParamIsLentList(params[0]);
+    }
+
+    /** `&x` for a shared list local lent to a lent list parameter. */
+    printLentListArg(node: any, text: string): string | undefined {
+        if (!isIdentifier(node) || !this.rustLentListSlot(node.parent, node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration === node || declaration.name === node || !this.rustLentListLocal(declaration)) return undefined;
+        return `&${text}`;
+    }
+
     // ── lent params dicts ────────────────────────────────────────────────────
     // A base `handle*` method whose required `params` dict is only read (key reads, omit, handed on, returned)
     // and never overridden takes it as `impl Into<crate::Value>`: a `Value` still passes (the by-name dispatch arms
@@ -13254,7 +13342,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string {
-        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p));
+        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p));
         return lent.map((p: any) => {
             const name = this.printNode(p.name, 0);
             return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();\n`;
