@@ -54738,6 +54738,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         handed = true;
       if (_is.isVariableDeclaration.call(void 0, top.parent) && top.parent.initializer === top)
         handed = true;
+      if (_is.isReturnStatement.call(void 0, top.parent))
+        handed = true;
       return true;
     });
     return handed;

@@ -3868,6 +3868,8 @@ export class RustTranspiler extends BaseTranspiler {
             while (isParenthesizedExpression(top.parent) || isConditionalExpression(top.parent)) top = top.parent;
             if (isBinaryExpression(top.parent) && top.parent.right === top && top.parent.operatorToken.kind === SyntaxKind.EqualsToken) handed = true;
             if (isVariableDeclaration(top.parent) && top.parent.initializer === top) handed = true;
+            // a returned string decides the method's own `-> Option<String>` return (and its dispatch arm)
+            if (isReturnStatement(top.parent)) handed = true;
             return true;
         });
         return handed;
