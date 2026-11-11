@@ -633,6 +633,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarNumericKind(node: any): string | undefined;
     /** The exact kind an expression shape yields over typed operands, else undefined. */
     rustScalarExpressionKind(expr: any): string | undefined;
+    private static readonly RUST_ALWAYS_INT_CALLS;
+    rustArithCallKind(expr: any): string | undefined;
+    /** A combinator over a typed operand prints native and boxes its result once. */
+    printRustArithCall(node: any): string | undefined;
+    /** `this.sum(..)` / `Math.min|max(a, b)`: a call whose own kind comes from its operands. */
+    rustArithCombinator(node: any): boolean;
+    rustArithCallText(kind: string, expr: any): string | undefined;
     rustScalarJoinKinds(a: string | undefined, b: string | undefined): string | undefined;
     /** Joins the initializer kind with every `x = <rhs>` write: a nullish write makes the local optional. */
     rustScalarWidenedKind(declaration: any, kind: string): string;

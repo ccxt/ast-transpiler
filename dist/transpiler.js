@@ -54505,7 +54505,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return true;
     if (isBinaryExpression5(node))
       return _RustTranspiler.RUST_SCALAR_ARITH_OPS.has(node.operatorToken.kind);
-    if (isIdentifier3(node) || isConditionalExpression4(node) || this.rustScalarStrMethod(node, true) !== void 0 || this.rustScalarPreciseCall(node))
+    if (isIdentifier3(node) || isConditionalExpression4(node) || this.rustScalarStrMethod(node, true) !== void 0 || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node))
       return true;
     if (isPropertyAccessExpression3(node))
       return isIdentifier3(node.name) && node.name.text === "length" && isIdentifier3(node.expression);
@@ -54660,6 +54660,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const expressionKind = this.rustScalarExpressionKind(node);
     if (expressionKind !== void 0)
       return expressionKind;
+    if (this.rustArithCombinator(node))
+      return this.rustArithCallKind(node);
     if (fresh && isBinaryExpression5(node) && node.operatorToken.kind === SyntaxKind7.PlusToken && this.rustScalarFormatText(node) !== void 0)
       return "str";
     if (this.rustElementReadScalarKind(node) !== void 0)
@@ -55087,6 +55089,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return "key";
     if (kind === "ostr" && this.rustOkeyLocal(n) && this.rustOkeyReadUse(n))
       return "okey";
+    if (isCallExpression6(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== void 0)
+      return "native";
     if (isCallExpression6(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
       return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? "box" : this.rustScalarExpressionUseForm(n, kind);
     }
@@ -55782,6 +55786,8 @@ ${binding(plan.indent)}` : ""), head: "" };
     }
     if (!isCallExpression6(node))
       return void 0;
+    if (this.rustArithCombinator(node))
+      return this.rustArithCallText(kind, node);
     const text = this.printNode(node, 0).trim();
     const fallback = node.arguments[node.arguments.length - 1];
     const defaulted = this.rustScalarValueKind(node, true) === base;
@@ -55986,6 +55992,9 @@ ${binding(plan.indent)}` : ""), head: "" };
       return "int";
     if (this.rustScalarFloatLiteral(inner) !== void 0)
       return "num";
+    const call = this.rustArithCallKind(inner);
+    if (call !== void 0)
+      return call;
     const kind = this.rustScalarExpressionKind(inner);
     return kind === "int" || kind === "num" || kind === "oint" || kind === "onum" ? kind : void 0;
   }
@@ -56027,6 +56036,67 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (method !== void 0)
       return method.kind;
     return this.rustScalarPreciseCall(node) ? "ostr" : void 0;
+  }
+  rustArithCallKind(expr) {
+    const node = this.unwrapParens(expr);
+    if (node === void 0 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
+      return void 0;
+    const recv = node.expression.expression;
+    const name = String(node.expression.name.text);
+    const args = Array.from(node.arguments ?? []);
+    const math = isIdentifier3(recv) && recv.text === "Math" && (name === "min" || name === "max") && args.length === 2;
+    if (!math && recv.kind !== SyntaxKind7.ThisKeyword)
+      return void 0;
+    if (!math) {
+      const declaration = this.rustScalarCallee(node);
+      if (declaration === void 0 || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? "")))
+        return void 0;
+      if (_RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name))
+        return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === "number" ? "int" : void 0;
+      if (_RustTranspiler.RUST_SCALAR_INT_HELPERS[name] !== void 0)
+        return this.rustScalarValueKind(node, true) === "int" ? "int" : void 0;
+      if (name !== "sum" || args.length < 2)
+        return void 0;
+    }
+    const kinds = args.map((a) => this.rustScalarNumericKind(a));
+    if (kinds.some((k) => k !== "int" && k !== "num"))
+      return void 0;
+    return kinds.every((k) => k === "int") ? "int" : args.length === 2 ? "num" : void 0;
+  }
+  /** A combinator over a typed operand prints native and boxes its result once. */
+  printRustArithCall(node) {
+    if (!this.rustArithCombinator(node) || !Array.from(node.arguments).some((a) => this.rustScalarHasTypedOperand(a)))
+      return void 0;
+    const kind = this.rustArithCallKind(node);
+    const text = kind === void 0 ? void 0 : this.rustArithCallText(kind, node);
+    return text === void 0 ? void 0 : this.rustScalarBoxText(kind, text, node);
+  }
+  /** `this.sum(..)` / `Math.min|max(a, b)`: a call whose own kind comes from its operands. */
+  rustArithCombinator(node) {
+    if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
+      return false;
+    const name = String(node.expression.name.text);
+    const recv = node.expression.expression;
+    return name === "sum" && recv.kind === SyntaxKind7.ThisKeyword || (name === "min" || name === "max") && isIdentifier3(recv) && recv.text === "Math";
+  }
+  rustArithCallText(kind, expr) {
+    const node = this.unwrapParens(expr);
+    const own = this.rustArithCallKind(node);
+    if (own === void 0 || kind !== own && kind !== `o${own}` && !(kind === "num" && own === "int"))
+      return void 0;
+    const name = String(node.expression.name.text);
+    let text;
+    if (_RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name))
+      text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or_default()`;
+    else if (_RustTranspiler.RUST_SCALAR_INT_HELPERS[name] !== void 0)
+      text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or(${this.rustScalarIntLiteral(node.arguments[node.arguments.length - 1])})`;
+    else {
+      const parts = Array.from(node.arguments).map((a) => this.rustScalarOperandText(own, a));
+      text = name === "sum" ? `(${parts.join(" + ")})` : `${own === "int" ? "i64" : "f64"}::${name}(${parts[0]}, ${parts[1]})`;
+    }
+    if (kind === "num" && own === "int")
+      return `((${text}) as f64)`;
+    return kind === own ? text : `Some(${text})`;
   }
   rustScalarJoinKinds(a, b) {
     if (a === void 0 || b === void 0)
@@ -56285,6 +56355,9 @@ ${binding(plan.indent)}` : ""), head: "" };
       const name = super.printIdentifier(inner);
       return kind === "num" && own2 === "int" ? `(${name} as f64)` : name;
     }
+    const call = kind === "int" || kind === "num" ? this.rustArithCallText(kind, inner) : void 0;
+    if (call !== void 0)
+      return `(${call})`;
     const own = this.rustScalarExpressionKind(inner) ?? kind;
     const text = this.rustScalarNativeText(own, inner) ?? this.printNode(inner, 0);
     return kind === "num" && own === "int" ? `((${text}) as f64)` : `(${text})`;
@@ -58055,6 +58128,9 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const scalarMethod = this.printRustScalarMethodCall(node);
     if (scalarMethod !== void 0)
       return scalarMethod;
+    const arithCall = this.printRustArithCall(node);
+    if (arithCall !== void 0)
+      return arithCall;
     const marketRead = this.printTypedMarketRead(node);
     if (marketRead !== void 0)
       return marketRead;
@@ -65842,6 +65918,11 @@ _RustTranspiler.RUST_SCALAR_ARITH_OPS = /* @__PURE__ */ new Set([
   SyntaxKind7.ExclamationEqualsToken,
   SyntaxKind7.ExclamationEqualsEqualsToken
 ]);
+// ── numeric calls over typed operands (rustArithCallKind / rustArithCallText) ──
+// Base calls whose runtime always answers `Int` (milliseconds, seconds, parseTimeframe), a literal-defaulted
+// integer reader, and `this.sum` / two-operand `Math.min|max` over int/num operands: the native i64 / f64 result
+// equals the helper's (Int with Int stays Int, any Float operand gives Float).
+_RustTranspiler.RUST_ALWAYS_INT_CALLS = /* @__PURE__ */ new Set(["milliseconds", "seconds", "parseTimeframe"]);
 /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
 _RustTranspiler.RUST_CACHE_CTORS = /* @__PURE__ */ new Set(["ArrayCache", "ArrayCacheByTimestamp", "ArrayCacheBySymbolById", "ArrayCacheBySymbolBySide", "ArrayCacheByOutcomeById"]);
 // `ts/src/base/**` — the shared `Exchange` / `PredictionExchange` classes
