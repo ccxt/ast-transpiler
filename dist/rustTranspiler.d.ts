@@ -664,6 +664,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Joins the initializer kind with every `x = <rhs>` write: a nullish write makes the local optional. */
     rustScalarWidenedKind(declaration: any, kind: string): string;
     rustOptParamKind(expr: any): string | undefined;
+    private static readonly RUST_PARAM_READ;
     rustOptParamText(kind: string, node: any): string | undefined;
     /** `p === undefined ? d : p` (or `p !== undefined ? p : d`) over a typed optional parameter `p` and a
      *  literal or typed local `d`: never `Null`, printed `p.as_i64().unwrap_or(d)`. */

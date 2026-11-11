@@ -56289,7 +56289,7 @@ ${binding(plan.indent)}` : ""), head: "" };
       return void 0;
     const typed = this.rustTypedSignature(param.parent);
     const entry = typed?.params[Array.from(param.parent.parameters).indexOf(param)];
-    const kind = entry?.optional ? { "Option<i64>": "oint", "Option<f64>": "onum" }[entry.rustType] : void 0;
+    const kind = entry === void 0 ? void 0 : entry.optional ? { "Option<i64>": "oint", "Option<f64>": "onum", "Option<&str>": "ostr" }[entry.rustType] : { "&str": "str", "i64": "int", "f64": "num" }[entry.rustType];
     if (kind === void 0)
       return void 0;
     for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text))) {
@@ -56312,7 +56312,7 @@ ${binding(plan.indent)}` : ""), head: "" };
     const own = this.rustOptParamKind(node);
     if (own === void 0 || own !== kind)
       return void 0;
-    return `${super.printIdentifier(node)}.${own === "oint" ? "as_i64" : "as_f64"}()`;
+    return `${super.printIdentifier(node)}.${_RustTranspiler.RUST_PARAM_READ[own]}`;
   }
   /** `p === undefined ? d : p` (or `p !== undefined ? p : d`) over a typed optional parameter `p` and a
    *  literal or typed local `d`: never `Null`, printed `p.as_i64().unwrap_or(d)`. */
@@ -56326,7 +56326,8 @@ ${binding(plan.indent)}` : ""), head: "" };
     const positive = cond.operatorToken.kind === SyntaxKind7.ExclamationEqualsToken || cond.operatorToken.kind === SyntaxKind7.ExclamationEqualsEqualsToken;
     const [present, fallback] = positive ? [node.whenTrue, node.whenFalse] : [node.whenFalse, node.whenTrue];
     const param = this.unwrapParens(tested);
-    const kind = this.rustOptParamKind(param);
+    const own = this.rustOptParamKind(param);
+    const kind = own === "oint" || own === "onum" ? own : void 0;
     const same = this.unwrapParens(present);
     if (kind === void 0 || !isIdentifier3(same) || this.rustDeclaredNode(same) !== this.rustDeclaredNode(param))
       return void 0;
@@ -66461,6 +66462,15 @@ _RustTranspiler.RUST_SCALAR_ARITH_OPS = /* @__PURE__ */ new Set([
 // integer reader, and `this.sum` / two-operand `Math.min|max` over int/num operands: the native i64 / f64 result
 // equals the helper's (Int with Int stays Int, any Float operand gives Float).
 _RustTranspiler.RUST_ALWAYS_INT_CALLS = /* @__PURE__ */ new Set(["milliseconds", "seconds", "parseTimeframe"]);
+// the typed argument's own `Value` rebinding read back as the native kind the signature declared
+_RustTranspiler.RUST_PARAM_READ = {
+  oint: "as_i64()",
+  onum: "as_f64()",
+  ostr: "as_str().map(str::to_owned)",
+  str: "as_str().unwrap_or_default().to_string()",
+  int: "as_i64().unwrap_or_default()",
+  num: "as_f64().unwrap_or_default()"
+};
 /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
 _RustTranspiler.RUST_CACHE_CTORS = /* @__PURE__ */ new Set(["ArrayCache", "ArrayCacheByTimestamp", "ArrayCacheBySymbolById", "ArrayCacheBySymbolBySide", "ArrayCacheByOutcomeById"]);
 // `ts/src/base/**` — the shared `Exchange` / `PredictionExchange` classes
