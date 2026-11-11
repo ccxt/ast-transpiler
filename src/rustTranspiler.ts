@@ -3829,6 +3829,26 @@ export class RustTranspiler extends BaseTranspiler {
         return hits > 0;
     }
 
+    // A string local's final read inside a ws client call statement moves (that call is never hoisted):
+    // no later use, no other use in the statement, no loop or closure between it and the declaration.
+    rustWsClientLastUse(node, declaration): boolean {
+        let statement: any = node;
+        while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
+        const call: any = statement.kind === SyntaxKind.ExpressionStatement ? this.unwrapParens(statement.expression) : undefined;
+        if (call === undefined || !isCallExpression(call) || !this.rustWsClientCallArg(call, 'str')) return false;
+        let last = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (n !== node && (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end))) last = false;
+            return true;
+        });
+        if (!last) return false;
+        for (let up: any = node.parent; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
+    }
+
     rustScalarInNestedWrite(n): boolean {
         let current: any = n;
         while (current.parent !== undefined && !isStatement(current.parent)) current = current.parent;
@@ -3911,7 +3931,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
         // only a direct `return x` moves: ccxt hoists call arguments ahead of their statement
-        const moved = isReturnStatement(node.parent) ? name : `${name}.clone()`;
+        const moved = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration) ? name : `${name}.clone()`;
         if (local.kind === 'ostr') return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
         if (local.kind === 'str') return `Value::from(${moved})`;
         return local.kind === 'bool' ? `Value::Bool(${name})` : `Value::from(${name})`;

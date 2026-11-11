@@ -54639,6 +54639,29 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     });
     return hits > 0;
   }
+  // A string local's final read inside a ws client call statement moves (that call is never hoisted):
+  // no later use, no other use in the statement, no loop or closure between it and the declaration.
+  rustWsClientLastUse(node, declaration) {
+    let statement = node;
+    while (statement.parent !== void 0 && !_is.isStatement.call(void 0, statement))
+      statement = statement.parent;
+    const call = statement.kind === _ast.SyntaxKind.ExpressionStatement ? this.unwrapParens(statement.expression) : void 0;
+    if (call === void 0 || !_is.isCallExpression.call(void 0, call) || !this.rustWsClientCallArg(call, "str"))
+      return false;
+    let last = true;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (n !== node && (n.pos > node.pos || n.pos >= statement.pos && n.end <= statement.end))
+        last = false;
+      return true;
+    });
+    if (!last)
+      return false;
+    for (let up = node.parent; up !== void 0 && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+      if (_chunkQYYT7MP4cjs.isFunctionLike.call(void 0, up) || up.kind === _ast.SyntaxKind.ForStatement || up.kind === _ast.SyntaxKind.ForOfStatement || up.kind === _ast.SyntaxKind.ForInStatement || up.kind === _ast.SyntaxKind.WhileStatement || up.kind === _ast.SyntaxKind.DoStatement)
+        return false;
+    }
+    return true;
+  }
   rustScalarInNestedWrite(n) {
     let current = n;
     while (current.parent !== void 0 && !_is.isStatement.call(void 0, current.parent))
@@ -54729,7 +54752,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (form !== "box" && form !== "xbox")
       return void 0;
     const name = super.printIdentifier(node);
-    const moved = _is.isReturnStatement.call(void 0, node.parent) ? name : `${name}.clone()`;
+    const moved = _is.isReturnStatement.call(void 0, node.parent) || this.rustWsClientLastUse(node, local.declaration) ? name : `${name}.clone()`;
     if (local.kind === "ostr")
       return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
     if (local.kind === "str")
