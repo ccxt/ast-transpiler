@@ -51438,6 +51438,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // reads the same as the optional map `into_opt_dict` keeps (a list or scalar has no string keys), so the
     // local holds `Option<Dict>`. Null tests, any-key reads and lengths would tell the variants apart: rejected.
     this.rustNilResponseLocals = /* @__PURE__ */ new WeakSet();
+    this.rustByRefParamDecisions = /* @__PURE__ */ new WeakMap();
     // ── lent string lists ────────────────────────────────────────────────────
     // A string-list local from a never-empty `marketSymbols (.., false, ..)`, `Object.keys/values`, or `marketIds` of
     // such a list holds the shared list (`crate::value::List`, moved out of the box). Length and element reads are
@@ -53741,6 +53742,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return "&mut indexmap::IndexMap<String, Value>";
     if (this.rustParamPrintsStrVec(param))
       return "Vec<String>";
+    if (this.rustParamReadsByReference(param))
+      return "impl KeyRead";
     return "Value";
   }
   // A read of a native-`bool` parameter that still compiles: a condition slot,
@@ -63024,10 +63027,61 @@ ${iden}}`;
     const callee = call.expression;
     if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
       return false;
-    if (!_RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(String(callee.name.text)) || (call.arguments?.length ?? 0) < 2)
+    if ((call.arguments?.length ?? 0) < 2)
       return false;
+    if (!_RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(String(callee.name.text)))
+      return this.rustReaderTakesContainerByReference(call);
     const declaration = this.rustScalarCallee(call);
     return declaration !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
+  }
+  rustParamReadsByReference(param) {
+    if (param?.kind !== SyntaxKind7.Parameter)
+      return false;
+    let decision = this.rustByRefParamDecisions.get(param);
+    if (decision === void 0) {
+      this.rustByRefParamDecisions.set(param, false);
+      try {
+        decision = this.rustParamReadsByReferenceUncached(param);
+      } catch (e) {
+        decision = false;
+      }
+      this.rustByRefParamDecisions.set(param, decision);
+    }
+    return decision;
+  }
+  rustParamReadsByReferenceUncached(param) {
+    const method = param.parent;
+    if (!isMethodDeclaration5(method) || method.body === void 0 || !isIdentifier3(method.name) || method.parameters[0] !== param)
+      return false;
+    if (!isIdentifier3(param.name) || param.dotDotDotToken !== void 0 || param.initializer !== void 0 || param.questionToken !== void 0)
+      return false;
+    if ((method.modifiers ?? []).some((m) => m.kind === SyntaxKind7.StaticKeyword))
+      return false;
+    const name = String(method.name.text);
+    if (!_RustTranspiler.RUST_BY_REF_GENERATED_READERS.test(name) || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(param.getSourceFile().fileName)))
+      return false;
+    if (this.rustMethodReferencedAsValue(method) || this.rustLentOverridden(name))
+      return false;
+    let reads = 0;
+    const ok = this.rustLocalUsesAll(param, String(param.name.text), true, (n) => {
+      const call = n.parent;
+      if (!isCallExpression6(call) || call.arguments[0] !== n || !this.rustBorrowedAnyKeyReader(call))
+        return false;
+      reads++;
+      return true;
+    });
+    return ok && reads > 0;
+  }
+  /** A call to a generated base reader (any overload) whose container parameter prints `impl KeyRead`. */
+  rustReaderTakesContainerByReference(call) {
+    let declaration = this.rustScalarCallee(call);
+    if (declaration === void 0 || !isMethodDeclaration5(declaration) || !isIdentifier3(declaration.name))
+      return false;
+    if (declaration.body === void 0) {
+      const name = String(declaration.name.text);
+      declaration = (declaration.parent?.members ?? []).find((m) => isMethodDeclaration5(m) && m.body !== void 0 && isIdentifier3(m.name) && String(m.name.text) === name);
+    }
+    return declaration !== void 0 && this.rustParamReadsByReference(declaration.parameters?.[0]);
   }
   /** `'dict' | 'list' | 'api'` for a container source the local may hold by reference. */
   rustBorrowedSourceKind(call) {
@@ -67009,6 +67063,10 @@ _RustTranspiler.RUST_BORROWED_DICT_SOURCES = /* @__PURE__ */ new Set(["safeDict"
 _RustTranspiler.RUST_BORROWED_LIST_SOURCES = /* @__PURE__ */ new Set(["safeList", "safeList2", "safeListN"]);
 // Hand-written readers whose container argument takes a map or list by reference, any key.
 _RustTranspiler.RUST_BORROWED_ANY_KEY_READERS = /^safe(?:Value|String(?:Lower|Upper)?|Integer|Float|Timestamp|IntegerProduct)(?:2|N)?$/;
+// ── rustParamReadsByReference / rustReaderTakesContainerByReference: generated readers lend their container ──
+// A generated base reader whose container parameter is only handed to by-reference readers declares it
+// `impl KeyRead`: a `Value` argument still passes by value, and a dict or list local is lent as `&x`.
+_RustTranspiler.RUST_BY_REF_GENERATED_READERS = /^safe(?:Dict|List|Bool|Number)(?:2|N)?$|^safe(?:NumberOmitZero|IntegerOmitZero|LedgerEntry)$/;
 // ── rustRecordLookupSource: base record lookups (market / outcome resolvers) held as a shared map ──
 // Each returns a cached record map (or nothing); read only by key, the map form reads the same.
 _RustTranspiler.RUST_RECORD_LOOKUP_SOURCES = /* @__PURE__ */ new Set(["outcome", "safeOutcome", "loadOutcome", "getMarketFromSymbols", "safeMarket", "market"]);
