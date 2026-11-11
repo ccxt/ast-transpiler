@@ -1991,7 +1991,7 @@ export class RustTranspiler extends BaseTranspiler {
                 : `${indent}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};\n`;
             const untypedRead = (idx: number) => (nativeList ? this.printTypedVecElementRead(syntheticName, idx) : `get_value(&${syntheticName}, &Value::Int(${idx}))`);
             const lines = parsedElements.map((e, idx) => this.printRustTupleSlotLocal(declaration.name.elements[idx], e, syntheticName, idx, nativeList, indent)
-                ?? `${indent}let mut ${e}: Value = ${untypedRead(idx)}`);
+                ?? this.printRustHandedDictSlot(declaration.name.elements[idx], e, untypedRead(idx), indent) ?? `${indent}let mut ${e}: Value = ${untypedRead(idx)}`);
             return head + lines.join(';\n');
         }
         const varName = this.printNode(declaration.name, 0);
@@ -2041,6 +2041,7 @@ export class RustTranspiler extends BaseTranspiler {
             return `${indent}let mut ${varName}: indexmap::IndexMap<String, Value> = (${block})`;
         }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
+        if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
         if (boolValue !== undefined) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -6055,6 +6056,7 @@ export class RustTranspiler extends BaseTranspiler {
     printCallExpression(node, identation) {
         const expression = node.expression;
         const borrowedRead = this.printBorrowedDictRead(node, identation); if (borrowedRead !== undefined) return borrowedRead;
+        const handed = this.printHandedDictExtend(node, identation); if (handed !== undefined) return handed;
         const scalarMethod = this.printRustScalarMethodCall(node); if (scalarMethod !== undefined) return scalarMethod;
         const marketRead = this.printTypedMarketRead(node);
         if (marketRead !== undefined) return marketRead;
@@ -10211,13 +10213,120 @@ export class RustTranspiler extends BaseTranspiler {
         const recv: any = rust === undefined ? undefined : node.arguments[0];
         if (recv === undefined || !isIdentifier(recv)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(recv);
-        const owned = declaration !== undefined && declaration !== recv && this.rustBorrowedDictLocal(declaration);
+        const owned = declaration !== undefined && declaration !== recv && (this.rustBorrowedDictLocal(declaration) || this.rustHandedDictLocal(declaration));
         if (!owned && !(this.rustContainerBoxUses.get(recv) !== undefined && this.rustReadBearerKind(recv) !== undefined)) return undefined;
         const key: any = this.rustSkipWrappers(node.arguments[1]);
         const dflt = node.arguments.length === 3 ? this.printNode(node.arguments[2], identation).trim() : '';
         const text = String(recv.text);
         const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[text] ?? text);
         return `self.${rust}(&${name}, ${this.quotedStringLiteral(String(key.text))}, &[${dflt}])`;
+    }
+
+    // ── handed-on dict locals ────────────────────────────────────────────────
+    // An `extend`/`omit`/`indexBy` result or the params slot of a `handle*AndParams` destructure that is only read,
+    // given to `omit`, or lent as the sole extra operand of `extend`/`deepExtend` holds the shared map.
+
+    private static readonly RUST_HANDED_DICT_SOURCES = new Set([ 'extend', 'omit', 'indexBy', 'groupBy' ]);
+
+    private rustHandedDictDecisions = new WeakMap<any, boolean>();
+
+    rustHandedDictLocal(declaration: any): boolean {
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration && declaration?.kind !== SyntaxKind.BindingElement) return false;
+        let decision = this.rustHandedDictDecisions.get(declaration);
+        if (decision === undefined) {
+            this.rustHandedDictDecisions.set(declaration, false); // re-entrancy guard
+            try {
+                decision = this.rustHandedDictLocalUncached(declaration);
+            } catch (e) {
+                decision = false;
+            }
+            this.rustHandedDictDecisions.set(declaration, decision);
+        }
+        return decision;
+    }
+
+    /** `this.m (..)` resolved to the base tier, `m` in `names`. */
+    rustBaseCallNamed(call: any, names: Set<string>): boolean {
+        const callee: any = call?.expression;
+        return isCallExpression(call) && isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword
+            && names.has(String(callee.name.text)) && this.rustCalleeIsRuntimeBase(call);
+    }
+
+    rustHandedDictLocalUncached(declaration: any): boolean {
+        if (declaration.name?.kind !== SyntaxKind.Identifier) return false;
+        const source: any = declaration.getSourceFile?.()?.fileName;
+        if (typeof source === 'string' && /[\\/]test[\\/]/.test(source)) return false;
+        if (declaration.kind === SyntaxKind.BindingElement) {
+            const pattern: any = declaration.parent;
+            const owner: any = pattern?.parent;
+            if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || !isVariableDeclaration(owner) || owner.name !== pattern
+                || (owner.parent as any)?.declarations?.length !== 1 || pattern.elements.indexOf(declaration) !== 1) return false;
+            if (declaration.dotDotDotToken !== undefined || declaration.initializer !== undefined || this.rustTupleSlotKind(declaration) !== undefined) return false;
+            const init: any = this.rustSkipWrappers(owner.initializer);
+            const callee: any = init?.expression;
+            if (!isCallExpression(init) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
+                || !/^handle\w*AndParams\d*$/.test(String(callee.name.text))) return false;
+        } else {
+            const list: any = declaration.parent;
+            if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1) return false;
+            let init: any = this.rustSkipWrappers(declaration.initializer);
+            if (init?.kind === SyntaxKind.AwaitExpression) init = this.rustSkipWrappers(init.expression);
+            if (!this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_SOURCES) || this.rustBorrowedDictLocal(declaration)) return false;
+            if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration)
+                || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false
+                || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
+            // The typed declaration line must stay within the 400-char line budget.
+            if (String(declaration.initializer.getText()).split('\n')[0].length > 240) return false;
+        }
+        const name = String(declaration.name.text);
+        const fn: any = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || isSourceFile(fn) || this.rustLocalIsReassigned(declaration, name)) return false;
+        let uses = 0;
+        const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
+            if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
+            if (this.rustDeclaredNode(n) !== declaration || this.rustEnclosingFunction(n) !== fn) return false;
+            const call: any = n.parent;
+            if (!isCallExpression(call)) return false;
+            const ok = (call.arguments[0] === n && this.rustBorrowedDictReader(call) !== undefined)
+                || (call.arguments[0] === n && call.arguments.length === 2 && this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_OMIT))
+                || this.rustHandedDictExtendOperand(call) === n;
+            if (ok) uses++;
+            return ok;
+        });
+        return safe && uses > 0;
+    }
+
+    private static readonly RUST_HANDED_DICT_OMIT = new Set([ 'omit' ]);
+    private static readonly RUST_HANDED_DICT_EXTEND = new Set([ 'extend', 'deepExtend' ]);
+
+    /** The sole extra operand of a base `this.extend (a, x)` / `this.deepExtend (a, x)` when it is a bare identifier. */
+    rustHandedDictExtendOperand(call: any): any {
+        if (call.arguments?.length !== 2 || !isIdentifier(call.arguments[1]) || isIdentifier(call.arguments[0]) && call.arguments[0].text === call.arguments[1].text) return undefined;
+        return this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_EXTEND) ? call.arguments[1] : undefined;
+    }
+
+    /** `self.extend(a, &[&x])` / `self.omit(&x, keys, &[])` lending a handed dict local. */
+    printHandedDictExtend(node: any, identation: number): string | undefined {
+        if (!isCallExpression(node)) return undefined;
+        const lent = (n: any) => {
+            const text = String(n.text);
+            return '&' + super.transformIdentifier(n, this.ReservedKeywordsReplacements[text] ?? text);
+        };
+        const first: any = node.arguments[0];
+        if (node.arguments.length === 2 && isIdentifier(first) && this.rustBaseCallNamed(node, RustTranspiler.RUST_HANDED_DICT_OMIT)
+            && this.rustHandedDictLocal(this.rustDeclarationOfIdentifier(first))) {
+            return `self.omit(${lent(first)}, ${this.printNode(node.arguments[1], identation).trim()}, &[])`;
+        }
+        const operand: any = this.rustHandedDictExtendOperand(node);
+        if (operand === undefined || !this.rustHandedDictLocal(this.rustDeclarationOfIdentifier(operand))) return undefined;
+        const head = this.printNode(first, identation).trim();
+        const method = this.toSnakeCaseName(String((node.expression as any).name.text));
+        return `self.${method}(${RustTranspiler.cloneIfBareLocal(head)}, &[${lent(operand)}])`;
+    }
+
+    /** `let mut x: crate::value::Dict = <slot read>.into_dict()` for a handed params slot. */
+    printRustHandedDictSlot(element: any, printedName: string, read: string, indent: string): string | undefined {
+        return this.rustHandedDictLocal(element) ? `${indent}let mut ${printedName}: crate::value::Dict = ${read}.into_dict()` : undefined;
     }
 
     /** One element read rooted at the bearer: a plain read the native op serves. */
