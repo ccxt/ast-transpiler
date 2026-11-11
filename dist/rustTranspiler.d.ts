@@ -996,6 +996,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     printOptionalParamsArg(node: any, text: string): string | undefined;
     /** `let mut a: Option<String> | bool = <temp>.get(i)..` for a typed tuple slot, else undefined. */
     printRustTupleSlotLocal(element: any, printedName: string, temp: string, index: number, nativeList: boolean, indent: string): string | undefined;
+    private rustExactSlotDecisions;
+    private static readonly RUST_EXACT_INT_PRODUCERS;
+    private static readonly RUST_EXACT_BOOL_PRODUCERS;
+    rustExactSlotKind(element: any): string | undefined;
+    private rustExactSlotKindUncached;
+    /** The callee builds slot `at` from an exact Int-or-null (`int`) / Bool-or-null (`bool`) producer on every return. */
+    rustExactSlotCallee(init: any, at: number, want: string): boolean;
+    /** An expression that is exactly Int-or-null / Bool-or-null in the `Value` form. */
+    rustExactScalarExpr(expr: any, want: string, method: any, depth: number): boolean;
+    /** `let mut a: Option<i64> | Option<bool> | Option<f64> = <temp>.get(i)..` for an exact slot, else undefined. */
+    printExactSlotLocal(element: any, printedName: string, temp: string, index: number, indent: string): string | undefined;
     /** Native read for one chain level, or undefined to keep `get_value`. */
     printNativeBookFieldRead(receiverText: string, receiverNode: Node, keyText: string, viaStore?: boolean): string | undefined;
     printNativeContainerAccess(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;

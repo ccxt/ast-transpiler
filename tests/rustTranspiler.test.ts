@@ -7832,6 +7832,47 @@ describe('rust tuple slots typed from the declared tuple', () => {
     });
 });
 
+describe('rust integer and boolean tuple slots typed from the callee', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Bool = boolean | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n" +
+            "    safeInteger2 (o: any, a: string, b: string, d: Int = undefined): Int { return o[a]; }\n" +
+            "    safeBool (o: any, k: string, d: Bool = undefined): Bool { return o[k]; }\n" +
+            "    omit (o: any, k: any): Dict { return o; }\n" +
+            "    checkOptionBool (m: Str, n: string, value: any): Bool { return value; }\n" +
+            "    checkOptionInteger (m: Str, n: string, value: any): Int { return value; }\n" +
+            "    handleOptionAndParams (params: Dict, m: Str, n: string, d: any = undefined): [any, Dict] { return [ d, params ]; }\n" +
+            "    handleOptionBoolAndParams (params: Dict, m: Str, n: string, d: Bool = undefined): [Bool, Dict] {\n        const [ value, rest ] = this.handleOptionAndParams (params, m, n, d);\n        return [ this.checkOptionBool (m, n, value), rest ];\n    }\n" +
+            "    handleOptionIntegerAndParams (params: Dict, m: Str, n: string, d: Int = undefined): [Int, Dict] {\n        const [ value, rest ] = this.handleOptionAndParams (params, m, n, d);\n        return [ this.checkOptionInteger (m, n, value), rest ];\n    }\n" +
+            "    handleParamInteger2 (params: Dict, a: string, b: string, d: Int = undefined): [Int, Dict] {\n        const value = this.safeInteger2 (params, a, b, d);\n        let rest = params;\n        if (value !== undefined) {\n            rest = this.omit (params, [ a, b ]);\n        }\n        return [ value, rest ];\n    }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    fetchThing (params: Dict = {}) {\n        const request: Dict = {};\n        const [ hedged, paramsHedged ] = this.handleOptionBoolAndParams (params, 'fetchThing', 'hedged');\n        if (hedged === true) {\n            request['hedged'] = hedged;\n        }\n        const [ until, paramsUntil ] = this.handleParamInteger2 (paramsHedged, 'until', 'till');\n        if (until !== undefined) {\n            request['endTime'] = until;\n        }\n        const [ generation, rest ] = this.handleOptionIntegerAndParams (paramsUntil, 'fetchThing', 'generation', 2);\n        if (generation === 2) {\n            return request;\n        }\n        return rest;\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-exact-slots-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a checked boolean option slot is Option<bool> with a native test and a boxed write', () => {
+        expect(out).toContain('let mut hedged: Option<bool> = ');
+        expect(out).toContain('hedged == Some(true)');
+        expect(out).toContain('hedged.map_or(Value::Null, Value::Bool)');
+    });
+    test('an integer reader slot is Option<i64> with a native null test', () => {
+        expect(out).toContain('let mut until: Option<i64> = ');
+        expect(out).toContain('until.is_some()');
+        expect(out).toContain('Value::from(until)');
+    });
+    test('a pass-through integer option slot keeps the numeric literal compare', () => {
+        expect(out).toContain('let mut generation: Option<f64> = ');
+        expect(out).toContain('generation == Some(2.0)');
+    });
+});
+
 describe('rust string locals read by string methods', () => {
     const files: Record<string, string> = {
         'ts/src/base/Exchange.ts': 'export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeList (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n',
