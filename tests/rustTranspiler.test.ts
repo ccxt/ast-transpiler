@@ -78,6 +78,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
     "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] { return o; }\n    hold (x: any): any { return x; }\n}\n",
     "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, key: string) {\n        const data = this.safeDict (resp, 'data');\n        const id = this.safeString (data, key);\n        const n = this.safeInteger (data, 'n', 1);\n        const rows = this.safeList (resp, 'rows');\n        const r0 = this.safeString (rows, key);\n        const lst = this.safeList (resp, 'lst');\n        const l0 = this.safeValue (lst, 0);\n        const l1 = this.safeString2 (lst, 1, 2);\n        const vs = this.safeList (resp, 'vs', []);\n        const v0 = this.safeString (vs, key);\n        const v1 = vs[1];\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            out.push (this.safeString (rows, i));\n        }\n        const first = this.safeValue (rows, 0);\n        const kept = this.safeList (resp, 'kept');\n        const k = this.safeDict (kept, 0);\n        return this.hold ([ id, n, out, first, k, kept, v0, v1, r0, l0, l1 ]);\n    }\n}\n"
   },
+ "optional-string-list": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport default class Exchange {\n    marketSymbols (symbols: Strings, type: Str | undefined, allowEmpty: false, sameTypeOnly?: boolean, sameSubTypeOnly?: boolean): string[];\n    marketSymbols (symbols?: Strings, type?: Str, allowEmpty?: boolean, sameTypeOnly?: boolean, sameSubTypeOnly?: boolean): Strings;\n    marketSymbols (symbols: Strings = undefined, type: Str = undefined, allowEmpty = true, sameTypeOnly = false, sameSubTypeOnly = false): Strings {\n        return symbols;\n    }\n    safeList (d: any, k: any, dflt: any[] = undefined): any[] | undefined {\n        return d[k];\n    }\n    market (symbol: string): Dict {\n        return {};\n    }\n    safeString (d: any, k: any, dflt: Str = undefined): Str {\n        return d[k];\n    }\n    parseTickers (rows: any, symbols: Strings = undefined) {\n        return rows;\n    }\n    sign (path: string, api: string[] = [ 'public' ], method = 'GET') {\n        return path;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Strings } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    tickers (symbols: Strings, rows: any) {\n        const normalized = this.marketSymbols (symbols);\n        if (normalized !== undefined) {\n            for (let i = 0; i < normalized.length; i++) {\n                this.market (normalized[i]);\n            }\n        }\n        const first = this.safeString (normalized, 0);\n        return this.parseTickers (rows, normalized);\n    }\n    entries (response: any) {\n        const data = this.safeList (response, 'data');\n        if (Array.isArray (data)) {\n            return data.length;\n        }\n        return 0;\n    }\n    handedOn (symbols: Strings, rows: any) {\n        const passed = this.marketSymbols (symbols);\n        return this.parseTickers (rows, passed);\n    }\n    override sign (path: string, api: string[] = [ 'public' ], method = 'GET') {\n        const access = api[0];\n        if (access === 'private') {\n            return path + '/p';\n        }\n        return path;\n    }\n}\n"
+ },
  "lent-string-list": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport default class Exchange {\n    marketSymbols (symbols: Strings, type: Str | undefined, allowEmpty: false, sameTypeOnly?: boolean, sameSubTypeOnly?: boolean): string[];\n    marketSymbols (symbols?: Strings, type?: Str, allowEmpty?: boolean, sameTypeOnly?: boolean, sameSubTypeOnly?: boolean): Strings;\n    marketSymbols (symbols: Strings = undefined, type: Str = undefined, allowEmpty = true, sameTypeOnly = false, sameSubTypeOnly = false): Strings {\n        return symbols;\n    }\n    marketIds (symbols: string[]): string[];\n    marketIds (symbols?: Strings): Strings;\n    marketIds (symbols: Strings = undefined): Strings {\n        return symbols;\n    }\n    market (symbol: string): Dict {\n        return {};\n    }\n    safeString (d: any, k: any, dflt: Str = undefined): Str {\n        return d[k];\n    }\n    filterByArray (objects: any, key: string, values: any = undefined, indexed = true) {\n        return objects;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Strings } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    pick (symbols: Strings, rows: any) {\n        const normalized = this.marketSymbols (symbols, undefined, false);\n        const market = this.market (normalized[0]);\n        const ids = this.marketIds (normalized);\n        const n = ids.length;\n        const out = this.filterByArray (rows, 'symbol', normalized, false);\n        return [ market, n, out ];\n    }\n    keysOf (d: Dict) {\n        const keys = Object.keys (d);\n        let found = false;\n        for (let i = 0; i < keys.length; i++) {\n            if (Array.isArray (d[keys[i]])) {\n                found = true;\n            }\n        }\n        return found;\n    }\n    wide (symbols: Strings) {\n        const listed: Strings = this.marketSymbols (symbols, undefined, false, true);\n        for (let i = 0; i < (listed as string[]).length; i++) {\n            this.market (this.safeString (listed, i));\n        }\n        return (listed as string[])[0];\n    }\n    keep (symbols: Strings) {\n        const maybe = this.marketSymbols (symbols);\n        return this.filterByArray ([], 'symbol', maybe);\n    }\n}\n"
@@ -5802,14 +5806,15 @@ ${body}
         expect(out).not.toContain('Option<String>');
     });
 
-    test('a null compare keeps the Value', () => {
+    test('a null compare of the element tests the option', () => {
         const out = sign("        const apiName = api[0];\n        if (apiName === 'a' || apiName !== undefined) { return 1; }\n        return 0;");
-        expect(out).toContain('let mut apiName: Value = ');
+        expect(out).toContain('let mut apiName: Option<String> = api.get(0).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('(apiName.is_some())');
     });
 
-    test('a method that is not sign/fetch2/request keeps the Value', () => {
+    test('any string-list parameter read through its slice gives an optional string element', () => {
         const out = sign("        const apiName = api[0];\n        if (apiName === 'private') { return 1; }\n        return 0;", 'other');
-        expect(out).not.toContain('Option<String>');
+        expect(out).toContain('let mut apiName: Option<String> = api.get(0).and_then(Value::as_str).map(str::to_owned);');
     });
 });
 
@@ -7198,5 +7203,30 @@ describe('rust ws client handle', () => {
     test('a field read after a write of that field keeps the live lookup', () => {
         expect(out).toContain('let mut __ch = crate::pro::ws_client::ClientHandle::from_value(client.clone());');
         expect(out).toContain('let mut left: Value = client.subscriptions;');
+    });
+});
+
+describe('rust optional list locals', () => {
+    test('a list that may be undefined holds the optional shared list and reads through its slice', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'optional-string-list', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut normalized: Option<crate::value::List> = ');
+        expect(out).toContain('.into_opt_list()');
+        expect(out).toContain('if (normalized.is_some()) {');
+        expect(out).toContain('normalized.as_deref().map(Vec::as_slice).unwrap_or_default().get(i as usize)');
+        expect(out).toContain('self.safeString(&normalized, ');
+        expect(out).toContain('self.parseTickers(rows, normalized.clone().map_or(Value::Null, Value::Arr))');
+        expect(out).toContain('let mut data: Option<crate::value::List> = ');
+        expect(out).toContain('if (data.is_some()) {');
+        expect(out).toContain('data.as_deref().map(Vec::as_slice).unwrap_or_default().len() as i64');
+    });
+
+    test('an element of a list parameter read as a string is an optional string', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'optional-string-list', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut access: Option<String> = api.get(0).and_then(Value::as_str).map(str::to_owned);');
+    });
+
+    test('negative: a list that is only handed on keeps its box', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'optional-string-list', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut passed: Value = ');
     });
 });

@@ -1436,6 +1436,33 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentListUse(node: any): boolean;
     /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
     printRustLentListBox(node: any, text: string): string | undefined;
+    private static readonly RUST_OPT_LIST_SOURCES;
+    private rustOptListDecisions;
+    private rustOptListBoxes;
+    rustOptListLocal(declaration: any): boolean;
+    /** A base-tier list source that may return `undefined` (a `safeList*` default must be absent or nullish). */
+    rustOptListSource(node: any): boolean;
+    rustOptListLocalUncached(declaration: any): boolean;
+    /** `xs[N]` on a `string[]` parameter the body re-binds as its slice (`xs.get(N)`). */
+    rustOptListParamRead(node: any): boolean;
+    rustOptListParamInit(init: any): boolean;
+    /** `Array.isArray`. */
+    rustIsArrayIsArrayCallee(call: any): boolean;
+    /** The optional list local an identifier reads (never its own declaration name). */
+    rustOptListOf(node: any): any;
+    rustOptListName(node: any): string;
+    /** The slice an optional list reads through (empty for `None`). */
+    rustOptListSlice(node: any): string;
+    printOptListDeclaration(declaration: any, varName: string, indent: string): string | undefined;
+    printOptListWrite(left: any, right: any): string | undefined;
+    printOptListNullTest(left: any, right: any, op: any): string | undefined;
+    printOptListIsArray(node: any): string | undefined;
+    printOptListLength(node: any): string | undefined;
+    printOptListElement(receiverNode: any, keyNode: any): string | undefined;
+    /** `i < x.length` over an optional list: the slice the `i64` counter is bounded by (the condition printed as that read). */
+    rustOptListCounterBound(node: any, counter: string, condStr: string): string | undefined;
+    /** `&x` at an any-key reader, the shared handle at a `Value` slot, a move at `return x`. */
+    printOptListIdentifier(node: any, text: string): string | undefined;
     private static readonly RUST_HANDED_DICT_SOURCES;
     private rustHandedDictDecisions;
     rustHandedDictLocal(declaration: any): boolean;
