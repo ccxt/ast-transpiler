@@ -10952,7 +10952,16 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustScalarCallee(call);
         const file = String(declaration?.getSourceFile?.()?.fileName ?? '');
         if (/ts[\\/]src[\\/]abstract[\\/]/.test(file)) return declaration.kind === SyntaxKind.MethodDeclaration;
-        return RustTranspiler.RUST_BORROWED_DICT_SOURCES.has(String(callee.name.text)) && RustTranspiler.RUST_BASE_TIER_FILE.test(file);
+        return (RustTranspiler.RUST_BORROWED_DICT_SOURCES.has(String(callee.name.text)) || this.rustRecordLookupSource(call)) && RustTranspiler.RUST_BASE_TIER_FILE.test(file);
+    }
+
+    // ── rustRecordLookupSource: base record lookups (market / outcome resolvers) held as a shared map ──
+    // Each returns a cached record map (or nothing); read only by key, the map form reads the same.
+    private static readonly RUST_RECORD_LOOKUP_SOURCES = new Set([ 'outcome', 'safeOutcome', 'loadOutcome', 'getMarketFromSymbols' ]);
+
+    rustRecordLookupSource(call: any): boolean {
+        const callee: any = call.expression;
+        return isPropertyAccessExpression(callee) && RustTranspiler.RUST_RECORD_LOOKUP_SOURCES.has(String(callee.name.text));
     }
 
     /** Rust `_k` reader name of a base `this.safeX(obj, 'literal'[, default])` call, else undefined. */
