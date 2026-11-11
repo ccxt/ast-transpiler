@@ -53403,9 +53403,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return n.parent?.kind !== SyntaxKind7.ShorthandPropertyAssignment;
       if (this.rustEnclosingFunction(n) !== scope)
         return false;
-      if (kind === "ostr" && isBinaryExpression5(n.parent) && n.parent.operatorToken.kind === SyntaxKind7.PlusToken)
+      if (kind === "ostr" && isBinaryExpression5(n.parent) && n.parent.operatorToken.kind === SyntaxKind7.PlusToken && !this.rustNilOptStrConcatUse(n))
         return false;
-      const form = this.rustNilSlotWrite(n) ? "slot" : this.rustScalarUseForm(n, kind);
+      const optConcat = kind === "ostr" && this.rustNilOptStrConcatUse(n);
+      const form = this.rustNilSlotWrite(n) ? "slot" : optConcat ? "concat" : this.rustScalarUseForm(n, kind);
       this.rustScalarUseForms.set(n, form);
       if (form === "box" || form === "xbox" || form === "err")
         boxed.push(n);
@@ -53418,6 +53419,24 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (boxed.length > 0)
       this.rustScalarGuarded.add(declaration);
     return kind;
+  }
+  // An optional string joins a `format!` concat whose other operand is always a string: the
+  // operand prints as `as_deref().unwrap_or("null")`, the text `Display` gives the boxed form.
+  rustNilOptStrConcatUse(n) {
+    const parent = n.parent;
+    if (!isBinaryExpression5(parent) || parent.operatorToken.kind !== SyntaxKind7.PlusToken)
+      return false;
+    const other = parent.left === n ? parent.right : parent.left;
+    if (!this.alwaysStr(other) || this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== "string")
+      return false;
+    if (!this.isNativeStringConcatPair(this.typeOfNodeIfAny(parent.left), this.typeOfNodeIfAny(parent.right)))
+      return false;
+    const statement = findAncestor(parent, (a) => isStatement(a));
+    if (statement === void 0 || isBlock4(statement))
+      return false;
+    const column = statement.getStart() - String(statement.getSourceFile().text).lastIndexOf("\n", statement.getStart()) - 1;
+    const longest = Math.max(...this.printNode(statement, 0).split("\n").map((l) => l.trim().length));
+    return column + longest + '.as_deref().unwrap_or("null")'.length <= 400;
   }
   /** A write that decodes a `Value` result (a call, or a ternary over one). */
   rustNilDecodedWrite(rhs) {
@@ -55914,6 +55933,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       return `${super.printIdentifier(node)}${this.rustLocalLastUse(node, local.declaration) ? "" : ".clone()"}.map(Value::from).unwrap_or(Value::Null)`;
     if (form === "cond" && local.kind === "obool")
       return `(${super.printIdentifier(node)} == Some(true))`;
+    if (form === "concat" && local.kind === "ostr")
+      return `${super.printIdentifier(node)}.as_deref().unwrap_or("null")`;
     if (form === "targ" && (local.kind === "str" || local.kind === "ostr") && this.rustWsKeyUse(node))
       return this.rustWsKeyText(node);
     if (form === "cond" || form === "concat" || form === "native" || form === "targ" || form === "key" || form === "okey" || form === "fin" || form === "frd" || form === "kin")
