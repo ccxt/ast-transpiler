@@ -51413,6 +51413,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustBorrowedDictDecisions = /* @__PURE__ */ new WeakMap();
     this.rustBorrowedKinds = /* @__PURE__ */ new WeakMap();
     this.rustOptContainerLocals = /* @__PURE__ */ new WeakSet();
+    // ── empty-declared endpoint responses (`let response = undefined; response = await this.<endpoint> (..)`) ──
+    // An endpoint may answer a list, a map or a scalar. Read only through literal-key readers, every variant
+    // reads the same as the optional map `into_opt_dict` keeps (a list or scalar has no string keys), so the
+    // local holds `Option<Dict>`. Null tests, any-key reads and lengths would tell the variants apart: rejected.
+    this.rustNilResponseLocals = /* @__PURE__ */ new WeakSet();
     // ── lent string lists ────────────────────────────────────────────────────
     // A string-list local from a never-empty `marketSymbols (.., false, ..)`, `Object.keys/values`, or `marketIds` of
     // such a list holds the shared list (`crate::value::List`, moved out of the box). Length and element reads are
@@ -53087,6 +53092,16 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       if (this.rustEnclosingFunction(n) !== scope)
         return false;
       const parent = n.parent;
+      if (this.rustNilSlotWrite(n)) {
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== "boolean")
+          return false;
+        const statement = parent.parent;
+        const column = statement.getStart() - String(statement.getSourceFile().text).lastIndexOf("\n", statement.getStart()) - 1;
+        if (column + this.printNode(statement, 0).trim().length + ".as_bool()".length > 400)
+          return false;
+        writes++;
+        return join3("bool");
+      }
       if (isBinaryExpression5(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind7.EqualsToken) {
         if (parent.parent?.kind !== SyntaxKind7.ExpressionStatement)
           return false;
@@ -53105,6 +53120,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return n.parent?.kind !== SyntaxKind7.ShorthandPropertyAssignment;
       const parent = n.parent;
       if (isBinaryExpression5(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind7.EqualsToken)
+        return true;
+      if (this.rustNilSlotWrite(n))
         return true;
       return this.rustNilReadForm(n, kind) !== void 0;
     });
@@ -53342,6 +53359,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   }
   /** Slot hook: an `Option<String>` local takes the slot's string. */
   printRustNilSlotWrite(element, read) {
+    if (isIdentifier3(element) && this.rustNilLocalOfIdentifier(element)?.kind === "bool")
+      return `${super.printIdentifier(element)} = ${read}.as_bool()`;
     if (!isIdentifier3(element) || this.rustScalarLocalOf(element)?.kind !== "ostr" || this.rustScalarUseForms.get(element) !== "slot")
       return void 0;
     return `${super.printIdentifier(element)} = ${read}.as_str().map(str::to_owned)`;
@@ -61157,7 +61176,7 @@ ${iden}}`;
     if (init?.kind === SyntaxKind7.AwaitExpression)
       init = this.rustSkipWrappers(init.expression);
     const nilDeclared = (init === void 0 || this.literalKindOfNode(init) === "null") && (list.flags & NodeFlags4.Const) === 0 && list.parent?.kind === SyntaxKind7.VariableStatement;
-    let from = isCallExpression6(init) ? this.rustBorrowedSourceKind(init) : void 0;
+    let from = init !== void 0 && isCallExpression6(init) ? this.rustBorrowedSourceKind(init) : void 0;
     if (from === void 0 && !nilDeclared)
       return void 0;
     const name = String(declaration.name.text);
@@ -61172,6 +61191,7 @@ ${iden}}`;
     let nullTests = 0;
     let writes = 0;
     let lengths = 0;
+    let indexLikeReads = 0;
     let mixed = false;
     const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
       if (this.rustIdentifierIsPropertyName(n))
@@ -61192,8 +61212,8 @@ ${iden}}`;
         writes++;
         if (this.literalKindOfNode(rhs) === "null")
           return true;
-        const kind = isCallExpression6(rhs) ? this.rustBorrowedSourceKind(rhs) : void 0;
-        if (kind === void 0 || kind === "api" || !this.rustOptContainerSourceOk(rhs, kind))
+        const kind = this.rustNilResponseWriteKind(rhs, nilDeclared, declaration);
+        if (kind === void 0 || kind === "api" || !this.rustOptContainerSourceOk(rhs, kind) && !this.rustNilResponseLocals.has(declaration))
           return false;
         if (from !== void 0 && from !== kind)
           mixed = true;
@@ -61207,12 +61227,15 @@ ${iden}}`;
       }
       if (!isCallExpression6(up) || up.arguments[0] !== n)
         return false;
-      if (this.rustBorrowedDictReader(up) === void 0 && !(from !== "api" && this.rustBorrowedAnyKeyReader(up)))
+      const literalKey = this.rustBorrowedDictReader(up) !== void 0;
+      if (!literalKey && !(from !== "api" && this.rustBorrowedAnyKeyReader(up)))
         return false;
+      if (!literalKey || /^\d+$/.test(String(this.rustSkipWrappers(up.arguments[1]).text)))
+        indexLikeReads++;
       reads++;
       return true;
     });
-    if (!safe || reads === 0 || mixed || from === void 0)
+    if (!safe || reads === 0 || mixed || from === void 0 || this.rustNilResponseLocals.has(declaration) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
       return void 0;
     const optional = nilDeclared || nullTests > 0 || writes > 0;
     if (lengths > 0 && (from !== "list" || optional))
@@ -61223,6 +61246,17 @@ ${iden}}`;
       this.rustOptContainerLocals.add(declaration);
     }
     return from === "list" ? "list" : "dict";
+  }
+  /** The container kind of a write to a borrowed local; an endpoint write to an empty `let` counts as a map. */
+  rustNilResponseWriteKind(rhs, nilDeclared, declaration) {
+    let call = rhs;
+    if (call?.kind === SyntaxKind7.AwaitExpression)
+      call = this.rustSkipWrappers(call.expression);
+    const kind = isCallExpression6(call) ? this.rustBorrowedSourceKind(call) : void 0;
+    if (kind !== "api" || !nilDeclared)
+      return kind;
+    this.rustNilResponseLocals.add(declaration);
+    return "dict";
   }
   /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
   rustOptContainerSourceOk(call, kind) {
