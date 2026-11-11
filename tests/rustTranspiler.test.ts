@@ -50,7 +50,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
  },
  "scalar-locals": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeTimestamp (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    safeBool (o: any, k: any, d: boolean): boolean { return o; }\n    parseNumber (x: any, d: any = undefined): any { return x; }\n    milliseconds (): number { return 1; }\n}\n",
-  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict) {\n        const id = this.safeString (resp, 'id');\n        const ts = this.safeInteger (resp, 'ts');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const price = this.safeNumber (resp, 'price');\n        const flag = this.safeBool (resp, 'flag', false);\n        const side = this.safeString (resp, 'side', 'buy');\n        let spot = true;\n        let name = 'abc';\n        let page = 1;\n        const fee = 0.25;\n        const req: Dict = {};\n        if (id === undefined) {\n            return undefined;\n        }\n        if (flag) {\n            req['f'] = 1;\n        }\n        if (name === 'x') {\n            name = 'y';\n            page = 2;\n            spot = false;\n        }\n        req['id'] = id;\n        req['ts'] = ts;\n        req['lim'] = lim;\n        req['p'] = price;\n        req['spot'] = spot;\n        req['side'] = side;\n        req['page'] = page;\n        req['fee'] = fee;\n        const kept = this.safeString (resp, 'kept');\n        const len = kept.length;\n        const other2 = kept.split ('-');\n        return [ req, name, len, other2 ];\n    }\n}\n"
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict) {\n        const id = this.safeString (resp, 'id');\n        const ts = this.safeInteger (resp, 'ts');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const price = this.safeNumber (resp, 'price');\n        const flag = this.safeBool (resp, 'flag', false);\n        const side = this.safeString (resp, 'side', 'buy');\n        let spot = true;\n        let name = 'abc';\n        let page = 1;\n        const fee = 0.25;\n        const req: Dict = {};\n        if (id === undefined) {\n            return undefined;\n        }\n        if (flag) {\n            req['f'] = 1;\n        }\n        if (name === 'x') {\n            name = 'y';\n            page = 2;\n            spot = false;\n        }\n        req['id'] = id;\n        req['ts'] = ts;\n        req['lim'] = lim;\n        req['p'] = price;\n        req['spot'] = spot;\n        req['side'] = side;\n        req['page'] = page;\n        req['fee'] = fee;\n        const kept = this.safeString (resp, 'kept');\n        const len = kept.length;\n        const other2 = kept.padStart (8, '0');\n        return [ req, name, len, other2 ];\n    }\n}\n"
  },
  "scalar-order": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n}\n",
@@ -4916,7 +4916,7 @@ describe('string helpers and anchored concat', () => {
         expect(o).toContain('h.as_str().map(|__s| Value::Str(__s.trim().to_string().into())).unwrap_or(Value::Null)');
         expect(o).toContain('code.as_str().zip(s.as_str()).is_some_and(|(__s, __p)| __s.starts_with(__p))');
         expect(o).toContain('code.as_str().zip(h.as_str()).is_some_and(|(__s, __p)| __s.ends_with(__p))');
-        expect(o).toContain('qs = qs.as_str().map(|__s| Value::Str(__s.replace("%2C", ",").into())).unwrap_or_else(|| qs.clone());');
+        expect(o).toContain('qs = qs.replace("%2C", ",");');
         expect(o).toContain('match (code.as_str(), s.as_str(), h.as_str()) { (Some(__s), Some(__p), Some(__r)) => Value::Str(__s.replace(__p, __r).into()), _ => code.clone() }');
     });
     test('concat anchored on an always-Str side goes native for any non-Precise box', () => {
@@ -7720,5 +7720,40 @@ describe('rust lookup tables and always-list producers', () => {
     });
     test('negative: a table also handed to another method keeps its box', () => {
         expect(out).toContain('let mut kept: Value = ');
+    });
+});
+
+describe('rust string locals read by string methods', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeList (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n',
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    parseTopic (message: any) {\n        const topic = this.safeString (message, 'topic', '');\n        const parts = topic.split ('.');\n        if (topic.indexOf ('book') === 0) {\n            return parts;\n        }\n        return [];\n    }\n" +
+            "    parseId (message: any) {\n        const id = this.safeString (message, 'id');\n        const clean = id.replace ('-', '');\n        const pieces = id.split ('_');\n        return [ clean, pieces ];\n    }\n" +
+            "    buildPath (message: any) {\n        let url = '/api';\n        url += this.safeString (message, 'path', '');\n        return url;\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-strm-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a split / indexOf receiver is a String with closure-free std forms', () => {
+        expect(out).toContain('let mut topic: String = ');
+        expect(out).toContain('Value::Array(topic.split(".").map(Value::from).collect())');
+        expect(out).toContain('if let Some(__i) = __h.find(__n) { __i as i64 } else { -1 }');
+        expect(out).not.toContain('|__s|');
+    });
+    test('an optional receiver of replace / split stays optional without a closure', () => {
+        expect(out).toContain('let mut id: Option<String> = ');
+        expect(out).toContain('if let Some(__s) = id.as_deref() { Some(__s.replace("-", "")) } else { None }');
+        expect(out).toContain('if let Some(__s) = id.as_deref() { __s.split("_").map(Value::from).collect() } else { Vec::new() }');
+    });
+    test('a string append of a string-typed value is a push_str', () => {
+        expect(out).toContain('let mut url: String = ');
+        expect(out).toContain('url.push_str(&');
     });
 });

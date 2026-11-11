@@ -603,6 +603,16 @@ export declare class RustTranspiler extends BaseTranspiler {
         method: string;
         kind: string;
     } | undefined;
+    /** `indexOf` needle as an `Option<&str>`: a non-empty literal, a typed string local, or a string-typed `Value` expression. */
+    rustStrFindNeedle(node: any, syntactic: boolean): string | undefined;
+    /** `s.indexOf(n)` on a typed string local: `str::find` (byte index), `-1` when absent or either side is null, as the helper. */
+    rustStrFindText(recvKind: string, name: string, needle: any): string;
+    /** `s.split(d)` on a typed string local with a literal or `String` delimiter: the helper's array of parts, empty for null. */
+    rustStrLocalSplitText(node: any): string | undefined;
+    /** A string local read by `split` / `indexOf` / `replace`: its printed lines keep the 400-char budget. */
+    rustStrMethodRecvLocal(declaration: any): boolean;
+    /** `s += v` with `v` a string-typed `Value` (not a `+` chain): `Display` is the text the `add` helper concatenates. */
+    rustStrPushValueText(target: any, right: any, dry: boolean): string | undefined;
     /** `Precise.string<Add|Sub|..>(..)`: a `string | undefined` result. */
     rustScalarPreciseCall(node: any): boolean;
     /** `s.length` on a typed string local. */
