@@ -7619,6 +7619,7 @@ export class RustTranspiler extends BaseTranspiler {
                 && this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n));
         }
         if (parent?.kind === SyntaxKind.PropertyAssignment && parent.initializer === n) return true;
+        if (this.rustDictWriteValue(n) && parent.parent?.kind === SyntaxKind.ExpressionStatement) return true;
         if (isArrayLiteralExpression(parent)) return !(isBinaryExpression(parent.parent) && parent.parent.left === parent);
         if (this.rustStrSlotThrownConcat(n)) return true;
         return isReturnStatement(parent) && parent.expression === n && this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike) as any) !== 'str';
@@ -12121,7 +12122,7 @@ export class RustTranspiler extends BaseTranspiler {
             const init: any = this.rustSkipWrappers(owner.initializer);
             const callee: any = init?.expression;
             if (!isCallExpression(init) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
-                || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) && !this.rustLentSlotSource(init, declaration)) return false;
+                || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) && !this.rustLentSlotSource(init, declaration) && !this.rustDeclaredDictSlot(declaration)) return false;
         } else {
             const list: any = declaration.parent;
             if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1) return false;
@@ -12371,6 +12372,24 @@ export class RustTranspiler extends BaseTranspiler {
         if (!/^handle\w+$/.test(name)) return false;
         const type: any = this.typeOfNodeIfAny(element.name);
         return type !== undefined && this.isProvenMapType(type);
+    }
+
+    // ── declared dict slots ──────────────────────────────────────────────────
+    // A transpiled venue method declaring a `[.., Dict, ..]` (or `Promise<[..]>`) return builds that tuple on every
+    // path (`rustNativeListSource`): the `Dict` slot holds the params map, handed on like a `handle*AndParams` one.
+
+    rustDeclaredDictSlot(element: any): boolean {
+        const owner: any = element?.parent?.parent;
+        let init: any = this.rustSkipWrappers(owner?.initializer);
+        if (init?.kind === SyntaxKind.AwaitExpression) init = this.rustSkipWrappers(init.expression);
+        if (!isCallExpression(init) || !this.rustNativeListSource(init)) return false;
+        const declaration: any = this.rustCalleeDeclaration(init);
+        if (declaration === undefined || declaration.body === undefined || RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
+        let type: any = declaration.type;
+        if (type?.kind === SyntaxKind.TypeReference && String(type.typeName?.getText?.() ?? '') === 'Promise' && type.typeArguments?.length === 1) type = type.typeArguments[0];
+        if (type?.kind !== SyntaxKind.TupleType) return false;
+        const slot: any = type.elements?.[element.parent.elements.indexOf(element)];
+        return slot !== undefined && String(slot.getText()).replace(/\s+/g, '') === 'Dict';
     }
 
     /** One element read rooted at the bearer: a plain read the native op serves. */
