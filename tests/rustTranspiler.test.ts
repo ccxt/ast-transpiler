@@ -7224,5 +7224,6 @@ describe('rust test-source string locals', () => {
         expect(out).not.toContain('.clone().map(Value::from)');
         expect(out).not.toContain('id.clone()');
         expect(out).not.toMatch(/let mut keys: Vec<Value>/);
+        expect(out).toContain('object_keys(&');
     });
 });

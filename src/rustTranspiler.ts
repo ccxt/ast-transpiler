@@ -8879,7 +8879,8 @@ export class RustTranspiler extends BaseTranspiler {
      *  from an object literal, so the helper's ws/tag filters have nothing to strip. */
     bearerEnum(node: any, kind: 'keys' | 'values'): string | undefined {
         const arg = this.bearerEnumArg(node);
-        if (arg === undefined || this.rustDictBearerDeclaration(arg) === undefined) return undefined;
+        // a test map's key list copies each key where the helper lent the map
+        if (arg === undefined || this.rustTestTierSource(arg) || this.rustDictBearerDeclaration(arg) === undefined) return undefined;
         const recv = String(arg.text);
         const body = kind === 'keys'
             ? `${recv}.keys().map(|__k| Value::Str(__k.clone().into())).collect()`
@@ -10384,8 +10385,7 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustReadBearerDecisions.set(declaration, false); // re-entrancy guard
             try {
                 decision = this.rustReadBearerKindUncached(declaration) || this.rustContainerLocalKind(declaration);
-                // a test list of a map's keys copies each key where the helper lent the map
-                if (decision === 'list' && this.rustTestTierSource(declaration) && this.bearerEnum(declaration.initializer, 'keys') !== undefined) decision = false;
+                if (decision === 'list' && this.rustTestTierSource(declaration) && this.bearerEnumArg(declaration.initializer) !== undefined) decision = false;
             } catch (e) {
                 decision = false; // no proof -> the local keeps its `Value` box
             }

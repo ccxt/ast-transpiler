@@ -59362,7 +59362,7 @@ ${this.getIden(identation)}}`;
    *  from an object literal, so the helper's ws/tag filters have nothing to strip. */
   bearerEnum(node, kind) {
     const arg = this.bearerEnumArg(node);
-    if (arg === void 0 || this.rustDictBearerDeclaration(arg) === void 0)
+    if (arg === void 0 || this.rustTestTierSource(arg) || this.rustDictBearerDeclaration(arg) === void 0)
       return void 0;
     const recv = String(arg.text);
     const body = kind === "keys" ? `${recv}.keys().map(|__k| Value::Str(__k.clone().into())).collect()` : `${recv}.values().cloned().collect()`;
@@ -60782,7 +60782,7 @@ ${iden}}`;
       this.rustReadBearerDecisions.set(declaration, false);
       try {
         decision = this.rustReadBearerKindUncached(declaration) || this.rustContainerLocalKind(declaration);
-        if (decision === "list" && this.rustTestTierSource(declaration) && this.bearerEnum(declaration.initializer, "keys") !== void 0)
+        if (decision === "list" && this.rustTestTierSource(declaration) && this.bearerEnumArg(declaration.initializer) !== void 0)
           decision = false;
       } catch (e) {
         decision = false;
