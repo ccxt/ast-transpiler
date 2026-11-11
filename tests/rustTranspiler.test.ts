@@ -28,6 +28,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; spot: boolean; swap: boolean; stock?: boolean; linear: boolean | undefined; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    safeString (d: any, k: any): Str {\n        return d[k];\n    }\n    hold (m: any): any {\n        return m;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchOne (symbol: string, params: Dict = {}) {\n        const market = this.market (symbol);\n        const request: Dict = { 'pair': market['id'] };\n        if (market['swap'] || market['linear']) {\n            request['info'] = market['info'];\n        }\n        request['s'] = this.safeString (market, 'symbol');\n        return this.hold (market);\n    }\n    fetchTwo (symbol: string) {\n        let market = this.market (symbol);\n        market = this.market ('x');\n        return market['id'];\n    }\n    fetchThree (symbol: string) {\n        const market = this.market (symbol);\n        const isStock = market['stock'];\n        const isStockSpot = isStock && (market['spot'] === true);\n        if (isStockSpot || (market['spot'] !== true)) {\n            return market['id'];\n        }\n        return market['symbol'];\n    }\n}\n"
  },
+ "derived-scalar-returns": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    findTimeframe (timeframe: any, timeframes: Dict = undefined): Str {\n        return undefined;\n    }\n    incrementingNonce (): int {\n        return 1;\n    }\n    hold (x: any): any {\n        return x;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseEntry (entry: Dict, keys: string[]) {\n        const timeframe = this.findTimeframe (entry['i']);\n        if (timeframe === undefined) {\n            return undefined;\n        }\n        const nonce = this.incrementingNonce ();\n        if (nonce === 0) {\n            return undefined;\n        }\n        const key = keys[0];\n        const parts = 'a-b'.split ('-');\n        const first = parts[0];\n        if (first === 'a') {\n            return this.hold (key);\n        }\n        const boxedOnly = this.findTimeframe (entry['j']);\n        return { 'tf': timeframe, 'n': nonce, 'f': first, 'b': boxedOnly };\n    }\n}\n"
+ },
  "typed-call-results": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; type: string; settle: Str; linear: boolean | undefined; info: any }\nexport interface Order { id: string; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    async loadMarkets (reload = false, params: Dict = {}): Promise<Dict> {\n        return this.markets;\n    }\n    async fetchOrders (symbol: Str = undefined, params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchA (symbol: Str = undefined, params: Dict = {}) {\n        await this.loadMarkets ();\n        let market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n        }\n        return this.hold (params, market);\n    }\n    async fetchB (symbol: string, params: Dict = {}) {\n        let market = this.market (symbol);\n        if (market['type'] === 'swap') {\n            market = this.market ('x');\n        }\n        return this.hold ({ 'k': market['settle'], 'l': market['linear'], 'b': market['baseId'] }, market);\n    }\n    async fetchC (symbol: string, params: Dict = {}) {\n        const orders = await this.fetchOrders (symbol, params);\n        return this.hold (orders);\n    }\n}\n"
@@ -40,14 +44,22 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeTimestamp (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    safeBool (o: any, k: any, d: boolean): boolean { return o; }\n    parseNumber (x: any, d: any = undefined): any { return x; }\n    milliseconds (): number { return 1; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict) {\n        const id = this.safeString (resp, 'id');\n        const ts = this.safeInteger (resp, 'ts');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const price = this.safeNumber (resp, 'price');\n        const flag = this.safeBool (resp, 'flag', false);\n        const side = this.safeString (resp, 'side', 'buy');\n        let spot = true;\n        let name = 'abc';\n        let page = 1;\n        const fee = 0.25;\n        const req: Dict = {};\n        if (id === undefined) {\n            return undefined;\n        }\n        if (flag) {\n            req['f'] = 1;\n        }\n        if (name === 'x') {\n            name = 'y';\n            page = 2;\n            spot = false;\n        }\n        req['id'] = id;\n        req['ts'] = ts;\n        req['lim'] = lim;\n        req['p'] = price;\n        req['spot'] = spot;\n        req['side'] = side;\n        req['page'] = page;\n        req['fee'] = fee;\n        const kept = this.safeString (resp, 'kept');\n        const len = kept.length;\n        const other2 = kept.split ('-');\n        return [ req, name, len, other2 ];\n    }\n}\n"
  },
+ "scalar-order": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    isStale (o: Dict) {\n        const now = this.safeInteger (o, 'now', 0);\n        const last = this.safeInteger (o, 'last');\n        const stale = now > last;\n        if (stale) {\n            return last;\n        }\n        return { 's': stale, 'l': last };\n    }\n    pick (o: Dict) {\n        let a = this.safeString (o, 'a');\n        const b = this.safeString (o, 'b');\n        if (a === undefined) {\n            a = b;\n        }\n        return a === 'x';\n    }\n    keep (o: Dict) {\n        const t = this.safeInteger (o, 't', 0);\n        const once = t * 2;\n        return { 'o': once };\n    }\n}\n"
+ },
  "expression-locals": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n}\n",
   "ts/src/base/Precise.ts": "export default class Precise {\n    static stringAdd (a: string, b: string): string { return a; }\n}\n",
-  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nimport Precise from './base/Precise.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict, inverse: boolean) {\n        const req: Dict = {};\n        const id = this.safeString (resp, 'id');\n        const side = this.safeString (resp, 'side', 'buy');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const alias = id;\n        const kind = inverse ? 'base' : 'quote';\n        const idx = inverse ? 7 : 5;\n        const sideLen = side.length;\n        const lower = side.toLowerCase ();\n        const isBuy = side.startsWith ('b');\n        const hasDash = side.indexOf ('-') >= 0;\n        const doubled = lim * 2;\n        const ratio = lim / 1000;\n        const big = lim > sideLen;\n        const total = Precise.stringAdd (id, '1');\n        let suffix = 'x';\n        suffix += '-y';\n        req['k'] = kind;\n        req['a'] = alias;\n        req['i'] = idx;\n        req['l'] = sideLen;\n        req['lw'] = lower;\n        req['b'] = isBuy;\n        req['d'] = hasDash;\n        req['x2'] = doubled;\n        req['r'] = ratio;\n        req['g'] = big;\n        req['t'] = total;\n        req['s'] = suffix;\n        return req;\n    }\n}\n"
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nimport Precise from './base/Precise.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, other: Dict, inverse: boolean) {\n        const req: Dict = {};\n        const id = this.safeString (resp, 'id');\n        const side = this.safeString (resp, 'side', 'buy');\n        const lim = this.safeInteger (resp, 'limit', 100);\n        const alias = id;\n        const kind = inverse ? 'base' : 'quote';\n        const idx = inverse ? 7 : 5;\n        const sideLen = side.length;\n        const lower = side.toLowerCase ();\n        const isBuy = side.startsWith ('b');\n        const hasDash = side.indexOf ('-') >= 0;\n        const doubled = lim * 2;\n        const ratio = lim / 1000;\n        const big = lim > sideLen;\n        const total = Precise.stringAdd (id, '1');\n        let suffix = 'x';\n        suffix += '-y';\n        req['k'] = kind;\n        req['a'] = alias;\n        req['i'] = idx;\n        req['l'] = sideLen;\n        req['lw'] = lower;\n        req['b'] = isBuy;\n        req['d'] = hasDash;\n        req['x2'] = doubled;\n        req['r'] = ratio;\n        req['g'] = big;\n        req['t'] = total;\n        req['s'] = suffix;\n        if (alias === 'a' || kind === 'b' || idx > 6 || lower === 'c' || doubled > 3 || big || total === '2' || ratio > 1) {\n            req['z'] = true;\n        }\n        return req;\n    }\n}\n"
  },
  "typed-unified-r4": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Order { id: string }\nexport interface CancellationRequest { id: string; symbol: string }\nexport default class Exchange {\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { CancellationRequest, Dict, Order, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async cancelOrdersForSymbols (orders: CancellationRequest[], params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    async cancelUnifiedOrder (order: Order, params: Dict = {}): Promise<Order> {\n        const orders = await this.cancelOrdersForSymbols ([ order ], params);\n        return orders[0];\n    }\n    async fetchOrderStatus (id: string, symbol: Str = undefined, params: Dict = {}): Promise<Str> {\n        return 'open';\n    }\n}\n"
+ },
+ "borrowed-dict": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    extend (...args: any[]): any { return args[0]; }\n    hold (x: any): any { return x; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, params: Dict) {\n        const data = this.safeDict (resp, 'data');\n        const id = this.safeString (data, 'id');\n        const n = this.safeInteger (data, 'n', 1);\n        const merged = this.extend (resp, params);\n        const s = this.safeString (merged, 's');\n        const kept = this.safeDict (resp, 'kept');\n        const k = this.safeString (kept, 'k');\n        return this.hold ([ id, n, s, k, kept ]);\n    }\n}\n"
  },
  "a15dstrvec": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    options: Dict = {};\n    omit = omit;\n    extend = extend;\n    safeValue (d: any, k: any, dflt: any = undefined): any {\n        return d === undefined ? dflt : d[k];\n    }\n    safeDict (d: any, k: any, dflt: Dict = undefined): Dict {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'object') ? v : dflt;\n    }\n    safeBool (d: any, k: any, dflt: Bool = undefined): Bool {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'boolean') ? v : dflt;\n    }\n    checkOptionBool (methodName: string, optionName: string, value: any): Bool {\n        if (value === undefined) {\n            return undefined;\n        }\n        return value === true;\n    }\n    handleOptionBoolAndParams (params: Dict, methodName: string, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const value = this.safeValue (params, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), params ];\n    }\n    handleTriggerAndParams (params: any): any[] {\n        const isTrigger = this.safeBool (params, 'trigger');\n        return [ isTrigger, params ];\n    }\n    handleOptionAndParams (params: Dict, methodName: string, optionName: string, defaultValue: any = undefined): [any, Dict] {\n        return [ this.safeValue (params, optionName, defaultValue), params ];\n    }\n}\n",
@@ -1278,6 +1290,51 @@ ${body}
             expect(out).toContain('let mut a: Value = Value::Null;');
             expect(out).toContain('let mut b: Value = Value::Null;');
             expect(out).toContain('let mut c: Value = Value::Null;');
+        });
+
+        test('ternary and typed-local writes join the optional scalar kinds', () => {
+            const out = transpiler.transpileRust(cls(`        let side = undefined;
+        if (kind === 'a') { side = 'buy'; } else { side = (kind === 'b') ? 'sell' : 'buy'; }
+        if (side === 'buy') { return 1; }
+        let n = undefined;
+        if (kind === 'c') { n = (kind === 'd') ? 1 : 2; }
+        if (n === undefined) { return 0; }
+        return this.hold(side);`)).content;
+            expect(out).toContain('let mut side: Option<String> = None;');
+            expect(out).toContain('side = (if (kind.as_str() == Some("b")) { Some("sell".to_string()) } else { Some("buy".to_string()) });');
+            expect(out).toContain('side.as_deref() == Some("buy")');
+            expect(out).toContain('let mut n: Option<i64> = None;');
+            expect(out).toContain('n = (if (kind.as_str() == Some(\"d\")) { Some(1) } else { Some(2) });');
+            expect(out).toContain('if (n.is_none()) {');
+        });
+
+        test('a tuple-slot write of a string joins Option<String>', () => {
+            const out = transpiler.transpileRust(`class A {
+    handleMarketTypeAndParams(m: string, x: any, p: any): [ string, any ] { return [ m, p ]; }
+    run(params: any) {
+        let marketType: string = undefined;
+        let rest = undefined;
+        [ marketType, rest ] = this.handleMarketTypeAndParams('f', undefined, params);
+        if (marketType === 'spot') { return 1; }
+        return rest;
+    }
+}`).content;
+            expect(out).toContain('let mut marketType: Option<String> = None;');
+            expect(out).toContain('marketType = __destr_tmp.get(0).cloned().unwrap_or(Value::Null).as_str().map(str::to_owned);');
+            expect(out).toContain('marketType.as_deref() == Some("spot")');
+        });
+
+        test('a single write boxed straight back keeps the Value box', () => {
+            const out = transpiler.transpileRust(cls(`        let p = undefined;
+        p = (kind === 'a') ? 'x' : 'y';
+        return this.hold(p);`)).content;
+            expect(out).toContain('let mut p: Value = Value::Null;');
+            const decoded = transpiler.transpileRust(cls(`        let q = undefined;
+        if (kind === 'a') { q = this.safeString(o, 'a'); } else { q = this.safeString(o, 'b'); }
+        let r = undefined;
+        r = q;
+        return this.hold(r);`)).content;
+            expect(decoded).toContain('let mut q: Value = Value::Null;');
         });
 
         test('a read outside the proven sinks keeps the Value box', () => {
@@ -5055,6 +5112,24 @@ describe('scalar locals from base methods with a concrete return', () => {
     });
 });
 
+describe('scalar locals from declared callee returns and string-list element reads', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'derived-scalar-returns', 'ts/src/venue.ts')).content;
+    });
+    test('a declared Str / int return and a split element read are Option locals with native tests', () => {
+        expect(out).toMatch(/let mut timeframe: Option<String> = self\.findTimeframe\(.*\)\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out).toMatch(/let mut nonce: Option<i64> = self\.incrementingNonce\(\)\.as_i64\(\);/);
+        expect(out).toMatch(/let mut first: Option<String> = parts\.get\(0\)\.and_then\(Value::as_str\)\.map\(str::to_owned\);/);
+        expect(out).toContain('if (timeframe.is_none()) {');
+        expect(out).toContain('first.as_deref() == Some("a")');
+    });
+    test('a local with only Value hand-offs keeps its Value box', () => {
+        expect(out).toMatch(/let mut boxedOnly: Value = self\.findTimeframe\(/);
+        expect(out).toMatch(/let mut key: Value = /);
+    });
+});
+
 describe('scalar locals from base safe readers and literals', () => {
     let out: string;
     beforeAll(() => {
@@ -5101,12 +5176,34 @@ describe('expression-shaped scalar locals', () => {
         expect(out).toMatch(/let mut idx: i64 = \(if inverse \{ 7 \} else \{ 5 \}\);/);
     });
     test('string methods and Precise results on typed receivers are native', () => {
-        expect(out).toMatch(/let mut lower: String = side\.as_str\(\)\.map\(str::to_lowercase\)\.unwrap_or_default\(\);/);
+        expect(out).toMatch(/let mut lower: String = side\.to_lowercase\(\);/);
         expect(out).toMatch(/let mut total: Option<String> = crate::precise::Precise::stringAdd\(.*\)\.as_str\(\)\.map\(str::to_owned\);/);
     });
-    test('operands whose own typing depends on the derived local keep the box', () => {
-        expect(out).toMatch(/let mut sideLen: Value = /);
-        expect(out).toMatch(/let mut doubled: Value = /);
+    test('an expression local stored once and boxed straight back stays Value', () => {
+        const rs = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'scalar-order', 'ts/src/venue.ts')).content;
+        expect(rs).toMatch(/let mut once: Value = /);
+    });
+    test('a local whose operand is itself an expression-typed local takes the native kind', () => {
+        expect(out).toContain('let mut sideLen: i64 = (side.chars().count() as i64);');
+        expect(out).toContain('let mut doubled: i64 = (lim * 2);');
+        expect(out).toContain('let mut big: bool = lim > sideLen;');
+    });
+    test('an optional number on the smaller side of an ordering is tested for presence first', () => {
+        const rs = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'scalar-order', 'ts/src/venue.ts')).content;
+        expect(rs).toContain('let mut last: Option<i64> = ');
+        expect(rs).toContain('let mut stale: bool = (last.is_some() && Some(');
+        expect(rs).not.toContain('is_greater_than');
+    });
+    test('a written local that is only read by another typed local takes the native kind', () => {
+        const rs = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'scalar-order', 'ts/src/venue.ts')).content;
+        expect(rs).toContain('let mut a: Option<String> = ');
+        expect(rs).toContain('let mut b: Option<String> = ');
+    });
+    test('a string key of a native insert keeps the insert', () => {
+        const src = "class T {\n    f (on: boolean, v: any) {\n        const req = {};\n        const key = on ? 'a' : 'b';\n        req[key] = v;\n        return req;\n    }\n}";
+        const rs = transpiler.transpileRust(src).content;
+        expect(rs).toContain('let mut key: String = ');
+        expect(rs).not.toContain('add_element_to_object');
     });
     test('a string local rewritten by a concat with an any operand prints the native concat', () => {
         const src = "class T {\n    f (method: string, body: any) {\n        let auth = 'x' + method;\n        if (body !== undefined) {\n            auth = auth + body;\n        }\n        return auth;\n    }\n}";
@@ -5144,7 +5241,7 @@ ${body}
     });
     test('a dynamic index read on an Arr-only local is native', () => {
         const out = rs("        const parts = s.split ('-');\n        parts.push ('x');\n        for (let i = 0; i < parts.length; i++) {\n            const v = parts[i];\n            if (v !== undefined) { return v; }\n        }\n        return undefined;", 's: string');
-        expect(out).toContain('parts.as_array().map(Vec::as_slice).unwrap_or_default().get(i as usize).cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('parts.as_array().map(Vec::as_slice).unwrap_or_default().get(i as usize)');
         expect(out).not.toContain('get_value(&parts');
     });
     test('negative: a string receiver or a dict keeps the helper', () => {
@@ -5345,6 +5442,25 @@ describe('bearer write shapes', () => {
         const out = rs("        let d: Dict = {};\n        d['a'] = v;\n        if (v) {\n            d = this.parseX (v);\n        }\n        return d;");
         expect(out).toContain('let mut d: Value = Value::Map({');
         expect(out).toContain('add_element_to_object(&mut d,');
+    });
+});
+
+describe('borrowed dict locals', () => {
+    test('a dict local read only by literal-key base readers holds the shared map and lends it to each read', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'borrowed-dict', 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut data: crate::value::Dict = self\.safeDict\(resp(?:\.clone\(\))?, Value::Str\("data"\.into\(\)\), &\[\]\)\.into_dict\(\);/);
+        expect(out).toContain('self.safe_string_k(&data, "id", &[])');
+        expect(out).toContain('self.safe_integer_k(&data, "n", &[Value::Int(1)])');
+        expect(out).toContain('let mut merged: crate::value::Dict = ');
+        expect(out).toContain('self.safe_string_k(&merged, "s", &[])');
+        expect(out).not.toContain('data: Value');
+        expect(out).not.toContain('data.clone()');
+    });
+
+    test('negative: a dict local that escapes to a Value slot keeps its box', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'borrowed-dict', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut kept: Value = ');
+        expect(out).not.toContain('safe_string_k(&kept');
     });
 });
 

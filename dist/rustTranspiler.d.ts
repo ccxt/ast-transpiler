@@ -284,6 +284,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustNilLocalCondition(node: any): string | undefined;
     /** Identifier hook: a box read converts with the standard `From` impls. */
     printRustNilLocalRead(node: any): string | undefined;
+    private static readonly RUST_NIL_SCALAR_NATIVE_FORMS;
+    /** `ostr|oint|onum` for an empty local the scalar rule types, else undefined. */
+    rustNilScalarKind(declaration: any): string | undefined;
+    /** A write that decodes a `Value` result (a call, or a ternary over one). */
+    rustNilDecodedWrite(rhs: any): boolean;
+    /** `[ x, .. ] = <list>` as its own statement: `x` is written from a tuple slot. */
+    rustNilSlotWrite(n: any): boolean;
+    /** Slot hook: an `Option<String>` local takes the slot's string. */
+    printRustNilSlotWrite(element: any, read: string): string | undefined;
+    /** Declaration hook: `let mut x: Option<..> = None` for an empty scalar local. */
+    printRustNilScalarDeclaration(declaration: any, varName: string, indent: string): string | undefined;
     /** Assignment hook: `x = <rhs>` with the right-hand side unwrapped to the local's payload. */
     printRustNilLocalWrite(left: any, right: any): string | undefined;
     private static readonly RUST_BOOL_RESULT_HELPERS;
@@ -396,8 +407,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustScalarDecisions;
     private rustScalarCandidates;
     private rustScalarUseForms;
+    private rustScalarSolved;
+    private rustScalarSolving;
+    private rustScalarSeeding;
+    private rustScalarVetoed;
+    private rustScalarGuarded;
     /** The Rust kind (`ostr|oint|onum|str|int|num|bool`) a scalar local is declared with, else undefined. */
     rustScalarLocalKind(declaration: any): string | undefined;
+    /** Decides every scalar candidate of one function together: seeds each with its initializer kind,
+     *  then re-checks all of them in declaration order until a whole pass changes nothing (each kept
+     *  decision is then proven against the final ones); a candidate that keeps flipping stays `Value`. */
+    rustScalarSolveScope(scope: any): void;
+    rustScalarTry(declaration: any): string | null;
     /** The scalar local an identifier reads (never its own declaration name). */
     rustScalarLocalOf(node: any): {
         declaration: any;
@@ -415,6 +436,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarValueKind(expr: any, fresh: boolean): string | undefined;
     private static readonly RUST_BASE_SCALAR_RETURNS;
     rustBaseReturnScalarKind(call: any, name: string): string | undefined;
+    rustDerivedScalarKind(call: any): string | undefined;
+    rustElementReadScalarKind(node: any): string | undefined;
+    /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
+    rustScalarNeedsNativeUse(init: any): boolean;
     rustScalarCallee(call: any): any;
     /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
     rustScalarFormatText(node: any): string | undefined;
@@ -489,7 +514,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A plain `Value` assignment target (no typed-local rule claims it). */
     rustScalarPlainValueTarget(left: any): boolean;
     /** Re-boxing an optional local lengthens each use: keep a line under the 400-char limit it was under. */
-    rustScalarBoxesOverflow(declaration: any, uses: any[], kind: string): boolean;
+    /** Prints a method body; boxed expression-shape locals named on a printed line over 400 chars
+     *  are left `Value` when that lowers the count of such lines. */
+    printRustScalarGuardedBody(method: any, print: () => string): string;
+    /** `m[k] = v` with `k` a `String` local whose single-key write prints a native insert. */
+    rustScalarInsertKeyUse(n: any): boolean;
+    /** The insert key of a `String` scalar local, else undefined. */
+    rustScalarInsertKeyArg(keyNode: any): string | undefined;
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
     rustScalarExpressionUseForm(n: any, kind: string): string | undefined;
@@ -1282,6 +1313,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustContainerBoxForm(n: any, neverNull: boolean): 'clone' | 'move' | undefined;
     /** `Value::Map(x.clone())` / `Value::from(x.clone())` at an admitted boxing use, else undefined. */
     printRustContainerLocalBox(node: any, text: string): string | undefined;
+    private static readonly RUST_BORROWED_DICT_READERS;
+    private static readonly RUST_BORROWED_DICT_SOURCES;
+    private rustBorrowedDictDecisions;
+    rustBorrowedDictLocal(declaration: any): boolean;
+    rustBorrowedDictLocalUncached(declaration: any): boolean;
+    /** A base `safeDict*` / `extend` / `omit` call, or an implicit-API endpoint call. */
+    rustBorrowedDictSource(call: any): boolean;
+    /** Rust `_k` reader name of a base `this.safeX(obj, 'literal'[, default])` call, else undefined. */
+    rustBorrowedDictReader(call: any): string | undefined;
+    /** `self.safe_X_k(&x, "k", &[..])` when `x` is a borrowed dict local or a typed container local. */
+    printBorrowedDictRead(node: any, identation: number): string | undefined;
     /** One element read rooted at the bearer: a plain read the native op serves. */
     rustReadBearerElementUse(access: any, kind: 'list' | 'map'): boolean;
     /** Key a read-only bearer serves natively: a literal string for a map, a
