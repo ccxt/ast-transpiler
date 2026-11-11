@@ -55607,6 +55607,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       return `${super.printIdentifier(node)}.clone().map(Value::from).unwrap_or(Value::Null)`;
     if (form === "cond" && local.kind === "obool")
       return `(${super.printIdentifier(node)} == Some(true))`;
+    if (form === "targ" && (local.kind === "str" || local.kind === "ostr") && this.rustWsKeyUse(node))
+      return this.rustWsKeyText(node);
     if (form === "cond" || form === "concat" || form === "native" || form === "targ" || form === "key" || form === "okey" || form === "fin" || form === "frd")
       return super.printIdentifier(node);
     if (form === "err")

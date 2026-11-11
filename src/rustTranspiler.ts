@@ -4680,6 +4680,7 @@ export class RustTranspiler extends BaseTranspiler {
         // an optional key that reaches a helper write (no native insert) takes the helper's boxed key
         if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}.clone().map(Value::from).unwrap_or(Value::Null)`;
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
+        if (form === 'targ' && (local.kind === 'str' || local.kind === 'ostr') && this.rustWsKeyUse(node)) return this.rustWsKeyText(node);
         if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
         if (form !== 'box' && form !== 'xbox') return undefined;
