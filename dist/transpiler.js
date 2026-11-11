@@ -51315,6 +51315,12 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustScopeIndexes = /* @__PURE__ */ new WeakMap();
     /** Declarations `printVariableDeclarationList` emitted as `let mut x: bool`. */
     this.rustBoolDeclaredLocals = /* @__PURE__ */ new WeakSet();
+    // `.length` nodes printed as a native `len()` of a place, with that place (the loop-counter bound reads it)
+    this.rustNativeLengths = /* @__PURE__ */ new WeakMap();
+    // `is_less_than` & co. compare two `Value`s and answer `false` for
+    // non-numbers; with both operands checker-typed numbers the same f64
+    // comparison runs natively on `Value::as_f64()` unwraps.
+    this.rustNativeCompares = /* @__PURE__ */ new WeakSet();
     this.rustNilLocalDecisions = /* @__PURE__ */ new Map();
     this.rustNilCandidateNames = /* @__PURE__ */ new WeakMap();
     // ── native `bool` parameters ──────────────────────────────────────────────
@@ -51386,6 +51392,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // boxed uses `Value::Int(i)`. The body is printed with the counter registered; if any use printed
     // another way the body is printed again as a `Value` counter.
     this.rustI64Counters = /* @__PURE__ */ new Map();
+    // counter identifiers printed as a `.get(i as usize)` key or a `Value::Int(i)` box while the body prints
+    this.rustI64ClosedUses = /* @__PURE__ */ new WeakSet();
     // `const x = []` locals declared `Vec<Value>` when every use is a statement
     // `x.push(v)` (native push), `x.length`, `return x` or an argument inside a `return`
     // (boxed once as `Value::from(x)`). Anything else keeps the `Value` box and `append_to_array`.
@@ -52002,12 +52010,16 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return scalarLength;
     const receiver = leftExpr ?? this.printNode(node.expression, 0);
     if (!this.rustIsOrderBookSide(node.expression) && this.isValueLengthType(this.typeOfNodeIfAny(node.expression)))
-      return `Value::Int(${receiver}.len() as i64)`;
+      return this.printNativeLength(node, receiver);
     if (this.rustReadBearerKind(node.expression) === "list" || this.rustBorrowedListUse(node.expression) || this.rustLentListUse(node.expression))
-      return `Value::Int(${receiver}.len() as i64)`;
+      return this.printNativeLength(node, receiver);
     if (this.provenListValue(node.expression))
       return `${receiver}.as_array().map_or(Value::Int(0), |__a| Value::Int(__a.len() as i64))`;
     return this.arrLength(node, receiver) ?? `get_array_length(&${receiver})`;
+  }
+  printNativeLength(node, place) {
+    this.rustNativeLengths.set(node, place);
+    return `Value::Int(${place}.len() as i64)`;
   }
   /** `orderbook['bids']` / `orderbook.asks` on an `OrderBook`-typed receiver, or a
    *  local initialised from one. The WS runtime keeps those sides as marker dicts
@@ -52656,12 +52668,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return false;
   }
-  // `is_less_than` & co. compare two `Value`s and answer `false` for
-  // non-numbers; with both operands checker-typed numbers the same f64
-  // comparison runs natively on `Value::as_f64()` unwraps.
   printNativeNumericComparison(node, operator, leftText, rightText) {
     const unwrap = (text) => `${text}.as_f64().unwrap_or(f64::NAN)`;
     const comparison = `${unwrap(leftText)} ${operator} ${unwrap(rightText)}`;
+    this.rustNativeCompares.add(node);
     return this.isBooleanPosition(node) ? comparison : `Value::Bool(${comparison})`;
   }
   // How numeric an ordered-comparison operand is: 'definite' (numeric
@@ -52986,7 +52996,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const handleKeys = this.printClientHandleKeys(declaration.initializer);
       if (handleKeys !== void 0)
         return `${indent}let mut ${varName}: Vec<Value> = ${handleKeys}`;
-      if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)))
+      if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(declaration.initializer)))
         return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
       return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
     }
@@ -58279,7 +58289,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const keyText = this.printNode(keyNode, 0).trim();
     if (!keyText || keyText.startsWith("&"))
       return void 0;
-    if (this.rustI64CounterOf(this.rustSkipWrappers(keyNode)) !== void 0) {
+    if (this.rustI64CounterUse(this.rustSkipWrappers(keyNode))) {
       return `${receiverText}.as_array().map(Vec::as_slice).unwrap_or_default().get(${keyText} as usize).cloned().unwrap_or(Value::Null)`;
     }
     return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
@@ -58687,7 +58697,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const place = this.printNode(key, 0).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(place))
       return void 0;
-    if (this.rustI64CounterOf(this.rustSkipWrappers(key)) !== void 0)
+    if (this.rustI64CounterUse(this.rustSkipWrappers(key)))
       return `${shadow.name}.get(${place} as usize).cloned().unwrap_or(Value::Null)`;
     return `${shadow.name}.get((${place}).as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)`;
   }
@@ -58712,10 +58722,10 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     return /^[A-Za-z_][A-Za-z0-9_]*$/.test(place) ? { place } : void 0;
   }
   /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
-  printShadowLength(shadow) {
+  printShadowLength(node, shadow) {
     if (shadow.kind !== RUST_PARAM_SHADOWS.LIST)
       return void 0;
-    return `Value::Int(${shadow.name}.len() as i64)`;
+    return this.printNativeLength(node, shadow.name);
   }
   /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
    *  runtime helper's exact semantics over `.get(..)`. */
@@ -59559,7 +59569,7 @@ ${ind}let ${view}: &${map} = &${arc};
     if (node.name.text !== "length")
       return void 0;
     const shadow = this.rustParamShadowOf(node.expression);
-    const native = shadow !== void 0 ? this.printShadowLength(shadow) : void 0;
+    const native = shadow !== void 0 ? this.printShadowLength(node, shadow) : void 0;
     return native ?? this.printArrayLength(node, 0, leftExpr);
   }
   // `crate::value::get_value_k` is `get_value` for a `&str` key — the same
@@ -59639,7 +59649,7 @@ ${ind}let ${view}: &${map} = &${arc};
     let condStr = node.condition ? this.printComparisonInBooleanContext(node.condition, 0).trim() : "true";
     const incrStr = node.incrementor ? this.printNode(node.incrementor, 0) : "";
     const counter = incrStr !== "" ? this.rustIntCounter(node, initStr, incrStr) : void 0;
-    const bound = counter?.sign === "+" ? this.rustI64CounterPlan(node, counter, condStr) : void 0;
+    const bound = counter?.sign === "+" ? this.rustI64CounterPlan(node, counter) : void 0;
     const printBody = () => node.statement.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
     let statements;
     let typed = false;
@@ -59655,7 +59665,7 @@ ${ind}let ${view}: &${map} = &${arc};
         else
           this.rustI64Counters.set(counter.name, previous);
       }
-      typed = this.rustI64BodyIsClosed(statements, counter.name);
+      typed = this.rustI64BodyIsClosed(node.statement, counter.name);
       if (!typed) {
         this.forLoopCounter = before;
         statements = printBody();
@@ -59735,9 +59745,8 @@ ${idn}}`;
     return (isForInStatement2(up) || isForOfStatement2(up)) && up.initializer === current;
   }
   /** The place `X` of a `i < X.length` condition over this counter, when its uses are all admissible. */
-  rustI64CounterPlan(node, counter, condStr) {
-    const printed = new RegExp(`^${counter.name}\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\) < Value::Int\\((self\\.\\w+|\\w+)\\.len\\(\\) as i64\\)\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\)$`).exec(condStr);
-    const bound = printed?.[1] ?? this.rustOptListCounterBound(node, counter.name, condStr) ?? this.rustScalarCounterPlan(node, counter.name);
+  rustI64CounterPlan(node, counter) {
+    const bound = this.rustLengthCounterBound(node, counter.name) ?? this.rustScalarCounterPlan(node, counter.name);
     if (bound === void 0)
       return void 0;
     for (const id of this.rustScopeNameNodes(node.statement, counter.name)) {
@@ -59764,14 +59773,36 @@ ${idn}}`;
     const symbol = this.rustI64Counters.size === 0 || !isIdentifier3(node) ? void 0 : this.rustI64Counters.get(String(node.text));
     return symbol !== void 0 && this.rustSymbolOf(node) === symbol ? symbol : void 0;
   }
-  /** True when every use of `name` in the printed body is a `.get(name as usize)` read or a `Value::Int(name)` box. */
-  rustI64BodyIsClosed(text, name) {
-    const masked = text.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/\/\/[^\n]*/g, "");
-    const count = (re) => (masked.match(re) ?? []).length;
-    const word = `(?<![\\w.])${name}(?![\\w])`;
-    const uses = count(new RegExp(word, "g"));
-    const closed = count(new RegExp(`\\.get\\(${name} as usize\\)`, "g")) + count(new RegExp(`Value::Int\\(${name}\\)`, "g"));
-    return uses > 0 && uses === closed;
+  rustI64CounterUse(node) {
+    if (this.rustI64CounterOf(node) === void 0)
+      return false;
+    this.rustI64ClosedUses.add(node);
+    return true;
+  }
+  /** True when every occurrence of `name` in the body printed as a `.get(name as usize)` read or a `Value::Int(name)` box. */
+  rustI64BodyIsClosed(body, name) {
+    let closed = 0;
+    for (const n of this.rustScopeNameNodes(body, name)) {
+      if (n.kind === SyntaxKind7.Identifier && this.rustIdentifierIsPropertyName(n) && n.parent.kind !== SyntaxKind7.ShorthandPropertyAssignment)
+        continue;
+      if (n.kind !== SyntaxKind7.Identifier || !this.rustI64ClosedUses.has(n))
+        return false;
+      closed++;
+    }
+    return closed > 0;
+  }
+  /** `i < X.length` whose condition printed as a native compare over a native `len()`: the place `X`. */
+  rustLengthCounterBound(node, counter) {
+    const cond = node?.condition;
+    if (cond === void 0 || !isBinaryExpression5(cond) || cond.operatorToken.kind !== SyntaxKind7.LessThanToken || !this.rustNativeCompares.has(cond))
+      return void 0;
+    const { left, right } = cond;
+    if (!isIdentifier3(left) || left.text !== counter || !isPropertyAccessExpression3(right))
+      return void 0;
+    const place = this.rustNativeLengths.get(right);
+    const recv = this.rustStripWrappers(right.expression);
+    const plain = isIdentifier3(recv) || isPropertyAccessExpression3(recv) && recv.expression.kind === SyntaxKind7.ThisKeyword;
+    return place !== void 0 && (plain || this.rustOptListOf(recv) !== void 0) ? place : void 0;
   }
   isEqualityOp(op) {
     return op === SyntaxKind7.EqualsEqualsToken || op === SyntaxKind7.EqualsEqualsEqualsToken || op === SyntaxKind7.ExclamationEqualsToken || op === SyntaxKind7.ExclamationEqualsEqualsToken;
@@ -60732,7 +60763,7 @@ ${iden}}`;
     if (lentBox !== void 0)
       return lentBox;
     const parent = node?.parent;
-    if (this.rustI64Counters.size > 0 && this.rustI64CounterOf(node) !== void 0 && (this.rustI64BoxedUse(node) || isVariableDeclaration3(parent) && parent.initializer === node))
+    if (this.rustI64Counters.size > 0 && this.rustI64CounterOf(node) !== void 0 && (this.rustI64BoxedUse(node) || isVariableDeclaration3(parent) && parent.initializer === node) && this.rustI64CounterUse(node))
       return `Value::Int(${text})`;
     if (parent !== void 0 && isCallExpression6(parent) && parent.arguments.some((a) => a === node)) {
       const at = Array.from(parent.arguments).indexOf(node);
@@ -61708,7 +61739,7 @@ ${iden}}`;
       return void 0;
     const value = form === "move" ? text : `${text}.clone()`;
     const listDecl = kind === "list" ? this.rustDeclarationOfIdentifier(node) : void 0;
-    if (listDecl !== void 0 && this.rustAlwaysListProducer(this.rustSkipWrappers(listDecl.initializer)))
+    if (listDecl !== void 0 && (this.rustAlwaysListProducer(this.rustSkipWrappers(listDecl.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(listDecl.initializer))))
       return `Value::Arr(${value})`;
     if (isCallExpression6(node.parent))
       return `${value}.into()`;
@@ -62137,7 +62168,20 @@ ${iden}}`;
       return args.length >= 3 && this.rustSkipWrappers(args[2])?.kind === SyntaxKind7.FalseKeyword;
     if (method === "marketIds")
       return args.length === 1 && this.rustLentListUse(this.rustSkipWrappers(args[0]));
-    return false;
+    return this.rustDefaultedListRead(init);
+  }
+  /** A base `safeList*` read with an empty `[]` default: a list on every path. */
+  rustDefaultedListRead(init) {
+    const callee = isCallExpression6(init) && isPropertyAccessExpression3(init.expression) ? init.expression : void 0;
+    if (callee === void 0 || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const method = String(callee.name.text);
+    const keys = method === "safeList2" ? 3 : method === "safeList" || method === "safeListN" ? 2 : 0;
+    const last = keys > 0 && init.arguments.length === keys + 1 ? this.rustSkipWrappers(init.arguments[keys]) : void 0;
+    if (last === void 0 || !isArrayLiteralExpression4(last) || last.elements.length !== 0)
+      return false;
+    const declaration = this.rustScalarCallee(init);
+    return declaration !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
   }
   rustLentListLocalUncached(declaration) {
     if (declaration.name?.kind !== SyntaxKind7.Identifier)
@@ -62151,6 +62195,8 @@ ${iden}}`;
     const init = this.rustSkipWrappers(declaration.initializer);
     if (!this.rustLentListSource(init))
       return false;
+    const defaulted = this.rustDefaultedListRead(init);
+    let indexed = 0;
     const type = this.typeOfNodeIfAny(declaration.initializer);
     if (type === void 0 || !this.getChecker().isArrayType(type))
       return false;
@@ -62164,7 +62210,8 @@ ${iden}}`;
       return false;
     const boxes = [];
     let natives = 0;
-    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+    const usesAll = (accept) => defaulted ? this.rustScalarUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
+    const safe = usesAll((n) => {
       if (this.rustIdentifierIsPropertyName(n))
         return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
       if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
@@ -62175,6 +62222,7 @@ ${iden}}`;
       const up = at.parent;
       if (isElementAccessExpression4(up) && up.expression === at) {
         natives++;
+        indexed++;
         return this.rustReadBearerElementUse(up, "list");
       }
       if (at === n && isCallExpression6(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
@@ -62184,6 +62232,7 @@ ${iden}}`;
       if (isPropertyAccessExpression3(up) && up.expression === at && String(up.name.text) === "length") {
         const use = up.parent;
         natives++;
+        indexed++;
         return use?.kind !== SyntaxKind7.PrefixUnaryExpression && use?.kind !== SyntaxKind7.PostfixUnaryExpression && !(isBinaryExpression5(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
       }
       if (isReturnStatement4(up) && up.expression === n) {
@@ -62199,7 +62248,7 @@ ${iden}}`;
       }
       return false;
     });
-    if (!safe || natives === 0)
+    if (!safe || natives === 0 || defaulted && indexed === 0 && boxes.some(([, form]) => form === "clone"))
       return false;
     for (const [n, form] of boxes)
       this.rustLentListBoxes.set(n, form);
@@ -62404,26 +62453,12 @@ ${iden}}`;
   printOptListLength(node) {
     if (this.rustOptListOf(node.expression) === void 0)
       return void 0;
-    return `Value::Int(${this.rustOptListSlice(node.expression)}.len() as i64)`;
+    return this.printNativeLength(node, this.rustOptListSlice(node.expression));
   }
   printOptListElement(receiverNode, keyNode) {
     if (this.rustOptListOf(receiverNode) === void 0)
       return void 0;
     return this.printReadBearerAccess("list", this.rustOptListSlice(receiverNode), keyNode);
-  }
-  /** `i < x.length` over an optional list: the slice the `i64` counter is bounded by (the condition printed as that read). */
-  rustOptListCounterBound(node, counter, condStr) {
-    const cond = this.unwrapParens(node?.condition);
-    if (cond === void 0 || !isBinaryExpression5(cond) || cond.operatorToken.kind !== SyntaxKind7.LessThanToken)
-      return void 0;
-    const left = this.unwrapParens(cond.left);
-    const right = this.unwrapParens(cond.right);
-    if (!isIdentifier3(left) || left.text !== counter || !isPropertyAccessExpression3(right) || String(right.name.text) !== "length")
-      return void 0;
-    if (this.rustOptListOf(right.expression) === void 0)
-      return void 0;
-    const slice = this.rustOptListSlice(right.expression);
-    return condStr === `${counter}.as_f64().unwrap_or(f64::NAN) < Value::Int(${slice}.len() as i64).as_f64().unwrap_or(f64::NAN)` ? slice : void 0;
   }
   /** `&x` at an any-key reader, the shared handle at a `Value` slot, a move at `return x`. */
   printOptListIdentifier(node, text) {
@@ -62771,7 +62806,7 @@ ${iden}}`;
     const keyText = this.printNode(keyNode, 0).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText))
       return void 0;
-    if (this.rustI64CounterOf(key) !== void 0)
+    if (this.rustI64CounterUse(key))
       return `${receiverText}.get(${keyText} as usize).cloned().unwrap_or(Value::Null)`;
     return `${receiverText}.get(${keyText}.as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)`;
   }
@@ -64435,7 +64470,7 @@ ${this.getIden(identation)}}`;
     const recv = this.rustStripWrappers(node?.expression);
     if (!this.arrLocal(recv, true))
       return void 0;
-    return `Value::Int(${receiver}.len() as i64)`;
+    return this.printNativeLength(node, receiver);
   }
   /** `x.push(v)` statement on an Arr-only local: `append_to_array`'s cache-push arm needs a Dict. */
   arrPush(node, name, parsedArg) {

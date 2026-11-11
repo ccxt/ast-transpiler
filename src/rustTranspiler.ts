@@ -882,11 +882,19 @@ export class RustTranspiler extends BaseTranspiler {
     printArrayLength(node, identation, leftExpr = undefined) {
         const scalarLength = this.rustScalarLengthText(node, true) ?? this.printOptListLength(node); if (scalarLength !== undefined) return scalarLength;
         const receiver = leftExpr ?? this.printNode(node.expression, 0);
-        if (!this.rustIsOrderBookSide(node.expression) && this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) return `Value::Int(${receiver}.len() as i64)`;
+        if (!this.rustIsOrderBookSide(node.expression) && this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) return this.printNativeLength(node, receiver);
         // A read-only list bearer is a `Vec<Value>`; `len()` is the helper's answer.
-        if (this.rustReadBearerKind(node.expression) === 'list' || this.rustBorrowedListUse(node.expression) || this.rustLentListUse(node.expression)) return `Value::Int(${receiver}.len() as i64)`;
+        if (this.rustReadBearerKind(node.expression) === 'list' || this.rustBorrowedListUse(node.expression) || this.rustLentListUse(node.expression)) return this.printNativeLength(node, receiver);
         if (this.provenListValue(node.expression)) return `${receiver}.as_array().map_or(Value::Int(0), |__a| Value::Int(__a.len() as i64))`;
         return this.arrLength(node, receiver) ?? `get_array_length(&${receiver})`;
+    }
+
+    // `.length` nodes printed as a native `len()` of a place, with that place (the loop-counter bound reads it)
+    private rustNativeLengths = new WeakMap<any, string>();
+
+    printNativeLength(node: any, place: string): string {
+        this.rustNativeLengths.set(node, place);
+        return `Value::Int(${place}.len() as i64)`;
     }
 
     /** `orderbook['bids']` / `orderbook.asks` on an `OrderBook`-typed receiver, or a
@@ -1649,9 +1657,12 @@ export class RustTranspiler extends BaseTranspiler {
     // `is_less_than` & co. compare two `Value`s and answer `false` for
     // non-numbers; with both operands checker-typed numbers the same f64
     // comparison runs natively on `Value::as_f64()` unwraps.
+    private rustNativeCompares = new WeakSet<any>();
+
     printNativeNumericComparison(node, operator, leftText, rightText) {
         const unwrap = (text: string) => `${text}.as_f64().unwrap_or(f64::NAN)`;
         const comparison = `${unwrap(leftText)} ${operator} ${unwrap(rightText)}`;
+        this.rustNativeCompares.add(node);
         // Conditions/logical operands already expect a bool; every other
         // position stores the result in a `Value`, so box it as before.
         return this.isBooleanPosition(node) ? comparison : `Value::Bool(${comparison})`;
@@ -2031,7 +2042,7 @@ export class RustTranspiler extends BaseTranspiler {
         const readBearer = node.declarations.length === 1 ? this.rustReadBearerKindOfDeclaration(declaration) : false;
         if (readBearer === 'list') {
             const handleKeys = this.printClientHandleKeys(declaration.initializer); if (handleKeys !== undefined) return `${indent}let mut ${varName}: Vec<Value> = ${handleKeys}`;
-            if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer))) return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
+            if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(declaration.initializer))) return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
             return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
         }
         if (readBearer === 'map') {
@@ -7657,7 +7668,7 @@ export class RustTranspiler extends BaseTranspiler {
         const keyText = this.printNode(keyNode, 0).trim();
         // A text that already carries the post-pass `&` is not a place.
         if (!keyText || keyText.startsWith('&')) return undefined;
-        if (this.rustI64CounterOf(this.rustSkipWrappers(keyNode)) !== undefined) {
+        if (this.rustI64CounterUse(this.rustSkipWrappers(keyNode))) {
             return `${receiverText}.as_array().map(Vec::as_slice).unwrap_or_default().get(${keyText} as usize).cloned().unwrap_or(Value::Null)`;
         }
         return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
@@ -8054,7 +8065,7 @@ export class RustTranspiler extends BaseTranspiler {
         const place = this.printNode(key, 0).trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(place)) return undefined;
         // a typed `i64` loop counter indexes the slice directly
-        if (this.rustI64CounterOf(this.rustSkipWrappers(key)) !== undefined) return `${shadow.name}.get(${place} as usize).cloned().unwrap_or(Value::Null)`;
+        if (this.rustI64CounterUse(this.rustSkipWrappers(key))) return `${shadow.name}.get(${place} as usize).cloned().unwrap_or(Value::Null)`;
         return `${shadow.name}.get((${place}).as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)`;
     }
 
@@ -8079,9 +8090,9 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
-    printShadowLength(shadow: RustParamShadow): string | undefined {
+    printShadowLength(node: any, shadow: RustParamShadow): string | undefined {
         if (shadow.kind !== RUST_PARAM_SHADOWS.LIST) return undefined;
-        return `Value::Int(${shadow.name}.len() as i64)`;
+        return this.printNativeLength(node, shadow.name);
     }
 
     /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
@@ -8958,7 +8969,7 @@ export class RustTranspiler extends BaseTranspiler {
         const leftExpr = this.printNode(node.expression, 0);
         if (node.name.text !== 'length') return undefined;
         const shadow = this.rustParamShadowOf(node.expression);
-        const native = shadow !== undefined ? this.printShadowLength(shadow) : undefined;
+        const native = shadow !== undefined ? this.printShadowLength(node, shadow) : undefined;
         return native ?? this.printArrayLength(node, 0, leftExpr);
     }
 
@@ -9041,7 +9052,7 @@ export class RustTranspiler extends BaseTranspiler {
         const incrStr = node.incrementor ? this.printNode(node.incrementor, 0) : '';
         // A proven `Value::Int` counter steps in place; one that only indexes lists is a plain `i64`.
         const counter = incrStr !== '' ? this.rustIntCounter(node, initStr, incrStr) : undefined;
-        const bound = counter?.sign === '+' ? this.rustI64CounterPlan(node, counter, condStr) : undefined;
+        const bound = counter?.sign === '+' ? this.rustI64CounterPlan(node, counter) : undefined;
         const printBody = () => node.statement.statements.map(s => this.printNode(s, identation + 1)).join('\n');
         let statements: string;
         let typed = false;
@@ -9055,7 +9066,7 @@ export class RustTranspiler extends BaseTranspiler {
                 if (previous === undefined) this.rustI64Counters.delete(counter.name);
                 else this.rustI64Counters.set(counter.name, previous);
             }
-            typed = this.rustI64BodyIsClosed(statements, counter.name);
+            typed = this.rustI64BodyIsClosed(node.statement, counter.name);
             if (!typed) {
                 this.forLoopCounter = before;
                 statements = printBody();
@@ -9137,9 +9148,8 @@ export class RustTranspiler extends BaseTranspiler {
     private rustI64Counters = new Map<string, any>();
 
     /** The place `X` of a `i < X.length` condition over this counter, when its uses are all admissible. */
-    rustI64CounterPlan(node, counter: { name: string, symbol: any }, condStr: string): string | { cond: string } | undefined {
-        const printed = new RegExp(`^${counter.name}\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\) < Value::Int\\((self\\.\\w+|\\w+)\\.len\\(\\) as i64\\)\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\)$`).exec(condStr);
-        const bound = printed?.[1] ?? this.rustOptListCounterBound(node, counter.name, condStr) ?? this.rustScalarCounterPlan(node, counter.name); if (bound === undefined) return undefined;
+    rustI64CounterPlan(node, counter: { name: string, symbol: any }): string | { cond: string } | undefined {
+        const bound = this.rustLengthCounterBound(node, counter.name) ?? this.rustScalarCounterPlan(node, counter.name); if (bound === undefined) return undefined;
         for (const id of this.rustScopeNameNodes(node.statement, counter.name) as any[]) {
             if (id.kind !== SyntaxKind.Identifier || this.rustIdentifierIsPropertyName(id) || this.rustSymbolOf(id) !== counter.symbol) continue;
             const up: any = id.parent;
@@ -9169,14 +9179,36 @@ export class RustTranspiler extends BaseTranspiler {
         return symbol !== undefined && this.rustSymbolOf(node) === symbol ? symbol : undefined;
     }
 
-    /** True when every use of `name` in the printed body is a `.get(name as usize)` read or a `Value::Int(name)` box. */
-    rustI64BodyIsClosed(text: string, name: string): boolean {
-        const masked = text.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/\/\/[^\n]*/g, '');
-        const count = (re: RegExp): number => (masked.match(re) ?? []).length;
-        const word = `(?<![\\w.])${name}(?![\\w])`;
-        const uses = count(new RegExp(word, 'g'));
-        const closed = count(new RegExp(`\\.get\\(${name} as usize\\)`, 'g')) + count(new RegExp(`Value::Int\\(${name}\\)`, 'g'));
-        return uses > 0 && uses === closed;
+    // counter identifiers printed as a `.get(i as usize)` key or a `Value::Int(i)` box while the body prints
+    private rustI64ClosedUses = new WeakSet<any>();
+
+    rustI64CounterUse(node: any): boolean {
+        if (this.rustI64CounterOf(node) === undefined) return false;
+        this.rustI64ClosedUses.add(node);
+        return true;
+    }
+
+    /** True when every occurrence of `name` in the body printed as a `.get(name as usize)` read or a `Value::Int(name)` box. */
+    rustI64BodyIsClosed(body: any, name: string): boolean {
+        let closed = 0;
+        for (const n of this.rustScopeNameNodes(body, name) as any[]) {
+            if (n.kind === SyntaxKind.Identifier && this.rustIdentifierIsPropertyName(n) && n.parent.kind !== SyntaxKind.ShorthandPropertyAssignment) continue;
+            if (n.kind !== SyntaxKind.Identifier || !this.rustI64ClosedUses.has(n)) return false;
+            closed++;
+        }
+        return closed > 0;
+    }
+
+    /** `i < X.length` whose condition printed as a native compare over a native `len()`: the place `X`. */
+    rustLengthCounterBound(node: any, counter: string): string | undefined {
+        const cond: any = node?.condition;
+        if (cond === undefined || !isBinaryExpression(cond) || cond.operatorToken.kind !== SyntaxKind.LessThanToken || !this.rustNativeCompares.has(cond)) return undefined;
+        const { left, right } = cond as any;
+        if (!isIdentifier(left) || left.text !== counter || !isPropertyAccessExpression(right)) return undefined;
+        const place = this.rustNativeLengths.get(right);
+        const recv: any = this.rustStripWrappers(right.expression);
+        const plain = isIdentifier(recv) || (isPropertyAccessExpression(recv) && recv.expression.kind === SyntaxKind.ThisKeyword);
+        return place !== undefined && (plain || this.rustOptListOf(recv) !== undefined) ? place : undefined;
     }
 
     private static readonly COMPARISON_OPS = new Set([
@@ -10207,7 +10239,7 @@ export class RustTranspiler extends BaseTranspiler {
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
         const parent = node?.parent;
         if (this.rustI64Counters.size > 0 && this.rustI64CounterOf(node) !== undefined
-            && (this.rustI64BoxedUse(node) || (isVariableDeclaration(parent) && parent.initializer === node))) return `Value::Int(${text})`;
+            && (this.rustI64BoxedUse(node) || (isVariableDeclaration(parent) && parent.initializer === node)) && this.rustI64CounterUse(node)) return `Value::Int(${text})`;
         // An argument in a native-map slot passes the map itself
         // (`&mut` is added by the caller printer), never a `Value::Map` box.
         if (parent !== undefined && isCallExpression(parent) && parent.arguments.some((a) => a === node)) {
@@ -11211,7 +11243,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === undefined) return undefined;
         const value = form === 'move' ? text : `${text}.clone()`;
         const listDecl: any = kind === 'list' ? this.rustDeclarationOfIdentifier(node) : undefined;
-        if (listDecl !== undefined && this.rustAlwaysListProducer(this.rustSkipWrappers(listDecl.initializer))) return `Value::Arr(${value})`;
+        if (listDecl !== undefined && (this.rustAlwaysListProducer(this.rustSkipWrappers(listDecl.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(listDecl.initializer)))) return `Value::Arr(${value})`;
         // A call argument boxes through `Into` so ccxt's literal-key reader rewrite still parses the argument.
         if (isCallExpression(node.parent)) return `${value}.into()`;
         return kind === 'map' ? `Value::Map(${value})` : `Value::from(${value})`;
@@ -11637,7 +11669,19 @@ export class RustTranspiler extends BaseTranspiler {
         // `allowEmpty: false` throws on an empty or missing input instead of returning it.
         if (method === 'marketSymbols') return args.length >= 3 && this.rustSkipWrappers(args[2])?.kind === SyntaxKind.FalseKeyword;
         if (method === 'marketIds') return args.length === 1 && this.rustLentListUse(this.rustSkipWrappers(args[0]));
-        return false;
+        return this.rustDefaultedListRead(init);
+    }
+
+    /** A base `safeList*` read with an empty `[]` default: a list on every path. */
+    rustDefaultedListRead(init: any): boolean {
+        const callee: any = isCallExpression(init) && isPropertyAccessExpression(init.expression) ? init.expression : undefined;
+        if (callee === undefined || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const method = String(callee.name.text);
+        const keys = method === 'safeList2' ? 3 : (method === 'safeList' || method === 'safeListN' ? 2 : 0);
+        const last: any = keys > 0 && init.arguments.length === keys + 1 ? this.rustSkipWrappers(init.arguments[keys]) : undefined;
+        if (last === undefined || !isArrayLiteralExpression(last) || last.elements.length !== 0) return false;
+        const declaration: any = this.rustScalarCallee(init);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
 
     rustLentListLocalUncached(declaration: any): boolean {
@@ -11648,6 +11692,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (typeof source === 'string' && /[\\/]test[\\/]/.test(source)) return false;
         const init: any = this.rustSkipWrappers(declaration.initializer);
         if (!this.rustLentListSource(init)) return false;
+        // a defaulted read boxes its shared handle only when it also has a length or index read
+        const defaulted = this.rustDefaultedListRead(init);
+        let indexed = 0;
         // The initializer's resolved overload (`string[]`) decides, so a wider `Strings` annotation does not reject it.
         const type: any = this.typeOfNodeIfAny(declaration.initializer);
         if (type === undefined || !this.getChecker().isArrayType(type)) return false;
@@ -11660,7 +11707,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (String(declaration.initializer.getText()).split('\n')[0].length > 240) return false;
         const boxes: [any, 'clone' | 'move'][] = [];
         let natives = 0;
-        const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
+        // a same-named `let`/`const` in a sibling block is another binding
+        const usesAll = (accept: (n: any) => boolean): boolean => (defaulted ? this.rustScalarUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept));
+        const safe = usesAll((n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
             let at: any = n;
@@ -11668,6 +11717,7 @@ export class RustTranspiler extends BaseTranspiler {
             const up: any = at.parent;
             if (isElementAccessExpression(up) && up.expression === at) {
                 natives++;
+                indexed++;
                 return this.rustReadBearerElementUse(up, 'list');
             }
             if (at === n && isCallExpression(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
@@ -11677,6 +11727,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (isPropertyAccessExpression(up) && up.expression === at && String(up.name.text) === 'length') {
                 const use: any = up.parent;
                 natives++;
+                indexed++;
                 return use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
                     && !(isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
             }
@@ -11687,14 +11738,14 @@ export class RustTranspiler extends BaseTranspiler {
             if (isCallExpression(up) && up.expression !== n && up.arguments.some((a: any) => a === n)) {
                 const callee: any = up.expression;
                 if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
-                    || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n))) return false;
+                    || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n)) ) return false;
                 boxes.push([n, 'clone']);
                 return true;
             }
             return false;
         });
         // A list that is only handed on would trade each box for a handle box.
-        if (!safe || natives === 0) return false;
+        if (!safe || natives === 0 || (defaulted && indexed === 0 && boxes.some(([, form]) => form === 'clone'))) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         return true;
     }
@@ -11907,24 +11958,12 @@ export class RustTranspiler extends BaseTranspiler {
 
     printOptListLength(node: any): string | undefined {
         if (this.rustOptListOf(node.expression) === undefined) return undefined;
-        return `Value::Int(${this.rustOptListSlice(node.expression)}.len() as i64)`;
+        return this.printNativeLength(node, this.rustOptListSlice(node.expression));
     }
 
     printOptListElement(receiverNode: any, keyNode: any): string | undefined {
         if (this.rustOptListOf(receiverNode) === undefined) return undefined;
         return this.printReadBearerAccess('list', this.rustOptListSlice(receiverNode), keyNode);
-    }
-
-    /** `i < x.length` over an optional list: the slice the `i64` counter is bounded by (the condition printed as that read). */
-    rustOptListCounterBound(node: any, counter: string, condStr: string): string | undefined {
-        const cond: any = this.unwrapParens(node?.condition);
-        if (cond === undefined || !isBinaryExpression(cond) || cond.operatorToken.kind !== SyntaxKind.LessThanToken) return undefined;
-        const left: any = this.unwrapParens(cond.left);
-        const right: any = this.unwrapParens(cond.right);
-        if (!isIdentifier(left) || left.text !== counter || !isPropertyAccessExpression(right) || String(right.name.text) !== 'length') return undefined;
-        if (this.rustOptListOf(right.expression) === undefined) return undefined;
-        const slice = this.rustOptListSlice(right.expression);
-        return condStr === `${counter}.as_f64().unwrap_or(f64::NAN) < Value::Int(${slice}.len() as i64).as_f64().unwrap_or(f64::NAN)` ? slice : undefined;
     }
 
     /** `&x` at an any-key reader, the shared handle at a `Value` slot, a move at `return x`. */
@@ -12274,7 +12313,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
         // A `Value` index: an in-range Int reads, a negative/absent/other key misses
         // (`-1 as usize` is out of range, exactly `get_value`'s default branch).
-        if (this.rustI64CounterOf(key) !== undefined) return `${receiverText}.get(${keyText} as usize).cloned().unwrap_or(Value::Null)`;
+        if (this.rustI64CounterUse(key)) return `${receiverText}.get(${keyText} as usize).cloned().unwrap_or(Value::Null)`;
         return `${receiverText}.get(${keyText}.as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)`;
     }
 
@@ -13881,7 +13920,7 @@ export class RustTranspiler extends BaseTranspiler {
     arrLength(node, receiver: string): string | undefined {
         const recv: any = this.rustStripWrappers(node?.expression);
         if (!this.arrLocal(recv, true)) return undefined;
-        return `Value::Int(${receiver}.len() as i64)`;
+        return this.printNativeLength(node, receiver);
     }
 
     /** `x.push(v)` statement on an Arr-only local: `append_to_array`'s cache-push arm needs a Dict. */

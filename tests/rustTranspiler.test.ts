@@ -7615,6 +7615,46 @@ describe('rust direct key reads on shared dict locals', () => {
     });
 });
 
+describe('rust list reads with an empty list default', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n}\n',
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    parseRows (response: any) {\n        const rows = this.safeList (response, 'data', []);\n        const result = [];\n        for (let i = 0; i < rows.length; i++) {\n            result.push (rows[i]);\n        }\n        return result;\n    }\n" +
+            "    readIds (response: any) {\n        const rows = this.safeList (response, 'data', []);\n        let id = undefined;\n        for (let i = 0; i < rows.length; i++) {\n            id = this.safeString (rows, i);\n        }\n        return id;\n    }\n" +
+            "    handOn (response: any) {\n        const rows = this.safeList (response, 'data', []);\n        return this.hold (rows);\n    }\n" +
+            "    firstOf (response: any) {\n        const items = this.safeList (response, 'data', []);\n        if (items.length > 0) {\n            return this.safeDict (items, 0);\n        }\n        return undefined;\n    }\n" +
+            "    readMaybe (response: any) {\n        const rows = this.safeList (response, 'data');\n        return rows[0];\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-deflist-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a list read by index and length holds the shared list with a native bound', () => {
+        expect(out).toContain('let mut rows: crate::value::List = self.safeList(response.clone(), Value::Str("data".into()), &[Value::from(vec![])]).into_list();');
+        expect(out).not.toContain('&[Value::from(vec![])]).as_array().cloned().unwrap_or_default()');
+        expect(out).toContain('i < (rows.len() as i64)');
+        expect(out).toContain('rows.get(i as usize).cloned().unwrap_or(Value::Null)');
+    });
+    test('a list lent to an any-key reader passes a reference', () => {
+        expect(out).toContain('self.safeString(&rows, Value::Int(i), &[])');
+    });
+    test('a list also handed to a Value slot boxes its shared handle', () => {
+        expect(out).toContain('let mut items: crate::value::List = ');
+        expect(out).toContain('self.safeDict(Value::Arr(items.clone()), Value::Int(0), &[])');
+    });
+    test('negative: a list only handed on, or one that may be undefined, keeps its box', () => {
+        expect(out).toContain('return self.hold(rows);');
+        expect(out).toContain('let mut rows: Value = self.safeList(response.clone(), Value::Str("data".into()), &[Value::from(vec![])]);');
+        expect(out).not.toContain('&[]).into_list()');
+    });
+});
+
 describe('rust lookup tables and always-list producers', () => {
     const files: Record<string, string> = {
         'ts/src/base/Exchange.ts': 'export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    toArray (o: any): any[] { return o; }\n    arrayConcat (a: any[], b: any[]): any[] { return a; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n}\n',

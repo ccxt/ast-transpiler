@@ -151,6 +151,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     typeOfNodeIfAny(node: Node): Type | undefined;
     isValueLengthType(type: Type | undefined): boolean;
     printArrayLength(node: any, identation: any, leftExpr?: any): string;
+    private rustNativeLengths;
+    printNativeLength(node: any, place: string): string;
     /** `orderbook['bids']` / `orderbook.asks` on an `OrderBook`-typed receiver, or a
      *  local initialised from one. The WS runtime keeps those sides as marker dicts
      *  whose levels live in the side store, so only `get_array_length` / `get_value`
@@ -231,6 +233,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     ensureRef(expr: string): string;
     isNumberTyped(node: any): boolean;
     isBooleanPosition(node: any): boolean;
+    private rustNativeCompares;
     printNativeNumericComparison(node: any, operator: any, leftText: any, rightText: any): string;
     rustNumericOperandKind(node: any): string | undefined;
     orderedComparisonOperand(node: any): any;
@@ -1013,7 +1016,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A shadow dict key: an inlinable literal, or a proven-string plain place. */
     private rustShadowMapKey;
     /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
-    printShadowLength(shadow: RustParamShadow): string | undefined;
+    printShadowLength(node: any, shadow: RustParamShadow): string | undefined;
     /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
      *  runtime helper's exact semantics over `.get(..)`. */
     printShadowSafeReadCall(node: CallExpression): string | undefined;
@@ -1182,15 +1185,19 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustI64CounterPlan(node: any, counter: {
         name: string;
         symbol: any;
-    }, condStr: string): string | {
+    }): string | {
         cond: string;
     } | undefined;
     /** A bare counter use that is an argument of a `this.m(..)` call or the value of an `x[k] = i` write. */
     rustI64BoxedUse(id: any): boolean;
     /** The registered counter's symbol when `node` is a use of it, else undefined. */
     rustI64CounterOf(node: any): any;
-    /** True when every use of `name` in the printed body is a `.get(name as usize)` read or a `Value::Int(name)` box. */
-    rustI64BodyIsClosed(text: string, name: string): boolean;
+    private rustI64ClosedUses;
+    rustI64CounterUse(node: any): boolean;
+    /** True when every occurrence of `name` in the body printed as a `.get(name as usize)` read or a `Value::Int(name)` box. */
+    rustI64BodyIsClosed(body: any, name: string): boolean;
+    /** `i < X.length` whose condition printed as a native compare over a native `len()`: the place `X`. */
+    rustLengthCounterBound(node: any, counter: string): string | undefined;
     private static readonly COMPARISON_OPS;
     private static readonly NATIVE_COMPARISON_OPERATORS;
     isEqualityOp(op: any): boolean;
@@ -1542,6 +1549,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentListLocal(declaration: any): boolean;
     /** A call that yields a string list on every path (never `undefined`). */
     rustLentListSource(init: any): boolean;
+    /** A base `safeList*` read with an empty `[]` default: a list on every path. */
+    rustDefaultedListRead(init: any): boolean;
     rustLentListLocalUncached(declaration: any): boolean;
     rustLentListUse(node: any): boolean;
     /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
@@ -1569,8 +1578,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     printOptListIsArray(node: any): string | undefined;
     printOptListLength(node: any): string | undefined;
     printOptListElement(receiverNode: any, keyNode: any): string | undefined;
-    /** `i < x.length` over an optional list: the slice the `i64` counter is bounded by (the condition printed as that read). */
-    rustOptListCounterBound(node: any, counter: string, condStr: string): string | undefined;
     /** `&x` at an any-key reader, the shared handle at a `Value` slot, a move at `return x`. */
     printOptListIdentifier(node: any, text: string): string | undefined;
     private static readonly RUST_HANDED_DICT_SOURCES;
