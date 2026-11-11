@@ -52932,8 +52932,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const typedMarket = this.printTypedMarketLocal(declaration, indent, varName);
     if (typedMarket !== void 0)
       return typedMarket;
-    if (node.declarations.length === 1 && this.rustLentListLocal(declaration))
-      return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
     const readBearer = node.declarations.length === 1 ? this.rustReadBearerKindOfDeclaration(declaration) : false;
     if (readBearer === "list") {
       return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
@@ -52957,6 +52955,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const block = this.rustObjectLiteralBlock(this.rustSkipWrappers(declaration.initializer), identation);
       return `${indent}let mut ${varName}: indexmap::IndexMap<String, Value> = (${block})`;
     }
+    if (node.declarations.length === 1 && this.rustLentListLocal(declaration))
+      return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
     if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration))
       return this.rustBorrowedLocalKind(declaration) === "list" ? `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
     if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration))
@@ -60802,8 +60802,7 @@ ${iden}}`;
     const fn = this.rustEnclosingFunction(declaration);
     if (fn === void 0 || isSourceFile5(fn) || this.rustLocalIsReassigned(declaration, name))
       return false;
-    const bearer = this.rustReadBearerKindOfDeclaration(declaration) !== false;
-    if (bearer && !isIdentifier3(init.expression.expression) || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration) || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustBorrowedDictLocal(declaration) || this.rustNilLocalKind(declaration) !== void 0 || this.rustScalarLocalKind(declaration) !== void 0)
+    if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration) || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustBorrowedDictLocal(declaration) || this.rustNilLocalKind(declaration) !== void 0 || this.rustScalarLocalKind(declaration) !== void 0)
       return false;
     if (String(declaration.initializer.getText()).split("\n")[0].length > 240)
       return false;
@@ -60837,7 +60836,7 @@ ${iden}}`;
       }
       return false;
     });
-    if (!safe || natives === 0 || bearer && boxes.length > 0)
+    if (!safe || natives === 0)
       return false;
     for (const [n, form] of boxes)
       this.rustLentListBoxes.set(n, form);

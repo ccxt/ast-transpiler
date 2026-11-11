@@ -2015,7 +2015,6 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const typedMarket = this.printTypedMarketLocal(declaration, indent, varName);
         if (typedMarket !== undefined) return typedMarket;
-        if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
         // A read-only container bearer carries the container itself.
         const readBearer = node.declarations.length === 1 ? this.rustReadBearerKindOfDeclaration(declaration) : false;
         if (readBearer === 'list') {
@@ -2041,6 +2040,7 @@ export class RustTranspiler extends BaseTranspiler {
             const block = this.rustObjectLiteralBlock(this.rustSkipWrappers(declaration.initializer), identation);
             return `${indent}let mut ${varName}: indexmap::IndexMap<String, Value> = (${block})`;
         }
+        if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
@@ -10446,9 +10446,7 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn) || this.rustLocalIsReassigned(declaration, name)) return false;
-        // A read-only `Object.keys` bearer copies the keys out of the box; the shared list replaces that copy.
-        const bearer = this.rustReadBearerKindOfDeclaration(declaration) !== false;
-        if ((bearer && !isIdentifier(init.expression.expression)) || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration)
+        if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration)
             || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustBorrowedDictLocal(declaration)
             || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
         if (String(declaration.initializer.getText()).split('\n')[0].length > 240) return false;
@@ -10482,7 +10480,7 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         });
         // A list that is only handed on would trade each box for a handle box.
-        if (!safe || natives === 0 || (bearer && boxes.length > 0)) return false;
+        if (!safe || natives === 0) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         return true;
     }

@@ -7091,13 +7091,12 @@ describe('rust string lists lent to base methods', () => {
         expect(out).toContain('let mut ids: crate::value::List = ');
         expect(out).toContain('Value::Arr(normalized.clone())');
         expect(out).toMatch(/ids\.len\(\) as i64/);
-        expect(out).toContain('let mut keys: crate::value::List = ');
-        expect(out).toContain('keys.get(i as usize).cloned().unwrap_or(Value::Null)');
         expect(out).not.toContain('normalized: Value');
     });
 
     test('negative: a list that may be undefined keeps its box', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'lent-string-list', 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut maybe: Value = ');
+        expect(out).toContain('let mut keys: Vec<Value> = ');
     });
 });
