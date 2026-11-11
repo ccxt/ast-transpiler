@@ -55883,10 +55883,9 @@ ${binding(plan.indent)}` : ""), head: "" };
       return `${super.printIdentifier(inner)}.as_deref()`;
     if (kind !== void 0 || this.primitiveKindOfType(this.typeOfNodeIfAny(inner)) !== "string" || !this.printsValueExpression(inner))
       return void 0;
-    if (this.rustScalarHasTypedOperand(inner))
+    if (this.rustScalarHasTypedOperand(inner) || String(inner.getText()).includes("\n"))
       return void 0;
-    const text = this.printNode(inner, 0).trim();
-    return text.includes("\n") ? void 0 : `(${text}).as_str()`;
+    return `(${this.printNode(inner, 0).trim()}).as_str()`;
   }
   /** `s.indexOf(n)` on a typed string local: `str::find` (byte index), `-1` when absent or either side is null, as the helper. */
   rustStrFindText(recvKind, name, needle) {
@@ -55934,10 +55933,12 @@ ${binding(plan.indent)}` : ""), head: "" };
       return void 0;
     if (this.rustScalarHasTypedOperand(right) || new RegExp(`\\b${String(target.text)}\\b`).test(String(right.getText())))
       return void 0;
+    if (String(right.getText()).includes("\n"))
+      return void 0;
     if (dry)
       return "_";
     const text = this.printNode(right, 0).trim();
-    return text.includes("\n") ? void 0 : `${/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) ? text : `(${text})`}.to_string()`;
+    return `${isIdentifier3(right) ? text : `(${text})`}.to_string()`;
   }
   /** A string-method local returned from a method whose signature alone could print `-> Option<String>`: typing it would flip that ABI. */
   rustStrReturnSignature(fn, n) {
@@ -63298,12 +63299,13 @@ ${iden}}`;
     if (declaration === void 0 || declaration.body === void 0 || _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName)))
       return false;
     let type = declaration.type;
-    if (type?.kind === SyntaxKind7.TypeReference && String(type.typeName?.getText?.() ?? "") === "Promise" && type.typeArguments?.length === 1)
+    const named = (t, name) => t?.kind === SyntaxKind7.TypeReference && isIdentifier3(t.typeName) && t.typeName.text === name;
+    if (named(type, "Promise") && type.typeArguments?.length === 1)
       type = type.typeArguments[0];
     if (type?.kind !== SyntaxKind7.TupleType)
       return false;
     const slot = type.elements?.[element.parent.elements.indexOf(element)];
-    return slot !== void 0 && String(slot.getText()).replace(/\s+/g, "") === "Dict";
+    return named(slot, "Dict") && slot.typeArguments === void 0;
   }
   /** One element read rooted at the bearer: a plain read the native op serves. */
   rustReadBearerElementUse(access, kind) {

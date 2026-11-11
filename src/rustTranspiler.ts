@@ -4913,9 +4913,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'str') return `Some(${super.printIdentifier(inner)}.as_str())`;
         if (kind === 'ostr' && this.rustScalarLocalOf(inner) !== undefined) return `${super.printIdentifier(inner)}.as_deref()`;
         if (kind !== undefined || this.primitiveKindOfType(this.typeOfNodeIfAny(inner)) !== 'string' || !this.printsValueExpression(inner)) return undefined;
-        if (this.rustScalarHasTypedOperand(inner)) return undefined;
-        const text = this.printNode(inner, 0).trim();
-        return text.includes('\n') ? undefined : `(${text}).as_str()`;
+        if (this.rustScalarHasTypedOperand(inner) || String(inner.getText()).includes('\n')) return undefined;
+        return `(${this.printNode(inner, 0).trim()}).as_str()`;
     }
 
     /** `s.indexOf(n)` on a typed string local: `str::find` (byte index), `-1` when absent or either side is null, as the helper. */
@@ -4958,9 +4957,10 @@ export class RustTranspiler extends BaseTranspiler {
     rustStrPushValueText(target, right, dry: boolean): string | undefined {
         if (isBinaryExpression(right) || this.literalKindOfNode(right) !== undefined || this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== 'string' || !this.printsValueExpression(right)) return undefined;
         if (this.rustScalarHasTypedOperand(right) || new RegExp(`\\b${String(target.text)}\\b`).test(String(right.getText()))) return undefined;
+        if (String(right.getText()).includes('\n')) return undefined;
         if (dry) return '_';
         const text = this.printNode(right, 0).trim();
-        return text.includes('\n') ? undefined : `${/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) ? text : `(${text})`}.to_string()`;
+        return `${isIdentifier(right) ? text : `(${text})`}.to_string()`;
     }
 
     /** A string-method local returned from a method whose signature alone could print `-> Option<String>`: typing it would flip that ABI. */
@@ -5077,7 +5077,7 @@ export class RustTranspiler extends BaseTranspiler {
         const entry = typed?.params[Array.from(param.parent.parameters).indexOf(param)];
         const kind = entry?.optional ? ({ 'Option<i64>': 'oint', 'Option<f64>': 'onum' })[entry.rustType] : undefined;
         if (kind === undefined) return undefined;
-        for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text)) as any[]) {
+        for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text))) {
             if (n === param.name || !isIdentifier(n)) continue;
             const up: any = n.parent;
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return undefined;
@@ -12739,10 +12739,11 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustCalleeDeclaration(init);
         if (declaration === undefined || declaration.body === undefined || RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
         let type: any = declaration.type;
-        if (type?.kind === SyntaxKind.TypeReference && String(type.typeName?.getText?.() ?? '') === 'Promise' && type.typeArguments?.length === 1) type = type.typeArguments[0];
+        const named = (t: any, name: string): boolean => t?.kind === SyntaxKind.TypeReference && isIdentifier(t.typeName) && t.typeName.text === name;
+        if (named(type, 'Promise') && type.typeArguments?.length === 1) type = type.typeArguments[0];
         if (type?.kind !== SyntaxKind.TupleType) return false;
         const slot: any = type.elements?.[element.parent.elements.indexOf(element)];
-        return slot !== undefined && String(slot.getText()).replace(/\s+/g, '') === 'Dict';
+        return named(slot, 'Dict') && slot.typeArguments === undefined;
     }
 
     /** One element read rooted at the bearer: a plain read the native op serves. */
