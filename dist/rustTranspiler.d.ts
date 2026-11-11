@@ -837,6 +837,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustTupleSlotDecisions;
     rustTupleSlotKind(element: any): string | undefined;
     private rustTupleSlotKindUncached;
+    rustStrSlotBoxUse(n: any): boolean;
+    /** `x.clone().map(Value::from).unwrap_or(Value::Null)` at a boxed use of a typed string slot. */
+    printRustStrSlotBox(node: any): string | undefined;
+    /** The slot's final read: no later use, no other use in its statement, no loop or closure since the destructure. */
+    rustStrSlotLastUse(node: any, declaration: any): boolean;
+    /** An optional `params: Dict = {}` of a transpiled `handle*` / `fetchPaginatedCall*` method (the base one or a venue
+     *  override): the argument rides in the `optional_args` slice, where a dict local is the shared map (`From<&Dict>`). */
+    rustOptionalParamsSlot(call: any, arg: any): boolean;
+    /** `Value::from(&x)` for a handed dict local riding in an optional params slot. */
+    printOptionalParamsArg(node: any, text: string): string | undefined;
     /** `let mut a: Option<String> | bool = <temp>.get(i)..` for a typed tuple slot, else undefined. */
     printRustTupleSlotLocal(element: any, printedName: string, temp: string, index: number, nativeList: boolean, indent: string): string | undefined;
     /** Native read for one chain level, or undefined to keep `get_value`. */

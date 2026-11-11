@@ -389,7 +389,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_NUMBER_CONSTANT_IMPORTS.has(name) && this.rustIsImportedValueName(node)) {
             return `Value::Int(crate::runtime::${name})`;
         }
-        return this.printClientHandleUse(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? super.printIdentifier(node);
+        return this.printClientHandleUse(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node);
     }
 
     /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
@@ -6908,9 +6908,75 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustDeclaredNode(n) !== element || this.rustEnclosingFunction(n) !== fn) return false;
             const ok = kind === 'string' ? this.rustStringLocalUseIsNative(n) : this.rustIdentifierUseIsCondition(n);
             if (ok) nativeUses++;
-            return ok;
+            return ok || (kind === 'string' && this.rustStrSlotBoxUse(n) && (isCallExpression(n.parent) || isReturnStatement(n.parent) || this.rustStrSlotLastUse(n, element)));
         });
         return safe && nativeUses > 0 ? (kind === 'string' ? 'str' : 'bool') : undefined;
+    }
+
+    // ── optional params slots ────────────────────────────────────────────────
+    // A literal-tested `Option<String>` tuple slot may also hand itself to a plain `Value` slot (a `this.`/`super.`
+    // argument, an object-literal value, an array element, a return): there it boxes through `From`.
+    // A handed dict local given to the optional `params: Dict = {}` of a transpiled method rides in its
+    // `optional_args` slice as the shared map (`From<&Dict>`, no copy).
+
+    rustStrSlotBoxUse(n: any): boolean {
+        if (this.rustScalarInNestedWrite(n)) return false;
+        const parent: any = n.parent;
+        if (isCallExpression(parent) && parent.expression !== n) {
+            const callee: any = parent.expression;
+            return isPropertyAccessExpression(callee) && this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n));
+        }
+        if (parent?.kind === SyntaxKind.PropertyAssignment && parent.initializer === n) return true;
+        if (isArrayLiteralExpression(parent)) return !(isBinaryExpression(parent.parent) && parent.parent.left === parent);
+        return isReturnStatement(parent) && parent.expression === n && this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike) as any) !== 'str';
+    }
+
+    /** `x.clone().map(Value::from).unwrap_or(Value::Null)` at a boxed use of a typed string slot. */
+    printRustStrSlotBox(node: any): string | undefined {
+        if (!isIdentifier(node) || !this.rustStrSlotBoxUse(node)) return undefined;
+        const declaration: any = this.rustDeclaredNode(node);
+        if (declaration?.kind !== SyntaxKind.BindingElement || declaration.name === node || this.rustTupleSlotKind(declaration) !== 'str') return undefined;
+        const name = super.printIdentifier(node);
+        return `${isReturnStatement(node.parent) || this.rustStrSlotLastUse(node, declaration) ? name : `${name}.clone()`}.map(Value::from).unwrap_or(Value::Null)`;
+    }
+
+    /** The slot's final read: no later use, no other use in its statement, no loop or closure since the destructure. */
+    rustStrSlotLastUse(node: any, declaration: any): boolean {
+        let statement: any = node;
+        while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
+        let last = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => {
+            if (n !== node && (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end))) last = false;
+            return true;
+        });
+        if (!last) return false;
+        const owner: any = declaration.parent?.parent;
+        for (let up: any = node.parent; up !== undefined && !(up.pos <= owner.pos && owner.end <= up.end); up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
+    }
+
+    /** An optional `params: Dict = {}` of a transpiled `handle*` / `fetchPaginatedCall*` method (the base one or a venue
+     *  override): the argument rides in the `optional_args` slice, where a dict local is the shared map (`From<&Dict>`). */
+    rustOptionalParamsSlot(call: any, arg: any): boolean {
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(call.expression.name.text);
+        if (!/^(?:handle\w+|fetchPaginatedCall\w+)$/.test(name)) return false;
+        const at = Array.from(call.arguments ?? []).indexOf(arg);
+        const params = at < 0 ? undefined : this.rustTranspiledCalleeParams(call, name);
+        const param: any = params?.[at];
+        if (param === undefined || param.dotDotDotToken !== undefined || param.initializer === undefined || !isIdentifier(param.name) || param.name.text !== 'params') return false;
+        return String(param.type?.getText?.() ?? '').replace(/\s+/g, '') === 'Dict';
+    }
+
+    /** `Value::from(&x)` for a handed dict local riding in an optional params slot. */
+    printOptionalParamsArg(node: any, text: string): string | undefined {
+        if (!isIdentifier(node) || !this.rustOptionalParamsSlot(node.parent, node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration === node || declaration.name === node || !this.rustHandedDictLocal(declaration)) return undefined;
+        return `Value::from(&${text})`;
     }
 
     /** `let mut a: Option<String> | bool = <temp>.get(i)..` for a typed tuple slot, else undefined. */
@@ -9541,7 +9607,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     transformIdentifier(node, identifier) {
         const text = super.transformIdentifier(node, identifier);
-        const borrowedArg = this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printOptionalParamsArg(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -10950,7 +11016,8 @@ export class RustTranspiler extends BaseTranspiler {
                 || (call.arguments[0] === n && call.arguments.length === 2 && this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_OMIT))
                 || this.rustHandedDictExtendOperand(call) === n || this.rustLentParamsSlot(call, n);
             if (ok) uses++;
-            return ok;
+            // an optional-slice hand-off boxes the shared map back, so it only rides along with a by-reference use
+            return ok || this.rustOptionalParamsSlot(call, n);
         });
         return safe && uses > 0;
     }
