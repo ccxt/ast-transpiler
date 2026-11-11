@@ -12081,7 +12081,8 @@ export class RustTranspiler extends BaseTranspiler {
     // The optional map answers the test natively (`is_some()` / `is_none()`); a non-map reads as `None`, as the reader does.
     rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean {
         if (nullTests === 0 || writes > 0 || init === undefined || !isCallExpression(init)) return false;
-        return /^safeDict(?:2|N)?$/.test(String((init.expression as any)?.name?.text ?? '')) && this.rustOptContainerSourceOk(init, 'dict');
+        const callee = init.expression;
+        return isPropertyAccessExpression(callee) && /^safeDict(?:2|N)?$/.test(String(callee.name.text)) && this.rustOptContainerSourceOk(init, 'dict');
     }
 
     // ── rustDictElementSource: `xs[i]` over a list whose checker element type is a string-keyed map ──

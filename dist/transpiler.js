@@ -62675,7 +62675,8 @@ ${iden}}`;
   rustNullTestedDictLocal(init, nullTests, writes) {
     if (nullTests === 0 || writes > 0 || init === void 0 || !isCallExpression6(init))
       return false;
-    return /^safeDict(?:2|N)?$/.test(String(init.expression?.name?.text ?? "")) && this.rustOptContainerSourceOk(init, "dict");
+    const callee = init.expression;
+    return isPropertyAccessExpression3(callee) && /^safeDict(?:2|N)?$/.test(String(callee.name.text)) && this.rustOptContainerSourceOk(init, "dict");
   }
   // ── rustDictElementSource: `xs[i]` over a list whose checker element type is a string-keyed map ──
   // The element leaves its copied box as the shared map (the same Arc bump the copy paid). A missing
