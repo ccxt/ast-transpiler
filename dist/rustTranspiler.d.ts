@@ -1750,9 +1750,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustParamIsLentList(param: any): boolean;
     private static readonly RUST_LENT_LIST_TYPES;
     rustParamIsLentListUncached(param: any): boolean;
-    private rustLentListNamesByRoot;
-    /** Base `parse*s` methods whose first parameter every declaration (base and overrides) types `List`. */
-    rustLentListMethodNames(srcRoot: string): Set<string>;
     /** A call argument landing in a lent list parameter of the callee. */
     rustLentListSlot(call: any, arg: any): boolean;
     /** `&x` for a shared list local lent to a lent list parameter. */

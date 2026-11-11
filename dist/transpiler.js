@@ -51456,9 +51456,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustUntilHeadDecisions = /* @__PURE__ */ new WeakMap();
     // ── lent list containers (rustParamIsLentList / rustLentListSlot / printLentListArg) ──
     // The response list of a base `parse*` method declared `List` takes `impl Into<crate::Value>`, in the base and in
-    // every override: a `Value` still passes (dispatch arms too) and a shared list local is lent as `&x`, no copy.
+    // every override of it: a `Value` still passes (dispatch arms too) and a shared list local is lent as `&x`, no copy.
     this.rustLentListParamDecisions = /* @__PURE__ */ new WeakMap();
-    this.rustLentListNamesByRoot = /* @__PURE__ */ new Map();
     // ── lent params dicts ────────────────────────────────────────────────────
     // A base `handle*` method whose required `params` dict is only read (key reads, omit, handed on, returned)
     // and never overridden takes it as `impl Into<crate::Value>`: a `Value` still passes (the by-name dispatch arms
@@ -63961,54 +63960,25 @@ ${iden}}`;
     const name = String(method.name.text);
     if (!/^parse[A-Z]\w*s$/.test(name) || param.name?.kind !== SyntaxKind7.Identifier || param.initializer !== void 0 || param.questionToken !== void 0)
       return false;
-    const type = param.type;
-    const typeName = type?.kind === SyntaxKind7.TypeReference && isIdentifier3(type.typeName) && type.typeArguments === void 0 ? String(type.typeName.text) : "";
-    if (!_RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName) || !isClassDeclaration4(method.parent))
+    if (!isClassDeclaration4(method.parent) || (method.modifiers ?? []).some((m) => m.kind === SyntaxKind7.StaticKeyword))
       return false;
-    if ((method.modifiers ?? []).some((m) => m.kind === SyntaxKind7.StaticKeyword) || this.rustTypedSignature(method) !== void 0 || this.rustMethodReferencedAsValue(method))
+    if (this.rustTypedSignature(method) !== void 0 || this.rustMethodReferencedAsValue(method))
       return false;
     const file = String(method.getSourceFile().fileName).replace(/\\/g, "/");
-    const at = file.search(/\/ts\/src\/(?:base\/|pro\/|prediction\/)?[^/]+\.ts$/);
-    if (at < 0)
+    if (file.search(/\/ts\/src\/(?:base\/|pro\/|prediction\/)?[^/]+\.ts$/) < 0)
       return false;
-    if (_RustTranspiler.RUST_BASE_TIER_FILE.test(file)) {
-      const marker = String(method.getSourceFile().text ?? "").indexOf("METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT");
-      if (marker < 0 || (method.getStart?.() ?? method.pos) < marker)
+    if (!_RustTranspiler.RUST_BASE_TIER_FILE.test(file)) {
+      if (!(method.modifiers ?? []).some((m) => m.kind === SyntaxKind7.OverrideKeyword))
         return false;
-    } else if (!(method.modifiers ?? []).some((m) => m.kind === SyntaxKind7.OverrideKeyword))
-      return false;
-    return this.rustLentListMethodNames(file.slice(0, at) + "/ts/src").has(name);
-  }
-  /** Base `parse*s` methods whose first parameter every declaration (base and overrides) types `List`. */
-  rustLentListMethodNames(srcRoot) {
-    let names = this.rustLentListNamesByRoot.get(srcRoot);
-    if (names !== void 0)
-      return names;
-    names = /* @__PURE__ */ new Set();
-    const declared = /^ {4}(?:(?:override|async|public|protected|private)\s+)*(parse[A-Z]\w*s)\s*\(\s*\w+\s*(?::\s*([^,=)]+))?/gm;
-    const seen = /* @__PURE__ */ new Map();
-    for (const dir of ["/base", "", "/pro", "/prediction"]) {
-      let entries = [];
-      try {
-        entries = fs3.readdirSync(srcRoot + dir).filter((f) => f.endsWith(".ts") && (dir !== "/base" || f === "Exchange.ts"));
-      } catch (e) {
-        continue;
-      }
-      for (const f of entries) {
-        for (const m of fs3.readFileSync(`${srcRoot}${dir}/${f}`, "utf8").matchAll(declared)) {
-          const listed = _RustTranspiler.RUST_LENT_LIST_TYPES.has(String(m[2] ?? "").replace(/\s+/g, ""));
-          if (dir === "/base")
-            seen.set(m[1], (seen.get(m[1]) ?? true) && listed);
-          else if (seen.has(m[1]) && !listed)
-            seen.set(m[1], false);
-        }
-      }
+      const overridden = this.getMethodOverride(method);
+      return overridden !== void 0 && overridden !== method && this.rustParamIsLentList(overridden.parameters?.[0]);
     }
-    for (const [n, ok] of seen)
-      if (ok)
-        names.add(n);
-    this.rustLentListNamesByRoot.set(srcRoot, names);
-    return names;
+    const marker = String(method.getSourceFile().text ?? "").indexOf("METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT");
+    if (marker < 0 || (method.getStart?.() ?? method.pos) < marker)
+      return false;
+    const type = param.type;
+    const typeName = type?.kind === SyntaxKind7.TypeReference && isIdentifier3(type.typeName) && type.typeArguments === void 0 ? String(type.typeName.text) : "";
+    return _RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName);
   }
   /** A call argument landing in a lent list parameter of the callee. */
   rustLentListSlot(call, arg) {
