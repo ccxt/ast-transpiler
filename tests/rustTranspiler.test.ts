@@ -57,6 +57,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Order { id: string }\nexport interface CancellationRequest { id: string; symbol: string }\nexport default class Exchange {\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { CancellationRequest, Dict, Order, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async cancelOrdersForSymbols (orders: CancellationRequest[], params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    async cancelUnifiedOrder (order: Order, params: Dict = {}): Promise<Order> {\n        const orders = await this.cancelOrdersForSymbols ([ order ], params);\n        return orders[0];\n    }\n    async fetchOrderStatus (id: string, symbol: Str = undefined, params: Dict = {}): Promise<Str> {\n        return 'open';\n    }\n}\n"
  },
+ "lent-params": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleParamString (params: Dict, paramName: string, defaultValue: Str = undefined): [Str, Dict] {\n        const value = this.safeString (params, paramName, defaultValue);\n        const paramsOmitted = (value !== undefined) ? this.omit (params, paramName) : params;\n        return [ value, paramsOmitted ];\n    }\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        const until = this.safeString (params, 'until');\n        if (until !== undefined) {\n            request[key] = until;\n        }\n        const paramsOmitted = (until !== undefined) ? this.omit (params, 'until') : params;\n        return [ request, paramsOmitted ];\n    }\n    handleWrittenParams (params: Dict): [Str, Dict] {\n        params['seen'] = true;\n        return [ undefined, params ];\n    }\n    handleOverriddenParams (params: Dict): [Str, Dict] {\n        return [ this.safeString (params, 'x'), params ];\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ tag, paramsTag ] = this.handleParamString (params, 'tag');\n        const [ requestUntil, paramsUntil ] = this.handleUntilOption ('end', { 'tag': tag }, paramsTag);\n        return this.extend (requestUntil, paramsUntil);\n    }\n    handleOverriddenParams (params: Dict): [Str, Dict] {\n        return [ undefined, params ];\n    }\n}\ntype Str = string | undefined;\n"
+ },
  "handed-dict": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    handleMarketTypeAndParams (m: string, market: any = undefined, params: Dict = {}): [string, Dict] { return [ m, params ]; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ marketType, query ] = this.handleMarketTypeAndParams ('fetchThing', undefined, params);\n        const rest = this.omit (query, 'x');\n        const s = this.safeString (query, 's');\n        const request: Dict = { 'type': marketType, 's': s };\n        return this.hold (this.extend (request, rest));\n    }\n    fetchKept (params: Dict = {}) {\n        const kept = this.omit (params, 'x');\n        return this.hold (kept);\n    }\n}\n"
@@ -5464,6 +5468,28 @@ describe('bearer write shapes', () => {
         const out = rs("        let d: Dict = {};\n        d['a'] = v;\n        if (v) {\n            d = this.parseX (v);\n        }\n        return d;");
         expect(out).toContain('let mut d: Value = Value::Map({');
         expect(out).toContain('add_element_to_object(&mut d,');
+    });
+});
+
+describe('lent params dicts', () => {
+    test('a read-only params dict of a base handle method is lent by reference from typed dict locals', () => {
+        const base = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'lent-params', 'ts/src/base/Exchange.ts')).content;
+        expect(base).toMatch(/fn handleParamString\(&self, params: impl Into<crate::Value>, paramName: Value, optional_args: &\[Value\]\)/);
+        expect(base).toMatch(/fn handleUntilOption\(&self, key: Value, request: Value, params: impl Into<crate::Value>, optional_args: &\[Value\]\)/);
+        expect(base).toContain('let mut params: Value = params.into();');
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'lent-params', 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut paramsTag: crate::value::Dict = \w+\.get\(1\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+        expect(out).toContain(', &paramsTag, &[])');
+        expect(out).toMatch(/let mut paramsUntil: crate::value::Dict = /);
+        expect(out).toContain('&[&paramsUntil])');
+        expect(out).not.toContain('paramsTag: Value');
+        expect(out).not.toContain('paramsUntil: Value');
+    });
+
+    test('negative: a written or overridden params dict keeps its Value parameter', () => {
+        const base = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'lent-params', 'ts/src/base/Exchange.ts')).content;
+        expect(base).toMatch(/fn handleWrittenParams\(&self, params: Value\)/);
+        expect(base).toMatch(/fn handleOverriddenParams\(&self, params: Value\)/);
     });
 });
 

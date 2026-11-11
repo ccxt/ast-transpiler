@@ -1374,6 +1374,25 @@ export declare class RustTranspiler extends BaseTranspiler {
     printHandedDictExtend(node: any, identation: number): string | undefined;
     /** `let mut x: crate::value::Dict = <slot read>.into_dict()` for a handed params slot. */
     printRustHandedDictSlot(element: any, printedName: string, read: string, indent: string): string | undefined;
+    private rustLentParamDecisions;
+    private rustLentOverrideNames;
+    rustParamIsLentDict(param: any): boolean;
+    rustParamIsLentDictUncached(param: any): boolean;
+    /** A method of that name is declared outside the base tier: in this program (checker-visible), or in a venue
+     *  source next to the base tier, which a base-only program does not load. Either keeps the `Value` signature. */
+    rustLentOverridden(name: string): boolean;
+    private rustVenueMethodNamesByRoot;
+    /** Method names declared by the venue sources under `srcRoot` (REST, pro, prediction). */
+    rustVenueMethodNames(srcRoot: string): Set<string>;
+    /** The callee parameter a call argument lands in, when that parameter takes a lent dict. */
+    rustLentParamsSlot(call: any, arg: any): boolean;
+    /** `&x` for a handed dict local lent to a lent-params slot. */
+    printLentParamsArg(node: any, text: string): string | undefined;
+    /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
+    rustLentParamsBinding(node: any, identation: number): string;
+    /** A base `handleUntilOption` / `handleParam*` call, or any `this.handle*` call whose slot 1 the checker types as a
+     *  dict: that slot is the params dict, like a `handle*AndParams` one. */
+    rustLentSlotSource(init: any, element: any): boolean;
     /** One element read rooted at the bearer: a plain read the native op serves. */
     rustReadBearerElementUse(access: any, kind: 'list' | 'map'): boolean;
     /** Key a read-only bearer serves natively: a literal string for a map, a
