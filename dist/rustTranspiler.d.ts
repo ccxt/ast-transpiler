@@ -1324,6 +1324,20 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBorrowedDictReader(call: any): string | undefined;
     /** `self.safe_X_k(&x, "k", &[..])` when `x` is a borrowed dict local or a typed container local. */
     printBorrowedDictRead(node: any, identation: number): string | undefined;
+    private static readonly RUST_HANDED_DICT_SOURCES;
+    private rustHandedDictDecisions;
+    rustHandedDictLocal(declaration: any): boolean;
+    /** `this.m (..)` resolved to the base tier, `m` in `names`. */
+    rustBaseCallNamed(call: any, names: Set<string>): boolean;
+    rustHandedDictLocalUncached(declaration: any): boolean;
+    private static readonly RUST_HANDED_DICT_OMIT;
+    private static readonly RUST_HANDED_DICT_EXTEND;
+    /** The sole extra operand of a base `this.extend (a, x)` / `this.deepExtend (a, x)` when it is a bare identifier. */
+    rustHandedDictExtendOperand(call: any): any;
+    /** `self.extend(a, &[&x])` / `self.omit(&x, keys, &[])` lending a handed dict local. */
+    printHandedDictExtend(node: any, identation: number): string | undefined;
+    /** `let mut x: crate::value::Dict = <slot read>.into_dict()` for a handed params slot. */
+    printRustHandedDictSlot(element: any, printedName: string, read: string, indent: string): string | undefined;
     /** One element read rooted at the bearer: a plain read the native op serves. */
     rustReadBearerElementUse(access: any, kind: 'list' | 'map'): boolean;
     /** Key a read-only bearer serves natively: a literal string for a map, a

@@ -51398,6 +51398,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // `IndexMap`, reads stay native and each `Value` slot boxes a clone (a move at `return x`).
     this.rustContainerBoxUses = /* @__PURE__ */ new WeakMap();
     this.rustBorrowedDictDecisions = /* @__PURE__ */ new WeakMap();
+    this.rustHandedDictDecisions = /* @__PURE__ */ new WeakMap();
     // Two-level dict bearers: an object literal whose every value is an object literal is declared
     // `IndexMap<String, IndexMap<String, Value>>`, so `x[k1][k2] = v` is one `entry(k1)..insert(k2, v)` and
     // `x[k1][k2]` a two-step lookup. Any other shape keeps the box.
@@ -52890,7 +52891,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
 ` : `${indent}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};
 `;
       const untypedRead = (idx) => nativeList ? this.printTypedVecElementRead(syntheticName, idx) : `get_value(&${syntheticName}, &Value::Int(${idx}))`;
-      const lines = parsedElements.map((e, idx) => this.printRustTupleSlotLocal(declaration.name.elements[idx], e, syntheticName, idx, nativeList, indent) ?? `${indent}let mut ${e}: Value = ${untypedRead(idx)}`);
+      const lines = parsedElements.map((e, idx) => this.printRustTupleSlotLocal(declaration.name.elements[idx], e, syntheticName, idx, nativeList, indent) ?? this.printRustHandedDictSlot(declaration.name.elements[idx], e, untypedRead(idx), indent) ?? `${indent}let mut ${e}: Value = ${untypedRead(idx)}`);
       return head + lines.join(";\n");
     }
     const varName = this.printNode(declaration.name, 0);
@@ -52940,7 +52941,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const block = this.rustObjectLiteralBlock(this.rustSkipWrappers(declaration.initializer), identation);
       return `${indent}let mut ${varName}: indexmap::IndexMap<String, Value> = (${block})`;
     }
-    if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration))
+    if (node.declarations.length === 1 && (this.rustBorrowedDictLocal(declaration) || this.rustHandedDictLocal(declaration)))
       return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
     const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
     if (boolValue !== void 0) {
@@ -56625,6 +56626,9 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const borrowedRead = this.printBorrowedDictRead(node, identation);
     if (borrowedRead !== void 0)
       return borrowedRead;
+    const handed = this.printHandedDictExtend(node, identation);
+    if (handed !== void 0)
+      return handed;
     const scalarMethod = this.printRustScalarMethodCall(node);
     if (scalarMethod !== void 0)
       return scalarMethod;
@@ -60479,7 +60483,7 @@ ${iden}}`;
     if (recv === void 0 || !isIdentifier3(recv))
       return void 0;
     const declaration = this.rustDeclarationOfIdentifier(recv);
-    const owned = declaration !== void 0 && declaration !== recv && this.rustBorrowedDictLocal(declaration);
+    const owned = declaration !== void 0 && declaration !== recv && (this.rustBorrowedDictLocal(declaration) || this.rustHandedDictLocal(declaration));
     if (!owned && !(this.rustContainerBoxUses.get(recv) !== void 0 && this.rustReadBearerKind(recv) !== void 0))
       return void 0;
     const key = this.rustSkipWrappers(node.arguments[1]);
@@ -60487,6 +60491,106 @@ ${iden}}`;
     const text = String(recv.text);
     const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[text] ?? text);
     return `self.${rust}(&${name}, ${this.quotedStringLiteral(String(key.text))}, &[${dflt}])`;
+  }
+  rustHandedDictLocal(declaration) {
+    if (declaration?.kind !== SyntaxKind7.VariableDeclaration && declaration?.kind !== SyntaxKind7.BindingElement)
+      return false;
+    let decision = this.rustHandedDictDecisions.get(declaration);
+    if (decision === void 0) {
+      this.rustHandedDictDecisions.set(declaration, false);
+      try {
+        decision = this.rustHandedDictLocalUncached(declaration);
+      } catch (e) {
+        decision = false;
+      }
+      this.rustHandedDictDecisions.set(declaration, decision);
+    }
+    return decision;
+  }
+  /** `this.m (..)` resolved to the base tier, `m` in `names`. */
+  rustBaseCallNamed(call, names) {
+    const callee = call?.expression;
+    return isCallExpression6(call) && isPropertyAccessExpression3(callee) && callee.expression.kind === SyntaxKind7.ThisKeyword && names.has(String(callee.name.text)) && this.rustCalleeIsRuntimeBase(call);
+  }
+  rustHandedDictLocalUncached(declaration) {
+    if (declaration.name?.kind !== SyntaxKind7.Identifier)
+      return false;
+    const source = declaration.getSourceFile?.()?.fileName;
+    if (typeof source === "string" && /[\\/]test[\\/]/.test(source))
+      return false;
+    if (declaration.kind === SyntaxKind7.BindingElement) {
+      const pattern = declaration.parent;
+      const owner = pattern?.parent;
+      if (pattern?.kind !== SyntaxKind7.ArrayBindingPattern || !isVariableDeclaration3(owner) || owner.name !== pattern || owner.parent?.declarations?.length !== 1 || pattern.elements.indexOf(declaration) !== 1)
+        return false;
+      if (declaration.dotDotDotToken !== void 0 || declaration.initializer !== void 0 || this.rustTupleSlotKind(declaration) !== void 0)
+        return false;
+      const init = this.rustSkipWrappers(owner.initializer);
+      const callee = init?.expression;
+      if (!isCallExpression6(init) || !isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)))
+        return false;
+    } else {
+      const list = declaration.parent;
+      if (list?.kind !== SyntaxKind7.VariableDeclarationList || list.declarations?.length !== 1)
+        return false;
+      let init = this.rustSkipWrappers(declaration.initializer);
+      if (init?.kind === SyntaxKind7.AwaitExpression)
+        init = this.rustSkipWrappers(init.expression);
+      if (!this.rustBaseCallNamed(init, _RustTranspiler.RUST_HANDED_DICT_SOURCES) || this.rustBorrowedDictLocal(declaration))
+        return false;
+      if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration) || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustNilLocalKind(declaration) !== void 0 || this.rustScalarLocalKind(declaration) !== void 0)
+        return false;
+      if (String(declaration.initializer.getText()).split("\n")[0].length > 240)
+        return false;
+    }
+    const name = String(declaration.name.text);
+    const fn = this.rustEnclosingFunction(declaration);
+    if (fn === void 0 || isSourceFile5(fn) || this.rustLocalIsReassigned(declaration, name))
+      return false;
+    let uses = 0;
+    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+      if (this.rustIdentifierIsPropertyName(n))
+        return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
+      if (this.rustDeclaredNode(n) !== declaration || this.rustEnclosingFunction(n) !== fn)
+        return false;
+      const call = n.parent;
+      if (!isCallExpression6(call))
+        return false;
+      const ok = call.arguments[0] === n && this.rustBorrowedDictReader(call) !== void 0 || call.arguments[0] === n && call.arguments.length === 2 && this.rustBaseCallNamed(call, _RustTranspiler.RUST_HANDED_DICT_OMIT) || this.rustHandedDictExtendOperand(call) === n;
+      if (ok)
+        uses++;
+      return ok;
+    });
+    return safe && uses > 0;
+  }
+  /** The sole extra operand of a base `this.extend (a, x)` / `this.deepExtend (a, x)` when it is a bare identifier. */
+  rustHandedDictExtendOperand(call) {
+    if (call.arguments?.length !== 2 || !isIdentifier3(call.arguments[1]) || isIdentifier3(call.arguments[0]) && call.arguments[0].text === call.arguments[1].text)
+      return void 0;
+    return this.rustBaseCallNamed(call, _RustTranspiler.RUST_HANDED_DICT_EXTEND) ? call.arguments[1] : void 0;
+  }
+  /** `self.extend(a, &[&x])` / `self.omit(&x, keys, &[])` lending a handed dict local. */
+  printHandedDictExtend(node, identation) {
+    if (!isCallExpression6(node))
+      return void 0;
+    const lent = (n) => {
+      const text = String(n.text);
+      return "&" + super.transformIdentifier(n, this.ReservedKeywordsReplacements[text] ?? text);
+    };
+    const first = node.arguments[0];
+    if (node.arguments.length === 2 && isIdentifier3(first) && this.rustBaseCallNamed(node, _RustTranspiler.RUST_HANDED_DICT_OMIT) && this.rustHandedDictLocal(this.rustDeclarationOfIdentifier(first))) {
+      return `self.omit(${lent(first)}, ${this.printNode(node.arguments[1], identation).trim()}, &[])`;
+    }
+    const operand = this.rustHandedDictExtendOperand(node);
+    if (operand === void 0 || !this.rustHandedDictLocal(this.rustDeclarationOfIdentifier(operand)))
+      return void 0;
+    const head = this.printNode(first, identation).trim();
+    const method = this.toSnakeCaseName(String(node.expression.name.text));
+    return `self.${method}(${_RustTranspiler.cloneIfBareLocal(head)}, &[${lent(operand)}])`;
+  }
+  /** `let mut x: crate::value::Dict = <slot read>.into_dict()` for a handed params slot. */
+  printRustHandedDictSlot(element, printedName, read, indent) {
+    return this.rustHandedDictLocal(element) ? `${indent}let mut ${printedName}: crate::value::Dict = ${read}.into_dict()` : void 0;
   }
   /** One element read rooted at the bearer: a plain read the native op serves. */
   rustReadBearerElementUse(access, kind) {
@@ -63547,6 +63651,12 @@ _RustTranspiler.RUST_BORROWED_DICT_READERS = {
   safeTimestamp: "safe_timestamp_k"
 };
 _RustTranspiler.RUST_BORROWED_DICT_SOURCES = /* @__PURE__ */ new Set(["safeDict", "safeDict2", "safeDictN", "extend", "deepExtend", "omit"]);
+// ── handed-on dict locals ────────────────────────────────────────────────
+// An `extend`/`omit`/`indexBy` result or the params slot of a `handle*AndParams` destructure that is only read,
+// given to `omit`, or lent as the sole extra operand of `extend`/`deepExtend` holds the shared map.
+_RustTranspiler.RUST_HANDED_DICT_SOURCES = /* @__PURE__ */ new Set(["extend", "omit", "indexBy", "groupBy"]);
+_RustTranspiler.RUST_HANDED_DICT_OMIT = /* @__PURE__ */ new Set(["omit"]);
+_RustTranspiler.RUST_HANDED_DICT_EXTEND = /* @__PURE__ */ new Set(["extend", "deepExtend"]);
 // Plain-dict sources from base `safeDict*` reads of unshared dicts and same-file
 // sync request builders; native truthiness / bool equality on operands proven `Value::Bool`
 // or `Value::Null` at runtime (bool tuple elements, bool-returning exchange methods).

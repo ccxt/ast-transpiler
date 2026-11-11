@@ -57,6 +57,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Order { id: string }\nexport interface CancellationRequest { id: string; symbol: string }\nexport default class Exchange {\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { CancellationRequest, Dict, Order, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async cancelOrdersForSymbols (orders: CancellationRequest[], params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    async cancelUnifiedOrder (order: Order, params: Dict = {}): Promise<Order> {\n        const orders = await this.cancelOrdersForSymbols ([ order ], params);\n        return orders[0];\n    }\n    async fetchOrderStatus (id: string, symbol: Str = undefined, params: Dict = {}): Promise<Str> {\n        return 'open';\n    }\n}\n"
  },
+ "handed-dict": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    handleMarketTypeAndParams (m: string, market: any = undefined, params: Dict = {}): [string, Dict] { return [ m, params ]; }\n    hold (x: any): any { return x; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ marketType, query ] = this.handleMarketTypeAndParams ('fetchThing', undefined, params);\n        const rest = this.omit (query, 'x');\n        const s = this.safeString (query, 's');\n        const request: Dict = { 'type': marketType, 's': s };\n        return this.hold (this.extend (request, rest));\n    }\n    fetchKept (params: Dict = {}) {\n        const kept = this.omit (params, 'x');\n        return this.hold (kept);\n    }\n}\n"
+ },
  "borrowed-dict": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    extend (...args: any[]): any { return args[0]; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, params: Dict) {\n        const data = this.safeDict (resp, 'data');\n        const id = this.safeString (data, 'id');\n        const n = this.safeInteger (data, 'n', 1);\n        const merged = this.extend (resp, params);\n        const s = this.safeString (merged, 's');\n        const kept = this.safeDict (resp, 'kept');\n        const k = this.safeString (kept, 'k');\n        return this.hold ([ id, n, s, k, kept ]);\n    }\n}\n"
@@ -5452,6 +5456,23 @@ describe('bearer write shapes', () => {
         const out = rs("        let d: Dict = {};\n        d['a'] = v;\n        if (v) {\n            d = this.parseX (v);\n        }\n        return d;");
         expect(out).toContain('let mut d: Value = Value::Map({');
         expect(out).toContain('add_element_to_object(&mut d,');
+    });
+});
+
+describe('handed-on dict locals', () => {
+    test('an omit result and a params slot lent only to readers, omit and extend hold the shared map', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'handed-dict', 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut query: crate::value::Dict = \w+\.get\(1\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+        expect(out).toContain('let mut rest: crate::value::Dict = self.omit(&query, Value::Str("x".into()), &[]).into_dict();');
+        expect(out).toContain('self.safe_string_k(&query, "s", &[])');
+        expect(out).toContain('&[&rest])');
+        expect(out).not.toContain('query: Value');
+        expect(out).not.toContain('rest: Value');
+    });
+
+    test('negative: a dict local boxed straight back keeps its box', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'handed-dict', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut kept: Value = ');
     });
 });
 
