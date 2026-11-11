@@ -8218,6 +8218,42 @@ describe('rust shared dict locals read through their key set', () => {
     });
 });
 
+describe('rust request maps merged as the extend head', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    extend = extend;\n    options: any = {};\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        const until = this.safeString (params, \'until\');\n        if (until !== undefined) {\n            request[key] = until;\n        }\n        return [ request, params ];\n    }\n}\n',
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    fetchThing (limit: any, params: Dict = {}) {\n        const [ requestUntil, paramsUntil ] = this.handleUntilOption ('end', { 'a': 1 }, params);\n        requestUntil['limit'] = limit;\n        const first = this.hold (this.extend (requestUntil, paramsUntil));\n        return this.extend (requestUntil, { 'b': first });\n    }\n" +
+            "    fetchOther (params: Dict = {}) {\n        const query = this.safeDict (this.options, 'q', {});\n        return this.extend (query, params);\n    }\n" +
+            "    kept (params: Dict = {}) {\n        const [ requestUntil, paramsUntil ] = this.handleUntilOption ('end', { 'a': 1 }, params);\n        this.hold (requestUntil);\n        return this.extend (requestUntil, paramsUntil);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-exthead-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the request slot is a shared map: native key write, lent then moved as the extend head', () => {
+        const thing = out.slice (out.indexOf ('fn fetchThing'), out.indexOf ('fn fetchOther'));
+        expect(thing).toMatch(/let mut requestUntil: crate::value::Dict = \w+\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+        expect(thing).toContain('std::sync::Arc::make_mut(&mut requestUntil).insert("limit".into(), limit.clone())');
+        expect(thing).toContain('self.extend(&requestUntil, &[&paramsUntil])');
+        expect(thing).toMatch(/self\.extend\(requestUntil, &\[Value::Map/);
+        expect(thing).not.toContain('requestUntil: Value');
+    });
+    test('a dict local used as the extend head is a shared map moved into extend', () => {
+        expect(out).toContain('let mut query: crate::value::Dict = ');
+        expect(out).toMatch(/self\.extend\(query, &\[params(\.clone\(\))?\]\)/);
+    });
+    test('negative: a request slot handed on whole keeps its box', () => {
+        const kept = out.slice (out.indexOf ('fn kept'));
+        expect(kept).toMatch(/let mut requestUntil: Value = /);
+    });
+});
+
 describe('rust message field reads handed on whole', () => {
     const out = () => transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'ws-field-read', 'ts/src/pro/venue.ts')).content;
 
