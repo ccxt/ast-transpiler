@@ -5316,7 +5316,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || !isMethodDeclaration(param.parent)) return undefined;
         const typed = this.rustTypedSignature(param.parent);
         const entry = typed?.params[Array.from(param.parent.parameters).indexOf(param)];
-        const kind = entry?.optional ? ({ 'Option<i64>': 'oint', 'Option<f64>': 'onum' })[entry.rustType] : undefined;
+        const kind = entry === undefined ? undefined : (entry.optional
+            ? ({ 'Option<i64>': 'oint', 'Option<f64>': 'onum', 'Option<&str>': 'ostr' })[entry.rustType]
+            : ({ '&str': 'str', 'i64': 'int', 'f64': 'num' })[entry.rustType]);
         if (kind === undefined) return undefined;
         for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text))) {
             if (n === param.name || !isIdentifier(n)) continue;
@@ -5329,12 +5331,16 @@ export class RustTranspiler extends BaseTranspiler {
         return kind;
     }
 
+    // the typed argument's own `Value` rebinding read back as the native kind the signature declared
+    private static readonly RUST_PARAM_READ: Record<string, string> = { oint: 'as_i64()', onum: 'as_f64()', ostr: 'as_str().map(str::to_owned)',
+        str: 'as_str().unwrap_or_default().to_string()', int: 'as_i64().unwrap_or_default()', num: 'as_f64().unwrap_or_default()' };
+
     rustOptParamText(kind: string, node): string | undefined {
         const narrowed = isConditionalExpression(node) ? this.rustOptParamDefault(node) : undefined;
         if (narrowed !== undefined && (narrowed.kind === kind || `o${narrowed.kind}` === kind)) return kind === narrowed.kind ? narrowed.text : `Some(${narrowed.text})`;
         const own = this.rustOptParamKind(node);
         if (own === undefined || own !== kind) return undefined;
-        return `${super.printIdentifier(node)}.${own === 'oint' ? 'as_i64' : 'as_f64'}()`;
+        return `${super.printIdentifier(node)}.${RustTranspiler.RUST_PARAM_READ[own]}`;
     }
 
     /** `p === undefined ? d : p` (or `p !== undefined ? p : d`) over a typed optional parameter `p` and a
@@ -5347,7 +5353,8 @@ export class RustTranspiler extends BaseTranspiler {
         const positive = cond.operatorToken.kind === SyntaxKind.ExclamationEqualsToken || cond.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken;
         const [ present, fallback ]: any[] = positive ? [ node.whenTrue, node.whenFalse ] : [ node.whenFalse, node.whenTrue ];
         const param: any = this.unwrapParens(tested);
-        const kind = this.rustOptParamKind(param);
+        const own = this.rustOptParamKind(param);
+        const kind = own === 'oint' || own === 'onum' ? own : undefined;
         const same: any = this.unwrapParens(present);
         if (kind === undefined || !isIdentifier(same) || this.rustDeclaredNode(same) !== this.rustDeclaredNode(param)) return undefined;
         const d: any = this.unwrapParens(fallback);

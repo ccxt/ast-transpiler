@@ -8026,6 +8026,17 @@ describe('rust optional typed parameter defaults and boolean writes', () => {
         expect(output).not.toContain('let mut limitResolved: Value');
     });
 
+    test('an alias of a required string parameter of a typed signature is a native String', () => {
+        const output = run((
+            "        let side = symbol;\n" +
+            "        if (side === 'buy') {\n" +
+            "            side = 'sell';\n" +
+            "        }\n" +
+            "        return { 'side': side } as any;\n"));
+        expect(output).toContain('let mut side: String = symbol.as_str().unwrap_or_default().to_string();');
+        expect(output).not.toContain('let mut side: Value');
+    });
+
     test('a written parameter keeps the boxed conditional', () => {
         const output = run((
             "        limit = this.g (limit);\n" +
