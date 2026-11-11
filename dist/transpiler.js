@@ -54788,6 +54788,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // `rustLocalUsesAll` for a scalar `let`/`const`: a same-named block-scoped binding in a sibling
   // block is another symbol (Rust scopes it to its own block too), so its uses are skipped.
   rustScalarUsesAll(declaration, name, acceptUse) {
+    return this.rustBlockLocalUsesAll(declaration, name, acceptUse, true);
+  }
+  rustBlockLocalUsesAll(declaration, name, acceptUse, scalar = false) {
     const own = this.rustSymbolOf(declaration.name);
     const scope = this.rustEnclosingFunction(declaration);
     if (own === void 0 || scope === void 0 || (declaration.parent?.flags & (NodeFlags4.Let | NodeFlags4.Const)) === 0)
@@ -54813,6 +54816,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         continue;
       if (!acceptUse(n))
         return false;
+      if (!scalar)
+        continue;
       const trial = this.rustScalarDecisions.get(declaration);
       const form = this.rustScalarUseForms.get(n);
       if ((trial === "str" || trial === "ostr") && (form === "box" || form === "xbox" || form === "err" || form === "key") && !this.rustScalarBoxMoves(n, form, declaration))
@@ -61810,7 +61815,7 @@ ${iden}}`;
     let indexLikeReads = 0;
     let keyReads = 0;
     let mixed = false;
-    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+    const accept = (n) => {
       if (this.rustIdentifierIsPropertyName(n))
         return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
       if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
@@ -61849,15 +61854,18 @@ ${iden}}`;
       }
       if (!isCallExpression6(up) || up.arguments[0] !== n)
         return false;
+      const keyArgs = up.arguments.slice(1, /2$/.test(String(up.expression.name?.text)) ? 3 : 2).map((a) => this.rustSkipWrappers(a));
+      const stringKey = keyArgs.every((k) => k !== void 0 && isStringLiteralLikeNode4(k) && !/^\d+$/.test(String(k.text)) && !(String(k.text) in this.StringLiteralReplacements));
       const literalKey = this.rustBorrowedDictReader(up) !== void 0;
-      if (!literalKey && !(from !== "api" && this.rustBorrowedAnyKeyReader(up)))
+      if (!literalKey && !((from !== "api" || stringKey) && this.rustBorrowedAnyKeyReader(up)))
         return false;
-      if (!literalKey || /^\d+$/.test(String(this.rustSkipWrappers(up.arguments[1]).text)))
+      if (!stringKey)
         indexLikeReads++;
       reads++;
       return true;
-    });
-    if (!safe || reads === 0 || mixed || from === void 0 || this.rustNilResponseLocals.has(declaration) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
+    };
+    const safe = from === "api" && !nilDeclared ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
+    if (!safe || reads === 0 || mixed || from === void 0 || (this.rustNilResponseLocals.has(declaration) || from === "api") && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
       return void 0;
     if ((keyReads > 0 || init !== void 0 && isCallExpression6(init) && this.rustRecordLookupSource(init)) && !this.rustDictKeyReadLineOk(declaration, name))
       return void 0;

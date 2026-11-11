@@ -3909,6 +3909,10 @@ export class RustTranspiler extends BaseTranspiler {
     // `rustLocalUsesAll` for a scalar `let`/`const`: a same-named block-scoped binding in a sibling
     // block is another symbol (Rust scopes it to its own block too), so its uses are skipped.
     rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean {
+        return this.rustBlockLocalUsesAll(declaration, name, acceptUse, true);
+    }
+
+    rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar = false): boolean {
         const own: any = this.rustSymbolOf(declaration.name);
         const scope = this.rustEnclosingFunction(declaration);
         if (own === undefined || scope === undefined || (declaration.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) === 0) return this.rustLocalUsesAll(declaration, name, false, acceptUse);
@@ -3927,6 +3931,7 @@ export class RustTranspiler extends BaseTranspiler {
                 if (symbol !== own) continue;
             } else if (!this.isNodeInsideNode(n, declaration.parent?.parent?.parent ?? declaration)) continue;
             if (!acceptUse(n)) return false;
+            if (!scalar) continue;
             // a string re-boxed at a by-value slot copies where the `Value` moved: keep those boxed
             const trial = this.rustScalarDecisions.get(declaration);
             const form = this.rustScalarUseForms.get(n);
@@ -11333,7 +11338,7 @@ export class RustTranspiler extends BaseTranspiler {
         let indexLikeReads = 0;
         let keyReads = 0;
         let mixed = false;
-        const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
+        const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
             const up: any = n.parent;
@@ -11365,16 +11370,20 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             if (!isCallExpression(up) || up.arguments[0] !== n) return false;
-            // An endpoint response may be a list or a map: only literal-key reads agree for both.
+            // An endpoint response may be a list or a map: only string-key reads agree for both.
+            const keyArgs: any[] = up.arguments.slice(1, /2$/.test(String(up.expression.name?.text)) ? 3 : 2).map((a: any) => this.rustSkipWrappers(a));
+            const stringKey = keyArgs.every((k: any) => k !== undefined && isStringLiteralLikeNode(k) && !/^\d+$/.test(String(k.text)) && !(String(k.text) in this.StringLiteralReplacements));
             const literalKey = this.rustBorrowedDictReader(up) !== undefined;
-            if (!literalKey && !(from !== 'api' && this.rustBorrowedAnyKeyReader(up))) return false;
+            if (!literalKey && !((from !== 'api' || stringKey) && this.rustBorrowedAnyKeyReader(up))) return false;
             // a list answer reads a digit key as an index, the optional map reads nothing
-            if (!literalKey || /^\d+$/.test(String(this.rustSkipWrappers(up.arguments[1]).text))) indexLikeReads++;
+            if (!stringKey) indexLikeReads++;
             reads++;
             return true;
-        });
+        };
+        // an endpoint response may share its name with a `let`/`const` in a sibling block (another Rust binding)
+        const safe = from === 'api' && !nilDeclared ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
         if (!safe || reads === 0 || mixed || from === undefined
-            || (this.rustNilResponseLocals.has(declaration) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
+            || ((this.rustNilResponseLocals.has(declaration) || from === 'api') && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
         if ((keyReads > 0 || (init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init))) && !this.rustDictKeyReadLineOk(declaration, name)) return undefined;
         const optional = nilDeclared || nullTests > 0 || writes > 0;
         if (lengths > 0 && (from !== 'list' || optional)) return undefined;
