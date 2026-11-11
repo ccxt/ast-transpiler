@@ -7736,3 +7736,33 @@ describe('rust lookup tables and always-list producers', () => {
         expect(out).toContain('let mut kept: Value = ');
     });
 });
+
+describe('rust tuple slots typed from the declared tuple', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n" +
+            "    handleOptionStringAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Str = undefined): [Str, Dict] {\n        return [ defaultValue, params ];\n    }\n" +
+            "    extend (a: any, b: any = undefined): Dict { return a; }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    getVenueType (method: string, params: Dict = {}): [Str, Dict] {\n        return [ 'spot', params ];\n    }\n" +
+            "    withdraw (params: Dict = {}) {\n        const request: Dict = {};\n        const [ tag, rest ] = this.handleOptionStringAndParams (params, 'withdraw', 'tag');\n        if (tag !== undefined) {\n            request['memo'] = tag;\n        }\n        return this.extend (request, rest);\n    }\n" +
+            "    fetchThing (params: Dict = {}) {\n        const request: Dict = {};\n        const [ category, paramsCategory ] = this.getVenueType ('fetchThing', params);\n        if (category === 'spot') {\n            return 1;\n        }\n        return this.extend (request, paramsCategory);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-slots-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a string slot written into a request map moves into the write', () => {
+        expect(out).toContain('let mut tag: Option<String> = ');
+        expect(out).toContain('tag.map(Value::from).unwrap_or(Value::Null)');
+    });
+    test('the Dict slot of a venue method declaring [Str, Dict] is the shared map lent by reference', () => {
+        expect(out).toContain('let mut paramsCategory: crate::value::Dict = ');
+        expect(out).toContain('&[&paramsCategory]');
+    });
+});

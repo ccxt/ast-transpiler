@@ -58261,6 +58261,8 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     }
     if (parent?.kind === SyntaxKind7.PropertyAssignment && parent.initializer === n)
       return true;
+    if (this.rustDictWriteValue(n) && parent.parent?.kind === SyntaxKind7.ExpressionStatement)
+      return true;
     if (isArrayLiteralExpression4(parent))
       return !(isBinaryExpression5(parent.parent) && parent.parent.left === parent);
     if (this.rustStrSlotThrownConcat(n))
@@ -62642,7 +62644,7 @@ ${iden}}`;
         return false;
       const init = this.rustSkipWrappers(owner.initializer);
       const callee = init?.expression;
-      if (!isCallExpression6(init) || !isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) && !this.rustLentSlotSource(init, declaration))
+      if (!isCallExpression6(init) || !isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) && !this.rustLentSlotSource(init, declaration) && !this.rustDeclaredDictSlot(declaration))
         return false;
     } else {
       const list = declaration.parent;
@@ -62898,6 +62900,27 @@ ${iden}}`;
       return false;
     const type = this.typeOfNodeIfAny(element.name);
     return type !== void 0 && this.isProvenMapType(type);
+  }
+  // ── declared dict slots ──────────────────────────────────────────────────
+  // A transpiled venue method declaring a `[.., Dict, ..]` (or `Promise<[..]>`) return builds that tuple on every
+  // path (`rustNativeListSource`): the `Dict` slot holds the params map, handed on like a `handle*AndParams` one.
+  rustDeclaredDictSlot(element) {
+    const owner = element?.parent?.parent;
+    let init = this.rustSkipWrappers(owner?.initializer);
+    if (init?.kind === SyntaxKind7.AwaitExpression)
+      init = this.rustSkipWrappers(init.expression);
+    if (!isCallExpression6(init) || !this.rustNativeListSource(init))
+      return false;
+    const declaration = this.rustCalleeDeclaration(init);
+    if (declaration === void 0 || declaration.body === void 0 || _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName)))
+      return false;
+    let type = declaration.type;
+    if (type?.kind === SyntaxKind7.TypeReference && String(type.typeName?.getText?.() ?? "") === "Promise" && type.typeArguments?.length === 1)
+      type = type.typeArguments[0];
+    if (type?.kind !== SyntaxKind7.TupleType)
+      return false;
+    const slot = type.elements?.[element.parent.elements.indexOf(element)];
+    return slot !== void 0 && String(slot.getText()).replace(/\s+/g, "") === "Dict";
   }
   /** One element read rooted at the bearer: a plain read the native op serves. */
   rustReadBearerElementUse(access, kind) {

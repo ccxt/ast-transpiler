@@ -1638,6 +1638,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A base `handleUntilOption` / `handleParam*` call, or any `this.handle*` call whose slot 1 the checker types as a
      *  dict: that slot is the params dict, like a `handle*AndParams` one. */
     rustLentSlotSource(init: any, element: any): boolean;
+    rustDeclaredDictSlot(element: any): boolean;
     /** One element read rooted at the bearer: a plain read the native op serves. */
     rustReadBearerElementUse(access: any, kind: 'list' | 'map'): boolean;
     /** Key a read-only bearer serves natively: a literal string for a map, a
