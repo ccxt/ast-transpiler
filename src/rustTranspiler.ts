@@ -3632,7 +3632,7 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustScalarUseForms.set(n, form);
             if (form === 'box' || form === 'xbox' || form === 'err') boxed++;
             else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ') typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'okey') typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -3645,7 +3645,7 @@ export class RustTranspiler extends BaseTranspiler {
         const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer);
         // a string handed once to a ws client call and nothing else stays a `Value`
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
-        if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
+        if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed)) return undefined;
         if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration))) return undefined;
         if (guarded) this.rustScalarGuarded.add(declaration);
         return kind;
@@ -3917,6 +3917,7 @@ export class RustTranspiler extends BaseTranspiler {
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
+        if (kind === 'ostr' && this.rustOkeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
         }
@@ -4329,7 +4330,7 @@ export class RustTranspiler extends BaseTranspiler {
     printRustScalarLocalRead(node): string | undefined {
         const local = this.rustScalarLocalOf(node);
         const form = local === undefined ? undefined : this.rustScalarUseForms.get(node);
-        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key') return super.printIdentifier(node);
+        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
@@ -4819,6 +4820,75 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarInsertKeyArg(keyNode): string | undefined {
         const key: any = this.rustSkipWrappers(keyNode);
         return isIdentifier(key) && this.rustScalarLocalOf(key)?.kind === 'str' && this.rustScalarUseForms.get(key) === 'key' ? `${super.printIdentifier(key)}.clone()` : undefined;
+    }
+
+    // ── optional-string keys (rustOkeyKind / rustOkeyReadUse / printOkeyRead) ──
+    // `m[k]` with `k` an `Option<String>` element local reads the map natively on the receivers the
+    // dynamic dict reads already prove (typed dict locals and params, base dict fields, plain dict locals):
+    // a `None` key misses like the `Str` test of the boxed key did.
+
+    /** The key is an element-read local (`const k = keys[i]`). */
+    rustOkeyLocal(n: any): boolean {
+        const declaration: any = this.rustDeclaredNode(n);
+        return declaration !== undefined && isVariableDeclaration(declaration) && declaration.initializer !== undefined
+            && this.rustElementReadScalarKind(this.unwrapParens(declaration.initializer)) !== undefined;
+    }
+
+    /** An element-read local keyed into maps stays `Value` when a box sits where the `Value` moved
+     *  (an assignment source, an object-literal value, a `format!` operand, the last use): the typed local would clone there. */
+    rustOkeyBoxed(declaration: any, boxed: number): boolean {
+        if (boxed === 0 || !isIdentifier(declaration.name)) return false;
+        let keyed = false;
+        let moved = false;
+        let last: any;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const form = this.rustScalarUseForms.get(n);
+            if (form === 'okey') keyed = true;
+            if (!this.rustIdentifierIsPropertyName(n) && (last === undefined || n.pos > last.pos)) last = n;
+            const up: any = n.parent;
+            if ((form === 'box' || form === 'xbox') && ((up.kind === SyntaxKind.PropertyAssignment && up.initializer === n)
+                || (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken)
+                || (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.PlusToken))) moved = true;
+            return true;
+        });
+        const lastForm = last === undefined ? undefined : this.rustScalarUseForms.get(last);
+        return keyed && (moved || lastForm === 'box' || lastForm === 'xbox');
+    }
+
+    /** 'map' for a typed map receiver, 'value' for a proven-dict `Value` receiver, else undefined. */
+    rustOkeyKind(receiver: any, read: any): 'map' | 'value' | undefined {
+        if (this.isTestSource(receiver) || this.isWriteBackBindRead(read)) return undefined;
+        if (this.rustDictBearerDeclaration(receiver) !== undefined || this.rustMapParamDeclaration(receiver) !== undefined) return 'map';
+        if (this.rustReadBearerKind(receiver) !== undefined || this.rustParamShadowOf(receiver) !== undefined || this.rustLentListUse(receiver)
+            || this.printOptListElement(receiver, read.argumentExpression) !== undefined) return undefined;
+        const field = this.rustDictField(receiver);
+        if ((field !== undefined && field !== 'accounts') || this.rustProvenDynamicMapReceiver(receiver) !== undefined
+            || this.rustProvenDictThisField(receiver) !== undefined || this.rustProvenDictThisFieldElement(receiver)
+            || this.rustDictLocalProof(receiver) === 'plain') return 'value';
+        return undefined;
+    }
+
+    /** A one-level read `m[k]` (not a write target, not a chain link) on an `rustOkeyKind` receiver. */
+    rustOkeyReadUse(n: any): boolean {
+        const read: any = n.parent;
+        if (!isElementAccessExpression(read) || read.argumentExpression !== n || isElementAccessExpression(read.expression)) return false;
+        const up: any = read.parent;
+        if (up === undefined || (isElementAccessExpression(up) && up.expression === read) || up.kind === SyntaxKind.DeleteExpression
+            || isPrefixUnaryExpression(up) || up.kind === SyntaxKind.PostfixUnaryExpression) return false;
+        if (isBinaryExpression(up) && up.left === read && rustIsAssignmentOperator(up.operatorToken.kind)) return false;
+        if (!this.isNativeAccessPositionSafe(read) || this.isNativeWriteTargetBase(read)) return false;
+        const kind = this.rustOkeyKind(read.expression, read);
+        return kind === 'map' || (kind === 'value' && RUST_PLAIN_PLACE.test(this.printNode(read.expression, 0).trim()));
+    }
+
+    /** Element-access hook: the native read of an `okey` use. */
+    printOkeyRead(node: any): string | undefined {
+        const key: any = node.argumentExpression;
+        if (!isIdentifier(key) || this.rustScalarUseForms.get(key) !== 'okey' || this.rustScalarLocalOf(key)?.kind !== 'ostr') return undefined;
+        const recv = this.printNode(node.expression, 0).trim();
+        const name = super.printIdentifier(key);
+        if (this.rustOkeyKind(node.expression, node) === 'map') return `${recv}.get(${name}.as_deref().unwrap_or("")).cloned().unwrap_or(Value::Null)`;
+        return `(if let (Some(__m), Some(__k)) = (${recv}.as_map(), ${name}.as_deref()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
     }
 
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
@@ -8523,6 +8593,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpression(node, identation) {
+        const okeyRead = this.printOkeyRead(node); if (okeyRead !== undefined) return okeyRead;
         const handleRead = this.printClientHandleKeyedRead(node); if (handleRead !== undefined) return handleRead;
         const marketRead = this.printTypedMarketRead(node);
         if (marketRead !== undefined) return marketRead;
