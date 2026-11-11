@@ -7249,12 +7249,9 @@ describe('rust literal containers handed off by move', () => {
 
 describe('rust message-hash string locals handed to the ws client', () => {
     const files: Record<string, string> = {
-        'ts/src/base/ws/Client.ts': 'export default class Client {\n    url: string;\n    subscriptions: any;\n    resolve (result: any, messageHash: string): any { return result; }\n    reject (result: any, messageHash: string = undefined): any { return result; }\n    reusableFuture (messageHash: string): any { return messageHash; }\n}\n',
-        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport default class Exchange {\n    orders: any = undefined;\n    client (url: string): Client { return new Client (); }\n}\n",
-        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport Client from './base/ws/Client.js';\nexport default class venue extends Exchange {\n" +
-            "    handleError (client: Client, message: any, symbol: string) {\n        const messageHash = 'orders:' + symbol;\n        client.reject (message, messageHash);\n        client.resolve (message, messageHash);\n    }\n" +
-            "    handleSub (client: Client, message: any) {\n        const messageHash = 'auth';\n        if (messageHash in client.subscriptions) {\n            client.resolve (message, messageHash);\n        }\n    }\n" +
-            "    handleOnce (client: Client, message: any) {\n        const messageHash = 'orders';\n        client.resolve (this.orders, messageHash);\n    }\n}\n",
+        'ts/src/base/ws/Client.ts': "export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    resolve (result: any, messageHash: string): any { return result; }\n    reject (result: any, messageHash: string = undefined): any { return result; }\n    future (messageHash: string): any { return messageHash; }\n    reusableFuture (messageHash: string): any { return messageHash; }\n}\n",
+        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport default class Exchange {\n    orders: any = undefined;\n    client (url: string): Client { return new Client (); }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n    handleError (client: Client, message: any, symbol: string) {\n        const messageHash = 'orders:' + symbol;\n        client.reject (message, messageHash);\n        client.resolve (message, messageHash);\n    }\n    handleSub (client: Client, message: any) {\n        const messageHash = 'auth';\n        if (messageHash in client.subscriptions) {\n            delete client.subscriptions[messageHash];\n        }\n        const future = client.futures[messageHash];\n        client.resolve (future, messageHash);\n    }\n    handleOnce (client: Client, message: any) {\n        const messageHash = 'orders';\n        client.resolve (this.orders, messageHash);\n    }\n    async authenticate (url: string) {\n        const client = this.client (url);\n        const messageHash = 'authenticated';\n        if (!(messageHash in client.futures)) {\n            const future = client.reusableFuture (messageHash);\n            return await future;\n        }\n        return client.future (messageHash);\n    }\n    async watchThing (symbol: string) {\n        const url = 'wss://x/' + symbol;\n        const messageHash = 'thing:' + symbol;\n        return await this.watch (url, messageHash, { 'op': symbol }, messageHash);\n    }\n}\n",
     };
     let out: string;
     beforeAll(() => {
@@ -7263,18 +7260,32 @@ describe('rust message-hash string locals handed to the ws client', () => {
             fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
             fs.writeFileSync (path.join (root, rel), text);
         }
-        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
         fs.rmSync (root, { recursive: true, force: true });
     });
-    test('a hash read by two client calls is a String boxed at each client slot', () => {
+    test('a hash settled by the client is a String lent as its str', () => {
         expect(out).toContain('let mut messageHash: String = format!(');
-        expect(out).toContain('client.reject(&[message.clone(), Value::from(messageHash.clone())]);');
-        // the final read moves into the client call
-        expect(out).toContain('client.resolve(&[message.clone(), Value::from(messageHash)]);');
+        expect(out).toContain('client.reject(message.clone(), messageHash.as_str());');
+        expect(out).toContain('client.resolve(message.clone(), messageHash.as_str());');
+        expect(out).toContain('let mut messageHash: String = "orders".to_string();');
     });
-    test('a hash handed once to the client, or keyed into its subscriptions, stays Value', () => {
-        expect(out).toContain('let mut messageHash: Value = Value::Str("orders".into());');
-        expect(out).toContain('let mut messageHash: Value = Value::Str("auth".into());');
+    test('handle key tests, keyed reads and deletes take the str', () => {
+        expect(out).toContain('let mut messageHash: String = "auth".to_string();');
+        expect(out).toContain('.has_subscription(messageHash.as_str())');
+        expect(out).toContain('.remove_subscription(messageHash.as_str());');
+        expect(out).toContain('.get_future(messageHash.as_str())');
+    });
+    test('flight hashes and the watch url and hash take the str', () => {
+        expect(out).toContain('let mut messageHash: String = "authenticated".to_string();');
+        expect(out).toContain('client.has_future(messageHash.as_str())');
+        expect(out).toContain('client.reusable_future(messageHash.as_str())');
+        expect(out).toContain('client.future(messageHash.as_str())');
+        expect(out).toContain('let mut url: String = format!(');
+        expect(out).toContain('self.watch(url.as_str(), messageHash.as_str(), &[');
+    });
+    test('negative: no hash or url local of these shapes keeps its box', () => {
+        expect(out).not.toMatch(/let mut (messageHash|url): Value/);
+        expect(out).not.toContain('client.resolve(&[');
     });
 });
 

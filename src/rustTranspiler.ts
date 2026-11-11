@@ -4105,6 +4105,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if ((kind === 'bool' || kind === 'obool') && this.rustIdentifierUseIsCondition(n)) return 'cond';
         if (kind === 'str' || kind === 'ostr') { const fieldForm = this.rustFieldKeyUseForm(n); if (fieldForm !== undefined) return fieldForm; }
+        if ((kind === 'str' || kind === 'ostr') && this.rustWsKeyUse(n)) return 'targ';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -4185,6 +4186,74 @@ export class RustTranspiler extends BaseTranspiler {
                 || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
         }
         return true;
+    }
+
+    // ── ws keys and hashes (rustWsSettleCall / rustWsKeyUse / rustWsKeyText / printWsSettleCall) ──
+    // The hand-written ws handles take `resolve|reject(value: impl Into<Value>, hash: impl Into<Option<&str>>)`
+    // and `has_|get_subscription|future(key: impl Into<Option<&str>>)`: a string local is lent, a `Value` by reference.
+    rustWsSettleCall(call): boolean {
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || !isIdentifier(callee.expression) || call.arguments.length > 2) return false;
+        const name = String(callee.name.text);
+        return (name === 'resolve' || name === 'reject') && !call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement) && this.rustCallsRuntimeHandle(call);
+    }
+
+    /** `client.future|reusableFuture(hash)` on a ws handle: the hand-written method takes `hash: impl Into<Value>`. */
+    rustWsFlightCall(call): boolean {
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || !isIdentifier(callee.expression) || call.arguments.length > 1) return false;
+        const name = String(callee.name.text);
+        return (name === 'future' || name === 'reusableFuture') && call.arguments[0]?.kind !== SyntaxKind.SpreadElement && this.rustCallsRuntimeHandle(call);
+    }
+
+    /** `this.watch(url, hash, ..)` / `this.watchMultiple(url, ..)`: the runtime takes `url` and the single hash as `impl Into<Value>`. */
+    rustWsWatchSlot(call, at: number): boolean {
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+        const name = String(callee.name.text);
+        if (!(at === 0 || (at === 1 && name === 'watch')) || (name !== 'watch' && name !== 'watchMultiple') || call.arguments.length < 2) return false;
+        return this.rustCalleeIsRuntimeBase(call);
+    }
+
+    /** A string local read as a ws hash or key slot: the settle hash, a handle `in` test or a handle keyed read. */
+    rustWsKeyUse(n): boolean {
+        const parent: any = n.parent;
+        if (isCallExpression(parent)) return (parent.arguments[1] === n && this.rustWsSettleCall(parent)) || (parent.arguments[0] === n && this.rustWsFlightCall(parent))
+            || this.rustWsWatchSlot(parent, parent.arguments.indexOf(n));
+        if (isBinaryExpression(parent)) return parent.left === n && this.rustClientHandleIsInTest(parent);
+        if (!isElementAccessExpression(parent) || parent.argumentExpression !== n) return false;
+        const access = this.rustClientHandleAccess(parent.expression);
+        if (isDeleteExpression(parent.parent)) return access?.key === 'subscriptions' && parent.parent.parent?.kind === SyntaxKind.ExpressionStatement;
+        return !this.isNativeWriteTargetBase(parent) && access !== undefined && !access.write && RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key] !== undefined;
+    }
+
+    rustWsStrKey(node): boolean {
+        const inner: any = this.unwrapParens(node);
+        const kind = isIdentifier(inner) ? this.rustScalarLocalOf(inner)?.kind : undefined;
+        return kind === 'str' || kind === 'ostr';
+    }
+
+    /** A key slot's text: `x.as_str()` / `x.as_deref()` for a string local, else the `Value` by reference. */
+    rustWsKeyText(node): string {
+        const inner: any = this.unwrapParens(node);
+        if (this.rustWsStrKey(inner)) return `${super.printIdentifier(inner)}.${this.rustScalarLocalOf(inner).kind === 'str' ? 'as_str' : 'as_deref'}()`;
+        if (inner !== undefined && isStringLiteral(inner) && !(inner.text in this.StringLiteralReplacements)) return this.quotedStringLiteral(inner.text);
+        const text = this.printNode(node, 0).trim();
+        const bare = isIdentifier(inner) || isCallExpression(inner) || isPropertyAccessExpression(inner) || isElementAccessExpression(inner) || this.literalKindOfNode(inner) !== undefined;
+        return bare ? `&${text}` : `&(${text})`;
+    }
+
+    printWsSettleCall(node, receiver: string, identation: number): string {
+        const args: any[] = Array.from(node.arguments);
+        const value = args.length > 0 ? this.rustSliceArgText(this.printNode(args[0], identation).trim()) : 'Value::Null';
+        const hash = args.length > 1 ? this.rustWsKeyText(args[1]) : 'None';
+        return `${receiver}.${node.expression.name.text}(${value}, ${hash})`;
+    }
+
+    printWsFlightCall(node, receiver: string, identation: number): string {
+        const arg: any = node.arguments[0];
+        const hash = arg === undefined ? 'Value::Null' : (this.rustWsStrKey(arg) ? this.rustWsKeyText(arg) : this.rustSliceArgText(this.printNode(arg, identation).trim()));
+        return `${receiver}.${this.toSnakeCaseName(String(node.expression.name.text))}(${hash})`;
     }
 
     // ── ws client handle (rustClientHandlePlan / printClientHandle*) ──────────
@@ -4359,7 +4428,7 @@ export class RustTranspiler extends BaseTranspiler {
         const access = this.rustClientHandleAccess(this.unwrapParens(obj) ?? obj);
         const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
         if (name === undefined) return undefined;
-        const call = `${this.rustClientHandleReceiver(access.plan, false)}.has_${name}(&${this.printNode(key, 0).trim()})`;
+        const call = `${this.rustClientHandleReceiver(access.plan, false)}.has_${name}(${this.rustWsKeyText(key)})`;
         return bare ? call : `Value::Bool(${call})`;
     }
 
@@ -4386,6 +4455,7 @@ export class RustTranspiler extends BaseTranspiler {
         const access = this.rustClientHandleAccess(node.expression);
         const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
         if (name === undefined || this.isNativeWriteTargetBase(node)) return undefined;
+        if (this.rustWsStrKey(node.argumentExpression)) return `${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(${this.rustWsKeyText(node.argumentExpression)})`;
         const key = this.printNode(node.argumentExpression, 0).trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return undefined;
         return `${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(&${key})`;
@@ -4407,7 +4477,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isElementAccessExpression(target)) return undefined;
         const access = this.rustClientHandleAccess(target.expression);
         if (access === undefined || access.key !== 'subscriptions') return undefined;
-        return `${this.rustClientHandleReceiver(access.plan, false)}.remove_subscription(&${this.printNode(target.argumentExpression, 0).trim()})`;
+        return `${this.rustClientHandleReceiver(access.plan, false)}.remove_subscription(${this.rustWsKeyText(target.argumentExpression)})`;
     }
 
     /** `client.subscriptions[k] = v`: the handle writes the live client and its snapshot. */
@@ -6696,6 +6766,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isIdentifier(expr.expression) && this.rustCallsTestExchange(node)) {
             return this.printRuntimeVariadicCall(node, this.printNode(expr.expression, 0), expr.name.text, identation, true, true);
         }
+        if (isIdentifier(expr.expression) && this.rustWsSettleCall(node)) return this.printWsSettleCall(node, this.printNode(expr.expression, 0), identation);
+        if (isIdentifier(expr.expression) && this.rustWsFlightCall(node)) return this.printWsFlightCall(node, this.printNode(expr.expression, 0), identation);
         if (isIdentifier(expr.expression) && this.rustCallsRuntimeHandle(node)) {
             return this.printRuntimeVariadicCall(node, this.printNode(expr.expression, 0), expr.name.text, identation, false, true);
         }
@@ -6797,8 +6869,12 @@ export class RustTranspiler extends BaseTranspiler {
     printOptionalArgsSliceCall(node, receiver: string, methodName: string, fixed: number, identation: number): string | undefined {
         const args = this.rustPrintedArgs(node, identation);
         if (args.length < fixed || (args.length > 0 && args[args.length - 1].startsWith('&['))) return undefined;
-        const cloned = args.map((a) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(a) && a !== 'self' ? `${a}.clone()` : a);
+        const cloned = args.map((a, at) => this.rustWsWatchSlot(node, at) && this.rustWsStrKey(node.arguments[at]) ? this.rustWsKeyText(node.arguments[at]) : this.rustSliceArgText(a));
         return `${receiver}.${methodName}(${cloned.slice(0, fixed).join(', ')}${fixed > 0 ? ', ' : ''}&[${cloned.slice(fixed).join(', ')}])`;
+    }
+
+    rustSliceArgText(a: string): string {
+        return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(a) && a !== 'self' ? `${a}.clone()` : a;
     }
 
     // The callee is declared in `ts/src/base/` (a base method, or a base field aliasing a helper);
