@@ -3791,7 +3791,6 @@ export class RustTranspiler extends BaseTranspiler {
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
-        if (this.rustWsClientInKey(n, kind)) return 'box';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
         }
@@ -3819,14 +3818,6 @@ export class RustTranspiler extends BaseTranspiler {
         if ((kind !== 'str' && kind !== 'ostr') || !isPropertyAccessExpression(callee) || !isIdentifier(callee.expression)) return false;
         if (!RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS.has(String(callee.name.text))) return false;
         return this.rustIsWsClientType(this.typeOfNodeIfAny(callee.expression));
-    }
-
-    // `x in client.subscriptions|futures` on a ws `Client`: the key boxes into the `in_op` slot.
-    rustWsClientInKey(n, kind: string): boolean {
-        const parent: any = n.parent;
-        if ((kind !== 'str' && kind !== 'ostr') || !isBinaryExpression(parent) || parent.left !== n || parent.operatorToken.kind !== SyntaxKind.InKeyword) return false;
-        const right: any = this.unwrapParens(parent.right);
-        return isPropertyAccessExpression(right) && isIdentifier(right.expression) && this.rustIsWsClientType(this.typeOfNodeIfAny(right.expression));
     }
 
     rustWsClientOnlyUse(declaration): boolean {

@@ -54601,8 +54601,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     if (kind === "str" && this.rustScalarInsertKeyUse(n))
       return "key";
-    if (this.rustWsClientInKey(n, kind))
-      return "box";
     if (_is.isCallExpression.call(void 0, parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
       return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? "box" : this.rustScalarExpressionUseForm(n, kind);
     }
@@ -54631,14 +54629,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!_RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS.has(String(callee.name.text)))
       return false;
     return this.rustIsWsClientType(this.typeOfNodeIfAny(callee.expression));
-  }
-  // `x in client.subscriptions|futures` on a ws `Client`: the key boxes into the `in_op` slot.
-  rustWsClientInKey(n, kind) {
-    const parent = n.parent;
-    if (kind !== "str" && kind !== "ostr" || !_is.isBinaryExpression.call(void 0, parent) || parent.left !== n || parent.operatorToken.kind !== _ast.SyntaxKind.InKeyword)
-      return false;
-    const right = this.unwrapParens(parent.right);
-    return _is.isPropertyAccessExpression.call(void 0, right) && _is.isIdentifier.call(void 0, right.expression) && this.rustIsWsClientType(this.typeOfNodeIfAny(right.expression));
   }
   rustWsClientOnlyUse(declaration) {
     let hits = 0;

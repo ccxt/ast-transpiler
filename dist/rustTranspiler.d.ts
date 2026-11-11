@@ -448,7 +448,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarUseForm(n: any, kind: string): string | undefined;
     private static readonly RUST_WS_CLIENT_VALUE_METHODS;
     rustWsClientCallArg(call: any, kind: string): boolean;
-    rustWsClientInKey(n: any, kind: string): boolean;
     rustWsClientOnlyUse(declaration: any): boolean;
     rustScalarInNestedWrite(n: any): boolean;
     /** A write source the local's type holds exactly: a same-kind value, a typed scalar local of the

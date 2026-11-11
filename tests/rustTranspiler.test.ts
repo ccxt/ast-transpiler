@@ -6976,13 +6976,12 @@ describe('rust message-hash string locals handed to the ws client', () => {
         out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
         fs.rmSync (root, { recursive: true, force: true });
     });
-    test('a hash read by client calls and an in-test is a String boxed at each client slot', () => {
+    test('a hash read by two client calls is a String boxed at each client slot', () => {
         expect(out).toContain('let mut messageHash: String = format!(');
         expect(out).toContain('client.reject(&[message.clone(), Value::from(messageHash.clone())]);');
-        expect(out).toContain('let mut messageHash: String = "auth".to_string();');
-        expect(out).toContain('&Value::from(messageHash.clone())');
     });
-    test('a hash handed once to the client stays Value', () => {
+    test('a hash handed once to the client, or keyed into its subscriptions, stays Value', () => {
         expect(out).toContain('let mut messageHash: Value = Value::Str("orders".into());');
+        expect(out).toContain('let mut messageHash: Value = Value::Str("auth".into());');
     });
 });
