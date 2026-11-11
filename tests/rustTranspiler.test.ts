@@ -7,6 +7,7 @@ import * as path from 'path';
 
 // fixture trees used above are written to a temp dir so the suite carries no fixture files
 const rustInlineFixtures: Record<string, Record<string, string>> = {
+ "reader-defaults": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    options: any = {};\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    safeInteger (o: any, k: any, d: number = undefined): number | undefined { return o[k]; }\n    safeNumber (o: any, k: any, d: number = undefined): number | undefined { return o[k]; }\n    safeBool (o: any, k: any, d: boolean = undefined): boolean | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange';\nexport default class venue extends Exchange {\n    f (o: any, fallback: string, n: number): any {\n        const flag = this.safeBool (o, 'flag');\n        if (flag) {\n            return 1;\n        }\n        const name = this.safeString (o, 'name', fallback);\n        if (name === 'x') {\n            return 2;\n        }\n        const limit = this.safeInteger (o, 'limit', this.safeInteger (o, 'max'));\n        if (limit === undefined) {\n            return 3;\n        }\n        const fee = this.safeNumber (o, 'fee', 0);\n        if (fee === undefined) {\n            return 4;\n        }\n        const boxed = this.safeNumber (o, 'boxed', 0);\n        return this.hold (boxed);\n    }\n}\n"},
  "bool-params": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['sandbox'] = true;\n        }\n    }\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n    hold (f: any): any {\n        return f;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required `boolean` read only in condition slots -> native `bool`\n    settlementData (isBuy: boolean, amount: any) {\n        if (isBuy) {\n            return -amount;\n        }\n        return amount;\n    }\n    // optional `boolean`: bound with the truthiness the use sites applied\n    starkAmount (amount: any, roundUp: boolean = false) {\n        if (roundUp) {\n            return amount + 1;\n        }\n        return amount;\n    }\n    // a bool parameter forwarded into a native-`bool` slot\n    forwarded (on: boolean) {\n        return this.settlementData (on, 1);\n    }\n    // a `Value` argument coerces at the call site\n    fromValue (raw: any) {\n        return this.settlementData (raw, 2);\n    }\n    // a bool parameter read outside a bool sink keeps the box\n    boxed (flag: boolean) {\n        const held = flag;\n        return held;\n    }\n    // an override keeps the base `Value` signature\n    override setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['demo'] = true;\n        }\n    }\n    // a method reference handed to another call keeps the `Value` signature\n    channelB (flag: boolean) {\n        if (flag) {\n            return 1;\n        }\n        return 2;\n    }\n    holdRef () {\n        return this.hold (this.channelB);\n    }\n}\n"
@@ -7494,5 +7495,22 @@ describe('rust string key elements', () => {
     test('negative: a key that is also boxed at its last use keeps its box', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'string-key-element', 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut id: Value = ids.get(i as usize).cloned().unwrap_or(Value::Null);');
+    });
+});
+
+describe('rust reader default locals', () => {
+    const out = () => transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'reader-defaults', 'ts/src/venue.ts')).content;
+
+    test('readers whose default has the reader kind, and a bool reader without default, get native types', () => {
+        const text = out();
+        expect(text).toMatch(/let mut flag: Option<bool> = self\.safe_?[bB]ool[^;]*\.as_bool\(\);/);
+        expect(text).toContain('if (flag == Some(true)) {');
+        expect(text).toMatch(/let mut name: Option<String> = self\.safe_?[sS]tring[^;]*\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(text).toMatch(/let mut limit: Option<i64> = self\.safe_?[iI]nteger[^;]*\.as_i64\(\);/);
+        expect(text).toMatch(/let mut fee: Option<f64> = self\.safe_?[nN]umber[^;]*\.as_f64\(\);/);
+    });
+
+    test('negative: a number reader with an Int default that is boxed keeps its box', () => {
+        expect(out()).toContain('let mut boxed: Value = ');
     });
 });

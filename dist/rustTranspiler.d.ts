@@ -444,6 +444,19 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBaseReturnScalarKind(call: any, name: string): string | undefined;
     rustDerivedScalarKind(call: any): string | undefined;
     rustElementReadScalarKind(node: any): string | undefined;
+    rustReaderDefaultKind(name: string, args: any[], fresh: boolean): string | undefined;
+    rustReaderFallbackKind(fallback: any): string | undefined;
+    /** The checker scalar of a default that is a field, parameter or local (never a call: its `Value` may differ). */
+    rustReaderFallbackChecked(fallback: any): string | undefined;
+    rustReaderDeclTooLong(declaration: any, kind: string): boolean;
+    /** True when the initializer or any `x = ..` write is a reader this block admits. */
+    rustReaderDefaultTouched(declaration: any): boolean;
+    /** A string local that is the source of another local's write: that local then copies at its own uses. */
+    rustReaderStrHandedOn(declaration: any): boolean;
+    /** True when the initializer is a reader this block admits (its kind comes from `rustReaderDefaultKind`). */
+    rustReaderDefaultInit(init: any): boolean;
+    /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */
+    rustReaderIntDefaultNum(init: any): boolean;
     rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
     rustScalarCounterCond(node: any, name: string): string | undefined;
     rustScalarCounterPlan(node: any, name: string): {

@@ -54466,7 +54466,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (this.rustSafeStringLocalIsTyped(declaration) || this.rustStringMethodLocalInit(declaration) !== void 0 || kind === "bool" && this.getRustBoolLocalInitializer(declaration, this.printNode(declaration.initializer, 0)) !== void 0)
       return void 0;
     const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
-    const expected = kind === "ostr" || kind === "str" ? "string" : kind === "bool" ? "boolean" : "number";
+    const expected = kind === "ostr" || kind === "str" ? "string" : kind === "bool" || kind === "obool" ? "boolean" : "number";
     if (checked !== expected)
       return void 0;
     const seeded = kind;
@@ -54510,6 +54510,15 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration)))
       return void 0;
     if (typedUses === 0 && this.rustTestTierSource(declaration))
+      return void 0;
+    if ((boxed > 0 || expressionUses) && this.rustReaderIntDefaultNum(declaration.initializer))
+      return void 0;
+    const readerTouched = this.rustReaderDefaultTouched(declaration);
+    if (readerTouched && (kind === "ostr" || kind === "str") && (boxed > 0 && copied > 0 || this.rustReaderStrHandedOn(declaration)))
+      return void 0;
+    if (readerTouched && boxed > 0)
+      this.rustScalarGuarded.add(declaration);
+    if (readerTouched && this.rustReaderDeclTooLong(declaration, kind))
       return void 0;
     if (copied > 0 && (kind === "str" || kind === "ostr") && this.rustTestTierSource(declaration))
       return void 0;
@@ -54586,6 +54595,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const declaration = this.rustScalarCallee(node);
     if (declaration === void 0 || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName)))
       return void 0;
+    const readerKind = this.rustReaderDefaultKind(name, args, fresh);
+    if (readerKind !== void 0)
+      return readerKind;
     if (_RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(name)) {
       const base = name.endsWith("2") ? 3 : 2;
       if (args.length === base)
@@ -54646,6 +54658,108 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (listType === void 0 || !this.getChecker().isArrayType(listType))
       return void 0;
     return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === "string" ? "ostr" : void 0;
+  }
+  // ── reader defaults (rustReaderDefaultKind / rustReaderIntDefaultNum) ──
+  // A base scalar reader returns its parsed value or its default, so its result has one scalar kind
+  // when the default does: a typed local or reader of that kind, or a value the checker types as that
+  // scalar (string/boolean; a number default must be proven, `as_i64` drops a float). `safeBool` with no
+  // default is `Bool` or `Null` (`Option<bool>`). `safeNumber` with an `Int` default may return that
+  // `Int`, so such a local stays native only (no box, no arithmetic): a `Float` re-box would differ.
+  rustReaderDefaultKind(name, args, fresh) {
+    const strBase = _RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(name) ? name.endsWith("2") ? 3 : 2 : void 0;
+    const intBase = _RustTranspiler.RUST_SCALAR_INT_HELPERS[name];
+    const numBase = _RustTranspiler.RUST_SCALAR_NUM_HELPERS[name];
+    const boolBase = _RustTranspiler.RUST_SCALAR_BOOL_HELPERS[name];
+    const base = strBase ?? intBase ?? numBase ?? boolBase;
+    if (base === void 0)
+      return void 0;
+    if (args.length === base)
+      return fresh && boolBase !== void 0 ? "obool" : void 0;
+    if (args.length !== base + 1)
+      return void 0;
+    const fallback = this.unwrapParens(args[base]);
+    if (this.literalKindOfNode(fallback) !== void 0 || this.rustScalarIntLiteral(fallback) !== void 0 || this.rustScalarFloatLiteral(fallback) !== void 0) {
+      return numBase !== void 0 && this.rustScalarIntLiteral(fallback) !== void 0 ? "onum" : void 0;
+    }
+    const kind = this.rustReaderFallbackKind(fallback);
+    if (strBase !== void 0)
+      return kind === "str" || kind === "ostr" || kind === void 0 && this.rustReaderFallbackChecked(fallback) === "string" ? "ostr" : void 0;
+    if (intBase !== void 0)
+      return kind === "int" || kind === "oint" ? "oint" : void 0;
+    if (numBase !== void 0)
+      return kind !== void 0 || this.rustReaderFallbackChecked(fallback) === "number" ? "onum" : void 0;
+    return fresh && (kind === "bool" || kind === "obool" || kind === void 0 && this.rustReaderFallbackChecked(fallback) === "boolean") ? "obool" : void 0;
+  }
+  rustReaderFallbackKind(fallback) {
+    if (isIdentifier3(fallback))
+      return this.rustScalarLocalOf(fallback)?.kind;
+    const kind = this.rustScalarValueKind(fallback, true);
+    return kind === "null" ? void 0 : kind;
+  }
+  /** The checker scalar of a default that is a field, parameter or local (never a call: its `Value` may differ). */
+  rustReaderFallbackChecked(fallback) {
+    const plain = isIdentifier3(fallback) || isPropertyAccessExpression3(fallback) && fallback.expression.kind === SyntaxKind7.ThisKeyword;
+    return plain ? this.primitiveKindOfType(this.typeOfNodeIfAny(fallback)) : void 0;
+  }
+  rustReaderDeclTooLong(declaration, kind) {
+    const init = this.rustScalarNativeText(kind, declaration.initializer);
+    if (init === void 0)
+      return true;
+    let depth = 0;
+    for (let up = declaration.parent; up !== void 0; up = up.parent)
+      if (isBlock4(up))
+        depth++;
+    return depth * 4 + `let mut ${declaration.name.text}: ${_RustTranspiler.RUST_SCALAR_TYPES[kind]} = ${init};`.length > 360;
+  }
+  /** True when the initializer or any `x = ..` write is a reader this block admits. */
+  rustReaderDefaultTouched(declaration) {
+    const init = this.unwrapParens(declaration.initializer);
+    if (this.rustReaderDefaultInit(init) || isConditionalExpression4(init) && (this.rustReaderDefaultInit(init.whenTrue) || this.rustReaderDefaultInit(init.whenFalse)))
+      return true;
+    let touched = false;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      const parent = n.parent;
+      if (isBinaryExpression5(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind7.EqualsToken) {
+        const rhs = this.unwrapParens(parent.right);
+        if (this.rustReaderDefaultInit(rhs) || isConditionalExpression4(rhs) && (this.rustReaderDefaultInit(rhs.whenTrue) || this.rustReaderDefaultInit(rhs.whenFalse)))
+          touched = true;
+      }
+      return true;
+    });
+    return touched;
+  }
+  /** A string local that is the source of another local's write: that local then copies at its own uses. */
+  rustReaderStrHandedOn(declaration) {
+    let handed = false;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      let top = n;
+      while (isParenthesizedExpression3(top.parent) || isConditionalExpression4(top.parent))
+        top = top.parent;
+      if (isBinaryExpression5(top.parent) && top.parent.right === top && top.parent.operatorToken.kind === SyntaxKind7.EqualsToken)
+        handed = true;
+      if (isVariableDeclaration3(top.parent) && top.parent.initializer === top)
+        handed = true;
+      return true;
+    });
+    return handed;
+  }
+  /** True when the initializer is a reader this block admits (its kind comes from `rustReaderDefaultKind`). */
+  rustReaderDefaultInit(init) {
+    const node = this.unwrapParens(init);
+    if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || !this.rustScalarReceiver(node.expression.expression))
+      return false;
+    return this.rustReaderDefaultKind(String(node.expression.name.text), Array.from(node.arguments ?? []), true) !== void 0;
+  }
+  /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */
+  rustReaderIntDefaultNum(init) {
+    const node = this.unwrapParens(init);
+    if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
+      return false;
+    const base = _RustTranspiler.RUST_SCALAR_NUM_HELPERS[String(node.expression.name.text)];
+    if (base === void 0 || node.arguments.length !== base + 1)
+      return false;
+    const kind = this.rustReaderFallbackKind(this.unwrapParens(node.arguments[base]));
+    return kind !== "num" && kind !== "onum";
   }
   // ── scalar sibling bindings (rustScalarUsesAll) ──
   // `rustLocalUsesAll` for a scalar `let`/`const`: a same-named block-scoped binding in a sibling
@@ -54863,7 +54977,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       if (this.rustScalarLiteralTest(kind, other) !== void 0)
         return "test";
     }
-    if (kind === "bool" && this.rustIdentifierUseIsCondition(n))
+    if ((kind === "bool" || kind === "obool") && this.rustIdentifierUseIsCondition(n))
       return "cond";
     if (this.rustScalarInNestedWrite(n))
       return void 0;
@@ -55322,7 +55436,8 @@ ${binding(plan.indent)}` : ""), head: "" };
   /** Condition hook: a `bool` scalar local is its own condition. */
   printRustScalarLocalCondition(node) {
     const inner = this.unwrapParens(node);
-    return this.rustScalarLocalOf(inner)?.kind === "bool" ? super.printIdentifier(inner) : void 0;
+    const kind = this.rustScalarLocalOf(inner)?.kind;
+    return kind === "bool" ? super.printIdentifier(inner) : kind === "obool" ? `(${super.printIdentifier(inner)} == Some(true))` : void 0;
   }
   /** Identifier hook: a `box` use converts with the standard `From` impls (scalars are `Copy`). */
   printRustScalarLocalRead(node) {
@@ -55330,6 +55445,8 @@ ${binding(plan.indent)}` : ""), head: "" };
     const form = local === void 0 ? void 0 : this.rustScalarUseForms.get(node);
     if (form === "key" && local.kind === "ostr")
       return `${super.printIdentifier(node)}.clone().map(Value::from).unwrap_or(Value::Null)`;
+    if (form === "cond" && local.kind === "obool")
+      return `(${super.printIdentifier(node)} == Some(true))`;
     if (form === "cond" || form === "concat" || form === "native" || form === "targ" || form === "key" || form === "okey")
       return super.printIdentifier(node);
     if (form === "err")
@@ -55342,6 +55459,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
     if (local.kind === "str")
       return `Value::from(${moved})`;
+    if (local.kind === "obool")
+      return `${name}.map_or(Value::Null, Value::Bool)`;
     return local.kind === "bool" ? `Value::Bool(${name})` : `Value::from(${name})`;
   }
   /** The native value of a scalar expression for a local of `kind` (`Some(..)` for optional kinds). */
@@ -55369,7 +55488,7 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (base === "str" && this.literalKindOfNode(node) === "string")
       return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
     if (base === "bool" && this.literalKindOfNode(node) === "boolean")
-      return node.kind === SyntaxKind7.TrueKeyword ? "true" : "false";
+      return wrap(node.kind === SyntaxKind7.TrueKeyword ? "true" : "false");
     const int = base === "int" ? this.rustScalarIntLiteral(node) : void 0;
     if (int !== void 0)
       return wrap(int);
@@ -55404,6 +55523,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       return `${text}.as_i64()`;
     if (kind === "onum")
       return `${text}.as_f64()`;
+    if (kind === "obool")
+      return `${text}.as_bool()`;
     if (kind === "bool")
       return `${text}.as_bool().unwrap_or(${fallback.kind === SyntaxKind7.TrueKeyword ? "true" : "false"})`;
     return void 0;
@@ -55750,6 +55871,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       return this.isBooleanPosition(node) ? text : `Value::Bool(${text})`;
     if (kind === "oint" || kind === "onum")
       return `Value::from(${text})`;
+    if (kind === "obool")
+      return `${text}.map_or(Value::Null, Value::Bool)`;
     return kind === "int" ? `Value::Int(${text})` : kind === "num" ? `Value::Float(${text})` : `Value::from(${text})`;
   }
   /** Binary hook: arithmetic/ordered comparisons over typed operands, and `+=`/`-=` on a typed local. */
@@ -64797,6 +64920,7 @@ _RustTranspiler.RUST_SCALAR_TYPES = {
   ostr: "Option<String>",
   oint: "Option<i64>",
   onum: "Option<f64>",
+  obool: "Option<bool>",
   str: "String",
   int: "i64",
   num: "f64",

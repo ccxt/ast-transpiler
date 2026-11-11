@@ -3493,7 +3493,7 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_SCALAR_BOOL_HELPERS: { [name: string]: number } = { safeBool: 2, safeBool2: 3, safeBoolN: 2 };
 
     private static readonly RUST_SCALAR_TYPES: { [kind: string]: string } = {
-        ostr: 'Option<String>', oint: 'Option<i64>', onum: 'Option<f64>', str: 'String', int: 'i64', num: 'f64', bool: 'bool',
+        ostr: 'Option<String>', oint: 'Option<i64>', onum: 'Option<f64>', obool: 'Option<bool>', str: 'String', int: 'i64', num: 'f64', bool: 'bool',
     };
 
     private rustScalarDecisions = new Map<any, string | null>();
@@ -3629,7 +3629,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustSafeStringLocalIsTyped(declaration) || this.rustStringMethodLocalInit(declaration) !== undefined
             || (kind === 'bool' && this.getRustBoolLocalInitializer(declaration, this.printNode(declaration.initializer, 0)) !== undefined)) return undefined;
         const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
-        const expected = kind === 'ostr' || kind === 'str' ? 'string' : (kind === 'bool' ? 'boolean' : 'number');
+        const expected = kind === 'ostr' || kind === 'str' ? 'string' : (kind === 'bool' || kind === 'obool' ? 'boolean' : 'number');
         if (checked !== expected) return undefined;
         const seeded = kind;
         kind = this.rustScalarWidenedKind(declaration, kind);
@@ -3668,6 +3668,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed)) return undefined;
         if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration))) return undefined;
         if (typedUses === 0 && this.rustTestTierSource(declaration)) return undefined;
+        if ((boxed > 0 || expressionUses) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
+        // a reader-default string re-boxed anywhere but a moving `return` would copy where the `Value` moved
+        const readerTouched = this.rustReaderDefaultTouched(declaration);
+        if (readerTouched && (kind === 'ostr' || kind === 'str') && ((boxed > 0 && copied > 0) || this.rustReaderStrHandedOn(declaration))) return undefined;
+        if (readerTouched && boxed > 0) this.rustScalarGuarded.add(declaration);
+        // the converted declaration keeps the 400-char line budget (headroom for the later snake_case renames)
+        if (readerTouched && this.rustReaderDeclTooLong(declaration, kind)) return undefined;
         // a test string re-boxed anywhere but its moving `return` copies where the `Value` was lent
         if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustTestTierSource(declaration)) return undefined;
         if (this.rustScalarOptKeyCostly(declaration, kind)) return undefined;
@@ -3726,6 +3733,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && this.rustVenueInitializer(node) && this.rustVenueIntCall(node)) return 'int';
         const declaration: any = this.rustScalarCallee(node);
         if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return undefined;
+        const readerKind = this.rustReaderDefaultKind(name, args, fresh); if (readerKind !== undefined) return readerKind;
         // a literal default is returned for every missing key, so the reader is never `Null`
         if (RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(name)) {
             const base = name.endsWith('2') ? 3 : 2;
@@ -3787,6 +3795,99 @@ export class RustTranspiler extends BaseTranspiler {
         const listType: any = this.typeOfNodeIfAny(node.expression);
         if (listType === undefined || !this.getChecker().isArrayType(listType)) return undefined;
         return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'string' ? 'ostr' : undefined;
+    }
+
+    // ── reader defaults (rustReaderDefaultKind / rustReaderIntDefaultNum) ──
+    // A base scalar reader returns its parsed value or its default, so its result has one scalar kind
+    // when the default does: a typed local or reader of that kind, or a value the checker types as that
+    // scalar (string/boolean; a number default must be proven, `as_i64` drops a float). `safeBool` with no
+    // default is `Bool` or `Null` (`Option<bool>`). `safeNumber` with an `Int` default may return that
+    // `Int`, so such a local stays native only (no box, no arithmetic): a `Float` re-box would differ.
+    rustReaderDefaultKind(name: string, args: any[], fresh: boolean): string | undefined {
+        const strBase = RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(name) ? (name.endsWith('2') ? 3 : 2) : undefined;
+        const intBase = RustTranspiler.RUST_SCALAR_INT_HELPERS[name];
+        const numBase = RustTranspiler.RUST_SCALAR_NUM_HELPERS[name];
+        const boolBase = RustTranspiler.RUST_SCALAR_BOOL_HELPERS[name];
+        const base = strBase ?? intBase ?? numBase ?? boolBase;
+        if (base === undefined) return undefined;
+        if (args.length === base) return fresh && boolBase !== undefined ? 'obool' : undefined;
+        if (args.length !== base + 1) return undefined;
+        const fallback: any = this.unwrapParens(args[base]);
+        if (this.literalKindOfNode(fallback) !== undefined || this.rustScalarIntLiteral(fallback) !== undefined || this.rustScalarFloatLiteral(fallback) !== undefined) {
+            // literal defaults are the existing rule's, except an `Int` literal on a number reader
+            return numBase !== undefined && this.rustScalarIntLiteral(fallback) !== undefined ? 'onum' : undefined;
+        }
+        const kind = this.rustReaderFallbackKind(fallback);
+        if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && this.rustReaderFallbackChecked(fallback) === 'string') ? 'ostr' : undefined;
+        if (intBase !== undefined) return kind === 'int' || kind === 'oint' ? 'oint' : undefined;
+        if (numBase !== undefined) return kind !== undefined || this.rustReaderFallbackChecked(fallback) === 'number' ? 'onum' : undefined;
+        return fresh && (kind === 'bool' || kind === 'obool' || (kind === undefined && this.rustReaderFallbackChecked(fallback) === 'boolean')) ? 'obool' : undefined;
+    }
+
+    rustReaderFallbackKind(fallback): string | undefined {
+        if (isIdentifier(fallback)) return this.rustScalarLocalOf(fallback)?.kind;
+        const kind = this.rustScalarValueKind(fallback, true);
+        return kind === 'null' ? undefined : kind;
+    }
+
+    /** The checker scalar of a default that is a field, parameter or local (never a call: its `Value` may differ). */
+    rustReaderFallbackChecked(fallback): string | undefined {
+        const plain = isIdentifier(fallback) || (isPropertyAccessExpression(fallback) && fallback.expression.kind === SyntaxKind.ThisKeyword);
+        return plain ? this.primitiveKindOfType(this.typeOfNodeIfAny(fallback)) : undefined;
+    }
+
+    rustReaderDeclTooLong(declaration, kind: string): boolean {
+        const init = this.rustScalarNativeText(kind, declaration.initializer);
+        if (init === undefined) return true;
+        let depth = 0;
+        for (let up: any = declaration.parent; up !== undefined; up = up.parent) if (isBlock(up)) depth++;
+        return depth * 4 + `let mut ${declaration.name.text}: ${RustTranspiler.RUST_SCALAR_TYPES[kind]} = ${init};`.length > 360;
+    }
+
+    /** True when the initializer or any `x = ..` write is a reader this block admits. */
+    rustReaderDefaultTouched(declaration): boolean {
+        const init: any = this.unwrapParens(declaration.initializer);
+        if (this.rustReaderDefaultInit(init) || (isConditionalExpression(init) && (this.rustReaderDefaultInit(init.whenTrue) || this.rustReaderDefaultInit(init.whenFalse)))) return true;
+        let touched = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const parent: any = n.parent;
+            if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
+                const rhs: any = this.unwrapParens(parent.right);
+                if (this.rustReaderDefaultInit(rhs) || (isConditionalExpression(rhs) && (this.rustReaderDefaultInit(rhs.whenTrue) || this.rustReaderDefaultInit(rhs.whenFalse)))) touched = true;
+            }
+            return true;
+        });
+        return touched;
+    }
+
+    /** A string local that is the source of another local's write: that local then copies at its own uses. */
+    rustReaderStrHandedOn(declaration): boolean {
+        let handed = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            let top: any = n;
+            while (isParenthesizedExpression(top.parent) || isConditionalExpression(top.parent)) top = top.parent;
+            if (isBinaryExpression(top.parent) && top.parent.right === top && top.parent.operatorToken.kind === SyntaxKind.EqualsToken) handed = true;
+            if (isVariableDeclaration(top.parent) && top.parent.initializer === top) handed = true;
+            return true;
+        });
+        return handed;
+    }
+
+    /** True when the initializer is a reader this block admits (its kind comes from `rustReaderDefaultKind`). */
+    rustReaderDefaultInit(init): boolean {
+        const node: any = this.unwrapParens(init);
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustScalarReceiver(node.expression.expression)) return false;
+        return this.rustReaderDefaultKind(String(node.expression.name.text), Array.from(node.arguments ?? []), true) !== undefined;
+    }
+
+    /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */
+    rustReaderIntDefaultNum(init): boolean {
+        const node: any = this.unwrapParens(init);
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return false;
+        const base = RustTranspiler.RUST_SCALAR_NUM_HELPERS[String(node.expression.name.text)];
+        if (base === undefined || node.arguments.length !== base + 1) return false;
+        const kind = this.rustReaderFallbackKind(this.unwrapParens(node.arguments[base]));
+        return kind !== 'num' && kind !== 'onum';
     }
 
     // ── scalar sibling bindings (rustScalarUsesAll) ──
@@ -3998,7 +4099,7 @@ export class RustTranspiler extends BaseTranspiler {
             const other = parent.left === n ? parent.right : parent.left;
             if (this.rustScalarLiteralTest(kind, other) !== undefined) return 'test';
         }
-        if (kind === 'bool' && this.rustIdentifierUseIsCondition(n)) return 'cond';
+        if ((kind === 'bool' || kind === 'obool') && this.rustIdentifierUseIsCondition(n)) return 'cond';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -4428,7 +4529,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** Condition hook: a `bool` scalar local is its own condition. */
     printRustScalarLocalCondition(node): string | undefined {
         const inner = this.unwrapParens(node);
-        return this.rustScalarLocalOf(inner)?.kind === 'bool' ? super.printIdentifier(inner) : undefined;
+        const kind = this.rustScalarLocalOf(inner)?.kind;
+        return kind === 'bool' ? super.printIdentifier(inner) : (kind === 'obool' ? `(${super.printIdentifier(inner)} == Some(true))` : undefined);
     }
 
     /** Identifier hook: a `box` use converts with the standard `From` impls (scalars are `Copy`). */
@@ -4437,6 +4539,7 @@ export class RustTranspiler extends BaseTranspiler {
         const form = local === undefined ? undefined : this.rustScalarUseForms.get(node);
         // an optional key that reaches a helper write (no native insert) takes the helper's boxed key
         if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}.clone().map(Value::from).unwrap_or(Value::Null)`;
+        if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
         if (form !== 'box' && form !== 'xbox') return undefined;
@@ -4446,6 +4549,7 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustTestLastUse(node, local.declaration) ? name : `${name}.clone()`;
         if (local.kind === 'ostr') return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
         if (local.kind === 'str') return `Value::from(${moved})`;
+        if (local.kind === 'obool') return `${name}.map_or(Value::Null, Value::Bool)`;
         return local.kind === 'bool' ? `Value::Bool(${name})` : `Value::from(${name})`;
     }
 
@@ -4469,7 +4573,7 @@ export class RustTranspiler extends BaseTranspiler {
         const expressionText = this.rustScalarExpressionText(kind, node);
         if (expressionText !== undefined) return expressionText;
         if (base === 'str' && this.literalKindOfNode(node) === 'string') return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
-        if (base === 'bool' && this.literalKindOfNode(node) === 'boolean') return node.kind === SyntaxKind.TrueKeyword ? 'true' : 'false';
+        if (base === 'bool' && this.literalKindOfNode(node) === 'boolean') return wrap(node.kind === SyntaxKind.TrueKeyword ? 'true' : 'false');
         const int = base === 'int' ? this.rustScalarIntLiteral(node) : undefined;
         if (int !== undefined) return wrap(int);
         const float = base === 'num' && !isCallExpression(node) ? this.rustScalarFloatLiteral(node) : undefined;
@@ -4494,6 +4598,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr') return `${text}.as_str().map(str::to_owned)`;
         if (kind === 'oint') return `${text}.as_i64()`;
         if (kind === 'onum') return `${text}.as_f64()`;
+        if (kind === 'obool') return `${text}.as_bool()`;
         if (kind === 'bool') return `${text}.as_bool().unwrap_or(${fallback.kind === SyntaxKind.TrueKeyword ? 'true' : 'false'})`;
         return undefined;
     }
@@ -4801,6 +4906,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr') return `${text}.map(Value::from).unwrap_or(Value::Null)`;
         if (kind === 'bool') return this.isBooleanPosition(node) ? text : `Value::Bool(${text})`;
         if (kind === 'oint' || kind === 'onum') return `Value::from(${text})`;
+        if (kind === 'obool') return `${text}.map_or(Value::Null, Value::Bool)`;
         return kind === 'int' ? `Value::Int(${text})` : (kind === 'num' ? `Value::Float(${text})` : `Value::from(${text})`);
     }
 
