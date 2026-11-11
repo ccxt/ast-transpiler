@@ -445,6 +445,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarReceiver(node: any): boolean;
     rustScalarLocalKindUncached(declaration: any): string | undefined;
     rustParamAliasSeedKind(declaration: any): string | undefined;
+    rustLimitCall(expr: any): boolean;
+    rustLimitArgUse(n: any, kind: string): boolean;
+    rustLimitArgText(arg: any, at: number): string;
+    rustLimitCallText(expr: any): string | undefined;
     /** Integer literal text (`5`, `-5`) that fits an `i64`, else undefined. */
     rustScalarIntLiteral(node: any): string | undefined;
     /** Decimal float literal text (`1.5`, `-0.25`, `1e8`), else undefined. */
@@ -498,6 +502,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueLocalHandedOn(declaration: any): boolean;
     /** The whole initializer of a `let`/`const` (writes and ternary arms keep their `Value`). */
     rustVenueInitializer(node: any): boolean;
+    /** A venue `int` result boxed at two or more slots: the `i64` is `Copy`, so each box replaces a `Value` clone. */
+    rustVenueIntReboxed(declaration: any, kind: string, boxed: number): boolean;
     /** `x.toString()` on an `i64` local: it prints `format!("{}", x)`, the same text `Display` gives the `Int` box. */
     rustVenueIntToString(call: any, access: any): boolean;
     /** The `toString()` print of an `i64` scalar local receiver, else undefined. */
@@ -664,6 +670,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Joins the initializer kind with every `x = <rhs>` write: a nullish write makes the local optional. */
     rustScalarWidenedKind(declaration: any, kind: string): string;
     rustOptParamKind(expr: any): string | undefined;
+    private static readonly RUST_PARAM_READ;
     rustOptParamText(kind: string, node: any): string | undefined;
     /** `p === undefined ? d : p` (or `p !== undefined ? p : d`) over a typed optional parameter `p` and a
      *  literal or typed local `d`: never `Null`, printed `p.as_i64().unwrap_or(d)`. */
@@ -1642,6 +1649,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBorrowedListUse(node: any): boolean;
     /** A base hand-written reader (`safeString`, `safeValue2`, `safeIntegerN`, ..) with any key. */
     rustBorrowedAnyKeyReader(call: any): boolean;
+    private static readonly RUST_BY_REF_GENERATED_READERS;
+    private rustByRefParamDecisions;
+    rustParamReadsByReference(param: any): boolean;
+    rustParamReadsByReferenceUncached(param: any): boolean;
+    /** A call to a generated base reader (any overload) whose container parameter prints `impl KeyRead`. */
+    rustReaderTakesContainerByReference(call: any): boolean;
     /** `'dict' | 'list' | 'api'` for a container source the local may hold by reference. */
     rustBorrowedSourceKind(call: any): 'dict' | 'list' | 'api' | undefined;
     /** `&x` for a borrowed local (or a typed container local) passed to a hand-written any-key reader. */
@@ -1719,6 +1732,31 @@ export declare class RustTranspiler extends BaseTranspiler {
     printHandedDictExtend(node: any, identation: number): string | undefined;
     /** `let mut x: crate::value::Dict = <slot read>.into_dict()` for a handed params slot. */
     printRustHandedDictSlot(element: any, printedName: string, read: string, indent: string): string | undefined;
+    /** `n` is the first operand of a two-operand base `this.extend (n, x)`. */
+    rustExtendHeadUse(n: any): boolean;
+    private static readonly RUST_EXTEND_HEAD_CALLS;
+    private rustUntilHeadDecisions;
+    rustUntilHeadSlot(element: any): boolean;
+    /** Slot 0 of `const [ x, p ] = this.handleUntilOption (k, r, ..)` with `r` a map literal or a typed map local,
+     *  used only as an extend head or written at literal keys (`Arc::make_mut(&mut x).insert(..)`). */
+    rustUntilHeadSlotUncached(element: any): boolean;
+    /** `x` (moved at its last use) or `&x` for a shared-map local as the head of a base `extend`, else undefined. */
+    printExtendHeadArg(node: any, text: string): string | undefined;
+    /** The literal key of a statement write `n['k'] = v` (one level, not a book-meta or replaced key). */
+    rustUntilHeadKeyWrite(n: any): string | undefined;
+    /** `std::sync::Arc::make_mut(&mut x).insert("k".into(), v)` for a literal-key write on a typed request slot. */
+    printUntilHeadKeyWrite(left: any, right: any, valueText: string): string | undefined;
+    private rustLentListParamDecisions;
+    rustParamIsLentList(param: any): boolean;
+    private static readonly RUST_LENT_LIST_TYPES;
+    rustParamIsLentListUncached(param: any): boolean;
+    private rustLentListNamesByRoot;
+    /** Base `parse*s` methods whose first parameter every declaration (base and overrides) types `List`. */
+    rustLentListMethodNames(srcRoot: string): Set<string>;
+    /** A call argument landing in a lent list parameter of the callee. */
+    rustLentListSlot(call: any, arg: any): boolean;
+    /** `&x` for a shared list local lent to a lent list parameter. */
+    printLentListArg(node: any, text: string): string | undefined;
     private rustLentParamDecisions;
     private rustLentOverrideNames;
     rustParamIsLentDict(param: any): boolean;

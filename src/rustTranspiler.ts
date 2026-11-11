@@ -1896,7 +1896,7 @@ export class RustTranspiler extends BaseTranspiler {
             const keyStrs = keys.map(k => this.printNode(k, 0));
             for (const key of keyStrs.slice(0, -1)) acc = `get_value_mut(${acc}, &${key})`;
             const rhs = this.printNode(right, 0);
-            const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
+            const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
             const helperCall = `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
             // a nested helper write whose value was read natively binds the value first, like the ccxt hoist did
             const helperWrite = this.rustDictHoistHosts.has(node)
@@ -3802,7 +3802,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (kind === 'oint') return name;
         }
         const v = this.printNode(arg, 0).trim();
-        return `${/^[A-Za-z_][A-Za-z0-9_.]*$/.test(v) ? v : `(${v})`}.${at === 0 ? 'as_str' : 'as_i64'}()`;
+        return `${isIdentifier(node) ? v : `(${v})`}.${at === 0 ? 'as_str' : 'as_i64'}()`;
     }
 
     rustLimitCallText(expr): string | undefined {
@@ -12519,7 +12519,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration === undefined || !isMethodDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
         if (declaration.body === undefined) {
             const name = String(declaration.name.text);
-            declaration = (declaration.parent?.members ?? []).find((m: any) => isMethodDeclaration(m) && m.body !== undefined && isIdentifier(m.name) && String(m.name.text) === name);
+            const owner = declaration.parent;
+            declaration = (owner !== undefined && isClassDeclaration(owner) ? Array.from(owner.members) : []).find((m: any) => isMethodDeclaration(m) && m.body !== undefined && isIdentifier(m.name) && String(m.name.text) === name);
         }
         return declaration !== undefined && this.rustParamReadsByReference(declaration.parameters?.[0]);
     }
@@ -13288,16 +13289,18 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** `std::sync::Arc::make_mut(&mut x).insert("k".into(), v)` for a literal-key write on a typed request slot. */
-    printUntilHeadKeyWrite(left: any, valueText: string): string | undefined {
+    printUntilHeadKeyWrite(left: any, right: any, valueText: string): string | undefined {
         const recv: any = isElementAccessExpression(left) ? left.expression : undefined;
         if (recv === undefined || !isIdentifier(recv)) return undefined;
         const key = this.rustUntilHeadKeyWrite(recv);
         const declaration: any = this.rustDeclaredNode(recv);
         if (key === undefined || declaration === recv || !this.rustUntilHeadSlot(declaration)) return undefined;
         const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
-        const value = this.rustPrintedBoolArg(valueText) ? `Value::Bool(${valueText})` : valueText.trim();
+        const value = this.rustNodeIsBoolExpression(right) ? `Value::Bool(${valueText})` : valueText.trim();
         const insert = (v: string) => `std::sync::Arc::make_mut(&mut ${name}).insert(${this.quotedStringLiteral(key)}.into(), ${v})`;
-        return new RegExp(`\\b${name}\\b`).test(value) ? `{ let __be_tmp = ${value}; ${insert('__be_tmp')}; }` : insert(RustTranspiler.cloneIfBareLocal(value));
+        const reads = (n: any): boolean => (isIdentifier(n) && n.text === recv.text) || (n.forEachChild(reads) ?? false);
+        if (reads(right)) return `{ let __be_tmp = ${value}; ${insert('__be_tmp')}; }`;
+        return isIdentifier(this.unwrapParens(right)) ? insert(RustTranspiler.cloneIfBareLocal(value)) : insert(value);
     }
 
     // ── lent list containers (rustParamIsLentList / rustLentListSlot / printLentListArg) ──
@@ -13327,7 +13330,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || method.parameters?.[0] !== param) return false;
         const name = String(method.name.text);
         if (!/^parse[A-Z]\w*s$/.test(name) || param.name?.kind !== SyntaxKind.Identifier || param.initializer !== undefined || param.questionToken !== undefined) return false;
-        if (!RustTranspiler.RUST_LENT_LIST_TYPES.has(String(param.type?.getText?.() ?? '').replace(/\s+/g, '')) || !isClassDeclaration(method.parent)) return false;
+        const type: any = param.type;
+        const typeName = type?.kind === SyntaxKind.TypeReference && isIdentifier(type.typeName) && type.typeArguments === undefined ? String(type.typeName.text) : '';
+        if (!RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName) || !isClassDeclaration(method.parent)) return false;
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword) || this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         const at = file.search(/\/ts\/src\/(?:base\/|pro\/|prediction\/)?[^/]+\.ts$/);
