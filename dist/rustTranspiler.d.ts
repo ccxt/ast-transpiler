@@ -441,6 +441,25 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
     rustScalarNeedsNativeUse(init: any): boolean;
     rustScalarCallee(call: any): any;
+    private rustVenueReturnTypesByRoot;
+    rustVenueStrCall(node: any): boolean;
+    /** A sync venue method (not a base one) every venue declaration of which returns `int`: it keeps its
+     *  `-> Value` signature and dispatch arm, and its result holds an `Int`, read once as an `i64`. */
+    rustVenueIntCall(node: any): boolean;
+    /** A venue string-method result: typed only when no use boxes it back or hands it to another local
+     *  (each would copy the `String`). */
+    rustVenueScalarSource(init: any): boolean;
+    rustVenueLocalHandedOn(declaration: any): boolean;
+    /** The whole initializer of a `let`/`const` (writes and ternary arms keep their `Value`). */
+    rustVenueInitializer(node: any): boolean;
+    /** `x.toString()` on an `i64` local: it prints `format!("{}", x)`, the same text `Display` gives the `Int` box. */
+    rustVenueIntToString(call: any, access: any): boolean;
+    /** The `toString()` print of an `i64` scalar local receiver, else undefined. */
+    printRustVenueIntToString(node: any, name: string): string | undefined;
+    /** Declared return type texts per method name over the venue sources under `srcRoot`. */
+    rustVenueReturnTypes(srcRoot: string): Map<string, Set<string>>;
+    /** The `Option<String>` text of a venue string-method call (the box a `Value` position adds is left off). */
+    rustVenueStrCallText(node: any): string;
     /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
     rustScalarFormatText(node: any): string | undefined;
     /** How a use of a scalar local prints: `test` (literal/null compare), `cond` (bool condition),

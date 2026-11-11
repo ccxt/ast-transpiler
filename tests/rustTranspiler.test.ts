@@ -36,6 +36,11 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; type: string; settle: Str; linear: boolean | undefined; info: any }\nexport interface Order { id: string; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    async loadMarkets (reload = false, params: Dict = {}): Promise<Dict> {\n        return this.markets;\n    }\n    async fetchOrders (symbol: Str = undefined, params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchA (symbol: Str = undefined, params: Dict = {}) {\n        await this.loadMarkets ();\n        let market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n        }\n        return this.hold (params, market);\n    }\n    async fetchB (symbol: string, params: Dict = {}) {\n        let market = this.market (symbol);\n        if (market['type'] === 'swap') {\n            market = this.market ('x');\n        }\n        return this.hold ({ 'k': market['settle'], 'l': market['linear'], 'b': market['baseId'] }, market);\n    }\n    async fetchC (symbol: string, params: Dict = {}) {\n        const orders = await this.fetchOrders (symbol, params);\n        return this.hold (orders);\n    }\n}\n"
  },
+ "venue-scalar-returns": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    options: Dict = {};\n    sum (a: any, b: any): any { return a + b; }\n    safeInteger (o: any, k: any, d: any = undefined): any { return o; }\n    hold (x: any): any { return x; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    requestId (): int {\n        const requestId = this.sum (this.safeInteger (this.options, 'requestId', 0), 1);\n        this.options['requestId'] = requestId;\n        return requestId;\n    }\n    topicName (symbol: Str): Str {\n        if (symbol === undefined) {\n            return undefined;\n        }\n        return 'topic:' + symbol;\n    }\n    mixedId (): int {\n        return 1;\n    }\n    subscribe (symbol: Str) {\n        const requestId = this.requestId ();\n        const request: Dict = { 'id': requestId.toString () };\n        const topic = this.topicName (symbol);\n        if (topic === undefined) {\n            return request;\n        }\n        const other = this.mixedId ();\n        return this.hold ([ request, other.toString () ]);\n    }\n}\n",
+  "ts/src/other.ts": "import Exchange from './base/Exchange.js';\nexport default class other extends Exchange {\n    mixedId (): string {\n        return 'a';\n    }\n}\n"
+ },
  "base-scalar-returns": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Currency { code: Str }\nexport default class Exchange {\n    currencies: Dict = {};\n    safeCurrency (currencyId: Str, currency: Currency = undefined): Currency {\n        return this.currencies[currencyId];\n    }\n    safeCurrencyCode (currencyId: Str, currency: Currency = undefined): Str {\n        const c: Currency = this.safeCurrency (currencyId, currency);\n        return c['code'];\n    }\n    milliseconds (): number {\n        return 0;\n    }\n    hold (x: any): any {\n        return x;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseEntry (entry: Dict) {\n        const code = this.safeCurrencyCode (entry['c']);\n        if (code === undefined) {\n            return undefined;\n        }\n        const now = this.milliseconds ();\n        const kept = this.safeCurrencyCode (entry['d']);\n        kept['x'] = 1;\n        return { 'code': code, 'ts': now, 'k': kept };\n    }\n}\n"
@@ -5123,6 +5128,26 @@ describe('rust typed tuple-destructure slots', () => {
     test('a slot with another use stays Value', () => {
         expect(out).toContain('let mut kept: Value = keptotherVariable.get(0).cloned().unwrap_or(Value::Null)');
         expect(out).toContain('let mut query: Value = marketTypequeryVariable.get(1).cloned().unwrap_or(Value::Null)');
+    });
+});
+
+describe('scalar locals from venue methods with a declared scalar return', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'venue-scalar-returns', 'ts/src/venue.ts')).content;
+    });
+    test('an int venue method keeps its Value signature and the local reads it once as i64', () => {
+        expect(out).toMatch(/pub fn requestId\(&self\) -> Value \{/);
+        expect(out).toContain('let mut requestId: i64 = self.requestId().as_i64().unwrap_or_default();');
+        expect(out).toContain('format!("{}", requestId)');
+    });
+    test('a native-Str venue method result is taken as the Option<String> it returns', () => {
+        expect(out).toMatch(/let mut topic: Option<String> = self\.topicName\(symbol[^;]*\);/);
+        expect(out).not.toMatch(/let mut topic: Option<String> = [^;]*\.map\(Value::from\)/);
+        expect(out).toContain('topic.is_none()');
+    });
+    test('a name another venue declares with a different return stays Value', () => {
+        expect(out).toContain('let mut other: Value = self.mixedId();');
     });
 });
 

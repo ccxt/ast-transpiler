@@ -51352,6 +51352,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustScalarSeeding = false;
     this.rustScalarVetoed = /* @__PURE__ */ new WeakSet();
     this.rustScalarGuarded = /* @__PURE__ */ new WeakSet();
+    // ── venue string-method results (rustVenueStrCall / rustVenueReturnTypes) ──
+    // A call to a venue method already printed `-> Option<String>` is an optional-string source as it
+    // stands, when every venue declaration of that name (REST, pro, prediction) declares a string return.
+    this.rustVenueReturnTypesByRoot = /* @__PURE__ */ new Map();
     this.rustClientHandlePlans = /* @__PURE__ */ new WeakMap();
     this.rustClientHandleDeclPrinting = false;
     // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
@@ -54465,6 +54469,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
     if (!ok || unused || storeOnly || clientOnce || guarded && scope.kind !== SyntaxKind7.MethodDeclaration)
       return void 0;
+    if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration)))
+      return void 0;
     if (guarded)
       this.rustScalarGuarded.add(declaration);
     return kind;
@@ -54527,6 +54533,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const baseReturn = this.rustBaseReturnScalarKind(node, name);
     if (baseReturn !== void 0)
       return baseReturn;
+    if (this.rustVenueInitializer(node) && this.rustVenueStrCall(node))
+      return "ostr";
+    if (fresh && this.rustVenueInitializer(node) && this.rustVenueIntCall(node))
+      return "int";
     const declaration = this.rustScalarCallee(node);
     if (declaration === void 0 || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName)))
       return void 0;
@@ -54594,7 +54604,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
   rustScalarNeedsNativeUse(init) {
     const node = this.unwrapParens(init);
-    if (this.rustElementReadScalarKind(node) !== void 0)
+    if (this.rustElementReadScalarKind(node) !== void 0 || this.rustVenueIntCall(node) || this.rustVenueStrCall(node))
       return true;
     if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
       return false;
@@ -54611,6 +54621,98 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       this.rustCallDeclarations.set(call, declaration);
     }
     return declaration === null ? void 0 : declaration.resolve?.() ?? declaration;
+  }
+  rustVenueStrCall(node) {
+    if (node === void 0 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || node.expression.expression.kind !== SyntaxKind7.ThisKeyword || this.rustNativeStrCalleeKind(node) !== "str")
+      return false;
+    const file = String(this.rustScalarCallee(node)?.getSourceFile?.()?.fileName ?? "");
+    const at = file.search(/[/\\]ts[/\\]src[/\\]/);
+    if (at < 0)
+      return false;
+    const types = this.rustVenueReturnTypes(file.slice(0, at) + "/ts/src").get(String(node.expression.name.text));
+    return types !== void 0 && [...types].every((t) => t === "string" || t === "Str");
+  }
+  /** A sync venue method (not a base one) every venue declaration of which returns `int`: it keeps its
+   *  `-> Value` signature and dispatch arm, and its result holds an `Int`, read once as an `i64`. */
+  rustVenueIntCall(node) {
+    if (node === void 0 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || node.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const declaration = this.rustScalarCallee(node);
+    if (declaration === void 0 || !isMethodDeclaration5(declaration) || this.isAsyncFunction(declaration))
+      return false;
+    const file = String(declaration.getSourceFile?.()?.fileName ?? "");
+    const at = file.search(/[/\\]ts[/\\]src[/\\]/);
+    if (at < 0 || _RustTranspiler.RUST_BASE_TIER_FILE.test(file) || this.getMethodOverride(declaration) !== void 0)
+      return false;
+    const types = this.rustVenueReturnTypes(file.slice(0, at) + "/ts/src").get(String(node.expression.name.text));
+    return types !== void 0 && [...types].every((t) => t === "int");
+  }
+  /** A venue string-method result: typed only when no use boxes it back or hands it to another local
+   *  (each would copy the `String`). */
+  rustVenueScalarSource(init) {
+    return this.rustVenueStrCall(this.unwrapParens(init));
+  }
+  rustVenueLocalHandedOn(declaration) {
+    let handed = false;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      let top = n;
+      while (isParenthesizedExpression3(top.parent))
+        top = top.parent;
+      const parent = top.parent;
+      if (isBinaryExpression5(parent) && parent.right === top && parent.operatorToken.kind === SyntaxKind7.EqualsToken || isVariableDeclaration3(parent) && parent.initializer === top || isConditionalExpression4(parent))
+        handed = true;
+      return true;
+    });
+    return handed;
+  }
+  /** The whole initializer of a `let`/`const` (writes and ternary arms keep their `Value`). */
+  rustVenueInitializer(node) {
+    let current = node;
+    while (isParenthesizedExpression3(current.parent))
+      current = current.parent;
+    return isVariableDeclaration3(current.parent) && current.parent.initializer === current;
+  }
+  /** `x.toString()` on an `i64` local: it prints `format!("{}", x)`, the same text `Display` gives the `Int` box. */
+  rustVenueIntToString(call, access) {
+    return call !== void 0 && isCallExpression6(call) && call.expression === access && call.arguments.length === 0 && String(access.name.text) === "toString" && this.primitiveKindOfType(this.typeOfNodeIfAny(access.expression)) === "number";
+  }
+  /** The `toString()` print of an `i64` scalar local receiver, else undefined. */
+  printRustVenueIntToString(node, name) {
+    const receiver = node?.expression?.expression;
+    if (receiver === void 0 || !isIdentifier3(receiver) || this.rustScalarLocalOf(receiver)?.kind !== "int")
+      return void 0;
+    return `Value::Str(format!("{}", ${name}).into())`;
+  }
+  /** Declared return type texts per method name over the venue sources under `srcRoot`. */
+  rustVenueReturnTypes(srcRoot) {
+    let table = this.rustVenueReturnTypesByRoot.get(srcRoot);
+    if (table !== void 0)
+      return table;
+    table = /* @__PURE__ */ new Map();
+    const header = /^\s+(?:(?:override|async|public|protected|private|static)\s+)*([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?::\s*([^{;]+?))?\s*\{\s*$/gm;
+    for (const dir of ["", "/pro", "/prediction"]) {
+      let entries = [];
+      try {
+        entries = fs3.readdirSync(srcRoot + dir).filter((f) => f.endsWith(".ts"));
+      } catch (e) {
+        continue;
+      }
+      for (const f of entries) {
+        for (const m of fs3.readFileSync(`${srcRoot}${dir}/${f}`, "utf8").matchAll(header)) {
+          const types = table.get(m[1]) ?? /* @__PURE__ */ new Set();
+          types.add(String(m[3] ?? "").trim());
+          table.set(m[1], types);
+        }
+      }
+    }
+    this.rustVenueReturnTypesByRoot.set(srcRoot, table);
+    return table;
+  }
+  /** The `Option<String>` text of a venue string-method call (the box a `Value` position adds is left off). */
+  rustVenueStrCallText(node) {
+    const text = this.printNode(node, 0).trim();
+    const box = ".map(Value::from).unwrap_or(Value::Null)";
+    return text.endsWith(box) ? text.slice(0, -box.length) : text;
   }
   /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
   rustScalarFormatText(node) {
@@ -55146,10 +55248,14 @@ ${binding(plan.indent)}` : ""), head: "" };
     const text = this.printNode(node, 0).trim();
     const fallback = node.arguments[node.arguments.length - 1];
     const defaulted = this.rustScalarValueKind(node, true) === base;
+    if (kind === "int" && this.rustVenueIntCall(node))
+      return `${text}.as_i64().unwrap_or_default()`;
     if (kind === "str" && defaulted)
       return `${text}.as_str().unwrap_or(${this.quotedStringLiteral(fallback.text)}).to_string()`;
     if (kind === "int" && defaulted)
       return `${text}.as_i64().unwrap_or(${this.rustScalarIntLiteral(fallback)})`;
+    if (kind === "ostr" && this.rustVenueStrCall(node))
+      return this.rustVenueStrCallText(node);
     if (kind === "ostr")
       return `${text}.as_str().map(str::to_owned)`;
     if (kind === "oint")
@@ -55671,6 +55777,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       if (this.rustScalarLengthRecv(parent) !== void 0)
         return "native";
       const call = parent.parent;
+      if (kind === "int" && this.rustVenueIntToString(call, parent))
+        return "native";
       if (isCallExpression6(call) && call.expression === parent) {
         if (this.rustScalarStrMethod(call) !== void 0)
           return "native";
@@ -59458,7 +59566,7 @@ ${this.getIden(identation)}}`;
     return this.printNativeToFixed(node, name) ?? `to_fixed(&${name}, &${parsedArg})`;
   }
   printToStringCall(node, identation, name = void 0) {
-    return this.printRustNativeToString(node, name) ?? this.printRustToString(node, name) ?? `to_string_val(&${name})`;
+    return this.printRustVenueIntToString(node, name) ?? this.printRustNativeToString(node, name) ?? this.printRustToString(node, name) ?? `to_string_val(&${name})`;
   }
   printToUpperCaseCall(node, identation, name = void 0) {
     return this.printNativeStringCase(node, name, "to_uppercase") ?? this.printRustCase(node, name, "to_uppercase") ?? this.looseStrCase(name, "to_uppercase");
