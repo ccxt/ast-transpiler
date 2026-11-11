@@ -8385,3 +8385,39 @@ describe('rust cache limit polls with typed arguments', () => {
         expect(text).not.toContain('let mut limitResolved: Value');
     });
 });
+
+describe('rust deep-extend heads and watch hash lists', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nconst deepExtend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    deepExtend = deepExtend;\n    options: any = {};\n    describe (): any { return {}; }\n    hold (x: any): any { return x; }\n    watchMultiple (url: Str, messageHashes: string[], message: any = undefined, subscribeHashes: Strings = undefined, subscription: any = undefined): any { return url; }\n}\n',
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    merged () {\n        const extended = this.deepExtend (this.describe (), { 'a': 1 });\n        return this.deepExtend (extended, { 'b': 2 });\n    }\n" +
+            "    async watchMany (symbols: string[]) {\n        const messageHashes = [];\n        for (let i = 0; i < symbols.length; i++) {\n            messageHashes.push ('t:' + symbols[i]);\n        }\n        return await this.watchMultiple ('u', messageHashes, {}, messageHashes);\n    }\n" +
+            "    kept () {\n        const extended = this.deepExtend (this.describe (), { 'a': 1 });\n        this.hold (extended);\n        return this.deepExtend (extended, { 'b': 2 });\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-deephead-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a dict local used as the deepExtend head is a shared map moved into deep_extend', () => {
+        const merged = out.slice (out.indexOf ('fn merged'), out.indexOf ('fn watchMany'));
+        expect(merged).toContain('let mut extended: crate::value::Dict = ');
+        expect(merged).toMatch(/self\.deepExtend\(extended, &\[/);
+    });
+    test('a built hash list is lent as the message hashes and hands its shared handle as the subscribe hashes', () => {
+        const many = out.slice (out.indexOf ('fn watchMany'), out.indexOf ('fn kept'));
+        expect(many).toContain('let mut messageHashes: crate::value::List = ');
+        expect(many).toContain('self.watchMultiple(Value::Str("u".into()), &messageHashes, &[');
+        expect(many).toContain('Value::Arr(messageHashes.clone())]).await');
+        expect(many).not.toContain('messageHashes: Value');
+    });
+    test('negative: a deepExtend head handed on whole keeps its box', () => {
+        const kept = out.slice (out.indexOf ('fn kept'));
+        expect(kept).toMatch(/let mut extended: Value = /);
+    });
+});

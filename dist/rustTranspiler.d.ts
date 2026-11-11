@@ -1679,6 +1679,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentListUse(node: any): boolean;
     /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
     printRustLentListBox(node: any, text: string): string | undefined;
+    rustWatchHashListSlot(call: any, n: any): 'clone' | 'lend' | undefined;
     private rustBuiltLists;
     rustBuiltListLocal(declaration: any): boolean;
     /** `x = this.m(.., x, ..)` naming `x` only there and on the left: the old list moves into the call before the write. */

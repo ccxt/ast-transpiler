@@ -12622,7 +12622,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     private rustLentListKinds = new WeakMap<any, boolean>();
 
-    private rustLentListBoxes = new WeakMap<any, 'clone' | 'move'>();
+    private rustLentListBoxes = new WeakMap<any, 'clone' | 'move' | 'lend'>();
 
     rustLentListLocal(declaration: any): boolean {
         if (declaration?.kind !== SyntaxKind.VariableDeclaration) return false;
@@ -12750,7 +12750,19 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustLentListUse(node)) return undefined;
         const form = this.rustLentListBoxes.get(node);
         if (form === undefined) return undefined;
+        if (form === 'lend') return `&${text}`;
         return form === 'move' ? `Value::Arr(${text})` : `Value::Arr(${text}.clone())`;
+    }
+
+    // ── watch hash lists (rustWatchHashListSlot) ──
+    // `watch_multiple` takes its message hashes as `impl Into<Value>`, so a built hash list is lent there (`&x`);
+    // as the optional subscribe hashes it passes its shared handle, never its elements.
+    rustWatchHashListSlot(call: any, n: any): 'clone' | 'lend' | undefined {
+        if (!isCallExpression(call) || call.expression === n || !this.rustWsWatchSlot(call, 0)) return undefined;
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || String(callee.name.text) !== 'watchMultiple') return undefined;
+        const at = Array.from(call.arguments).indexOf(n);
+        return at === 1 ? 'lend' : (at === 3 ? 'clone' : undefined);
     }
 
     // ── built lists (rustBuiltListLocal / rustBuiltListWriteSource / printBuiltListDeclaration / printBuiltListWrite / printBuiltListPush) ──
@@ -12775,7 +12787,7 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustBorrowedDictLocal(declaration)
             || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
         if (String(init.getText()).split('\n')[0].length > 120 || !this.rustBuiltListWriteSource(init)) return false;
-        const boxes: [any, 'clone' | 'move'][] = [];
+        const boxes: [any, 'clone' | 'move' | 'lend'][] = [];
         let natives = 0;
         // the boxed hand-off lengthens its statement
         const short = (n: any): boolean => { let st: any = n; while (st !== undefined && !isStatement(st)) st = st.parent; return st !== undefined && String(st.getText()).split('\n')[0].length <= 160; };
@@ -12805,6 +12817,11 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (isReturnStatement(up) && up.expression === n) {
                 boxes.push([n, 'move']);
+                return true;
+            }
+            const hashSlot = this.rustWatchHashListSlot(up, n);
+            if (hashSlot !== undefined) {
+                boxes.push([n, hashSlot]);
                 return true;
             }
             if (isCallExpression(up) && up.expression !== n && up.arguments.some((a: any) => a === n)) {
@@ -13239,7 +13256,7 @@ export class RustTranspiler extends BaseTranspiler {
             && this.rustBaseCallNamed(call, RustTranspiler.RUST_EXTEND_HEAD_CALLS);
     }
 
-    private static readonly RUST_EXTEND_HEAD_CALLS = new Set([ 'extend' ]);
+    private static readonly RUST_EXTEND_HEAD_CALLS = new Set([ 'extend', 'deepExtend' ]);
 
     private rustUntilHeadDecisions = new WeakMap<any, boolean>();
 
