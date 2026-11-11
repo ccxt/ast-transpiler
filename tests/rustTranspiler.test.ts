@@ -7884,6 +7884,26 @@ describe('rust optional typed parameter defaults and boolean writes', () => {
         expect(output).not.toContain('unwrap_or(100)');
     });
 
+    test('an alias of an optional Int parameter copies the native i64 out of it', () => {
+        const output = run((
+            "        let limitResolved = limit;\n" +
+            "        if (limitResolved === undefined) {\n" +
+            "            limitResolved = 50;\n" +
+            "        }\n" +
+            "        const request = { 'limit': limitResolved };\n" +
+            "        return request as any;\n"));
+        expect(output).toContain('let mut limitResolved: Option<i64> = limit.as_i64();');
+        expect(output).toContain('limitResolved.is_none()');
+        expect(output).not.toContain('let mut limitResolved: Value');
+    });
+
+    test('an alias of an optional Int parameter that is only handed on keeps its Value', () => {
+        const output = run((
+            "        const limitResolved = limit;\n" +
+            "        return this.g (limitResolved);\n"));
+        expect(output).toContain('let mut limitResolved: Value = limit');
+    });
+
     test('a boolean literal local joins comparison writes', () => {
         const output = run((
             "        let found = false;\n" +

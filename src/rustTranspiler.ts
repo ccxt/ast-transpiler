@@ -3689,7 +3689,7 @@ export class RustTranspiler extends BaseTranspiler {
         const scope: any = this.rustEnclosingFunction(declaration);
         if (scope === undefined || isSourceFile(scope)) return undefined;
         // a proof the existing typed-local rules already take keeps their spelling
-        let kind = this.rustScalarValueKind(declaration.initializer, true);
+        let kind = this.rustScalarValueKind(declaration.initializer, true) ?? this.rustParamAliasSeedKind(declaration);
         if (kind === undefined || kind === 'null') return undefined;
         if (this.rustSafeStringLocalIsTyped(declaration) || this.rustStringMethodLocalInit(declaration) !== undefined
             || (kind === 'bool' && this.getRustBoolLocalInitializer(declaration, this.printNode(declaration.initializer, 0)) !== undefined)) return undefined;
@@ -3733,6 +3733,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed)) return undefined;
         if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration))) return undefined;
         if (typedUses === 0 && this.rustTestTierSource(declaration)) return undefined;
+        if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined) return undefined;
         if ((boxed > 0 || expressionUses) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
         // a reader-default string re-boxed anywhere but a moving `return` would copy where the `Value` moved
         const readerTouched = this.rustReaderDefaultTouched(declaration);
@@ -3750,6 +3751,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustScalarOptKeyCostly(declaration, kind) === false && kind === 'ostr' && this.rustScalarOptKeyCount(declaration) > 0) this.rustScalarGuarded.add(declaration);
         if (guarded || this.rustStrMethodRecvLocal(declaration)) this.rustScalarGuarded.add(declaration);
         return kind;
+    }
+
+    // A local initialised as a plain alias of a typed optional `i64`/`f64` parameter takes the
+    // parameter's kind (`p.as_i64()` is a copy, the `Value` is never cloned); it must earn a native use.
+    rustParamAliasSeedKind(declaration): string | undefined {
+        const init: any = this.unwrapParens(declaration?.initializer);
+        return init !== undefined && isIdentifier(init) ? this.rustOptParamKind(init) : undefined;
     }
 
     /** Integer literal text (`5`, `-5`) that fits an `i64`, else undefined. */

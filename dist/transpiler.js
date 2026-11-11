@@ -54542,7 +54542,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const scope = this.rustEnclosingFunction(declaration);
     if (scope === void 0 || isSourceFile5(scope))
       return void 0;
-    let kind = this.rustScalarValueKind(declaration.initializer, true);
+    let kind = this.rustScalarValueKind(declaration.initializer, true) ?? this.rustParamAliasSeedKind(declaration);
     if (kind === void 0 || kind === "null")
       return void 0;
     if (this.rustSafeStringLocalIsTyped(declaration) || this.rustStringMethodLocalInit(declaration) !== void 0 || kind === "bool" && this.getRustBoolLocalInitializer(declaration, this.printNode(declaration.initializer, 0)) !== void 0)
@@ -54593,6 +54593,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     if (typedUses === 0 && this.rustTestTierSource(declaration))
       return void 0;
+    if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== void 0)
+      return void 0;
     if ((boxed > 0 || expressionUses) && this.rustReaderIntDefaultNum(declaration.initializer))
       return void 0;
     const readerTouched = this.rustReaderDefaultTouched(declaration);
@@ -54615,6 +54617,12 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (guarded || this.rustStrMethodRecvLocal(declaration))
       this.rustScalarGuarded.add(declaration);
     return kind;
+  }
+  // A local initialised as a plain alias of a typed optional `i64`/`f64` parameter takes the
+  // parameter's kind (`p.as_i64()` is a copy, the `Value` is never cloned); it must earn a native use.
+  rustParamAliasSeedKind(declaration) {
+    const init = this.unwrapParens(declaration?.initializer);
+    return init !== void 0 && isIdentifier3(init) ? this.rustOptParamKind(init) : void 0;
   }
   /** Integer literal text (`5`, `-5`) that fits an `i64`, else undefined. */
   rustScalarIntLiteral(node) {
