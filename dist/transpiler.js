@@ -60953,7 +60953,7 @@ ${this.getIden(identation)}}`;
     return this.printTrim(node, name) ?? `trim(&${name})`;
   }
   printJoinCall(node, identation, name = void 0, parsedArg = void 0) {
-    return this.printStrVecParamJoin(node) ?? this.printVecJoin(node) ?? this.printNativeStringJoin(node, name) ?? `join(&${name}, &${parsedArg})`;
+    return this.printOptListJoin(node) ?? this.printStrVecParamJoin(node) ?? this.printVecJoin(node) ?? this.printNativeStringJoin(node, name) ?? `join(&${name}, &${parsedArg})`;
   }
   printSplitCall(node, identation, name = void 0, parsedArg = void 0) {
     return this.rustStrLocalSplitText(node) ?? this.printNativeStringSplit(node, name) ?? this.printRustSplit(node, name) ?? `split(&${name}, &${parsedArg})`;
@@ -63378,7 +63378,7 @@ ${iden}}`;
         return true;
       }
       if (isBinaryExpression5(up) && up.left === n && up.operatorToken.kind === SyntaxKind7.EqualsToken) {
-        return up.parent?.kind === SyntaxKind7.ExpressionStatement && this.rustOptListSource(up.right);
+        return up.parent?.kind === SyntaxKind7.ExpressionStatement && (this.rustOptListSource(up.right) || this.rustOptListLiteralWrite(up.right));
       }
       if (isCallExpression6(up) && up.arguments.length === 1 && up.arguments[0] === at && this.rustIsArrayIsArrayCallee(up)) {
         natives++;
@@ -63409,7 +63409,12 @@ ${iden}}`;
         boxes.push([n, "clone"]);
         return true;
       }
-      return false;
+      const extra = at === n ? this.rustOptListExtraUse(n, declaration) : void 0;
+      if (extra === "join")
+        natives++;
+      else if (extra !== void 0)
+        boxes.push([n, extra]);
+      return extra !== void 0;
     });
     if (!safe || natives === 0)
       return false;
@@ -63506,6 +63511,41 @@ ${iden}}`;
     if (form === "lend")
       return `&${text}`;
     return form === "move" ? `${text}.map_or(Value::Null, Value::Arr)` : `${text}.clone().map_or(Value::Null, Value::Arr)`;
+  }
+  // ── optional list locals: joins, map-literal values, literal writes ─────
+  // `x.join("lit")` on a `string[]` joins each element's Display text, as the helper does for `Str`/`Null`
+  // (and "" for `None`, as for a non-list). `{ k: x }` moves the list at its last use, else shares the handle.
+  /** `[..]` without spread is always a list, so `into_opt_list` keeps exactly what the box held. */
+  rustOptListLiteralWrite(node) {
+    const right = this.rustSkipWrappers(node);
+    return right !== void 0 && right.kind === SyntaxKind7.ArrayLiteralExpression && !right.elements.some((e) => e.kind === SyntaxKind7.SpreadElement);
+  }
+  rustOptListExtraUse(n, declaration) {
+    const up = n.parent;
+    if (isPropertyAccessExpression3(up) && up.expression === n && String(up.name.text) === "join") {
+      const call = up.parent;
+      if (!isCallExpression6(call) || call.expression !== up || call.arguments.length !== 1 || this.rustNativeStringLiteralArg(call.arguments[0]) === void 0)
+        return void 0;
+      const checker = this.checkerOrUndefined();
+      const type = checker === void 0 ? void 0 : this.typeOfNodeIfAny(n);
+      const list = type === void 0 ? void 0 : type.flags & TypeFlags6.Union ? (typeParts(type) ?? []).find((t) => checker.isArrayType(t)) : type;
+      if (list === void 0 || !checker.isArrayType(list) || this.primitiveKindOfType(checker.getTypeArguments?.(list)?.[0]) !== "string")
+        return void 0;
+      return "join";
+    }
+    if (up?.kind === SyntaxKind7.PropertyAssignment && up.initializer === n && up.parent?.kind === SyntaxKind7.ObjectLiteralExpression) {
+      return this.rustLocalLastUse(n, declaration) ? "move" : "clone";
+    }
+    return void 0;
+  }
+  printOptListJoin(node) {
+    const access = node?.expression;
+    if (!isPropertyAccessExpression3(access) || this.rustOptListOf(access.expression) === void 0)
+      return void 0;
+    const literal2 = this.rustNativeStringLiteralArg(node.arguments?.[0]);
+    if (literal2 === void 0)
+      return void 0;
+    return `Value::Str(${this.rustOptListSlice(access.expression)}.iter().map(Value::to_string).collect::<Vec<String>>().join("${literal2}").into())`;
   }
   rustHandedDictLocal(declaration) {
     if (declaration?.kind !== SyntaxKind7.VariableDeclaration && declaration?.kind !== SyntaxKind7.BindingElement)

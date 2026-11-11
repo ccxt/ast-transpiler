@@ -10297,7 +10297,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
-        return this.printStrVecParamJoin(node) ?? this.printVecJoin(node) ?? this.printNativeStringJoin(node, name) ?? `join(&${name}, &${parsedArg})`;
+        return this.printOptListJoin(node) ?? this.printStrVecParamJoin(node) ?? this.printVecJoin(node) ?? this.printNativeStringJoin(node, name) ?? `join(&${name}, &${parsedArg})`;
     }
 
     printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -12749,7 +12749,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
-                return up.parent?.kind === SyntaxKind.ExpressionStatement && this.rustOptListSource(up.right);
+                return up.parent?.kind === SyntaxKind.ExpressionStatement && (this.rustOptListSource(up.right) || this.rustOptListLiteralWrite(up.right));
             }
             if (isCallExpression(up) && up.arguments.length === 1 && up.arguments[0] === at && this.rustIsArrayIsArrayCallee(up)) {
                 natives++;
@@ -12781,7 +12781,9 @@ export class RustTranspiler extends BaseTranspiler {
                 boxes.push([n, 'clone']);
                 return true;
             }
-            return false;
+            const extra = at === n ? this.rustOptListExtraUse(n, declaration) : undefined;
+            if (extra === 'join') natives++; else if (extra !== undefined) boxes.push([n, extra]);
+            return extra !== undefined;
         });
         // A list that is only handed on would trade each box for a handle box.
         if (!safe || natives === 0) return false;
@@ -12881,6 +12883,41 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === undefined || this.rustOptListOf(node) === undefined) return undefined;
         if (form === 'lend') return `&${text}`;
         return form === 'move' ? `${text}.map_or(Value::Null, Value::Arr)` : `${text}.clone().map_or(Value::Null, Value::Arr)`;
+    }
+
+    // ── optional list locals: joins, map-literal values, literal writes ─────
+    // `x.join("lit")` on a `string[]` joins each element's Display text, as the helper does for `Str`/`Null`
+    // (and "" for `None`, as for a non-list). `{ k: x }` moves the list at its last use, else shares the handle.
+
+    /** `[..]` without spread is always a list, so `into_opt_list` keeps exactly what the box held. */
+    rustOptListLiteralWrite(node: any): boolean {
+        const right: any = this.rustSkipWrappers(node);
+        return right !== undefined && right.kind === SyntaxKind.ArrayLiteralExpression && !right.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement);
+    }
+
+    rustOptListExtraUse(n: any, declaration: any): 'join' | 'move' | 'clone' | undefined {
+        const up: any = n.parent;
+        if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'join') {
+            const call: any = up.parent;
+            if (!isCallExpression(call) || call.expression !== up || call.arguments.length !== 1 || this.rustNativeStringLiteralArg(call.arguments[0]) === undefined) return undefined;
+            const checker: any = this.checkerOrUndefined();
+            const type: any = checker === undefined ? undefined : this.typeOfNodeIfAny(n);
+            const list: any = type === undefined ? undefined : ((type.flags & TypeFlags.Union) ? (typeParts(type) ?? []).find((t: any) => checker.isArrayType(t)) : type);
+            if (list === undefined || !checker.isArrayType(list) || this.primitiveKindOfType(checker.getTypeArguments?.(list)?.[0]) !== 'string') return undefined;
+            return 'join';
+        }
+        if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n && up.parent?.kind === SyntaxKind.ObjectLiteralExpression) {
+            return this.rustLocalLastUse(n, declaration) ? 'move' : 'clone';
+        }
+        return undefined;
+    }
+
+    printOptListJoin(node: any): string | undefined {
+        const access: any = node?.expression;
+        if (!isPropertyAccessExpression(access) || this.rustOptListOf(access.expression) === undefined) return undefined;
+        const literal = this.rustNativeStringLiteralArg(node.arguments?.[0]);
+        if (literal === undefined) return undefined;
+        return `Value::Str(${this.rustOptListSlice(access.expression)}.iter().map(Value::to_string).collect::<Vec<String>>().join("${literal}").into())`;
     }
 
     // ── handed-on dict locals ────────────────────────────────────────────────
