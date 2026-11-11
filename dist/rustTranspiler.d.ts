@@ -493,7 +493,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsClientCallArg(call: any, kind: string): boolean;
     rustWsClientOnlyUse(declaration: any): boolean;
     rustWsClientLastUse(node: any, declaration: any): boolean;
-    rustTestLastUse(node: any, declaration: any): boolean;
+    rustLocalLastUse(node: any, declaration: any): boolean;
     private static readonly RUST_CLIENT_HANDLE_TYPE;
     private static readonly RUST_CLIENT_HANDLE_KEYS;
     private static readonly RUST_CLIENT_HANDLE_NAMES;
@@ -551,7 +551,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustFieldKeyUseForm(n: any): string | undefined;
     /** Element-access hook: `this.f[k]` read with a typed string key. */
     printFieldKeyRead(node: any): string | undefined;
-    /** A local keyed on a field and re-boxed anywhere but a direct `return` would copy where the `Value` moved. */
+    /** A boxed use that takes the local by move (a `return`, or its last use); `err` always copies. */
+    rustScalarBoxMoves(n: any, form: string, declaration: any): boolean;
+    /** A local keyed on a field and re-boxed anywhere but a moving use would copy where the `Value` moved. */
     rustFieldKeyCostly(declaration: any): boolean;
     printFieldKeyInOp(key: any, obj: any): string | undefined;
     rustScalarInNestedWrite(n: any): boolean;
