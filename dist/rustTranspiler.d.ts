@@ -273,6 +273,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNilLocalKindUncached(declaration: any): string | undefined;
     /** Static kind of a write's right-hand side: `null`, or the `Option` payload it yields exactly. */
     rustNilWriteKind(rhs: any): string | undefined;
+    /** A boolean that is never undefined: `!x`, a ternary of boolean literals, or `&&` / `||` / parens over such operands. */
+    rustNilDefiniteBool(expr: any): boolean;
+    /** `if <cond> { true } else { false }` for a ternary of boolean literals. */
+    printRustNilBoolTernary(node: any): string | undefined;
     rustNilSelfHelperName(call: any): string | undefined;
     /** Integer literal text (`5`, `-5`), else undefined. */
     rustNilIntLiteral(node: any): string | undefined;
