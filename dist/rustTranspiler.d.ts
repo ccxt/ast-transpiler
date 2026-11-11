@@ -1374,6 +1374,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBorrowedDictReader(call: any): string | undefined;
     /** `self.safe_X_k(&x, "k", &[..])` when `x` is a borrowed dict local or a typed container local. */
     printBorrowedDictRead(node: any, identation: number): string | undefined;
+    private rustLentListKinds;
+    private rustLentListBoxes;
+    rustLentListLocal(declaration: any): boolean;
+    /** A call that yields a string list on every path (never `undefined`). */
+    rustLentListSource(init: any): boolean;
+    rustLentListLocalUncached(declaration: any): boolean;
+    rustLentListUse(node: any): boolean;
+    /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
+    printRustLentListBox(node: any, text: string): string | undefined;
     private static readonly RUST_HANDED_DICT_SOURCES;
     private rustHandedDictDecisions;
     rustHandedDictLocal(declaration: any): boolean;
