@@ -609,10 +609,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrFindText(recvKind: string, name: string, needle: any): string;
     /** `s.split(d)` on a typed string local with a literal or `String` delimiter: the helper's array of parts, empty for null. */
     rustStrLocalSplitText(node: any): string | undefined;
-    /** A string local read by `split` / `indexOf` / `replace`: its printed lines keep the 400-char budget. */
+    /** A string local read by `split` / `indexOf` / `replace` or appended a string `Value`: its printed lines keep the 400-char budget. */
     rustStrMethodRecvLocal(declaration: any): boolean;
     /** `s += v` with `v` a string-typed `Value` (not a `+` chain): `Display` is the text the `add` helper concatenates. */
     rustStrPushValueText(target: any, right: any, dry: boolean): string | undefined;
+    /** A string-method local returned from a method whose signature alone could print `-> Option<String>`: typing it would flip that ABI. */
+    rustStrReturnSignature(fn: any, n: any): boolean;
+    /** `split`, `replaceAll`, an optional receiver's `replace`, or an `indexOf` outside a literal contains test. */
+    rustStrMethodNewUse(call: any): boolean;
     /** `Precise.string<Add|Sub|..>(..)`: a `string | undefined` result. */
     rustScalarPreciseCall(node: any): boolean;
     /** `s.length` on a typed string local. */

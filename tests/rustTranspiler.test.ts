@@ -7729,7 +7729,8 @@ describe('rust string locals read by string methods', () => {
         'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
             "    parseTopic (message: any) {\n        const topic = this.safeString (message, 'topic', '');\n        const parts = topic.split ('.');\n        if (topic.indexOf ('book') === 0) {\n            return parts;\n        }\n        return [];\n    }\n" +
             "    parseId (message: any) {\n        const id = this.safeString (message, 'id');\n        const clean = id.replace ('-', '');\n        const pieces = id.split ('_');\n        return [ clean, pieces ];\n    }\n" +
-            "    buildPath (message: any) {\n        let url = '/api';\n        url += this.safeString (message, 'path', '');\n        return url;\n    }\n}\n",
+            "    buildPath (message: any) {\n        let url = '/api';\n        url += this.safeString (message, 'path', '');\n        return url;\n    }\n" +
+            "    joinParts (raw: string): string {\n        let joined = '';\n        const bits = raw.split (',');\n        for (let i = 0; i < bits.length; i++) {\n            joined += this.safeString (bits, i, '');\n        }\n        return joined;\n    }\n}\n",
     };
     let out: string;
     beforeAll(() => {
@@ -7751,6 +7752,10 @@ describe('rust string locals read by string methods', () => {
         expect(out).toContain('let mut id: Option<String> = ');
         expect(out).toContain('if let Some(__s) = id.as_deref() { Some(__s.replace("-", "")) } else { None }');
         expect(out).toContain('if let Some(__s) = id.as_deref() { __s.split("_").map(Value::from).collect() } else { Vec::new() }');
+    });
+    test('negative: a returned local keeps the method signature that returns Option<String>', () => {
+        expect(out).toContain('-> Option<String>');
+        expect(out).toContain('let mut joined: Value = ');
     });
     test('a string append of a string-typed value is a push_str', () => {
         expect(out).toContain('let mut url: String = ');

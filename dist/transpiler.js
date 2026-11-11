@@ -55034,7 +55034,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (this.rustDictWriteValue(n))
       return "box";
     if (isReturnStatement4(parent) && parent.expression === n) {
-      return this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike)) === "str" ? void 0 : "box";
+      const fn = findAncestor(parent.parent, isFunctionLike);
+      return this.rustNativeStrReturnKind(fn) === "str" || this.rustStrReturnSignature(fn, n) ? void 0 : "box";
     }
     if (isBinaryExpression5(parent) && parent.operatorToken.kind === SyntaxKind7.PlusToken) {
       if (kind !== "str" && kind !== "ostr")
@@ -55842,12 +55843,15 @@ ${binding(plan.indent)}` : ""), head: "" };
       return `Value::Array(${name}.split(${sep}).map(Value::from).collect())`;
     return `Value::Array(if let Some(__s) = ${name}.as_deref() { __s.split(${sep}).map(Value::from).collect() } else { Vec::new() })`;
   }
-  /** A string local read by `split` / `indexOf` / `replace`: its printed lines keep the 400-char budget. */
+  /** A string local read by `split` / `indexOf` / `replace` or appended a string `Value`: its printed lines keep the 400-char budget. */
   rustStrMethodRecvLocal(declaration) {
     let hit = false;
     this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
       const call = isPropertyAccessExpression3(n.parent) && n.parent.expression === n ? n.parent.parent : void 0;
-      if (call !== void 0 && isCallExpression6(call) && call.expression === n.parent && /^(?:split|indexOf|replace|replaceAll)$/.test(String(n.parent.name.text)))
+      if (call !== void 0 && isCallExpression6(call) && call.expression === n.parent && this.rustStrMethodNewUse(call))
+        hit = true;
+      const append = n.parent;
+      if (isBinaryExpression5(append) && append.left === n && append.operatorToken.kind === SyntaxKind7.PlusEqualsToken && this.rustStrPushValueText(n, this.unwrapParens(append.right), true) !== void 0)
         hit = true;
       return true;
     });
@@ -55855,7 +55859,7 @@ ${binding(plan.indent)}` : ""), head: "" };
   }
   /** `s += v` with `v` a string-typed `Value` (not a `+` chain): `Display` is the text the `add` helper concatenates. */
   rustStrPushValueText(target, right, dry) {
-    if (isBinaryExpression5(right) || this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== "string" || !this.printsValueExpression(right))
+    if (isBinaryExpression5(right) || this.literalKindOfNode(right) !== void 0 || this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== "string" || !this.printsValueExpression(right))
       return void 0;
     if (this.rustScalarHasTypedOperand(right) || new RegExp(`\\b${String(target.text)}\\b`).test(String(right.getText())))
       return void 0;
@@ -55863,6 +55867,29 @@ ${binding(plan.indent)}` : ""), head: "" };
       return "_";
     const text = this.printNode(right, 0).trim();
     return text.includes("\n") ? void 0 : `${/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) ? text : `(${text})`}.to_string()`;
+  }
+  /** A string-method local returned from a method whose signature alone could print `-> Option<String>`: typing it would flip that ABI. */
+  rustStrReturnSignature(fn, n) {
+    if (fn === void 0 || fn.kind !== SyntaxKind7.MethodDeclaration || fn.type === void 0 || this.isAsyncFunction(fn))
+      return false;
+    const declaration = this.rustScalarLocalOf(n)?.declaration ?? this.rustDeclaredNode(n);
+    if (declaration === void 0 || !isVariableDeclaration3(declaration) || !this.rustStrMethodRecvLocal(declaration))
+      return false;
+    return this.primitiveKindOfType(this.getChecker().getTypeFromTypeNode(fn.type)) === "string";
+  }
+  /** `split`, `replaceAll`, an optional receiver's `replace`, or an `indexOf` outside a literal contains test. */
+  rustStrMethodNewUse(call) {
+    const method = String(call.expression.name.text);
+    if (method === "split" || method === "replaceAll")
+      return true;
+    if (method === "replace")
+      return this.rustScalarLocalOf(call.expression.expression)?.kind !== "str";
+    if (method !== "indexOf")
+      return false;
+    let top = call;
+    while (isParenthesizedExpression3(top.parent))
+      top = top.parent;
+    return !(isBinaryExpression5(top.parent) && top.parent.left === top && this.rustScalarContainsTest(top.parent, true) !== void 0);
   }
   /** `Precise.string<Add|Sub|..>(..)`: a `string | undefined` result. */
   rustScalarPreciseCall(node) {

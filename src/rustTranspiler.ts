@@ -4136,7 +4136,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(parent) && !(isBinaryExpression(parent.parent) && parent.parent.left === parent)) return 'box';
         if (this.rustDictWriteValue(n)) return 'box';
         if (isReturnStatement(parent) && parent.expression === n) {
-            return this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike) as any) === 'str' ? undefined : 'box';
+            const fn: any = findAncestor(parent.parent, isFunctionLike);
+            return this.rustNativeStrReturnKind(fn) === 'str' || this.rustStrReturnSignature(fn, n) ? undefined : 'box';
         }
         if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.PlusToken) {
             // a `String` is a `format!` operand as-is; other concats need the box
@@ -4884,12 +4885,14 @@ export class RustTranspiler extends BaseTranspiler {
         return `Value::Array(if let Some(__s) = ${name}.as_deref() { __s.split(${sep}).map(Value::from).collect() } else { Vec::new() })`;
     }
 
-    /** A string local read by `split` / `indexOf` / `replace`: its printed lines keep the 400-char budget. */
+    /** A string local read by `split` / `indexOf` / `replace` or appended a string `Value`: its printed lines keep the 400-char budget. */
     rustStrMethodRecvLocal(declaration): boolean {
         let hit = false;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             const call: any = isPropertyAccessExpression(n.parent) && n.parent.expression === n ? n.parent.parent : undefined;
-            if (call !== undefined && isCallExpression(call) && call.expression === n.parent && /^(?:split|indexOf|replace|replaceAll)$/.test(String(n.parent.name.text))) hit = true;
+            if (call !== undefined && isCallExpression(call) && call.expression === n.parent && this.rustStrMethodNewUse(call)) hit = true;
+            const append: any = n.parent;
+            if (isBinaryExpression(append) && append.left === n && append.operatorToken.kind === SyntaxKind.PlusEqualsToken && this.rustStrPushValueText(n, this.unwrapParens(append.right), true) !== undefined) hit = true;
             return true;
         });
         return hit;
@@ -4897,11 +4900,30 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `s += v` with `v` a string-typed `Value` (not a `+` chain): `Display` is the text the `add` helper concatenates. */
     rustStrPushValueText(target, right, dry: boolean): string | undefined {
-        if (isBinaryExpression(right) || this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== 'string' || !this.printsValueExpression(right)) return undefined;
+        if (isBinaryExpression(right) || this.literalKindOfNode(right) !== undefined || this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== 'string' || !this.printsValueExpression(right)) return undefined;
         if (this.rustScalarHasTypedOperand(right) || new RegExp(`\\b${String(target.text)}\\b`).test(String(right.getText()))) return undefined;
         if (dry) return '_';
         const text = this.printNode(right, 0).trim();
         return text.includes('\n') ? undefined : `${/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) ? text : `(${text})`}.to_string()`;
+    }
+
+    /** A string-method local returned from a method whose signature alone could print `-> Option<String>`: typing it would flip that ABI. */
+    rustStrReturnSignature(fn, n): boolean {
+        if (fn === undefined || fn.kind !== SyntaxKind.MethodDeclaration || fn.type === undefined || this.isAsyncFunction(fn)) return false;
+        const declaration: any = this.rustScalarLocalOf(n)?.declaration ?? this.rustDeclaredNode(n);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !this.rustStrMethodRecvLocal(declaration)) return false;
+        return this.primitiveKindOfType(this.getChecker().getTypeFromTypeNode(fn.type)) === 'string';
+    }
+
+    /** `split`, `replaceAll`, an optional receiver's `replace`, or an `indexOf` outside a literal contains test. */
+    rustStrMethodNewUse(call): boolean {
+        const method = String(call.expression.name.text);
+        if (method === 'split' || method === 'replaceAll') return true;
+        if (method === 'replace') return this.rustScalarLocalOf(call.expression.expression)?.kind !== 'str';
+        if (method !== 'indexOf') return false;
+        let top: any = call;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        return !(isBinaryExpression(top.parent) && top.parent.left === top && this.rustScalarContainsTest(top.parent, true) !== undefined);
     }
 
     /** `Precise.string<Add|Sub|..>(..)`: a `string | undefined` result. */
