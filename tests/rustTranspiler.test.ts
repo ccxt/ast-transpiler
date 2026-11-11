@@ -7939,6 +7939,38 @@ describe('rust tuple slots typed from the declared tuple', () => {
     });
 });
 
+describe('rust params slots lent and also handed whole', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n" +
+            "    handleOptionStringAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Str = undefined): [Str, Dict] {\n        return [ defaultValue, params ];\n    }\n" +
+            "    safeString (o: any, k: string, d: Str = undefined): Str { return o[k]; }\n" +
+            "    extend (a: any, b: any = undefined): Dict { return a; }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    fetchInner (request: any, query: any) {\n        return [ request, query ];\n    }\n" +
+            "    fetchThing (params: Dict = {}) {\n        const [ tag, paramsTag ] = this.handleOptionStringAndParams (params, 'fetchThing', 'tag');\n        const request: Dict = { 'memo': tag };\n" +
+            "        if (tag === 'x') {\n            return this.fetchInner (request, paramsTag);\n        }\n        const id = this.safeString (paramsTag, 'id');\n        return this.fetchInner (id, paramsTag);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-hslots-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a lent params slot boxed whole shares the map, then moves at its last use', () => {
+        expect(out).toContain('let mut paramsTag: crate::value::Dict = ');
+        expect(out).toContain('Value::from(&paramsTag)');
+        expect(out).toContain('Value::Dict(paramsTag)');
+    });
+    test('a literal-tested string slot boxed before a later read clones into the box', () => {
+        expect(out).toContain('let mut tag: Option<String> = ');
+        expect(out).toContain('tag.clone().map(Value::from).unwrap_or(Value::Null)');
+    });
+});
+
 describe('rust integer and boolean tuple slots typed from the callee', () => {
     const files: Record<string, string> = {
         'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Bool = boolean | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n" +

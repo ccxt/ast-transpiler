@@ -8086,7 +8086,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustDeclaredNode(n) !== element || this.rustEnclosingFunction(n) !== fn) return false;
             const ok = kind === 'string' ? this.rustStringLocalUseIsNative(n) : this.rustIdentifierUseIsCondition(n);
             if (ok) nativeUses++;
-            return ok || (kind === 'string' && this.rustStrSlotBoxUse(n) && (isCallExpression(n.parent) || isReturnStatement(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustStrSlotLastUse(n, element)));
+            return ok || (kind === 'string' && this.rustStrSlotBoxUse(n) && (isCallExpression(n.parent) || isReturnStatement(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustSlotUseOutsideLoop(n, element)));
         });
         return safe && nativeUses > 0 ? (kind === 'string' ? 'str' : 'bool') : undefined;
     }
@@ -10970,7 +10970,7 @@ export class RustTranspiler extends BaseTranspiler {
     transformIdentifier(node, identifier) {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text); if (optList !== undefined) return optList;
-        const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -13142,7 +13142,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || !isVariableDeclaration(owner) || owner.name !== pattern
                 || (owner.parent as any)?.declarations?.length !== 1 || pattern.elements.indexOf(declaration) !== 1) return false;
             if (declaration.dotDotDotToken !== undefined || declaration.initializer !== undefined || this.rustTupleSlotKind(declaration) !== undefined) return false;
-            const init: any = this.rustSkipWrappers(owner.initializer);
+            const init: any = this.rustAwaitedCall(owner.initializer);
             const callee: any = init?.expression;
             if (!isCallExpression(init) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
                 || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) && !this.rustLentSlotSource(init, declaration) && !this.rustDeclaredDictSlot(declaration)) return false;
@@ -13166,13 +13166,13 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (this.rustDeclaredNode(n) !== declaration || this.rustEnclosingFunction(n) !== fn) return false;
             const call: any = n.parent;
-            if (!isCallExpression(call)) return false;
+            if (!isCallExpression(call)) return this.rustHandedSlotBoxUse(n, declaration);
             const ok = (call.arguments[0] === n && this.rustBorrowedDictReader(call) !== undefined)
                 || (call.arguments[0] === n && call.arguments.length === 2 && this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_OMIT))
                 || this.rustHandedDictExtendOperand(call) === n || this.rustLentParamsSlot(call, n) || this.rustExtendHeadUse(n);
             if (ok) uses++;
             // an optional-slice hand-off boxes the shared map back, so it only rides along with a by-reference use
-            return ok || this.rustOptionalParamsSlot(call, n);
+            return ok || this.rustOptionalParamsSlot(call, n) || this.rustHandedSlotBoxUse(n, declaration);
         });
         return safe && uses > 0;
     }
@@ -13574,6 +13574,46 @@ export class RustTranspiler extends BaseTranspiler {
         if (!/^handle\w+$/.test(name)) return false;
         const type: any = this.typeOfNodeIfAny(element.name);
         return type !== undefined && this.isProvenMapType(type);
+    }
+
+    // ── handed params slots boxed whole ──────────────────────────────────────
+    // A params slot lent at least once may also go whole into a plain `Value` argument of a `this.`/`super.` method
+    // or an object-literal value: the shared map moves there at its last use, else the box takes an Arc bump.
+
+    /** The call a slot destructures, past parentheses, casts and one `await`. */
+    rustAwaitedCall(node: any): any {
+        const init: any = this.rustSkipWrappers(node);
+        return init?.kind === SyntaxKind.AwaitExpression ? this.rustSkipWrappers(init.expression) : init;
+    }
+
+    rustHandedSlotBoxUse(n: any, declaration: any): boolean {
+        const up: any = n.parent;
+        if (declaration?.kind !== SyntaxKind.BindingElement || up === undefined || this.rustScalarInNestedWrite(n)) return false;
+        if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
+        if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression)
+            || (up.expression.expression.kind !== SyntaxKind.ThisKeyword && up.expression.expression.kind !== SyntaxKind.SuperKeyword)) return false;
+        const callee = String(up.expression.name.text);
+        if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
+        if (this.rustBorrowedDictReader(up) !== undefined || this.rustLentParamsSlot(up, n) || this.rustOptionalParamsSlot(up, n)) return false;
+        return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+    }
+
+    /** No loop or closure between the destructure and this use: a box there copies the slot once. */
+    rustSlotUseOutsideLoop(node: any, element: any): boolean {
+        const owner: any = element.parent?.parent;
+        for (let up: any = node.parent; up !== undefined && !(up.pos <= owner.pos && owner.end <= up.end); up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
+    }
+
+    /** `Value::Dict(x)` at the slot's last use (moved), else `Value::from(&x)`. */
+    printHandedSlotBox(node: any, text: string): string | undefined {
+        if (!isIdentifier(node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration?.kind !== SyntaxKind.BindingElement || declaration.name === node || !this.rustHandedSlotBoxUse(node, declaration) || !this.rustHandedDictLocal(declaration)) return undefined;
+        return this.rustLocalLastUse(node, declaration) ? `Value::Dict(${text})` : `Value::from(&${text})`;
     }
 
     // ── declared dict slots ──────────────────────────────────────────────────
