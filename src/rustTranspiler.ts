@@ -6908,7 +6908,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustDeclaredNode(n) !== element || this.rustEnclosingFunction(n) !== fn) return false;
             const ok = kind === 'string' ? this.rustStringLocalUseIsNative(n) : this.rustIdentifierUseIsCondition(n);
             if (ok) nativeUses++;
-            return ok || (kind === 'string' && this.rustStrSlotBoxUse(n) && (isCallExpression(n.parent) || isReturnStatement(n.parent) || this.rustStrSlotLastUse(n, element)));
+            return ok || (kind === 'string' && this.rustStrSlotBoxUse(n) && (isCallExpression(n.parent) || isReturnStatement(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustStrSlotLastUse(n, element)));
         });
         return safe && nativeUses > 0 ? (kind === 'string' ? 'str' : 'bool') : undefined;
     }
@@ -6924,11 +6924,21 @@ export class RustTranspiler extends BaseTranspiler {
         const parent: any = n.parent;
         if (isCallExpression(parent) && parent.expression !== n) {
             const callee: any = parent.expression;
-            return isPropertyAccessExpression(callee) && this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n));
+            return isPropertyAccessExpression(callee) && (callee.expression.kind === SyntaxKind.ThisKeyword || callee.expression.kind === SyntaxKind.SuperKeyword)
+                && this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n));
         }
         if (parent?.kind === SyntaxKind.PropertyAssignment && parent.initializer === n) return true;
         if (isArrayLiteralExpression(parent)) return !(isBinaryExpression(parent.parent) && parent.parent.left === parent);
+        if (this.rustStrSlotThrownConcat(n)) return true;
         return isReturnStatement(parent) && parent.expression === n && this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike) as any) !== 'str';
+    }
+
+    /** A `+` operand of a thrown error message: the statement diverges, so the slot moves into its `format!`. */
+    rustStrSlotThrownConcat(n: any): boolean {
+        let up: any = n.parent;
+        if (!isBinaryExpression(up) || up.operatorToken.kind !== SyntaxKind.PlusToken) return false;
+        while (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.PlusToken) up = up.parent;
+        return up?.kind === SyntaxKind.NewExpression && up.parent?.kind === SyntaxKind.ThrowStatement;
     }
 
     /** `x.clone().map(Value::from).unwrap_or(Value::Null)` at a boxed use of a typed string slot. */
@@ -6937,7 +6947,7 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclaredNode(node);
         if (declaration?.kind !== SyntaxKind.BindingElement || declaration.name === node || this.rustTupleSlotKind(declaration) !== 'str') return undefined;
         const name = super.printIdentifier(node);
-        return `${isReturnStatement(node.parent) || this.rustStrSlotLastUse(node, declaration) ? name : `${name}.clone()`}.map(Value::from).unwrap_or(Value::Null)`;
+        return `${isReturnStatement(node.parent) || this.rustStrSlotThrownConcat(node) || this.rustStrSlotLastUse(node, declaration) ? name : `${name}.clone()`}.map(Value::from).unwrap_or(Value::Null)`;
     }
 
     /** The slot's final read: no later use, no other use in its statement, no loop or closure since the destructure. */

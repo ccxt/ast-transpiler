@@ -57451,7 +57451,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       const ok = kind === "string" ? this.rustStringLocalUseIsNative(n) : this.rustIdentifierUseIsCondition(n);
       if (ok)
         nativeUses++;
-      return ok || kind === "string" && this.rustStrSlotBoxUse(n) && (isCallExpression6(n.parent) || isReturnStatement4(n.parent) || this.rustStrSlotLastUse(n, element));
+      return ok || kind === "string" && this.rustStrSlotBoxUse(n) && (isCallExpression6(n.parent) || isReturnStatement4(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustStrSlotLastUse(n, element));
     });
     return safe && nativeUses > 0 ? kind === "string" ? "str" : "bool" : void 0;
   }
@@ -57466,13 +57466,24 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const parent = n.parent;
     if (isCallExpression6(parent) && parent.expression !== n) {
       const callee = parent.expression;
-      return isPropertyAccessExpression3(callee) && this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n));
+      return isPropertyAccessExpression3(callee) && (callee.expression.kind === SyntaxKind7.ThisKeyword || callee.expression.kind === SyntaxKind7.SuperKeyword) && this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n));
     }
     if (parent?.kind === SyntaxKind7.PropertyAssignment && parent.initializer === n)
       return true;
     if (isArrayLiteralExpression4(parent))
       return !(isBinaryExpression5(parent.parent) && parent.parent.left === parent);
+    if (this.rustStrSlotThrownConcat(n))
+      return true;
     return isReturnStatement4(parent) && parent.expression === n && this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike)) !== "str";
+  }
+  /** A `+` operand of a thrown error message: the statement diverges, so the slot moves into its `format!`. */
+  rustStrSlotThrownConcat(n) {
+    let up = n.parent;
+    if (!isBinaryExpression5(up) || up.operatorToken.kind !== SyntaxKind7.PlusToken)
+      return false;
+    while (isBinaryExpression5(up) && up.operatorToken.kind === SyntaxKind7.PlusToken)
+      up = up.parent;
+    return up?.kind === SyntaxKind7.NewExpression && up.parent?.kind === SyntaxKind7.ThrowStatement;
   }
   /** `x.clone().map(Value::from).unwrap_or(Value::Null)` at a boxed use of a typed string slot. */
   printRustStrSlotBox(node) {
@@ -57482,7 +57493,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     if (declaration?.kind !== SyntaxKind7.BindingElement || declaration.name === node || this.rustTupleSlotKind(declaration) !== "str")
       return void 0;
     const name = super.printIdentifier(node);
-    return `${isReturnStatement4(node.parent) || this.rustStrSlotLastUse(node, declaration) ? name : `${name}.clone()`}.map(Value::from).unwrap_or(Value::Null)`;
+    return `${isReturnStatement4(node.parent) || this.rustStrSlotThrownConcat(node) || this.rustStrSlotLastUse(node, declaration) ? name : `${name}.clone()`}.map(Value::from).unwrap_or(Value::Null)`;
   }
   /** The slot's final read: no later use, no other use in its statement, no loop or closure since the destructure. */
   rustStrSlotLastUse(node, declaration) {

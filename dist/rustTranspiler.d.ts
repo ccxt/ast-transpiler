@@ -838,6 +838,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTupleSlotKind(element: any): string | undefined;
     private rustTupleSlotKindUncached;
     rustStrSlotBoxUse(n: any): boolean;
+    /** A `+` operand of a thrown error message: the statement diverges, so the slot moves into its `format!`. */
+    rustStrSlotThrownConcat(n: any): boolean;
     /** `x.clone().map(Value::from).unwrap_or(Value::Null)` at a boxed use of a typed string slot. */
     printRustStrSlotBox(node: any): string | undefined;
     /** The slot's final read: no later use, no other use in its statement, no loop or closure since the destructure. */
