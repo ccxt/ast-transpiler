@@ -44,6 +44,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    requestId (): int {\n        const requestId = this.sum (this.safeInteger (this.options, 'requestId', 0), 1);\n        this.options['requestId'] = requestId;\n        return requestId;\n    }\n    topicName (symbol: Str): Str {\n        if (symbol === undefined) {\n            return undefined;\n        }\n        return 'topic:' + symbol;\n    }\n    mixedId (): int {\n        return 1;\n    }\n    subscribe (symbol: Str) {\n        const requestId = this.requestId ();\n        const request: Dict = { 'id': requestId.toString () };\n        const topic = this.topicName (symbol);\n        if (topic === undefined) {\n            return request;\n        }\n        const other = this.mixedId ();\n        return this.hold ([ request, other.toString () ]);\n    }\n}\n",
   "ts/src/other.ts": "import Exchange from './base/Exchange.js';\nexport default class other extends Exchange {\n    mixedId (): string {\n        return 'a';\n    }\n}\n"
  },
+ "clock-sum-locals": {
+  "ts/src/base/Exchange.ts": "export type Str = string | undefined;\nconst sum = (...xs: any[]) => xs[0];\nexport default class Exchange {\n    sum = sum;\n    milliseconds (): number { return 1; }\n    seconds (): number { return 1; }\n    numberToString (x: any): Str { return x; }\n    hold (x: any): any { return x; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    window (since: number) {\n        const now = this.milliseconds ();\n        const start = now - 1000;\n        const stamp = this.milliseconds ().toString ();\n        const signed = stamp + 'x';\n        const next = this.sum (start, 1);\n        const id = this.numberToString (next) as string;\n        if (id === '5') {\n            return this.hold (signed);\n        }\n        if (next > 10) {\n            return start;\n        }\n        return now;\n    }\n}\n"
+ },
  "base-scalar-returns": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Currency { code: Str }\nexport default class Exchange {\n    currencies: Dict = {};\n    safeCurrency (currencyId: Str, currency: Currency = undefined): Currency {\n        return this.currencies[currencyId];\n    }\n    safeCurrencyCode (currencyId: Str, currency: Currency = undefined): Str {\n        const c: Currency = this.safeCurrency (currencyId, currency);\n        return c['code'];\n    }\n    milliseconds (): number {\n        return 0;\n    }\n    hold (x: any): any {\n        return x;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseEntry (entry: Dict) {\n        const code = this.safeCurrencyCode (entry['c']);\n        if (code === undefined) {\n            return undefined;\n        }\n        const now = this.milliseconds ();\n        const kept = this.safeCurrencyCode (entry['d']);\n        kept['x'] = 1;\n        return { 'code': code, 'ts': now, 'k': kept };\n    }\n    parseBalances (entries: Dict[]) {\n        const result: Dict = {};\n        for (let i = 0; i < entries.length; i++) {\n            const entry = entries[i];\n            const code = this.safeCurrencyCode (entry['c']);\n            result[code] = entry;\n        }\n        return result;\n    }\n    parseHeld (entries: Dict[]) {\n        const result: Dict = {};\n        for (let i = 0; i < entries.length; i++) {\n            const entry = entries[i];\n            const held = this.safeCurrencyCode (entry['c']);\n            result[held] = entry;\n            this.hold (held);\n        }\n        return result;\n    }\n}\n"
@@ -5183,6 +5187,22 @@ describe('scalar locals from venue methods with a declared scalar return', () =>
     });
 });
 
+describe('scalar locals from the clock, int sums and string casts', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'clock-sum-locals', 'ts/src/venue.ts')).content;
+    });
+    test('the runtime clock is an i64 local with native arithmetic', () => {
+        expect(out).toContain('let mut now: i64 = self.milliseconds().as_i64().unwrap_or_default();');
+        expect(out).toContain('let mut start: i64 = (now - 1000);');
+    });
+    test('a clock string, an all-int sum and a cast string reader are native locals', () => {
+        expect(out).toContain('let mut stamp: String = format!("{}", self.milliseconds().as_i64().unwrap_or_default());');
+        expect(out).toContain('let mut next: i64 = (start + 1);');
+        expect(out).toMatch(/let mut id: Option<String> = self\.numberToString\(Value::from\(next\)\)\.as_str\(\)\.map\(str::to_owned\);/);
+    });
+});
+
 describe('scalar locals from base methods with a concrete return', () => {
     let out: string;
     beforeAll(() => {
@@ -5190,7 +5210,7 @@ describe('scalar locals from base methods with a concrete return', () => {
     });
     test('a Str / number base return is an Option local, tested and re-boxed natively', () => {
         expect(out).toMatch(/let mut code: Option<String> = self\.safeCurrencyCode\(.*\)\.as_str\(\)\.map\(str::to_owned\);/);
-        expect(out).toMatch(/let mut now: Option<i64> = self\.milliseconds\(\)\.as_i64\(\);/);
+        expect(out).toContain('let mut now: i64 = self.milliseconds().as_i64().unwrap_or_default();');
         expect(out).toContain('if (code.is_none()) {');
         expect(out).toContain('m.insert("code".to_string(), code.map(Value::from).unwrap_or(Value::Null));');
         expect(out).toContain('Value::from(now)');

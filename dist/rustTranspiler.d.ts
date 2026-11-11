@@ -453,6 +453,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarValueKind(expr: any, fresh: boolean): string | undefined;
     private static readonly RUST_BASE_SCALAR_RETURNS;
     rustBaseReturnScalarKind(call: any, name: string): string | undefined;
+    rustClockCall(node: any): boolean;
+    rustVenueReturnTypesHas(node: any, name: string): boolean;
+    /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
+    rustClockString(node: any): boolean;
+    /** Base `sum(a, b, ..)` over operands that are all `i64`: the runtime adds two `Int`s to an `Int`. */
+    rustSumShape(node: any): boolean;
+    rustIntSumArgs(node: any): any[] | undefined;
+    rustIntOperand(node: any): boolean;
+    /** A cast, clock-string or `sum` local must earn a native use, and a string one never copies where the `Value` moved. */
+    rustNewShapeCostly(init: any, typedUses: number, copied: number): boolean;
+    rustStrCastCall(node: any): any;
     rustDerivedScalarKind(call: any): string | undefined;
     rustElementReadScalarKind(node: any): string | undefined;
     rustReaderDefaultKind(name: string, args: any[], fresh: boolean): string | undefined;

@@ -54507,6 +54507,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return _RustTranspiler.RUST_SCALAR_ARITH_OPS.has(node.operatorToken.kind);
     if (isIdentifier3(node) || isConditionalExpression4(node) || this.rustScalarStrMethod(node, true) !== void 0 || this.rustScalarPreciseCall(node))
       return true;
+    if (this.rustStrCastCall(node) !== void 0 || this.rustClockString(node) || this.rustSumShape(node))
+      return true;
     if (isPropertyAccessExpression3(node))
       return isIdentifier3(node.name) && node.name.text === "length" && isIdentifier3(node.expression);
     if (isElementAccessExpression4(node))
@@ -54549,7 +54551,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
     const expected = kind === "ostr" || kind === "str" ? "string" : kind === "bool" || kind === "obool" ? "boolean" : "number";
-    if (checked !== expected)
+    if (checked !== expected && !(kind === "int" && this.rustIntSumArgs(this.unwrapParens(declaration.initializer)) !== void 0))
       return void 0;
     const seeded = kind;
     kind = this.rustScalarWidenedKind(declaration, kind);
@@ -54606,6 +54608,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     if (this.rustScalarOptKeyCostly(declaration, kind))
       return void 0;
+    if (this.rustNewShapeCostly(declaration.initializer, typedUses, kind === "str" || kind === "ostr" ? copied : 0))
+      return void 0;
     if (this.rustFieldKeyCostly(declaration))
       return void 0;
     if (copied > 0 && (kind === "str" || kind === "ostr") && this.rustStrMethodRecvLocal(declaration))
@@ -54660,6 +54664,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const expressionKind = this.rustScalarExpressionKind(node);
     if (expressionKind !== void 0)
       return expressionKind;
+    const cast = this.rustStrCastCall(node);
+    if (cast !== void 0)
+      return this.rustScalarValueKind(cast, fresh) === "ostr" ? "ostr" : void 0;
+    if (fresh && this.rustClockString(node))
+      return "str";
     if (fresh && isBinaryExpression5(node) && node.operatorToken.kind === SyntaxKind7.PlusToken && this.rustScalarFormatText(node) !== void 0)
       return "str";
     if (this.rustElementReadScalarKind(node) !== void 0)
@@ -54671,6 +54680,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     const name = String(callee.name.text);
     const args = Array.from(node.arguments ?? []);
+    if (this.rustClockCall(node))
+      return "int";
+    if (this.rustIntSumArgs(node) !== void 0)
+      return "int";
     const baseReturn = this.rustBaseReturnScalarKind(node, name);
     if (baseReturn !== void 0)
       return baseReturn;
@@ -54713,6 +54726,67 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     const want = kind === "ostr" ? "string" : "number";
     return this.primitiveKindOfType(this.typeOfNodeIfAny(call)) === want ? kind : void 0;
+  }
+  // ── clock and cast initialisers (rustClockCall / rustStrCastCall) ──
+  // The runtime `milliseconds()`/`seconds()` always return `Value::Int`, so with no venue override the
+  // result is an `i64` exactly; `this.m(..) as string` keeps the call's own `Option<String>` kind.
+  rustClockCall(node) {
+    if (!isCallExpression6(node) || node.arguments.length !== 0 || !isPropertyAccessExpression3(node.expression) || node.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const name = String(node.expression.name.text);
+    if (name !== "milliseconds" && name !== "seconds" || !this.rustCalleeIsRuntimeBase(node))
+      return false;
+    return !this.rustVenueReturnTypesHas(node, name);
+  }
+  rustVenueReturnTypesHas(node, name) {
+    const file = String(node.getSourceFile?.()?.fileName ?? "");
+    const at = file.lastIndexOf("/ts/src/");
+    if (at < 0)
+      return false;
+    return this.rustVenueReturnTypes(file.slice(0, at) + "/ts/src").has(name);
+  }
+  /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
+  rustClockString(node) {
+    if (!isCallExpression6(node) || node.arguments.length !== 0 || !isPropertyAccessExpression3(node.expression) || node.expression.name.text !== "toString")
+      return false;
+    return this.rustClockCall(this.unwrapParens(node.expression.expression));
+  }
+  /** Base `sum(a, b, ..)` over operands that are all `i64`: the runtime adds two `Int`s to an `Int`. */
+  rustSumShape(node) {
+    return isCallExpression6(node) && isPropertyAccessExpression3(node.expression) && node.expression.expression.kind === SyntaxKind7.ThisKeyword && node.expression.name.text === "sum" && node.arguments.length >= 2;
+  }
+  rustIntSumArgs(node) {
+    if (!this.rustSumShape(node) || !this.rustCalleeIsRuntimeBase(node) || this.rustVenueReturnTypesHas(node, "sum"))
+      return void 0;
+    const args = Array.from(node.arguments);
+    return args.every((a) => this.rustIntOperand(a)) ? args : void 0;
+  }
+  rustIntOperand(node) {
+    const inner = this.unwrapParens(node);
+    if (inner === void 0 || inner.kind === SyntaxKind7.SpreadElement)
+      return false;
+    if (this.rustScalarIntLiteral(inner) !== void 0)
+      return true;
+    if (isIdentifier3(inner))
+      return this.rustScalarIdentifierKind(inner) === "int";
+    if (isCallExpression6(inner))
+      return this.rustScalarValueKind(inner, true) === "int" && this.rustScalarNativeText("int", inner) !== void 0;
+    return this.rustScalarExpressionKind(inner) === "int";
+  }
+  /** A cast, clock-string or `sum` local must earn a native use, and a string one never copies where the `Value` moved. */
+  rustNewShapeCostly(init, typedUses, copied) {
+    const node = this.unwrapParens(init);
+    if (this.rustStrCastCall(node) === void 0 && !this.rustClockString(node) && !this.rustSumShape(node))
+      return false;
+    return typedUses === 0 || copied > 0;
+  }
+  rustStrCastCall(node) {
+    if (node === void 0 || !isAsExpression3(node) || node.type?.kind !== SyntaxKind7.StringKeyword)
+      return void 0;
+    const inner = this.unwrapParens(node.expression);
+    if (!isCallExpression6(inner) || !isPropertyAccessExpression3(inner.expression) || !this.rustScalarReceiver(inner.expression.expression))
+      return void 0;
+    return _RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(inner.expression.name.text)] === "ostr" ? inner : void 0;
   }
   // Any other callee: a base one whose checker return is a string, or one declaring `string`/`Str`/`int`/`Int`
   // (a bare `number` may hold a float, which `as_i64` would drop).
@@ -54925,7 +54999,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
   rustScalarNeedsNativeUse(init) {
     const node = this.unwrapParens(init);
-    if (this.rustElementReadScalarKind(node) !== void 0 || this.rustVenueIntCall(node) || this.rustVenueStrCall(node))
+    if (this.rustElementReadScalarKind(node) !== void 0 || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== void 0 || this.rustClockString(node))
       return true;
     if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
       return false;
@@ -55780,9 +55854,19 @@ ${binding(plan.indent)}` : ""), head: "" };
       const tail = ".cloned().unwrap_or(Value::Null)";
       return read.endsWith(tail) ? `${read.slice(0, -tail.length)}.and_then(Value::as_str).map(str::to_owned)` : void 0;
     }
+    const cast = this.rustStrCastCall(node);
+    if (cast !== void 0)
+      return kind === "ostr" ? this.rustScalarNativeText(kind, cast) : void 0;
     if (!isCallExpression6(node))
       return void 0;
     const text = this.printNode(node, 0).trim();
+    if (this.rustClockCall(node))
+      return kind === "int" || kind === "oint" ? wrap(`${text}.as_i64().unwrap_or_default()`) : void 0;
+    if (base === "str" && this.rustClockString(node))
+      return wrap(`format!("{}", ${this.rustScalarNativeText("int", node.expression.expression)})`);
+    const summed = this.rustIntSumArgs(node);
+    if (summed !== void 0)
+      return base === "int" ? wrap(`(${summed.map((a) => this.rustScalarOperandText("int", a)).join(" + ")})`) : void 0;
     const fallback = node.arguments[node.arguments.length - 1];
     const defaulted = this.rustScalarValueKind(node, true) === base;
     if (kind === "int" && this.rustVenueIntCall(node))
@@ -55986,6 +56070,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       return "int";
     if (this.rustScalarFloatLiteral(inner) !== void 0)
       return "num";
+    if (isCallExpression6(inner) && this.rustClockCall(inner))
+      return "int";
     const kind = this.rustScalarExpressionKind(inner);
     return kind === "int" || kind === "num" || kind === "oint" || kind === "onum" ? kind : void 0;
   }
