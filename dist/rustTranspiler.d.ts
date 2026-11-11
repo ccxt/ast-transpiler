@@ -1347,6 +1347,20 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBorrowedLocalKind(declaration: any): 'dict' | 'list' | undefined;
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
+    private rustOptContainerLocals;
+    /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
+    rustOptContainerSourceOk(call: any, kind: 'dict' | 'list' | 'api'): boolean;
+    /** The optional form's local behind an identifier, else undefined. */
+    rustOptContainerOf(node: any): {
+        declaration: any;
+        kind: 'dict' | 'list';
+    } | undefined;
+    /** `let mut x: Option<crate::value::Dict> = <init>.into_opt_dict()` (`None` when declared empty). */
+    printOptContainerDeclaration(declaration: any, varName: string, indent: string): string | undefined;
+    /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
+    printOptContainerWrite(left: any, right: any): string | undefined;
+    /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */
+    printOptContainerNullTest(left: any, right: any, op: any): string | undefined;
     rustBorrowedListUse(node: any): boolean;
     /** A base hand-written reader (`safeString`, `safeValue2`, `safeIntegerN`, ..) with any key. */
     rustBorrowedAnyKeyReader(call: any): boolean;

@@ -798,6 +798,7 @@ export class RustTranspiler extends BaseTranspiler {
     // Value variants line up; undefined keeps the is_equal() helper.
     printNativeEqualityComparison(left, right, op): string {
         const nilLocal = this.printRustNilLocalEquality(left, right, op); if (nilLocal !== undefined) return nilLocal;
+        const optContainer = this.printOptContainerNullTest(left, right, op); if (optContainer !== undefined) return optContainer;
         const optMarket = this.printOptMarketNullTest(left, right, op); if (optMarket !== undefined) return optMarket;
         const scalarLocal = this.printRustScalarLocalEquality(left, right, op); if (scalarLocal !== undefined) return scalarLocal;
         const nativeIntResult = this.rustLengthEquality(left, right, op); if (nativeIntResult !== undefined) return nativeIntResult;
@@ -1858,6 +1859,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const marketWrite = isAssign ? this.printTypedMarketWrite(left, right) : undefined;
         if (marketWrite !== undefined) return marketWrite;
+        const optContainerWrite = isAssign && isIdentifier(left) ? this.printOptContainerWrite(left, right) : undefined;
+        if (optContainerWrite !== undefined) return optContainerWrite;
         const nilWrite = isAssign && isIdentifier(left) ? this.printRustNilLocalWrite(left, right) : undefined;
         if (nilWrite !== undefined) return nilWrite;
         const scalarWrite = isAssign && isIdentifier(left) ? this.printRustScalarLocalWrite(left, right) : undefined;
@@ -1999,6 +2002,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (nilKind !== undefined) {
             return `${indent}let mut ${varName}: Option<${nilKind === 'str' ? 'String' : (nilKind === 'int' ? 'i64' : 'bool')}> = None`;
         }
+        const optContainer = node.declarations.length === 1 ? this.printOptContainerDeclaration(declaration, varName, indent) : undefined;
+        if (optContainer !== undefined) return optContainer;
         const optMarket = node.declarations.length === 1 && (this.rustMarketLocalKind(declaration) === 'opt' || this.rustMarketLocalKind(declaration) === 'call')
             ? this.printTypedMarketLocal(declaration, indent, varName) : undefined;
         if (optMarket !== undefined) return optMarket;
@@ -10279,35 +10284,118 @@ export class RustTranspiler extends BaseTranspiler {
         if (typeof source === 'string' && /[\\/]test[\\/]/.test(source)) return undefined;
         let init: any = this.rustSkipWrappers(declaration.initializer);
         if (init?.kind === SyntaxKind.AwaitExpression) init = this.rustSkipWrappers(init.expression);
-        const from = isCallExpression(init) ? this.rustBorrowedSourceKind(init) : undefined;
-        if (from === undefined) return undefined;
+        // A `let` declared empty is filled later by container writes only (the optional form).
+        const nilDeclared = (init === undefined || this.literalKindOfNode(init) === 'null') && (list.flags & NodeFlags.Const) === 0
+            && list.parent?.kind === SyntaxKind.VariableStatement;
+        let from: 'dict' | 'list' | 'api' | undefined = isCallExpression(init) ? this.rustBorrowedSourceKind(init) : undefined;
+        if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
-        if (fn === undefined || isSourceFile(fn) || this.rustLocalIsReassigned(declaration, name)) return undefined;
+        if (fn === undefined || isSourceFile(fn)) return undefined;
         if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration)
             || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false
             || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return undefined;
         // The typed declaration line must stay within the 400-char line budget.
-        if (String(declaration.initializer.getText()).split('\n')[0].length > 240) return undefined;
-        // An endpoint response may be a list or a map: only literal-key reads agree for both.
-        const anyKey = from !== 'api';
+        if (declaration.initializer !== undefined && String(declaration.initializer.getText()).split('\n')[0].length > 240) return undefined;
         let reads = 0;
+        let nullTests = 0;
+        let writes = 0;
+        let lengths = 0;
+        let mixed = false;
         const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
             const up: any = n.parent;
-            if (from === 'list' && isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length') {
+            if (isBinaryExpression(up) && this.isEqualityOp(up.operatorToken.kind)) {
+                if (this.literalKindOfNode(this.unwrapParens(up.left === n ? up.right : up.left)) !== 'null') return false;
+                nullTests++;
+                return true;
+            }
+            if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
+                if (up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+                const rhs: any = this.rustSkipWrappers(up.right);
+                writes++;
+                if (this.literalKindOfNode(rhs) === 'null') return true;
+                const kind = isCallExpression(rhs) ? this.rustBorrowedSourceKind(rhs) : undefined;
+                if (kind === undefined || kind === 'api' || !this.rustOptContainerSourceOk(rhs, kind)) return false;
+                if (from !== undefined && from !== kind) mixed = true;
+                from = from ?? kind;
+                return String(rhs.getText()).split('\n')[0].length <= 240;
+            }
+            if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length') {
+                lengths++;
                 const use: any = up.parent;
                 return use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
                     && !(isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
             }
             if (!isCallExpression(up) || up.arguments[0] !== n) return false;
-            if (this.rustBorrowedDictReader(up) === undefined && !(anyKey && this.rustBorrowedAnyKeyReader(up))) return false;
+            // An endpoint response may be a list or a map: only literal-key reads agree for both.
+            if (this.rustBorrowedDictReader(up) === undefined && !(from !== 'api' && this.rustBorrowedAnyKeyReader(up))) return false;
             reads++;
             return true;
         });
-        if (!safe || reads === 0) return undefined;
+        if (!safe || reads === 0 || mixed || from === undefined) return undefined;
+        const optional = nilDeclared || nullTests > 0 || writes > 0;
+        if (lengths > 0 && (from !== 'list' || optional)) return undefined;
+        if (optional) {
+            // Null stays distinct from an empty container: the local holds `Option<Dict>` / `Option<List>`.
+            if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !this.rustOptContainerSourceOk(init, from))) return undefined;
+            this.rustOptContainerLocals.add(declaration);
+        }
         return from === 'list' ? 'list' : 'dict';
+    }
+
+    private rustOptContainerLocals = new WeakSet<any>();
+
+    /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
+    rustOptContainerSourceOk(call: any, kind: 'dict' | 'list' | 'api'): boolean {
+        if (kind === 'api' || !isCallExpression(call)) return false;
+        const name = String((call.expression as any)?.name?.text ?? '');
+        if (!/^safe(?:Dict|List)(?:2|N)?$/.test(name)) return RustTranspiler.RUST_BORROWED_DICT_SOURCES.has(name);
+        const at = name.endsWith('2') ? 3 : 2;
+        const dflt: any = call.arguments.length > at ? this.rustSkipWrappers(call.arguments[at]) : undefined;
+        if (dflt === undefined || this.literalKindOfNode(dflt) === 'null') return true;
+        return kind === 'dict' ? isObjectLiteralExpression(dflt) && dflt.properties.length === 0 : isArrayLiteralExpression(dflt) && dflt.elements.length === 0;
+    }
+
+    /** The optional form's local behind an identifier, else undefined. */
+    rustOptContainerOf(node: any): { declaration: any, kind: 'dict' | 'list' } | undefined {
+        if (node === undefined || !isIdentifier(node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration.name === node) return undefined;
+        const kind = this.rustBorrowedLocalKind(declaration);
+        return kind !== undefined && this.rustOptContainerLocals.has(declaration) ? { declaration, kind } : undefined;
+    }
+
+    /** `let mut x: Option<crate::value::Dict> = <init>.into_opt_dict()` (`None` when declared empty). */
+    printOptContainerDeclaration(declaration: any, varName: string, indent: string): string | undefined {
+        const kind = this.rustBorrowedLocalKind(declaration);
+        if (kind === undefined || !this.rustOptContainerLocals.has(declaration)) return undefined;
+        const type = kind === 'list' ? 'crate::value::List' : 'crate::value::Dict';
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        if (init === undefined || this.literalKindOfNode(init) === 'null') return `${indent}let mut ${varName}: Option<${type}> = None`;
+        return `${indent}let mut ${varName}: Option<${type}> = ${this.printNode(declaration.initializer, 0).trim()}.into_opt_${kind}()`;
+    }
+
+    /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
+    printOptContainerWrite(left: any, right: any): string | undefined {
+        const local = this.rustOptContainerOf(left);
+        if (local === undefined) return undefined;
+        const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
+        const rhs: any = this.rustSkipWrappers(right);
+        if (this.literalKindOfNode(rhs) === 'null') return `${name} = None`;
+        return `${name} = ${this.printNode(right, 0).trim()}.into_opt_${local.kind}()`;
+    }
+
+    /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */
+    printOptContainerNullTest(left: any, right: any, op: any): string | undefined {
+        const l = this.unwrapParens(left);
+        const r = this.unwrapParens(right);
+        const self = this.rustOptContainerOf(l) !== undefined ? l : (this.rustOptContainerOf(r) !== undefined ? r : undefined);
+        if (self === undefined || this.literalKindOfNode(self === l ? r : l) !== 'null') return undefined;
+        const name = super.transformIdentifier(self, this.ReservedKeywordsReplacements[self.text] ?? self.text);
+        const equal = op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken;
+        return `${name}.${equal ? 'is_none' : 'is_some'}()`;
     }
 
     rustBorrowedListUse(node: any): boolean {

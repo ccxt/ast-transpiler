@@ -69,6 +69,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    extend (...args: any[]): any { return args[0]; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, params: Dict) {\n        const data = this.safeDict (resp, 'data');\n        const id = this.safeString (data, 'id');\n        const n = this.safeInteger (data, 'n', 1);\n        const merged = this.extend (resp, params);\n        const s = this.safeString (merged, 's');\n        const kept = this.safeDict (resp, 'kept');\n        const k = this.safeString (kept, 'k');\n        return this.hold ([ id, n, s, k, kept ]);\n    }\n}\n"
  },
+ "optional-containers": {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] { return o; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, key: string) {\n        const fees = this.safeDict (resp, 'fees');\n        let feeId = undefined;\n        if (fees !== undefined) {\n            feeId = this.safeString (fees, 'id');\n        }\n        let rows = undefined;\n        if (key === 'a') {\n            rows = this.safeList (resp, 'a');\n        } else {\n            rows = this.safeList (resp, 'b', []);\n        }\n        if (key === 'z') {\n            rows = undefined;\n        }\n        let first = undefined;\n        if (rows !== undefined) {\n            first = this.safeValue (rows, 0);\n        }\n        let info = undefined;\n        info = this.safeDict (resp, 'info');\n        const note = this.safeString (info, key);\n        const filled = this.safeDict (resp, 'filled', { 'x': 1 });\n        const fx = (filled === undefined) ? undefined : this.safeString (filled, 'x');\n        let lost = undefined;\n        lost = this.safeDict (resp, 'lost');\n        const kept = this.safeDict (resp, 'kept');\n        if (kept === undefined) {\n            return this.hold (kept);\n        }\n        return this.hold ([ feeId, first, note, fx, this.safeString (lost, 'k'), lost ]);\n    }\n}\n"},
  "borrowed-any-key": {
     "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] { return o; }\n    hold (x: any): any { return x; }\n}\n",
     "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, key: string) {\n        const data = this.safeDict (resp, 'data');\n        const id = this.safeString (data, key);\n        const n = this.safeInteger (data, 'n', 1);\n        const rows = this.safeList (resp, 'rows');\n        const r0 = this.safeString (rows, key);\n        const lst = this.safeList (resp, 'lst');\n        const l0 = this.safeValue (lst, 0);\n        const l1 = this.safeString2 (lst, 1, 2);\n        const vs = this.safeList (resp, 'vs', []);\n        const v0 = this.safeString (vs, key);\n        const v1 = vs[1];\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            out.push (this.safeString (rows, i));\n        }\n        const first = this.safeValue (rows, 0);\n        const kept = this.safeList (resp, 'kept');\n        const k = this.safeDict (kept, 0);\n        return this.hold ([ id, n, out, first, k, kept, v0, v1, r0, l0, l1 ]);\n    }\n}\n"
@@ -5500,6 +5501,35 @@ describe('borrowed dict locals', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'borrowed-dict', 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut kept: Value = ');
         expect(out).not.toContain('safe_string_k(&kept');
+    });
+});
+
+describe('optional dict and list locals', () => {
+    test('null-tested or empty-declared container locals hold Option of the shared container and lend it', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'optional-containers', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut fees: Option<crate::value::Dict> = ');
+        expect(out).toContain('.into_opt_dict()');
+        expect(out).toContain('fees.is_some()');
+        expect(out).toContain('self.safe_string_k(&fees, "id", &[])');
+        expect(out).toContain('let mut rows: Option<crate::value::List> = None');
+        expect(out).toContain('rows = None');
+        expect(out).not.toContain('rows = None.into_opt_list()');
+        expect(out).toContain('.into_opt_list()');
+        expect(out).toContain('rows.is_some()');
+        expect(out).toContain('self.safeValue(&rows, ');
+        expect(out).toContain('let mut info: Option<crate::value::Dict> = None');
+        expect(out).toContain('self.safeString(&info, key');
+        expect(out).not.toContain('fees: Value');
+        expect(out).not.toContain('rows: Value');
+        expect(out).not.toContain('info: Value');
+    });
+
+    test('negative: a non-empty default, a boxed escape or a returned null keeps the box', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'optional-containers', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut filled: Value = ');
+        expect(out).toContain('let mut lost: Value = ');
+        expect(out).toContain('let mut kept: Value = ');
+        expect(out).not.toContain('Option<crate::value::Dict> = self.safeDict(resp.clone(), "filled"');
     });
 });
 
