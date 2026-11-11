@@ -53258,6 +53258,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return n.parent?.kind !== SyntaxKind7.ShorthandPropertyAssignment;
       if (this.rustEnclosingFunction(n) !== scope)
         return false;
+      if (kind === "ostr" && isBinaryExpression5(n.parent) && n.parent.operatorToken.kind === SyntaxKind7.PlusToken)
+        return false;
       const form = this.rustNilSlotWrite(n) ? "slot" : this.rustScalarUseForm(n, kind);
       this.rustScalarUseForms.set(n, form);
       if (form === "box" || form === "xbox" || form === "err")

@@ -1308,6 +1308,16 @@ ${body}
             expect(out).toContain('if (n.is_none()) {');
         });
 
+        test('a nil-declared string used as a concat operand stays Value', () => {
+            const out = transpiler.transpileRust(cls(`        let body = undefined;
+        if (kind === 'a') { body = 'x'; } else { body = 'y'; }
+        let auth = 'k' + kind;
+        if (body !== undefined) { auth = auth + body; }
+        return auth;`)).content;
+            expect(out).toContain('let mut body: Value = Value::Null;');
+            expect(out).not.toContain('add(&auth');
+        });
+
         test('a tuple-slot write of a string joins Option<String>', () => {
             const out = transpiler.transpileRust(`class A {
     handleMarketTypeAndParams(m: string, x: any, p: any): [ string, any ] { return [ m, p ]; }

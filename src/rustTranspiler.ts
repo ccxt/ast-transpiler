@@ -2339,6 +2339,8 @@ export class RustTranspiler extends BaseTranspiler {
         const ok = this.rustLocalUsesAll(declaration, name, false, (n) => {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             if (this.rustEnclosingFunction(n) !== scope) return false;
+            // an optional string has no native `+`: the concat would fall back to the `add` helper
+            if (kind === 'ostr' && isBinaryExpression(n.parent) && n.parent.operatorToken.kind === SyntaxKind.PlusToken) return false;
             const form = this.rustNilSlotWrite(n) ? 'slot' : this.rustScalarUseForm(n, kind);
             this.rustScalarUseForms.set(n, form);
             if (form === 'box' || form === 'xbox' || form === 'err') boxed.push(n);
