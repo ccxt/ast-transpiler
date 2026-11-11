@@ -3572,6 +3572,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** The Rust kind (`ostr|oint|onum|str|int|num|bool`) a scalar local is declared with, else undefined. */
     rustScalarLocalKind(declaration): string | undefined {
+        if (declaration?.kind === SyntaxKind.BindingElement) return this.rustExactSlotKind(declaration);
         if (declaration === undefined || !isVariableDeclaration(declaration)) return undefined;
         const scope: any = this.rustEnclosingFunction(declaration);
         if (scope !== undefined && !this.rustScalarSolved.has(scope) && !this.rustScalarSolving.has(scope)) this.rustScalarSolveScope(scope);
@@ -3641,6 +3642,7 @@ export class RustTranspiler extends BaseTranspiler {
             names = new Set<string>();
             for (const n of this.rustScopeIndex(src).nodes as any[]) {
                 if (isVariableDeclaration(n) && isIdentifier(n.name) && (n.initializer === undefined || this.rustScalarInitShape(n.initializer))) names.add(String(n.name.text));
+                if (isBindingElement(n) && isIdentifier(n.name) && n.parent?.kind === SyntaxKind.ArrayBindingPattern) names.add(String(n.name.text));
             }
             this.rustScalarCandidates.set(src, names);
         }
@@ -7918,6 +7920,152 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = this.rustTupleSlotKind(element);
         if (kind === 'str') return `${indent}let mut ${printedName}: Option<String> = ${temp}.get(${index}).and_then(Value::as_str).map(str::to_owned)`;
         if (kind === 'bool') return `${indent}let mut ${printedName}: bool = ${temp}.get(${index}).and_then(Value::as_bool) == Some(true)`;
+        return this.printExactSlotLocal(element, printedName, temp, index, indent);
+    }
+
+    // ── exact integer / boolean tuple slots ──────────────────────────────────
+    // A `number` / `boolean` slot whose callee builds that slot from an Int-or-null (Bool-or-null) producer on every
+    // path is `Option<i64>` / `Option<bool>`; its uses go through the scalar-local forms (native tests, conditions,
+    // arithmetic; `Value::from` / `map_or` only where the `Value` form was handed on). It needs at least one native use.
+
+    private rustExactSlotDecisions = new WeakMap<Node, string | null>();
+
+    private static readonly RUST_EXACT_INT_PRODUCERS = new Set([ 'parseToInt', 'safeInteger', 'safeInteger2', 'safeIntegerN' ]);
+    private static readonly RUST_EXACT_BOOL_PRODUCERS = new Set([ 'checkOptionBool', 'safeBool', 'safeBool2', 'safeBoolN' ]);
+
+    rustExactSlotKind(element: any): string | undefined {
+        let decision = this.rustExactSlotDecisions.get(element);
+        if (decision === undefined) {
+            this.rustExactSlotDecisions.set(element, null); // re-entrancy guard
+            try {
+                decision = this.rustExactSlotKindUncached(element) ?? null;
+            } catch (e) {
+                decision = null; // no proof -> the slot keeps its `Value` box
+            }
+            this.rustExactSlotDecisions.set(element, decision);
+        }
+        return decision ?? undefined;
+    }
+
+    private rustExactSlotKindUncached(element: any): string | undefined {
+        const pattern: any = element.parent;
+        const owner: any = pattern?.parent;
+        if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || owner === undefined || !isVariableDeclaration(owner) || owner.name !== pattern
+            || (owner.parent as any)?.declarations?.[0] !== owner || element.dotDotDotToken !== undefined || element.initializer !== undefined || !isIdentifier(element.name)) return undefined;
+        if (owner.initializer === undefined || !this.rustNativeListSource(owner.initializer) || this.rustTestTierSource(element)) return undefined;
+        const scope: any = this.rustEnclosingFunction(owner);
+        if (scope === undefined || isSourceFile(scope) || scope.kind !== SyntaxKind.MethodDeclaration) return undefined;
+        const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(element.name));
+        if (checked !== 'number' && checked !== 'boolean') return undefined;
+        if (this.rustTupleSlotKind(element) !== undefined) return undefined;
+        const at = pattern.elements.indexOf(element);
+        const want = checked === 'number' ? 'int' : 'bool';
+        // a pass-through integer option may hold any number: as `f64` it serves numeric literal tests only (the `Value` form's `as_f64` compare)
+        const loose = want === 'int' && !this.rustExactSlotCallee(owner.initializer, at, want);
+        if (loose && !this.rustExactSlotCallee(owner.initializer, at, 'num')) return undefined;
+        if (!loose && !this.rustExactSlotCallee(owner.initializer, at, want)) return undefined;
+        const kind = loose ? 'onum' : (want === 'int' ? 'oint' : 'obool');
+        let nativeUses = 0;
+        this.rustExactSlotDecisions.set(element, kind); // uses that read the slot itself see the trial kind
+        let ok = false;
+        try {
+            ok = this.rustLocalUsesAll(element, String(element.name.text), true, (n: any) => {
+                if (this.rustDeclaredNode(n) !== element) return true;
+                if (this.rustEnclosingFunction(n) !== scope) return false;
+                const form = this.rustScalarUseForm(n, kind);
+                this.rustScalarUseForms.set(n, form);
+                if (form === undefined || form === 'xbox' || form === 'err' || form === 'key' || form === 'okey' || form === 'targ') return false;
+                if (loose && (form !== 'test' || this.literalKindOfNode(this.unwrapParens(n.parent.left === n ? n.parent.right : n.parent.left)) === 'null')) return false;
+                // ccxt passes key on the boxed operand of a `.push(..)` or of a write to another local
+                const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
+                if (push !== undefined && isCallExpression(push)) return false;
+                const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
+                if (form === 'box' && write !== undefined && isBinaryExpression(write) && isIdentifier(write.left) && this.isNodeInsideNode(n, write.right)) return false;
+                if (form !== 'box') nativeUses++;
+                return true;
+            });
+        } finally {
+            this.rustExactSlotDecisions.set(element, null);
+        }
+        return ok && nativeUses > 0 ? kind : undefined;
+    }
+
+    /** The callee builds slot `at` from an exact Int-or-null (`int`) / Bool-or-null (`bool`) producer on every return. */
+    rustExactSlotCallee(init: any, at: number, want: string): boolean {
+        let call: any = this.rustSkipWrappers(init);
+        if (call?.kind === SyntaxKind.AwaitExpression) call = this.rustSkipWrappers(call.expression);
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(call.expression.name.text);
+        let method: any = this.rustCalleeDeclaration(call);
+        if (method !== undefined && method.body === undefined) method = method.parent?.members?.find((m: any) => m.kind === SyntaxKind.MethodDeclaration && m.body !== undefined && m.name?.text === name);
+        if (method === undefined || method.body === undefined || !isBlock(method.body) || !isClassDeclaration(method.parent)) return false;
+        // every declaration of the name is this one (no venue override changes the slot)
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const root = file.search(/\/ts\/src\//);
+        if (root < 0) return false;
+        const own = (method.parent.members ?? []).filter((m: any) => m.kind === SyntaxKind.MethodDeclaration && m.name?.text === name).length;
+        const base = RustTranspiler.RUST_BASE_TIER_FILE.test(file);
+        if (this.rustVenueMethodDeclCounts(file.slice(0, root) + '/ts/src').get(name) !== own * (base ? 2 : 1)) return false;
+        let returns = 0;
+        let all = true;
+        const visit = (node: any) => {
+            if (!all || (node !== method.body && isFunctionLike(node))) return;
+            if (isReturnStatement(node)) {
+                returns++;
+                const list: any = this.unwrapParens(node.expression);
+                all = list !== undefined && isArrayLiteralExpression(list) && list.elements.length > at && this.rustExactScalarExpr(list.elements[at], want, method, 0);
+                return;
+            }
+            node.forEachChild(visit);
+        };
+        method.body.forEachChild(visit);
+        return all && returns > 0;
+    }
+
+    /** An expression that is exactly Int-or-null / Bool-or-null in the `Value` form. */
+    rustExactScalarExpr(expr: any, want: string, method: any, depth: number): boolean {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || depth > 4) return false;
+        const literal = this.literalKindOfNode(node);
+        if (literal === 'null') return true;
+        if (want === 'bool') {
+            if (literal === 'boolean') return true;
+            if (isBinaryExpression(node) && this.isEqualityOp(node.operatorToken.kind)) return true;
+            if (isPrefixUnaryExpression(node) && node.operator === SyntaxKind.ExclamationToken) return true;
+        } else if (this.rustScalarIntLiteral(node) !== undefined) return true;
+        if (want === 'num' && isIdentifier(node) && isParameterDeclaration(this.rustDeclaredNode(node)) && this.rustEnclosingFunction(this.rustDeclaredNode(node)) === method) return true;
+        if (isCallExpression(node) && isPropertyAccessExpression(node.expression) && node.expression.expression.kind === SyntaxKind.ThisKeyword) {
+            const name = String(node.expression.name.text);
+            const producers = want === 'bool' ? RustTranspiler.RUST_EXACT_BOOL_PRODUCERS : RustTranspiler.RUST_EXACT_INT_PRODUCERS;
+            if (!(producers.has(name) || (want === 'num' && name === 'checkOptionInteger')) || !this.rustCalleeIsRuntimeBase(node)) return false;
+            // a reader returns its default for a missing key: that default must be exact too
+            const fixed = name === 'parseToInt' || name.startsWith('checkOption') ? undefined : (name.endsWith('2') ? 3 : 2);
+            const fallback: any = fixed === undefined ? undefined : node.arguments[fixed];
+            return fallback === undefined || this.rustExactScalarExpr(fallback, want, method, depth + 1);
+        }
+        if (!isIdentifier(node)) return false;
+        const declaration: any = this.rustDeclaredNode(node);
+        if (declaration === undefined || this.rustEnclosingFunction(declaration) !== method) return false;
+        if (isParameterDeclaration(declaration)) {
+            const type = String(declaration.type?.getText?.() ?? '');
+            return (want === 'bool' ? /^(?:Bool|boolean)$/ : /^(?:Int|number)$/).test(type) && (declaration.initializer === undefined || this.rustExactScalarExpr(declaration.initializer, want, method, depth + 1));
+        }
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.initializer === undefined
+            || !this.rustExactScalarExpr(declaration.initializer, want, method, depth + 1)) return false;
+        return this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => {
+            const parent: any = n.parent;
+            if (isPrefixUnaryExpression(parent) || parent?.kind === SyntaxKind.PostfixUnaryExpression) return parent.operator === SyntaxKind.ExclamationToken;
+            if (!isBinaryExpression(parent) || parent.left !== n || parent.operatorToken.kind < SyntaxKind.FirstAssignment || parent.operatorToken.kind > SyntaxKind.LastAssignment) return true;
+            return parent.operatorToken.kind === SyntaxKind.EqualsToken && this.rustExactScalarExpr(parent.right, want, method, depth + 1);
+        });
+    }
+
+    /** `let mut a: Option<i64> | Option<bool> | Option<f64> = <temp>.get(i)..` for an exact slot, else undefined. */
+    printExactSlotLocal(element: any, printedName: string, temp: string, index: number, indent: string): string | undefined {
+        const kind = this.rustExactSlotKind(element);
+        if (kind === 'oint') return `${indent}let mut ${printedName}: Option<i64> = ${temp}.get(${index}).and_then(Value::as_i64)`;
+        if (kind === 'obool') return `${indent}let mut ${printedName}: Option<bool> = ${temp}.get(${index}).and_then(Value::as_bool)`;
+        if (kind === 'onum') return `${indent}let mut ${printedName}: Option<f64> = ${temp}.get(${index}).and_then(Value::as_f64)`;
         return undefined;
     }
 
