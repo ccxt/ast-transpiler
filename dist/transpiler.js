@@ -55094,7 +55094,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (own === void 0 || scope === void 0)
       return false;
     for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
-      if (n === node || n === declaration.name || n.kind !== SyntaxKind7.Identifier || this.rustIdentifierIsPropertyName(n))
+      if (n === node || n === declaration.name || !isIdentifier3(n) || this.rustIdentifierIsPropertyName(n))
         continue;
       const symbol = this.rustSymbolOf(n);
       if (symbol !== void 0 && symbol !== own)
@@ -59888,9 +59888,9 @@ ${idn}}`;
   rustI64BodyIsClosed(body, name) {
     let closed = 0;
     for (const n of this.rustScopeNameNodes(body, name)) {
-      if (n.kind === SyntaxKind7.Identifier && this.rustIdentifierIsPropertyName(n) && n.parent.kind !== SyntaxKind7.ShorthandPropertyAssignment)
+      if (isIdentifier3(n) && this.rustIdentifierIsPropertyName(n) && n.parent.kind !== SyntaxKind7.ShorthandPropertyAssignment)
         continue;
-      if (n.kind !== SyntaxKind7.Identifier || !this.rustI64ClosedUses.has(n))
+      if (!isIdentifier3(n) || !this.rustI64ClosedUses.has(n))
         return false;
       closed++;
     }
@@ -61954,7 +61954,7 @@ ${iden}}`;
       }
       if (!isCallExpression6(up) || up.arguments[0] !== n)
         return false;
-      const keyArgs = up.arguments.slice(1, /2$/.test(String(up.expression.name?.text)) ? 3 : 2).map((a) => this.rustSkipWrappers(a));
+      const keyArgs = up.arguments.slice(1, isPropertyAccessExpression3(up.expression) && /2$/.test(String(up.expression.name.text)) ? 3 : 2).map((a) => this.rustSkipWrappers(a));
       const stringKey = keyArgs.every((k) => k !== void 0 && isStringLiteralLikeNode4(k) && !/^\d+$/.test(String(k.text)) && !(String(k.text) in this.StringLiteralReplacements));
       const literalKey = this.rustBorrowedDictReader(up) !== void 0;
       if (!literalKey && !((from !== "api" || stringKey) && this.rustBorrowedAnyKeyReader(up)))

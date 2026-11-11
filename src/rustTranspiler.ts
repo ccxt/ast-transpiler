@@ -4194,8 +4194,8 @@ export class RustTranspiler extends BaseTranspiler {
         const own = this.rustSymbolOf(node);
         const scope = this.rustEnclosingFunction(declaration);
         if (own === undefined || scope === undefined) return false;
-        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text)) as any[]) {
-            if (n === node || n === declaration.name || n.kind !== SyntaxKind.Identifier || this.rustIdentifierIsPropertyName(n)) continue;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
+            if (n === node || n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) continue;
             const symbol = this.rustSymbolOf(n);
             if (symbol !== undefined && symbol !== own) continue;
             if (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end)) return false;
@@ -9291,9 +9291,9 @@ export class RustTranspiler extends BaseTranspiler {
     /** True when every occurrence of `name` in the body printed as a `.get(name as usize)` read or a `Value::Int(name)` box. */
     rustI64BodyIsClosed(body: any, name: string): boolean {
         let closed = 0;
-        for (const n of this.rustScopeNameNodes(body, name) as any[]) {
-            if (n.kind === SyntaxKind.Identifier && this.rustIdentifierIsPropertyName(n) && n.parent.kind !== SyntaxKind.ShorthandPropertyAssignment) continue;
-            if (n.kind !== SyntaxKind.Identifier || !this.rustI64ClosedUses.has(n)) return false;
+        for (const n of this.rustScopeNameNodes(body, name)) {
+            if (isIdentifier(n) && this.rustIdentifierIsPropertyName(n) && n.parent.kind !== SyntaxKind.ShorthandPropertyAssignment) continue;
+            if (!isIdentifier(n) || !this.rustI64ClosedUses.has(n)) return false;
             closed++;
         }
         return closed > 0;
@@ -9303,7 +9303,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustLengthCounterBound(node: any, counter: string): string | undefined {
         const cond: any = node?.condition;
         if (cond === undefined || !isBinaryExpression(cond) || cond.operatorToken.kind !== SyntaxKind.LessThanToken || !this.rustNativeCompares.has(cond)) return undefined;
-        const { left, right } = cond as any;
+        const { left, right } = cond;
         if (!isIdentifier(left) || left.text !== counter || !isPropertyAccessExpression(right)) return undefined;
         const place = this.rustNativeLengths.get(right);
         const recv: any = this.rustStripWrappers(right.expression);
@@ -11466,7 +11466,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (!isCallExpression(up) || up.arguments[0] !== n) return false;
             // An endpoint response may be a list or a map: only string-key reads agree for both.
-            const keyArgs: any[] = up.arguments.slice(1, /2$/.test(String(up.expression.name?.text)) ? 3 : 2).map((a: any) => this.rustSkipWrappers(a));
+            const keyArgs: any[] = up.arguments.slice(1, isPropertyAccessExpression(up.expression) && /2$/.test(String(up.expression.name.text)) ? 3 : 2).map((a: any) => this.rustSkipWrappers(a));
             const stringKey = keyArgs.every((k: any) => k !== undefined && isStringLiteralLikeNode(k) && !/^\d+$/.test(String(k.text)) && !(String(k.text) in this.StringLiteralReplacements));
             const literalKey = this.rustBorrowedDictReader(up) !== undefined;
             if (!literalKey && !((from !== 'api' || stringKey) && this.rustBorrowedAnyKeyReader(up))) return false;

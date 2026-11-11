@@ -498,6 +498,19 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsClientOnlyUse(declaration: any): boolean;
     rustWsClientLastUse(node: any, declaration: any): boolean;
     rustLocalLastUse(node: any, declaration: any): boolean;
+    rustWsSettleCall(call: any): boolean;
+    /** `client.future|reusableFuture(hash)` on a ws handle: the hand-written method takes `hash: impl Into<Value>`. */
+    rustWsFlightCall(call: any): boolean;
+    /** `this.watch(url, hash, ..)` / `this.watchMultiple(url, ..)`: the runtime takes `url` and the single hash as `impl Into<Value>`. */
+    rustWsWatchSlot(call: any, at: number): boolean;
+    /** A string local read as a ws hash or key slot: the settle hash, a handle `in` test or a handle keyed read. */
+    rustWsKeyUse(n: any): boolean;
+    rustWsStrKey(node: any): boolean;
+    /** A key slot's text: `x.as_str()` / `x.as_deref()` for a string local, else the `Value` by reference. */
+    rustWsKeyText(node: any): string;
+    rustWsKeySharesStatement(node: any): boolean;
+    printWsSettleCall(node: any, receiver: string, identation: number): string;
+    printWsFlightCall(node: any, receiver: string, identation: number): string;
     private static readonly RUST_CLIENT_HANDLE_TYPE;
     private static readonly RUST_CLIENT_HANDLE_KEYS;
     private static readonly RUST_CLIENT_HANDLE_NAMES;
@@ -840,6 +853,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_TEST_VARIADIC_ARITY;
     printRuntimeVariadicCall(node: any, receiver: string, methodName: string, identation: number, testCrate?: boolean, handleProven?: boolean): string | undefined;
     printOptionalArgsSliceCall(node: any, receiver: string, methodName: string, fixed: number, identation: number): string | undefined;
+    rustSliceArgText(a: string): string;
     rustCalleeIsRuntimeBase(node: any): boolean;
     rustCallsTestExchange(node: any): boolean;
     rustCallsRuntimeHandle(node: any): boolean;
