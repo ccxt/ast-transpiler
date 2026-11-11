@@ -5691,6 +5691,7 @@ describe('containers lent to any-key readers', () => {
         expect(out).toContain('self.safeString(&rows, ');
         expect(out).toMatch(/rows\.len\(\) as i64/);
         expect(out).not.toContain('rows.clone().into()');
+        expect(out).toContain('Value::Arr(rows.clone())');
         expect(out).not.toContain('lst: Value');
         expect(out).not.toContain('data: Value');
     });
@@ -7473,11 +7474,12 @@ describe('rust string key elements', () => {
 
 describe('rust lookup tables and always-list producers', () => {
     const files: Record<string, string> = {
-        'ts/src/base/Exchange.ts': 'export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    toArray (o: any): any[] { return o; }\n    arrayConcat (a: any[], b: any[]): any[] { return a; }\n    hold (x: any): any { return x; }\n}\n',
+        'ts/src/base/Exchange.ts': 'export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    toArray (o: any): any[] { return o; }\n    arrayConcat (a: any[], b: any[]): any[] { return a; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n}\n',
         'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
             "    parseStatus (status: Str) {\n        const statuses = { '0': 'open', '1': 'closed', 'done': 'closed' };\n        return this.safeString (statuses, status, status);\n    }\n" +
             "    parseHeld (status: Str) {\n        const kept = { '0': 'open' };\n        this.hold (kept);\n        return this.safeString (kept, status);\n    }\n" +
             "    parseRows (response: any) {\n        const rows = this.toArray (response);\n        const result = [];\n        for (let i = 0; i < rows.length; i++) {\n            result.push (rows[i]);\n        }\n        return result;\n    }\n" +
+            "    readRows (response: any) {\n        const rows = this.toArray (response);\n        let out = undefined;\n        for (let i = 0; i < rows.length; i++) {\n            out = this.safeDict (rows, i);\n        }\n        return out;\n    }\n" +
             "    parseBoth (a: any[], b: any[]) {\n        const all = this.arrayConcat (a, b);\n        return all[0];\n    }\n}\n",
     };
     let out: string;
@@ -7499,6 +7501,8 @@ describe('rust lookup tables and always-list producers', () => {
         expect(out).toContain('.into_list();');
         expect(out).toContain('let mut all: crate::value::List = self.arrayConcat(');
         expect(out).not.toContain('.as_array().map(Vec::as_slice).unwrap_or_default().get(i as usize)');
+        expect(out).not.toContain('rows.clone().into()');
+        expect(out).toContain('Value::Arr(rows.clone())');
     });
     test('negative: a table also handed to another method keeps its box', () => {
         expect(out).toContain('let mut kept: Value = ');

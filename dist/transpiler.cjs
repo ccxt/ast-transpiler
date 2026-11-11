@@ -61430,6 +61430,9 @@ ${iden}}`;
     if (kind === void 0)
       return void 0;
     const value = form === "move" ? text : `${text}.clone()`;
+    const listDecl = kind === "list" ? this.rustDeclarationOfIdentifier(node) : void 0;
+    if (listDecl !== void 0 && this.rustAlwaysListProducer(this.rustSkipWrappers(listDecl.initializer)))
+      return `Value::Arr(${value})`;
     if (_is.isCallExpression.call(void 0, node.parent))
       return `${value}.into()`;
     return kind === "map" ? `Value::Map(${value})` : `Value::from(${value})`;

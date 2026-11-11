@@ -10977,6 +10977,8 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = this.rustReadBearerKind(node);
         if (kind === undefined) return undefined;
         const value = form === 'move' ? text : `${text}.clone()`;
+        const listDecl: any = kind === 'list' ? this.rustDeclarationOfIdentifier(node) : undefined;
+        if (listDecl !== undefined && this.rustAlwaysListProducer(this.rustSkipWrappers(listDecl.initializer))) return `Value::Arr(${value})`;
         // A call argument boxes through `Into` so ccxt's literal-key reader rewrite still parses the argument.
         if (isCallExpression(node.parent)) return `${value}.into()`;
         return kind === 'map' ? `Value::Map(${value})` : `Value::from(${value})`;
