@@ -10926,6 +10926,52 @@ export class RustTranspiler extends BaseTranspiler {
 
     private rustOptContainerLocals = new WeakSet<any>();
 
+    // ── dict-valued conditional initialisers (rustDictTernaryInit / rustDictTernaryArm) ──
+    // `c ? this.omit (p, k) : p` holds a map on both arms, so a handed-on local takes the map out of the
+    // printed if-expression with `.into_dict()` (moves the Arc, no copy) and lends it to its uses.
+    rustDictTernaryInit(init: any): boolean {
+        const node: any = this.rustSkipWrappers(init);
+        if (node === undefined || !isConditionalExpression(node)) return false;
+        return this.rustDictTernaryArm(node.whenTrue) && this.rustDictTernaryArm(node.whenFalse);
+    }
+
+    /** An arm that is always a map: a base `extend`/`deepExtend`/`omit` call, or a local / `params = {}`
+     *  parameter whose initializer and every write are such calls. */
+    rustDictTernaryArm(arm: any): boolean {
+        const node: any = this.rustSkipWrappers(arm);
+        if (node === undefined) return false;
+        if (isCallExpression(node)) return this.rustDictTernaryCall(node);
+        if (!isIdentifier(node)) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration.name === node || !isIdentifier(declaration.name)) return false;
+        if (isParameterDeclaration(declaration)) {
+            const dflt: any = this.rustSkipWrappers(declaration.initializer);
+            if (dflt === undefined || !isObjectLiteralExpression(dflt) || dflt.properties.length !== 0) return false;
+        } else if (!isVariableDeclaration(declaration) || declaration.initializer === undefined || !isCallExpression(this.rustSkipWrappers(declaration.initializer))
+            || !this.rustDictTernaryCall(this.rustSkipWrappers(declaration.initializer))
+            || this.rustHandedDictLocal(declaration) || this.rustBorrowedDictLocal(declaration)) return false;
+        const fn: any = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || isSourceFile(fn)) return false;
+        for (const n of this.rustScopeNameNodes(fn, String(declaration.name.text)) as any[]) {
+            if (n === declaration.name || !this.rustIdentifierRefersToDeclaration(n, declaration)) continue;
+            const up: any = n.parent;
+            if (up?.kind === SyntaxKind.PrefixUnaryExpression || up?.kind === SyntaxKind.PostfixUnaryExpression) return false;
+            if (!isBinaryExpression(up) || up.left !== n || !rustIsAssignmentOperator(up.operatorToken.kind)) continue;
+            const rhs: any = this.rustSkipWrappers(up.right);
+            if (up.operatorToken.kind !== SyntaxKind.EqualsToken || !isCallExpression(rhs) || !this.rustDictTernaryCall(rhs)) return false;
+        }
+        return true;
+    }
+
+    rustDictTernaryCall(call: any): boolean {
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(callee.name.text);
+        if (name !== 'extend' && name !== 'deepExtend' && name !== 'omit') return false;
+        const declaration: any = this.rustScalarCallee(call);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
+    }
+
     // ── empty-declared endpoint responses (`let response = undefined; response = await this.<endpoint> (..)`) ──
     // An endpoint may answer a list, a map or a scalar. Read only through literal-key readers, every variant
     // reads the same as the optional map `into_opt_dict` keeps (a list or scalar has no string keys), so the
@@ -11454,7 +11500,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1) return false;
             let init: any = this.rustSkipWrappers(declaration.initializer);
             if (init?.kind === SyntaxKind.AwaitExpression) init = this.rustSkipWrappers(init.expression);
-            if (!this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_SOURCES) || this.rustBorrowedDictLocal(declaration)) return false;
+            if (!this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_SOURCES) && !this.rustDictTernaryInit(init) || this.rustBorrowedDictLocal(declaration)) return false;
             if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration)
                 || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false
                 || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
