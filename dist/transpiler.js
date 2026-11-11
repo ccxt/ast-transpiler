@@ -54758,6 +54758,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     } else {
       return void 0;
     }
+    const type = this.getCheckedTypeOf(decl.name);
+    if (!this.rustIsWsClientType(type) && (type === void 0 || (type.flags & TypeFlags6.Any) === 0))
+      return void 0;
     const keys = _RustTranspiler.RUST_CLIENT_HANDLE_KEYS;
     const firstWrite = /* @__PURE__ */ new Map();
     let mut = false;

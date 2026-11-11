@@ -3930,6 +3930,8 @@ export class RustTranspiler extends BaseTranspiler {
         } else {
             return undefined;
         }
+        const type: any = this.getCheckedTypeOf(decl.name);
+        if (!this.rustIsWsClientType(type) && (type === undefined || (type.flags & TypeFlags.Any) === 0)) return undefined;
         const keys = RustTranspiler.RUST_CLIENT_HANDLE_KEYS;
         const firstWrite = new Map<string, number>();
         let mut = false;

@@ -7078,3 +7078,39 @@ describe('rust message-hash string locals handed to the ws client', () => {
         expect(out).toContain('let mut messageHash: Value = Value::Str("auth".into());');
     });
 });
+
+describe('rust ws client handle', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/ws/Client.ts': 'export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    resolve (result: any, messageHash: string): any { return result; }\n    send (message: any): any { return message; }\n}\n',
+        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport default class Exchange {\n    client (url: string): Client { return new Client (); }\n    safeValue (obj: any, key: any): any { return obj[key]; }\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n" +
+            "    subscribe (url: string, messageHash: string) {\n        const client = this.client (url);\n        if (!(messageHash in client.subscriptions)) {\n            client.subscriptions[messageHash] = true;\n        }\n        const future = this.safeValue (client.futures, messageHash);\n        client.send ({ 'op': 'sub' });\n        return future;\n    }\n" +
+            "    handleUnsub (client: Client, messageHash: string) {\n        if (messageHash in client.subscriptions) {\n            delete client.subscriptions[messageHash];\n        }\n        if (messageHash in client.futures) {\n            client.resolve (true, messageHash);\n        }\n    }\n" +
+            "    handleAfterWrite (client: Client, messageHash: string) {\n        delete client.subscriptions[messageHash];\n        const left = client.subscriptions;\n        return left;\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-wch-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a client local served only by the handle is declared as the handle', () => {
+        expect(out).toContain('let mut client: crate::pro::ws_client::ClientHandle = crate::pro::ws_client::ClientHandle::from_value(self.client(');
+        expect(out).toContain('if !(client.has_subscription(&messageHash)) {');
+        expect(out).toContain('client.add_subscription(&messageHash, Value::Bool(true))');
+        expect(out).toContain('(client).futures.clone()');
+    });
+    test('a client parameter binds the handle once and reads through it', () => {
+        expect(out).toMatch(/let mut __ch = crate::pro::ws_client::ClientHandle::from_value\(client\.clone\(\)\);\n\s*if \(__ch\.has_subscription\(&messageHash\)\) \{/);
+        expect(out).toContain('__ch.remove_subscription(&messageHash)');
+        expect(out).toContain('if (__ch.has_future(&messageHash)) {');
+    });
+    test('a field read after a write of that field keeps the live lookup', () => {
+        expect(out).toContain('let mut __ch = crate::pro::ws_client::ClientHandle::from_value(client.clone());');
+        expect(out).toContain('let mut left: Value = client.subscriptions;');
+    });
+});
