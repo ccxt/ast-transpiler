@@ -1432,6 +1432,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    rustDictTernaryInit(init: any): boolean;
+    /** An arm that is always a map: a base `extend`/`deepExtend`/`omit` call, or a local / `params = {}`
+     *  parameter whose initializer and every write are such calls. */
+    rustDictTernaryArm(arm: any): boolean;
+    rustDictTernaryCall(call: any): boolean;
     private rustNilResponseLocals;
     /** The container kind of a write to a borrowed local; an endpoint write to an empty `let` counts as a map. */
     rustNilResponseWriteKind(rhs: any, nilDeclared: boolean, declaration: any): 'dict' | 'list' | 'api' | undefined;

@@ -68,7 +68,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
  },
  "handed-dict": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    handleMarketTypeAndParams (m: string, market: any = undefined, params: Dict = {}): [string, Dict] { return [ m, params ]; }\n    hold (x: any): any { return x; }\n}\n",
-  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ marketType, query ] = this.handleMarketTypeAndParams ('fetchThing', undefined, params);\n        const rest = this.omit (query, 'x');\n        const s = this.safeString (query, 's');\n        const request: Dict = { 'type': marketType, 's': s };\n        return this.hold (this.extend (request, rest));\n    }\n    fetchKept (params: Dict = {}) {\n        const kept = this.omit (params, 'x');\n        return this.hold (kept);\n    }\n}\n"
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ marketType, query ] = this.handleMarketTypeAndParams ('fetchThing', undefined, params);\n        const rest = this.omit (query, 'x');\n        const s = this.safeString (query, 's');\n        const request: Dict = { 'type': marketType, 's': s };\n        return this.hold (this.extend (request, rest));\n    }\n    fetchKept (params: Dict = {}) {\n        const kept = this.omit (params, 'x');\n        return this.hold (kept);\n    }\n    fetchPicked (until: Str = undefined, params: Dict = {}) {\n        const picked = (until !== undefined) ? this.omit (params, 'until') : params;\n        const s = this.safeString (picked, 's');\n        const request: Dict = { 's': s };\n        return this.hold (this.extend (request, picked));\n    }\n    fetchPickedBack (until: Str = undefined, params: Dict = {}) {\n        const back = (until !== undefined) ? this.omit (params, 'until') : params;\n        return this.hold (back);\n    }\n}\n"
  },
  "literal-handoff": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    parseFee (o: any): Dict { return o; }\n    hold (o: any): any { return o; }\n    extend (...args: any[]): any { return args[0]; }\n}\n",
@@ -5563,6 +5563,15 @@ describe('handed-on dict locals', () => {
     test('negative: a dict local boxed straight back keeps its box', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'handed-dict', 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut kept: Value = ');
+    });
+
+    test('a conditional with a map on both arms holds the shared map out of a plain if-expression', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'handed-dict', 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut picked: crate::value::Dict = \(if \(until (!= Value::Null|\.is_some\(\))\) \{ self\.omit\(params\.clone\(\), Value::Str\("until"\.into\(\)\), &\[\]\) \} else \{ params(\.clone\(\))? \}\)\.into_dict\(\);/);
+        expect(out).toContain('self.safe_string_k(&picked, "s", &[])');
+        expect(out).toContain('&[&picked])');
+        expect(out).not.toContain('picked: Value');
+        expect(out).toContain('let mut back: Value = ');
     });
 });
 

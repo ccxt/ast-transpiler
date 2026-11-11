@@ -61259,6 +61259,61 @@ ${iden}}`;
     }
     return from === "list" ? "list" : "dict";
   }
+  // ── dict-valued conditional initialisers (rustDictTernaryInit / rustDictTernaryArm) ──
+  // `c ? this.omit (p, k) : p` holds a map on both arms, so a handed-on local takes the map out of the
+  // printed if-expression with `.into_dict()` (moves the Arc, no copy) and lends it to its uses.
+  rustDictTernaryInit(init) {
+    const node = this.rustSkipWrappers(init);
+    if (node === void 0 || !isConditionalExpression4(node))
+      return false;
+    return this.rustDictTernaryArm(node.whenTrue) && this.rustDictTernaryArm(node.whenFalse);
+  }
+  /** An arm that is always a map: a base `extend`/`deepExtend`/`omit` call, or a local / `params = {}`
+   *  parameter whose initializer and every write are such calls. */
+  rustDictTernaryArm(arm) {
+    const node = this.rustSkipWrappers(arm);
+    if (node === void 0)
+      return false;
+    if (isCallExpression6(node))
+      return this.rustDictTernaryCall(node);
+    if (!isIdentifier3(node))
+      return false;
+    const declaration = this.rustDeclarationOfIdentifier(node);
+    if (declaration === void 0 || declaration.name === node || !isIdentifier3(declaration.name))
+      return false;
+    if (isParameterDeclaration3(declaration)) {
+      const dflt = this.rustSkipWrappers(declaration.initializer);
+      if (dflt === void 0 || !isObjectLiteralExpression4(dflt) || dflt.properties.length !== 0)
+        return false;
+    } else if (!isVariableDeclaration3(declaration) || declaration.initializer === void 0 || !isCallExpression6(this.rustSkipWrappers(declaration.initializer)) || !this.rustDictTernaryCall(this.rustSkipWrappers(declaration.initializer)) || this.rustHandedDictLocal(declaration) || this.rustBorrowedDictLocal(declaration))
+      return false;
+    const fn = this.rustEnclosingFunction(declaration);
+    if (fn === void 0 || isSourceFile5(fn))
+      return false;
+    for (const n of this.rustScopeNameNodes(fn, String(declaration.name.text))) {
+      if (n === declaration.name || !this.rustIdentifierRefersToDeclaration(n, declaration))
+        continue;
+      const up = n.parent;
+      if (up?.kind === SyntaxKind7.PrefixUnaryExpression || up?.kind === SyntaxKind7.PostfixUnaryExpression)
+        return false;
+      if (!isBinaryExpression5(up) || up.left !== n || !rustIsAssignmentOperator(up.operatorToken.kind))
+        continue;
+      const rhs = this.rustSkipWrappers(up.right);
+      if (up.operatorToken.kind !== SyntaxKind7.EqualsToken || !isCallExpression6(rhs) || !this.rustDictTernaryCall(rhs))
+        return false;
+    }
+    return true;
+  }
+  rustDictTernaryCall(call) {
+    const callee = call.expression;
+    if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const name = String(callee.name.text);
+    if (name !== "extend" && name !== "deepExtend" && name !== "omit")
+      return false;
+    const declaration = this.rustScalarCallee(call);
+    return declaration !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
+  }
   /** The container kind of a write to a borrowed local; an endpoint write to an empty `let` counts as a map. */
   rustNilResponseWriteKind(rhs, nilDeclared, declaration) {
     let call = rhs;
@@ -61784,7 +61839,7 @@ ${iden}}`;
       let init = this.rustSkipWrappers(declaration.initializer);
       if (init?.kind === SyntaxKind7.AwaitExpression)
         init = this.rustSkipWrappers(init.expression);
-      if (!this.rustBaseCallNamed(init, _RustTranspiler.RUST_HANDED_DICT_SOURCES) || this.rustBorrowedDictLocal(declaration))
+      if (!this.rustBaseCallNamed(init, _RustTranspiler.RUST_HANDED_DICT_SOURCES) && !this.rustDictTernaryInit(init) || this.rustBorrowedDictLocal(declaration))
         return false;
       if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration) || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustNilLocalKind(declaration) !== void 0 || this.rustScalarLocalKind(declaration) !== void 0)
         return false;
