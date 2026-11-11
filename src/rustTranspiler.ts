@@ -9422,7 +9422,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (!this.rustIdentifierRefersToDeclaration(n, declaration)) return false;
             if (this.rustEnclosingFunction(n) !== fn) return false; // a closure capture
             const parent: any = n.parent;
-            if ((isReturnStatement(parent) && parent.expression === n) || this.rustCastReturnOperand(n)) {
+            if ((isReturnStatement(parent) && parent.expression === n) || (!produced && this.rustCastReturnOperand(n))) {
                 escapes.push(n);
                 return true;
             }

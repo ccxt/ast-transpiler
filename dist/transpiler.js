@@ -59766,7 +59766,7 @@ ${iden}}`;
       if (this.rustEnclosingFunction(n) !== fn)
         return false;
       const parent = n.parent;
-      if (isReturnStatement4(parent) && parent.expression === n || this.rustCastReturnOperand(n)) {
+      if (isReturnStatement4(parent) && parent.expression === n || !produced && this.rustCastReturnOperand(n)) {
         escapes.push(n);
         return true;
       }
