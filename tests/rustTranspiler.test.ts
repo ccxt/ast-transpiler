@@ -104,7 +104,8 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
  "a15dstrvec": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    options: Dict = {};\n    omit = omit;\n    extend = extend;\n    safeValue (d: any, k: any, dflt: any = undefined): any {\n        return d === undefined ? dflt : d[k];\n    }\n    safeDict (d: any, k: any, dflt: Dict = undefined): Dict {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'object') ? v : dflt;\n    }\n    safeBool (d: any, k: any, dflt: Bool = undefined): Bool {\n        const v = this.safeValue (d, k);\n        return (typeof v === 'boolean') ? v : dflt;\n    }\n    checkOptionBool (methodName: string, optionName: string, value: any): Bool {\n        if (value === undefined) {\n            return undefined;\n        }\n        return value === true;\n    }\n    handleOptionBoolAndParams (params: Dict, methodName: string, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const value = this.safeValue (params, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), params ];\n    }\n    handleTriggerAndParams (params: any): any[] {\n        const isTrigger = this.safeBool (params, 'trigger');\n        return [ isTrigger, params ];\n    }\n    handleOptionAndParams (params: Dict, methodName: string, optionName: string, defaultValue: any = undefined): [any, Dict] {\n        return [ this.safeValue (params, optionName, defaultValue), params ];\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchByIds (ids: string[], symbol: string = undefined, params: Dict = {}) {\n        const request: Dict = { 'txid': ids.join (',') };\n        return request;\n    }\n    async fetchOne (id: string, params: Dict = {}) {\n        return await this.fetchByIds ([ id ], undefined, params);\n    }\n    async fetchIndexed (ids: string[], params: Dict = {}) {\n        const first = ids[0];\n        return ids.join (',') + first;\n    }\n    async fetchOneIndexed (id: string, params: Dict = {}) {\n        return await this.fetchIndexed ([ id ], params);\n    }\n    async fetchComputed (ids: string[], params: Dict = {}) {\n        return ids.join (',');\n    }\n    async fetchComputedCaller (params: Dict = {}) {\n        return await this.fetchComputed (params['ids'], params);\n    }\n    async fetchNoCaller (ids: string[], symbol: string = undefined, params: Dict = {}) {\n        const request: Dict = { 'txid': ids.join (',') };\n        return request;\n    }\n    async fetchChunked (hashes: string[], params: Dict = {}) {\n        const rows = [];\n        const chunk = this.arraySlice (hashes, 0, 2);\n        rows.push (await this.fetchByIds (chunk, undefined, params));\n        return rows;\n    }\n}\n"
- }
+ },
+  "field-string-key": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    orderbooks: any = {};\n    trades: any = {};\n    tickers: any = {};\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    orderBook (): any { return {}; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleTicker (message: any) {\n        const symbol = this.safeString (message, 's');\n        this.tickers[symbol] = message;\n    }\n    handleBook (message: any) {\n        const symbol = this.safeString (message, 's', '');\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = this.orderBook ();\n        }\n        const book = this.orderbooks[symbol];\n        return book;\n    }\n    handleTrade (message: any) {\n        const symbol = this.safeString (message, 's', '');\n        this.trades[symbol] = message;\n        return this.hold (symbol);\n    }\n}\n"}
 };
 const rustFixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-'));
 for (const [dir, files] of Object.entries (rustInlineFixtures)) {
@@ -7512,5 +7513,21 @@ describe('rust reader default locals', () => {
 
     test('negative: a number reader with an Int default that is boxed keeps its box', () => {
         expect(out()).toContain('let mut boxed: Value = ');
+    });
+});
+
+describe('rust string keys on plain cache fields', () => {
+    test('a string local keys a plain field natively: insert, contains_key and read', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'field-string-key', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut symbol: Option<String> =');
+        expect(out).toContain('std::sync::Arc::make_mut(__d).insert(symbol.as_deref().unwrap_or("null").to_string(), message.clone())');
+        expect(out).toContain('matches!(&self.orderbooks, Value::Dict(__d) if __d.contains_key(symbol.as_str()))');
+        expect(out).toContain('(if let (Some(__m), Some(__k)) = (self.orderbooks.as_map(), Some(symbol.as_str())) {');
+    });
+
+    test('negative: a field key that is also boxed at a call argument keeps its box', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'field-string-key', 'ts/src/venue.ts')).content;
+        const trade = out.slice(out.indexOf('fn handleTrade'));
+        expect(trade).toMatch(/let mut symbol: Value =/);
     });
 });

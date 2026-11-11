@@ -1931,7 +1931,7 @@ export class RustTranspiler extends BaseTranspiler {
         // `in` — wrapped as Value so it composes in any context
         if (op === SyntaxKind.InKeyword) {
             const shadow = this.rustParamShadowOf(right);
-            return this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
+            return this.printFieldKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
                 ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right)
                 ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right)
                 ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
@@ -3652,7 +3652,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' || !(isReturnStatement(n.parent) || this.rustTestLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'okey') typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'okey' || form === 'fin' || form === 'frd') typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -3678,6 +3678,7 @@ export class RustTranspiler extends BaseTranspiler {
         // a test string re-boxed anywhere but its moving `return` copies where the `Value` was lent
         if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustTestTierSource(declaration)) return undefined;
         if (this.rustScalarOptKeyCostly(declaration, kind)) return undefined;
+        if (this.rustFieldKeyCostly(declaration)) return undefined;
         // a key-admitted local converts once at its declaration: that line keeps the 400-char budget
         if (this.rustScalarOptKeyCostly(declaration, kind) === false && kind === 'ostr' && this.rustScalarOptKeyCount(declaration) > 0) this.rustScalarGuarded.add(declaration);
         if (guarded) this.rustScalarGuarded.add(declaration);
@@ -4102,6 +4103,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustScalarLiteralTest(kind, other) !== undefined) return 'test';
         }
         if ((kind === 'bool' || kind === 'obool') && this.rustIdentifierUseIsCondition(n)) return 'cond';
+        if (kind === 'str' || kind === 'ostr') { const fieldForm = this.rustFieldKeyUseForm(n); if (fieldForm !== undefined) return fieldForm; }
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -4461,6 +4463,71 @@ export class RustTranspiler extends BaseTranspiler {
         return { statements: statements.split(mark).join(plan.touched ? `;\n${binding(plan.indent)}` : ''), head: '' };
     }
 
+    // ── string keys on plain `this.<field>` maps (rustFieldKeyUseForm / printFieldKeyInOp) ──
+    // The hand-written base holds the cache fields (`orderbooks`, `trades`, `tickers`, `ohlcvs`,
+    // `balance`, ...) as plain untagged maps. A `String` / `Option<String>` local keys them natively:
+    // `this.f[k] = v` is the plain-field insert (key text from the typed local), `k in this.f` is
+    // `contains_key` on the borrowed key; a `None` key misses like the `Str` test of the boxed key.
+    rustFieldKeyReceiver(expr: any): string | undefined {
+        if (!isPropertyAccessExpression(expr) || expr.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(expr.name)) return undefined;
+        const name = String(expr.name.text);
+        if (!RustTranspiler.RUST_PLAIN_DICT_FIELDS.has(name) || !this.rustFieldStaysDict(expr, name)) return undefined;
+        return name;
+    }
+
+    rustFieldKeyUseForm(n: any): string | undefined {
+        const parent: any = n.parent;
+        if (parent === undefined || this.isTestSource(n)) return undefined;
+        if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.InKeyword && parent.left === n) {
+            return this.rustFieldKeyReceiver(this.rustStripWrappers(parent.right)) !== undefined ? 'fin' : undefined;
+        }
+        if (!isElementAccessExpression(parent) || parent.argumentExpression !== n || this.rustFieldKeyReceiver(parent.expression) === undefined) return undefined;
+        const write: any = parent.parent;
+        if (this.rustOkeyReadUse(n)) return 'frd';
+        if (!isBinaryExpression(write) || write.left !== parent || write.operatorToken.kind !== SyntaxKind.EqualsToken
+            || write.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
+        // the value operand must not read the key local (the insert takes it by name)
+        if (new RegExp(`\\b${String(n.text)}\\b`).test(String(write.right.getText()))) return undefined;
+        return 'key';
+    }
+
+    /** Element-access hook: `this.f[k]` read with a typed string key. */
+    printFieldKeyRead(node: any): string | undefined {
+        const key: any = node.argumentExpression;
+        if (!isIdentifier(key) || this.rustScalarUseForms.get(key) !== 'frd') return undefined;
+        const kind = this.rustScalarLocalOf(key)?.kind;
+        const field = this.rustFieldKeyReceiver(node.expression);
+        if (field === undefined || (kind !== 'str' && kind !== 'ostr')) return undefined;
+        const name = super.printIdentifier(key);
+        return `(if let (Some(__m), Some(__k)) = (self.${field}.as_map(), ${kind === 'str' ? `Some(${name}.as_str())` : `${name}.as_deref()`}) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
+    }
+
+    /** A local keyed on a field and re-boxed anywhere but a direct `return` would copy where the `Value` moved. */
+    rustFieldKeyCostly(declaration: any): boolean {
+        let field = false;
+        let boxed = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const form = this.rustScalarUseForms.get(n);
+            if (form === 'fin' || form === 'frd' || (form === 'key' && this.rustFieldKeyReceiver(n.parent?.expression) !== undefined)) field = true;
+            else if ((form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !isReturnStatement(n.parent)) boxed = true;
+            return true;
+        });
+        return field && boxed;
+    }
+
+    printFieldKeyInOp(key: any, obj: any): string | undefined {
+        const inner: any = this.rustStripWrappers(key);
+        if (!isIdentifier(inner) || this.rustScalarUseForms.get(inner) !== 'fin') return undefined;
+        const kind = this.rustScalarLocalOf(inner)?.kind;
+        const field = this.rustFieldKeyReceiver(this.rustStripWrappers(obj));
+        if (field === undefined || (kind !== 'str' && kind !== 'ostr')) return undefined;
+        const name = super.printIdentifier(inner);
+        const test = kind === 'str'
+            ? `matches!(&self.${field}, Value::Dict(__d) if __d.contains_key(${name}.as_str()))`
+            : `matches!((&self.${field}, ${name}.as_deref()), (Value::Dict(__d), Some(__k)) if __d.contains_key(__k))`;
+        return `Value::Bool(${test})`;
+    }
+
     rustScalarInNestedWrite(n): boolean {
         let current: any = n;
         while (current.parent !== undefined && !isStatement(current.parent)) current = current.parent;
@@ -4542,7 +4609,7 @@ export class RustTranspiler extends BaseTranspiler {
         // an optional key that reaches a helper write (no native insert) takes the helper's boxed key
         if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}.clone().map(Value::from).unwrap_or(Value::Null)`;
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
-        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey') return super.printIdentifier(node);
+        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
@@ -5040,6 +5107,8 @@ export class RustTranspiler extends BaseTranspiler {
         const key: any = this.rustSkipWrappers(keyNode);
         const kind = isIdentifier(key) && this.rustScalarUseForms.get(key) === 'key' ? this.rustScalarLocalOf(key)?.kind : undefined;
         if (kind === 'ostr') return this.rustScalarOptKeyText(key);
+        // a field insert copies the key text like the `stringify_param` it replaces (one allocation either way)
+        if (kind === 'str' && this.rustFieldKeyReceiver(key.parent?.expression) !== undefined) return `${super.printIdentifier(key)}.to_string()`;
         return kind === 'str' ? `${super.printIdentifier(key)}.clone()` : undefined;
     }
 
@@ -8876,6 +8945,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpression(node, identation) {
+        const fieldRead = this.printFieldKeyRead(node); if (fieldRead !== undefined) return fieldRead;
         const okeyRead = this.printOkeyRead(node); if (okeyRead !== undefined) return okeyRead;
         const handleRead = this.printClientHandleKeyedRead(node); if (handleRead !== undefined) return handleRead;
         const marketRead = this.printTypedMarketRead(node);
