@@ -2793,6 +2793,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustParamIsLentDict(param)) return 'impl Into<crate::Value>';
         if (this.rustParamPrintsMap(param)) return '&mut indexmap::IndexMap<String, Value>';
         if (this.rustParamPrintsStrVec(param)) return 'Vec<String>';
+        if (this.rustParamReadsByReference(param)) return 'impl KeyRead';
         return 'Value';
     }
 
@@ -12400,9 +12401,62 @@ export class RustTranspiler extends BaseTranspiler {
     rustBorrowedAnyKeyReader(call: any): boolean {
         const callee: any = call.expression;
         if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
-        if (!RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(String(callee.name.text)) || (call.arguments?.length ?? 0) < 2) return false;
+        if ((call.arguments?.length ?? 0) < 2) return false;
+        if (!RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(String(callee.name.text))) return this.rustReaderTakesContainerByReference(call);
         const declaration: any = this.rustScalarCallee(call);
         return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
+    }
+
+    // ── rustParamReadsByReference / rustReaderTakesContainerByReference: generated readers lend their container ──
+    // A generated base reader whose container parameter is only handed to by-reference readers declares it
+    // `impl KeyRead`: a `Value` argument still passes by value, and a dict or list local is lent as `&x`.
+
+    private static readonly RUST_BY_REF_GENERATED_READERS = /^safe(?:Dict|List|Bool|Number)(?:2|N)?$|^safe(?:NumberOmitZero|IntegerOmitZero|LedgerEntry)$/;
+
+    private rustByRefParamDecisions = new WeakMap<any, boolean>();
+
+    rustParamReadsByReference(param: any): boolean {
+        if (param?.kind !== SyntaxKind.Parameter) return false;
+        let decision = this.rustByRefParamDecisions.get(param);
+        if (decision === undefined) {
+            this.rustByRefParamDecisions.set(param, false); // re-entrancy guard
+            try {
+                decision = this.rustParamReadsByReferenceUncached(param);
+            } catch (e) {
+                decision = false;
+            }
+            this.rustByRefParamDecisions.set(param, decision);
+        }
+        return decision;
+    }
+
+    rustParamReadsByReferenceUncached(param: any): boolean {
+        const method: any = param.parent;
+        if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || method.parameters[0] !== param) return false;
+        if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined) return false;
+        if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
+        const name = String(method.name.text);
+        if (!RustTranspiler.RUST_BY_REF_GENERATED_READERS.test(name) || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(param.getSourceFile().fileName))) return false;
+        if (this.rustMethodReferencedAsValue(method) || this.rustLentOverridden(name)) return false;
+        let reads = 0;
+        const ok = this.rustLocalUsesAll(param, String(param.name.text), true, (n: any) => {
+            const call: any = n.parent;
+            if (!isCallExpression(call) || call.arguments[0] !== n || !this.rustBorrowedAnyKeyReader(call)) return false;
+            reads++;
+            return true;
+        });
+        return ok && reads > 0;
+    }
+
+    /** A call to a generated base reader (any overload) whose container parameter prints `impl KeyRead`. */
+    rustReaderTakesContainerByReference(call: any): boolean {
+        let declaration: any = this.rustScalarCallee(call);
+        if (declaration === undefined || !isMethodDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        if (declaration.body === undefined) {
+            const name = String(declaration.name.text);
+            declaration = (declaration.parent?.members ?? []).find((m: any) => isMethodDeclaration(m) && m.body !== undefined && isIdentifier(m.name) && String(m.name.text) === name);
+        }
+        return declaration !== undefined && this.rustParamReadsByReference(declaration.parameters?.[0]);
     }
 
     /** `'dict' | 'list' | 'api'` for a container source the local may hold by reference. */
