@@ -56060,7 +56060,7 @@ ${binding(plan.indent)}` : ""), head: "" };
       return push ? "xbox" : void 0;
     }
     if (this.rustCacheCtorLimitArg(n, kind))
-      return "targ";
+      return this.rustCacheCtorFinalUse(n) ? "targ" : "box";
     if (parent.kind === SyntaxKind7.NewExpression && isIdentifier3(parent.expression) && (kind === "str" || kind === "ostr")) {
       const ctor = _RustTranspiler.RUST_ERROR_CONSTRUCTOR_ARGS[this.rustErrorConstructorName(String(parent.expression.text))];
       if (ctor?.[parent.arguments.indexOf(n)] !== "msg" || parent.parent?.kind !== SyntaxKind7.ThrowStatement)
@@ -56079,6 +56079,28 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (parent?.kind !== SyntaxKind7.NewExpression || !isIdentifier3(parent.expression) || parent.arguments?.length !== 1 || parent.arguments[0] !== n)
       return false;
     return _RustTranspiler.RUST_CACHE_CTORS.has(String(parent.expression.text));
+  }
+  /** The size argument is the local's last use, outside any loop or closure below its declaration (a bare move). */
+  rustCacheCtorFinalUse(node) {
+    const declaration = this.rustScalarLocalOf(node)?.declaration;
+    if (declaration === void 0 || !isIdentifier3(declaration.name))
+      return false;
+    let statement = node;
+    while (statement.parent !== void 0 && !isStatement(statement))
+      statement = statement.parent;
+    let last = true;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (n !== node && (n.pos > node.pos || n.pos >= statement.pos && n.end <= statement.end))
+        last = false;
+      return true;
+    });
+    if (!last)
+      return false;
+    for (let up = node.parent; up !== void 0 && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+      if (isFunctionLike(up) || up.kind === SyntaxKind7.ForStatement || up.kind === SyntaxKind7.ForOfStatement || up.kind === SyntaxKind7.ForInStatement || up.kind === SyntaxKind7.WhileStatement || up.kind === SyntaxKind7.DoStatement)
+        return false;
+    }
+    return true;
   }
   /** Call hook: a string method of a typed string local, boxed back to `Value`. */
   printRustScalarMethodCall(node) {

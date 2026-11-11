@@ -628,6 +628,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_CACHE_CTORS;
     /** An integer local as the size argument of `new ArrayCache*(limit)`: passed natively (`i64` / `Option<i64>` into `impl Into<Value>`). */
     rustCacheCtorLimitArg(n: any, kind: string): boolean;
+    /** The size argument is the local's last use, outside any loop or closure below its declaration (a bare move). */
+    rustCacheCtorFinalUse(node: any): boolean;
     /** Call hook: a string method of a typed string local, boxed back to `Value`. */
     printRustScalarMethodCall(node: any): string | undefined;
     /** `.length` hook: the char count of a typed string local. */
