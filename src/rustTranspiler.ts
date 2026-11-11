@@ -3721,7 +3721,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' || !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || (form === 'key' && this.rustOkeyLocal(n))) typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -4790,6 +4790,14 @@ export class RustTranspiler extends BaseTranspiler {
             return true;
         });
         return keyed && copied;
+    }
+
+    /** `m[k] = v` as a statement: the element key of a native insert. */
+    rustElemInsertKey(n: any): boolean {
+        const access: any = n.parent;
+        const write: any = access?.parent;
+        return isElementAccessExpression(access) && access.argumentExpression === n && isBinaryExpression(write) && write.left === access
+            && write.operatorToken.kind === SyntaxKind.EqualsToken && write.parent?.kind === SyntaxKind.ExpressionStatement;
     }
 
     printElemKeyInOp(key: any, obj: any): string | undefined {

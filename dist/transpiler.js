@@ -54588,7 +54588,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
           copied++;
       } else if (form !== void 0 && !this.rustIdentifierIsPropertyName(n))
         nativeUses++;
-      if (form === "test" || form === "cond" || form === "concat" || form === "native" || form === "targ" || form === "okey" || form === "fin" || form === "frd" || form === "kin" || form === "key" && this.rustOkeyLocal(n))
+      if (form === "test" || form === "cond" || form === "concat" || form === "native" || form === "targ" || form === "okey" || form === "fin" || form === "frd" || form === "kin" || form === "key" && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))
         typedUses++;
       if (form === "xbox" || form === "native" || form === "targ" || form === "err")
         expressionUses = true;
@@ -55737,6 +55737,12 @@ ${binding(plan.indent)}` : ""), head: "" };
       return true;
     });
     return keyed && copied;
+  }
+  /** `m[k] = v` as a statement: the element key of a native insert. */
+  rustElemInsertKey(n) {
+    const access = n.parent;
+    const write = access?.parent;
+    return isElementAccessExpression4(access) && access.argumentExpression === n && isBinaryExpression5(write) && write.left === access && write.operatorToken.kind === SyntaxKind7.EqualsToken && write.parent?.kind === SyntaxKind7.ExpressionStatement;
   }
   printElemKeyInOp(key, obj) {
     const inner = this.rustStripWrappers(key);
