@@ -3723,7 +3723,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' || !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -3765,6 +3765,51 @@ export class RustTranspiler extends BaseTranspiler {
     rustParamAliasSeedKind(declaration): string | undefined {
         const init: any = this.unwrapParens(declaration?.initializer);
         return init !== undefined && isIdentifier(init) ? this.rustOptParamKind(init) : undefined;
+    }
+
+    // `cache.getLimit(symbol, limit)`: the hand-written runtime method takes `Option<&str>, Option<i64>`
+    // and returns `Option<i64>`, so each argument converts once here and an `Option<i64>` local takes it as-is.
+    rustLimitCall(expr): boolean {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.arguments.length !== 2) return false;
+        const recv: any = node.expression.expression;
+        if (String(node.expression.name.text) !== 'getLimit' || !isIdentifier(recv) || node.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+        const declaration: any = this.rustScalarCallee(node);
+        return declaration === undefined || /ts[\\/]src[\\/]base[\\/]ws[\\/]Cache\.ts$/.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
+    }
+
+    rustLimitArgUse(n, kind: string): boolean {
+        const call: any = n.parent;
+        if (!this.rustLimitCall(call)) return false;
+        const at = call.arguments.indexOf(n);
+        return (at === 0 && (kind === 'str' || kind === 'ostr')) || (at === 1 && (kind === 'int' || kind === 'oint'));
+    }
+
+    rustLimitArgText(arg, at: number): string {
+        const node: any = this.unwrapParens(arg);
+        // a bare `None` would take a text-pass `.clone()`
+        if (this.literalKindOfNode(node) === 'null') return at === 0 ? 'None::<&str>' : 'None::<i64>';
+        const kind = isIdentifier(node) ? this.rustScalarIdentifierKind(node) : undefined;
+        const name = kind === undefined ? '' : super.printIdentifier(node);
+        if (at === 0) {
+            if (isStringLiteral(node) && !(node.text in this.StringLiteralReplacements)) return `Some(${this.quotedStringLiteral(node.text)})`;
+            if (kind === 'str') return `Some(${name}.as_str())`;
+            if (kind === 'ostr') return `${name}.as_deref()`;
+        } else {
+            const int = this.rustScalarIntLiteral(node);
+            if (int !== undefined) return `Some(${int})`;
+            if (kind === 'int') return `Some(${name})`;
+            if (kind === 'oint') return name;
+        }
+        const v = this.printNode(arg, 0).trim();
+        return `${/^[A-Za-z_][A-Za-z0-9_.]*$/.test(v) ? v : `(${v})`}.${at === 0 ? 'as_str' : 'as_i64'}()`;
+    }
+
+    rustLimitCallText(expr): string | undefined {
+        const node: any = this.unwrapParens(expr);
+        if (!this.rustLimitCall(node)) return undefined;
+        const recv = this.printNode(node.expression.expression, 0).trim();
+        return `${recv}.getLimit(${this.rustLimitArgText(node.arguments[0], 0)}, ${this.rustLimitArgText(node.arguments[1], 1)})`;
     }
 
     /** Integer literal text (`5`, `-5`) that fits an `i64`, else undefined. */
@@ -4229,7 +4274,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (parent === undefined) return undefined;
         if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
             if (parent.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
-            return this.rustScalarWriteOk(kind, parent.right, 0) ? 'write' : undefined;
+            return this.rustScalarWriteOk(kind, parent.right, 0) ? (this.rustLimitCall(parent.right) ? 'lwrite' : 'write') : undefined;
         }
         if (isBinaryExpression(parent) && this.isEqualityOp(parent.operatorToken.kind)) {
             const other = parent.left === n ? parent.right : parent.left;
@@ -4245,6 +4290,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustOkeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         if (kind === 'ostr' && this.rustOkeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
         if (isCallExpression(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== undefined) return 'native';
+        if (this.rustLimitArgUse(n, kind)) return 'targ';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
         }
@@ -4823,6 +4869,7 @@ export class RustTranspiler extends BaseTranspiler {
         const node: any = this.unwrapParens(rhs);
         if (node === undefined || depth > 3) return false;
         if (this.rustOptParamWriteOk(kind, node)) return true;
+        if (kind === 'oint' && this.rustLimitCall(node)) return true;
         if (isConditionalExpression(node)) return this.rustScalarWriteOk(kind, node.whenTrue, depth + 1) && this.rustScalarWriteOk(kind, node.whenFalse, depth + 1);
         const optional = kind.startsWith('o');
         if (isIdentifier(node) && node.text !== 'undefined') {
@@ -4912,6 +4959,7 @@ export class RustTranspiler extends BaseTranspiler {
         const wrap = (t: string) => optional ? `Some(${t})` : t;
         if (this.literalKindOfNode(node) === 'null') return optional ? 'None' : undefined;
         const paramText = this.rustOptParamText(kind, node); if (paramText !== undefined) return paramText;
+        if (kind === 'oint' && this.rustLimitCall(node)) return this.rustLimitCallText(node);
         if (isConditionalExpression(node)) {
             const whenTrue = this.rustScalarNativeText(kind, node.whenTrue);
             const whenFalse = this.rustScalarNativeText(kind, node.whenFalse);
@@ -7503,6 +7551,7 @@ export class RustTranspiler extends BaseTranspiler {
         const borrowedRead = this.printBorrowedDictRead(node, identation); if (borrowedRead !== undefined) return borrowedRead;
         const handed = this.printHandedDictExtend(node, identation); if (handed !== undefined) return handed;
         const scalarMethod = this.printRustScalarMethodCall(node); if (scalarMethod !== undefined) return scalarMethod;
+        const limitCall = this.rustLimitCallText(node); if (limitCall !== undefined) return `Value::from(${limitCall})`;
         const arithCall = this.printRustArithCall(node); if (arithCall !== undefined) return arithCall;
         const marketRead = this.printTypedMarketRead(node);
         if (marketRead !== undefined) return marketRead;
