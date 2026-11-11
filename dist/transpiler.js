@@ -58819,7 +58819,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       const ok = kind === "string" ? this.rustStringLocalUseIsNative(n) : this.rustIdentifierUseIsCondition(n);
       if (ok)
         nativeUses++;
-      return ok || kind === "string" && this.rustStrSlotBoxUse(n) && (isCallExpression6(n.parent) || isReturnStatement4(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustStrSlotLastUse(n, element));
+      return ok || kind === "string" && this.rustStrSlotBoxUse(n) && (isCallExpression6(n.parent) || isReturnStatement4(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustSlotUseOutsideLoop(n, element));
     });
     return safe && nativeUses > 0 ? kind === "string" ? "str" : "bool" : void 0;
   }
@@ -61632,7 +61632,7 @@ ${iden}}`;
     const optList = this.printOptListIdentifier(node, text);
     if (optList !== void 0)
       return optList;
-    const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text);
+    const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text);
     if (borrowedArg !== void 0)
       return borrowedArg;
     const containerBox = this.printRustContainerLocalBox(node, text);
@@ -63798,7 +63798,7 @@ ${iden}}`;
         return false;
       if (declaration.dotDotDotToken !== void 0 || declaration.initializer !== void 0 || this.rustTupleSlotKind(declaration) !== void 0)
         return false;
-      const init = this.rustSkipWrappers(owner.initializer);
+      const init = this.rustAwaitedCall(owner.initializer);
       const callee = init?.expression;
       if (!isCallExpression6(init) || !isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) && !this.rustLentSlotSource(init, declaration) && !this.rustDeclaredDictSlot(declaration))
         return false;
@@ -63828,11 +63828,11 @@ ${iden}}`;
         return false;
       const call = n.parent;
       if (!isCallExpression6(call))
-        return false;
+        return this.rustHandedSlotBoxUse(n, declaration);
       const ok = call.arguments[0] === n && this.rustBorrowedDictReader(call) !== void 0 || call.arguments[0] === n && call.arguments.length === 2 && this.rustBaseCallNamed(call, _RustTranspiler.RUST_HANDED_DICT_OMIT) || this.rustHandedDictExtendOperand(call) === n || this.rustLentParamsSlot(call, n) || this.rustExtendHeadUse(n);
       if (ok)
         uses++;
-      return ok || this.rustOptionalParamsSlot(call, n);
+      return ok || this.rustOptionalParamsSlot(call, n) || this.rustHandedSlotBoxUse(n, declaration);
     });
     return safe && uses > 0;
   }
@@ -64210,6 +64210,47 @@ ${iden}}`;
       return false;
     const type = this.typeOfNodeIfAny(element.name);
     return type !== void 0 && this.isProvenMapType(type);
+  }
+  // ── handed params slots boxed whole ──────────────────────────────────────
+  // A params slot lent at least once may also go whole into a plain `Value` argument of a `this.`/`super.` method
+  // or an object-literal value: the shared map moves there at its last use, else the box takes an Arc bump.
+  /** The call a slot destructures, past parentheses, casts and one `await`. */
+  rustAwaitedCall(node) {
+    const init = this.rustSkipWrappers(node);
+    return init?.kind === SyntaxKind7.AwaitExpression ? this.rustSkipWrappers(init.expression) : init;
+  }
+  rustHandedSlotBoxUse(n, declaration) {
+    const up = n.parent;
+    if (declaration?.kind !== SyntaxKind7.BindingElement || up === void 0 || this.rustScalarInNestedWrite(n))
+      return false;
+    if (up.kind === SyntaxKind7.PropertyAssignment)
+      return up.initializer === n;
+    if (!isCallExpression6(up) || up.expression === n || !isPropertyAccessExpression3(up.expression) || up.expression.expression.kind !== SyntaxKind7.ThisKeyword && up.expression.expression.kind !== SyntaxKind7.SuperKeyword)
+      return false;
+    const callee = String(up.expression.name.text);
+    if (_RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || _RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee))
+      return false;
+    if (this.rustBorrowedDictReader(up) !== void 0 || this.rustLentParamsSlot(up, n) || this.rustOptionalParamsSlot(up, n))
+      return false;
+    return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+  }
+  /** No loop or closure between the destructure and this use: a box there copies the slot once. */
+  rustSlotUseOutsideLoop(node, element) {
+    const owner = element.parent?.parent;
+    for (let up = node.parent; up !== void 0 && !(up.pos <= owner.pos && owner.end <= up.end); up = up.parent) {
+      if (isFunctionLike(up) || up.kind === SyntaxKind7.ForStatement || up.kind === SyntaxKind7.ForOfStatement || up.kind === SyntaxKind7.ForInStatement || up.kind === SyntaxKind7.WhileStatement || up.kind === SyntaxKind7.DoStatement)
+        return false;
+    }
+    return true;
+  }
+  /** `Value::Dict(x)` at the slot's last use (moved), else `Value::from(&x)`. */
+  printHandedSlotBox(node, text) {
+    if (!isIdentifier3(node))
+      return void 0;
+    const declaration = this.rustDeclarationOfIdentifier(node);
+    if (declaration?.kind !== SyntaxKind7.BindingElement || declaration.name === node || !this.rustHandedSlotBoxUse(node, declaration) || !this.rustHandedDictLocal(declaration))
+      return void 0;
+    return this.rustLocalLastUse(node, declaration) ? `Value::Dict(${text})` : `Value::from(&${text})`;
   }
   // ── declared dict slots ──────────────────────────────────────────────────
   // A transpiled venue method declaring a `[.., Dict, ..]` (or `Promise<[..]>`) return builds that tuple on every

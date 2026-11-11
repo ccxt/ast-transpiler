@@ -1780,6 +1780,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A base `handleUntilOption` / `handleParam*` call, or any `this.handle*` call whose slot 1 the checker types as a
      *  dict: that slot is the params dict, like a `handle*AndParams` one. */
     rustLentSlotSource(init: any, element: any): boolean;
+    /** The call a slot destructures, past parentheses, casts and one `await`. */
+    rustAwaitedCall(node: any): any;
+    rustHandedSlotBoxUse(n: any, declaration: any): boolean;
+    /** No loop or closure between the destructure and this use: a box there copies the slot once. */
+    rustSlotUseOutsideLoop(node: any, element: any): boolean;
+    /** `Value::Dict(x)` at the slot's last use (moved), else `Value::from(&x)`. */
+    printHandedSlotBox(node: any, text: string): string | undefined;
     rustDeclaredDictSlot(element: any): boolean;
     /** One element read rooted at the bearer: a plain read the native op serves. */
     rustReadBearerElementUse(access: any, kind: 'list' | 'map'): boolean;
