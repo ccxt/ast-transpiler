@@ -54599,7 +54599,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustScalarDecisions.set(declaration, previous);
     const guarded = (widened || expressionUses || this.rustOptListParamInit(declaration.initializer)) && boxed > 0;
     const storeOnly = guarded && nativeUses === 0 && boxed === 1;
-    const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer);
+    const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
     const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
     if (!ok || unused || storeOnly || clientOnce || guarded && scope.kind !== SyntaxKind7.MethodDeclaration || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration))
       return void 0;
@@ -55066,6 +55066,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     while (isParenthesizedExpression3(current.parent))
       current = current.parent;
     return isVariableDeclaration3(current.parent) && current.parent.initializer === current;
+  }
+  /** A venue `int` result boxed at two or more slots: the `i64` is `Copy`, so each box replaces a `Value` clone. */
+  rustVenueIntReboxed(declaration, kind, boxed) {
+    return kind === "int" && boxed >= 2 && this.rustVenueIntCall(this.unwrapParens(declaration.initializer));
   }
   /** `x.toString()` on an `i64` local: it prints `format!("{}", x)`, the same text `Display` gives the `Int` box. */
   rustVenueIntToString(call, access) {

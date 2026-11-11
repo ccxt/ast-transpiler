@@ -498,6 +498,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueLocalHandedOn(declaration: any): boolean;
     /** The whole initializer of a `let`/`const` (writes and ternary arms keep their `Value`). */
     rustVenueInitializer(node: any): boolean;
+    /** A venue `int` result boxed at two or more slots: the `i64` is `Copy`, so each box replaces a `Value` clone. */
+    rustVenueIntReboxed(declaration: any, kind: string, boxed: number): boolean;
     /** `x.toString()` on an `i64` local: it prints `format!("{}", x)`, the same text `Display` gives the `Int` box. */
     rustVenueIntToString(call: any, access: any): boolean;
     /** The `toString()` print of an `i64` scalar local receiver, else undefined. */

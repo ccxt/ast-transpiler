@@ -3731,7 +3731,7 @@ export class RustTranspiler extends BaseTranspiler {
         // an expression-shape local stored once and boxed straight back buys nothing
         const storeOnly = guarded && nativeUses === 0 && boxed === 1;
         // a derived call result needs at least one native use to be worth typing
-        const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer);
+        const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
         // a string handed once to a ws client call and nothing else stays a `Value`
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration)) return undefined;
@@ -4157,6 +4157,11 @@ export class RustTranspiler extends BaseTranspiler {
         let current: any = node;
         while (isParenthesizedExpression(current.parent)) current = current.parent;
         return isVariableDeclaration(current.parent) && current.parent.initializer === current;
+    }
+
+    /** A venue `int` result boxed at two or more slots: the `i64` is `Copy`, so each box replaces a `Value` clone. */
+    rustVenueIntReboxed(declaration, kind: string, boxed: number): boolean {
+        return kind === 'int' && boxed >= 2 && this.rustVenueIntCall(this.unwrapParens(declaration.initializer));
     }
 
     /** `x.toString()` on an `i64` local: it prints `format!("{}", x)`, the same text `Display` gives the `Int` box. */
