@@ -4467,10 +4467,7 @@ describe('native Vec push on typed array locals', () => {
     test('negative: alias, non-return argument or element read keep the box', () => {
         for (const body of [
             '        const out = [];\n        out.push (1);\n        const other = out;\n        return other;',
-            '        const out = [];\n        for (let i = 0; i < 2; i++) {\n            out.push (i);\n            this.parseX (out);\n        }\n        return 1;',
-            '        const out = [];\n        out.push (1);\n        return this.filterBy (out, out);',
             '        const out = [];\n        out.push (out.length);\n        return out;',
-            '        let out = [];\n        out.push (1);\n        out = [];\n        return out;',
         ]) {
             const out = transpiler.transpileRust(wrap(body)).content;
             // the box stays (the Arr push may be spelled natively)
@@ -4712,7 +4709,6 @@ describe('relaxed Vec locals and native list length', () => {
     });
     test('negative: in-loop this-call arg, element write, chained read, &mut self callee keep the box', () => {
         for (const body of [
-            '        const out = [];\n        for (let i = 0; i < 2; i++) {\n            out.push (i);\n            this.parseX (out);\n        }\n        return 1;',
             '        const out = [];\n        out.push (1);\n        out[0] = 2;\n        return out;',
             '        const out = [];\n        out.push (items);\n        return out[0][1];',
             '        const out = [];\n        out.push (1);\n        this.extend (out);\n        return out;',
@@ -7683,6 +7679,54 @@ describe('rust list reads with an empty list default', () => {
         expect(out).toContain('return self.hold(rows);');
         expect(out).toContain('let mut rows: Value = self.safeList(response.clone(), Value::Str("data".into()), &[Value::from(vec![])]);');
         expect(out).not.toContain('&[]).into_list()');
+    });
+});
+
+describe('rust lists built by pushes and reassigned from list producers', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export default class Exchange {\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    arrayConcat (a: any[], b: any[]): any[] { return a; }\n    hold (x: any): any { return x; }\n}\n',
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    collect (responses: any[]) {\n        let result = [];\n        for (let i = 0; i < responses.length; i++) {\n            result.push (responses[i]);\n            result = this.arrayConcat (result, this.safeList (responses[i], 'data', []));\n        }\n        return result;\n    }\n" +
+            "    pick (response: any, flag: boolean) {\n        let rows = [];\n        if (flag) {\n            rows = this.safeList (response, 'data', []);\n        }\n        return rows.length;\n    }\n" +
+            "    boxOnly (response: any, flag: boolean) {\n        let rows = [];\n        if (flag) {\n            rows = this.safeList (response, 'data', []);\n        }\n        return this.hold (rows);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-built-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a pushed and reassigned list holds the shared list and moves at each hand-off', () => {
+        expect(out).toContain('let mut result: crate::value::List = std::sync::Arc::new(Vec::new());');
+        expect(out).toContain('std::sync::Arc::make_mut(&mut result).push(');
+        expect(out).toContain('result = self.arrayConcat(Value::Arr(result), ');
+        expect(out).toContain('.into_list();');
+        expect(out).toContain('return Value::Arr(result);');
+    });
+    test('a list reassigned from a defaulted read has a native length', () => {
+        expect(out).toContain('let mut rows: crate::value::List = std::sync::Arc::new(Vec::new());');
+        expect(out).toContain('rows.len() as i64');
+    });
+    test('a pushed list handed on in a loop or twice in one call shares its handle', () => {
+        const wrap = (body: string) => `class T {\n    parseX (x) { return x; }\n    filterBy (a, b) { return a; }\n    f (items: any[]) {\n${body}\n    }\n}`;
+        const looped = transpiler.transpileRust(wrap('        const out = [];\n        for (let i = 0; i < 2; i++) {\n            out.push (i);\n            this.parseX (out);\n        }\n        return 1;')).content;
+        expect(looped).toContain('self.parseX(Value::Arr(out.clone()));');
+        const twice = transpiler.transpileRust(wrap('        const out = [];\n        out.push (1);\n        return this.filterBy (out, out);')).content;
+        expect(twice).toContain('return self.filterBy(Value::Arr(out.clone()), Value::Arr(out.clone()));');
+    });
+    test('a pushed list reset to an empty literal stays a shared list', () => {
+        const body = '        let out = [];\n        out.push (1);\n        out = [];\n        return out;';
+        const rs = transpiler.transpileRust(`class T {\n    f (items: any[]) {\n${body}\n    }\n}`).content;
+        expect(rs).toContain('out = std::sync::Arc::new(Vec::new());');
+        expect(rs).toContain('return Value::Arr(out);');
+    });
+    test('negative: a list only built and boxed straight back keeps its box', () => {
+        expect(out).toContain('return self.hold(rows);');
+        expect(out).toMatch(/let mut rows: Value = Value::from\(vec!\[\]\);/);
     });
 });
 

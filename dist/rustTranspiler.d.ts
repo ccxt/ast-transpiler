@@ -1570,6 +1570,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentListUse(node: any): boolean;
     /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
     printRustLentListBox(node: any, text: string): string | undefined;
+    private rustBuiltLists;
+    rustBuiltListLocal(declaration: any): boolean;
+    /** `x = this.m(.., x, ..)` naming `x` only there and on the left: the old list moves into the call before the write. */
+    rustBuiltListSelfWriteArg(n: any, name: string): boolean;
+    /** A right-hand side that answers a `Value::Arr` on every path. */
+    rustBuiltListWriteSource(right: any): boolean;
+    rustBuiltListOf(node: any): any;
+    printBuiltListLiteral(node: any): string;
+    printBuiltListDeclaration(declaration: any, indent: string, varName: string): string | undefined;
+    printBuiltListWrite(left: any, right: any): string | undefined;
+    printBuiltListPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined;
     private static readonly RUST_OPT_LIST_SOURCES;
     private rustOptListDecisions;
     private rustOptListBoxes;

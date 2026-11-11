@@ -51439,6 +51439,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // `return x`), so handing the list on never copies its elements.
     this.rustLentListKinds = /* @__PURE__ */ new WeakMap();
     this.rustLentListBoxes = /* @__PURE__ */ new WeakMap();
+    // ── built lists (rustBuiltListLocal / rustBuiltListWriteSource / printBuiltListDeclaration / printBuiltListWrite / printBuiltListPush) ──
+    // A local built from an array literal, reassigned only from list producers (array literals, base `toArray` /
+    // `arrayConcat`, a `[]`-defaulted `safeList*`) holds the shared list: pushes, length and index reads are native.
+    this.rustBuiltLists = /* @__PURE__ */ new WeakSet();
     this.rustOptListDecisions = /* @__PURE__ */ new WeakMap();
     this.rustOptListBoxes = /* @__PURE__ */ new WeakMap();
     this.rustHandedDictDecisions = /* @__PURE__ */ new WeakMap();
@@ -52841,6 +52845,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const assignments = left.elements.map((e, idx) => this.printRustNilSlotWrite(e, slotRead(idx)) ?? `${this.printNode(e, 0)} = ${slotRead(idx)}`).join("; ");
       return `{ ${head}; ${assignments}; }`;
     }
+    const builtListWrite = isAssign && isIdentifier3(left) ? this.printBuiltListWrite(left, right) : void 0;
+    if (builtListWrite !== void 0)
+      return builtListWrite;
     const marketWrite = isAssign ? this.printTypedMarketWrite(left, right) : void 0;
     if (marketWrite !== void 0)
       return marketWrite;
@@ -53020,7 +53027,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return `${indent}let mut ${varName}: indexmap::IndexMap<String, Value> = (${block})`;
     }
     if (node.declarations.length === 1 && this.rustLentListLocal(declaration))
-      return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
+      return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
     if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration))
       return this.rustBorrowedLocalKind(declaration) === "list" ? `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
     if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration))
@@ -60304,7 +60311,7 @@ ${this.getIden(identation)}}`;
     return `is_integer(&${parsedArg})`;
   }
   printArrayPushCall(node, identation, name = void 0, parsedArg = void 0) {
-    return this.printRustVecPush(node, name, parsedArg) ?? this.arrPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${parsedArg})`;
+    return this.printRustVecPush(node, name, parsedArg) ?? this.printBuiltListPush(node, name, parsedArg) ?? this.arrPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${parsedArg})`;
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
     return `Value::Bool(contains(&${name}, &${parsedArg}))`;
@@ -62301,6 +62308,8 @@ ${iden}}`;
     if (typeof source === "string" && /[\\/]test[\\/]/.test(source))
       return false;
     const init = this.rustSkipWrappers(declaration.initializer);
+    if (isArrayLiteralExpression4(init))
+      return this.rustBuiltListLocal(declaration);
     if (!this.rustLentListSource(init))
       return false;
     const defaulted = this.rustDefaultedListRead(init);
@@ -62377,6 +62386,134 @@ ${iden}}`;
     if (form === void 0)
       return void 0;
     return form === "move" ? `Value::Arr(${text})` : `Value::Arr(${text}.clone())`;
+  }
+  rustBuiltListLocal(declaration) {
+    if (declaration.name?.kind !== SyntaxKind7.Identifier)
+      return false;
+    const list = declaration.parent;
+    if (list?.kind !== SyntaxKind7.VariableDeclarationList || list.declarations?.length !== 1 || list.parent?.kind !== SyntaxKind7.VariableStatement)
+      return false;
+    if (/[\\/]test[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? "")))
+      return false;
+    const init = declaration.initializer;
+    if (init === void 0 || !isArrayLiteralExpression4(init) || init.elements.some((e) => e.kind === SyntaxKind7.SpreadElement))
+      return false;
+    const type = this.typeOfNodeIfAny(declaration.name);
+    if (type === void 0 || !this.getChecker().isArrayType(type))
+      return false;
+    const name = String(declaration.name.text);
+    const fn = this.rustEnclosingFunction(declaration);
+    if (fn === void 0 || isSourceFile5(fn))
+      return false;
+    if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration) || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustBorrowedDictLocal(declaration) || this.rustNilLocalKind(declaration) !== void 0 || this.rustScalarLocalKind(declaration) !== void 0)
+      return false;
+    if (String(init.getText()).split("\n")[0].length > 120 || !this.rustBuiltListWriteSource(init))
+      return false;
+    const boxes = [];
+    let natives = 0;
+    const short = (n) => {
+      let st = n;
+      while (st !== void 0 && !isStatement(st))
+        st = st.parent;
+      return st !== void 0 && String(st.getText()).split("\n")[0].length <= 160;
+    };
+    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+      if (this.rustIdentifierIsPropertyName(n))
+        return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
+      if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
+        return false;
+      const up = n.parent;
+      if (isBinaryExpression5(up) && up.left === n) {
+        return up.operatorToken.kind === SyntaxKind7.EqualsToken && up.parent?.kind === SyntaxKind7.ExpressionStatement && this.rustBuiltListWriteSource(up.right) && String(up.parent.getText()).split("\n")[0].length <= 200;
+      }
+      if (isElementAccessExpression4(up) && up.expression === n) {
+        natives++;
+        return !(isElementAccessExpression4(up.parent) && up.parent.expression === up) && this.rustReadBearerElementUse(up, "list");
+      }
+      if (isPropertyAccessExpression3(up) && up.expression === n) {
+        const member = String(up.name.text);
+        natives++;
+        if (member === "push")
+          return this.rustVecPushShape(up.parent, name);
+        const use = up.parent;
+        return member === "length" && use?.kind !== SyntaxKind7.PrefixUnaryExpression && use?.kind !== SyntaxKind7.PostfixUnaryExpression && !(isBinaryExpression5(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
+      }
+      if (isCallExpression6(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
+        natives++;
+        return true;
+      }
+      if (isReturnStatement4(up) && up.expression === n) {
+        boxes.push([n, "move"]);
+        return true;
+      }
+      if (isCallExpression6(up) && up.expression !== n && up.arguments.some((a) => a === n)) {
+        const callee = up.expression;
+        if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || !short(n) || _RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.text))) || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n)))
+          return false;
+        boxes.push([n, this.rustLocalLastUse(n, declaration) || this.rustBuiltListSelfWriteArg(n, name) ? "move" : "clone"]);
+        return true;
+      }
+      return false;
+    });
+    if (!safe || natives === 0)
+      return false;
+    for (const [n, form] of boxes)
+      this.rustLentListBoxes.set(n, form);
+    this.rustBuiltLists.add(declaration);
+    return true;
+  }
+  /** `x = this.m(.., x, ..)` naming `x` only there and on the left: the old list moves into the call before the write. */
+  rustBuiltListSelfWriteArg(n, name) {
+    const call = n.parent;
+    const write = call?.parent;
+    if (!isBinaryExpression5(write) || write.right !== call || write.operatorToken.kind !== SyntaxKind7.EqualsToken || !isIdentifier3(write.left) || write.left.text !== name || write.parent?.kind !== SyntaxKind7.ExpressionStatement)
+      return false;
+    let count = 0;
+    const visit = (m) => {
+      if (m.kind === SyntaxKind7.Identifier && m.text === name)
+        count++;
+      m.forEachChild?.(visit);
+    };
+    visit(write);
+    return count === 2;
+  }
+  /** A right-hand side that answers a `Value::Arr` on every path. */
+  rustBuiltListWriteSource(right) {
+    const rhs = this.rustSkipWrappers(right);
+    if (rhs === void 0)
+      return false;
+    if (isArrayLiteralExpression4(rhs))
+      return !rhs.elements.some((e) => e.kind === SyntaxKind7.SpreadElement || isIdentifier3(this.rustSkipWrappers(e)));
+    return this.rustAlwaysListProducer(rhs) || this.rustDefaultedListRead(rhs);
+  }
+  rustBuiltListOf(node) {
+    if (node === void 0 || !isIdentifier3(node))
+      return void 0;
+    const declaration = this.rustDeclarationOfIdentifier(node);
+    if (declaration === void 0 || declaration.name === node || !this.rustLentListLocal(declaration))
+      return void 0;
+    return this.rustBuiltLists.has(declaration) ? declaration : void 0;
+  }
+  printBuiltListLiteral(node) {
+    const native = this.rustVecNativeLiteral({ initializer: node });
+    return `std::sync::Arc::new(${native ?? "Vec::new()"})`;
+  }
+  printBuiltListDeclaration(declaration, indent, varName) {
+    if (!this.rustLentListLocal(declaration) || !this.rustBuiltLists.has(declaration))
+      return void 0;
+    return `${indent}let mut ${varName}: crate::value::List = ${this.printBuiltListLiteral(declaration.initializer)}`;
+  }
+  printBuiltListWrite(left, right) {
+    if (this.rustBuiltListOf(left) === void 0)
+      return void 0;
+    const rhs = this.rustSkipWrappers(right);
+    const value = isArrayLiteralExpression4(rhs) ? this.printBuiltListLiteral(rhs) : `${this.printNode(right, 0).trim()}.into_list()`;
+    return `${this.printNode(left, 0).trim()} = ${value}`;
+  }
+  printBuiltListPush(node, name, parsedArg) {
+    if (name === void 0 || parsedArg === void 0 || this.rustBuiltListOf(node?.expression?.expression) === void 0)
+      return void 0;
+    return `std::sync::Arc::make_mut(&mut ${name}).push(${_RustTranspiler.cloneIfBareLocal(parsedArg.trim())})`;
   }
   rustOptListLocal(declaration) {
     if (declaration?.kind !== SyntaxKind7.VariableDeclaration)
