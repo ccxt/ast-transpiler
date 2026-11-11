@@ -10349,7 +10349,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (call === undefined || !isCallExpression(call) || call.arguments[0] !== node || !this.rustBorrowedAnyKeyReader(call)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
-        if (this.rustBorrowedLocalKind(declaration) !== undefined) return `&${text}`;
+        if (this.rustBorrowedLocalKind(declaration) !== undefined || this.rustLentListLocal(declaration)) return `&${text}`;
         return this.rustContainerBoxUses.get(node) !== undefined && this.rustReadBearerKind(node) !== undefined ? `&${text}` : undefined;
     }
 
@@ -10441,7 +10441,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (typeof source === 'string' && /[\\/]test[\\/]/.test(source)) return false;
         const init: any = this.rustSkipWrappers(declaration.initializer);
         if (!this.rustLentListSource(init)) return false;
-        const type: any = this.typeOfNodeIfAny(declaration.name);
+        // The initializer's resolved overload (`string[]`) decides, so a wider `Strings` annotation does not reject it.
+        const type: any = this.typeOfNodeIfAny(declaration.initializer);
         if (type === undefined || !this.getChecker().isArrayType(type)) return false;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
@@ -10455,12 +10456,18 @@ export class RustTranspiler extends BaseTranspiler {
         const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
-            const up: any = n.parent;
-            if (isElementAccessExpression(up) && up.expression === n) {
+            let at: any = n;
+            while ((isAsExpression(at.parent) || isParenthesizedExpression(at.parent)) && at.parent.expression === at) at = at.parent;
+            const up: any = at.parent;
+            if (isElementAccessExpression(up) && up.expression === at) {
                 natives++;
                 return this.rustReadBearerElementUse(up, 'list');
             }
-            if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length') {
+            if (at === n && isCallExpression(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
+                natives++;
+                return true;
+            }
+            if (isPropertyAccessExpression(up) && up.expression === at && String(up.name.text) === 'length') {
                 const use: any = up.parent;
                 natives++;
                 return use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
@@ -10486,6 +10493,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustLentListUse(node: any): boolean {
+        node = this.rustSkipWrappers(node);
         if (node === undefined || !isIdentifier(node)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         return declaration !== undefined && declaration !== node && declaration.name !== node && this.rustLentListLocal(declaration);

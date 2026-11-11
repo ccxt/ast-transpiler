@@ -60699,7 +60699,7 @@ ${iden}}`;
     const declaration = this.rustDeclarationOfIdentifier(node);
     if (declaration === void 0 || declaration === node || declaration.name === node)
       return void 0;
-    if (this.rustBorrowedLocalKind(declaration) !== void 0)
+    if (this.rustBorrowedLocalKind(declaration) !== void 0 || this.rustLentListLocal(declaration))
       return `&${text}`;
     return this.rustContainerBoxUses.get(node) !== void 0 && this.rustReadBearerKind(node) !== void 0 ? `&${text}` : void 0;
   }
@@ -60794,7 +60794,7 @@ ${iden}}`;
     const init = this.rustSkipWrappers(declaration.initializer);
     if (!this.rustLentListSource(init))
       return false;
-    const type = this.typeOfNodeIfAny(declaration.name);
+    const type = this.typeOfNodeIfAny(declaration.initializer);
     if (type === void 0 || !this.getChecker().isArrayType(type))
       return false;
     const name = String(declaration.name.text);
@@ -60812,12 +60812,19 @@ ${iden}}`;
         return !(_optionalChain([n, 'access', _9052 => _9052.parent, 'optionalAccess', _9053 => _9053.kind]) === _ast.SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
       if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
         return false;
-      const up = n.parent;
-      if (_is.isElementAccessExpression.call(void 0, up) && up.expression === n) {
+      let at = n;
+      while ((_is.isAsExpression.call(void 0, at.parent) || _is.isParenthesizedExpression.call(void 0, at.parent)) && at.parent.expression === at)
+        at = at.parent;
+      const up = at.parent;
+      if (_is.isElementAccessExpression.call(void 0, up) && up.expression === at) {
         natives++;
         return this.rustReadBearerElementUse(up, "list");
       }
-      if (_is.isPropertyAccessExpression.call(void 0, up) && up.expression === n && String(up.name.text) === "length") {
+      if (at === n && _is.isCallExpression.call(void 0, up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
+        natives++;
+        return true;
+      }
+      if (_is.isPropertyAccessExpression.call(void 0, up) && up.expression === at && String(up.name.text) === "length") {
         const use = up.parent;
         natives++;
         return _optionalChain([use, 'optionalAccess', _9054 => _9054.kind]) !== _ast.SyntaxKind.PrefixUnaryExpression && _optionalChain([use, 'optionalAccess', _9055 => _9055.kind]) !== _ast.SyntaxKind.PostfixUnaryExpression && !(_is.isBinaryExpression.call(void 0, use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
@@ -60842,6 +60849,7 @@ ${iden}}`;
     return true;
   }
   rustLentListUse(node) {
+    node = this.rustSkipWrappers(node);
     if (node === void 0 || !_is.isIdentifier.call(void 0, node))
       return false;
     const declaration = this.rustDeclarationOfIdentifier(node);

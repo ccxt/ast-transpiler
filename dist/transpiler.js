@@ -60700,7 +60700,7 @@ ${iden}}`;
     const declaration = this.rustDeclarationOfIdentifier(node);
     if (declaration === void 0 || declaration === node || declaration.name === node)
       return void 0;
-    if (this.rustBorrowedLocalKind(declaration) !== void 0)
+    if (this.rustBorrowedLocalKind(declaration) !== void 0 || this.rustLentListLocal(declaration))
       return `&${text}`;
     return this.rustContainerBoxUses.get(node) !== void 0 && this.rustReadBearerKind(node) !== void 0 ? `&${text}` : void 0;
   }
@@ -60795,7 +60795,7 @@ ${iden}}`;
     const init = this.rustSkipWrappers(declaration.initializer);
     if (!this.rustLentListSource(init))
       return false;
-    const type = this.typeOfNodeIfAny(declaration.name);
+    const type = this.typeOfNodeIfAny(declaration.initializer);
     if (type === void 0 || !this.getChecker().isArrayType(type))
       return false;
     const name = String(declaration.name.text);
@@ -60813,12 +60813,19 @@ ${iden}}`;
         return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
       if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
         return false;
-      const up = n.parent;
-      if (isElementAccessExpression4(up) && up.expression === n) {
+      let at = n;
+      while ((isAsExpression3(at.parent) || isParenthesizedExpression3(at.parent)) && at.parent.expression === at)
+        at = at.parent;
+      const up = at.parent;
+      if (isElementAccessExpression4(up) && up.expression === at) {
         natives++;
         return this.rustReadBearerElementUse(up, "list");
       }
-      if (isPropertyAccessExpression3(up) && up.expression === n && String(up.name.text) === "length") {
+      if (at === n && isCallExpression6(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
+        natives++;
+        return true;
+      }
+      if (isPropertyAccessExpression3(up) && up.expression === at && String(up.name.text) === "length") {
         const use = up.parent;
         natives++;
         return use?.kind !== SyntaxKind7.PrefixUnaryExpression && use?.kind !== SyntaxKind7.PostfixUnaryExpression && !(isBinaryExpression5(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
@@ -60843,6 +60850,7 @@ ${iden}}`;
     return true;
   }
   rustLentListUse(node) {
+    node = this.rustSkipWrappers(node);
     if (node === void 0 || !isIdentifier3(node))
       return false;
     const declaration = this.rustDeclarationOfIdentifier(node);
