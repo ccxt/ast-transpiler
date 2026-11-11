@@ -62182,7 +62182,7 @@ ${iden}}`;
     if (_optionalChain([init, 'optionalAccess', _9145 => _9145.kind]) === _ast.SyntaxKind.AwaitExpression)
       init = this.rustSkipWrappers(init.expression);
     const nilDeclared = (init === void 0 || this.literalKindOfNode(init) === "null") && (list.flags & _ast.NodeFlags.Const) === 0 && _optionalChain([list, 'access', _9146 => _9146.parent, 'optionalAccess', _9147 => _9147.kind]) === _ast.SyntaxKind.VariableStatement;
-    let from = init !== void 0 && _is.isCallExpression.call(void 0, init) ? this.rustBorrowedSourceKind(init) : void 0;
+    let from = init !== void 0 && _is.isCallExpression.call(void 0, init) ? this.rustBorrowedSourceKind(init) : this.rustDictElementSource(init) ? "dict" : void 0;
     if (from === void 0 && !nilDeclared)
       return void 0;
     const name = String(declaration.name.text);
@@ -62250,7 +62250,7 @@ ${iden}}`;
       return true;
     };
     const safe = from === "api" && !nilDeclared ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
-    if (!safe || reads === 0 || mixed || from === void 0 || (this.rustNilResponseLocals.has(declaration) || from === "api") && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
+    if (!safe || reads === 0 || mixed || from === void 0 || (this.rustNilResponseLocals.has(declaration) || from === "api" || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
       return void 0;
     if ((keyReads > 0 || init !== void 0 && _is.isCallExpression.call(void 0, init) && this.rustRecordLookupSource(init)) && !this.rustDictKeyReadLineOk(declaration, name))
       return void 0;
@@ -62263,6 +62263,23 @@ ${iden}}`;
       this.rustOptContainerLocals.add(declaration);
     }
     return from === "list" ? "list" : "dict";
+  }
+  // ── rustDictElementSource: `xs[i]` over a list whose checker element type is a string-keyed map ──
+  // The element leaves its copied box as the shared map (the same Arc bump the copy paid). A missing
+  // element reads as an empty map, so the borrowed rule keeps it only for null-safe key reads.
+  rustDictElementSource(init) {
+    if (init === void 0 || !_is.isElementAccessExpression.call(void 0, init) || !_is.isIdentifier.call(void 0, init.expression) || this.checkerOrUndefined() === void 0)
+      return false;
+    const key = this.rustSkipWrappers(init.argumentExpression);
+    if (key === void 0 || !_is.isNumericLiteral.call(void 0, key) && this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== "number")
+      return false;
+    const listType = this.typeOfNodeIfAny(init.expression);
+    if (listType === void 0 || !this.getChecker().isArrayType(listType))
+      return false;
+    const element = this.typeOfNodeIfAny(init);
+    if (element === void 0 || (element.flags & (_sync.TypeFlags.Any | _sync.TypeFlags.Unknown | _sync.TypeFlags.Union)) !== 0)
+      return false;
+    return this.primitiveKindOfType(element) === void 0 && this.getChecker().getIndexTypeOfType(element, _sync.IndexKind.String) !== void 0 && !this.getChecker().isArrayType(element);
   }
   // ── rustDictKeyReadUse / printDictKeyRead: direct literal-key reads (`m['k']`, `m.k`) on a dict local ──
   // The shared map (or its optional form) reads through the reader trait the `safe_*_k` readers use:

@@ -1550,6 +1550,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    rustDictElementSource(init: any): boolean;
     /** A read of `n['literal']` / `n.name` (not a write target, call receiver, length or digit key). */
     rustDictKeyReadUse(n: any): boolean;
     /** The typed declaration line (`: crate::value::Dict = .. .into_dict()`, about 40 chars more) stays within 400 chars. */

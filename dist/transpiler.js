@@ -62183,7 +62183,7 @@ ${iden}}`;
     if (init?.kind === SyntaxKind7.AwaitExpression)
       init = this.rustSkipWrappers(init.expression);
     const nilDeclared = (init === void 0 || this.literalKindOfNode(init) === "null") && (list.flags & NodeFlags4.Const) === 0 && list.parent?.kind === SyntaxKind7.VariableStatement;
-    let from = init !== void 0 && isCallExpression6(init) ? this.rustBorrowedSourceKind(init) : void 0;
+    let from = init !== void 0 && isCallExpression6(init) ? this.rustBorrowedSourceKind(init) : this.rustDictElementSource(init) ? "dict" : void 0;
     if (from === void 0 && !nilDeclared)
       return void 0;
     const name = String(declaration.name.text);
@@ -62251,7 +62251,7 @@ ${iden}}`;
       return true;
     };
     const safe = from === "api" && !nilDeclared ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
-    if (!safe || reads === 0 || mixed || from === void 0 || (this.rustNilResponseLocals.has(declaration) || from === "api") && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
+    if (!safe || reads === 0 || mixed || from === void 0 || (this.rustNilResponseLocals.has(declaration) || from === "api" || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
       return void 0;
     if ((keyReads > 0 || init !== void 0 && isCallExpression6(init) && this.rustRecordLookupSource(init)) && !this.rustDictKeyReadLineOk(declaration, name))
       return void 0;
@@ -62264,6 +62264,23 @@ ${iden}}`;
       this.rustOptContainerLocals.add(declaration);
     }
     return from === "list" ? "list" : "dict";
+  }
+  // ── rustDictElementSource: `xs[i]` over a list whose checker element type is a string-keyed map ──
+  // The element leaves its copied box as the shared map (the same Arc bump the copy paid). A missing
+  // element reads as an empty map, so the borrowed rule keeps it only for null-safe key reads.
+  rustDictElementSource(init) {
+    if (init === void 0 || !isElementAccessExpression4(init) || !isIdentifier3(init.expression) || this.checkerOrUndefined() === void 0)
+      return false;
+    const key = this.rustSkipWrappers(init.argumentExpression);
+    if (key === void 0 || !isNumericLiteral4(key) && this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== "number")
+      return false;
+    const listType = this.typeOfNodeIfAny(init.expression);
+    if (listType === void 0 || !this.getChecker().isArrayType(listType))
+      return false;
+    const element = this.typeOfNodeIfAny(init);
+    if (element === void 0 || (element.flags & (TypeFlags6.Any | TypeFlags6.Unknown | TypeFlags6.Union)) !== 0)
+      return false;
+    return this.primitiveKindOfType(element) === void 0 && this.getChecker().getIndexTypeOfType(element, IndexKind4.String) !== void 0 && !this.getChecker().isArrayType(element);
   }
   // ── rustDictKeyReadUse / printDictKeyRead: direct literal-key reads (`m['k']`, `m.k`) on a dict local ──
   // The shared map (or its optional form) reads through the reader trait the `safe_*_k` readers use:
