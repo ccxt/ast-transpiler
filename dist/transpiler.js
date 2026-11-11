@@ -51402,6 +51402,12 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustDictBearerDecisions = /* @__PURE__ */ new WeakMap();
     /** Bearers whose escapes all box a clone (the prediction-tier multi-escape rule). */
     this.rustDictBearerCloned = /* @__PURE__ */ new WeakSet();
+    // ── rustReaderTableLocal: lookup tables lent to the any-key readers ──
+    // `const statuses = { '0': 'open', .. }; return this.safeString (statuses, status, status);` — a literal
+    // table whose only uses are arg 0 of a base any-key reader. The reader on `&IndexMap` runs
+    // `get_map_value`, the very function `get_value` runs on the boxed `Value::Dict`, so numeric keys read
+    // the same (a literal carries no cache / book marker key).
+    this.rustReaderTables = /* @__PURE__ */ new WeakSet();
     // ── read-only container bearers ───────────────────────────────────────────
     // A local that provably holds a list (or a plain dict) and is only read by element access is declared
     // `Vec<Value>` (resp. a bare `IndexMap`), so reads print the native op. Any other use keeps the box and the helper.
@@ -52975,6 +52981,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const handleKeys = this.printClientHandleKeys(declaration.initializer);
       if (handleKeys !== void 0)
         return `${indent}let mut ${varName}: Vec<Value> = ${handleKeys}`;
+      if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)))
+        return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
       return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
     }
     if (readBearer === "map") {
@@ -60598,6 +60606,8 @@ ${iden}}`;
       return false;
     if (produced && this.rustInitReadsTaggedStore(init))
       return false;
+    if (!produced && this.rustReaderTableLocal(declaration, literal2))
+      return true;
     const entries = produced ? [] : literal2.properties;
     for (const property of entries) {
       if (property.kind === SyntaxKind7.SpreadAssignment)
@@ -60687,6 +60697,54 @@ ${iden}}`;
       this.rustDictBearerCloned.add(declaration);
     }
     return true;
+  }
+  rustReaderTableLocal(declaration, literal2) {
+    if (!isObjectLiteralExpression4(literal2) || literal2.properties.length === 0 || this.rustTestTierSource(declaration))
+      return false;
+    const list = declaration.parent;
+    if (list?.kind !== SyntaxKind7.VariableDeclarationList || list.declarations?.length !== 1)
+      return false;
+    for (const property of Array.from(literal2.properties)) {
+      if (property.kind !== SyntaxKind7.PropertyAssignment)
+        return false;
+      const key = property.name;
+      if (key === void 0 || !isStringLiteralLikeNode4(key) && key.kind !== SyntaxKind7.NumericLiteral && !isIdentifier3(key))
+        return false;
+      const text = String(key.text);
+      if (text === "" || text.startsWith("__") || text === "subscriptions" || text === "futures")
+        return false;
+    }
+    const fn = this.rustEnclosingFunction(declaration);
+    if (fn === void 0 || isSourceFile5(fn))
+      return false;
+    let reads = 0;
+    const safe = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (this.rustIdentifierIsPropertyName(n))
+        return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
+      if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
+        return false;
+      const call = n.parent;
+      if (call === void 0 || !isCallExpression6(call) || call.arguments[0] !== n || !this.rustBorrowedAnyKeyReader(call))
+        return false;
+      reads++;
+      return true;
+    });
+    if (!safe || reads === 0)
+      return false;
+    this.rustReaderTables.add(declaration);
+    return true;
+  }
+  /** Base `toArray(x)` / `arrayConcat(a, b)`: the hand-written runtime answers a `Value::Arr` on every
+   *  path (a cache's entries, the list itself, a dict's values, `[]` for anything else). */
+  rustAlwaysListProducer(call) {
+    const callee = call?.expression;
+    if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const method = String(callee.name.text);
+    if (method !== "toArray" && method !== "arrayConcat")
+      return false;
+    const declaration = this.rustScalarCallee(call);
+    return declaration !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
   }
   /** A call that builds a fresh plain map — the request/params builders, `parseJson`, and the `handle*` family.
    *  The checker proves the result Dict-shaped and every copied map operand plain, so the bearer may be declared
@@ -61653,7 +61711,7 @@ ${iden}}`;
     const declaration = this.rustDeclarationOfIdentifier(node);
     if (declaration === void 0 || declaration === node || declaration.name === node)
       return void 0;
-    if (this.rustBorrowedLocalKind(declaration) !== void 0 || this.rustLentListLocal(declaration))
+    if (this.rustBorrowedLocalKind(declaration) !== void 0 || this.rustLentListLocal(declaration) || this.rustReaderTables.has(declaration))
       return `&${text}`;
     return this.rustContainerBoxUses.get(node) !== void 0 && this.rustReadBearerKind(node) !== void 0 ? `&${text}` : void 0;
   }
@@ -62388,6 +62446,8 @@ ${iden}}`;
       const args = node.arguments ?? [];
       return args.length < 3 || isArrayLiteralExpression4(this.rustSkipWrappers(args[2])) ? "list" : void 0;
     }
+    if (this.rustAlwaysListProducer(node))
+      return "list";
     if (method === "safeDict" || method === "safeMarket" || method === "safeMarketStructure" || method === "market" || method === "currency" || method === "safeCurrency")
       return "map";
     if (method === "safeValue" || method === "safeValue2") {

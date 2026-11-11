@@ -1318,6 +1318,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustDictBearerDeclaration(node: any): any | undefined;
     rustDictLocalIsTyped(declaration: any): boolean;
     rustDictLocalIsTypedUncached(declaration: any): boolean;
+    private rustReaderTables;
+    rustReaderTableLocal(declaration: any, literal: any): boolean;
+    /** Base `toArray(x)` / `arrayConcat(a, b)`: the hand-written runtime answers a `Value::Arr` on every
+     *  path (a cache's entries, the list itself, a dict's values, `[]` for anything else). */
+    rustAlwaysListProducer(call: any): boolean;
     /** A call that builds a fresh plain map — the request/params builders, `parseJson`, and the `handle*` family.
      *  The checker proves the result Dict-shaped and every copied map operand plain, so the bearer may be declared
      *  from the call and the box is cloned out once. */
