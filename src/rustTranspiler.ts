@@ -11094,7 +11094,7 @@ export class RustTranspiler extends BaseTranspiler {
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
         for (const n of this.rustScopeNameNodes(fn, String(declaration.name.text)) as any[]) {
-            if (n === declaration.name || !this.rustIdentifierRefersToDeclaration(n, declaration)) continue;
+            if (n === declaration.name || !this.rustIdentifierRefersToDeclaration(n, declaration as any)) continue;
             const up: any = n.parent;
             if (up?.kind === SyntaxKind.PrefixUnaryExpression || up?.kind === SyntaxKind.PostfixUnaryExpression) return false;
             if (!isBinaryExpression(up) || up.left !== n || !rustIsAssignmentOperator(up.operatorToken.kind)) continue;

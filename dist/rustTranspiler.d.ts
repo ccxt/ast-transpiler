@@ -610,6 +610,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarOptKeyCount(declaration: any): number;
     rustScalarOptKeyCostly(declaration: any, kind: string): boolean;
     rustScalarOptKeyText(key: any): string;
+    /** The key is an element-read local (`const k = keys[i]`). */
+    rustOkeyLocal(n: any): boolean;
+    /** An element-read local keyed into maps stays `Value` when a box sits where the `Value` moved
+     *  (an assignment source, an object-literal value, a `format!` operand, the last use): the typed local would clone there. */
+    rustOkeyBoxed(declaration: any, boxed: number): boolean;
+    /** 'map' for a typed map receiver, 'value' for a proven-dict `Value` receiver, else undefined. */
+    rustOkeyKind(receiver: any, read: any): 'map' | 'value' | undefined;
+    /** A one-level read `m[k]` (not a write target, not a chain link) on an `rustOkeyKind` receiver. */
+    rustOkeyReadUse(n: any): boolean;
+    /** Element-access hook: the native read of an `okey` use. */
+    printOkeyRead(node: any): string | undefined;
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
     rustScalarExpressionUseForm(n: any, kind: string): string | undefined;
