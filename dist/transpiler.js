@@ -54658,6 +54658,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const push = findAncestor(n, (m) => isStatement(m) || isCallExpression6(m) && isPropertyAccessExpression3(m.expression) && m.expression.name.text === "push");
       if (push !== void 0 && isCallExpression6(push))
         return false;
+      const write = findAncestor(n, (m) => isStatement(m) || isBinaryExpression5(m) && m.operatorToken.kind === SyntaxKind7.EqualsToken);
+      if (write !== void 0 && isBinaryExpression5(write) && this.isNodeInsideNode(n, write.right))
+        return false;
     }
     return true;
   }

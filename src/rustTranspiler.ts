@@ -3792,6 +3792,9 @@ export class RustTranspiler extends BaseTranspiler {
             // a `.push(..)` argument: ccxt's native-push pass keys on the boxed operand text
             const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
             if (push !== undefined && isCallExpression(push)) return false;
+            // nor when it feeds a write to another local (ccxt passes read that write's printed source)
+            const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
+            if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right)) return false;
         }
         return true;
     }

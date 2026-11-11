@@ -7378,11 +7378,19 @@ describe('rust scalar residual locals', () => {
             + "            const id = this.safeString (b, 'y');\n"
             + '            if (id !== undefined) { return id.toUpperCase (); }\n'
             + '        }\n'
+            + "        if (b) {\n"
+            + "            const tag = this.safeString (b, 'z');\n"
+            + '            if (tag !== undefined) { a = tag.toUpperCase (); }\n'
+            + '        } else {\n'
+            + "            const tag = this.safeString (b, 'w');\n"
+            + '            if (tag !== undefined) { return tag; }\n'
+            + '        }\n'
             + '        return out;\n'
             + '    }\n'
             + '}\n');
         const output = transpiler.transpileRustByPath(file).content;
         expect(output).toContain('let mut id: Value = ');
         expect(output).toContain('let mut id: Option<String> = ');
+        expect(output).toContain('let mut tag: Value = ');
     });
 });
