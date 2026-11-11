@@ -883,7 +883,7 @@ export class RustTranspiler extends BaseTranspiler {
         const receiver = leftExpr ?? this.printNode(node.expression, 0);
         if (!this.rustIsOrderBookSide(node.expression) && this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) return `Value::Int(${receiver}.len() as i64)`;
         // A read-only list bearer is a `Vec<Value>`; `len()` is the helper's answer.
-        if (this.rustReadBearerKind(node.expression) === 'list') return `Value::Int(${receiver}.len() as i64)`;
+        if (this.rustReadBearerKind(node.expression) === 'list' || this.rustBorrowedListUse(node.expression)) return `Value::Int(${receiver}.len() as i64)`;
         if (this.provenListValue(node.expression)) return `${receiver}.as_array().map_or(Value::Int(0), |__a| Value::Int(__a.len() as i64))`;
         return this.arrLength(node, receiver) ?? `get_array_length(&${receiver})`;
     }
@@ -2040,7 +2040,7 @@ export class RustTranspiler extends BaseTranspiler {
             const block = this.rustObjectLiteralBlock(this.rustSkipWrappers(declaration.initializer), identation);
             return `${indent}let mut ${varName}: indexmap::IndexMap<String, Value> = (${block})`;
         }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
         if (boolValue !== undefined) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -9189,6 +9189,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     transformIdentifier(node, identifier) {
         const text = super.transformIdentifier(node, identifier);
+        const borrowedArg = this.printBorrowedReaderArg(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const parent = node?.parent;
@@ -10060,6 +10061,11 @@ export class RustTranspiler extends BaseTranspiler {
 
     private static readonly RUST_BORROWED_DICT_SOURCES = new Set([ 'safeDict', 'safeDict2', 'safeDictN', 'extend', 'deepExtend', 'omit' ]);
 
+    private static readonly RUST_BORROWED_LIST_SOURCES = new Set([ 'safeList', 'safeList2', 'safeListN' ]);
+
+    // Hand-written readers whose container argument takes a map or list by reference, any key.
+    private static readonly RUST_BORROWED_ANY_KEY_READERS = /^safe(?:Value|String(?:Lower|Upper)?|Integer|Float|Timestamp|IntegerProduct)(?:2|N)?$/;
+
     private rustBorrowedDictDecisions = new WeakMap<any, boolean>();
 
     rustBorrowedDictLocal(declaration: any): boolean {
@@ -10078,32 +10084,101 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustBorrowedDictLocalUncached(declaration: any): boolean {
-        if (declaration.name?.kind !== SyntaxKind.Identifier) return false;
+        return this.rustBorrowedLocalKind(declaration) !== undefined;
+    }
+
+    /** `'dict' | 'list'` for a local that holds the shared container and lends it to every read, else undefined. */
+    rustBorrowedLocalKind(declaration: any): 'dict' | 'list' | undefined {
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration) return undefined;
+        if (!this.rustBorrowedKinds.has(declaration)) {
+            this.rustBorrowedKinds.set(declaration, undefined); // re-entrancy guard
+            let kind: 'dict' | 'list' | undefined;
+            try {
+                kind = this.rustBorrowedLocalKindUncached(declaration);
+            } catch (e) {
+                kind = undefined;
+            }
+            this.rustBorrowedKinds.set(declaration, kind);
+        }
+        return this.rustBorrowedKinds.get(declaration);
+    }
+
+    private rustBorrowedKinds = new WeakMap<any, 'dict' | 'list' | undefined>();
+
+    rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined {
+        if (declaration.name?.kind !== SyntaxKind.Identifier) return undefined;
         const list: any = declaration.parent;
-        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1) return false;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1) return undefined;
         const source: any = declaration.getSourceFile?.()?.fileName;
-        if (typeof source === 'string' && /[\\/]test[\\/]/.test(source)) return false;
+        if (typeof source === 'string' && /[\\/]test[\\/]/.test(source)) return undefined;
         let init: any = this.rustSkipWrappers(declaration.initializer);
         if (init?.kind === SyntaxKind.AwaitExpression) init = this.rustSkipWrappers(init.expression);
-        if (!isCallExpression(init) || !this.rustBorrowedDictSource(init)) return false;
+        const from = isCallExpression(init) ? this.rustBorrowedSourceKind(init) : undefined;
+        if (from === undefined) return undefined;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
-        if (fn === undefined || isSourceFile(fn) || this.rustLocalIsReassigned(declaration, name)) return false;
+        if (fn === undefined || isSourceFile(fn) || this.rustLocalIsReassigned(declaration, name)) return undefined;
         if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration)
             || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false
-            || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
+            || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return undefined;
         // The typed declaration line must stay within the 400-char line budget.
-        if (String(declaration.initializer.getText()).split('\n')[0].length > 240) return false;
+        if (String(declaration.initializer.getText()).split('\n')[0].length > 240) return undefined;
+        // An endpoint response may be a list or a map: only literal-key reads agree for both.
+        const anyKey = from !== 'api';
         let reads = 0;
         const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
-            const call: any = n.parent;
-            if (!isCallExpression(call) || call.arguments[0] !== n || this.rustBorrowedDictReader(call) === undefined) return false;
+            const up: any = n.parent;
+            if (from === 'list' && isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length') {
+                const use: any = up.parent;
+                return use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
+                    && !(isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
+            }
+            if (!isCallExpression(up) || up.arguments[0] !== n) return false;
+            if (this.rustBorrowedDictReader(up) === undefined && !(anyKey && this.rustBorrowedAnyKeyReader(up))) return false;
             reads++;
             return true;
         });
-        return safe && reads > 0;
+        if (!safe || reads === 0) return undefined;
+        return from === 'list' ? 'list' : 'dict';
+    }
+
+    rustBorrowedListUse(node: any): boolean {
+        const declaration: any = isIdentifier(node) ? this.rustDeclarationOfIdentifier(node) : undefined;
+        return declaration !== undefined && declaration !== node && declaration.name !== node && this.rustBorrowedLocalKind(declaration) === 'list';
+    }
+
+    /** A base hand-written reader (`safeString`, `safeValue2`, `safeIntegerN`, ..) with any key. */
+    rustBorrowedAnyKeyReader(call: any): boolean {
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (!RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(String(callee.name.text)) || (call.arguments?.length ?? 0) < 2) return false;
+        const declaration: any = this.rustScalarCallee(call);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
+    }
+
+    /** `'dict' | 'list' | 'api'` for a container source the local may hold by reference. */
+    rustBorrowedSourceKind(call: any): 'dict' | 'list' | 'api' | undefined {
+        if (!this.rustBorrowedDictSource(call)) {
+            const callee: any = call.expression;
+            if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+            if (!RustTranspiler.RUST_BORROWED_LIST_SOURCES.has(String(callee.name.text))) return undefined;
+            const declaration: any = this.rustScalarCallee(call);
+            return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName)) ? 'list' : undefined;
+        }
+        const file = String(this.rustScalarCallee(call)?.getSourceFile?.()?.fileName ?? '');
+        return /ts[\\/]src[\\/]abstract[\\/]/.test(file) ? 'api' : 'dict';
+    }
+
+    /** `&x` for a borrowed local (or a typed container local) passed to a hand-written any-key reader. */
+    printBorrowedReaderArg(node: any, text: string): string | undefined {
+        const call: any = node.parent;
+        if (call === undefined || !isCallExpression(call) || call.arguments[0] !== node || !this.rustBorrowedAnyKeyReader(call)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
+        if (this.rustBorrowedLocalKind(declaration) !== undefined) return `&${text}`;
+        return this.rustContainerBoxUses.get(node) !== undefined && this.rustReadBearerKind(node) !== undefined ? `&${text}` : undefined;
     }
 
     /** A base `safeDict*` / `extend` / `omit` call, or an implicit-API endpoint call. */
