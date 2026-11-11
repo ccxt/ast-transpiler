@@ -51383,6 +51383,12 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // `x.push(v)` (native push), `x.length`, `return x` or an argument inside a `return`
     // (boxed once as `Value::from(x)`). Anything else keeps the `Value` box and `append_to_array`.
     this.rustVecLocalDecisions = /* @__PURE__ */ new WeakMap();
+    // ── literal container hand-offs ───────────────────────────────────────────
+    // A literal-built map / list keeps its native type through `return x as T` and through writes keyed by a
+    // string local that still prints as a `Value`.
+    this.literalKeyHits = 0;
+    /** Same-named sibling bindings `literalLocalUsesAll` skipped for the local being decided. */
+    this.literalSiblingBindings = 0;
     // ── typed dict bearers ────────────────────────────────────────────────────
     // A local that builds one object literal, is only read/written by literal keys and moves at most once is declared
     // a bare `IndexMap<String, Value>`: reads `.get(k)`, writes `.insert(k, v)`. Any other use keeps the `Value` box.
@@ -59439,7 +59445,11 @@ ${iden}}`;
     if (typeof source === "string" && /\/test\//.test(source))
       return false;
     let pushes = 0;
-    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+    let clonedOut = 0;
+    let castReturns = 0;
+    const outerSiblings = this.literalSiblingBindings;
+    this.literalSiblingBindings = 0;
+    const safe = this.literalLocalUsesAll(declaration, name, (n) => {
       const parent = n.parent;
       if (isPropertyAccessExpression3(parent) && parent.name === n || parent?.kind === SyntaxKind7.PropertyAssignment && parent.name === n)
         return true;
@@ -59457,9 +59467,17 @@ ${iden}}`;
         }
         return this.vecJoinUse(parent);
       }
-      return this.rustVecValueUse(n, name) || this.vecUse(n) || this.vecPropertyUse(n);
+      if (this.rustCastReturnOperand(n))
+        castReturns++;
+      if (this.rustVecValueUse(n, name))
+        return true;
+      if (isCallExpression6(parent) && parent.arguments.some((a) => a === n))
+        clonedOut++;
+      return this.vecUse(n) || this.vecPropertyUse(n);
     });
-    return safe && pushes > 0;
+    const siblings = this.literalSiblingBindings;
+    this.literalSiblingBindings = outerSiblings;
+    return safe && pushes > 0 && (siblings === 0 && castReturns === 0 || clonedOut === 0);
   }
   /** The array literal's native `vec![..]`: elements are `Value`s taken by move, so a
    *  bare local is cloned (the boxed form relied on ccxt's argument-clone pass). */
@@ -59497,7 +59515,7 @@ ${iden}}`;
   // Elsewhere a boxing argument / object-literal value must be the local's last use outside any loop.
   rustVecValueUse(n, name) {
     const parent = n.parent;
-    if (isReturnStatement4(parent))
+    if (isReturnStatement4(parent) || this.rustCastReturnOperand(n))
       return true;
     const isArg = isCallExpression6(parent) && parent.arguments.some((a) => a === n) && this.rustVecBoxingCallee(parent.expression);
     const isProp = parent?.kind === SyntaxKind7.PropertyAssignment && parent.initializer === n;
@@ -59532,7 +59550,8 @@ ${iden}}`;
       }
     }
     const end = n.getEnd?.() ?? n.end;
-    return !this.rustScopeNameNodes(fn, name).some((m) => m.kind === SyntaxKind7.Identifier && m !== n && (m.getStart?.() ?? m.pos) >= end && !this.rustIdentifierIsPropertyName(m));
+    const own = this.rustSymbolOf(n);
+    return !this.rustScopeNameNodes(fn, name).some((m) => m.kind === SyntaxKind7.Identifier && m !== n && (m.getStart?.() ?? m.pos) >= end && !this.rustIdentifierIsPropertyName(m) && !(own !== void 0 && this.rustSymbolOf(m) !== void 0 && this.rustSymbolOf(m) !== own));
   }
   // `this.m(..)` / `super.m(..)` / `Promise.all(..)`: every argument prints through printNode as a `Value`.
   rustVecBoxingCallee(callee) {
@@ -59580,18 +59599,106 @@ ${iden}}`;
       return `Value::Map(${text}.clone())`;
     }
     const bearer = this.rustDictBearerDeclaration(node);
-    if (bearer !== void 0 && parent !== void 0 && (isReturnStatement4(parent) && parent.expression === node || isCallExpression6(parent) && parent.arguments.some((a) => a === node) || this.rustDictWriteValue(node) || this.rustBearerLiteralMove(node))) {
-      return `Value::Map(${text}${!this.rustDictBearerCloned.has(bearer) && this.rustVecIsFinalUse(node, String(node.text)) ? "" : ".clone()"})`;
+    if (bearer !== void 0 && parent !== void 0 && (isReturnStatement4(parent) && parent.expression === node || this.rustCastReturnOperand(node) || isCallExpression6(parent) && parent.arguments.some((a) => a === node) || this.rustDictWriteValue(node) || this.rustBearerLiteralMove(node))) {
+      const moved = this.rustReturnOperand(node) || this.rustVecIsFinalUse(node, String(node.text));
+      return `Value::Map(${text}${!this.rustDictBearerCloned.has(bearer) && moved ? "" : ".clone()"})`;
     }
     const stringMethod = this.rustDeclarationOfIdentifier(node);
     if (stringMethod !== void 0 && isVariableDeclaration3(stringMethod) && stringMethod.name !== node && this.rustStringMethodLocalInit(stringMethod) !== void 0) {
       return `Value::from(${text}${this.rustVecIsFinalUse(node, String(node.text)) ? "" : ".clone()"})`;
     }
-    if (parent === void 0 || !(isReturnStatement4(parent) || isCallExpression6(parent) && parent.arguments.some((a) => a === node) && this.rustVecBoxingCallee(parent.expression) || parent.kind === SyntaxKind7.PropertyAssignment && parent.initializer === node))
+    if (parent === void 0 || !(isReturnStatement4(parent) || this.rustCastReturnOperand(node) || isCallExpression6(parent) && parent.arguments.some((a) => a === node) && this.rustVecBoxingCallee(parent.expression) || parent.kind === SyntaxKind7.PropertyAssignment && parent.initializer === node))
       return text;
     if (this.rustVecLocalDeclarationOf(node) === void 0)
       return text;
     return this.rustVecValueUse(node, String(node.text)) ? `Value::from(${text})` : `Value::from(${text}.clone())`;
+  }
+  /** `rustLocalUsesAll` for a literal-initialised `let`/`const`: a same-named
+   *  block-scoped binding elsewhere in the function is another symbol, so its
+   *  uses are skipped instead of rejecting this local. */
+  literalLocalUsesAll(declaration, name, acceptUse) {
+    const list = declaration.parent;
+    const own = isIdentifier3(declaration.name) ? this.rustSymbolOf(declaration.name) : void 0;
+    const literal2 = isObjectLiteralExpression4(this.rustSkipWrappers(declaration.initializer)) || isArrayLiteralExpression4(this.rustSkipWrappers(declaration.initializer));
+    if (!literal2 || own === void 0 || (list?.flags & (NodeFlags4.Let | NodeFlags4.Const)) === 0)
+      return this.rustLocalUsesAll(declaration, name, false, acceptUse);
+    const scope = this.rustEnclosingFunction(declaration);
+    if (scope === void 0)
+      return false;
+    for (const n of this.rustScopeNameNodes(scope, name)) {
+      if (n === declaration || n === declaration.name)
+        continue;
+      if (this.rustBindsName(n, name)) {
+        if (!isVariableDeclaration3(n) || (n.parent?.flags & (NodeFlags4.Let | NodeFlags4.Const)) === 0 || this.isNodeInsideNode(declaration, n.parent?.parent ?? n) || this.isNodeInsideNode(n, declaration.parent?.parent ?? declaration))
+          return false;
+        this.literalSiblingBindings++;
+        continue;
+      }
+      if (n.kind !== SyntaxKind7.Identifier)
+        continue;
+      if (n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment) {
+        if (!acceptUse(n))
+          return false;
+        continue;
+      }
+      const symbol = this.rustSymbolOf(n);
+      if (symbol === void 0)
+        return false;
+      if (symbol !== own)
+        continue;
+      if (!acceptUse(n))
+        return false;
+    }
+    return true;
+  }
+  literalKeyWidened(keyArg) {
+    if (keyArg === void 0)
+      return false;
+    this.literalKeyHits++;
+    return true;
+  }
+  /** `return x`, bare or under a cast: the statement leaves the function, so the box moves. */
+  rustReturnOperand(node) {
+    return isReturnStatement4(node?.parent) && node.parent.expression === node || this.rustCastReturnOperand(node);
+  }
+  /** `return x as T` / `return (x)`: the cast only narrows the TS type, the
+   *  statement still moves `x` out once. */
+  rustCastReturnOperand(node) {
+    let top = node;
+    while (top.parent !== void 0 && (isAsExpression3(top.parent) || isParenthesizedExpression3(top.parent) || isNonNullExpression2(top.parent)) && top.parent.expression === top)
+      top = top.parent;
+    return top !== node && isReturnStatement4(top.parent) && top.parent.expression === top;
+  }
+  /** The key of `x[k]` on a bearer built from an object literal, when `k` is a
+   *  `string` local that prints as a plain `Value` (no typed-local rule claimed it). */
+  rustLiteralBearerKeyArg(receiver, keyNode) {
+    const declaration = isIdentifier3(receiver) ? this.rustDeclarationOfIdentifier(receiver) : void 0;
+    if (declaration === void 0 || !isVariableDeclaration3(declaration) || !isObjectLiteralExpression4(this.rustSkipWrappers(declaration.initializer)))
+      return void 0;
+    const key = this.rustSkipWrappers(keyNode);
+    if (!isIdentifier3(key) || !this.rustKeyIsProvenString(key))
+      return void 0;
+    return this.rustValueKeyLocalArg(key, this.printNode(key, 0).trim(), String(receiver.text));
+  }
+  /** A `string` key local that prints as a plain `Value`: the helper's own
+   *  `stringify` of the key is the map key. */
+  rustValueKeyLocalArg(key, text, receiverName) {
+    if (!isIdentifier3(key) || text !== String(key.text) || text === "self" || text === receiverName)
+      return void 0;
+    const declaration = this.rustDeclarationOfIdentifier(key);
+    if (declaration === void 0 || declaration.name === key)
+      return void 0;
+    if (isParameterDeclaration3(declaration)) {
+      if (this.rustParamShadowOf(key) !== void 0)
+        return void 0;
+    } else if (!isVariableDeclaration3(declaration) || declaration.initializer === void 0 || declaration.initializer.kind === SyntaxKind7.NewExpression) {
+      return void 0;
+    }
+    if (this.placeKeyNative(key) || this.rustScalarLocalOf(key) !== void 0 || this.rustStringLocalIdentifierIsTyped(key))
+      return void 0;
+    if (isVariableDeclaration3(declaration) && (this.rustNilLocalKind(declaration) !== void 0 || this.rustStringMethodLocalInit(declaration) !== void 0))
+      return void 0;
+    return `crate::runtime::stringify_param(&${text})`;
   }
   /** The declaration behind `node` when it is a local typed as a dict bearer. */
   rustDictBearerDeclaration(node) {
@@ -59645,7 +59752,12 @@ ${iden}}`;
     const prediction = typeof source === "string" && _RustTranspiler.RUST_PREDICTION_VENUE_FILE.test(source.replace(/\\/g, "/"));
     const escapes = [];
     let elementUses = 0;
-    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+    let enumUses = 0;
+    const outerWidened = this.literalKeyHits;
+    const outerSiblings = this.literalSiblingBindings;
+    this.literalKeyHits = 0;
+    this.literalSiblingBindings = 0;
+    const safe = this.literalLocalUsesAll(declaration, name, (n) => {
       if (this.rustIdentifierIsPropertyName(n)) {
         return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
       }
@@ -59654,7 +59766,7 @@ ${iden}}`;
       if (this.rustEnclosingFunction(n) !== fn)
         return false;
       const parent = n.parent;
-      if (isReturnStatement4(parent) && parent.expression === n) {
+      if (isReturnStatement4(parent) && parent.expression === n || this.rustCastReturnOperand(n)) {
         escapes.push(n);
         return true;
       }
@@ -59680,10 +59792,12 @@ ${iden}}`;
       }
       if (this.rustDictWriteValue(n))
         return true;
-      if (isCallExpression6(parent) && this.bearerEnumArg(parent) === n)
+      if (isCallExpression6(parent) && this.bearerEnumArg(parent) === n) {
+        enumUses++;
         return true;
+      }
       if (isBinaryExpression5(parent) && parent.operatorToken.kind === SyntaxKind7.InKeyword && parent.right === n)
-        return this.bearerInOpKeyText(parent.left) !== void 0;
+        return this.bearerInOpKeyText(parent.left) !== void 0 || this.literalKeyWidened(this.rustLiteralBearerKeyArg(n, parent.left));
       if (this.rustBearerRebuild(n))
         return true;
       const reuse = this.rustProducerReuse(n);
@@ -59691,12 +59805,20 @@ ${iden}}`;
         return true;
       return false;
     });
+    const siblings = this.literalSiblingBindings;
+    const widened = this.literalKeyHits > 0 || siblings > 0 || escapes.some((e) => this.rustCastReturnOperand(e));
+    this.literalKeyHits = outerWidened;
+    this.literalSiblingBindings = outerSiblings;
     if (!safe)
+      return false;
+    if (siblings > 0 && elementUses === 0)
+      return false;
+    if (widened && (enumUses > 0 || !escapes.every((e) => this.rustReturnOperand(e) || this.rustVecIsFinalUse(e, name) && !this.loopBetween(e))))
       return false;
     if (produced && escapes.length > 0 && elementUses === 0)
       return false;
     for (const escape of escapes) {
-      if (this.boxSiteOk(escape) === true)
+      if (this.boxSiteOk(escape) === true || this.rustCastReturnOperand(escape))
         continue;
       if (!prediction)
         return false;
@@ -59960,7 +60082,7 @@ ${iden}}`;
         return false;
       if (root !== access)
         return this.rustBearerChainHopArg(access.argumentExpression, this.printNode(access.argumentExpression, 0), name) !== void 0;
-      return this.rustDictBearerKeyOk(access.argumentExpression) || this.rustBearerWriteKeyOk(access.argumentExpression, name);
+      return this.rustDictBearerKeyOk(access.argumentExpression) || this.rustBearerWriteKeyOk(access.argumentExpression, name) || this.literalKeyWidened(this.rustLiteralBearerKeyArg(access.expression, access.argumentExpression));
     }
     if (up !== void 0 && (isDeleteExpression2(up) || isCallExpression6(up) && up.expression === root || up.kind === SyntaxKind7.PrefixUnaryExpression || up.kind === SyntaxKind7.PostfixUnaryExpression))
       return false;
@@ -60011,9 +60133,10 @@ ${iden}}`;
   rustBearerDictInsert(baseExpr, keyNode, keyText, valueText) {
     const declaration = this.rustDictBearerDeclaration(baseExpr);
     const name = String(baseExpr.text);
-    if (declaration === void 0 || !(this.rustDictBearerKeyOk(keyNode) || this.rustBearerWriteKeyOk(keyNode, name)))
+    const literalKey = declaration === void 0 ? void 0 : this.rustLiteralBearerKeyArg(baseExpr, keyNode);
+    if (declaration === void 0 || !(this.rustDictBearerKeyOk(keyNode) || this.rustBearerWriteKeyOk(keyNode, name) || literalKey !== void 0))
       return void 0;
-    const keyArg = this.rustNativeInsertKeyArg({ text: name, isField: false, plain: true }, keyNode, keyText) ?? this.rustBearerWriteKeyArg(keyNode, keyText, name);
+    const keyArg = this.rustNativeInsertKeyArg({ text: name, isField: false, plain: true }, keyNode, keyText) ?? this.rustBearerWriteKeyArg(keyNode, keyText, name) ?? literalKey;
     if (keyArg === void 0)
       return void 0;
     return this.rustBearerInsertText(name, keyArg, valueText);
@@ -60134,7 +60257,7 @@ ${iden}}`;
     if (recv === void 0 || !isIdentifier3(recv) || this.rustDictBearerDeclaration(recv) === void 0) {
       return void 0;
     }
-    const text = this.bearerInOpKeyText(key);
+    const text = this.bearerInOpKeyText(key) ?? (this.rustLiteralBearerKeyArg(recv, key) !== void 0 ? this.printNode(key, 0).trim() : void 0);
     if (text === void 0)
       return void 0;
     return `Value::Bool(matches!(&${text}, Value::Str(__k) if ${String(recv.text)}.contains_key(__k.as_ref())))`;
