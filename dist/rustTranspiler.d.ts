@@ -530,6 +530,13 @@ export declare class RustTranspiler extends BaseTranspiler {
         statements: string;
         head: string;
     };
+    rustFieldKeyReceiver(expr: any): string | undefined;
+    rustFieldKeyUseForm(n: any): string | undefined;
+    /** Element-access hook: `this.f[k]` read with a typed string key. */
+    printFieldKeyRead(node: any): string | undefined;
+    /** A local keyed on a field and re-boxed anywhere but a direct `return` would copy where the `Value` moved. */
+    rustFieldKeyCostly(declaration: any): boolean;
+    printFieldKeyInOp(key: any, obj: any): string | undefined;
     rustScalarInNestedWrite(n: any): boolean;
     /** A write source the local's type holds exactly: a same-kind value, a typed scalar local of the
      *  same kind, or a ternary of those (its condition printed as a bool). */
