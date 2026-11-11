@@ -10293,8 +10293,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** Base `toArray(x)` / `arrayConcat(a, b)`: the hand-written runtime answers a `Value::Arr` on every
      *  path (a cache's entries, the list itself, a dict's values, `[]` for anything else). */
     rustAlwaysListProducer(call: any): boolean {
-        const callee: any = call?.expression;
-        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const callee: any = call !== undefined && isCallExpression(call) ? call.expression : undefined;
+        if (callee === undefined || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const method = String(callee.name.text);
         if (method !== 'toArray' && method !== 'arrayConcat') return false;
         const declaration: any = this.rustScalarCallee(call);

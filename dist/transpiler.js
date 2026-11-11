@@ -60737,8 +60737,8 @@ ${iden}}`;
   /** Base `toArray(x)` / `arrayConcat(a, b)`: the hand-written runtime answers a `Value::Arr` on every
    *  path (a cache's entries, the list itself, a dict's values, `[]` for anything else). */
   rustAlwaysListProducer(call) {
-    const callee = call?.expression;
-    if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+    const callee = call !== void 0 && isCallExpression6(call) ? call.expression : void 0;
+    if (callee === void 0 || !isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
       return false;
     const method = String(callee.name.text);
     if (method !== "toArray" && method !== "arrayConcat")
