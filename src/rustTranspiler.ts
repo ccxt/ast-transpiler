@@ -2150,6 +2150,16 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             if (this.rustEnclosingFunction(n) !== scope) return false;
             const parent: any = n.parent;
+            if (this.rustNilSlotWrite(n)) {
+                // a flag slot of `[ flag, rest ] = <call>`: the checker types the slot `boolean`
+                if (this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== 'boolean') return false;
+                // the unwrap lengthens the printed statement: it must stay within the 400-char line budget
+                const statement: any = parent.parent;
+                const column = statement.getStart() - String(statement.getSourceFile().text).lastIndexOf('\n', statement.getStart()) - 1;
+                if (column + this.printNode(statement, 0).trim().length + '.as_bool()'.length > 400) return false;
+                writes++;
+                return join('bool');
+            }
             if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
                 if (parent.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
                 const rhsKind = this.rustNilWriteKind(parent.right);
@@ -2164,6 +2174,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             const parent: any = n.parent;
             if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) return true;
+            if (this.rustNilSlotWrite(n)) return true;
             return this.rustNilReadForm(n, kind) !== undefined;
         });
         return readsOk ? kind : undefined;
@@ -2381,6 +2392,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Slot hook: an `Option<String>` local takes the slot's string. */
     printRustNilSlotWrite(element, read: string): string | undefined {
+        if (isIdentifier(element) && this.rustNilLocalOfIdentifier(element)?.kind === 'bool') return `${super.printIdentifier(element)} = ${read}.as_bool()`;
         if (!isIdentifier(element) || this.rustScalarLocalOf(element)?.kind !== 'ostr' || this.rustScalarUseForms.get(element) !== 'slot') return undefined;
         return `${super.printIdentifier(element)} = ${read}.as_str().map(str::to_owned)`;
     }
@@ -10579,7 +10591,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A `let` declared empty is filled later by container writes only (the optional form).
         const nilDeclared = (init === undefined || this.literalKindOfNode(init) === 'null') && (list.flags & NodeFlags.Const) === 0
             && list.parent?.kind === SyntaxKind.VariableStatement;
-        let from: 'dict' | 'list' | 'api' | undefined = isCallExpression(init) ? this.rustBorrowedSourceKind(init) : undefined;
+        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? this.rustBorrowedSourceKind(init) : undefined;
         if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
@@ -10593,6 +10605,7 @@ export class RustTranspiler extends BaseTranspiler {
         let nullTests = 0;
         let writes = 0;
         let lengths = 0;
+        let indexLikeReads = 0;
         let mixed = false;
         const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
@@ -10608,8 +10621,8 @@ export class RustTranspiler extends BaseTranspiler {
                 const rhs: any = this.rustSkipWrappers(up.right);
                 writes++;
                 if (this.literalKindOfNode(rhs) === 'null') return true;
-                const kind = isCallExpression(rhs) ? this.rustBorrowedSourceKind(rhs) : undefined;
-                if (kind === undefined || kind === 'api' || !this.rustOptContainerSourceOk(rhs, kind)) return false;
+                const kind = this.rustNilResponseWriteKind(rhs, nilDeclared, declaration);
+                if (kind === undefined || kind === 'api' || !this.rustOptContainerSourceOk(rhs, kind) && !this.rustNilResponseLocals.has(declaration)) return false;
                 if (from !== undefined && from !== kind) mixed = true;
                 from = from ?? kind;
                 return String(rhs.getText()).split('\n')[0].length <= 240;
@@ -10622,11 +10635,15 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (!isCallExpression(up) || up.arguments[0] !== n) return false;
             // An endpoint response may be a list or a map: only literal-key reads agree for both.
-            if (this.rustBorrowedDictReader(up) === undefined && !(from !== 'api' && this.rustBorrowedAnyKeyReader(up))) return false;
+            const literalKey = this.rustBorrowedDictReader(up) !== undefined;
+            if (!literalKey && !(from !== 'api' && this.rustBorrowedAnyKeyReader(up))) return false;
+            // a list answer reads a digit key as an index, the optional map reads nothing
+            if (!literalKey || /^\d+$/.test(String(this.rustSkipWrappers(up.arguments[1]).text))) indexLikeReads++;
             reads++;
             return true;
         });
-        if (!safe || reads === 0 || mixed || from === undefined) return undefined;
+        if (!safe || reads === 0 || mixed || from === undefined
+            || (this.rustNilResponseLocals.has(declaration) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
         const optional = nilDeclared || nullTests > 0 || writes > 0;
         if (lengths > 0 && (from !== 'list' || optional)) return undefined;
         if (optional) {
@@ -10638,6 +10655,22 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustOptContainerLocals = new WeakSet<any>();
+
+    // ── empty-declared endpoint responses (`let response = undefined; response = await this.<endpoint> (..)`) ──
+    // An endpoint may answer a list, a map or a scalar. Read only through literal-key readers, every variant
+    // reads the same as the optional map `into_opt_dict` keeps (a list or scalar has no string keys), so the
+    // local holds `Option<Dict>`. Null tests, any-key reads and lengths would tell the variants apart: rejected.
+    private rustNilResponseLocals = new WeakSet<any>();
+
+    /** The container kind of a write to a borrowed local; an endpoint write to an empty `let` counts as a map. */
+    rustNilResponseWriteKind(rhs: any, nilDeclared: boolean, declaration: any): 'dict' | 'list' | 'api' | undefined {
+        let call: any = rhs;
+        if (call?.kind === SyntaxKind.AwaitExpression) call = this.rustSkipWrappers(call.expression);
+        const kind = isCallExpression(call) ? this.rustBorrowedSourceKind(call) : undefined;
+        if (kind !== 'api' || !nilDeclared) return kind;
+        this.rustNilResponseLocals.add(declaration);
+        return 'dict';
+    }
 
     /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
     rustOptContainerSourceOk(call: any, kind: 'dict' | 'list' | 'api'): boolean {
