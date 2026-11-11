@@ -235,6 +235,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNumericOperandKind(node: any): string | undefined;
     orderedComparisonOperand(node: any): any;
     printNativeOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
+    /** True when the operands prove the helper's answer, so the comparison runs on `as_f64` unwraps. */
+    rustOrderedOperandsProven(op: any, left: any, right: any): boolean;
     printNativeIndexOfLiteralTest(node: any, op: any, left: any, right: any): string | undefined;
     nativeIndexOfLiteralTestText(op: any, left: any, right: any): string | undefined;
     rustTypeFlagsAll(type: any, flags: Set<number>): boolean;
@@ -443,8 +445,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustDerivedScalarKind(call: any): string | undefined;
     rustElementReadScalarKind(node: any): string | undefined;
     rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
-    private static readonly RUST_SCALAR_COUNTER_COND;
-    rustScalarCounterCond(name: string, condStr: string): string | undefined;
+    rustScalarCounterCond(node: any, name: string): string | undefined;
+    rustScalarCounterPlan(node: any, name: string): {
+        cond: string;
+    } | undefined;
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
     rustScalarNeedsNativeUse(init: any): boolean;
     rustScalarCallee(call: any): any;
@@ -1150,7 +1154,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustI64CounterPlan(node: any, counter: {
         name: string;
         symbol: any;
-    }, condStr: string): string | undefined;
+    }, condStr: string): string | {
+        cond: string;
+    } | undefined;
     /** A bare counter use that is an argument of a `this.m(..)` call or the value of an `x[k] = i` write. */
     rustI64BoxedUse(id: any): boolean;
     /** The registered counter's symbol when `node` is a use of it, else undefined. */

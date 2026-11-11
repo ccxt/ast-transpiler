@@ -7386,6 +7386,32 @@ describe('rust scalar residual locals', () => {
         expect(output).toContain('i += 1;');
     });
 
+    test('an int-literal counter condition prints the cast against the printed bound', () => {
+        const mk = (cond: string) =>
+            "class C {\n" +
+            "    f (rows: string[], count: number, limit: number): any {\n" +
+            "        const out = [];\n" +
+            "        for (let i = 0; " + cond + "; i++) {\n" +
+            "            out.push (this.g (rows[i]));\n" +
+            "        }\n" +
+            "        return out;\n" +
+            "    }\n" +
+            "    g (x: any): any { return x; }\n" +
+            "}";
+        const le = transpiler.transpileRust(mk('i <= count')).content;
+        expect(le).toContain('let mut i: i64 = 0;');
+        expect(le).toContain('(i as f64) <= count.as_f64().unwrap_or(f64::NAN)');
+        const lt = transpiler.transpileRust(mk('i < count')).content;
+        expect(lt).toContain('(i as f64) < count.as_f64().unwrap_or(f64::NAN)');
+        const call = transpiler.transpileRust(mk('i < Math.min (count, limit)')).content;
+        expect(call).toContain('let mut i: i64 = 0;');
+        expect(call).toMatch(/\(i as f64\) < .+\.as_f64\(\)\.unwrap_or\(f64::NAN\)/);
+        const own = transpiler.transpileRust(mk('i < count - i')).content;
+        expect(own).toContain('let mut i: Value = Value::Int(0);');
+        expect(own).not.toContain('(i as f64)');
+        expect(le + lt + call + own).not.toContain('\u0007');
+    });
+
     test('a counter written in its body keeps the Value box', () => {
         const ts =
             "class C {\n" +

@@ -1692,6 +1692,15 @@ export class RustTranspiler extends BaseTranspiler {
             !this.printsValueExpression(this.orderedComparisonOperand(right))) {
             return undefined;
         }
+        if (!this.rustOrderedOperandsProven(op, left, right)) {
+            return this.strOrderedComparison(node, op, left, right) ?? this.nativeLooseOrderedComparison(node, op, left, right);
+        }
+        return this.printNativeIndexOfLiteralTest(node, op, left, right)
+            ?? this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
+    }
+
+    /** True when the operands prove the helper's answer, so the comparison runs on `as_f64` unwraps. */
+    rustOrderedOperandsProven(op, left, right): boolean {
         const leftKind = this.rustNumericOperandKind(left);
         const rightKind = this.rustNumericOperandKind(right);
         const ordered = op === SyntaxKind.LessThanToken || op === SyntaxKind.GreaterThanToken;
@@ -1699,11 +1708,7 @@ export class RustTranspiler extends BaseTranspiler {
             (ordered
                 ? (leftKind !== undefined || rightKind !== undefined)
                 : (leftKind === 'number' && rightKind === 'number'));
-        if (!proven && !this.rustOrderedProven(op, left, right)) {
-            return this.strOrderedComparison(node, op, left, right) ?? this.nativeLooseOrderedComparison(node, op, left, right);
-        }
-        return this.printNativeIndexOfLiteralTest(node, op, left, right)
-            ?? this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
+        return proven || this.rustOrderedProven(op, left, right);
     }
 
     // `s.indexOf("lit") >= 0` / `> -1` / `< 0` on a proven string place and a non-empty literal needle is a `contains`
@@ -3821,16 +3826,26 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     // ── scalar loop counters (rustScalarCounterCond) ──
-    // `i < n` over an `Int`-literal counter whose bound is any other numeric operand: the counter's
-    // `Value::Int` payload compares as `i.as_f64()`, which on an `i64` is exactly `(i as f64)`.
-    // The marked result is the whole rewritten condition (the bound side prints unchanged).
-    private static readonly RUST_SCALAR_COUNTER_COND = '\u0007';
+    // `i < n` over an `Int`-literal counter whose bound is any other numeric operand (one that the
+    // native `as_f64` comparison takes): the `Value::Int` payload's `as_f64()` on an `i64` is
+    // exactly `(i as f64)`, so the condition is that cast against the bound's unwrap.
+    rustScalarCounterCond(node: any, name: string): string | undefined {
+        const cond: any = node?.condition;
+        if (cond === undefined || !isBinaryExpression(cond)) return undefined;
+        const op = cond.operatorToken.kind;
+        const operator = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+        const { left, right } = cond as any;
+        if (operator === undefined || !isIdentifier(left) || left.text !== name) return undefined;
+        const refs = (n: any): boolean => (isIdentifier(n) && n.text === name) || (n.forEachChild(refs) ?? false);
+        if (refs(right) || !this.printsValueExpression(left) || !this.printsValueExpression(this.orderedComparisonOperand(right))) return undefined;
+        if (this.printRustScalarBinary(cond) !== undefined || this.rustScalarOwnsOperand(left) || this.rustScalarOwnsOperand(right)) return undefined;
+        if (!this.rustOrderedOperandsProven(op, left, right) || this.nativeIndexOfLiteralTestText(op, left, right) !== undefined) return undefined;
+        return `(${name} as f64) ${operator} ${this.printNode(right, 0)}.as_f64().unwrap_or(f64::NAN)`;
+    }
 
-    rustScalarCounterCond(name: string, condStr: string): string | undefined {
-        const head = `${name}.as_f64().unwrap_or(f64::NAN) `;
-        const match = /^(<=?|>=?) (.+)$/.exec(condStr.startsWith(head) ? condStr.slice(head.length) : '');
-        if (match === null || new RegExp(`(?<![\\w.])${name}(?![\\w])`).test(match[2])) return undefined;
-        return `${RustTranspiler.RUST_SCALAR_COUNTER_COND}(${name} as f64) ${match[1]} ${match[2]}`;
+    rustScalarCounterPlan(node: any, name: string): { cond: string } | undefined {
+        const cond = this.rustScalarCounterCond(node, name);
+        return cond === undefined ? undefined : { cond };
     }
 
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
@@ -8844,7 +8859,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (typed && counter !== undefined && bound !== undefined) {
                 initStr = initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
-                condStr = bound.startsWith(RustTranspiler.RUST_SCALAR_COUNTER_COND) ? bound.slice(1) : `${counter.name} < (${bound}.len() as i64)`;
+                condStr = typeof bound === 'object' ? bound.cond : `${counter.name} < (${bound}.len() as i64)`;
                 step = `${counter.name} += 1;`;
             }
             const cond = `{ if !${flag} { ${step} } ${flag} = false; ${condStr} }`;
@@ -8903,9 +8918,9 @@ export class RustTranspiler extends BaseTranspiler {
     private rustI64Counters = new Map<string, any>();
 
     /** The place `X` of a `i < X.length` condition over this counter, when its uses are all admissible. */
-    rustI64CounterPlan(node, counter: { name: string, symbol: any }, condStr: string): string | undefined {
+    rustI64CounterPlan(node, counter: { name: string, symbol: any }, condStr: string): string | { cond: string } | undefined {
         const printed = new RegExp(`^${counter.name}\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\) < Value::Int\\((self\\.\\w+|\\w+)\\.len\\(\\) as i64\\)\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\)$`).exec(condStr);
-        const bound = printed?.[1] ?? this.rustOptListCounterBound(node, counter.name, condStr) ?? this.rustScalarCounterCond(counter.name, condStr); if (bound === undefined) return undefined;
+        const bound = printed?.[1] ?? this.rustOptListCounterBound(node, counter.name, condStr) ?? this.rustScalarCounterPlan(node, counter.name); if (bound === undefined) return undefined;
         for (const id of this.rustScopeNameNodes(node.statement, counter.name) as any[]) {
             if (id.kind !== SyntaxKind.Identifier || this.rustIdentifierIsPropertyName(id) || this.rustSymbolOf(id) !== counter.symbol) continue;
             const up: any = id.parent;

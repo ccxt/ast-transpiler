@@ -52687,14 +52687,18 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (operator === void 0 || !this.printsValueExpression(this.orderedComparisonOperand(left)) || !this.printsValueExpression(this.orderedComparisonOperand(right))) {
       return void 0;
     }
+    if (!this.rustOrderedOperandsProven(op, left, right)) {
+      return this.strOrderedComparison(node, op, left, right) ?? this.nativeLooseOrderedComparison(node, op, left, right);
+    }
+    return this.printNativeIndexOfLiteralTest(node, op, left, right) ?? this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
+  }
+  /** True when the operands prove the helper's answer, so the comparison runs on `as_f64` unwraps. */
+  rustOrderedOperandsProven(op, left, right) {
     const leftKind = this.rustNumericOperandKind(left);
     const rightKind = this.rustNumericOperandKind(right);
     const ordered = op === SyntaxKind7.LessThanToken || op === SyntaxKind7.GreaterThanToken;
     const proven = leftKind === "definite" || rightKind === "definite" || (ordered ? leftKind !== void 0 || rightKind !== void 0 : leftKind === "number" && rightKind === "number");
-    if (!proven && !this.rustOrderedProven(op, left, right)) {
-      return this.strOrderedComparison(node, op, left, right) ?? this.nativeLooseOrderedComparison(node, op, left, right);
-    }
-    return this.printNativeIndexOfLiteralTest(node, op, left, right) ?? this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
+    return proven || this.rustOrderedProven(op, left, right);
   }
   // `s.indexOf("lit") >= 0` / `> -1` / `< 0` on a proven string place and a non-empty literal needle is a `contains`
   // test: a non-Str receiver gives `""`, which contains no non-empty literal, like the `None` -> -1 arm.
@@ -54685,12 +54689,31 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return true;
   }
-  rustScalarCounterCond(name, condStr) {
-    const head = `${name}.as_f64().unwrap_or(f64::NAN) `;
-    const match = /^(<=?|>=?) (.+)$/.exec(condStr.startsWith(head) ? condStr.slice(head.length) : "");
-    if (match === null || new RegExp(`(?<![\\w.])${name}(?![\\w])`).test(match[2]))
+  // ── scalar loop counters (rustScalarCounterCond) ──
+  // `i < n` over an `Int`-literal counter whose bound is any other numeric operand (one that the
+  // native `as_f64` comparison takes): the `Value::Int` payload's `as_f64()` on an `i64` is
+  // exactly `(i as f64)`, so the condition is that cast against the bound's unwrap.
+  rustScalarCounterCond(node, name) {
+    const cond = node?.condition;
+    if (cond === void 0 || !isBinaryExpression5(cond))
       return void 0;
-    return `${_RustTranspiler.RUST_SCALAR_COUNTER_COND}(${name} as f64) ${match[1]} ${match[2]}`;
+    const op = cond.operatorToken.kind;
+    const operator = _RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+    const { left, right } = cond;
+    if (operator === void 0 || !isIdentifier3(left) || left.text !== name)
+      return void 0;
+    const refs = (n) => isIdentifier3(n) && n.text === name || (n.forEachChild(refs) ?? false);
+    if (refs(right) || !this.printsValueExpression(left) || !this.printsValueExpression(this.orderedComparisonOperand(right)))
+      return void 0;
+    if (this.printRustScalarBinary(cond) !== void 0 || this.rustScalarOwnsOperand(left) || this.rustScalarOwnsOperand(right))
+      return void 0;
+    if (!this.rustOrderedOperandsProven(op, left, right) || this.nativeIndexOfLiteralTestText(op, left, right) !== void 0)
+      return void 0;
+    return `(${name} as f64) ${operator} ${this.printNode(right, 0)}.as_f64().unwrap_or(f64::NAN)`;
+  }
+  rustScalarCounterPlan(node, name) {
+    const cond = this.rustScalarCounterCond(node, name);
+    return cond === void 0 ? void 0 : { cond };
   }
   /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
   rustScalarNeedsNativeUse(init) {
@@ -59391,7 +59414,7 @@ ${idn}}`;
       }
       if (typed && counter !== void 0 && bound !== void 0) {
         initStr = initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
-        condStr = bound.startsWith(_RustTranspiler.RUST_SCALAR_COUNTER_COND) ? bound.slice(1) : `${counter.name} < (${bound}.len() as i64)`;
+        condStr = typeof bound === "object" ? bound.cond : `${counter.name} < (${bound}.len() as i64)`;
         step = `${counter.name} += 1;`;
       }
       const cond = `{ if !${flag} { ${step} } ${flag} = false; ${condStr} }`;
@@ -59453,7 +59476,7 @@ ${idn}}`;
   /** The place `X` of a `i < X.length` condition over this counter, when its uses are all admissible. */
   rustI64CounterPlan(node, counter, condStr) {
     const printed = new RegExp(`^${counter.name}\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\) < Value::Int\\((self\\.\\w+|\\w+)\\.len\\(\\) as i64\\)\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\)$`).exec(condStr);
-    const bound = printed?.[1] ?? this.rustOptListCounterBound(node, counter.name, condStr) ?? this.rustScalarCounterCond(counter.name, condStr);
+    const bound = printed?.[1] ?? this.rustOptListCounterBound(node, counter.name, condStr) ?? this.rustScalarCounterPlan(node, counter.name);
     if (bound === void 0)
       return void 0;
     for (const id of this.rustScopeNameNodes(node.statement, counter.name)) {
@@ -64792,11 +64815,6 @@ _RustTranspiler.RUST_BASE_SCALAR_RETURNS = {
   milliseconds: "oint",
   seconds: "oint"
 };
-// ── scalar loop counters (rustScalarCounterCond) ──
-// `i < n` over an `Int`-literal counter whose bound is any other numeric operand: the counter's
-// `Value::Int` payload compares as `i.as_f64()`, which on an `i64` is exactly `(i as f64)`.
-// The marked result is the whole rewritten condition (the bound side prints unchanged).
-_RustTranspiler.RUST_SCALAR_COUNTER_COND = "\x07";
 // rustWsClientCallArg: `client.resolve|reject|future|reusableFuture|send(.., x)` on a ws `Client`
 // receiver takes its arguments as plain `Value`s, so a string local boxes there.
 _RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS = /* @__PURE__ */ new Set(["resolve", "reject", "future", "reusableFuture", "send"]);
