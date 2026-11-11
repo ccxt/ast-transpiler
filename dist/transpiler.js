@@ -51405,6 +51405,13 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustContainerBoxUses = /* @__PURE__ */ new WeakMap();
     this.rustBorrowedDictDecisions = /* @__PURE__ */ new WeakMap();
     this.rustBorrowedKinds = /* @__PURE__ */ new WeakMap();
+    // ── lent string lists ────────────────────────────────────────────────────
+    // A string-list local from a never-empty `marketSymbols (.., false, ..)`, `Object.keys/values`, or `marketIds` of
+    // such a list holds the shared list (`crate::value::List`, moved out of the box). Length and element reads are
+    // native; each `Value` slot of a `this.` method gets the shared handle (`Value::Arr(x.clone())`, a move at
+    // `return x`), so handing the list on never copies its elements.
+    this.rustLentListKinds = /* @__PURE__ */ new WeakMap();
+    this.rustLentListBoxes = /* @__PURE__ */ new WeakMap();
     this.rustHandedDictDecisions = /* @__PURE__ */ new WeakMap();
     // Two-level dict bearers: an object literal whose every value is an object literal is declared
     // `IndexMap<String, IndexMap<String, Value>>`, so `x[k1][k2] = v` is one `entry(k1)..insert(k2, v)` and
@@ -51963,7 +51970,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const receiver = leftExpr ?? this.printNode(node.expression, 0);
     if (!this.rustIsOrderBookSide(node.expression) && this.isValueLengthType(this.typeOfNodeIfAny(node.expression)))
       return `Value::Int(${receiver}.len() as i64)`;
-    if (this.rustReadBearerKind(node.expression) === "list" || this.rustBorrowedListUse(node.expression))
+    if (this.rustReadBearerKind(node.expression) === "list" || this.rustBorrowedListUse(node.expression) || this.rustLentListUse(node.expression))
       return `Value::Int(${receiver}.len() as i64)`;
     if (this.provenListValue(node.expression))
       return `${receiver}.as_array().map_or(Value::Int(0), |__a| Value::Int(__a.len() as i64))`;
@@ -52925,6 +52932,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const typedMarket = this.printTypedMarketLocal(declaration, indent, varName);
     if (typedMarket !== void 0)
       return typedMarket;
+    if (node.declarations.length === 1 && this.rustLentListLocal(declaration))
+      return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
     const readBearer = node.declarations.length === 1 ? this.rustReadBearerKindOfDeclaration(declaration) : false;
     if (readBearer === "list") {
       return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
@@ -57152,6 +57161,11 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       if (native !== void 0)
         return native;
     }
+    if (this.rustLentListUse(receiverNode)) {
+      const native = this.printReadBearerAccess("list", receiverText, keyNode);
+      if (native !== void 0)
+        return native;
+    }
     const shadow = this.rustParamShadowOf(receiverNode);
     if (shadow !== void 0) {
       const native = this.printShadowContainerRead(shadow, keyNode);
@@ -59634,6 +59648,9 @@ ${iden}}`;
     const containerBox = this.printRustContainerLocalBox(node, text);
     if (containerBox !== void 0)
       return containerBox;
+    const lentBox = this.printRustLentListBox(node, text);
+    if (lentBox !== void 0)
+      return lentBox;
     const parent = node?.parent;
     if (this.rustI64Counters.size > 0 && this.rustI64CounterOf(node) !== void 0 && (this.rustI64BoxedUse(node) || isVariableDeclaration3(parent) && parent.initializer === node))
       return `Value::Int(${text})`;
@@ -60730,6 +60747,116 @@ ${iden}}`;
     const text = String(recv.text);
     const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[text] ?? text);
     return `self.${rust}(&${name}, ${this.quotedStringLiteral(String(key.text))}, &[${dflt}])`;
+  }
+  rustLentListLocal(declaration) {
+    if (declaration?.kind !== SyntaxKind7.VariableDeclaration)
+      return false;
+    let decision = this.rustLentListKinds.get(declaration);
+    if (decision === void 0) {
+      this.rustLentListKinds.set(declaration, false);
+      try {
+        decision = this.rustLentListLocalUncached(declaration);
+      } catch (e) {
+        decision = false;
+      }
+      this.rustLentListKinds.set(declaration, decision);
+    }
+    return decision;
+  }
+  /** A call that yields a string list on every path (never `undefined`). */
+  rustLentListSource(init) {
+    if (!isCallExpression6(init) || !isPropertyAccessExpression3(init.expression))
+      return false;
+    const callee = init.expression;
+    const method = String(callee.name.text);
+    if (isIdentifier3(callee.expression) && callee.expression.text === "Object")
+      return method === "keys" || method === "values";
+    if (callee.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const declaration = this.rustScalarCallee(init);
+    if (declaration === void 0 || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName)))
+      return false;
+    const args = Array.from(init.arguments ?? []);
+    if (method === "marketSymbols")
+      return args.length >= 3 && this.rustSkipWrappers(args[2])?.kind === SyntaxKind7.FalseKeyword;
+    if (method === "marketIds")
+      return args.length === 1 && this.rustLentListUse(this.rustSkipWrappers(args[0]));
+    return false;
+  }
+  rustLentListLocalUncached(declaration) {
+    if (declaration.name?.kind !== SyntaxKind7.Identifier)
+      return false;
+    const list = declaration.parent;
+    if (list?.kind !== SyntaxKind7.VariableDeclarationList || list.declarations?.length !== 1)
+      return false;
+    const source = declaration.getSourceFile?.()?.fileName;
+    if (typeof source === "string" && /[\\/]test[\\/]/.test(source))
+      return false;
+    const init = this.rustSkipWrappers(declaration.initializer);
+    if (!this.rustLentListSource(init))
+      return false;
+    const type = this.typeOfNodeIfAny(declaration.name);
+    if (type === void 0 || !this.getChecker().isArrayType(type))
+      return false;
+    const name = String(declaration.name.text);
+    const fn = this.rustEnclosingFunction(declaration);
+    if (fn === void 0 || isSourceFile5(fn) || this.rustLocalIsReassigned(declaration, name))
+      return false;
+    const bearer = this.rustReadBearerKindOfDeclaration(declaration) !== false;
+    if (bearer && !isIdentifier3(init.expression.expression) || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration) || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustBorrowedDictLocal(declaration) || this.rustNilLocalKind(declaration) !== void 0 || this.rustScalarLocalKind(declaration) !== void 0)
+      return false;
+    if (String(declaration.initializer.getText()).split("\n")[0].length > 240)
+      return false;
+    const boxes = [];
+    let natives = 0;
+    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+      if (this.rustIdentifierIsPropertyName(n))
+        return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
+      if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
+        return false;
+      const up = n.parent;
+      if (isElementAccessExpression4(up) && up.expression === n) {
+        natives++;
+        return this.rustReadBearerElementUse(up, "list");
+      }
+      if (isPropertyAccessExpression3(up) && up.expression === n && String(up.name.text) === "length") {
+        const use = up.parent;
+        natives++;
+        return use?.kind !== SyntaxKind7.PrefixUnaryExpression && use?.kind !== SyntaxKind7.PostfixUnaryExpression && !(isBinaryExpression5(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
+      }
+      if (isReturnStatement4(up) && up.expression === n) {
+        boxes.push([n, "move"]);
+        return true;
+      }
+      if (isCallExpression6(up) && up.expression !== n && up.arguments.some((a) => a === n)) {
+        const callee = up.expression;
+        if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n)))
+          return false;
+        boxes.push([n, "clone"]);
+        return true;
+      }
+      return false;
+    });
+    if (!safe || natives === 0 || bearer && boxes.length > 0)
+      return false;
+    for (const [n, form] of boxes)
+      this.rustLentListBoxes.set(n, form);
+    return true;
+  }
+  rustLentListUse(node) {
+    if (node === void 0 || !isIdentifier3(node))
+      return false;
+    const declaration = this.rustDeclarationOfIdentifier(node);
+    return declaration !== void 0 && declaration !== node && declaration.name !== node && this.rustLentListLocal(declaration);
+  }
+  /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
+  printRustLentListBox(node, text) {
+    if (!this.rustLentListUse(node))
+      return void 0;
+    const form = this.rustLentListBoxes.get(node);
+    if (form === void 0)
+      return void 0;
+    return form === "move" ? `Value::Arr(${text})` : `Value::Arr(${text}.clone())`;
   }
   rustHandedDictLocal(declaration) {
     if (declaration?.kind !== SyntaxKind7.VariableDeclaration && declaration?.kind !== SyntaxKind7.BindingElement)
