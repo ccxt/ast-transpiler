@@ -2330,7 +2330,6 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(declaration.name) || list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1
             || (list.flags & NodeFlags.Const) !== 0 || list.parent?.kind !== SyntaxKind.VariableStatement) return undefined;
         if (this.rustNilLocalKind(declaration) !== undefined) return undefined;
-        if (/[\\/]test[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return undefined;
         const scope: any = this.rustEnclosingFunction(declaration);
         if (scope === undefined || isSourceFile(scope) || this.rustNativeStrReturnKind(scope) === 'str') return undefined;
         const name = String(declaration.name.text);
@@ -3591,9 +3590,23 @@ export class RustTranspiler extends BaseTranspiler {
         if (isIdentifier(node) || isConditionalExpression(node) || this.rustScalarStrMethod(node, true) !== undefined || this.rustScalarPreciseCall(node)) return true;
         if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && isIdentifier(node.expression);
         if (isElementAccessExpression(node)) return isIdentifier(node.expression);
-        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustScalarReceiver(node.expression.expression)) return false;
         // any `this.m(..)`: the kind comes from the callee's checker return
         return true;
+    }
+
+    /** True for test sources: their helpers take every argument as a `Value`, so a local typed there must earn a native use. */
+    rustTestTierSource(node): boolean {
+        return /[\\/]test[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? ''));
+    }
+
+    /** `this`, or in a test source an identifier typed as the base `Exchange` class (it resolves to the base readers). */
+    rustScalarReceiver(node): boolean {
+        if (node?.kind === SyntaxKind.ThisKeyword) return true;
+        if (!isIdentifier(node) || !this.rustTestTierSource(node)) return false;
+        const type: any = this.typeOfNodeIfAny(node);
+        const declaration: any = type === undefined ? undefined : symbolDeclarations(this.typeSymbolOf(type)).find((d: any) => isClassDeclaration(d));
+        return declaration !== undefined && /ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
     }
 
     rustScalarLocalKindUncached(declaration): string | undefined {
@@ -3603,7 +3616,6 @@ export class RustTranspiler extends BaseTranspiler {
         const list: any = declaration.parent;
         if (!isIdentifier(declaration.name) || list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1
             || list.parent?.kind !== SyntaxKind.VariableStatement) return undefined;
-        if (/[\\/]test[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return undefined;
         const scope: any = this.rustEnclosingFunction(declaration);
         if (scope === undefined || isSourceFile(scope)) return undefined;
         // a proof the existing typed-local rules already take keeps their spelling
@@ -3621,6 +3633,7 @@ export class RustTranspiler extends BaseTranspiler {
         let nativeUses = 0;
         let expressionUses = false;
         let typedUses = 0;
+        let copied = 0;
         // uses that read the local itself (`.length`, compares) see the candidate kind
         if (this.rustScalarSeeding) return kind;
         const previous = this.rustScalarDecisions.get(declaration);
@@ -3630,8 +3643,10 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustEnclosingFunction(n) !== scope) return false;
             const form = this.rustScalarUseForm(n, kind);
             this.rustScalarUseForms.set(n, form);
-            if (form === 'box' || form === 'xbox' || form === 'err') boxed++;
-            else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
+            if (form === 'box' || form === 'xbox' || form === 'err') {
+                boxed++;
+                if (form === 'err' || !(isReturnStatement(n.parent) || this.rustTestLastUse(n, declaration))) copied++;
+            } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
             if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ') typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
@@ -3647,6 +3662,9 @@ export class RustTranspiler extends BaseTranspiler {
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
         if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration))) return undefined;
+        if (typedUses === 0 && this.rustTestTierSource(declaration)) return undefined;
+        // a test string re-boxed anywhere but its moving `return` copies where the `Value` was lent
+        if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustTestTierSource(declaration)) return undefined;
         if (guarded) this.rustScalarGuarded.add(declaration);
         return kind;
     }
@@ -3691,7 +3709,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustElementReadScalarKind(node) !== undefined) return this.rustElementReadScalarKind(node);
         if (!isCallExpression(node)) return undefined;
         const callee: any = node.expression;
-        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (!isPropertyAccessExpression(callee) || !this.rustScalarReceiver(callee.expression)) return undefined;
         const name = String(callee.name.text);
         const args: any[] = Array.from(node.arguments ?? []);
         const baseReturn = this.rustBaseReturnScalarKind(node, name);
@@ -3740,7 +3758,7 @@ export class RustTranspiler extends BaseTranspiler {
     // Any other callee: a base one whose checker return is a string, or one declaring `string`/`Str`/`int`/`Int`
     // (a bare `number` may hold a float, which `as_i64` would drop).
     rustDerivedScalarKind(call): string | undefined {
-        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || !this.rustScalarReceiver(call.expression.expression)) return undefined;
         const name = String(call.expression.name.text);
         if (RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(name) || RustTranspiler.RUST_SCALAR_INT_HELPERS[name] !== undefined
             || RustTranspiler.RUST_SCALAR_NUM_HELPERS[name] !== undefined || RustTranspiler.RUST_SCALAR_BOOL_HELPERS[name] !== undefined) return undefined;
@@ -3962,6 +3980,25 @@ export class RustTranspiler extends BaseTranspiler {
         while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
         const call: any = statement.kind === SyntaxKind.ExpressionStatement ? this.unwrapParens(statement.expression) : undefined;
         if (call === undefined || !isCallExpression(call) || !this.rustWsClientCallArg(call, 'str')) return false;
+        let last = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (n !== node && (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end))) last = false;
+            return true;
+        });
+        if (!last) return false;
+        for (let up: any = node.parent; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
+    }
+
+    // In a test source a string local's final read moves: no later use, no other use in its statement,
+    // no loop or closure between it and the declaration (a hoisted argument is then still the last read).
+    rustTestLastUse(node, declaration): boolean {
+        if (!this.rustTestTierSource(declaration)) return false;
+        let statement: any = node;
+        while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
         let last = true;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             if (n !== node && (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end))) last = false;
@@ -4334,7 +4371,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
         // only a direct `return x` moves: ccxt hoists call arguments ahead of their statement
-        const moved = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration) ? name : `${name}.clone()`;
+        const moved = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration)
+            || this.rustTestLastUse(node, local.declaration) ? name : `${name}.clone()`;
         if (local.kind === 'ostr') return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
         if (local.kind === 'str') return `Value::from(${moved})`;
         return local.kind === 'bool' ? `Value::Bool(${name})` : `Value::from(${name})`;
@@ -4676,7 +4714,10 @@ export class RustTranspiler extends BaseTranspiler {
             const fn = method.method === 'toLowerCase' ? 'to_lowercase' : 'to_uppercase';
             if (method.recvKind === 'ostr') return wrap(`${name}.as_deref().map(str::${fn})`);
             if (method.method === 'trim') return wrap(`${name}.trim().to_string()`);
-            if (method.method === 'toString') return wrap(`${name}.clone()`);
+            if (method.method === 'toString') {
+                const local = this.rustScalarLocalOf(method.recv);
+                return wrap(local !== undefined && this.rustTestLastUse(method.recv, local.declaration) ? name : `${name}.clone()`);
+            }
             if (method.method === 'replace') return wrap(`${name}.replace("${arg(0)}", "${arg(1)}")`);
             return wrap(`${name}.${fn}()`);
         }
@@ -8629,7 +8670,7 @@ export class RustTranspiler extends BaseTranspiler {
         const incr: any = node.incrementor;
         if (init?.kind !== SyntaxKind.VariableDeclarationList || init.declarations.length !== 1 || !(init.flags & NodeFlags.BlockScoped)) return undefined;
         const declaration: any = init.declarations[0];
-        if (!isIdentifier(declaration.name) || /\/test\//.test(String(node.getSourceFile?.().fileName ?? ''))) return undefined;
+        if (!isIdentifier(declaration.name)) return undefined;
         const name = String(declaration.name.text);
         // The declaration must print as the boxed int literal the Int payload relies on.
         const printed = new RegExp(`^let mut ${name}: Value = Value::Int\\((-?\\d+)\\);$`).exec(initStr.trim());
@@ -9034,7 +9075,8 @@ export class RustTranspiler extends BaseTranspiler {
      *  from an object literal, so the helper's ws/tag filters have nothing to strip. */
     bearerEnum(node: any, kind: 'keys' | 'values'): string | undefined {
         const arg = this.bearerEnumArg(node);
-        if (arg === undefined || this.rustDictBearerDeclaration(arg) === undefined) return undefined;
+        // a test map's key list copies each key where the helper lent the map
+        if (arg === undefined || this.rustTestTierSource(arg) || this.rustDictBearerDeclaration(arg) === undefined) return undefined;
         const recv = String(arg.text);
         const body = kind === 'keys'
             ? `${recv}.keys().map(|__k| Value::Str(__k.clone().into())).collect()`
@@ -9609,9 +9651,6 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(declaration.name.text);
         const fn = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
-        // The tests pipeline's text post-passes key on the boxed `Value` local shape.
-        const source = declaration.getSourceFile?.()?.fileName;
-        if (typeof source === 'string' && /\/test\//.test(source)) return false;
         let pushes = 0;
         let clonedOut = 0;
         let castReturns = 0;
@@ -9938,9 +9977,7 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
-        // The tests pipeline's text post-passes key on the boxed `Value` local shape.
         const source: any = declaration.getSourceFile?.()?.fileName;
-        if (typeof source === 'string' && /\/test\//.test(source)) return false;
         // A prediction venue nests its builders (`{ action: obj }`, `f (x, obj)`), so a
         // local there escapes more than once; every escape then boxes a clone.
         const prediction = typeof source === 'string'
@@ -10032,7 +10069,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  from the call and the box is cloned out once. */
     rustDictProducer(node: any): boolean {
         const call: any = this.rustSkipWrappers(node);
-        if (!isCallExpression(call)) return false;
+        if (!isCallExpression(call) || this.rustTestTierSource(call)) return false;
         const callee: any = call.expression;
         if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
             || callee.name?.kind !== SyntaxKind.Identifier) return false;
@@ -10545,6 +10582,7 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustReadBearerDecisions.set(declaration, false); // re-entrancy guard
             try {
                 decision = this.rustReadBearerKindUncached(declaration) || this.rustContainerLocalKind(declaration);
+                if (decision === 'list' && this.rustTestTierSource(declaration) && this.bearerEnumArg(declaration.initializer) !== undefined) decision = false;
             } catch (e) {
                 decision = false; // no proof -> the local keeps its `Value` box
             }
@@ -10562,13 +10600,11 @@ export class RustTranspiler extends BaseTranspiler {
         // Literal-built containers belong to the Vec / dict local families.
         if (isArrayLiteralExpression(init) || isObjectLiteralExpression(init)) return false;
         const kind = this.rustContainerProducingKind(init, new Set());
-        if (kind === undefined) return false;
+        // a test map comes from a `Value`-returning helper; copying it out costs a clone
+        if (kind === undefined || (kind === 'map' && this.rustTestTierSource(declaration))) return false;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
-        // The tests pipeline's text post-passes key on the boxed `Value` local shape.
-        const source: any = declaration.getSourceFile?.()?.fileName;
-        if (typeof source === 'string' && /\/test\//.test(source)) return false;
         if (this.rustLocalIsReassigned(declaration, name)) return false;
         const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) {
