@@ -5091,6 +5091,7 @@ export class RustTranspiler extends BaseTranspiler {
             const push = isPropertyAccessExpression(callee) && callee.name.text === 'push' && callee.expression.kind !== SyntaxKind.ThisKeyword && parent.arguments.length === 1;
             return push ? 'xbox' : undefined;
         }
+        if (this.rustCacheCtorLimitArg(n, kind)) return 'targ';
         if (parent.kind === SyntaxKind.NewExpression && isIdentifier(parent.expression) && (kind === 'str' || kind === 'ostr')) {
             const ctor = (RustTranspiler as any).RUST_ERROR_CONSTRUCTOR_ARGS[this.rustErrorConstructorName(String(parent.expression.text))];
             if (ctor?.[parent.arguments.indexOf(n)] !== 'msg' || parent.parent?.kind !== SyntaxKind.ThrowStatement) return undefined;
@@ -5099,6 +5100,17 @@ export class RustTranspiler extends BaseTranspiler {
         // an alias initializer (a `bool` alias is the bool-initializer rule's)
         if (isVariableDeclaration(parent) && parent.initializer === n && isIdentifier(parent.name) && kind !== 'bool') return 'xbox';
         return undefined;
+    }
+
+    /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
+    private static readonly RUST_CACHE_CTORS = new Set([ 'ArrayCache', 'ArrayCacheByTimestamp', 'ArrayCacheBySymbolById', 'ArrayCacheBySymbolBySide', 'ArrayCacheByOutcomeById' ]);
+
+    /** An integer local as the size argument of `new ArrayCache*(limit)`: passed natively (`i64` / `Option<i64>` into `impl Into<Value>`). */
+    rustCacheCtorLimitArg(n, kind: string): boolean {
+        const parent: any = n.parent;
+        if (kind !== 'int' && kind !== 'oint') return false;
+        if (parent?.kind !== SyntaxKind.NewExpression || !isIdentifier(parent.expression) || parent.arguments?.length !== 1 || parent.arguments[0] !== n) return false;
+        return RustTranspiler.RUST_CACHE_CTORS.has(String(parent.expression.text));
     }
 
     /** Call hook: a string method of a typed string local, boxed back to `Value`. */

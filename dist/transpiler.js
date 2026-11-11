@@ -56059,6 +56059,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       const push = isPropertyAccessExpression3(callee) && callee.name.text === "push" && callee.expression.kind !== SyntaxKind7.ThisKeyword && parent.arguments.length === 1;
       return push ? "xbox" : void 0;
     }
+    if (this.rustCacheCtorLimitArg(n, kind))
+      return "targ";
     if (parent.kind === SyntaxKind7.NewExpression && isIdentifier3(parent.expression) && (kind === "str" || kind === "ostr")) {
       const ctor = _RustTranspiler.RUST_ERROR_CONSTRUCTOR_ARGS[this.rustErrorConstructorName(String(parent.expression.text))];
       if (ctor?.[parent.arguments.indexOf(n)] !== "msg" || parent.parent?.kind !== SyntaxKind7.ThrowStatement)
@@ -56068,6 +56070,15 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (isVariableDeclaration3(parent) && parent.initializer === n && isIdentifier3(parent.name) && kind !== "bool")
       return "xbox";
     return void 0;
+  }
+  /** An integer local as the size argument of `new ArrayCache*(limit)`: passed natively (`i64` / `Option<i64>` into `impl Into<Value>`). */
+  rustCacheCtorLimitArg(n, kind) {
+    const parent = n.parent;
+    if (kind !== "int" && kind !== "oint")
+      return false;
+    if (parent?.kind !== SyntaxKind7.NewExpression || !isIdentifier3(parent.expression) || parent.arguments?.length !== 1 || parent.arguments[0] !== n)
+      return false;
+    return _RustTranspiler.RUST_CACHE_CTORS.has(String(parent.expression.text));
   }
   /** Call hook: a string method of a typed string local, boxed back to `Value`. */
   printRustScalarMethodCall(node) {
@@ -64827,6 +64838,8 @@ _RustTranspiler.RUST_SCALAR_ARITH_OPS = /* @__PURE__ */ new Set([
   SyntaxKind7.ExclamationEqualsToken,
   SyntaxKind7.ExclamationEqualsEqualsToken
 ]);
+/** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
+_RustTranspiler.RUST_CACHE_CTORS = /* @__PURE__ */ new Set(["ArrayCache", "ArrayCacheByTimestamp", "ArrayCacheBySymbolById", "ArrayCacheBySymbolBySide", "ArrayCacheByOutcomeById"]);
 // `ts/src/base/**` — the shared `Exchange` / `PredictionExchange` classes
 // (the transpiler synthesises variants like `.__ExchangeNoOverloads.ts`).
 _RustTranspiler.RUST_BASE_TIER_FILE = /ts[\\/]src[\\/]base[\\/]/;

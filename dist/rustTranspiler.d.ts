@@ -624,6 +624,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
     rustScalarExpressionUseForm(n: any, kind: string): string | undefined;
+    /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
+    private static readonly RUST_CACHE_CTORS;
+    /** An integer local as the size argument of `new ArrayCache*(limit)`: passed natively (`i64` / `Option<i64>` into `impl Into<Value>`). */
+    rustCacheCtorLimitArg(n: any, kind: string): boolean;
     /** Call hook: a string method of a typed string local, boxed back to `Value`. */
     printRustScalarMethodCall(node: any): string | undefined;
     /** `.length` hook: the char count of a typed string local. */
