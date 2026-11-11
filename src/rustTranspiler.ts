@@ -3714,9 +3714,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustTestTierSource(declaration)) return undefined;
         if (this.rustScalarOptKeyCostly(declaration, kind)) return undefined;
         if (this.rustFieldKeyCostly(declaration)) return undefined;
+        // a local typed for its string-method reads must not copy where the `Value` moved
+        if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustStrMethodRecvLocal(declaration)) return undefined;
         // a key-admitted local converts once at its declaration: that line keeps the 400-char budget
         if (this.rustScalarOptKeyCostly(declaration, kind) === false && kind === 'ostr' && this.rustScalarOptKeyCount(declaration) > 0) this.rustScalarGuarded.add(declaration);
-        if (guarded) this.rustScalarGuarded.add(declaration);
+        if (guarded || this.rustStrMethodRecvLocal(declaration)) this.rustScalarGuarded.add(declaration);
         return kind;
     }
 
@@ -4157,7 +4159,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(parent) && !(isBinaryExpression(parent.parent) && parent.parent.left === parent)) return 'box';
         if (this.rustDictWriteValue(n)) return 'box';
         if (isReturnStatement(parent) && parent.expression === n) {
-            return this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike) as any) === 'str' ? undefined : 'box';
+            const fn: any = findAncestor(parent.parent, isFunctionLike);
+            return this.rustNativeStrReturnKind(fn) === 'str' || this.rustStrReturnSignature(fn, n) ? undefined : 'box';
         }
         if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.PlusToken) {
             // a `String` is a `format!` operand as-is; other concats need the box
@@ -4854,14 +4857,96 @@ export class RustTranspiler extends BaseTranspiler {
         if ((method === 'toLowerCase' || method === 'toUpperCase') && args.length === 0) shape = 'case';
         else if ((method === 'trim' || method === 'toString') && args.length === 0) shape = 'self';
         else if ((method === 'startsWith' || method === 'endsWith') && args.length === 1 && lit(args[0]) && args[0].text !== '') shape = 'affix';
-        else if (method === 'replace' && args.length === 2 && lit(args[0]) && lit(args[1]) && args[0].text !== '') shape = 'replace';
+        else if ((method === 'replace' || method === 'replaceAll') && args.length === 2 && lit(args[0]) && lit(args[1]) && args[0].text !== '') shape = 'replace';
+        else if (method === 'indexOf' && args.length === 1 && this.rustStrFindNeedle(args[0], true) !== undefined) shape = 'find';
         if (shape === undefined) return undefined;
         if (syntactic) return { recv, recvKind: '', method, kind: '' };
         const recvKind = this.rustScalarIdentifierKind(recv);
         if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
         if (shape === 'affix') return { recv, recvKind, method, kind: 'bool' };
-        if (recvKind === 'ostr' && shape !== 'case') return undefined;
+        if (shape === 'find') return this.rustStrFindNeedle(args[0], false) === undefined ? undefined : { recv, recvKind, method, kind: 'int' };
+        if (recvKind === 'ostr' && shape !== 'case' && shape !== 'replace') return undefined;
         return { recv, recvKind, method, kind: recvKind };
+    }
+
+    /** `indexOf` needle as an `Option<&str>`: a non-empty literal, a typed string local, or a string-typed `Value` expression. */
+    rustStrFindNeedle(node, syntactic: boolean): string | undefined {
+        const inner: any = this.unwrapParens(node);
+        if (inner === undefined) return undefined;
+        const lit = this.rustNativeStringLiteralArg(inner);
+        if (lit !== undefined) return inner.text === '' ? undefined : `Some("${lit}")`;
+        if (syntactic) return '_';
+        const kind = isIdentifier(inner) ? this.rustScalarIdentifierKind(inner) : undefined;
+        if (kind === 'str') return `Some(${super.printIdentifier(inner)}.as_str())`;
+        if (kind === 'ostr' && this.rustScalarLocalOf(inner) !== undefined) return `${super.printIdentifier(inner)}.as_deref()`;
+        if (kind !== undefined || this.primitiveKindOfType(this.typeOfNodeIfAny(inner)) !== 'string' || !this.printsValueExpression(inner)) return undefined;
+        if (this.rustScalarHasTypedOperand(inner)) return undefined;
+        const text = this.printNode(inner, 0).trim();
+        return text.includes('\n') ? undefined : `(${text}).as_str()`;
+    }
+
+    /** `s.indexOf(n)` on a typed string local: `str::find` (byte index), `-1` when absent or either side is null, as the helper. */
+    rustStrFindText(recvKind: string, name: string, needle): string {
+        const hay = recvKind === 'str' ? `Some(${name}.as_str())` : `${name}.as_deref()`;
+        return `(if let (Some(__h), Some(__n)) = (${hay}, ${this.rustStrFindNeedle(needle, false)}) { if let Some(__i) = __h.find(__n) { __i as i64 } else { -1 } } else { -1 })`;
+    }
+
+    /** `s.split(d)` on a typed string local with a literal or `String` delimiter: the helper's array of parts, empty for null. */
+    rustStrLocalSplitText(node): string | undefined {
+        const call: any = this.unwrapParens(node);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.name.text !== 'split') return undefined;
+        const recv: any = call.expression.expression;
+        if (!isIdentifier(recv) || call.arguments.length !== 1) return undefined;
+        const recvKind = this.rustScalarLocalOf(recv)?.kind;
+        if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
+        const delim: any = this.unwrapParens(call.arguments[0]);
+        const lit = this.rustNativeStringLiteralArg(delim);
+        const sep = lit !== undefined && delim.text !== '' ? `"${lit}"` : (isIdentifier(delim) && this.rustScalarLocalOf(delim)?.kind === 'str' ? `${super.printIdentifier(delim)}.as_str()` : undefined);
+        if (sep === undefined) return undefined;
+        const name = super.printIdentifier(recv);
+        if (recvKind === 'str') return `Value::Array(${name}.split(${sep}).map(Value::from).collect())`;
+        return `Value::Array(if let Some(__s) = ${name}.as_deref() { __s.split(${sep}).map(Value::from).collect() } else { Vec::new() })`;
+    }
+
+    /** A string local read by `split` / `indexOf` / `replace` or appended a string `Value`: its printed lines keep the 400-char budget. */
+    rustStrMethodRecvLocal(declaration): boolean {
+        let hit = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const call: any = isPropertyAccessExpression(n.parent) && n.parent.expression === n ? n.parent.parent : undefined;
+            if (call !== undefined && isCallExpression(call) && call.expression === n.parent && this.rustStrMethodNewUse(call)) hit = true;
+            const append: any = n.parent;
+            if (isBinaryExpression(append) && append.left === n && append.operatorToken.kind === SyntaxKind.PlusEqualsToken && this.rustStrPushValueText(n, this.unwrapParens(append.right), true) !== undefined) hit = true;
+            return true;
+        });
+        return hit;
+    }
+
+    /** `s += v` with `v` a string-typed `Value` (not a `+` chain): `Display` is the text the `add` helper concatenates. */
+    rustStrPushValueText(target, right, dry: boolean): string | undefined {
+        if (isBinaryExpression(right) || this.literalKindOfNode(right) !== undefined || this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== 'string' || !this.printsValueExpression(right)) return undefined;
+        if (this.rustScalarHasTypedOperand(right) || new RegExp(`\\b${String(target.text)}\\b`).test(String(right.getText()))) return undefined;
+        if (dry) return '_';
+        const text = this.printNode(right, 0).trim();
+        return text.includes('\n') ? undefined : `${/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) ? text : `(${text})`}.to_string()`;
+    }
+
+    /** A string-method local returned from a method whose signature alone could print `-> Option<String>`: typing it would flip that ABI. */
+    rustStrReturnSignature(fn, n): boolean {
+        if (fn === undefined || fn.kind !== SyntaxKind.MethodDeclaration || fn.type === undefined || this.isAsyncFunction(fn)) return false;
+        const declaration: any = this.rustScalarLocalOf(n)?.declaration ?? this.rustDeclaredNode(n);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !this.rustStrMethodRecvLocal(declaration)) return false;
+        return this.primitiveKindOfType(this.getChecker().getTypeFromTypeNode(fn.type)) === 'string';
+    }
+
+    /** `split`, `replaceAll`, an optional receiver's `replace`, or an `indexOf` outside a literal contains test. */
+    rustStrMethodNewUse(call): boolean {
+        const method = String(call.expression.name.text);
+        if (method === 'split' || method === 'replaceAll') return true;
+        if (method === 'replace') return this.rustScalarLocalOf(call.expression.expression)?.kind !== 'str';
+        if (method !== 'indexOf') return false;
+        let top: any = call;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        return !(isBinaryExpression(top.parent) && top.parent.left === top && this.rustScalarContainsTest(top.parent, true) !== undefined);
     }
 
     /** `Precise.string<Add|Sub|..>(..)`: a `string | undefined` result. */
@@ -5092,6 +5177,11 @@ export class RustTranspiler extends BaseTranspiler {
                 const hay = method.recvKind === 'str' ? name : `${name}.as_deref().unwrap_or_default()`;
                 return wrap(`${hay}.${method.method === 'startsWith' ? 'starts_with' : 'ends_with'}("${arg(0)}")`);
             }
+            if (method.method === 'indexOf') return wrap(this.rustStrFindText(method.recvKind, name, args[0]));
+            if (method.method === 'replace' || method.method === 'replaceAll') {
+                if (method.recvKind === 'ostr') return wrap(`(if let Some(__s) = ${name}.as_deref() { Some(__s.replace("${arg(0)}", "${arg(1)}")) } else { None })`);
+                return wrap(`${name}.replace("${arg(0)}", "${arg(1)}")`);
+            }
             const fn = method.method === 'toLowerCase' ? 'to_lowercase' : 'to_uppercase';
             if (method.recvKind === 'ostr') return wrap(`${name}.as_deref().map(str::${fn})`);
             if (method.method === 'trim') return wrap(`${name}.trim().to_string()`);
@@ -5099,7 +5189,6 @@ export class RustTranspiler extends BaseTranspiler {
                 const local = this.rustScalarLocalOf(method.recv);
                 return wrap(local !== undefined && this.rustLocalLastUse(method.recv, local.declaration) ? name : `${name}.clone()`);
             }
-            if (method.method === 'replace') return wrap(`${name}.replace("${arg(0)}", "${arg(1)}")`);
             return wrap(`${name}.${fn}()`);
         }
         if (this.rustScalarPreciseCall(node)) return wrap(`${this.printNode(node, 0).trim()}.as_str().map(str::to_owned)`);
@@ -5136,6 +5225,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'str' && node.operatorToken.kind === SyntaxKind.PlusEqualsToken) {
             if (this.literalKindOfNode(right) === 'string' && !(right.text in this.StringLiteralReplacements)) return dry ? '_' : `${name}.push_str(${this.quotedStringLiteral(right.text)})`;
             if (isIdentifier(right) && this.rustScalarLocalOf(right)?.kind === 'str') return dry ? '_' : `${name}.push_str(&${super.printIdentifier(right)})`;
+            const joined = this.rustStrPushValueText(node.left, right, dry);
+            if (joined !== undefined) return dry ? '_' : `${name}.push_str(&${joined})`;
             if (!isBinaryExpression(right) || right.operatorToken.kind !== SyntaxKind.PlusToken) return undefined;
             if (this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== 'string') return undefined;
             const format = this.rustScalarFormatText(right);
@@ -5404,7 +5495,7 @@ export class RustTranspiler extends BaseTranspiler {
             const call: any = parent.parent;
             if (kind === 'int' && this.rustVenueIntToString(call, parent)) return 'native';
             if (isCallExpression(call) && call.expression === parent) {
-                if (this.rustScalarStrMethod(call) !== undefined) return 'native';
+                if (this.rustScalarStrMethod(call) !== undefined || this.rustStrLocalSplitText(call) !== undefined) return 'native';
                 let top: any = call;
                 while (isParenthesizedExpression(top.parent)) top = top.parent;
                 if (isBinaryExpression(top.parent) && top.parent.left === top && this.rustScalarContainsTest(top.parent, true) !== undefined) return 'native';
@@ -9801,7 +9892,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
-        return this.printNativeStringSplit(node, name) ?? this.printRustSplit(node, name) ?? `split(&${name}, &${parsedArg})`;
+        return this.rustStrLocalSplitText(node) ?? this.printNativeStringSplit(node, name) ?? this.printRustSplit(node, name) ?? `split(&${name}, &${parsedArg})`;
     }
 
     printConcatCall(node, identation, name = undefined, parsedArg = undefined) {
