@@ -53266,8 +53266,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     if (this.rustNilLocalKind(declaration) !== void 0)
       return void 0;
-    if (/[\\/]test[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? "")))
-      return void 0;
     const scope = this.rustEnclosingFunction(declaration);
     if (scope === void 0 || isSourceFile5(scope) || this.rustNativeStrReturnKind(scope) === "str")
       return void 0;
@@ -54402,9 +54400,23 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return isIdentifier3(node.name) && node.name.text === "length" && isIdentifier3(node.expression);
     if (isElementAccessExpression4(node))
       return isIdentifier3(node.expression);
-    if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || node.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+    if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || !this.rustScalarReceiver(node.expression.expression))
       return false;
     return true;
+  }
+  /** True for test sources: their helpers take every argument as a `Value`, so a local typed there must earn a native use. */
+  rustTestTierSource(node) {
+    return /[\\/]test[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? ""));
+  }
+  /** `this`, or in a test source an identifier typed as the base `Exchange` class (it resolves to the base readers). */
+  rustScalarReceiver(node) {
+    if (node?.kind === SyntaxKind7.ThisKeyword)
+      return true;
+    if (!isIdentifier3(node) || !this.rustTestTierSource(node))
+      return false;
+    const type = this.typeOfNodeIfAny(node);
+    const declaration = type === void 0 ? void 0 : symbolDeclarations(this.typeSymbolOf(type)).find((d) => isClassDeclaration4(d));
+    return declaration !== void 0 && /ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(String(declaration.getSourceFile?.()?.fileName ?? ""));
   }
   rustScalarLocalKindUncached(declaration) {
     if (this.rustScalarVetoed.has(declaration))
@@ -54415,8 +54427,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     const list = declaration.parent;
     if (!isIdentifier3(declaration.name) || list?.kind !== SyntaxKind7.VariableDeclarationList || list.declarations.length !== 1 || list.parent?.kind !== SyntaxKind7.VariableStatement)
-      return void 0;
-    if (/[\\/]test[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? "")))
       return void 0;
     const scope = this.rustEnclosingFunction(declaration);
     if (scope === void 0 || isSourceFile5(scope))
@@ -54464,6 +54474,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer);
     const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
     if (!ok || unused || storeOnly || clientOnce || guarded && scope.kind !== SyntaxKind7.MethodDeclaration)
+      return void 0;
+    if (typedUses === 0 && this.rustTestTierSource(declaration))
       return void 0;
     if (guarded)
       this.rustScalarGuarded.add(declaration);
@@ -54520,7 +54532,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!isCallExpression6(node))
       return void 0;
     const callee = node.expression;
-    if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+    if (!isPropertyAccessExpression3(callee) || !this.rustScalarReceiver(callee.expression))
       return void 0;
     const name = String(callee.name.text);
     const args = Array.from(node.arguments ?? []);
@@ -54563,7 +54575,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // Any other callee: a base one whose checker return is a string, or one declaring `string`/`Str`/`int`/`Int`
   // (a bare `number` may hold a float, which `as_i64` would drop).
   rustDerivedScalarKind(call) {
-    if (!isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+    if (!isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || !this.rustScalarReceiver(call.expression.expression))
       return void 0;
     const name = String(call.expression.name.text);
     if (_RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(name) || _RustTranspiler.RUST_SCALAR_INT_HELPERS[name] !== void 0 || _RustTranspiler.RUST_SCALAR_NUM_HELPERS[name] !== void 0 || _RustTranspiler.RUST_SCALAR_BOOL_HELPERS[name] !== void 0)
@@ -58954,7 +58966,7 @@ ${idn}}`;
     if (init?.kind !== SyntaxKind7.VariableDeclarationList || init.declarations.length !== 1 || !(init.flags & NodeFlags4.BlockScoped))
       return void 0;
     const declaration = init.declarations[0];
-    if (!isIdentifier3(declaration.name) || /\/test\//.test(String(node.getSourceFile?.().fileName ?? "")))
+    if (!isIdentifier3(declaration.name))
       return void 0;
     const name = String(declaration.name.text);
     const printed = new RegExp(`^let mut ${name}: Value = Value::Int\\((-?\\d+)\\);$`).exec(initStr.trim());
@@ -59837,9 +59849,6 @@ ${iden}}`;
     const fn = this.rustEnclosingFunction(declaration);
     if (fn === void 0 || isSourceFile5(fn))
       return false;
-    const source = declaration.getSourceFile?.()?.fileName;
-    if (typeof source === "string" && /\/test\//.test(source))
-      return false;
     let pushes = 0;
     let clonedOut = 0;
     let castReturns = 0;
@@ -60149,8 +60158,6 @@ ${iden}}`;
     if (fn === void 0 || isSourceFile5(fn))
       return false;
     const source = declaration.getSourceFile?.()?.fileName;
-    if (typeof source === "string" && /\/test\//.test(source))
-      return false;
     const prediction = typeof source === "string" && _RustTranspiler.RUST_PREDICTION_VENUE_FILE.test(source.replace(/\\/g, "/"));
     const escapes = [];
     let elementUses = 0;
@@ -60233,7 +60240,7 @@ ${iden}}`;
    *  from the call and the box is cloned out once. */
   rustDictProducer(node) {
     const call = this.rustSkipWrappers(node);
-    if (!isCallExpression6(call))
+    if (!isCallExpression6(call) || this.rustTestTierSource(call))
       return false;
     const callee = call.expression;
     if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || callee.name?.kind !== SyntaxKind7.Identifier)
@@ -60764,14 +60771,11 @@ ${iden}}`;
     if (isArrayLiteralExpression4(init) || isObjectLiteralExpression4(init))
       return false;
     const kind = this.rustContainerProducingKind(init, /* @__PURE__ */ new Set());
-    if (kind === void 0)
+    if (kind === void 0 || kind === "map" && this.rustTestTierSource(declaration))
       return false;
     const name = String(declaration.name.text);
     const fn = this.rustEnclosingFunction(declaration);
     if (fn === void 0 || isSourceFile5(fn))
-      return false;
-    const source = declaration.getSourceFile?.()?.fileName;
-    if (typeof source === "string" && /\/test\//.test(source))
       return false;
     if (this.rustLocalIsReassigned(declaration, name))
       return false;

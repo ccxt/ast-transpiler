@@ -426,6 +426,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     } | undefined;
     /** Syntactic pre-filter: a literal, a `+` chain, or a `this.safe<Scalar>(..)` call. */
     rustScalarInitShape(init: any): boolean;
+    /** True for test sources: their helpers take every argument as a `Value`, so a local typed there must earn a native use. */
+    rustTestTierSource(node: any): boolean;
+    /** `this`, or in a test source an identifier typed as the base `Exchange` class (it resolves to the base readers). */
+    rustScalarReceiver(node: any): boolean;
     rustScalarLocalKindUncached(declaration: any): string | undefined;
     /** Integer literal text (`5`, `-5`) that fits an `i64`, else undefined. */
     rustScalarIntLiteral(node: any): string | undefined;
