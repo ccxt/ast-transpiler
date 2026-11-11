@@ -57567,6 +57567,9 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     return `crate::value::get_value_k(&${receiverText}, ${this.quotedStringLiteral(member)})`;
   }
   printPropertyAccessExpression(node, identation) {
+    const dictKeyRead = this.printDictKeyRead(node);
+    if (dictKeyRead !== void 0)
+      return dictKeyRead;
     const handleField = this.printClientHandleField(node, true);
     if (handleField !== void 0)
       return handleField;
@@ -59310,6 +59313,9 @@ ${ind}let ${view}: &${map} = &${arc};
     return this.quotedStringLiteral(text);
   }
   printElementAccessExpression(node, identation) {
+    const dictKeyRead = this.printDictKeyRead(node);
+    if (dictKeyRead !== void 0)
+      return dictKeyRead;
     const okeyRead = this.printOkeyRead(node);
     if (okeyRead !== void 0)
       return okeyRead;
@@ -61439,6 +61445,7 @@ ${iden}}`;
     let writes = 0;
     let lengths = 0;
     let indexLikeReads = 0;
+    let keyReads = 0;
     let mixed = false;
     const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
       if (this.rustIdentifierIsPropertyName(n))
@@ -61472,6 +61479,11 @@ ${iden}}`;
         const use = up.parent;
         return _optionalChain([use, 'optionalAccess', _9077 => _9077.kind]) !== _ast.SyntaxKind.PrefixUnaryExpression && _optionalChain([use, 'optionalAccess', _9078 => _9078.kind]) !== _ast.SyntaxKind.PostfixUnaryExpression && !(_is.isBinaryExpression.call(void 0, use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
       }
+      if (this.rustDictKeyReadUse(n)) {
+        keyReads++;
+        reads++;
+        return true;
+      }
       if (!_is.isCallExpression.call(void 0, up) || up.arguments[0] !== n)
         return false;
       const literalKey = this.rustBorrowedDictReader(up) !== void 0;
@@ -61484,6 +61496,8 @@ ${iden}}`;
     });
     if (!safe || reads === 0 || mixed || from === void 0 || this.rustNilResponseLocals.has(declaration) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
       return void 0;
+    if ((keyReads > 0 || init !== void 0 && _is.isCallExpression.call(void 0, init) && this.rustRecordLookupSource(init)) && !this.rustDictKeyReadLineOk(declaration, name))
+      return void 0;
     const optional = nilDeclared || nullTests > 0 || writes > 0;
     if (lengths > 0 && (from !== "list" || optional))
       return void 0;
@@ -61493,6 +61507,58 @@ ${iden}}`;
       this.rustOptContainerLocals.add(declaration);
     }
     return from === "list" ? "list" : "dict";
+  }
+  // ── rustDictKeyReadUse / printDictKeyRead: direct literal-key reads (`m['k']`, `m.k`) on a dict local ──
+  // The shared map (or its optional form) reads through the reader trait the `safe_*_k` readers use:
+  // `crate::value::KeyRead::key_read(&&m, "k")` is the `get_value_k` lookup itself, without a closure or a copy.
+  /** A read of `n['literal']` / `n.name` (not a write target, call receiver, length or digit key). */
+  rustDictKeyReadUse(n) {
+    const up = n.parent;
+    let key;
+    if (_is.isElementAccessExpression.call(void 0, up) && up.expression === n) {
+      const arg = this.rustSkipWrappers(up.argumentExpression);
+      if (arg === void 0 || !_is.isStringLiteralLikeNode.call(void 0, arg))
+        return false;
+      key = String(arg.text);
+    } else if (_is.isPropertyAccessExpression.call(void 0, up) && up.expression === n && _is.isIdentifier.call(void 0, up.name)) {
+      key = String(up.name.text);
+      if (key === "length")
+        return false;
+    } else
+      return false;
+    if (/^\d+$/.test(key) || key in this.StringLiteralReplacements || key === "__live_id")
+      return false;
+    const use = up.parent;
+    if (use === void 0 || (_is.isPropertyAccessExpression.call(void 0, use) || _is.isCallExpression.call(void 0, use) || _is.isElementAccessExpression.call(void 0, use)) && use.expression === up)
+      return false;
+    if (_is.isDeleteExpression.call(void 0, use) || _is.isBinaryExpression.call(void 0, use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind))
+      return false;
+    if (use.kind === _ast.SyntaxKind.PrefixUnaryExpression || use.kind === _ast.SyntaxKind.PostfixUnaryExpression)
+      return false;
+    return true;
+  }
+  /** The typed declaration line (`: crate::value::Dict = .. .into_dict()`, about 40 chars more) stays within 400 chars. */
+  rustDictKeyReadLineOk(declaration, name) {
+    if (declaration.initializer === void 0)
+      return true;
+    let depth = 0;
+    for (let p = declaration.parent; p !== void 0 && !_chunkQYYT7MP4cjs.isFunctionLike.call(void 0, p); p = p.parent)
+      if (_is.isBlock.call(void 0, p))
+        depth++;
+    const first = String(this.printNode(declaration.initializer, 0)).trim().split("\n")[0];
+    return depth * 4 + name.length + first.length + 60 <= 400;
+  }
+  /** `crate::value::KeyRead::key_read(&&m, "k")` for a direct read on a dict-typed local, else undefined. */
+  printDictKeyRead(node) {
+    const recv = node.expression;
+    if (recv === void 0 || !_is.isIdentifier.call(void 0, recv) || !this.rustDictKeyReadUse(recv))
+      return void 0;
+    const declaration = this.rustDeclarationOfIdentifier(recv);
+    if (declaration === void 0 || declaration === recv || declaration.name === recv || this.rustBorrowedLocalKind(declaration) !== "dict")
+      return void 0;
+    const key = _is.isElementAccessExpression.call(void 0, node) ? String(this.rustSkipWrappers(node.argumentExpression).text) : String(node.name.text);
+    const name = super.transformIdentifier(recv, _nullishCoalesce(this.ReservedKeywordsReplacements[recv.text], () => ( recv.text)));
+    return `crate::value::KeyRead::key_read(&&${name}, "${this.escapeRustStringLiteral(key)}")`;
   }
   // ── dict-valued conditional initialisers (rustDictTernaryInit / rustDictTernaryArm) ──
   // `c ? this.omit (p, k) : p` holds a map on both arms, so a handed-on local takes the map out of the
@@ -65372,7 +65438,7 @@ _RustTranspiler.RUST_BORROWED_LIST_SOURCES = /* @__PURE__ */ new Set(["safeList"
 _RustTranspiler.RUST_BORROWED_ANY_KEY_READERS = /^safe(?:Value|String(?:Lower|Upper)?|Integer|Float|Timestamp|IntegerProduct)(?:2|N)?$/;
 // ── rustRecordLookupSource: base record lookups (market / outcome resolvers) held as a shared map ──
 // Each returns a cached record map (or nothing); read only by key, the map form reads the same.
-_RustTranspiler.RUST_RECORD_LOOKUP_SOURCES = /* @__PURE__ */ new Set(["outcome", "safeOutcome", "loadOutcome", "getMarketFromSymbols"]);
+_RustTranspiler.RUST_RECORD_LOOKUP_SOURCES = /* @__PURE__ */ new Set(["outcome", "safeOutcome", "loadOutcome", "getMarketFromSymbols", "safeMarket", "market"]);
 // ── optional list locals ─────────────────────────────────────────────────
 // A list local whose source may yield `undefined` (the permissive `marketSymbols`, `marketIds`, a `safeList*`
 // with no default) holds `Option<crate::value::List>` (`into_opt_list` moves the shared list out of the box).

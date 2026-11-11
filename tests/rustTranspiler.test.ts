@@ -7470,3 +7470,29 @@ describe('rust string key elements', () => {
         expect(out).toContain('let mut id: Value = ids.get(i as usize).cloned().unwrap_or(Value::Null);');
     });
 });
+
+describe('rust direct key reads on shared dict locals', () => {
+    const write = (rel: string, text: string) => {
+        const out = path.join (rustFixtureRoot, 'dict-key-reads', rel);
+        fs.mkdirSync (path.dirname (out), { recursive: true });
+        fs.writeFileSync (out, text);
+        return out;
+    };
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeValue (o: any, k: any, d: any = undefined): any { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeMarket (marketId: Str = undefined, market: any = undefined, delimiter: Str = undefined, marketType: Str = undefined): any { return market; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: Dict, id: string) {\n        const market = this.safeMarket (id);\n        const data = this.safeDict (resp, 'data');\n        if (data === undefined) {\n            return market['symbol'];\n        }\n        return [ market.base, data['price'], this.safeString (data, 'qty') ];\n    }\n    writeThing (resp: Dict) {\n        const info = this.safeDict (resp, 'info');\n        info['x'] = 1;\n        return info['x'];\n    }\n}\n";
+    test('a record lookup and a safe dict read by key type as shared maps', () => {
+        write ('ts/src/base/Exchange.ts', base);
+        const out = transpiler.transpileRustByPath(write ('ts/src/venue.ts', venue)).content;
+        expect(out).toContain('let mut market: crate::value::Dict = ');
+        expect(out).toContain('let mut data: Option<crate::value::Dict> = ');
+        expect(out).toContain('crate::value::KeyRead::key_read(&&market, "symbol")');
+        expect(out).toContain('crate::value::KeyRead::key_read(&&market, "base")');
+        expect(out).toContain('crate::value::KeyRead::key_read(&&data, "price")');
+    });
+    test('negative: a local written by key keeps its box', () => {
+        write ('ts/src/base/Exchange.ts', base);
+        const out = transpiler.transpileRustByPath(write ('ts/src/venue.ts', venue)).content;
+        expect(out).not.toContain('let mut info: crate::value::Dict');
+        expect(out).not.toContain('key_read(&&info');
+    });
+});

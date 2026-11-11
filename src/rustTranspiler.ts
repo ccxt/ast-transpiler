@@ -6969,6 +6969,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printPropertyAccessExpression(node, identation) {
+        const dictKeyRead = this.printDictKeyRead(node); if (dictKeyRead !== undefined) return dictKeyRead;
         const handleField = this.printClientHandleField(node, true); if (handleField !== undefined) return handleField;
         const marketRead = this.printTypedMarketRead(node);
         if (marketRead !== undefined) return marketRead;
@@ -8753,6 +8754,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpression(node, identation) {
+        const dictKeyRead = this.printDictKeyRead(node); if (dictKeyRead !== undefined) return dictKeyRead;
         const okeyRead = this.printOkeyRead(node); if (okeyRead !== undefined) return okeyRead;
         const handleRead = this.printClientHandleKeyedRead(node); if (handleRead !== undefined) return handleRead;
         const marketRead = this.printTypedMarketRead(node);
@@ -11017,6 +11019,7 @@ export class RustTranspiler extends BaseTranspiler {
         let writes = 0;
         let lengths = 0;
         let indexLikeReads = 0;
+        let keyReads = 0;
         let mixed = false;
         const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
@@ -11044,6 +11047,11 @@ export class RustTranspiler extends BaseTranspiler {
                 return use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
                     && !(isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
             }
+            if (this.rustDictKeyReadUse(n)) {
+                keyReads++;
+                reads++;
+                return true;
+            }
             if (!isCallExpression(up) || up.arguments[0] !== n) return false;
             // An endpoint response may be a list or a map: only literal-key reads agree for both.
             const literalKey = this.rustBorrowedDictReader(up) !== undefined;
@@ -11055,6 +11063,7 @@ export class RustTranspiler extends BaseTranspiler {
         });
         if (!safe || reads === 0 || mixed || from === undefined
             || (this.rustNilResponseLocals.has(declaration) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
+        if ((keyReads > 0 || (init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init))) && !this.rustDictKeyReadLineOk(declaration, name)) return undefined;
         const optional = nilDeclared || nullTests > 0 || writes > 0;
         if (lengths > 0 && (from !== 'list' || optional)) return undefined;
         if (optional) {
@@ -11066,6 +11075,49 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustOptContainerLocals = new WeakSet<any>();
+
+    // ── rustDictKeyReadUse / printDictKeyRead: direct literal-key reads (`m['k']`, `m.k`) on a dict local ──
+    // The shared map (or its optional form) reads through the reader trait the `safe_*_k` readers use:
+    // `crate::value::KeyRead::key_read(&&m, "k")` is the `get_value_k` lookup itself, without a closure or a copy.
+    /** A read of `n['literal']` / `n.name` (not a write target, call receiver, length or digit key). */
+    rustDictKeyReadUse(n: any): boolean {
+        const up: any = n.parent;
+        let key: string | undefined;
+        if (isElementAccessExpression(up) && up.expression === n) {
+            const arg: any = this.rustSkipWrappers(up.argumentExpression);
+            if (arg === undefined || !isStringLiteralLikeNode(arg)) return false;
+            key = String(arg.text);
+        } else if (isPropertyAccessExpression(up) && up.expression === n && isIdentifier(up.name)) {
+            key = String(up.name.text);
+            if (key === 'length') return false;
+        } else return false;
+        if (/^\d+$/.test(key) || key in this.StringLiteralReplacements || key === '__live_id') return false;
+        const use: any = up.parent;
+        if (use === undefined || ((isPropertyAccessExpression(use) || isCallExpression(use) || isElementAccessExpression(use)) && use.expression === up)) return false;
+        if (isDeleteExpression(use) || (isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind))) return false;
+        if (use.kind === SyntaxKind.PrefixUnaryExpression || use.kind === SyntaxKind.PostfixUnaryExpression) return false;
+        return true;
+    }
+
+    /** The typed declaration line (`: crate::value::Dict = .. .into_dict()`, about 40 chars more) stays within 400 chars. */
+    rustDictKeyReadLineOk(declaration: any, name: string): boolean {
+        if (declaration.initializer === undefined) return true;
+        let depth = 0;
+        for (let p: any = declaration.parent; p !== undefined && !isFunctionLike(p); p = p.parent) if (isBlock(p)) depth++;
+        const first = String(this.printNode(declaration.initializer, 0)).trim().split('\n')[0];
+        return depth * 4 + name.length + first.length + 60 <= 400;
+    }
+
+    /** `crate::value::KeyRead::key_read(&&m, "k")` for a direct read on a dict-typed local, else undefined. */
+    printDictKeyRead(node: any): string | undefined {
+        const recv: any = node.expression;
+        if (recv === undefined || !isIdentifier(recv) || !this.rustDictKeyReadUse(recv)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(recv);
+        if (declaration === undefined || declaration === recv || declaration.name === recv || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
+        const key = isElementAccessExpression(node) ? String((this.rustSkipWrappers(node.argumentExpression) as any).text) : String(node.name.text);
+        const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+        return `crate::value::KeyRead::key_read(&&${name}, "${this.escapeRustStringLiteral(key)}")`;
+    }
 
     // ── dict-valued conditional initialisers (rustDictTernaryInit / rustDictTernaryArm) ──
     // `c ? this.omit (p, k) : p` holds a map on both arms, so a handed-on local takes the map out of the
@@ -11229,7 +11281,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // ── rustRecordLookupSource: base record lookups (market / outcome resolvers) held as a shared map ──
     // Each returns a cached record map (or nothing); read only by key, the map form reads the same.
-    private static readonly RUST_RECORD_LOOKUP_SOURCES = new Set([ 'outcome', 'safeOutcome', 'loadOutcome', 'getMarketFromSymbols' ]);
+    private static readonly RUST_RECORD_LOOKUP_SOURCES = new Set([ 'outcome', 'safeOutcome', 'loadOutcome', 'getMarketFromSymbols', 'safeMarket', 'market' ]);
 
     rustRecordLookupSource(call: any): boolean {
         const callee: any = call.expression;
