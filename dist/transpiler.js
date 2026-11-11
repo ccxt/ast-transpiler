@@ -54447,6 +54447,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     let nativeUses = 0;
     let expressionUses = false;
     let typedUses = 0;
+    let copied = 0;
     if (this.rustScalarSeeding)
       return kind;
     const previous = this.rustScalarDecisions.get(declaration);
@@ -54458,9 +54459,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return false;
       const form = this.rustScalarUseForm(n, kind);
       this.rustScalarUseForms.set(n, form);
-      if (form === "box" || form === "xbox" || form === "err")
+      if (form === "box" || form === "xbox" || form === "err") {
         boxed++;
-      else if (form !== void 0 && !this.rustIdentifierIsPropertyName(n))
+        if (form === "err" || !(isReturnStatement4(n.parent) || this.rustTestLastUse(n, declaration)))
+          copied++;
+      } else if (form !== void 0 && !this.rustIdentifierIsPropertyName(n))
         nativeUses++;
       if (form === "test" || form === "cond" || form === "concat" || form === "native" || form === "targ")
         typedUses++;
@@ -54476,6 +54479,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!ok || unused || storeOnly || clientOnce || guarded && scope.kind !== SyntaxKind7.MethodDeclaration)
       return void 0;
     if (typedUses === 0 && this.rustTestTierSource(declaration))
+      return void 0;
+    if (copied > 0 && (kind === "str" || kind === "ostr") && this.rustTestTierSource(declaration))
       return void 0;
     if (guarded)
       this.rustScalarGuarded.add(declaration);
@@ -54712,6 +54717,28 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const call = statement.kind === SyntaxKind7.ExpressionStatement ? this.unwrapParens(statement.expression) : void 0;
     if (call === void 0 || !isCallExpression6(call) || !this.rustWsClientCallArg(call, "str"))
       return false;
+    let last = true;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (n !== node && (n.pos > node.pos || n.pos >= statement.pos && n.end <= statement.end))
+        last = false;
+      return true;
+    });
+    if (!last)
+      return false;
+    for (let up = node.parent; up !== void 0 && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+      if (isFunctionLike(up) || up.kind === SyntaxKind7.ForStatement || up.kind === SyntaxKind7.ForOfStatement || up.kind === SyntaxKind7.ForInStatement || up.kind === SyntaxKind7.WhileStatement || up.kind === SyntaxKind7.DoStatement)
+        return false;
+    }
+    return true;
+  }
+  // In a test source a string local's final read moves: no later use, no other use in its statement,
+  // no loop or closure between it and the declaration (a hoisted argument is then still the last read).
+  rustTestLastUse(node, declaration) {
+    if (!this.rustTestTierSource(declaration))
+      return false;
+    let statement = node;
+    while (statement.parent !== void 0 && !isStatement(statement))
+      statement = statement.parent;
     let last = true;
     this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
       if (n !== node && (n.pos > node.pos || n.pos >= statement.pos && n.end <= statement.end))
@@ -55105,7 +55132,7 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (form !== "box" && form !== "xbox")
       return void 0;
     const name = super.printIdentifier(node);
-    const moved = isReturnStatement4(node.parent) || this.rustWsClientLastUse(node, local.declaration) ? name : `${name}.clone()`;
+    const moved = isReturnStatement4(node.parent) || this.rustWsClientLastUse(node, local.declaration) || this.rustTestLastUse(node, local.declaration) ? name : `${name}.clone()`;
     if (local.kind === "ostr")
       return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
     if (local.kind === "str")

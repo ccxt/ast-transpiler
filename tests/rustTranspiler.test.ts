@@ -12,6 +12,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    // required `boolean` read only in condition slots -> native `bool`\n    settlementData (isBuy: boolean, amount: any) {\n        if (isBuy) {\n            return -amount;\n        }\n        return amount;\n    }\n    // optional `boolean`: bound with the truthiness the use sites applied\n    starkAmount (amount: any, roundUp: boolean = false) {\n        if (roundUp) {\n            return amount + 1;\n        }\n        return amount;\n    }\n    // a bool parameter forwarded into a native-`bool` slot\n    forwarded (on: boolean) {\n        return this.settlementData (on, 1);\n    }\n    // a `Value` argument coerces at the call site\n    fromValue (raw: any) {\n        return this.settlementData (raw, 2);\n    }\n    // a bool parameter read outside a bool sink keeps the box\n    boxed (flag: boolean) {\n        const held = flag;\n        return held;\n    }\n    // an override keeps the base `Value` signature\n    override setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['demo'] = true;\n        }\n    }\n    // a method reference handed to another call keeps the `Value` signature\n    channelB (flag: boolean) {\n        if (flag) {\n            return 1;\n        }\n        return 2;\n    }\n    holdRef () {\n        return this.hold (this.channelB);\n    }\n}\n"
  },
  "test-tier-locals": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/test/Exchange/test.locals.ts": "import Exchange from '../../base/Exchange';\nfunction testLocals (exchange: Exchange, entry: any, items: any[]) {\n    let ok = true;\n    for (let i = 0; i < items.length; i++) {\n        if (items[i] === undefined) {\n            ok = false;\n        }\n    }\n    const id = exchange.safeString (entry, 'id');\n    const kept = 'x';\n    if (ok && id === 'a') {\n        return exchange.hold (kept);\n    }\n    return exchange.hold (id === undefined);\n}\nexport default testLocals;\n"},
+ "test-tier-strings": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n}\n", "ts/src/base/Precise.ts": "export class Precise {\n    static stringAbs (s: string): string { return s; }\n}\n", "ts/src/test/Exchange/test.strings.ts": "import Exchange from '../../base/Exchange';\nimport { Precise } from '../../base/Precise';\nfunction testStrings (exchange: Exchange, entry: any) {\n    const lent = exchange.safeString (entry, 'a');\n    if (lent === undefined) {\n        return undefined;\n    }\n    const a = Precise.stringAbs (lent);\n    const b = Precise.stringAbs (lent);\n    const moved = exchange.safeString (entry, 'b');\n    if (moved === undefined) {\n        return [ a, b ];\n    }\n    const c = Precise.stringAbs (moved);\n    return [ a, b, c ];\n}\nexport default testStrings;\n"},
  "free-fn-defaults": {"ts/src/test/Exchange/test.helper.ts": "async function helperTest (exchange: any, symbol: string, params = {}) {\n    return [ exchange, symbol, params ];\n}\nasync function noAwait (exchange: any) {\n    return exchange;\n}\nasync function testHelper (exchange: any, symbol: string) {\n    const a = await helperTest (exchange, symbol);\n    const b = helperTest (exchange, symbol, { 'x': 1 });\n    const c = await noAwait (exchange);\n    return [ a, b, c ];\n}\nexport default testHelper;\n"},
  "bool-locals": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n}\n",
@@ -7210,5 +7211,16 @@ describe('rust test-source locals', () => {
         expect(out).toContain('let mut i: i64 = 0;');
         expect(out).toMatch(/let mut id: Option<String> = exchange\.safe_?[sS]tring\(/);
         expect(out).toContain('let mut kept: Value = ');
+    });
+});
+
+describe('rust test-source string locals', () => {
+    test('a string re-boxed before its last read stays boxed; one re-boxed only at its last read moves', () => {
+        const fresh = new Transpiler({ verbose: false, rust: {} } as any);
+        const out = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'test-tier-strings', 'ts/src/test/Exchange/test.strings.ts')).content;
+        expect(out).toContain('let mut lent: Value = ');
+        expect(out).toMatch(/let mut moved: Option<String> = /);
+        expect(out).toContain('moved.map(Value::from)');
+        expect(out).not.toContain('.clone().map(Value::from)');
     });
 });

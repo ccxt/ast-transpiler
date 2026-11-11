@@ -454,6 +454,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsClientCallArg(call: any, kind: string): boolean;
     rustWsClientOnlyUse(declaration: any): boolean;
     rustWsClientLastUse(node: any, declaration: any): boolean;
+    rustTestLastUse(node: any, declaration: any): boolean;
     private static readonly RUST_CLIENT_HANDLE_TYPE;
     private static readonly RUST_CLIENT_HANDLE_KEYS;
     private static readonly RUST_CLIENT_HANDLE_NAMES;

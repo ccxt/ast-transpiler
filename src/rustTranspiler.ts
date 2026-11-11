@@ -3621,6 +3621,7 @@ export class RustTranspiler extends BaseTranspiler {
         let nativeUses = 0;
         let expressionUses = false;
         let typedUses = 0;
+        let copied = 0;
         // uses that read the local itself (`.length`, compares) see the candidate kind
         if (this.rustScalarSeeding) return kind;
         const previous = this.rustScalarDecisions.get(declaration);
@@ -3630,8 +3631,10 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustEnclosingFunction(n) !== scope) return false;
             const form = this.rustScalarUseForm(n, kind);
             this.rustScalarUseForms.set(n, form);
-            if (form === 'box' || form === 'xbox' || form === 'err') boxed++;
-            else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
+            if (form === 'box' || form === 'xbox' || form === 'err') {
+                boxed++;
+                if (form === 'err' || !(isReturnStatement(n.parent) || this.rustTestLastUse(n, declaration))) copied++;
+            } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
             if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ') typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
@@ -3647,6 +3650,8 @@ export class RustTranspiler extends BaseTranspiler {
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
         if (typedUses === 0 && this.rustTestTierSource(declaration)) return undefined;
+        // a test string re-boxed anywhere but its moving `return` copies where the `Value` was lent
+        if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustTestTierSource(declaration)) return undefined;
         if (guarded) this.rustScalarGuarded.add(declaration);
         return kind;
     }
@@ -3860,6 +3865,25 @@ export class RustTranspiler extends BaseTranspiler {
         while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
         const call: any = statement.kind === SyntaxKind.ExpressionStatement ? this.unwrapParens(statement.expression) : undefined;
         if (call === undefined || !isCallExpression(call) || !this.rustWsClientCallArg(call, 'str')) return false;
+        let last = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (n !== node && (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end))) last = false;
+            return true;
+        });
+        if (!last) return false;
+        for (let up: any = node.parent; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
+    }
+
+    // In a test source a string local's final read moves: no later use, no other use in its statement,
+    // no loop or closure between it and the declaration (a hoisted argument is then still the last read).
+    rustTestLastUse(node, declaration): boolean {
+        if (!this.rustTestTierSource(declaration)) return false;
+        let statement: any = node;
+        while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
         let last = true;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             if (n !== node && (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end))) last = false;
@@ -4232,7 +4256,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
         // only a direct `return x` moves: ccxt hoists call arguments ahead of their statement
-        const moved = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration) ? name : `${name}.clone()`;
+        const moved = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration)
+            || this.rustTestLastUse(node, local.declaration) ? name : `${name}.clone()`;
         if (local.kind === 'ostr') return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
         if (local.kind === 'str') return `Value::from(${moved})`;
         return local.kind === 'bool' ? `Value::Bool(${name})` : `Value::from(${name})`;
