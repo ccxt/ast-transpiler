@@ -1327,6 +1327,20 @@ ${body}
             expect(out).toContain('m.insert("flag".to_string(), flag.map(Value::from).unwrap_or(Value::Null));');
         });
 
+        test('negations and literal ternaries join to Option<bool>', () => {
+            const out = transpiler.transpileRust(cls(`        let linear: boolean = undefined;
+        let inverse: boolean = undefined;
+        if (kind === 'x') { linear = !(kind === 'z'); inverse = (kind === 'q') ? false : true; }
+        if (inverse) { return 1; }
+        return { 'linear': linear, 'inverse': inverse };`)).content;
+            expect(out).toContain('let mut linear: Option<bool> = None;');
+            expect(out).toContain('linear = Some(!');
+            expect(out).toContain('let mut inverse: Option<bool> = None;');
+            expect(out).toContain('inverse = Some(if ');
+            expect(out).toContain('{ false } else { true });');
+            expect(out).not.toContain('linear: Value');
+        });
+
         test('mixed or unproven writes keep the Value box', () => {
             const out = transpiler.transpileRust(cls(`        let a = undefined;
         if (kind === 'x') { a = 'str'; } else { a = 1; }

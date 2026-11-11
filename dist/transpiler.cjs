@@ -53175,6 +53175,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     if (_is.isBinaryExpression.call(void 0, node) && _RustTranspiler.COMPARISON_OPS.has(node.operatorToken.kind))
       return "bool";
+    if (this.rustNilDefiniteBool(node))
+      return "bool";
     if (!_is.isCallExpression.call(void 0, node))
       return void 0;
     const callee = node.expression;
@@ -53198,6 +53200,31 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return args.length === boolBase || args.length === boolBase + 1 && this.literalKindOfNode(args[boolBase]) === "boolean" ? "bool" : void 0;
     }
     return void 0;
+  }
+  /** A boolean that is never undefined: `!x`, a ternary of boolean literals, or `&&` / `||` / parens over such operands. */
+  rustNilDefiniteBool(expr) {
+    const node = this.unwrapParens(expr);
+    if (node === void 0)
+      return false;
+    if (this.literalKindOfNode(node) === "boolean")
+      return true;
+    if (_is.isBinaryExpression.call(void 0, node) && _RustTranspiler.COMPARISON_OPS.has(node.operatorToken.kind))
+      return true;
+    if (_is.isPrefixUnaryExpression.call(void 0, node) && node.operator === _ast.SyntaxKind.ExclamationToken)
+      return true;
+    if (_is.isConditionalExpression.call(void 0, node))
+      return this.literalKindOfNode(this.unwrapParens(node.whenTrue)) === "boolean" && this.literalKindOfNode(this.unwrapParens(node.whenFalse)) === "boolean";
+    if (_is.isBinaryExpression.call(void 0, node) && (node.operatorToken.kind === _ast.SyntaxKind.AmpersandAmpersandToken || node.operatorToken.kind === _ast.SyntaxKind.BarBarToken)) {
+      return this.rustNilDefiniteBool(node.left) && this.rustNilDefiniteBool(node.right);
+    }
+    return false;
+  }
+  /** `if <cond> { true } else { false }` for a ternary of boolean literals. */
+  printRustNilBoolTernary(node) {
+    if (!_is.isConditionalExpression.call(void 0, node) || !this.rustNilDefiniteBool(node))
+      return void 0;
+    const arm = (n) => this.unwrapParens(n).kind === _ast.SyntaxKind.TrueKeyword ? "true" : "false";
+    return `if ${this.printCondition(node.condition, 0)} { ${arm(node.whenTrue)} } else { ${arm(node.whenFalse)} }`;
   }
   rustNilSelfHelperName(call) {
     const callee = call.expression;
@@ -53425,6 +53452,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return `${name} = ${text}.as_i64()`;
     if (_is.isCallExpression.call(void 0, node))
       return `${name} = ${text}.as_bool()`;
+    const pick = this.printRustNilBoolTernary(node);
+    if (pick !== void 0)
+      return `${name} = Some(${pick})`;
     const bool = this.peelValueBoolBox(this.stripOuterParens(text));
     if (bool !== void 0)
       return `${name} = Some(${bool})`;
