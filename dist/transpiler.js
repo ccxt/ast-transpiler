@@ -54477,7 +54477,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return kind;
     const previous = this.rustScalarDecisions.get(declaration);
     this.rustScalarDecisions.set(declaration, kind);
-    const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+    const ok = this.rustScalarUsesAll(declaration, String(declaration.name.text), (n) => {
       if (this.rustIdentifierIsPropertyName(n))
         return n.parent?.kind !== SyntaxKind7.ShorthandPropertyAssignment;
       if (this.rustEnclosingFunction(n) !== scope)
@@ -54638,6 +54638,55 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (listType === void 0 || !this.getChecker().isArrayType(listType))
       return void 0;
     return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === "string" ? "ostr" : void 0;
+  }
+  // ── scalar sibling bindings (rustScalarUsesAll) ──
+  // `rustLocalUsesAll` for a scalar `let`/`const`: a same-named block-scoped binding in a sibling
+  // block is another symbol (Rust scopes it to its own block too), so its uses are skipped.
+  rustScalarUsesAll(declaration, name, acceptUse) {
+    const own = this.rustSymbolOf(declaration.name);
+    const scope = this.rustEnclosingFunction(declaration);
+    if (own === void 0 || scope === void 0 || (declaration.parent?.flags & (NodeFlags4.Let | NodeFlags4.Const)) === 0)
+      return this.rustLocalUsesAll(declaration, name, false, acceptUse);
+    const nodes = this.rustScopeNameNodes(scope, name);
+    const siblings = nodes.filter((n) => n !== declaration && this.rustBindsName(n, name));
+    if (siblings.length === 0)
+      return this.rustLocalUsesAll(declaration, name, false, acceptUse);
+    for (const n of siblings) {
+      if (!isVariableDeclaration3(n) || (n.parent?.flags & (NodeFlags4.Let | NodeFlags4.Const)) === 0 || this.rustEnclosingFunction(n) !== scope || this.isNodeInsideNode(declaration, n.parent?.parent ?? n) || this.isNodeInsideNode(n, declaration.parent?.parent ?? declaration))
+        return false;
+    }
+    for (const n of nodes) {
+      if (n.kind !== SyntaxKind7.Identifier || n === declaration.name)
+        continue;
+      if (n.parent?.kind !== SyntaxKind7.ShorthandPropertyAssignment && !this.rustIdentifierIsPropertyName(n)) {
+        const symbol = this.rustSymbolOf(n);
+        if (symbol === void 0)
+          return false;
+        if (symbol !== own)
+          continue;
+      } else if (!this.isNodeInsideNode(n, declaration.parent?.parent?.parent ?? declaration))
+        continue;
+      if (!acceptUse(n))
+        return false;
+      const trial = this.rustScalarDecisions.get(declaration);
+      const form = this.rustScalarUseForms.get(n);
+      if ((trial === "str" || trial === "ostr") && (form === "box" || form === "xbox" || form === "err" || form === "key") && !isReturnStatement4(n.parent))
+        return false;
+      const push = findAncestor(n, (m) => isStatement(m) || isCallExpression6(m) && isPropertyAccessExpression3(m.expression) && m.expression.name.text === "push");
+      if (push !== void 0 && isCallExpression6(push))
+        return false;
+      const write = findAncestor(n, (m) => isStatement(m) || isBinaryExpression5(m) && m.operatorToken.kind === SyntaxKind7.EqualsToken);
+      if (write !== void 0 && isBinaryExpression5(write) && this.isNodeInsideNode(n, write.right))
+        return false;
+    }
+    return true;
+  }
+  rustScalarCounterCond(name, condStr) {
+    const head = `${name}.as_f64().unwrap_or(f64::NAN) `;
+    const match = /^(<=?|>=?) (.+)$/.exec(condStr.startsWith(head) ? condStr.slice(head.length) : "");
+    if (match === null || new RegExp(`(?<![\\w.])${name}(?![\\w])`).test(match[2]))
+      return void 0;
+    return `${_RustTranspiler.RUST_SCALAR_COUNTER_COND}(${name} as f64) ${match[1]} ${match[2]}`;
   }
   /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
   rustScalarNeedsNativeUse(init) {
@@ -59190,7 +59239,7 @@ ${idn}}`;
       }
       if (typed && counter !== void 0 && bound !== void 0) {
         initStr = initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
-        condStr = `${counter.name} < (${bound}.len() as i64)`;
+        condStr = bound.startsWith(_RustTranspiler.RUST_SCALAR_COUNTER_COND) ? bound.slice(1) : `${counter.name} < (${bound}.len() as i64)`;
         step = `${counter.name} += 1;`;
       }
       const cond = `{ if !${flag} { ${step} } ${flag} = false; ${condStr} }`;
@@ -59252,7 +59301,7 @@ ${idn}}`;
   /** The place `X` of a `i < X.length` condition over this counter, when its uses are all admissible. */
   rustI64CounterPlan(node, counter, condStr) {
     const printed = new RegExp(`^${counter.name}\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\) < Value::Int\\((self\\.\\w+|\\w+)\\.len\\(\\) as i64\\)\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\)$`).exec(condStr);
-    const bound = printed?.[1] ?? this.rustOptListCounterBound(node, counter.name, condStr);
+    const bound = printed?.[1] ?? this.rustOptListCounterBound(node, counter.name, condStr) ?? this.rustScalarCounterCond(counter.name, condStr);
     if (bound === void 0)
       return void 0;
     for (const id of this.rustScopeNameNodes(node.statement, counter.name)) {
@@ -64532,6 +64581,11 @@ _RustTranspiler.RUST_BASE_SCALAR_RETURNS = {
   milliseconds: "oint",
   seconds: "oint"
 };
+// ── scalar loop counters (rustScalarCounterCond) ──
+// `i < n` over an `Int`-literal counter whose bound is any other numeric operand: the counter's
+// `Value::Int` payload compares as `i.as_f64()`, which on an `i64` is exactly `(i as f64)`.
+// The marked result is the whole rewritten condition (the bound side prints unchanged).
+_RustTranspiler.RUST_SCALAR_COUNTER_COND = "\x07";
 // rustWsClientCallArg: `client.resolve|reject|future|reusableFuture|send(.., x)` on a ws `Client`
 // receiver takes its arguments as plain `Value`s, so a string local boxes there.
 _RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS = /* @__PURE__ */ new Set(["resolve", "reject", "future", "reusableFuture", "send"]);
