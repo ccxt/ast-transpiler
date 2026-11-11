@@ -3505,13 +3505,42 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const inner = this.stripOuterParens(printedValue);
         const peeled = this.peelValueBoolBox(inner);
-        if (peeled === undefined && !this.printedBoolHelperCall(inner) && !this.rustNodeIsBoolExpression(initializer)) {
+        const member = peeled === undefined && !this.printedBoolHelperCall(inner) && !this.rustNodeIsBoolExpression(initializer);
+        if (member && !this.rustBoolMemberSource(initializer)) {
             return undefined;
         }
         if (!this.rustTypeIsBoolean(initializer) || !this.rustLocalUsesAcceptBool(declaration, declaration.name.text)) {
             return undefined;
         }
-        return peeled ?? inner;
+        return member ? this.rustBoolMemberText(inner) : (peeled ?? inner);
+    }
+
+    // ── boolean members (rustBoolMemberSource / rustBoolMemberText) ──
+    // `this.<field>` or `this.<method>(..)` declared `boolean` on every declaration: the `Value` it prints holds a
+    // `Bool` (or `Null`), so a local read only as a condition converts once with the truthiness every use printed.
+    rustBoolMemberSource(init): boolean {
+        const node: any = this.unwrapParens(init);
+        const access: any = node !== undefined && isCallExpression(node) ? node.expression : node;
+        if (access === undefined || !isPropertyAccessExpression(access) || access.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        // the scalar readers keep their own spelling
+        const name = String(access.name.text);
+        if (RustTranspiler.RUST_SCALAR_BOOL_HELPERS[name] !== undefined || RustTranspiler.RUST_BOOL_READERS[name] !== undefined) return false;
+        const declarations: any[] = symbolDeclarations(this.checkerOrUndefined()?.getSymbolAtLocation(access.name));
+        const wanted = isCallExpression(node) ? SyntaxKind.MethodDeclaration : SyntaxKind.PropertyDeclaration;
+        if (declarations.length === 0 || !declarations.every((d: any) => d.kind === wanted && d.type?.kind === SyntaxKind.BooleanKeyword)) return false;
+        // a method also proves every `return` is a bool value (the use sites' own truthiness proof)
+        return !isCallExpression(node) || this.rustBoolValue(node);
+    }
+
+    /** An identifier read of a local the member rule above declares `bool`. */
+    rustBoolMemberLocal(node): boolean {
+        const declaration: any = isIdentifier(node) ? this.rustDeclaredNode(node) : undefined;
+        return declaration !== undefined && isVariableDeclaration(declaration) && declaration.name !== node
+            && this.rustBoolMemberSource(declaration.initializer) && this.rustDeclarationPrintsNativeBool(declaration);
+    }
+
+    rustBoolMemberText(printed: string): string {
+        return `${printed}.as_bool() == Some(true)`;
     }
 
     // ── scalar locals (`let x = this.safeString|safeInteger|safeNumber|safeBool(..)` / scalar literals) ──
@@ -13793,7 +13822,7 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(node);
         if (inner === undefined || (!isIdentifier(inner) && !isCallExpression(inner))
             || !this.printsValueExpression(inner) || !this.isBareBoolEmissionSafe(node)
-            || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || !this.rustBoolValue(inner)) {
+            || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || this.rustBoolMemberLocal(inner) || !this.rustBoolValue(inner)) {
             return undefined;
         }
         // the text ccxt's is_true post-pass prints for the same proof; `!` needs the parens
@@ -13813,7 +13842,7 @@ export class RustTranspiler extends BaseTranspiler {
         const [ literal, other ] = leftLiteral ? [ left, right ] : [ right, left ];
         const inner: any = this.unwrapParens(other);
         if (inner === undefined || (!isIdentifier(inner) && !isCallExpression(inner)) || !this.printsValueExpression(inner)
-            || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || !this.rustBoolValue(inner)) {
+            || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || this.rustBoolMemberLocal(inner) || !this.rustBoolValue(inner)) {
             return undefined;
         }
         const operator = (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) ? '==' : '!=';

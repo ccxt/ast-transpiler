@@ -409,6 +409,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustIdentifierIsPropertyName(node: any): boolean;
     rustStringLocalIdentifierIsTyped(node: any): boolean;
     getRustBoolLocalInitializer(declaration: any, printedValue: string): string | undefined;
+    rustBoolMemberSource(init: any): boolean;
+    /** An identifier read of a local the member rule above declares `bool`. */
+    rustBoolMemberLocal(node: any): boolean;
+    rustBoolMemberText(printed: string): string;
     private static readonly RUST_SCALAR_INT_HELPERS;
     private static readonly RUST_SCALAR_NUM_HELPERS;
     private static readonly RUST_SCALAR_BOOL_HELPERS;

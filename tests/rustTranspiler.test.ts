@@ -7898,3 +7898,34 @@ describe('rust optional typed parameter defaults and boolean writes', () => {
         expect(output).toContain('if found {');
     });
 });
+
+describe('rust boolean members read as conditions', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export default class Exchange {\n    isSandboxModeEnabled: boolean = false;\n    options: any = {};\n    isPostOnly (isMarketOrder: boolean, params: any = {}): boolean { return params[\'postOnly\'] === true; }\n    hold (x: any): any { return x; }\n}\n',
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    pickUrl () {\n        const isTestnet = this.isSandboxModeEnabled;\n        let key = 'api';\n        if (isTestnet) {\n            key = 'test';\n        }\n        return key;\n    }\n" +
+            "    createOrder (type: string, params: any = {}) {\n        const postOnly = this.isPostOnly (type === 'market', params);\n        if (postOnly && type === 'limit') {\n            return 'po';\n        }\n        return 'gtc';\n    }\n" +
+            "    handedOn (type: string, params: any = {}) {\n        const postOnly = this.isPostOnly (type === 'market', params);\n        return this.hold (postOnly);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-boolmember-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a boolean field read only as a condition is a bool local', () => {
+        expect(out).toContain('let mut isTestnet: bool = self.isSandboxModeEnabled.as_bool() == Some(true);');
+        expect(out).not.toContain('isTestnet.as_bool()');
+    });
+    test('a boolean method result read only as a condition is a bool local', () => {
+        expect(out).toMatch(/let mut postOnly: bool = self\.isPostOnly\(.*\)\.as_bool\(\) == Some\(true\);/);
+        expect(out).not.toContain('postOnly.as_bool()');
+    });
+    test('negative: a boolean result handed to another method keeps its box', () => {
+        expect(out).toMatch(/let mut postOnly: Value = self\.isPostOnly\(/);
+    });
+});
