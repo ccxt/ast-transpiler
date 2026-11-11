@@ -52996,7 +52996,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const handleKeys = this.printClientHandleKeys(declaration.initializer);
       if (handleKeys !== void 0)
         return `${indent}let mut ${varName}: Vec<Value> = ${handleKeys}`;
-      if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)))
+      if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(declaration.initializer)))
         return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
       return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
     }
@@ -62161,7 +62161,20 @@ ${iden}}`;
       return args.length >= 3 && this.rustSkipWrappers(args[2])?.kind === SyntaxKind7.FalseKeyword;
     if (method === "marketIds")
       return args.length === 1 && this.rustLentListUse(this.rustSkipWrappers(args[0]));
-    return false;
+    return this.rustDefaultedListRead(init);
+  }
+  /** A base `safeList*` read with an empty `[]` default: a list on every path. */
+  rustDefaultedListRead(init) {
+    const callee = isCallExpression6(init) && isPropertyAccessExpression3(init.expression) ? init.expression : void 0;
+    if (callee === void 0 || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const method = String(callee.name.text);
+    const keys = method === "safeList2" ? 3 : method === "safeList" || method === "safeListN" ? 2 : 0;
+    const last = keys > 0 && init.arguments.length === keys + 1 ? this.rustSkipWrappers(init.arguments[keys]) : void 0;
+    if (last === void 0 || !isArrayLiteralExpression4(last) || last.elements.length !== 0)
+      return false;
+    const declaration = this.rustScalarCallee(init);
+    return declaration !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
   }
   rustLentListLocalUncached(declaration) {
     if (declaration.name?.kind !== SyntaxKind7.Identifier)
@@ -62175,6 +62188,8 @@ ${iden}}`;
     const init = this.rustSkipWrappers(declaration.initializer);
     if (!this.rustLentListSource(init))
       return false;
+    const defaulted = this.rustDefaultedListRead(init);
+    let indexed = 0;
     const type = this.typeOfNodeIfAny(declaration.initializer);
     if (type === void 0 || !this.getChecker().isArrayType(type))
       return false;
@@ -62188,7 +62203,8 @@ ${iden}}`;
       return false;
     const boxes = [];
     let natives = 0;
-    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+    const usesAll = (accept) => defaulted ? this.rustScalarUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
+    const safe = usesAll((n) => {
       if (this.rustIdentifierIsPropertyName(n))
         return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
       if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
@@ -62199,6 +62215,7 @@ ${iden}}`;
       const up = at.parent;
       if (isElementAccessExpression4(up) && up.expression === at) {
         natives++;
+        indexed++;
         return this.rustReadBearerElementUse(up, "list");
       }
       if (at === n && isCallExpression6(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
@@ -62208,6 +62225,7 @@ ${iden}}`;
       if (isPropertyAccessExpression3(up) && up.expression === at && String(up.name.text) === "length") {
         const use = up.parent;
         natives++;
+        indexed++;
         return use?.kind !== SyntaxKind7.PrefixUnaryExpression && use?.kind !== SyntaxKind7.PostfixUnaryExpression && !(isBinaryExpression5(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
       }
       if (isReturnStatement4(up) && up.expression === n) {
@@ -62223,7 +62241,7 @@ ${iden}}`;
       }
       return false;
     });
-    if (!safe || natives === 0)
+    if (!safe || natives === 0 || defaulted && indexed === 0 && boxes.some(([, form]) => form === "clone"))
       return false;
     for (const [n, form] of boxes)
       this.rustLentListBoxes.set(n, form);

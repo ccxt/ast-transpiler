@@ -2042,7 +2042,7 @@ export class RustTranspiler extends BaseTranspiler {
         const readBearer = node.declarations.length === 1 ? this.rustReadBearerKindOfDeclaration(declaration) : false;
         if (readBearer === 'list') {
             const handleKeys = this.printClientHandleKeys(declaration.initializer); if (handleKeys !== undefined) return `${indent}let mut ${varName}: Vec<Value> = ${handleKeys}`;
-            if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer))) return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
+            if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(declaration.initializer))) return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
             return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
         }
         if (readBearer === 'map') {
@@ -11662,7 +11662,19 @@ export class RustTranspiler extends BaseTranspiler {
         // `allowEmpty: false` throws on an empty or missing input instead of returning it.
         if (method === 'marketSymbols') return args.length >= 3 && this.rustSkipWrappers(args[2])?.kind === SyntaxKind.FalseKeyword;
         if (method === 'marketIds') return args.length === 1 && this.rustLentListUse(this.rustSkipWrappers(args[0]));
-        return false;
+        return this.rustDefaultedListRead(init);
+    }
+
+    /** A base `safeList*` read with an empty `[]` default: a list on every path. */
+    rustDefaultedListRead(init: any): boolean {
+        const callee: any = isCallExpression(init) && isPropertyAccessExpression(init.expression) ? init.expression : undefined;
+        if (callee === undefined || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const method = String(callee.name.text);
+        const keys = method === 'safeList2' ? 3 : (method === 'safeList' || method === 'safeListN' ? 2 : 0);
+        const last: any = keys > 0 && init.arguments.length === keys + 1 ? this.rustSkipWrappers(init.arguments[keys]) : undefined;
+        if (last === undefined || !isArrayLiteralExpression(last) || last.elements.length !== 0) return false;
+        const declaration: any = this.rustScalarCallee(init);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
 
     rustLentListLocalUncached(declaration: any): boolean {
@@ -11673,6 +11685,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (typeof source === 'string' && /[\\/]test[\\/]/.test(source)) return false;
         const init: any = this.rustSkipWrappers(declaration.initializer);
         if (!this.rustLentListSource(init)) return false;
+        // a defaulted read boxes its shared handle only when it also has a length or index read
+        const defaulted = this.rustDefaultedListRead(init);
+        let indexed = 0;
         // The initializer's resolved overload (`string[]`) decides, so a wider `Strings` annotation does not reject it.
         const type: any = this.typeOfNodeIfAny(declaration.initializer);
         if (type === undefined || !this.getChecker().isArrayType(type)) return false;
@@ -11685,7 +11700,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (String(declaration.initializer.getText()).split('\n')[0].length > 240) return false;
         const boxes: [any, 'clone' | 'move'][] = [];
         let natives = 0;
-        const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
+        // a same-named `let`/`const` in a sibling block is another binding
+        const usesAll = (accept: (n: any) => boolean): boolean => (defaulted ? this.rustScalarUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept));
+        const safe = usesAll((n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
             let at: any = n;
@@ -11693,6 +11710,7 @@ export class RustTranspiler extends BaseTranspiler {
             const up: any = at.parent;
             if (isElementAccessExpression(up) && up.expression === at) {
                 natives++;
+                indexed++;
                 return this.rustReadBearerElementUse(up, 'list');
             }
             if (at === n && isCallExpression(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
@@ -11702,6 +11720,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (isPropertyAccessExpression(up) && up.expression === at && String(up.name.text) === 'length') {
                 const use: any = up.parent;
                 natives++;
+                indexed++;
                 return use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
                     && !(isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
             }
@@ -11712,14 +11731,14 @@ export class RustTranspiler extends BaseTranspiler {
             if (isCallExpression(up) && up.expression !== n && up.arguments.some((a: any) => a === n)) {
                 const callee: any = up.expression;
                 if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
-                    || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n))) return false;
+                    || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n)) ) return false;
                 boxes.push([n, 'clone']);
                 return true;
             }
             return false;
         });
         // A list that is only handed on would trade each box for a handle box.
-        if (!safe || natives === 0) return false;
+        if (!safe || natives === 0 || (defaulted && indexed === 0 && boxes.some(([, form]) => form === 'clone'))) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         return true;
     }

@@ -52995,7 +52995,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const handleKeys = this.printClientHandleKeys(declaration.initializer);
       if (handleKeys !== void 0)
         return `${indent}let mut ${varName}: Vec<Value> = ${handleKeys}`;
-      if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)))
+      if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(declaration.initializer)))
         return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
       return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
     }
@@ -62160,7 +62160,20 @@ ${iden}}`;
       return args.length >= 3 && _optionalChain([this, 'access', _9123 => _9123.rustSkipWrappers, 'call', _9124 => _9124(args[2]), 'optionalAccess', _9125 => _9125.kind]) === _ast.SyntaxKind.FalseKeyword;
     if (method === "marketIds")
       return args.length === 1 && this.rustLentListUse(this.rustSkipWrappers(args[0]));
-    return false;
+    return this.rustDefaultedListRead(init);
+  }
+  /** A base `safeList*` read with an empty `[]` default: a list on every path. */
+  rustDefaultedListRead(init) {
+    const callee = _is.isCallExpression.call(void 0, init) && _is.isPropertyAccessExpression.call(void 0, init.expression) ? init.expression : void 0;
+    if (callee === void 0 || callee.expression.kind !== _ast.SyntaxKind.ThisKeyword)
+      return false;
+    const method = String(callee.name.text);
+    const keys = method === "safeList2" ? 3 : method === "safeList" || method === "safeListN" ? 2 : 0;
+    const last = keys > 0 && init.arguments.length === keys + 1 ? this.rustSkipWrappers(init.arguments[keys]) : void 0;
+    if (last === void 0 || !_is.isArrayLiteralExpression.call(void 0, last) || last.elements.length !== 0)
+      return false;
+    const declaration = this.rustScalarCallee(init);
+    return declaration !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
   }
   rustLentListLocalUncached(declaration) {
     if (_optionalChain([declaration, 'access', _9126 => _9126.name, 'optionalAccess', _9127 => _9127.kind]) !== _ast.SyntaxKind.Identifier)
@@ -62174,6 +62187,8 @@ ${iden}}`;
     const init = this.rustSkipWrappers(declaration.initializer);
     if (!this.rustLentListSource(init))
       return false;
+    const defaulted = this.rustDefaultedListRead(init);
+    let indexed = 0;
     const type = this.typeOfNodeIfAny(declaration.initializer);
     if (type === void 0 || !this.getChecker().isArrayType(type))
       return false;
@@ -62187,7 +62202,8 @@ ${iden}}`;
       return false;
     const boxes = [];
     let natives = 0;
-    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+    const usesAll = (accept) => defaulted ? this.rustScalarUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
+    const safe = usesAll((n) => {
       if (this.rustIdentifierIsPropertyName(n))
         return !(_optionalChain([n, 'access', _9134 => _9134.parent, 'optionalAccess', _9135 => _9135.kind]) === _ast.SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
       if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
@@ -62198,6 +62214,7 @@ ${iden}}`;
       const up = at.parent;
       if (_is.isElementAccessExpression.call(void 0, up) && up.expression === at) {
         natives++;
+        indexed++;
         return this.rustReadBearerElementUse(up, "list");
       }
       if (at === n && _is.isCallExpression.call(void 0, up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
@@ -62207,6 +62224,7 @@ ${iden}}`;
       if (_is.isPropertyAccessExpression.call(void 0, up) && up.expression === at && String(up.name.text) === "length") {
         const use = up.parent;
         natives++;
+        indexed++;
         return _optionalChain([use, 'optionalAccess', _9136 => _9136.kind]) !== _ast.SyntaxKind.PrefixUnaryExpression && _optionalChain([use, 'optionalAccess', _9137 => _9137.kind]) !== _ast.SyntaxKind.PostfixUnaryExpression && !(_is.isBinaryExpression.call(void 0, use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
       }
       if (_is.isReturnStatement.call(void 0, up) && up.expression === n) {
@@ -62222,7 +62240,7 @@ ${iden}}`;
       }
       return false;
     });
-    if (!safe || natives === 0)
+    if (!safe || natives === 0 || defaulted && indexed === 0 && boxes.some(([, form]) => form === "clone"))
       return false;
     for (const [n, form] of boxes)
       this.rustLentListBoxes.set(n, form);

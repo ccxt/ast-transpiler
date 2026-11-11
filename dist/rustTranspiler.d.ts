@@ -1547,6 +1547,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentListLocal(declaration: any): boolean;
     /** A call that yields a string list on every path (never `undefined`). */
     rustLentListSource(init: any): boolean;
+    /** A base `safeList*` read with an empty `[]` default: a list on every path. */
+    rustDefaultedListRead(init: any): boolean;
     rustLentListLocalUncached(declaration: any): boolean;
     rustLentListUse(node: any): boolean;
     /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
