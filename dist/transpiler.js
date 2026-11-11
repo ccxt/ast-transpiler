@@ -62590,7 +62590,7 @@ ${iden}}`;
       return true;
     };
     const safe = from === "api" && !nilDeclared ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
-    if (!safe || reads === 0 || mixed || from === void 0 || (this.rustNilResponseLocals.has(declaration) || from === "api" || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
+    if (!safe || reads === 0 && !this.rustNullTestedDictLocal(init, nullTests, writes) || mixed || from === void 0 || (this.rustNilResponseLocals.has(declaration) || from === "api" || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
       return void 0;
     if ((keyReads > 0 || init !== void 0 && isCallExpression6(init) && this.rustRecordLookupSource(init)) && !this.rustDictKeyReadLineOk(declaration, name))
       return void 0;
@@ -62607,6 +62607,13 @@ ${iden}}`;
     for (const n of boxedElementUses)
       this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) ? "move" : "share");
     return from === "list" ? "list" : "dict";
+  }
+  // ── rustNullTestedDictLocal: a base `safeDict*` result that is only tested against null ──
+  // The optional map answers the test natively (`is_some()` / `is_none()`); a non-map reads as `None`, as the reader does.
+  rustNullTestedDictLocal(init, nullTests, writes) {
+    if (nullTests === 0 || writes > 0 || init === void 0 || !isCallExpression6(init))
+      return false;
+    return /^safeDict(?:2|N)?$/.test(String(init.expression?.name?.text ?? "")) && this.rustOptContainerSourceOk(init, "dict");
   }
   // ── rustDictElementSource: `xs[i]` over a list whose checker element type is a string-keyed map ──
   // The element leaves its copied box as the shared map (the same Arc bump the copy paid). A missing
