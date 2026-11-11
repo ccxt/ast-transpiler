@@ -2031,6 +2031,7 @@ export class RustTranspiler extends BaseTranspiler {
         const readBearer = node.declarations.length === 1 ? this.rustReadBearerKindOfDeclaration(declaration) : false;
         if (readBearer === 'list') {
             const handleKeys = this.printClientHandleKeys(declaration.initializer); if (handleKeys !== undefined) return `${indent}let mut ${varName}: Vec<Value> = ${handleKeys}`;
+            if (this.rustAlwaysListProducer(this.rustSkipWrappers(declaration.initializer))) return `${indent}let mut ${varName}: crate::value::List = ${parsedValue}.into_list()`;
             return `${indent}let mut ${varName}: Vec<Value> = ${parsedValue}.as_array().cloned().unwrap_or_default()`;
         }
         if (readBearer === 'map') {
@@ -10383,6 +10384,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A dict read out of a live store (`x.hashmap()`, `x.subscriptions`) is a
         // tagged handle: its writes must reach the store, so it keeps the helper.
         if (produced && this.rustInitReadsTaggedStore(init)) return false;
+        if (!produced && this.rustReaderTableLocal(declaration, literal)) return true;
         const entries: any[] = produced ? [] : literal.properties;
         for (const property of entries) {
             if (property.kind === SyntaxKind.SpreadAssignment) return false;
@@ -10478,6 +10480,51 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustDictBearerCloned.add(declaration);
         }
         return true;
+    }
+
+    // ── rustReaderTableLocal: lookup tables lent to the any-key readers ──
+    // `const statuses = { '0': 'open', .. }; return this.safeString (statuses, status, status);` — a literal
+    // table whose only uses are arg 0 of a base any-key reader. The reader on `&IndexMap` runs
+    // `get_map_value`, the very function `get_value` runs on the boxed `Value::Dict`, so numeric keys read
+    // the same (a literal carries no cache / book marker key).
+    private rustReaderTables = new WeakSet<any>();
+
+    rustReaderTableLocal(declaration: any, literal: any): boolean {
+        if (!isObjectLiteralExpression(literal) || literal.properties.length === 0 || this.rustTestTierSource(declaration)) return false;
+        const list: any = declaration.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1) return false;
+        for (const property of Array.from<any>(literal.properties)) {
+            if (property.kind !== SyntaxKind.PropertyAssignment) return false;
+            const key: any = property.name;
+            if (key === undefined || (!isStringLiteralLikeNode(key) && key.kind !== SyntaxKind.NumericLiteral && !isIdentifier(key))) return false;
+            const text = String(key.text);
+            if (text === '' || text.startsWith('__') || text === 'subscriptions' || text === 'futures') return false;
+        }
+        const fn: any = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || isSourceFile(fn)) return false;
+        let reads = 0;
+        const safe = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
+            if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
+            const call: any = n.parent;
+            if (call === undefined || !isCallExpression(call) || call.arguments[0] !== n || !this.rustBorrowedAnyKeyReader(call)) return false;
+            reads++;
+            return true;
+        });
+        if (!safe || reads === 0) return false;
+        this.rustReaderTables.add(declaration);
+        return true;
+    }
+
+    /** Base `toArray(x)` / `arrayConcat(a, b)`: the hand-written runtime answers a `Value::Arr` on every
+     *  path (a cache's entries, the list itself, a dict's values, `[]` for anything else). */
+    rustAlwaysListProducer(call: any): boolean {
+        const callee: any = call !== undefined && isCallExpression(call) ? call.expression : undefined;
+        if (callee === undefined || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const method = String(callee.name.text);
+        if (method !== 'toArray' && method !== 'arrayConcat') return false;
+        const declaration: any = this.rustScalarCallee(call);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
 
     /** A call that builds a fresh plain map — the request/params builders, `parseJson`, and the `handle*` family.
@@ -11156,6 +11203,8 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = this.rustReadBearerKind(node);
         if (kind === undefined) return undefined;
         const value = form === 'move' ? text : `${text}.clone()`;
+        const listDecl: any = kind === 'list' ? this.rustDeclarationOfIdentifier(node) : undefined;
+        if (listDecl !== undefined && this.rustAlwaysListProducer(this.rustSkipWrappers(listDecl.initializer))) return `Value::Arr(${value})`;
         // A call argument boxes through `Into` so ccxt's literal-key reader rewrite still parses the argument.
         if (isCallExpression(node.parent)) return `${value}.into()`;
         return kind === 'map' ? `Value::Map(${value})` : `Value::from(${value})`;
@@ -11491,7 +11540,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (call === undefined || !isCallExpression(call) || call.arguments[0] !== node || !this.rustBorrowedAnyKeyReader(call)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
-        if (this.rustBorrowedLocalKind(declaration) !== undefined || this.rustLentListLocal(declaration)) return `&${text}`;
+        if (this.rustBorrowedLocalKind(declaration) !== undefined || this.rustLentListLocal(declaration) || this.rustReaderTables.has(declaration)) return `&${text}`;
         return this.rustContainerBoxUses.get(node) !== undefined && this.rustReadBearerKind(node) !== undefined ? `&${text}` : undefined;
     }
 
@@ -12266,6 +12315,7 @@ export class RustTranspiler extends BaseTranspiler {
             const args: any[] = (node as any).arguments ?? [];
             return args.length < 3 || isArrayLiteralExpression(this.rustSkipWrappers(args[2])) ? 'list' : undefined;
         }
+        if (this.rustAlwaysListProducer(node)) return 'list';
         if (method === 'safeDict' || method === 'safeMarket' || method === 'safeMarketStructure'
             || method === 'market' || method === 'currency' || method === 'safeCurrency') return 'map';
         // `safeValue(container, key)` without a default: the element or `undefined`.
