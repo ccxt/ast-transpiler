@@ -39,6 +39,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    findTimeframe (timeframe: any, timeframes: Dict = undefined): Str {\n        return undefined;\n    }\n    incrementingNonce (): int {\n        return 1;\n    }\n    hold (x: any): any {\n        return x;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseEntry (entry: Dict, keys: string[]) {\n        const timeframe = this.findTimeframe (entry['i']);\n        if (timeframe === undefined) {\n            return undefined;\n        }\n        const nonce = this.incrementingNonce ();\n        if (nonce === 0) {\n            return undefined;\n        }\n        const key = keys[0];\n        const parts = 'a-b'.split ('-');\n        const first = parts[0];\n        if (first === 'a') {\n            return this.hold (key);\n        }\n        const boxedOnly = this.findTimeframe (entry['j']);\n        return { 'tf': timeframe, 'n': nonce, 'f': first, 'b': boxedOnly };\n    }\n}\n"
  },
+ "opt-market-key-reads": {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; type: string; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchA (symbol: Str = undefined, params: Dict = {}) {\n        const request: Dict = {};\n        let market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n            request['symbol'] = market['id'];\n        }\n        const code = this.safeString (market, 'symbol');\n        return this.hold (request, code);\n    }\n    fetchB (symbol: Str = undefined, params: Dict = {}) {\n        let market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n        }\n        return this.hold (market['id'], market);\n    }\n}\n"},
  "typed-call-results": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; type: string; settle: Str; linear: boolean | undefined; info: any }\nexport interface Order { id: string; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    async loadMarkets (reload = false, params: Dict = {}): Promise<Dict> {\n        return this.markets;\n    }\n    async fetchOrders (symbol: Str = undefined, params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchA (symbol: Str = undefined, params: Dict = {}) {\n        await this.loadMarkets ();\n        let market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n        }\n        return this.hold (params, market);\n    }\n    async fetchB (symbol: string, params: Dict = {}) {\n        let market = this.market (symbol);\n        if (market['type'] === 'swap') {\n            market = this.market ('x');\n        }\n        return this.hold ({ 'k': market['settle'], 'l': market['linear'], 'b': market['baseId'] }, market);\n    }\n    async fetchC (symbol: string, params: Dict = {}) {\n        const orders = await this.fetchOrders (symbol, params);\n        return this.hold (orders);\n    }\n}\n"
@@ -7401,6 +7402,25 @@ describe('rust typed Market optional fields', () => {
         expect(output).toContain('((market).margin == Some(true))');
         expect(output).toContain('(market).spot');
         expect(output).not.toContain('safe_bool');
+    });
+});
+
+describe('rust optional market locals read by key', () => {
+    let output = '';
+    beforeAll(() => {
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = typed.transpileRustByPath(path.join (rustFixtureRoot, 'opt-market-key-reads', 'ts/src/venue.ts')).content;
+    });
+
+    test('an empty market local read only by literal keys is an Option<Market> read through the reader trait', () => {
+        expect(output).toContain('let mut market: Option<crate::types::Market> = None');
+        expect(output).toContain('crate::value::KeyRead::key_read(&&market, "id")');
+        expect(output).toContain('self.safe_string_k(&market, "symbol", &[])');
+    });
+
+    test('a market local both read by key and handed on whole stays boxed', () => {
+        expect(output).toContain('let mut market: Value = Value::Null');
+        expect(output.match(/Option<crate::types::Market>/g)?.length).toBe(1);
     });
 });
 

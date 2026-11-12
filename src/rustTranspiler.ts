@@ -7229,12 +7229,19 @@ export class RustTranspiler extends BaseTranspiler {
         const scope = this.rustEnclosingFunction(declaration);
         let fieldReads = 0;
         let writes = 0;
+        let keyReads = 0;
+        let handOffs = 0;
         const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
             if (this.rustEnclosingFunction(n) !== scope) return false; // a closure capture keeps the box
             if (this.rustIsTypedMarketWrite(n)) {
                 writes++;
                 return true;
             }
+            if (empty && this.rustOptMarketKeyRead(n)) {
+                if (this.rustDictKeyReadUse(n)) keyReads++;
+                return true;
+            }
+            if (empty && this.rustMarketValueUse(n)) handOffs++;
             if (empty) return this.rustIsNullTestOf(n) || this.rustMarketValueUse(n);
             const key = this.rustMarketReadKey(n);
             if (key !== undefined) {
@@ -7247,8 +7254,25 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustMarketValueUse(n);
         });
         if (!ok) return false;
-        if (empty) return writes > 0 ? 'opt' : false;
+        // direct key reads go through the reader trait; with a whole-value hand-off as well the box would come back
+        if (empty) return writes > 0 && (keyReads === 0 || handOffs === 0) ? 'opt' : false;
         return fieldReads > 0 ? 'struct' : false;
+    }
+
+    // ── rustOptMarketKeyRead / printOptMarketKeyRead: literal-key reads on an `Option<Market>` local ──
+    // `KeyRead` for `&Option<Market>` reads the market's own map (Null when empty), as the boxed local did.
+    rustOptMarketKeyRead(n: any): boolean {
+        if (this.rustDictKeyReadUse(n)) return true;
+        const call: any = n.parent;
+        return call !== undefined && isCallExpression(call) && call.arguments[0] === n && this.rustBorrowedDictReader(call) !== undefined;
+    }
+
+    /** `crate::value::KeyRead::key_read(&&m, "k")` for a direct read on an `Option<Market>` local. */
+    printOptMarketKeyRead(node: any): string | undefined {
+        const recv: any = node.expression;
+        if (recv === undefined || !isIdentifier(recv) || !this.rustDictKeyReadUse(recv) || this.rustOptMarketLocalOf(recv) === undefined) return undefined;
+        const key = isElementAccessExpression(node) ? String((this.rustSkipWrappers(node.argumentExpression) as any).text) : String(node.name.text);
+        return `crate::value::KeyRead::key_read(&&${super.printIdentifier(recv)}, "${this.escapeRustStringLiteral(key)}")`;
     }
 
     /** The Rust result type of an awaited typed core call other than `market` that decodes into a struct. */
@@ -12644,6 +12668,7 @@ export class RustTranspiler extends BaseTranspiler {
     printDictKeyRead(node: any): string | undefined {
         const recv: any = node.expression;
         if (recv === undefined || !isIdentifier(recv) || !this.rustDictKeyReadUse(recv)) return undefined;
+        const optMarket = this.printOptMarketKeyRead(node); if (optMarket !== undefined) return optMarket;
         const declaration: any = this.rustDeclarationOfIdentifier(recv);
         if (declaration === undefined || declaration === recv || declaration.name === recv || (this.rustBorrowedLocalKind(declaration) !== 'dict' && !this.rustMutableDictSlot(declaration))) return undefined;
         const key = isElementAccessExpression(node) ? String((this.rustSkipWrappers(node.argumentExpression) as any).text) : String(node.name.text);
@@ -12894,7 +12919,8 @@ export class RustTranspiler extends BaseTranspiler {
         const recv: any = rust === undefined ? undefined : node.arguments[0];
         if (recv === undefined || !isIdentifier(recv)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(recv);
-        const owned = declaration !== undefined && declaration !== recv && (this.rustBorrowedDictLocal(declaration) || this.rustHandedDictLocal(declaration));
+        const owned = declaration !== undefined && declaration !== recv && (this.rustBorrowedDictLocal(declaration) || this.rustHandedDictLocal(declaration)
+            || this.rustOptMarketLocalOf(recv) !== undefined);
         if (!owned && !(this.rustContainerBoxUses.get(recv) !== undefined && this.rustReadBearerKind(recv) !== undefined)) return undefined;
         const key: any = this.rustSkipWrappers(node.arguments[1]);
         const dflt = node.arguments.length === 3 ? this.printNode(node.arguments[2], identation).trim() : '';
