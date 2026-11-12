@@ -2128,7 +2128,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!declaration.initializer) {
             return `${indent}let mut ${varName}: Value = Value::Null`;
         }
-        const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) : undefined;
+        const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) ?? this.printWsFlightLocalDeclaration(declaration, varName, indent) : undefined;
         if (scalarDecl !== undefined) return scalarDecl;
         const parsedValue = this.printNode(declaration.initializer, identation).trim();
         if (declaration.initializer.kind === SyntaxKind.NewExpression) {
@@ -4759,7 +4759,7 @@ export class RustTranspiler extends BaseTranspiler {
     printWsFlightCall(node, receiver: string, identation: number): string {
         const arg: any = node.arguments[0];
         const hash = arg === undefined ? 'Value::Null' : (this.rustWsStrKey(arg) ? this.rustWsKeyText(arg) : this.rustSliceArgText(this.printNode(arg, identation).trim()));
-        return `${receiver}.${this.toSnakeCaseName(String(node.expression.name.text))}(${hash})`;
+        return this.rustWsFlightBox(node, `${receiver}.${this.toSnakeCaseName(String(node.expression.name.text))}(${hash})`);
     }
 
     // ── ws client handle (rustClientHandlePlan / printClientHandle*) ──────────
@@ -4961,10 +4961,11 @@ export class RustTranspiler extends BaseTranspiler {
         const access = this.rustClientHandleAccess(node.expression);
         const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
         if (name === undefined || this.isNativeWriteTargetBase(node)) return undefined;
-        if (this.rustWsStrKey(node.argumentExpression)) return `${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(${this.rustWsKeyText(node.argumentExpression)})`;
+        const box = (text: string) => (name === 'future' ? this.rustWsFlightBox(node, text) : text);
+        if (this.rustWsStrKey(node.argumentExpression)) return box(`${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(${this.rustWsKeyText(node.argumentExpression)})`);
         const key = this.printNode(node.argumentExpression, 0).trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return undefined;
-        return `${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(&${key})`;
+        return box(`${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(&${key})`);
     }
 
     /** `Object.keys(client.subscriptions|futures)` bound to a key list: the handle's key list. */
@@ -13381,6 +13382,57 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr') return `${super.printIdentifier(inner)}.as_deref()`;
         if (kind === 'str') return `${super.printIdentifier(inner)}.as_str()`;
         return /^[A-Za-z_][A-Za-z0-9_]*$/.test(printed) ? `&${printed}` : `&(${printed})`;
+    }
+
+    // ── ws flight locals (rustWsFlightLocal / printWsFlightLocalDeclaration / rustWsFlightBox) ──
+    // `client.future|reusableFuture(h)` and a `client.futures[k]` read give the runtime's typed `Flight` handle. A local
+    // bound to one is a `Flight` when every use awaits it or calls its `resolve` / `reject`; elsewhere the handle is boxed.
+    private static readonly RUST_FLIGHT_TYPE = 'crate::pro::ws_client::Flight';
+    private rustWsFlightLocals = new WeakMap<Node, boolean>();
+
+    rustWsFlightSource(init: any): boolean {
+        const node: any = init === undefined ? undefined : this.unwrapParens(init);
+        if (node === undefined) return false;
+        if (isCallExpression(node)) return isPropertyAccessExpression(node.expression) && isIdentifier(node.expression.expression) && this.rustWsFlightCall(node);
+        if (!isElementAccessExpression(node) || this.isNativeWriteTargetBase(node)) return false;
+        const access = this.rustClientHandleAccess(node.expression);
+        return access !== undefined && !access.write && access.key === 'futures' && isIdentifier(node.argumentExpression);
+    }
+
+    rustWsFlightLocal(declaration: any): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        let known = this.rustWsFlightLocals.get(declaration);
+        if (known === undefined) {
+            known = false;
+            const list: any = declaration.parent;
+            if (list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1 && this.rustWsFlightSource(declaration.initializer)) {
+                let uses = 0;
+                known = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
+                    const p: any = n.parent;
+                    const settle = isPropertyAccessExpression(p) && p.expression === n && isCallExpression(p.parent) && p.parent.expression === p
+                        && (p.name.text === 'resolve' || p.name.text === 'reject');
+                    uses++;
+                    return (p?.kind === SyntaxKind.AwaitExpression && p.expression === n) || settle;
+                }) && uses > 0;
+            }
+            this.rustWsFlightLocals.set(declaration, known);
+        }
+        return known;
+    }
+
+    printWsFlightLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined {
+        if (!this.rustWsFlightLocal(declaration)) return undefined;
+        return `${indent}let mut ${varName}: ${RustTranspiler.RUST_FLIGHT_TYPE} = ${this.printNode(declaration.initializer, 0).trim()}`;
+    }
+
+    /** A flight handle stays typed where it is awaited, a statement, or a `Flight` local's initializer; elsewhere it is boxed. */
+    rustWsFlightBox(node: any, text: string): string {
+        let up: any = node;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        const p: any = up.parent;
+        if (p?.kind === SyntaxKind.AwaitExpression || p?.kind === SyntaxKind.ExpressionStatement) return text;
+        if (p !== undefined && isVariableDeclaration(p) && p.initializer === up && this.rustWsFlightLocal(p)) return text;
+        return `Value::from(${text})`;
     }
 
     // ── watch positionals (printWsWatchCall / rustWsWatchDictSlot / rustWsSubscriptionWriteValue) ──

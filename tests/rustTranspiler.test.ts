@@ -7560,6 +7560,33 @@ describe('rust message-hash string locals handed to the ws client', () => {
     });
 });
 
+describe('rust ws flight handles', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/ws/Client.ts': "export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    resolve (result: any, messageHash: string): any { return result; }\n    reject (result: any, messageHash: string = undefined): any { return result; }\n    future (messageHash: string): any { return messageHash; }\n    reusableFuture (messageHash: string): any { return messageHash; }\n}\n",
+        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport default class Exchange {\n    client (url: string): Client { return new Client (); }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n    async authenticate (url: string) {\n        const client = this.client (url);\n        const messageHash = 'authenticated';\n        const future = client.reusableFuture (messageHash);\n        client.resolve (true, messageHash);\n        return await future;\n    }\n    handleAuth (client: Client, message: any) {\n        const messageHash = 'auth';\n        const future = client.futures[messageHash];\n        future.resolve (true);\n    }\n    async subscribe (url: string) {\n        const client = this.client (url);\n        const messageHash = 'sub';\n        const flight = client.reusableFuture (messageHash);\n        await this.watch (url, messageHash, undefined, messageHash, flight);\n        return await flight;\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-flight-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('an awaited reusable future is a typed flight', () => {
+        expect(out).toContain('let mut future: crate::pro::ws_client::Flight = client.reusable_future(messageHash.as_str());');
+    });
+    test('a futures entry that is only settled is a typed flight', () => {
+        expect(out).toMatch(/let mut future: crate::pro::ws_client::Flight = \w+\.get_future\(messageHash\.as_str\(\)\);/);
+    });
+    test('negative: a flight handed to a Value slot is boxed at its source', () => {
+        expect(out).toContain('let mut flight: Value = Value::from(client.reusable_future(messageHash.as_str()));');
+    });
+});
+
 describe('rust string lists lent to base methods', () => {
     test('a never-empty string list holds the shared list, reads natively and hands on the handle', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'lent-string-list', 'ts/src/venue.ts')).content;
