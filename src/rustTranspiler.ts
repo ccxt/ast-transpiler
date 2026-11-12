@@ -389,7 +389,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_NUMBER_CONSTANT_IMPORTS.has(name) && this.rustIsImportedValueName(node)) {
             return `Value::Int(crate::runtime::${name})`;
         }
-        return this.printClientHandleUse(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node);
+        return this.printClientHandleUse(node) ?? this.printTypedFilterParamRead(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node);
     }
 
     /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
@@ -4313,6 +4313,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustOkeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
         if (isCallExpression(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== undefined) return 'native';
         if (this.rustLimitArgUse(n, kind)) return 'targ';
+        if (isCallExpression(parent) && parent.expression !== n && (({ 'Option<&str>': [ 'str', 'ostr' ], 'Option<i64>': [ 'int', 'oint' ] })[this.rustTypedFilterSlot(parent, parent.arguments.indexOf(n))] ?? []).includes(kind)) return 'targ';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
         }
@@ -6487,6 +6488,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printMethodDefinition(node, identation) {
         const name = (node.name as any).text;
+        const filter = this.printTypedFilterSignature(node, identation); if (filter !== undefined) return filter;
         const typed = this.rustTypedSignature(node);
         if (typed !== undefined) {
             const args = ['&self', ...typed.params.map(p => `${p.name}: ${p.rustType}`)].join(', ');
@@ -7221,7 +7223,7 @@ export class RustTranspiler extends BaseTranspiler {
     printMethodDeclaration(node, identation) {
         const methodDef = this.printMethodDefinition(node, identation);
         const params = node.parameters;
-        const optionalParams = params.filter(p => p.initializer !== undefined || p.questionToken !== undefined);
+        const optionalParams = params.filter(p => (p.initializer !== undefined || p.questionToken !== undefined) && !this.rustTypedFilterPositional(p));
 
         // Build optional param initializations
         const optionalInits = optionalParams.map((p, idx) => {
@@ -7249,7 +7251,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (typed !== undefined) {
             return this.printNodeCommentsIfAny(node, identation, methodDef + this.rustTypedBody(node, typed, identation, handle.head + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements));
         }
-        const body = blockOpen + this.rustLentParamsBinding(node, identation) + handle.head + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements + blockClose;
+        const body = blockOpen + this.rustLentParamsBinding(node, identation) + this.rustTypedFilterBinding(node, identation) + handle.head + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements + blockClose;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef + body);
     }
@@ -7303,6 +7305,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (expr.expression.kind === SyntaxKind.ThisKeyword) {
             const implicitApi = this.printImplicitApiCall(node, expr.name.text, identation);
             if (implicitApi !== undefined) return implicitApi;
+            const filterCall = this.printTypedFilterCall(node, identation); if (filterCall !== undefined) return filterCall;
         }
         if (expr.expression.kind === SyntaxKind.ThisKeyword && !this.methodSignatures[expr.name.text]) {
             return this.printRuntimeVariadicCall(node, 'self', expr.name.text, identation)
@@ -12645,6 +12648,8 @@ export class RustTranspiler extends BaseTranspiler {
         const callee: any = init.expression;
         const method = String(callee.name.text);
         if (isIdentifier(callee.expression) && callee.expression.text === 'Object') return method === 'keys' || method === 'values';
+        // a typed string local split natively: a list on every path (empty for `None`)
+        if (method === 'split' && this.rustStrLocalSplitText(init) !== undefined) return true;
         if (callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const declaration: any = this.rustScalarCallee(init);
         if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
@@ -12691,6 +12696,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (String(declaration.initializer.getText()).split('\n')[0].length > 240) return false;
         const boxes: [any, 'clone' | 'move'][] = [];
         let natives = 0;
+        let filterLent = 0;
         // a same-named `let`/`const` in a sibling block is another binding
         const usesAll = (accept: (n: any) => boolean): boolean => (defaulted ? this.rustScalarUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept));
         const safe = usesAll((n: any) => {
@@ -12721,6 +12727,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (at === n && this.rustLentListSlot(up, n)) {
                 natives++;
+                if (this.rustTypedFilterLentSlot(up, n)) filterLent++;
                 return true;
             }
             if (isCallExpression(up) && up.expression !== n && up.arguments.some((a: any) => a === n)) {
@@ -12734,6 +12741,8 @@ export class RustTranspiler extends BaseTranspiler {
         });
         // A list that is only handed on would trade each box for a handle box.
         if (!safe || natives === 0 || (defaulted && indexed === 0 && boxes.some(([, form]) => form === 'clone'))) return false;
+        // a split list is admitted only for its hand-off to a typed filter slot
+        if (this.rustCallPrintsRuntimeSplit(init) && filterLent === 0) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         return true;
     }
@@ -12965,7 +12974,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
                     && !(isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
             }
-            if (at === n && isCallExpression(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
+            if (at === n && isCallExpression(up) && ((up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) || this.rustTypedFilterLentSlot(up, n))) {
                 natives++;
                 boxes.push([n, 'lend']);
                 return true;
@@ -13368,6 +13377,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** A call argument landing in a lent list parameter of the callee. */
     rustLentListSlot(call: any, arg: any): boolean {
         if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (this.rustTypedFilterLentSlot(call, arg)) return true;
         if (call.arguments?.[0] !== arg) return false;
         const params = this.rustTranspiledCalleeParams(call, String(call.expression.name.text));
         return params !== undefined && params.length > 0 && this.rustParamIsLentList(params[0]);
@@ -13379,6 +13389,153 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration === node || declaration.name === node || !this.rustLentListLocal(declaration)) return undefined;
         return `&${text}`;
+    }
+
+    // ── typed filter parameters (rustTypedFilterParams / printTypedFilterSignature / printTypedFilterCall) ──
+    // The base `filterBy*` helpers take their optional `Int` / `Str` parameters as positional `Option<i64>` /
+    // `Option<&str>` (with any optional parameter before them as a positional `Value`); the rest stay in the slice.
+
+    private static readonly RUST_TYPED_FILTER_METHODS = new Set([ 'filterBySinceLimit', 'filterBySymbolSinceLimit', 'filterBySymbolsSinceLimit', 'filterByArray' ]);
+
+    private static readonly RUST_TYPED_FILTER_TYPES: Record<string, string> = { Int: 'Option<i64>', Str: 'Option<&str>' };
+
+    private rustTypedFilterDecisions = new WeakMap<any, { typed: Map<number, string>, positional: number } | null>();
+
+    /** Typed slots (parameter index -> Rust type; a symbol list is lent as `impl Into<crate::Value>`) and the positional
+     *  count of a base `filterBy*` method or its override. */
+    rustTypedFilterParams(method: any): { typed: Map<number, string>, positional: number } | undefined {
+        if (method === undefined || !isMethodDeclaration(method)) return undefined;
+        let decision = this.rustTypedFilterDecisions.get(method);
+        if (decision === undefined) {
+            try {
+                decision = this.rustTypedFilterParamsUncached(method) ?? null;
+            } catch (e) {
+                decision = null;
+            }
+            this.rustTypedFilterDecisions.set(method, decision);
+        }
+        return decision ?? undefined;
+    }
+
+    rustTypedFilterParamsUncached(method: any): { typed: Map<number, string>, positional: number } | undefined {
+        const lent = 'impl Into<crate::Value>';
+        if (method.body === undefined || !isIdentifier(method.name) || !RustTranspiler.RUST_TYPED_FILTER_METHODS.has(String(method.name.text))) return undefined;
+        if (!isClassDeclaration(method.parent) || (method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return undefined;
+        if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return undefined;
+        const file = String(method.getSourceFile().fileName);
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(file)) {
+            // an override keeps the signature of the checker-resolved base declaration
+            const overridden: any = this.getMethodOverride(method);
+            const base = overridden !== undefined && overridden !== method ? this.rustTypedFilterParams(overridden) : undefined;
+            return base !== undefined && base.positional <= method.parameters.length ? base : undefined;
+        }
+        const marker = String(method.getSourceFile().text ?? '').indexOf('METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT');
+        if (marker < 0 || (method.getStart?.() ?? method.pos) < marker) return undefined;
+        const params: any[] = Array.from(method.parameters);
+        if (params.some((p: any) => p.dotDotDotToken !== undefined || !isIdentifier(p.name))) return undefined;
+        const typed = new Map<number, string>();
+        params.forEach((p: any, i: number) => {
+            const optional = p.initializer !== undefined || p.questionToken !== undefined;
+            const declared = p.type?.kind === SyntaxKind.TypeReference && isIdentifier(p.type.typeName) && p.type.typeArguments === undefined ? String(p.type.typeName.text) : '';
+            const rustType = RustTranspiler.RUST_TYPED_FILTER_TYPES[declared];
+            // a typed slot defaults to `None`: only an absent default qualifies
+            const absent = p.initializer === undefined || this.literalKindOfNode(this.unwrapParens(p.initializer)) === 'null';
+            if (optional && rustType !== undefined && absent) typed.set(i, rustType);
+            // a symbol-list (`Strings`, or an untyped list of values) is lent: a `Value` still passes
+            else if (optional && absent && (declared === 'Strings' || p.type?.kind === SyntaxKind.AnyKeyword)) typed.set(i, lent);
+        });
+        if (![ ...typed.values() ].some((t) => t !== lent)) {
+            if (typed.size === 0 || String(method.name.text) !== 'filterByArray') return undefined;
+        }
+        const positional = Math.max(...typed.keys()) + 1;
+        // an untyped optional moved before a typed one keeps an absent default (`Value::Null`)
+        if (params.slice(0, positional).some((p: any) => p.initializer !== undefined && this.literalKindOfNode(this.unwrapParens(p.initializer)) !== 'null')) return undefined;
+        return { typed, positional };
+    }
+
+    /** A parameter the typed filter signature takes positionally (typed or `Value`). */
+    rustTypedFilterPositional(param: any): boolean {
+        const sig = isParameterDeclaration(param) ? this.rustTypedFilterParams(param.parent) : undefined;
+        return sig !== undefined && Array.from(param.parent.parameters).indexOf(param) < sig.positional;
+    }
+
+    /** `let mut values: Value = values.into();` for each lent symbol-list parameter. */
+    rustTypedFilterBinding(node: any, identation: number): string {
+        const sig = this.rustTypedFilterParams(node);
+        if (sig === undefined) return '';
+        return Array.from(node.parameters).filter((p: any, i: number) => sig.typed.get(i)?.startsWith('impl')).map((p: any) => {
+            const name = this.printNode(p.name, 0);
+            return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();\n`;
+        }).join('');
+    }
+
+    /** A call argument landing in a lent symbol-list slot of a typed filter method. */
+    rustTypedFilterLentSlot(call: any, arg: any): boolean {
+        const at = isCallExpression(call) ? Array.from(call.arguments).indexOf(arg) : -1;
+        return at >= 0 && this.rustTypedFilterSlot(call, at)?.startsWith('impl') === true;
+    }
+
+    printTypedFilterSignature(node: any, identation: number): string | undefined {
+        const sig = this.rustTypedFilterParams(node);
+        if (sig === undefined) return undefined;
+        const params: any[] = Array.from(node.parameters);
+        const args = [ '&self', ...params.slice(0, sig.positional).map((p: any, i: number) => `${this.printNode(p.name, 0)}: ${sig.typed.get(i) ?? this.rustParamType(p)}`) ];
+        if (params.length > sig.positional) args.push('optional_args: &[Value]');
+        const returnType = this.printRustFunctionType(node);
+        return `${this.getIden(identation + 1)}pub fn ${String(node.name.text)}(${args.join(', ')})${returnType ? ` -> ${returnType}` : ''}`;
+    }
+
+    /** The typed parameter an identifier reads inside its own filter method, else undefined. */
+    rustTypedFilterParamOf(node: any): { param: any, rustType: string } | undefined {
+        if (!isIdentifier(node)) return undefined;
+        const param: any = this.rustDeclaredNode(node);
+        if (param === undefined || !isParameterDeclaration(param) || param.name === node) return undefined;
+        const rustType = this.rustTypedFilterParams(param.parent)?.typed.get(Array.from(param.parent.parameters).indexOf(param));
+        return rustType === undefined || rustType.startsWith('impl') ? undefined : { param, rustType };
+    }
+
+    /** A read of a typed filter parameter in a `Value` position boxes it (both types are `Copy`). */
+    printTypedFilterParamRead(node: any): string | undefined {
+        return this.rustTypedFilterParamOf(node) === undefined ? undefined : `Value::from(${super.printIdentifier(node)})`;
+    }
+
+    /** The Rust type of a typed slot of a `this.filterBy*` call, else undefined. */
+    rustTypedFilterSlot(call: any, at: number): string | undefined {
+        const callee: any = call?.expression;
+        if (!isCallExpression(call) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (!RustTranspiler.RUST_TYPED_FILTER_METHODS.has(String(callee.name.text))) return undefined;
+        const params = this.rustTranspiledCalleeParams(call, String(callee.name.text));
+        return params === undefined || params.length === 0 ? undefined : this.rustTypedFilterParams(params[0].parent)?.typed.get(at);
+    }
+
+    rustTypedFilterArgText(arg: any, rustType: string, identation: number): string {
+        const node: any = this.unwrapParens(arg);
+        if (rustType.startsWith('impl')) return arg === undefined ? 'Value::Null' : this.rustSliceArgText(this.printNode(arg, identation).trim());
+        if (node === undefined || this.literalKindOfNode(node) === 'null') return 'None';
+        const own = this.rustTypedFilterParamOf(node);
+        if (own !== undefined && own.rustType === rustType) return super.printIdentifier(node);
+        return this.rustLimitArgText(arg, rustType === 'Option<&str>' ? 0 : 1);
+    }
+
+    /** `self.m(array, <positional typed / Value args>, &[rest])` for a call of a typed filter method. */
+    printTypedFilterCall(node: any, identation: number): string | undefined {
+        const callee: any = node.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || !RustTranspiler.RUST_TYPED_FILTER_METHODS.has(String(callee.name.text))) return undefined;
+        const params = this.rustTranspiledCalleeParams(node, String(callee.name.text));
+        const sig = params === undefined || params.length === 0 ? undefined : this.rustTypedFilterParams(params[0].parent);
+        const args: any[] = Array.from(node.arguments);
+        if (sig === undefined || args.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return undefined;
+        const required = params.filter((p: any) => !p.initializer && !p.questionToken).length;
+        const printed: string[] = [];
+        for (let i = 0; i < sig.positional; i++) {
+            const rustType = sig.typed.get(i);
+            if (rustType !== undefined) printed.push(this.rustTypedFilterArgText(args[i], rustType, identation));
+            else if (args[i] === undefined) printed.push('Value::Null');
+            else printed.push(i < required ? this.printNode(args[i], identation).trim() : this.rustSliceArgText(this.printNode(args[i], identation).trim()));
+        }
+        const rest = args.slice(sig.positional).map((a: any) => this.rustSliceArgText(this.printNode(a, identation).trim()));
+        const tail = params.length > sig.positional ? `, &[${rest.join(', ')}]` : '';
+        return `self.${callee.name.text}(${printed.join(', ')}${tail})`;
     }
 
     // ── lent params dicts ────────────────────────────────────────────────────
