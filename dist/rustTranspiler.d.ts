@@ -547,7 +547,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsSettleCall(call: any): boolean;
     /** `client.future|reusableFuture(hash)` on a ws handle: the hand-written method takes `hash: impl Into<Value>`. */
     rustWsFlightCall(call: any): boolean;
-    /** `this.watch(url, hash, ..)` / `this.watchMultiple(url, ..)`: the runtime takes `url` and the single hash as `impl Into<Value>`. */
+    /** `this.watch(url, hash, message, subscribeHash, ..)` / `this.watchMultiple(url, ..)`: url and hashes are `impl Into<Option<&str>>`. */
     rustWsWatchSlot(call: any, at: number): boolean;
     /** A string local read as a ws hash or key slot: the settle hash, a handle `in` test or a handle keyed read. */
     rustWsKeyUse(n: any): boolean;
@@ -903,6 +903,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustMarketReadKey(n: any): string | undefined;
     /** The listed field a `this.safeString|safeBool (m, 'k')` call reads (no default, or a `false` default for a flag). */
     rustMarketSafeReadField(call: any): string | undefined;
+    /** `this.safeString (m, 'k', '')`: three arguments, the last an empty string literal. */
+    rustMarketEmptyDefaultRead(call: any): boolean;
     /** A whole-value hand-off: a call argument, an array element, a dict value or a returned value. */
     rustMarketValueUse(n: any): boolean;
     rustMarketLocalKind(declaration: any): false | 'struct' | 'opt' | 'call';
@@ -912,6 +914,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `m === undefined` / `m !== undefined` (either side). */
     rustIsNullTestOf(n: any): boolean;
     rustMarketLocalIsTypedUncached(declaration: any): false | 'struct' | 'opt' | 'call';
+    rustOptMarketKeyRead(n: any): boolean;
+    /** `crate::value::KeyRead::key_read(&&m, "k")` for a direct read on an `Option<Market>` local. */
+    printOptMarketKeyRead(node: any): string | undefined;
     /** The Rust result type of an awaited typed core call other than `market` that decodes into a struct. */
     rustTypedCallResultType(init: any): string | undefined;
     rustCallLocalOf(node: any): any;
@@ -1311,6 +1316,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     } | undefined;
     /** A bare counter use that is an argument of a `this.m(..)` call or the value of an `x[k] = i` write. */
     rustI64BoxedUse(id: any): boolean;
+    rustBoolSlotWrite(n: any): boolean;
+    rustBoolSlotUsesOk(declaration: any): boolean;
+    /** The destructuring statement keeps the 400-char line budget with the slot's `== Some(true)` read. */
+    rustBoolSlotLineLong(n: any): boolean;
+    /** The `usize` index text of a `Value` list read: a registered `i64` counter indexes directly. */
+    rustI64IndexText(keyNode: any, place: string): string;
+    /** A registered `i64` counter as a helper key (`Value::Int(i)`); a read the ccxt write-back binds keeps the counter `Value`. */
+    rustI64HelperKeyText(keyNode: any, read?: any): string | undefined;
     /** The registered counter's symbol when `node` is a use of it, else undefined. */
     rustI64CounterOf(node: any): any;
     private rustI64ClosedUses;
@@ -1636,8 +1649,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsFieldGetText(init: any, optional: boolean): string | undefined;
     /** `Value::Arr(x)` (moved) / `Value::Arr(x.clone())` at a list hand-off; dict hand-offs print through `printDictElementBox`. */
     printWsFieldBox(node: any, text: string): string | undefined;
-    /** `Value::Dict(x)` at the last use (moved), else `Value::from(&x)` (the Arc bump the copied `Value` paid). */
+    /** `Value::Dict(x)` / `Value::Arr(x)` at the last use (moved), else `Value::from(&x)` (the Arc bump the copied `Value` paid). */
     printDictElementBox(node: any, text: string): string | undefined;
+    rustDefaultedContainerBoxUse(n: any, init: any): boolean;
     rustBorrowedKeySetUse(n: any): boolean;
     /** The key operand of `k in m`: a literal as `"k"`, else the boxed key text `bearerInOp` tests. */
     rustBorrowedInOpKey(key: any): {
@@ -1685,6 +1699,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustReaderTakesContainerByReference(call: any): boolean;
     /** `'dict' | 'list' | 'api'` for a container source the local may hold by reference. */
     rustBorrowedSourceKind(call: any): 'dict' | 'list' | 'api' | undefined;
+    rustDeclaredEndpointKind(call: any): 'dict' | 'list' | undefined;
     /** `&x` for a borrowed local (or a typed container local) passed to a hand-written any-key reader. */
     printBorrowedReaderArg(node: any, text: string): string | undefined;
     /** A base `safeDict*` / `extend` / `omit` call, or an implicit-API endpoint call. */
@@ -1717,6 +1732,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     printWsUrlLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
     /** A `watch` url / hash slot takes `impl Into<Option<&str>>`: a string local or literal as `&str`, anything else lent as `&Value`. */
     rustWsWatchSlotText(arg: any, printed: string): string;
+    printWsWatchCall(node: any, receiver: string, methodName: string, identation: number): string | undefined;
+    /** A numeric or boolean hash argument: the runtime keys by its text, as `stringify_param` did. */
+    rustWsNumberSlot(arg: any): boolean;
+    rustWsNumberSlotText(arg: any, printed: string): string;
+    /** The message and subscription slots take `impl Into<Value>`: a dict local is lent there as its shared handle. */
+    rustWsWatchDictSlot(call: any, at: number): boolean;
+    /** `client.subscriptions[k] = x`: the handle stores the boxed value, no nested container write. */
+    rustWsSubscriptionWriteValue(n: any): boolean;
     private rustBuiltLists;
     rustBuiltListLocal(declaration: any): boolean;
     /** `x = this.m(.., x, ..)` naming `x` only there and on the left: the old list moves into the call before the write. */
@@ -2138,6 +2161,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueStrCallers;
     rustVenueStrParamType(param: any): string | undefined;
     rustVenueStrParamTypeUncached(param: any): string | undefined;
+    /** Rust type of a scalar TS parameter type: string -> `&str`, `number` / `Num` -> `f64`, `int` / `Int` -> `i64`,
+     *  boolean -> `bool`; a nullable part makes it an `Option` (never for `bool`). */
+    rustVenueScalarTypeOf(type: any, typeNode: any): string | undefined;
+    /** A caller argument that converts to a numeric / boolean slot without changing its value, decided on the
+     *  source alone: `null` only for an `Option`, and an `i64` slot takes an integer literal or a value declared
+     *  `int` / `Int` (a `number` could carry a fraction). */
+    rustVenueScalarArgExact(arg: any, rustType: string): boolean;
     /** `this.<m>(..)` / `super.<m>(..)` calls in the method's own file that resolve to it. */
     rustVenueStrCallSites(method: any): any[];
     /** Scalar-local kind of a per-venue string parameter read through its `Value` binding. */
@@ -2158,5 +2188,27 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueStrArgSlot(arg: any): boolean;
     /** Argument text for a per-venue string slot: a typed local or literal natively, any other value read once. */
     rustVenueStrArgText(arg: any, type: string, identation: number): string;
+    /** Argument text for a numeric / boolean per-venue slot: literals natively, a typed parameter read back once,
+     *  any other value read once from its `Value`. */
+    rustVenueScalarArgText(arg: any, type: string, identation: number): string;
+    /** An `f64` rebinding turns an integer argument into a `Float`: admit it only when every body read is blind to
+     *  that variant (a null / truthiness test, an ordered comparison, or `numberToString` / `parseToInt`). */
+    rustVenueFloatUsesStayInside(method: any, param: any): boolean;
+    rustVenueArithmeticArg(arg: any): boolean;
+    /** `!x` over a simple operand: a `bool` slot reads it once as a native negation. */
+    rustVenueNegatedArg(arg: any): boolean;
+    /** Base `parseToInt(p)` over a required numeric per-venue parameter: an `Int` for every number (`parse_int` of
+     *  the float text), read once as an `i64`. */
+    rustVenueParseToInt(node: any): boolean;
+    /** An optional parameter may print positionally when its default is absent and every optional parameter before
+     *  it does too (they form the positional prefix of the optional tail). */
+    rustVenueOptionalSlotOpen(method: any, param: any): boolean;
+    /** An optional per-venue parameter that prints as a typed positional `Option`. */
+    rustVenuePositional(param: any): boolean;
+    /** `None` for each positional optional slot a call leaves out. */
+    rustVenuePads(params: any[] | undefined, given: number, fixed: number): string[];
+    /** A checker-`boolean` argument for a `bool` slot: native where it already is one, an `Option<bool>` local or a
+     *  `Value` compared with `Some(true)` (its variant is `Bool` or `Null`), else its truthiness. */
+    rustVenueBoolArgText(arg: any, identation: number): string;
 }
 export {};
