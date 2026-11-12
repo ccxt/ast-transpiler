@@ -7103,14 +7103,15 @@ export class RustTranspiler extends BaseTranspiler {
     // `const market = this.market (symbol)` whose every use is a literal-key read or a whole-value hand-off
     // stays a `crate::types::Market`: listed fields read natively, other keys and hand-offs use its `raw`.
     private static readonly RUST_MARKET_STR_FIELDS: Record<string, string> = {
-        id: 'id', symbol: 'symbol', base: 'base', quote: 'quote', baseId: 'base_id', quoteId: 'quote_id', type: 'market_type',
+        symbol: 'symbol', base: 'base', quote: 'quote', type: 'market_type',
     };
     // fields every loaded market carries (`from_value` defaults only a missing key, which a market never lacks)
-    private static readonly RUST_MARKET_BOOL_FIELDS = new Set(['spot', 'margin', 'swap', 'future', 'option', 'contract']);
+    private static readonly RUST_MARKET_BOOL_FIELDS = new Set(['spot', 'swap', 'future', 'option', 'contract']);
     // nullable flags (`Option<bool>`): only a truthiness test reads them natively
-    private static readonly RUST_MARKET_OPT_BOOL_FIELDS = new Set(['linear', 'inverse']);
+    private static readonly RUST_MARKET_OPT_BOOL_FIELDS = new Set(['linear', 'inverse', 'margin']);
     private static readonly RUST_MARKET_SAFE_READERS = new Set(['safeString', 'safeBool']);
-    private static readonly RUST_MARKET_OPT_STR_FIELDS = new Set(['settle']);
+    // `Str` keys of `MarketInterface` (`Option<String>` fields)
+    private static readonly RUST_MARKET_OPT_STR_FIELDS: Record<string, string> = { settle: 'settle', id: 'id', baseId: 'base_id', quoteId: 'quote_id' };
     private rustMarketLocalDecisions = new Map<any, false | 'struct' | 'opt' | 'call'>();
 
     /** `this.market (x)` printed through the typed core. */
@@ -7146,12 +7147,22 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(callee.name.text);
         if (!RustTranspiler.RUST_MARKET_SAFE_READERS.has(name) || !isStringLiteralLikeNode(call.arguments[1])) return undefined;
         // `const spot = this.safeBool (m, 'spot', false)`: the bool-local passes key on the reader's own text
-        if (call.parent?.kind === SyntaxKind.VariableDeclaration || isParenthesizedExpression(call.parent)) return undefined;
+        let top: any = call.parent;
+        while (top !== undefined && isParenthesizedExpression(top)) top = top.parent;
+        if (top?.kind === SyntaxKind.VariableDeclaration) return undefined;
         const key = String(call.arguments[1].text);
-        if (name === 'safeString' && call.arguments.length === 2 && (RustTranspiler.RUST_MARKET_STR_FIELDS[key] !== undefined || RustTranspiler.RUST_MARKET_OPT_STR_FIELDS.has(key))) return key;
+        const strField = RustTranspiler.RUST_MARKET_STR_FIELDS[key] !== undefined || RustTranspiler.RUST_MARKET_OPT_STR_FIELDS[key] !== undefined;
+        if (name === 'safeString' && call.arguments.length === 2 && strField) return key;
+        if (name === 'safeString' && this.rustMarketEmptyDefaultRead(call) && key !== 'type' && strField) return key;
         if (name === 'safeBool' && (RustTranspiler.RUST_MARKET_BOOL_FIELDS.has(key) || RustTranspiler.RUST_MARKET_OPT_BOOL_FIELDS.has(key))
             && (call.arguments.length === 2 || (call.arguments.length === 3 && call.arguments[2].kind === SyntaxKind.FalseKeyword))) return key;
         return undefined;
+    }
+
+    /** `this.safeString (m, 'k', '')`: three arguments, the last an empty string literal. */
+    rustMarketEmptyDefaultRead(call: any): boolean {
+        const def: any = call.arguments[2];
+        return call.arguments.length === 3 && def !== undefined && isStringLiteralLikeNode(def) && String(def.text) === '';
     }
 
     /** A whole-value hand-off: a call argument, an array element, a dict value or a returned value. */
@@ -7228,7 +7239,9 @@ export class RustTranspiler extends BaseTranspiler {
             const key = this.rustMarketReadKey(n);
             if (key !== undefined) {
                 if (RustTranspiler.RUST_MARKET_STR_FIELDS[key] !== undefined || RustTranspiler.RUST_MARKET_BOOL_FIELDS.has(key)
-                    || RustTranspiler.RUST_MARKET_OPT_BOOL_FIELDS.has(key) || RustTranspiler.RUST_MARKET_OPT_STR_FIELDS.has(key)) fieldReads++;
+                    || RustTranspiler.RUST_MARKET_OPT_BOOL_FIELDS.has(key) || RustTranspiler.RUST_MARKET_OPT_STR_FIELDS[key] !== undefined) {
+                    if (!isCallExpression(n.parent) || !this.rustMarketEmptyDefaultRead(n.parent)) fieldReads++;
+                }
                 return true;
             }
             return this.rustMarketValueUse(n);
@@ -7332,8 +7345,14 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (asBool) return undefined;
         const field = RustTranspiler.RUST_MARKET_STR_FIELDS[key];
+        const optField = RustTranspiler.RUST_MARKET_OPT_STR_FIELDS[key];
+        if (isCallExpression(node) && this.rustMarketEmptyDefaultRead(node)) {
+            // `safeString (m, 'k', '')`: a missing or non-string key reads the empty default
+            if (field !== undefined) return `Value::from(${recv}.${field}.as_str())`;
+            if (optField !== undefined) return `Value::from(${recv}.${optField}.as_deref().unwrap_or(""))`;
+        }
         if (field !== undefined) return `Value::from(${recv}.${field}.clone())`;
-        if (RustTranspiler.RUST_MARKET_OPT_STR_FIELDS.has(key)) return `Value::from(${recv}.${key}.as_deref())`;
+        if (optField !== undefined) return `Value::from(${recv}.${optField}.as_deref())`;
         // a declared flag's initializer keeps the raw read: the bool-local narrowing keys on it
         if (RustTranspiler.RUST_MARKET_OPT_BOOL_FIELDS.has(key) && !isCallExpression(node) && node.parent?.kind !== SyntaxKind.VariableDeclaration) {
             return `${recv}.${key}.map(Value::Bool).unwrap_or_default()`;

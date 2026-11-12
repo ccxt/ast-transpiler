@@ -31,6 +31,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; spot: boolean; swap: boolean; stock?: boolean; linear: boolean | undefined; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    safeString (d: any, k: any): Str {\n        return d[k];\n    }\n    hold (m: any): any {\n        return m;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchOne (symbol: string, params: Dict = {}) {\n        const market = this.market (symbol);\n        const request: Dict = { 'pair': market['id'] };\n        if (market['swap'] || market['linear']) {\n            request['info'] = market['info'];\n        }\n        request['s'] = this.safeString (market, 'symbol');\n        return this.hold (market);\n    }\n    fetchTwo (symbol: string) {\n        let market = this.market (symbol);\n        market = this.market ('x');\n        return market['id'];\n    }\n    fetchThree (symbol: string) {\n        const market = this.market (symbol);\n        const isStock = market['stock'];\n        const isStockSpot = isStock && (market['spot'] === true);\n        if (isStockSpot || (market['spot'] !== true)) {\n            return market['id'];\n        }\n        return market['symbol'];\n    }\n}\n"
  },
+ "typed-market-optional-fields": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Bool = boolean | undefined;\nexport interface Market { id: Str; baseId: Str; symbol: string; spot: boolean; margin: Bool; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    safeString (d: any, k: any, dflt: Str = undefined): Str {\n        return d[k];\n    }\n    safeBool (d: any, k: any, dflt: Bool = undefined): Bool {\n        return d[k];\n    }\n    hold (m: any): any {\n        return m;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchOne (symbol: string) {\n        const market = this.market (symbol);\n        const request: Dict = { 'pair': this.safeString (market, 'id', ''), 'base': market['baseId'], 's': this.safeString (market, 'symbol', '') };\n        const kind = (this.safeBool (market, 'spot', false)) ? 'spot' : 'swap';\n        if (market['margin']) {\n            request['m'] = kind;\n        }\n        return this.hold (request);\n    }\n}\n"
+ },
  "derived-scalar-returns": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    findTimeframe (timeframe: any, timeframes: Dict = undefined): Str {\n        return undefined;\n    }\n    incrementingNonce (): int {\n        return 1;\n    }\n    hold (x: any): any {\n        return x;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseEntry (entry: Dict, keys: string[]) {\n        const timeframe = this.findTimeframe (entry['i']);\n        if (timeframe === undefined) {\n            return undefined;\n        }\n        const nonce = this.incrementingNonce ();\n        if (nonce === 0) {\n            return undefined;\n        }\n        const key = keys[0];\n        const parts = 'a-b'.split ('-');\n        const first = parts[0];\n        if (first === 'a') {\n            return this.hold (key);\n        }\n        const boxedOnly = this.findTimeframe (entry['j']);\n        return { 'tf': timeframe, 'n': nonce, 'f': first, 'b': boxedOnly };\n    }\n}\n"
@@ -7358,7 +7362,7 @@ describe('rust typed Market locals', () => {
 
     test('a read-only market local keeps the struct and reads listed fields natively', () => {
         expect(output).toContain('let mut market: crate::types::Market = (match self.market(');
-        expect(output).toContain('Value::from((market).id.clone())');
+        expect(output).toContain('Value::from((market).id.as_deref())');
         expect(output).toContain('(market).swap || (market.linear == Some(true))'.replace('market.linear', '(market).linear'));
         expect(output).toContain('(market).raw.as_map().and_then(|__m| __m.get("info"))');
         expect(output).toContain('Value::from((market).symbol.clone())');
@@ -7376,6 +7380,27 @@ describe('rust typed Market locals', () => {
         expect(output).toContain('!(market).spot');
         expect(output).not.toContain('is_true(&isStock)');
         expect(output).not.toContain('Value::Bool((market).spot)');
+    });
+});
+
+describe('rust typed Market optional fields', () => {
+    let output = '';
+    beforeAll(() => {
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = typed.transpileRustByPath(path.join (rustFixtureRoot, 'typed-market-optional-fields', 'ts/src/venue.ts')).content;
+    });
+
+    test('Str fields read the Option natively, an empty-string default reads the field with that default', () => {
+        expect(output).toContain('Value::from((market).id.as_deref().unwrap_or(""))');
+        expect(output).toContain('Value::from((market).base_id.as_deref())');
+        expect(output).toContain('Value::from((market).symbol.as_str())');
+        expect(output).not.toContain('(market).raw.clone()');
+    });
+
+    test('the Bool margin flag and a parenthesised flag read natively', () => {
+        expect(output).toContain('((market).margin == Some(true))');
+        expect(output).toContain('(market).spot');
+        expect(output).not.toContain('safe_bool');
     });
 });
 
@@ -7403,7 +7428,7 @@ describe('rust typed core call results', () => {
         expect(output).toContain('Value::from((market).market_type.clone())');
         expect(output).toContain('Value::from((market).settle.as_deref())');
         expect(output).toContain('(market).linear.map(Value::Bool).unwrap_or_default()');
-        expect(output).toContain('Value::from((market).base_id.clone())');
+        expect(output).toContain('Value::from((market).base_id.as_deref())');
         expect(output).not.toContain('IntoRaw::into_raw(self.market(');
     });
 
