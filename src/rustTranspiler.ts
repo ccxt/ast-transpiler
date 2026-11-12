@@ -8232,6 +8232,7 @@ export class RustTranspiler extends BaseTranspiler {
         const scope: any = this.rustEnclosingFunction(owner);
         if (scope === undefined || isSourceFile(scope) || scope.kind !== SyntaxKind.MethodDeclaration) return undefined;
         const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(element.name));
+        if (checked === 'string' && this.rustTupleSlotKind(element) === undefined) return this.rustStrSlotKind(element, scope);
         if (checked !== 'number' && checked !== 'boolean') return undefined;
         if (this.rustTupleSlotKind(element) !== undefined) return undefined;
         const at = pattern.elements.indexOf(element);
@@ -8344,6 +8345,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'oint') return `${indent}let mut ${printedName}: Option<i64> = ${temp}.get(${index}).and_then(Value::as_i64)`;
         if (kind === 'obool') return `${indent}let mut ${printedName}: Option<bool> = ${temp}.get(${index}).and_then(Value::as_bool)`;
         if (kind === 'onum') return `${indent}let mut ${printedName}: Option<f64> = ${temp}.get(${index}).and_then(Value::as_f64)`;
+        if (kind === 'ostr') return `${indent}let mut ${printedName}: Option<String> = ${temp}.get(${index}).and_then(Value::as_str).map(str::to_owned)`;
         return undefined;
     }
 
@@ -12302,7 +12304,7 @@ export class RustTranspiler extends BaseTranspiler {
         const recv: any = this.rustSkipWrappers(node);
         if (recv === undefined || !isIdentifier(recv)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(recv);
-        if (declaration === undefined || declaration.name === recv || this.rustBorrowedLocalKind(declaration) !== 'dict' || this.rustOptContainerLocals.has(declaration)) return undefined;
+        if (declaration === undefined || declaration.name === recv || (this.rustBorrowedLocalKind(declaration) !== 'dict' && !this.rustMutableDictSlot(declaration)) || this.rustOptContainerLocals.has(declaration)) return undefined;
         return super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
     }
 
@@ -12359,7 +12361,7 @@ export class RustTranspiler extends BaseTranspiler {
         const recv: any = node.expression;
         if (recv === undefined || !isIdentifier(recv) || !this.rustDictKeyReadUse(recv)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(recv);
-        if (declaration === undefined || declaration === recv || declaration.name === recv || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
+        if (declaration === undefined || declaration === recv || declaration.name === recv || (this.rustBorrowedLocalKind(declaration) !== 'dict' && !this.rustMutableDictSlot(declaration))) return undefined;
         const key = isElementAccessExpression(node) ? String((this.rustSkipWrappers(node.argumentExpression) as any).text) : String(node.name.text);
         const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
         return `crate::value::KeyRead::key_read(&&${name}, "${this.escapeRustStringLiteral(key)}")`;
@@ -13210,7 +13212,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (this.rustDeclaredNode(n) !== declaration || this.rustEnclosingFunction(n) !== fn) return false;
             const call: any = n.parent;
-            if (!isCallExpression(call)) return this.rustHandedSlotBoxUse(n, declaration);
+            const mutable = isCallExpression(call) ? undefined : this.rustMutableSlotUse(n, declaration); if (mutable === 'native') uses++;
+            if (!isCallExpression(call)) return mutable !== undefined || this.rustHandedSlotBoxUse(n, declaration);
             const ok = (call.arguments[0] === n && this.rustBorrowedDictReader(call) !== undefined)
                 || (call.arguments[0] === n && call.arguments.length === 2 && this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_OMIT))
                 || this.rustHandedDictExtendOperand(call) === n || this.rustLentParamsSlot(call, n) || this.rustExtendHeadUse(n);
@@ -13338,9 +13341,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (recv === undefined || !isIdentifier(recv)) return undefined;
         const key = this.rustUntilHeadKeyWrite(recv);
         const declaration: any = this.rustDeclaredNode(recv);
-        if (key === undefined || declaration === recv || !this.rustUntilHeadSlot(declaration)) return undefined;
+        if (key === undefined || declaration === recv || !(this.rustUntilHeadSlot(declaration) || this.rustMutableDictSlot(declaration))) return undefined;
         const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
-        const value = this.rustNodeIsBoolExpression(right) ? `Value::Bool(${valueText})` : valueText.trim();
+        const value = this.rustNodeIsBoolExpression(right) && this.literalKindOfNode(this.unwrapParens(right)) !== 'boolean' ? `Value::Bool(${valueText})` : valueText.trim();
         const insert = (v: string) => `std::sync::Arc::make_mut(&mut ${name}).insert(${this.quotedStringLiteral(key)}.into(), ${v})`;
         const reads = (n: any): boolean => (isIdentifier(n) && n.text === recv.text) || (n.forEachChild(reads) ?? false);
         if (reads(right)) return `{ let __be_tmp = ${value}; ${insert('__be_tmp')}; }`;
@@ -13778,8 +13781,74 @@ export class RustTranspiler extends BaseTranspiler {
     printHandedSlotBox(node: any, text: string): string | undefined {
         if (!isIdentifier(node)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
-        if (declaration?.kind !== SyntaxKind.BindingElement || declaration.name === node || !this.rustHandedSlotBoxUse(node, declaration) || !this.rustHandedDictLocal(declaration)) return undefined;
+        if (declaration?.kind !== SyntaxKind.BindingElement || declaration.name === node || !(this.rustHandedSlotBoxUse(node, declaration) || this.rustMutableSlotUse(node, declaration) === 'box') || !this.rustHandedDictLocal(declaration)) return undefined;
         return this.rustLocalLastUse(node, declaration) ? `Value::Dict(${text})` : `Value::from(&${text})`;
+    }
+
+    // ── mutable params slots (rustMutableSlotUse / rustMutableDictSlot / rustSlotTargetStaysValue) ──
+    // A handed params slot may also be read or written at a literal key (copy-on-write insert on the shared map),
+    // tested with a literal `in`, or handed whole to an alias, a ternary arm or a `Value` local write (boxed there).
+
+    /** `native` for a literal-key read / statement write / `in` test of a params slot, `box` for a whole-value hand-off. */
+    rustMutableSlotUse(n: any, declaration: any): 'native' | 'box' | undefined {
+        if (declaration?.kind !== SyntaxKind.BindingElement || this.rustDeclaredNode(n) !== declaration) return undefined;
+        const up: any = n.parent;
+        if (this.rustDictKeyReadUse(n) || this.rustUntilHeadKeyWrite(n) !== undefined) return 'native';
+        if (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.InKeyword && up.right === n) {
+            const key: any = this.rustSkipWrappers(up.left);
+            return key !== undefined && isStringLiteral(key) && this.rustBorrowedInOpKey(key)?.literal === true ? 'native' : undefined;
+        }
+        if (isConditionalExpression(up) && up.condition !== n) return 'box';
+        if (isVariableDeclaration(up) && up.initializer === n && isIdentifier(up.name)) return this.rustSlotTargetStaysValue(up) ? 'box' : undefined;
+        if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement && isIdentifier(up.left)) {
+            const target: any = this.rustDeclaredNode(up.left);
+            return target !== undefined && target !== up.left && isVariableDeclaration(target) && this.rustSlotTargetStaysValue(target) ? 'box' : undefined;
+        }
+        return undefined;
+    }
+
+    /** A `let` the slot is copied into that no typed-local rule claims (it keeps its `Value` box). */
+    rustSlotTargetStaysValue(target: any): boolean {
+        if (!isIdentifier(target.name) || (target.parent as any)?.declarations?.length !== 1) return false;
+        return this.rustBorrowedLocalKind(target) === undefined && !this.rustHandedDictLocal(target) && this.rustScalarLocalKind(target) === undefined
+            && this.rustNilLocalKind(target) === undefined && !this.rustDictLocalIsTyped(target) && !this.rustVecLocalIsTyped(target)
+            && !this.rustNestedDictLocalIsTyped(target) && this.rustReadBearerKindOfDeclaration(target) === false && this.rustMarketLocalKind(target) === false;
+    }
+
+    rustMutableDictSlot(declaration: any): boolean {
+        return declaration?.kind === SyntaxKind.BindingElement && this.rustHandedDictLocal(declaration);
+    }
+
+    /** `ostr` for a string slot read through the scalar forms: tests, `format!` concats, string methods, typed
+     *  writes, and boxes (alias, ternary arm, `Value` slots) that re-box through `From`; needs one native use. */
+    rustStrSlotKind(element: any, scope: any): string | undefined {
+        if (this.rustTestTierSource(element)) return undefined;
+        let nativeUses = 0;
+        this.rustExactSlotDecisions.set(element, 'ostr'); // uses that read the slot itself see the trial kind
+        let ok = false;
+        try {
+            ok = this.rustLocalUsesAll(element, String(element.name.text), true, (n: any) => {
+                if (this.rustDeclaredNode(n) !== element) return true;
+                if (this.rustEnclosingFunction(n) !== scope) return false;
+                const up: any = n.parent;
+                const plus = isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.PlusToken;
+                if (plus && !this.rustNilOptStrConcatUse(n)) return false;
+                const form = plus ? 'concat' : this.rustScalarUseForm(n, 'ostr');
+                this.rustScalarUseForms.set(n, form);
+                if (form === undefined || form === 'err' || form === 'key' || form === 'okey' || form === 'targ' || form === 'kin') return false;
+                const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
+                if (push !== undefined && isCallExpression(push)) return false;
+                if ((form === 'box' || form === 'xbox') && !this.rustSlotUseOutsideLoop(n, element)) return false;
+                // a box feeding another local's write or initializer would make that local's own typing depend on this slot
+                const feeds: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(m.left)) || isVariableDeclaration(m));
+                if (feeds !== undefined && !isStatement(feeds) && (form === 'box' || form === 'xbox')) return false;
+                if (RustTranspiler.RUST_NIL_SCALAR_NATIVE_FORMS.has(form) || form === 'write') nativeUses++;
+                return true;
+            });
+        } finally {
+            this.rustExactSlotDecisions.set(element, null);
+        }
+        return ok && nativeUses > 0 ? 'ostr' : undefined;
     }
 
     // ── declared dict slots ──────────────────────────────────────────────────

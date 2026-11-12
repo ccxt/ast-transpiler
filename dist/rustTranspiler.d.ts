@@ -1820,6 +1820,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSlotUseOutsideLoop(node: any, element: any): boolean;
     /** `Value::Dict(x)` at the slot's last use (moved), else `Value::from(&x)`. */
     printHandedSlotBox(node: any, text: string): string | undefined;
+    /** `native` for a literal-key read / statement write / `in` test of a params slot, `box` for a whole-value hand-off. */
+    rustMutableSlotUse(n: any, declaration: any): 'native' | 'box' | undefined;
+    /** A `let` the slot is copied into that no typed-local rule claims (it keeps its `Value` box). */
+    rustSlotTargetStaysValue(target: any): boolean;
+    rustMutableDictSlot(declaration: any): boolean;
+    /** `ostr` for a string slot read through the scalar forms: tests, `format!` concats, string methods, typed
+     *  writes, and boxes (alias, ternary arm, `Value` slots) that re-box through `From`; needs one native use. */
+    rustStrSlotKind(element: any, scope: any): string | undefined;
     rustDeclaredDictSlot(element: any): boolean;
     /** One element read rooted at the bearer: a plain read the native op serves. */
     rustReadBearerElementUse(access: any, kind: 'list' | 'map'): boolean;
