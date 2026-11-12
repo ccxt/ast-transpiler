@@ -64263,7 +64263,8 @@ ${iden}}`;
     const param = this.rustDeclaredNode(node);
     if (param === void 0 || !isParameterDeclaration3(param) || param.name === node)
       return void 0;
-    const rustType = this.rustTypedFilterParams(param.parent)?.typed.get(Array.from(param.parent.parameters).indexOf(param));
+    const owner = param.parent;
+    const rustType = this.rustTypedFilterParams(owner)?.typed.get(Array.from(owner.parameters).indexOf(param));
     return rustType === void 0 || rustType.startsWith("impl") ? void 0 : { param, rustType };
   }
   /** A read of a typed filter parameter in a `Value` position boxes it (both types are `Copy`). */

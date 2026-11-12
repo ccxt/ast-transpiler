@@ -64262,7 +64262,8 @@ ${iden}}`;
     const param = this.rustDeclaredNode(node);
     if (param === void 0 || !_is.isParameterDeclaration.call(void 0, param) || param.name === node)
       return void 0;
-    const rustType = _optionalChain([this, 'access', _9371 => _9371.rustTypedFilterParams, 'call', _9372 => _9372(param.parent), 'optionalAccess', _9373 => _9373.typed, 'access', _9374 => _9374.get, 'call', _9375 => _9375(Array.from(param.parent.parameters).indexOf(param))]);
+    const owner = param.parent;
+    const rustType = _optionalChain([this, 'access', _9371 => _9371.rustTypedFilterParams, 'call', _9372 => _9372(owner), 'optionalAccess', _9373 => _9373.typed, 'access', _9374 => _9374.get, 'call', _9375 => _9375(Array.from(owner.parameters).indexOf(param))]);
     return rustType === void 0 || rustType.startsWith("impl") ? void 0 : { param, rustType };
   }
   /** A read of a typed filter parameter in a `Value` position boxes it (both types are `Copy`). */

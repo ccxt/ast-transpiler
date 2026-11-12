@@ -13614,7 +13614,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(node)) return undefined;
         const param: any = this.rustDeclaredNode(node);
         if (param === undefined || !isParameterDeclaration(param) || param.name === node) return undefined;
-        const rustType = this.rustTypedFilterParams(param.parent)?.typed.get(Array.from(param.parent.parameters).indexOf(param));
+        const owner: any = param.parent;
+        const rustType = this.rustTypedFilterParams(owner)?.typed.get(Array.from(owner.parameters).indexOf(param));
         return rustType === undefined || rustType.startsWith('impl') ? undefined : { param, rustType };
     }
 
