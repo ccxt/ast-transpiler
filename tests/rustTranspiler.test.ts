@@ -1723,7 +1723,8 @@ describe('rust checker-typed native container access', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('let pqVariable: Vec<Value> = g().as_array().cloned().unwrap_or_default();');
-        expect(output).toContain('let mut p: Value = pqVariable.get(0).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('let mut p: Option<String> = pqVariable.get(0).and_then(Value::as_str).map(str::to_owned)');
+        expect(output).toContain('return p.map(Value::from).unwrap_or(Value::Null);');
         expect(output).toContain('let mut q: Value = pqVariable.get(1).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('Value::Int(0)');
     });
@@ -4514,8 +4515,8 @@ describe('native Vec push on typed array locals', () => {
     test('length read and this-call argument in a return box once', () => {
         const out = transpiler.transpileRust(wrap('        const result = [];\n        const item = items[0];\n        result.push (item);\n        const n = result.length;\n        return this.filterBy (result, n);')).content;
         expect(out).toContain('result.push(item.clone());');
-        expect(out).toContain('Value::Int(result.len() as i64)');
-        expect(out).toContain('return self.filterBy(Value::from(result), n);');
+        expect(out).toContain('let mut n: i64 = result.len() as i64;');
+        expect(out).toContain('return self.filterBy(Value::from(result), Value::from(n));');
     });
     test('final-use argument / object value outside a loop box once', () => {
         const out = transpiler.transpileRust(wrap('        const args = [];\n        args.push (items[0]);\n        const request = { \'args\': args };\n        return this.parseX (request);')).content;
@@ -5005,7 +5006,7 @@ describe('collection helpers on proven plain-dict / Arr-only locals', () => {
 
     test('push on a [] local / length on a toArray local are native', () => {
         expect(rest).toContain('if let Value::Arr(__a) = &mut out { std::sync::Arc::make_mut(__a).push(rows.get(');
-        expect(rest).toContain('return Value::from(vec![out, count, Value::Int(parsed.len() as i64)]);');
+        expect(rest).toContain('return Value::from(vec![out, Value::from(count), Value::Int(parsed.len() as i64)]);');
     });
 
     test('literal-key in on a plain-dict local is contains_key', () => {
@@ -5210,8 +5211,9 @@ describe('rust typed tuple-destructure slots', () => {
         expect(out).toContain('let mut paginate: bool = paginaterestVariable.get(0).and_then(Value::as_bool) == Some(true)');
         expect(out).toMatch(/if paginate \{/);
     });
-    test('a slot with another use stays Value', () => {
-        expect(out).toContain('let mut kept: Value = keptotherVariable.get(0).cloned().unwrap_or(Value::Null)');
+    test('a string slot only handed back moves into its box', () => {
+        expect(out).toContain('let mut kept: Option<String> = keptotherVariable.get(0).and_then(Value::as_str).map(str::to_owned)');
+        expect(out).toContain('kept.map(Value::from).unwrap_or(Value::Null)');
         expect(out).toContain('let mut query: Value = marketTypequeryVariable.get(1).cloned().unwrap_or(Value::Null)');
     });
 });
@@ -5225,8 +5227,9 @@ describe('request id locals from a venue int method', () => {
         expect(out).toContain('let mut requestId: i64 = self.requestId().as_i64().unwrap_or_default();');
         expect(out).toContain('Value::from(requestId)');
     });
-    test('a venue int result boxed once stays Value', () => {
-        expect(out).toContain('let mut once: Value = self.requestId();');
+    test('a venue int result boxed once is an i64 local boxed at the hand-off', () => {
+        expect(out).toContain('let mut once: i64 = self.requestId().as_i64().unwrap_or_default();');
+        expect(out).toContain('Value::from(once)');
     });
 });
 
@@ -5260,9 +5263,10 @@ describe('typed locals from venue helper methods with a declared scalar return',
         expect(out).toMatch(/let mut type_var: Option<String> = self\.marketType\([^;]*\)\.as_str\(\)\.map\(str::to_owned\);/);
         expect(out).toMatch(/let mut latest: i64 = self\.height\([^;]*\)\.await\.as_i64\(\)\.unwrap_or_default\(\);/);
     });
-    test('an any-typed return or a box-only use keeps the local a Value', () => {
+    test('an any-typed return keeps the local a Value; a box-only use takes the declared type', () => {
         expect(out).toMatch(/let mut raw: Value = self\.rawType\(/);
-        expect(out).toMatch(/let mut boxed: Value = self\.marketType\(/);
+        expect(out).toMatch(/let mut boxed: Option<String> = self\.marketType\(/);
+        expect(out).toContain('boxed.map(Value::from).unwrap_or(Value::Null)');
     });
 });
 
@@ -5305,7 +5309,8 @@ describe('string locals from hand-written runtime methods returning String', () 
         expect(out).not.toMatch(/let mut (implodedPath|v): Value/);
     });
     test('a result handed straight to a Value slot is boxed once with Value::from', () => {
-        expect(out).toMatch(/let mut request: Value = Value::from\(self\.implodeParams\(path, params\)\);/);
+        expect(out).toMatch(/let mut request: String = self\.implodeParams\(path, params\);/);
+        expect(out).toContain('return self.hold(Value::from(request));');
         expect(out).toContain('self.hold(Value::from(self.implodeParams(path, params)))');
     });
 });
@@ -5348,9 +5353,10 @@ describe('scalar locals from declared callee returns and string-list element rea
         expect(out).toContain('if (timeframe.is_none()) {');
         expect(out).toContain('first.as_deref() == Some("a")');
     });
-    test('a local with only Value hand-offs keeps its Value box', () => {
-        expect(out).toMatch(/let mut boxedOnly: Value = self\.findTimeframe\(/);
-        expect(out).toMatch(/let mut key: Value = /);
+    test('a local with only Value hand-offs takes its producer type and boxes at the hand-off', () => {
+        expect(out).toMatch(/let mut boxedOnly: Option<String> = self\.findTimeframe\(/);
+        expect(out).toContain('let mut key: Option<String> = keys.get(0).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('return self.hold(key.map(Value::from).unwrap_or(Value::Null));');
     });
 });
 
@@ -5403,9 +5409,10 @@ describe('expression-shaped scalar locals', () => {
         expect(out).toMatch(/let mut lower: String = side\.to_lowercase\(\);/);
         expect(out).toMatch(/let mut total: Option<String> = crate::precise::Precise::stringAdd\(.*\)\.as_str\(\)\.map\(str::to_owned\);/);
     });
-    test('an expression local stored once and boxed straight back stays Value', () => {
+    test('an expression local stored once and boxed straight back keeps its native kind', () => {
         const rs = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'scalar-order', 'ts/src/venue.ts')).content;
-        expect(rs).toMatch(/let mut once: Value = /);
+        expect(rs).toContain('let mut once: i64 = (t * 2);');
+        expect(rs).toContain('Value::from(once)');
     });
     test('a local whose operand is itself an expression-typed local takes the native kind', () => {
         expect(out).toContain('let mut sideLen: i64 = (side.chars().count() as i64);');
@@ -5460,7 +5467,7 @@ ${body}
     });
     test('a literal index read on an Arr-only local is native', () => {
         const out = rs("        const parts = s.split ('-');\n        parts.push ('x');\n        const first = parts[0];\n        return first;", 's: string');
-        expect(out).toContain('parts.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('parts.as_array().and_then(|__arr| __arr.get(0)).and_then(Value::as_str).map(str::to_owned)');
         expect(out).not.toContain('get_value(&parts');
     });
     test('a dynamic index read on an Arr-only local is native', () => {
@@ -5600,9 +5607,9 @@ describe('bool locals into native-`bool` slots', () => {
         expect(venue).toContain('let mut isSpot: bool = type_var.as_str() == Some("spot");');
     });
 
-    test('negative: a local read in a `Value` slot keeps the box', () => {
-        expect(venue).toContain('let mut isWide: Value = (Value::Bool(type_var.as_str() == Some("spot")));');
-        expect(venue).not.toContain('let mut isWide: bool');
+    test('a local read only in a `Value` slot is a `bool` boxed at that slot', () => {
+        expect(venue).toContain('let mut isWide: bool = ');
+        expect(venue).toContain('Value::Bool(isWide)');
     });
 
     test('negative: a `Value` operand into the bool slot still coerces', () => {
@@ -6157,10 +6164,10 @@ ${body}
         expect(out).toContain('apiName.as_deref() == Some("private")');
     });
 
-    test('a use that is not a literal compare keeps the Value', () => {
+    test('a use that only hands the element on boxes the typed string there', () => {
         const out = sign("        const apiName = api[0];\n        return this.foo(apiName);");
-        expect(out).toContain('let mut apiName: Value = api.get(0).cloned().unwrap_or(Value::Null);');
-        expect(out).not.toContain('Option<String>');
+        expect(out).toContain('let mut apiName: Option<String> = api.get(0).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('return self.foo(apiName.map(Value::from).unwrap_or(Value::Null));');
     });
 
     test('a null compare of the element tests the option', () => {
@@ -8727,12 +8734,40 @@ describe('rust string-method and comparison locals over typed parameters', () =>
     });
 });
 
+describe('locals stored once and boxed back', () => {
+    test('an expression, a venue int and a venue string result handed only to Value slots keep their producer type', () => {
+        const order = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'scalar-order', 'ts/src/venue.ts')).content;
+        const ids = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'venue-int-ids', 'ts/src/venue.ts')).content;
+        expect(order).toContain('let mut once: i64 = (t * 2);');
+        expect(order).toContain('m.insert("o".to_string(), Value::from(once));');
+        expect(ids).toContain('let mut once: i64 = self.requestId().as_i64().unwrap_or_default();');
+        expect(ids).not.toContain('let mut once: Value');
+    });
+    test('a string tuple slot returned as-is is an Option<String> moved into the return box', () => {
+        const out = transpiler.transpileRust("function g(): [string, number] { return ['a', 1]; }\nfunction h() {\n    const [p, q] = g();\n    return p;\n}").content;
+        expect(out).toContain('let mut p: Option<String> = pqVariable.get(0).and_then(Value::as_str).map(str::to_owned)');
+        expect(out).not.toContain('p.clone()');
+    });
+});
+
+describe('locals returned from a string method', () => {
+    test('a local only handed to the return of a declared string method keeps the method signature', () => {
+        const dir = path.join (rustFixtureRoot, 'str-return-handoff');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), 'export default class Exchange {\n    encode (x: any): any { return x; }\n    toB58 (x: any): string { return x; }\n}\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    sign (p: any): string {\n        const b = this.encode (p);\n        const out = this.toB58 (b);\n        return out;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/pub fn sign\(&self, [^)]*\) -> Option<String> \{/);
+    });
+});
+
 describe('list length locals', () => {
     test('a list length is an i64 local with native compares and arithmetic', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'list-length-locals', 'ts/src/venue.ts')).content;
         expect(out).toMatch(/let mut rowsLength: i64 = /);
         expect(out).toContain('if (rowsLength == 0) {');
-        expect(out).toContain('Value::Int((rowsLength - 1))');
+        expect(out).toContain('let mut last: i64 = (rowsLength - 1);');
+        expect(out).toContain('return self.hold(Value::from(rowsLength));');
         expect(out).toContain('if rowsLength > 10 {');
         expect(out).not.toContain('let mut rowsLength: Value');
     });

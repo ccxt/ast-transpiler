@@ -3845,14 +3845,17 @@ export class RustTranspiler extends BaseTranspiler {
         if (ok && kind === 'bool' && !this.rustBoolSlotUsesOk(declaration)) return undefined;
         // boxed uses of the expression shapes are checked against the printed method lines
         const guarded = (widened || expressionUses || this.rustOptListParamInit(declaration.initializer)) && boxed > 0;
-        // an expression-shape local stored once and boxed straight back buys nothing
-        const storeOnly = guarded && nativeUses === 0 && boxed === 1;
-        // a derived call result needs at least one native use to be worth typing
-        const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
+        // a local only handed back to `Value` slots keeps its producer's type: one conversion per box, no extra string copy
+        // (never a local returned from a method declaring a string return: that signature decides from the boxed local)
+        const handOff = nativeUses === 0 && boxed >= 1 && (copied === 0 || !(kind === 'str' || kind === 'ostr')) && !this.rustStrReturnedLocal(declaration, scope);
+        const storeOnly = guarded && nativeUses === 0 && boxed === 1 && !handOff;
+        const unused = typedUses === 0 && !handOff && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
         // a string handed once to a ws client call and nothing else stays a `Value`
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration)) return undefined;
-        if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration))) return undefined;
+        // a hand-off ternary whose arms print only as a `Value` keeps the box its uses would read
+        if (handOff && isConditionalExpression(this.unwrapParens(declaration.initializer)) && this.rustScalarNativeText(kind, declaration.initializer) === undefined) return undefined;
+        if (this.rustVenueScalarSource(declaration.initializer) && ((boxed > 0 && !handOff) || this.rustVenueLocalHandedOn(declaration))) return undefined;
         if (this.rustVenueTypedCostly(declaration, kind, copied)) return undefined;
         if (typedUses === 0 && this.rustTestTierSource(declaration)) return undefined;
         if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined) return undefined;
@@ -3873,8 +3876,26 @@ export class RustTranspiler extends BaseTranspiler {
         if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustStrMethodRecvLocal(declaration)) return undefined;
         // a key-admitted local converts once at its declaration: that line keeps the 400-char budget
         if (this.rustScalarOptKeyCostly(declaration, kind) === false && kind === 'ostr' && this.rustScalarOptKeyCount(declaration) > 0) this.rustScalarGuarded.add(declaration);
-        if (guarded || this.rustStrMethodRecvLocal(declaration)) this.rustScalarGuarded.add(declaration);
+        if (guarded || handOff || this.rustStrMethodRecvLocal(declaration)) this.rustScalarGuarded.add(declaration);
         return kind;
+    }
+
+    /** A local some `return` of a method with a declared string return hands back as-is. */
+    rustStrReturnedLocal(declaration, scope): boolean {
+        if (scope?.kind !== SyntaxKind.MethodDeclaration || scope.type === undefined) return false;
+        let declared: any;
+        try {
+            declared = this.getChecker().getTypeFromTypeNode(scope.type);
+        } catch (e) {
+            return false;
+        }
+        if (this.primitiveKindOfType(declared) !== 'string') return false;
+        let returned = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (isReturnStatement(n.parent) && n.parent.expression === n) returned = true;
+            return true;
+        });
+        return returned;
     }
 
     // A local initialised as a plain alias of a typed optional `i64`/`f64` parameter takes the
@@ -8491,13 +8512,17 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = this.primitiveKindOfType(this.typeOfNodeIfAny(element.name));
         if (kind !== 'string' && kind !== 'boolean') return undefined;
         let nativeUses = 0;
+        let copies = 0;
         const safe = this.rustLocalUsesAll(element, name, true, (n: any) => {
             if (this.rustDeclaredNode(n) !== element || this.rustEnclosingFunction(n) !== fn) return false;
             const ok = kind === 'string' ? this.rustStringLocalUseIsNative(n) || this.rustVenueStrArgSlot(n) : this.rustIdentifierUseIsCondition(n);
             if (ok) nativeUses++;
-            return ok || (kind === 'string' && this.rustStrSlotBoxUse(n) && (isCallExpression(n.parent) || isReturnStatement(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustSlotUseOutsideLoop(n, element)));
+            const box = !ok && kind === 'string' && this.rustStrSlotBoxUse(n) && (isCallExpression(n.parent) || isReturnStatement(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustSlotUseOutsideLoop(n, element));
+            if (box && !(isReturnStatement(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustStrSlotLastUse(n, element))) copies++;
+            return ok || box;
         });
-        return safe && nativeUses > 0 ? (kind === 'string' ? 'str' : 'bool') : undefined;
+        // a string slot only handed back to `Value` slots is typed when each box moves it (no copy of the string)
+        return safe && (nativeUses > 0 || (kind === 'string' && copies === 0)) ? (kind === 'string' ? 'str' : 'bool') : undefined;
     }
 
     // ── optional params slots ────────────────────────────────────────────────
@@ -8631,6 +8656,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!loose && !this.rustExactSlotCallee(owner.initializer, at, want)) return undefined;
         const kind = loose ? 'onum' : (want === 'int' ? 'oint' : 'obool');
         let nativeUses = 0;
+        let boxes = 0;
         this.rustExactSlotDecisions.set(element, kind); // uses that read the slot itself see the trial kind
         let ok = false;
         try {
@@ -8647,12 +8673,14 @@ export class RustTranspiler extends BaseTranspiler {
                 const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
                 if (form === 'box' && write !== undefined && isBinaryExpression(write) && isIdentifier(write.left) && this.isNodeInsideNode(n, write.right)) return false;
                 if (form !== 'box') nativeUses++;
+                else boxes++;
                 return true;
             });
         } finally {
             this.rustExactSlotDecisions.set(element, null);
         }
-        return ok && nativeUses > 0 ? kind : undefined;
+        // an `Option<i64>` / `Option<bool>` slot is `Copy`: one only handed back to `Value` slots boxes there
+        return ok && (nativeUses > 0 || boxes > 0) ? kind : undefined;
     }
 
     /** The callee builds slot `at` from an exact Int-or-null (`int`) / Bool-or-null (`bool`) producer on every return. */
@@ -14516,6 +14544,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustStrSlotKind(element: any, scope: any): string | undefined {
         if (this.rustTestTierSource(element)) return undefined;
         let nativeUses = 0;
+        let copies = 0;
         this.rustExactSlotDecisions.set(element, 'ostr'); // uses that read the slot itself see the trial kind
         let ok = false;
         try {
@@ -14535,12 +14564,14 @@ export class RustTranspiler extends BaseTranspiler {
                 const feeds: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(m.left)) || isVariableDeclaration(m));
                 if (feeds !== undefined && !isStatement(feeds) && (form === 'box' || form === 'xbox')) return false;
                 if (RustTranspiler.RUST_NIL_SCALAR_NATIVE_FORMS.has(form) || form === 'write') nativeUses++;
+                else if ((form === 'box' || form === 'xbox') && !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, element))) copies++;
                 return true;
             });
         } finally {
             this.rustExactSlotDecisions.set(element, null);
         }
-        return ok && nativeUses > 0 ? 'ostr' : undefined;
+        // a slot only handed back to `Value` slots is typed when each box moves it
+        return ok && (nativeUses > 0 || copies === 0) ? 'ostr' : undefined;
     }
 
     // ── declared dict slots ──────────────────────────────────────────────────
