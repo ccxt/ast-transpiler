@@ -1776,6 +1776,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentListSlot(call: any, arg: any): boolean;
     /** `&x` for a shared list local lent to a lent list parameter. */
     printLentListArg(node: any, text: string): string | undefined;
+    private rustLentResponseDecisions;
+    rustParamIsLentResponse(param: any): boolean;
+    private static readonly RUST_LENT_RESPONSE_TYPES;
+    rustParamIsLentResponseUncached(param: any): boolean;
+    /** The response argument of a call to the class's own lent override (an inherited one is the `Value` trait method). */
+    rustLentResponseSlot(call: any, arg: any): boolean;
+    /** A base `extend` / `deepExtend`, or a `safeDict*` with an empty-map default: the local always holds a map. */
+    rustLentResponseSource(init: any): boolean;
+    /** `&x` for a shared dict local lent to a lent response slot; a container local boxes explicitly there (no `.into()`). */
+    printLentResponseArg(node: any, text: string): string | undefined;
     private static readonly RUST_TYPED_FILTER_METHODS;
     private static readonly RUST_TYPED_FILTER_TYPES;
     private rustTypedFilterDecisions;
