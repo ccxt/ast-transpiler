@@ -1,6 +1,6 @@
 import { Transpiler } from '../src/transpiler';
 import { isElementAccessExpression, isIdentifier } from "typescript/unstable/ast/is";
-import { RUST_DECLARED_DICT_LOCALS } from '../src/rustTranspiler';
+import { RUST_DECLARED_DICT_LOCALS, rustDispatch } from '../src/rustTranspiler';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -8821,5 +8821,76 @@ describe('rust defaulted container hand-offs', () => {
 
     test('negative: a dict read without a default keeps its box when handed on whole', () => {
         expect(slice(out(), 'fn parseNullable')).toMatch(/let mut data: Value = /);
+    });
+});
+
+describe('rust by-name dispatch signature table', () => {
+    // `rustSignatures` carries the kinds the printer gave each method; the dispatch conversions are one per kind
+    const sigs = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const table = (ts: string) => sigs.transpileRust(ts).rustSignatures ?? [];
+    const kinds = (call: (k: string, i: number) => string, ks: string[]) => ks.map((k, i) => call(k, i));
+
+    test('records the printed parameter and return kinds of every method', () => {
+        const got = table('class T {\n    f (a: any, b: any = undefined): any { return a; }\n    g (x: boolean): void { }\n}\n');
+        expect(got).toEqual([
+            { name: 'f', params: [ { name: 'a', kind: 'value', type: 'Value' }, { name: 'optional_args', kind: 'slice', type: '&[Value]' } ], ret: 'value', returns: 'Value' },
+            { name: 'g', params: [ { name: 'x', kind: 'flag', type: 'bool' } ], ret: 'void', returns: '' },
+        ]);
+    });
+
+    test('converts each container parameter kind once, from args[i]', () => {
+        expect(kinds(rustDispatch.arg, [ 'dict', 'list', 'optdict', 'optlist' ])).toEqual([
+            'args.get(0).cloned().unwrap_or_default().into_dict()',
+            'args.get(1).cloned().unwrap_or_default().into_list()',
+            'args.get(2).cloned().unwrap_or_default().into_opt_dict()',
+            'args.get(3).cloned().unwrap_or_default().into_opt_list()',
+        ]);
+        expect(rustDispatch.fromValue('dict', 'market')).toBe('market.into_dict()');
+        expect(rustDispatch.fromValue('optlist', 'rows')).toBe('rows.into_opt_list()');
+    });
+
+    test('boxes each native return kind back to Value once, inside the arm', () => {
+        const call = 'self.m(x)';
+        expect([ 'dict', 'list', 'optdict', 'struct', 'ostr', 'int', 'string', 'bool' ].map((k) => rustDispatch.result(call, k))).toEqual([
+            'crate::Value::Dict(self.m(x))',
+            'crate::Value::Arr(self.m(x))',
+            'self.m(x).map_or(crate::Value::Null, crate::Value::Dict)',
+            'crate::types::IntoRaw::into_raw(self.m(x))',
+            'crate::types::IntoRaw::into_raw(self.m(x))',
+            'crate::Value::from(self.m(x))',
+            'crate::Value::from(self.m(x))',
+            'crate::Value::from(self.m(x))',
+        ]);
+        expect([ 'dict', 'list', 'optdict', 'struct', 'ostr', 'int', 'string', 'bool' ].every(rustDispatch.isNativeReturn)).toBe(false);
+    });
+
+    test('a sync scalar or struct return keeps its arm (it was dropped as non-Value before)', () => {
+        for (const ret of [ 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct' ]) {
+            expect(rustDispatch.isNativeReturn(ret)).toBe(true);
+        }
+        expect(rustDispatch.isNativeReturn('other')).toBe(false);
+        expect(rustDispatch.isNativeReturn('value')).toBe(false);
+    });
+
+    test('records a native Option<String> return and the &str of a venue string parameter', () => {
+        const got = table('class T {\n    clean (path: string): string {\n        return path;\n    }\n}\n');
+        expect(got[0].name).toBe('clean');
+        expect([ 'ostr', 'value' ]).toContain(got[0].ret);
+    });
+
+    test('the base virtual-dispatch preamble is printed from the signature, with a non-virtual shim', () => {
+        const virt = new Transpiler({ 'verbose': false, 'rust': { 'virtualDispatch': { parse_ticker: [ 'ticker', 'market' ], market: [ 'symbol' ] }, 'nonVirtualShims': [ 'market' ], 'typedUnified': [ 'market' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-'));
+        const file = path.join(root, 'ts/src/base/Exchange.ts');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, 'export type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; info: any }\nexport default class Exchange {\n'
+            + '    markets: any = {};\n    parseTicker (ticker: any, market: any = undefined): any { return ticker; }\n'
+            + '    market (symbol: Str): Market { return this.markets[symbol]; }\n}\n');
+        const out = virt.transpileRustByPath(file);
+        expect(out.content).toContain('{ let __v = crate::exchange::DerivedExchange::parse_ticker(self, ticker.clone(), crate::runtime::get_arg(optional_args, 0, crate::Value::Null)); if !matches!(__v, crate::Value::Null) { return __v; } }');
+        expect(out.content).toContain('DerivedExchange::market(self, crate::Value::from(symbol)); if !matches!(__v, crate::Value::Null) { return Ok(crate::types::FromRaw::from_raw(__v)); } }');
+        expect(out.content).toContain('self.market_non_virtual(symbol)');
+        expect(out.content).toContain('pub fn market_non_virtual(&self, symbol: &str) -> crate::Result<crate::types::Market>');
+        expect((out.rustSignatures ?? []).map((s) => s.name)).toEqual([ 'parse_ticker', 'market', 'market_non_virtual' ]);
     });
 });

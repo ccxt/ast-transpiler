@@ -10,7 +10,7 @@ import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput, ITranspileContext, ITranspileProgramCache } from './types.js';
 import { GoTranspiler, alignGoTrailingComments } from './goTranspiler.js';
 import { JavaTranspiler } from './javaTranspiler.js';
-import { RustTranspiler, RUST_DECLARED_DICT_LOCALS } from './rustTranspiler.js';
+import { RustTranspiler, RUST_DECLARED_DICT_LOCALS, rustDispatch } from './rustTranspiler.js';
 import type { RustDeclaredDictLocalEntry } from './rustTranspiler.js';
 import { CppTranspiler } from './cppTranspiler.js';
 import { installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest } from './goTranspiler.js';
@@ -518,6 +518,7 @@ export default class Transpiler {
 
         let transpiledContent = undefined;
         let stdlibImports = undefined;
+        let rustSignatures = undefined;
         switch(lang) {
         case Languages.Python:
             this.pythonTranspiler.asyncTranspiling = !sync;
@@ -542,7 +543,9 @@ export default class Transpiler {
             transpiledContent = this.javaTranspiler.printNode(src, -1);
             break;
         case Languages.Rust:
+            this.rustTranspiler.rustSignatureTable = new Map();
             transpiledContent = this.rustTranspiler.printNode(src, -1);
+            rustSignatures = [ ...this.rustTranspiler.rustSignatureTable.values() ].filter(sig => sig.file === src).map(({ name, params, ret, returns }) => ({ name, params, ret, returns }));
             break;
         case Languages.Cpp:
             transpiledContent = this.cppTranspiler.printNode(src, -1);
@@ -569,7 +572,8 @@ export default class Transpiler {
             imports,
             exports,
             methodsTypes,
-            stdlibImports
+            stdlibImports,
+            rustSignatures
         };
     }
 
@@ -835,6 +839,8 @@ export {
     // the rust declared-Dict locals vocabulary + entry shape, so the
     // helper-removal consumers can import them from the package entry
     RUST_DECLARED_DICT_LOCALS,
+    // the by-name dispatch conversions per parameter / return kind (ccxt builds the arms from `rustSignatures`)
+    rustDispatch,
     // ccxt's Go printer hooks
     installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams,
     installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads,

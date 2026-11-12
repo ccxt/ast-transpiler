@@ -200,6 +200,95 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
     return byName;
 }
 
+// A by-name dispatch parameter kind (one conversion each) and return kind, from the printer's type decisions.
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
+    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'other';
+// `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
+export interface RustMethodSignature {
+    file: any;
+    name: string;
+    params: Array<{ name: string, kind: RustDispatchParamKind, type: string }>;
+    ret: RustDispatchReturnKind;
+    returns: string;
+}
+
+// The typed parameter kinds a dispatch arm decodes from `args[i]` and a forwarder from its `Value` slot.
+const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist' ]);
+// a native return a by-name arm boxes back to `Value`
+const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct' ]);
+
+export const rustDispatch = {
+    isTyped: (kind: string): boolean => RUST_DISPATCH_TYPED_KINDS.has(kind),
+    /** Tail of a dynamic-dispatch `args` list as a slice: the whole list, or the tail past index `i`. */
+    sliceArg: (i: number): string => (i === 0 ? '&args[..]' : `&args[${i}.min(args.len())..]`),
+    /** An owned map copy for a native-map parameter, built on the arm's own line (400-char line budget). */
+    mapArg: (i: number): string => `&mut { let mut __m = args.get(${i}).cloned().unwrap_or_default().as_map().cloned().unwrap_or_default();\n                    __m }`,
+    /** `args[i]` lowered to the parameter kind of a by-name dispatch arm. */
+    arg(kind: string, i: number): string {
+        const arg = `args.get(${i}).cloned().unwrap_or_default()`;
+        switch (kind) {
+        case 'value': return `args.get(${i}).cloned().unwrap_or(crate::Value::Null)`;
+        case 'strvec': return `${arg}.to_str_vec()`;
+        case 'map': return rustDispatch.mapArg(i);
+        case 'slice': return rustDispatch.sliceArg(i);
+        case 'str': return `args.get(${i}).and_then(crate::Value::as_str).unwrap_or_default()`;
+        case 'optstr': return `args.get(${i}).and_then(crate::Value::as_str)`;
+        case 'f64': return `args.get(${i}).and_then(crate::Value::as_f64).unwrap_or_default()`;
+        case 'optf64': return `args.get(${i}).and_then(crate::Value::as_f64)`;
+        case 'opti64': return `args.get(${i}).and_then(crate::Value::as_i64)`;
+        case 'i64': return `args.get(${i}).and_then(crate::Value::as_i64).unwrap_or_default()`;
+        case 'optstrvec': return `${arg}.to_opt_str_vec()`;
+        case 'strvecvec': return `${arg}.to_str_vec_vec()`;
+        case 'orderreqs': return `crate::types::FromRaw::from_raw(${arg})`;
+        case 'flag': return `args.get(${i}).is_some_and(crate::Value::is_truthy)`;
+        case 'dict': return `${arg}.into_dict()`;
+        case 'list': return `${arg}.into_list()`;
+        case 'optdict': return `${arg}.into_opt_dict()`;
+        case 'optlist': return `${arg}.into_opt_list()`;
+        default: return arg;
+        }
+    },
+    /** `args[i]` for a sync ws handler slot (`Value` / `bool` / list / map / slice), else undefined. */
+    wsArg(kind: string, i: number): string | undefined {
+        switch (kind) {
+        case 'slice': return rustDispatch.sliceArg(i);
+        case 'strvec': return `args.get(${i}).cloned().unwrap_or_default().to_str_vec()`;
+        case 'flag': return `args.get(${i}).map(|v| v.is_truthy()).unwrap_or(false)`;
+        case 'map': return rustDispatch.mapArg(i);
+        case 'value': return `args.get(${i}).cloned().unwrap_or(crate::Value::Null)`;
+        default: return undefined;
+        }
+    },
+    /** The typed parameter `kind` read from the boxed `Value` expression `v` (a `DerivedExchange` slot argument). */
+    fromValue(kind: string, v: string): string {
+        switch (kind) {
+        case 'str': return `${v}.as_str().unwrap_or_default()`;
+        case 'optstr': return `${v}.as_str()`;
+        case 'flag': return `${v}.is_truthy()`;
+        case 'dict': case 'list': case 'optdict': case 'optlist': return `${v}.into_${kind.replace('opt', 'opt_')}()`;
+        case 'orderreqs': return `crate::types::FromRaw::from_raw(${v})`;
+        default: return v;
+        }
+    },
+    /** A sync method with a native return still gets a by-name arm (it boxes back inside the arm). */
+    isNativeReturn: (ret: string): boolean => RUST_DISPATCH_NATIVE_RETURNS.has(ret),
+    /** Every `args[i]` of a by-name dispatch arm, one conversion per parameter kind. */
+    args: (kinds: string[]): string[] => kinds.map((kind, i) => rustDispatch.arg(kind, i)),
+    /** A typed method's `Result<T>` boxed back to the dispatcher's `Value`. */
+    result(call: string, isTyped: boolean | string | undefined): string {
+        const ret = isTyped === true ? 'typed' : isTyped === false || isTyped === undefined ? 'value' : isTyped;
+        switch (ret) {
+        case 'typed': case 'ostr': case 'struct': return `crate::types::IntoRaw::into_raw(${call})`;
+        case 'int': case 'string': case 'bool': return `crate::Value::from(${call})`;
+        case 'dict': return `crate::Value::Dict(${call})`;
+        case 'list': return `crate::Value::Arr(${call})`;
+        case 'optdict': return `${call}.map_or(crate::Value::Null, crate::Value::Dict)`;
+        default: return call;
+        }
+    },
+};
+
 export class RustTranspiler extends BaseTranspiler {
 
     private rustScopeIndexes = new WeakMap<Node, RustScopeIndex>();
@@ -266,11 +355,17 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Unified methods printed with a typed public signature (`config.typedUnified`, TS names). */
     rustTypedUnified: Set<string>;
+    /** Base methods dispatched to the derived exchange first (snake name -> the `DerivedExchange` slot names). */
+    rustVirtualDispatch: Record<string, string[]>;
+    /** Virtual base methods whose overrides call `super.X()`: the base body prints as `X_non_virtual`. */
+    rustNonVirtualShims: Set<string>;
 
     constructor(config = {}) {
         config['parser'] = Object.assign({}, parserConfig, config['parser'] ?? {});
         super(config);
         this.rustTypedUnified = new Set(config['typedUnified'] ?? []);
+        this.rustVirtualDispatch = config['virtualDispatch'] ?? {};
+        this.rustNonVirtualShims = new Set(config['nonVirtualShims'] ?? []);
 
         this.requiresParameterType = true;
         this.requiresReturnType = false;
@@ -6680,18 +6775,74 @@ export class RustTranspiler extends BaseTranspiler {
         const filter = this.printTypedFilterSignature(node, identation); if (filter !== undefined) return filter;
         const typed = this.rustTypedSignature(node);
         if (typed !== undefined) {
+            this.rustRecordSignature(node, name, typed.params, `crate::Result<${typed.ret}>`);
             const args = ['&self', ...typed.params.map(p => `${p.name}: ${p.rustType}`)].join(', ');
             return `${this.getIden(identation + 1)}pub fn ${name}(${args}) -> crate::Result<${typed.ret}>`;
         }
         const params = node.parameters;
         const requiredParams = params.filter(p => (!p.initializer && !p.questionToken) || this.rustVenuePositional(p));
-        let parsedArgs = ['&self', ...requiredParams.map(p => `${this.printNode(p.name, 0)}: ${this.rustParamType(p)}`)].join(', ');
-        if (requiredParams.length < params.length) {
-            parsedArgs += ', optional_args: &[Value]';
-        }
+        const printedParams = requiredParams.map(p => ({ name: this.printNode(p.name, 0), rustType: this.rustParamType(p) }));
+        if (requiredParams.length < params.length) printedParams.push({ name: 'optional_args', rustType: '&[Value]' });
         const returnType = this.printRustFunctionType(node);
+        this.rustRecordSignature(node, name, printedParams, returnType);
+        const parsedArgs = ['&self', ...printedParams.map(p => `${p.name}: ${p.rustType}`)].join(', ');
         const retStr = returnType ? ` -> ${returnType}` : '';
         return `${this.getIden(identation + 1)}pub fn ${name}(${parsedArgs})${retStr}`;
+    }
+
+    // ── by-name dispatch signature table (rustRecordSignature / RUST_DISPATCH_PARAM_KINDS / rustDispatch) ──
+    // Each printed method's parameter and return kinds, read from the printer's own type decisions; ccxt builds the
+    // by-name dispatch arms, the virtual-dispatch preamble and the DerivedExchange forwarders from this table.
+    rustSignatureTable: Map<any, RustMethodSignature> = new Map();
+
+    private static readonly RUST_DISPATCH_PARAM_KINDS: Record<string, RustDispatchParamKind> = {
+        'Value': 'value', 'impl Into<crate::Value>': 'value', '&[Value]': 'slice', '&mut indexmap::IndexMap<String, Value>': 'map',
+        'Vec<String>': 'strvec', 'bool': 'flag', '&str': 'str', 'Option<&str>': 'optstr', 'f64': 'f64',
+        'Option<f64>': 'optf64', 'Option<i64>': 'opti64', 'i64': 'i64', 'Option<Vec<String>>': 'optstrvec', 'Vec<Vec<String>>': 'strvecvec',
+        'impl Into<crate::Params> + Send': 'params', 'crate::value::Dict': 'dict', 'crate::value::List': 'list',
+        'Option<crate::value::Dict>': 'optdict', 'Option<crate::value::List>': 'optlist',
+    };
+
+    private static readonly RUST_DISPATCH_RETURN_KINDS: Record<string, RustDispatchReturnKind> = {
+        '': 'void', 'Value': 'value', 'crate::Value': 'value', 'Option<String>': 'ostr', 'i64': 'int', 'String': 'string', 'bool': 'bool',
+        'crate::value::Dict': 'dict', 'crate::value::List': 'list', 'Option<crate::value::Dict>': 'optdict',
+        'crate::types::Market': 'struct', 'crate::types::Currency': 'struct',
+    };
+
+    rustRecordSignature(node: any, name: string, params: Array<{ name: string, rustType: string }>, returnType: string): void {
+        const ret: RustDispatchReturnKind = RustTranspiler.RUST_DISPATCH_RETURN_KINDS[returnType] ?? (returnType.startsWith('crate::Result<') ? 'typed' : 'other');
+        this.rustSignatureTable.set(node, {
+            file: node.getSourceFile?.(),
+            name: this.toSnakeCaseName(name),
+            params: params.map(p => ({ name: p.name.replace(/^mut\s+/, ''), kind: RustTranspiler.RUST_DISPATCH_PARAM_KINDS[p.rustType] ?? (/^(?:Vec<)?crate::types::\w+>?$/.test(p.rustType) ? 'orderreqs' : 'other'), type: p.rustType })),
+            ret,
+            returns: returnType,
+        });
+    }
+
+    // A base method with a `DerivedExchange` slot first asks the derived exchange (static dispatch, no stored
+    // pointer); a shimmed one prints a forwarding `X` and its body as `X_non_virtual`, so `super.X()` cannot recurse.
+    rustVirtualDispatchMethod(node: any, methodDef: string, body: string): string {
+        const sig = this.rustSignatureTable.get(node);
+        const slots = sig === undefined ? undefined : this.rustVirtualDispatch[sig.name];
+        if (sig === undefined || slots === undefined || (sig.ret !== 'value' && sig.ret !== 'typed')) return methodDef + body;
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile?.()?.fileName ?? ''))) return methodDef + body;
+        const sliceAt = sig.params.findIndex(p => p.type === '&[Value]');
+        const callArgs = slots.map((_slot, i) => {
+            const p = sig.params[i];
+            if (p !== undefined && /^Value\b/.test(p.type)) return `${p.name}.clone()`;
+            if (p !== undefined && p.type === '&str') return `crate::Value::from(${p.name})`;
+            if (sliceAt >= 0 && i >= sliceAt) return `crate::runtime::get_arg(${sig.params[sliceAt].name}, ${i - sliceAt}, crate::Value::Null)`;
+            return 'crate::Value::Null';
+        });
+        const preamble = `\n        // virtual-dispatch (static: DerivedExchange::${sig.name}(self, ...))\n`
+            + `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}); if !matches!(__v, crate::Value::Null) { return ${sig.ret === 'typed' ? 'Ok(crate::types::FromRaw::from_raw(__v))' : '__v'}; } }\n`;
+        const open = body.indexOf('{') + 1;
+        if (!this.rustNonVirtualShims.has(sig.name)) return methodDef + body.slice(0, open) + preamble + body.slice(open);
+        const nonVirtual = `${sig.name}_non_virtual`;
+        this.rustSignatureTable.set({ shimOf: node }, { ...sig, name: nonVirtual });
+        const forward = `${body.slice(0, open)}${preamble}        self.${nonVirtual}(${sig.params.map(p => p.name).join(', ')})\n    }\n\n`;
+        return methodDef + forward + methodDef.replace(`fn ${String(node.name.text)}(`, `fn ${nonVirtual}(`) + body;
     }
 
     // Typed public parameter for a unified-method TS parameter, with its lowering back to `Value`.
@@ -7480,12 +7631,10 @@ export class RustTranspiler extends BaseTranspiler {
         const statements = handle.statements;
         this.rustProHandlerShadowParam = savedShadowParam;
         const typed = this.rustTypedSignature(node);
-        if (typed !== undefined) {
-            return this.printNodeCommentsIfAny(node, identation, methodDef + this.rustTypedBody(node, typed, identation, handle.head + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements));
-        }
-        const body = blockOpen + this.rustLentParamsBinding(node, identation) + this.rustTypedFilterBinding(node, identation) + handle.head + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements + blockClose;
-
-        return this.printNodeCommentsIfAny(node, identation, methodDef + body);
+        const body = typed !== undefined
+            ? this.rustTypedBody(node, typed, identation, handle.head + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements)
+            : blockOpen + this.rustLentParamsBinding(node, identation) + this.rustTypedFilterBinding(node, identation) + handle.head + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements + blockClose;
+        return this.printNodeCommentsIfAny(node, identation, this.rustVirtualDispatchMethod(node, methodDef, body));
     }
 
     // A free test-helper function with defaulted trailing parameters (`ts/src/[pro/]test/Exchange/`):
@@ -14039,6 +14188,10 @@ export class RustTranspiler extends BaseTranspiler {
         const args = [ '&self', ...params.slice(0, sig.positional).map((p: any, i: number) => `${this.printNode(p.name, 0)}: ${sig.typed.get(i) ?? this.rustParamType(p)}`) ];
         if (params.length > sig.positional) args.push('optional_args: &[Value]');
         const returnType = this.printRustFunctionType(node);
+        this.rustRecordSignature(node, String(node.name.text), [
+            ...params.slice(0, sig.positional).map((p: any, i: number) => ({ name: this.printNode(p.name, 0), rustType: sig.typed.get(i) ?? this.rustParamType(p) })),
+            ...(params.length > sig.positional ? [ { name: 'optional_args', rustType: '&[Value]' } ] : []),
+        ], returnType);
         return `${this.getIden(identation + 1)}pub fn ${String(node.name.text)}(${args.join(', ')})${returnType ? ` -> ${returnType}` : ''}`;
     }
 
