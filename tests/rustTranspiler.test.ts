@@ -8515,13 +8515,49 @@ describe('rust deep-extend heads and watch hash lists', () => {
     test('a built hash list is lent as the message hashes and hands its shared handle as the subscribe hashes', () => {
         const many = out.slice (out.indexOf ('fn watchMany'), out.indexOf ('fn kept'));
         expect(many).toContain('let mut messageHashes: crate::value::List = ');
-        expect(many).toContain('self.watchMultiple(Value::Str("u".into()), &messageHashes, &[');
+        expect(many).toContain('self.watchMultiple("u", &messageHashes, &[');
         expect(many).toContain('Value::Arr(messageHashes.clone())]).await');
         expect(many).not.toContain('messageHashes: Value');
     });
     test('negative: a deepExtend head handed on whole keeps its box', () => {
         const kept = out.slice (out.indexOf ('fn kept'));
         expect(kept).toMatch(/let mut extended: Value = /);
+    });
+});
+
+describe('rust ws url locals lent to watch', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport default class Exchange {\n    urls: any = {};\n    hold (x: any): any { return x; }\n    watch (url: Str, messageHash: Str, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): any { return url; }\n    watchMultiple (url: Str, messageHashes: string[], message: any = undefined, subscribeHashes: Strings = undefined, subscription: any = undefined): any { return url; }\n}\n',
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    async one (symbol: string) {\n        const url = this.urls['api']['ws']['public'];\n        const messageHash = 'ticker:' + symbol;\n        return await this.watch (url, messageHash, {}, messageHash);\n    }\n" +
+            "    async many (symbols: string[]) {\n        const url = this.urls['api']['ws'];\n        return await this.watchMultiple (url, symbols, {}, symbols);\n    }\n" +
+            "    async kept (symbol: string) {\n        const url = this.urls['api']['ws'];\n        this.hold (url);\n        return await this.watch (url, symbol);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-wsurl-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a urls read used only as the watch url is an Option<String> lent as &str', () => {
+        const one = out.slice (out.indexOf ('fn one'), out.indexOf ('fn many'));
+        expect(one).toContain('let mut url: Option<String> = ');
+        expect(one).toContain('.as_str().map(str::to_owned);');
+        expect(one).toMatch(/self\.watch\(url\.as_deref\(\), /);
+    });
+    test('the watchMultiple url slot takes the same lend', () => {
+        const many = out.slice (out.indexOf ('fn many'), out.indexOf ('fn kept'));
+        expect(many).toContain('let mut url: Option<String> = ');
+        expect(many).toMatch(/self\.watchMultiple\(url\.as_deref\(\), /);
+    });
+    test('negative: a url handed elsewhere keeps its box and is lent by reference', () => {
+        const kept = out.slice (out.indexOf ('fn kept'));
+        expect(kept).toContain('let mut url: Value = ');
+        expect(kept).toMatch(/self\.watch\(&url, /);
     });
 });
 

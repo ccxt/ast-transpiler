@@ -2032,7 +2032,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!declaration.initializer) {
             return `${indent}let mut ${varName}: Value = Value::Null`;
         }
-        const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) : undefined;
+        const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) : undefined;
         if (scalarDecl !== undefined) return scalarDecl;
         const parsedValue = this.printNode(declaration.initializer, identation).trim();
         if (declaration.initializer.kind === SyntaxKind.NewExpression) {
@@ -4592,6 +4592,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustWsStrKey(node): boolean {
         const inner: any = this.unwrapParens(node);
+        if (isIdentifier(inner) && this.rustWsUrlLocalOf(inner)) return true;
         const kind = isIdentifier(inner) ? this.rustScalarLocalOf(inner)?.kind : undefined;
         return kind === 'str' || kind === 'ostr';
     }
@@ -4601,7 +4602,7 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(node);
         if (this.rustWsStrKey(inner)) {
             const name = super.printIdentifier(inner);
-            const str = this.rustScalarLocalOf(inner).kind === 'str';
+            const str = this.rustScalarLocalOf(inner)?.kind === 'str';
             // a borrow next to another read of the local in its statement is spelled `&x` so ccxt keeps that read's clone
             if (!this.rustWsKeySharesStatement(inner)) return `${name}.${str ? 'as_str' : 'as_deref'}()`;
             return str ? `&${name}[..]` : `(&${name}).as_deref()`;
@@ -4613,7 +4614,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustWsKeySharesStatement(node): boolean {
-        const declaration: any = this.rustScalarLocalOf(node)?.declaration;
+        const declaration: any = this.rustScalarLocalOf(node)?.declaration ?? this.rustDeclaredNode(node);
         let top: any = node;
         while (top.parent !== undefined && !isStatement(top.parent)) top = top.parent;
         let shared = false;
@@ -7519,7 +7520,7 @@ export class RustTranspiler extends BaseTranspiler {
                         : (this.rustNativeBoolArgumentSlot(calleeParams, at)
                             ? this.rustBoolArgumentText(a, 0)
                             : this.printNode(a, 0));
-                const printArgs = (list, from = 0) => list.map((a, i) => printArg(a, from + i)).join(', ');
+                const printArgs = (list, from = 0) => list.map((a, i) => this.rustWsWatchSlot(node, from + i) ? this.rustWsWatchSlotText(a, this.printNode(a, 0)) : printArg(a, from + i)).join(', ');
                 const requiredArgs = printArgs(args.slice(0, sig.requiredCount));
                 const reqPart = requiredArgs ? `${requiredArgs}, ` : '';
                 return `self.${methodName}(${reqPart}&[${printArgs(args.slice(sig.requiredCount), sig.requiredCount)}])`;
@@ -7597,7 +7598,7 @@ export class RustTranspiler extends BaseTranspiler {
     printOptionalArgsSliceCall(node, receiver: string, methodName: string, fixed: number, identation: number): string | undefined {
         const args = this.rustPrintedArgs(node, identation);
         if (args.length < fixed || (args.length > 0 && args[args.length - 1].startsWith('&['))) return undefined;
-        const cloned = args.map((a, at) => this.rustWsWatchSlot(node, at) && this.rustWsStrKey(node.arguments[at]) ? this.rustWsKeyText(node.arguments[at]) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : this.rustSliceArgText(a)));
+        const cloned = args.map((a, at) => this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : this.rustSliceArgText(a)));
         return `${receiver}.${methodName}(${cloned.slice(0, fixed).join(', ')}${fixed > 0 ? ', ' : ''}&[${cloned.slice(fixed).join(', ')}])`;
     }
 
@@ -12958,6 +12959,82 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isPropertyAccessExpression(callee) || String(callee.name.text) !== 'watchMultiple') return undefined;
         const at = Array.from(call.arguments).indexOf(n);
         return at === 1 ? 'lend' : (at === 3 ? 'clone' : undefined);
+    }
+
+    // ── ws url locals (rustWsUrlLocal / rustWsUrlLocalOf / printWsUrlLocalDeclaration) ──
+    // `watch` / `watch_multiple` take the url as `impl Into<Option<&str>>`: a `this.urls[..]` read whose every use
+    // is that slot is held as `Option<String>` and lent there.
+    private rustWsUrlLocals = new Map<any, boolean>();
+
+    rustWsUrlLocal(declaration: any): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        let known = this.rustWsUrlLocals.get(declaration);
+        if (known === undefined) {
+            known = false;
+            try {
+                known = this.rustWsUrlLocalUncached(declaration);
+            } catch (e) {
+                known = false; // no proof -> the local keeps its `Value` box
+            }
+            this.rustWsUrlLocals.set(declaration, known);
+        }
+        return known;
+    }
+
+    rustWsUrlLocalUncached(declaration: any): boolean {
+        const list: any = declaration.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
+        if (!this.rustWsUrlRead(declaration.initializer)) return false;
+        const scope: any = this.rustEnclosingFunction(declaration);
+        if (scope === undefined || isSourceFile(scope)) return false;
+        let uses = 0;
+        const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const call: any = n.parent;
+            if (this.rustEnclosingFunction(n) !== scope || !isCallExpression(call) || call.expression === n || call.arguments[0] !== n || !this.rustWsWatchSlot(call, 0)) return false;
+            uses++;
+            return true;
+        });
+        return ok && uses > 0 && !this.rustWsUrlDeclTooLong(declaration);
+    }
+
+    /** `this.urls[k1][k2]..` (through parens / `as` casts) with literal keys: a url string, or Null when absent. */
+    rustWsUrlRead(init: any): boolean {
+        let node: any = this.rustSkipWrappers(init);
+        let depth = 0;
+        while (node !== undefined && isElementAccessExpression(node)) {
+            if (!isStringLiteral(node.argumentExpression)) return false;
+            node = this.rustSkipWrappers(node.expression);
+            depth++;
+        }
+        return depth > 0 && node !== undefined && isPropertyAccessExpression(node) && node.expression.kind === SyntaxKind.ThisKeyword
+            && isIdentifier(node.name) && node.name.text === 'urls';
+    }
+
+    rustWsUrlDeclTooLong(declaration: any): boolean {
+        let depth = 0;
+        for (let up: any = declaration.parent; up !== undefined; up = up.parent) if (isBlock(up)) depth++;
+        return depth * 4 + `let mut ${declaration.name.text}: Option<String> = ${this.printNode(declaration.initializer, 0).trim()}.as_str().map(str::to_owned);`.length > 360;
+    }
+
+    rustWsUrlLocalOf(node: any): boolean {
+        if (node === undefined || !isIdentifier(node) || this.checkerOrUndefined() === undefined) return false;
+        const declaration: any = this.rustDeclaredNode(node);
+        return declaration !== undefined && declaration.name !== node && this.rustWsUrlLocal(declaration);
+    }
+
+    printWsUrlLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined {
+        if (!this.rustWsUrlLocal(declaration)) return undefined;
+        return `${indent}let mut ${varName}: Option<String> = ${this.printNode(declaration.initializer, 0).trim()}.as_str().map(str::to_owned)`;
+    }
+
+    /** A `watch` url / hash slot takes `impl Into<Option<&str>>`: a string local or literal as `&str`, anything else lent as `&Value`. */
+    rustWsWatchSlotText(arg: any, printed: string): string {
+        const inner: any = this.unwrapParens(arg);
+        if (this.rustWsStrKey(inner) || (isStringLiteral(inner) && !(inner.text in this.StringLiteralReplacements))) return this.rustWsKeyText(inner);
+        const kind = isIdentifier(inner) ? this.rustScalarIdentifierKind(inner) : undefined;
+        if (kind === 'ostr') return `${super.printIdentifier(inner)}.as_deref()`;
+        if (kind === 'str') return `${super.printIdentifier(inner)}.as_str()`;
+        return /^[A-Za-z_][A-Za-z0-9_]*$/.test(printed) ? `&${printed}` : `&(${printed})`;
     }
 
     // ── built lists (rustBuiltListLocal / rustBuiltListWriteSource / printBuiltListDeclaration / printBuiltListWrite / printBuiltListPush) ──

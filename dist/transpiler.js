@@ -51451,6 +51451,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // `return x`), so handing the list on never copies its elements.
     this.rustLentListKinds = /* @__PURE__ */ new WeakMap();
     this.rustLentListBoxes = /* @__PURE__ */ new WeakMap();
+    // ── ws url locals (rustWsUrlLocal / rustWsUrlLocalOf / printWsUrlLocalDeclaration) ──
+    // `watch` / `watch_multiple` take the url as `impl Into<Option<&str>>`: a `this.urls[..]` read whose every use
+    // is that slot is held as `Option<String>` and lent there.
+    this.rustWsUrlLocals = /* @__PURE__ */ new Map();
     // ── built lists (rustBuiltListLocal / rustBuiltListWriteSource / printBuiltListDeclaration / printBuiltListWrite / printBuiltListPush) ──
     // A local built from an array literal, reassigned only from list producers (array literals, base `toArray` /
     // `arrayConcat`, a `[]`-defaulted `safeList*`) holds the shared list: pushes, length and index reads are native.
@@ -53013,7 +53017,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!declaration.initializer) {
       return `${indent}let mut ${varName}: Value = Value::Null`;
     }
-    const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) : void 0;
+    const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) : void 0;
     if (scalarDecl !== void 0)
       return scalarDecl;
     const parsedValue = this.printNode(declaration.initializer, identation).trim();
@@ -55557,6 +55561,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   }
   rustWsStrKey(node) {
     const inner = this.unwrapParens(node);
+    if (isIdentifier3(inner) && this.rustWsUrlLocalOf(inner))
+      return true;
     const kind = isIdentifier3(inner) ? this.rustScalarLocalOf(inner)?.kind : void 0;
     return kind === "str" || kind === "ostr";
   }
@@ -55565,7 +55571,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const inner = this.unwrapParens(node);
     if (this.rustWsStrKey(inner)) {
       const name = super.printIdentifier(inner);
-      const str = this.rustScalarLocalOf(inner).kind === "str";
+      const str = this.rustScalarLocalOf(inner)?.kind === "str";
       if (!this.rustWsKeySharesStatement(inner))
         return `${name}.${str ? "as_str" : "as_deref"}()`;
       return str ? `&${name}[..]` : `(&${name}).as_deref()`;
@@ -55577,7 +55583,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     return bare2 ? `&${text}` : `&(${text})`;
   }
   rustWsKeySharesStatement(node) {
-    const declaration = this.rustScalarLocalOf(node)?.declaration;
+    const declaration = this.rustScalarLocalOf(node)?.declaration ?? this.rustDeclaredNode(node);
     let top = node;
     while (top.parent !== void 0 && !isStatement(top.parent))
       top = top.parent;
@@ -58376,7 +58382,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       if (sig) {
         const calleeParams = this.rustCalleeParams(node);
         const printArg = (a, at) => this.rustNativeMapArgumentSlot(calleeParams, at) !== void 0 ? this.rustMapArgumentText(a, 0) : this.rustNativeStrVecArgumentSlot(calleeParams, at) ? this.rustStrVecArgumentText(a, 0) : this.rustNativeBoolArgumentSlot(calleeParams, at) ? this.rustBoolArgumentText(a, 0) : this.printNode(a, 0);
-        const printArgs = (list, from = 0) => list.map((a, i) => printArg(a, from + i)).join(", ");
+        const printArgs = (list, from = 0) => list.map((a, i) => this.rustWsWatchSlot(node, from + i) ? this.rustWsWatchSlotText(a, this.printNode(a, 0)) : printArg(a, from + i)).join(", ");
         const requiredArgs = printArgs(args.slice(0, sig.requiredCount));
         const reqPart = requiredArgs ? `${requiredArgs}, ` : "";
         return `self.${methodName}(${reqPart}&[${printArgs(args.slice(sig.requiredCount), sig.requiredCount)}])`;
@@ -58406,7 +58412,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const args = this.rustPrintedArgs(node, identation);
     if (args.length < fixed || args.length > 0 && args[args.length - 1].startsWith("&["))
       return void 0;
-    const cloned = args.map((a, at) => this.rustWsWatchSlot(node, at) && this.rustWsStrKey(node.arguments[at]) ? this.rustWsKeyText(node.arguments[at]) : at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== void 0 ? a : this.rustSliceArgText(a));
+    const cloned = args.map((a, at) => this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== void 0 ? a : this.rustSliceArgText(a));
     return `${receiver}.${methodName}(${cloned.slice(0, fixed).join(", ")}${fixed > 0 ? ", " : ""}&[${cloned.slice(fixed).join(", ")}])`;
   }
   rustSliceArgText(a) {
@@ -63635,6 +63641,82 @@ ${iden}}`;
       return void 0;
     const at = Array.from(call.arguments).indexOf(n);
     return at === 1 ? "lend" : at === 3 ? "clone" : void 0;
+  }
+  rustWsUrlLocal(declaration) {
+    if (declaration === void 0 || !isVariableDeclaration3(declaration) || !isIdentifier3(declaration.name))
+      return false;
+    let known = this.rustWsUrlLocals.get(declaration);
+    if (known === void 0) {
+      known = false;
+      try {
+        known = this.rustWsUrlLocalUncached(declaration);
+      } catch (e) {
+        known = false;
+      }
+      this.rustWsUrlLocals.set(declaration, known);
+    }
+    return known;
+  }
+  rustWsUrlLocalUncached(declaration) {
+    const list = declaration.parent;
+    if (list?.kind !== SyntaxKind7.VariableDeclarationList || list.declarations.length !== 1 || list.parent?.kind !== SyntaxKind7.VariableStatement)
+      return false;
+    if (!this.rustWsUrlRead(declaration.initializer))
+      return false;
+    const scope = this.rustEnclosingFunction(declaration);
+    if (scope === void 0 || isSourceFile5(scope))
+      return false;
+    let uses = 0;
+    const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      const call = n.parent;
+      if (this.rustEnclosingFunction(n) !== scope || !isCallExpression6(call) || call.expression === n || call.arguments[0] !== n || !this.rustWsWatchSlot(call, 0))
+        return false;
+      uses++;
+      return true;
+    });
+    return ok && uses > 0 && !this.rustWsUrlDeclTooLong(declaration);
+  }
+  /** `this.urls[k1][k2]..` (through parens / `as` casts) with literal keys: a url string, or Null when absent. */
+  rustWsUrlRead(init) {
+    let node = this.rustSkipWrappers(init);
+    let depth = 0;
+    while (node !== void 0 && isElementAccessExpression4(node)) {
+      if (!isStringLiteral3(node.argumentExpression))
+        return false;
+      node = this.rustSkipWrappers(node.expression);
+      depth++;
+    }
+    return depth > 0 && node !== void 0 && isPropertyAccessExpression3(node) && node.expression.kind === SyntaxKind7.ThisKeyword && isIdentifier3(node.name) && node.name.text === "urls";
+  }
+  rustWsUrlDeclTooLong(declaration) {
+    let depth = 0;
+    for (let up = declaration.parent; up !== void 0; up = up.parent)
+      if (isBlock4(up))
+        depth++;
+    return depth * 4 + `let mut ${declaration.name.text}: Option<String> = ${this.printNode(declaration.initializer, 0).trim()}.as_str().map(str::to_owned);`.length > 360;
+  }
+  rustWsUrlLocalOf(node) {
+    if (node === void 0 || !isIdentifier3(node) || this.checkerOrUndefined() === void 0)
+      return false;
+    const declaration = this.rustDeclaredNode(node);
+    return declaration !== void 0 && declaration.name !== node && this.rustWsUrlLocal(declaration);
+  }
+  printWsUrlLocalDeclaration(declaration, varName, indent) {
+    if (!this.rustWsUrlLocal(declaration))
+      return void 0;
+    return `${indent}let mut ${varName}: Option<String> = ${this.printNode(declaration.initializer, 0).trim()}.as_str().map(str::to_owned)`;
+  }
+  /** A `watch` url / hash slot takes `impl Into<Option<&str>>`: a string local or literal as `&str`, anything else lent as `&Value`. */
+  rustWsWatchSlotText(arg, printed) {
+    const inner = this.unwrapParens(arg);
+    if (this.rustWsStrKey(inner) || isStringLiteral3(inner) && !(inner.text in this.StringLiteralReplacements))
+      return this.rustWsKeyText(inner);
+    const kind = isIdentifier3(inner) ? this.rustScalarIdentifierKind(inner) : void 0;
+    if (kind === "ostr")
+      return `${super.printIdentifier(inner)}.as_deref()`;
+    if (kind === "str")
+      return `${super.printIdentifier(inner)}.as_str()`;
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(printed) ? `&${printed}` : `&(${printed})`;
   }
   rustBuiltListLocal(declaration) {
     if (declaration.name?.kind !== SyntaxKind7.Identifier)

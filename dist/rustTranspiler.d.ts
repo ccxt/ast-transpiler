@@ -1707,6 +1707,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
     printRustLentListBox(node: any, text: string): string | undefined;
     rustWatchHashListSlot(call: any, n: any): 'clone' | 'lend' | undefined;
+    private rustWsUrlLocals;
+    rustWsUrlLocal(declaration: any): boolean;
+    rustWsUrlLocalUncached(declaration: any): boolean;
+    /** `this.urls[k1][k2]..` (through parens / `as` casts) with literal keys: a url string, or Null when absent. */
+    rustWsUrlRead(init: any): boolean;
+    rustWsUrlDeclTooLong(declaration: any): boolean;
+    rustWsUrlLocalOf(node: any): boolean;
+    printWsUrlLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
+    /** A `watch` url / hash slot takes `impl Into<Option<&str>>`: a string local or literal as `&str`, anything else lent as `&Value`. */
+    rustWsWatchSlotText(arg: any, printed: string): string;
     private rustBuiltLists;
     rustBuiltListLocal(declaration: any): boolean;
     /** `x = this.m(.., x, ..)` naming `x` only there and on the left: the old list moves into the call before the write. */
