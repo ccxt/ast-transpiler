@@ -4462,6 +4462,7 @@ export class RustTranspiler extends BaseTranspiler {
         if ((kind === 'bool' || kind === 'obool') && this.rustIdentifierUseIsCondition(n)) return 'cond';
         if (kind === 'str' || kind === 'ostr') { const fieldForm = this.rustFieldKeyUseForm(n); if (fieldForm !== undefined) return fieldForm; }
         if ((kind === 'str' || kind === 'ostr') && this.rustWsKeyUse(n)) return 'targ';
+        if ((kind === 'str' || kind === 'ostr') && this.rustWsSubscriptionWriteValue(n)) return 'box';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -4571,12 +4572,12 @@ export class RustTranspiler extends BaseTranspiler {
         return (name === 'future' || name === 'reusableFuture') && call.arguments[0]?.kind !== SyntaxKind.SpreadElement && this.rustCallsRuntimeHandle(call);
     }
 
-    /** `this.watch(url, hash, ..)` / `this.watchMultiple(url, ..)`: the runtime takes `url` and the single hash as `impl Into<Value>`. */
+    /** `this.watch(url, hash, message, subscribeHash, ..)` / `this.watchMultiple(url, ..)`: url and hashes are `impl Into<Option<&str>>`. */
     rustWsWatchSlot(call, at: number): boolean {
         const callee: any = call.expression;
         if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
         const name = String(callee.name.text);
-        if (!(at === 0 || (at === 1 && name === 'watch')) || (name !== 'watch' && name !== 'watchMultiple') || call.arguments.length < 2) return false;
+        if (!(at === 0 || ((at === 1 || at === 3) && name === 'watch')) || (name !== 'watch' && name !== 'watchMultiple') || call.arguments.length < 2) return false;
         return this.rustCalleeIsRuntimeBase(call);
     }
 
@@ -7516,6 +7517,7 @@ export class RustTranspiler extends BaseTranspiler {
             const methodName = expr.name.text;
             const sig = this.methodSignatures[methodName];
             if (sig) {
+                const watchCall = this.printWsWatchCall(node, 'self', methodName, identation); if (watchCall !== undefined) return watchCall;
                 const calleeParams = this.rustCalleeParams(node);
                 const printArg = (a, at) => this.rustVenueStrSlot(calleeParams, at) !== undefined ? this.rustVenueStrArgText(a, this.rustVenueStrSlot(calleeParams, at), 0) : this.rustNativeMapArgumentSlot(calleeParams, at) !== undefined
                     ? this.rustMapArgumentText(a, 0)
@@ -7600,6 +7602,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // `receiver.m(a0..a{fixed-1}, &[rest])`; bare locals are cloned so a local reused by a later call is not moved.
     printOptionalArgsSliceCall(node, receiver: string, methodName: string, fixed: number, identation: number): string | undefined {
+        const watchCall = this.printWsWatchCall(node, receiver, methodName, identation); if (watchCall !== undefined) return watchCall;
         const args = this.rustPrintedArgs(node, identation);
         if (args.length < fixed || (args.length > 0 && args[args.length - 1].startsWith('&['))) return undefined;
         const params = this.rustCalleeParams(node);
@@ -12961,14 +12964,13 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     // ── watch hash lists (rustWatchHashListSlot) ──
-    // `watch_multiple` takes its message hashes as `impl Into<Value>`, so a built hash list is lent there (`&x`);
-    // as the optional subscribe hashes it passes its shared handle, never its elements.
+    // `watch_multiple` takes its message and subscribe hashes as `impl Into<Value>`, so a built hash list is lent there (`&x`).
     rustWatchHashListSlot(call: any, n: any): 'clone' | 'lend' | undefined {
         if (!isCallExpression(call) || call.expression === n || !this.rustWsWatchSlot(call, 0)) return undefined;
         const callee: any = call.expression;
         if (!isPropertyAccessExpression(callee) || String(callee.name.text) !== 'watchMultiple') return undefined;
         const at = Array.from(call.arguments).indexOf(n);
-        return at === 1 ? 'lend' : (at === 3 ? 'clone' : undefined);
+        return at === 1 || at === 3 ? 'lend' : undefined;
     }
 
     // ── ws url locals (rustWsUrlLocal / rustWsUrlLocalOf / printWsUrlLocalDeclaration) ──
@@ -13045,6 +13047,52 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr') return `${super.printIdentifier(inner)}.as_deref()`;
         if (kind === 'str') return `${super.printIdentifier(inner)}.as_str()`;
         return /^[A-Za-z_][A-Za-z0-9_]*$/.test(printed) ? `&${printed}` : `&(${printed})`;
+    }
+
+    // ── watch positionals (printWsWatchCall / rustWsWatchDictSlot / rustWsSubscriptionWriteValue) ──
+    // `watch(url, hash, message, subscribe_hash, subscription)` and `watch_multiple(url, hashes, message, subscribe_hashes,
+    // subscription)` take every parameter by position: an omitted one is `Value::Null`, an omitted subscribe hash `None`.
+    printWsWatchCall(node: any, receiver: string, methodName: string, identation: number): string | undefined {
+        if (receiver !== 'self' || (methodName !== 'watch' && methodName !== 'watchMultiple') || node.arguments.length > 5 || !this.rustWsWatchSlot(node, 0)) return undefined;
+        const printed = this.rustPrintedArgs(node, identation);
+        const single = methodName === 'watch';
+        const slots = [0, 1, 2, 3, 4].map((at) => {
+            const arg: any = node.arguments[at];
+            if (arg === undefined) return at === 3 && single ? 'None::<&str>' : 'Value::Null';
+            if (!this.rustWsWatchSlot(node, at)) return this.rustSliceArgText(printed[at]);
+            return at > 0 && this.rustWsNumberSlot(arg) ? this.rustWsNumberSlotText(arg, printed[at]) : this.rustWsWatchSlotText(arg, printed[at]);
+        });
+        return `self.${methodName}(${slots.join(', ')})`;
+    }
+
+    /** A numeric or boolean hash argument: the runtime keys by its text, as `stringify_param` did. */
+    rustWsNumberSlot(arg: any): boolean {
+        const type: any = this.typeOfNodeIfAny(arg);
+        const kind = type === undefined ? undefined : this.primitiveKindOfType(type);
+        return kind === 'number' || kind === 'boolean';
+    }
+
+    rustWsNumberSlotText(arg: any, printed: string): string {
+        const inner: any = this.unwrapParens(arg);
+        if (isNumericLiteral(inner) && /^\d+$/.test(String(inner.text))) return `"${inner.text}"`;
+        if (inner.kind === SyntaxKind.TrueKeyword || inner.kind === SyntaxKind.FalseKeyword) return `"${inner.kind === SyntaxKind.TrueKeyword}"`;
+        const kind = isIdentifier(inner) ? this.rustScalarIdentifierKind(inner) : undefined;
+        if (kind !== undefined && kind.startsWith('o')) return `Value::from(${printed}).to_string().as_str()`;
+        return `${/^[A-Za-z_][A-Za-z0-9_]*$/.test(printed) ? printed : `(${printed})`}.to_string().as_str()`;
+    }
+
+    /** The message and subscription slots take `impl Into<Value>`: a dict local is lent there as its shared handle. */
+    rustWsWatchDictSlot(call: any, at: number): boolean {
+        if (at !== 2 && at !== 4) return false;
+        const name = String(call.expression?.name?.text ?? '');
+        return (name === 'watch' || name === 'watchMultiple') && this.rustWsWatchSlot(call, 0);
+    }
+
+    /** `client.subscriptions[k] = x`: the handle stores the boxed value, no nested container write. */
+    rustWsSubscriptionWriteValue(n: any): boolean {
+        const write: any = n.parent;
+        if (!isBinaryExpression(write) || write.right !== n || write.operatorToken.kind !== SyntaxKind.EqualsToken || !isElementAccessExpression(write.left)) return false;
+        return write.parent?.kind === SyntaxKind.ExpressionStatement && this.rustClientHandleAccess(write.left.expression)?.key === 'subscriptions';
     }
 
     // ── built lists (rustBuiltListLocal / rustBuiltListWriteSource / printBuiltListDeclaration / printBuiltListWrite / printBuiltListPush) ──
@@ -14073,6 +14121,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const at = Array.from(call.arguments ?? []).indexOf(arg);
         if (at < 0) return false;
+        if (this.rustWsWatchDictSlot(call, at)) return true;
         const params = this.rustTranspiledCalleeParams(call, String(call.expression.name.text));
         return params !== undefined && at < params.length && this.rustParamIsLentDict(params[at]);
     }

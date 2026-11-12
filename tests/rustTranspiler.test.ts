@@ -7482,9 +7482,8 @@ describe('rust message-hash string locals handed to the ws client', () => {
         expect(out).toContain('client.reusable_future(messageHash.as_str())');
         expect(out).toContain('client.future(messageHash.as_str())');
         expect(out).toContain('let mut url: String = format!(');
-        // a hash also read in the optional slice is lent as `&x[..]`, which keeps that read's clone
-        expect(out).toContain('self.watch(url.as_str(), &messageHash[..], &[');
-        expect(out).toContain('Value::from(messageHash.clone())]).await;');
+        expect(out).toContain('self.watch(url.as_str(), &messageHash[..], ');
+        expect(out).toMatch(/\}\), &messageHash\[\.\.\], Value::Null\)\.await;/);
     });
     test('negative: no hash or url local of these shapes keeps its box', () => {
         expect(out).not.toMatch(/let mut (messageHash|url): Value(?! = \1\.into\(\);)/);
@@ -8513,11 +8512,11 @@ describe('rust deep-extend heads and watch hash lists', () => {
         expect(merged).toContain('let mut extended: crate::value::Dict = ');
         expect(merged).toMatch(/self\.deepExtend\(extended, &\[/);
     });
-    test('a built hash list is lent as the message hashes and hands its shared handle as the subscribe hashes', () => {
+    test('a built hash list is lent as the message hashes and as the subscribe hashes', () => {
         const many = out.slice (out.indexOf ('fn watchMany'), out.indexOf ('fn kept'));
         expect(many).toContain('let mut messageHashes: crate::value::List = ');
-        expect(many).toContain('self.watchMultiple("u", &messageHashes, &[');
-        expect(many).toContain('Value::Arr(messageHashes.clone())]).await');
+        expect(many).toContain('self.watchMultiple("u", &messageHashes, ');
+        expect(many).toMatch(/\}\), &messageHashes, Value::Null\)\.await/);
         expect(many).not.toContain('messageHashes: Value');
     });
     test('negative: a deepExtend head handed on whole keeps its box', () => {
@@ -8559,6 +8558,46 @@ describe('rust ws url locals lent to watch', () => {
         const kept = out.slice (out.indexOf ('fn kept'));
         expect(kept).toContain('let mut url: Value = ');
         expect(kept).toMatch(/self\.watch\(&url, /);
+    });
+});
+
+describe('rust watch takes message and subscribe hash as positional parameters', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport default class Exchange {\n    urls: any = {};\n    extend (...args: any[]): any { return args[0]; }\n    watch (url: Str, messageHash: Str, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): any { return url; }\n    watchMultiple (url: Str, messageHashes: string[], message: any = undefined, subscribeHashes: Strings = undefined, subscription: any = undefined): any { return url; }\n}\n',
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    async one (symbol: string, params = {}) {\n        const url = this.urls['api']['ws'];\n        const messageHash = 'ticker:' + symbol;\n        const request: Dict = { 'op': 'sub' };\n        const message = this.extend (request, params);\n        return await this.watch (url, messageHash, message, messageHash);\n    }\n" +
+            "    async two (symbol: string) {\n        const url = this.urls['api']['ws'];\n        return await this.watch (url, symbol);\n    }\n" +
+            "    async three (id: number) {\n        const url = this.urls['api']['ws'];\n        return await this.watch (url, 'auth', {}, id);\n    }\n" +
+            "    async many (hashes: string[], params = {}) {\n        const url = this.urls['api']['ws'];\n        const request: Dict = { 'op': 'sub' };\n        const message = this.extend (request, params);\n        return await this.watchMultiple (url, hashes, message, hashes);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-wspos-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the message dict is lent and the subscribe hash is a str, with no slice', () => {
+        const one = out.slice (out.indexOf ('fn one'), out.indexOf ('fn two'));
+        expect(one).toContain('let mut message: crate::value::Dict = ');
+        expect(one).toMatch(/self\.watch\(url\.as_deref\(\), &messageHash\[\.\.\], &message, &messageHash\[\.\.\], Value::Null\)/);
+    });
+    test('omitted trailing parameters print as null / None', () => {
+        const two = out.slice (out.indexOf ('fn two'), out.indexOf ('fn three'));
+        expect(two).toContain('Value::Null, None::<&str>, Value::Null)');
+    });
+    test('a numeric subscribe hash is keyed by its decimal text', () => {
+        const three = out.slice (out.indexOf ('fn three'), out.indexOf ('fn many'));
+        expect(three).toContain('id.to_string().as_str(), Value::Null)');
+    });
+    test('watchMultiple lends the message dict and both hash lists', () => {
+        const many = out.slice (out.indexOf ('fn many'));
+        expect(many).toContain('let mut message: crate::value::Dict = ');
+        expect(many).toMatch(/self\.watchMultiple\(url\.as_deref\(\), \S+, &message, \S+, Value::Null\)/);
+        expect(many.slice (many.indexOf ('self.watchMultiple'))).not.toContain('&[');
     });
 });
 
