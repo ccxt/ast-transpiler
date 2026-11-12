@@ -204,7 +204,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
     | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -216,7 +216,10 @@ export interface RustMethodSignature {
 // The typed parameter kinds a dispatch arm decodes from `args[i]` and a forwarder from its `Value` slot.
 const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist' ]);
 // a native return a by-name arm boxes back to `Value`
-const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct' ]);
+const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct' ]);
+
+// the native returns of the typed-return base methods, boxed back with `Value::from` in each arm they had as `-> Value`
+const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr' ]);
 
 export const rustDispatch = {
     isTyped: (kind: string): boolean => RUST_DISPATCH_TYPED_KINDS.has(kind),
@@ -273,6 +276,8 @@ export const rustDispatch = {
     },
     /** A sync method with a native return still gets a by-name arm (it boxes back inside the arm). */
     isNativeReturn: (ret: string): boolean => RUST_DISPATCH_NATIVE_RETURNS.has(ret),
+    /** A typed-return base method (or override): it keeps every arm it had as `-> Value`, sync ws handler arms too. */
+    isKeptReturn: (ret: string): boolean => RUST_DISPATCH_KEPT_RETURNS.has(ret),
     /** Every `args[i]` of a by-name dispatch arm, one conversion per parameter kind. */
     args: (kinds: string[]): string[] => kinds.map((kind, i) => rustDispatch.arg(kind, i)),
     /** A typed method's `Result<T>` boxed back to the dispatcher's `Value`. */
@@ -280,7 +285,7 @@ export const rustDispatch = {
         const ret = isTyped === true ? 'typed' : isTyped === false || isTyped === undefined ? 'value' : isTyped;
         switch (ret) {
         case 'typed': case 'ostr': case 'struct': return `crate::types::IntoRaw::into_raw(${call})`;
-        case 'int': case 'string': case 'bool': return `crate::Value::from(${call})`;
+        case 'oint': case 'keptostr': case 'keptint': case 'keptstr': case 'int': case 'string': case 'bool': return `crate::Value::from(${call})`;
         case 'dict': return `crate::Value::Dict(${call})`;
         case 'list': return `crate::Value::Arr(${call})`;
         case 'optdict': return `${call}.map_or(crate::Value::Null, crate::Value::Dict)`;
@@ -4000,6 +4005,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isPropertyAccessExpression(callee) || !this.rustScalarReceiver(callee.expression)) return undefined;
         const name = String(callee.name.text);
         const args: any[] = Array.from(node.arguments ?? []);
+        // a numeric-parameter `parseToInt` is an `Int` for every input: `i64`, ahead of its `Option<i64>` return
+        if (this.rustVenueParseToInt(node)) return 'int';
+        const typedReturn = this.rustBaseTypedReturnKind(node); if (typedReturn !== undefined) return typedReturn;
         if (this.rustClockCall(node)) return 'int';
         if (this.rustStrRuntimeCall(node)) return 'str';
         const baseReturn = this.rustBaseReturnScalarKind(node, name);
@@ -4109,6 +4117,96 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustStrRuntimeBare.has(node) || !this.rustStrRuntimeCall(node)) return undefined;
         const text = this.rustStrRuntimeBareText(node, identation);
         return this.rustStrRuntimeFormatOperand(node) ? text : `Value::from(${text})`;
+    }
+
+    // ── typed returns of base methods (rustBaseTypedReturnKind / printRustBaseTypedReturnCall) ──
+    // Generated base methods (and their overrides) print the native return their TS declaration names;
+    // the hand-written runtime methods return the same native types. Each call boxes once at a `Value` slot.
+    private static readonly RUST_BASE_TYPED_METHODS: { [name: string]: [ string, string ] } = {
+        parseToInt: [ 'number', 'oint' ], incrementingNonce: [ 'int', 'int' ], symbol: [ 'string', 'str' ],
+        findTimeframe: [ 'Str', 'ostr' ], networkIdToCode: [ 'Str', 'ostr' ], requestId: [ 'int', 'int' ],
+    };
+
+    private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
+        milliseconds: 'int', parse8601: 'oint', numberToString: 'ostr', omitZero: 'ostr', parseTimeframe: 'int',
+    };
+
+    private rustBaseTypedBare = new Set<Node>();
+
+    /** The native kind a method declaration returns under the table, else undefined. */
+    rustMethodTypedReturnKind(node): string | undefined {
+        if (node?.kind !== SyntaxKind.MethodDeclaration || node.body === undefined || this.isAsyncFunction(node) || !isIdentifier(node.name)) return undefined;
+        const entry = RustTranspiler.RUST_BASE_TYPED_METHODS[String(node.name.text)];
+        if (entry === undefined || String(node.type?.getText?.() ?? '').trim() !== entry[0]) return undefined;
+        return /ts[\\/]src[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? '')) ? entry[1] : undefined;
+    }
+
+    /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
+    rustBaseTypedReturnKind(expr): string | undefined {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || this.checkerOrUndefined() === undefined) return undefined;
+        const name = String(node.expression.name.text);
+        if (RustTranspiler.RUST_BASE_TYPED_METHODS[name] === undefined && RustTranspiler.RUST_BASE_TYPED_RUNTIME[name] === undefined) return undefined;
+        let member: any;
+        try {
+            member = this.getChecker().getSymbolAtLocation(node.expression.name)?.valueDeclaration;
+        } catch (e) {
+            return undefined;
+        }
+        member = member?.resolve?.() ?? member;
+        if (member === undefined) return undefined;
+        if (member.kind === SyntaxKind.MethodDeclaration) return this.rustMethodTypedReturnKind(member);
+        const base = RustTranspiler.RUST_BASE_TIER_FILE.test(String(member.getSourceFile?.()?.fileName ?? ''));
+        return base && member.kind === SyntaxKind.PropertyDeclaration ? RustTranspiler.RUST_BASE_TYPED_RUNTIME[name] : undefined;
+    }
+
+    /** The unboxed call text. */
+    rustBaseTypedBareText(node): string {
+        this.rustBaseTypedBare.add(node);
+        try {
+            return this.printNode(node, 0).trim();
+        } finally {
+            this.rustBaseTypedBare.delete(node);
+        }
+    }
+
+    /** The call as a `kind` value: the bare text, or `Some(..)` of a non-optional one. */
+    rustBaseTypedText(kind: string, expr): string | undefined {
+        const node: any = this.unwrapParens(expr);
+        const own = this.rustBaseTypedReturnKind(node);
+        if (own === undefined || (own !== kind && `o${own}` !== kind)) return undefined;
+        const text = this.rustBaseTypedBareText(node);
+        if (own === kind) return text;
+        return `o${own}` === kind ? `Some(${text})` : undefined;
+    }
+
+    /** Call hook: a `Value` position takes the native result boxed once. */
+    printRustBaseTypedReturnCall(node): string | undefined {
+        if (this.rustBaseTypedBare.has(node)) return undefined;
+        const kind = this.rustBaseTypedReturnKind(node);
+        if (kind === undefined) return undefined;
+        const text = this.rustBaseTypedBareText(node);
+        return kind === 'ostr' ? `Value::from(${text})` : this.rustScalarBoxText(kind, text, node);
+    }
+
+    /** `return x` in a typed method: the native value, converting a `Value` once. */
+    printRustBaseTypedReturn(fn, exp): string | undefined {
+        const kind = this.rustMethodTypedReturnKind(fn);
+        if (kind === undefined) return undefined;
+        const inner: any = this.unwrapParens(exp);
+        if (this.literalKindOfNode(inner) === 'null') return kind.startsWith('o') ? 'None' : undefined;
+        const local = isIdentifier(inner) ? this.rustScalarLocalOf(inner)?.kind : undefined;
+        if (local === kind) return super.printIdentifier(inner);
+        if (local !== undefined && `o${local}` === kind) return `Some(${super.printIdentifier(inner)})`;
+        const callKind = this.rustBaseTypedReturnKind(inner);
+        if (callKind !== undefined && `o${kind}` === callKind) return `${this.rustBaseTypedBareText(this.unwrapParens(inner))}.unwrap_or_default()`;
+        const native = this.rustBaseTypedText(kind, inner) ?? (local === undefined ? this.rustScalarNativeText(kind, inner) : undefined);
+        if (native !== undefined) return native;
+        const text = this.printNode(exp, 0).trim();
+        if (kind === 'int') return `${text}.as_i64().unwrap_or_default()`;
+        if (kind === 'oint') return `${text}.as_i64()`;
+        if (kind === 'ostr') return `${text}.as_str().map(str::to_owned)`;
+        return `${text}.as_str().unwrap_or_default().to_owned()`;
     }
 
     // ── clock and cast initialisers (rustClockCall / rustStrCastCall) ──
@@ -4356,7 +4454,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarNeedsNativeUse(init): boolean {
         const node: any = this.unwrapParens(init);
         if (this.rustElementReadScalarKind(node) !== undefined || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueParseToInt(node) || this.rustVenueTypedCall(node) !== undefined || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustStrRuntimeCall(node)) return true;
-        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return false;
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || this.rustBaseTypedReturnKind(node) !== undefined) return false;
         return RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(node.expression.name.text)] === undefined && this.rustDerivedScalarKind(node) !== undefined;
     }
 
@@ -4392,7 +4490,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  `-> Value` signature and dispatch arm, and its result holds an `Int`, read once as an `i64`. */
     rustVenueIntCall(node): boolean {
         if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)
-            || node.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+            || node.expression.expression.kind !== SyntaxKind.ThisKeyword || this.rustBaseTypedReturnKind(node) !== undefined) return false;
         const declaration: any = this.rustScalarCallee(node);
         if (declaration === undefined || !isMethodDeclaration(declaration) || this.isAsyncFunction(declaration)) return false;
         const file = String(declaration.getSourceFile?.()?.fileName ?? '');
@@ -4488,7 +4586,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node === undefined) return undefined;
         const awaited = node.kind === SyntaxKind.AwaitExpression;
         const call: any = awaited ? this.unwrapParens(node.expression) : node;
-        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword || this.rustBaseTypedReturnKind(call) !== undefined) return undefined;
         const declaration: any = this.rustScalarCallee(call);
         if (declaration === undefined || !isMethodDeclaration(declaration) || this.isAsyncFunction(declaration) !== awaited) return undefined;
         let kind = this.rustVenueTypedDecisions.get(declaration);
@@ -4602,6 +4700,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustDictWriteValue(n)) return 'box';
         if (isReturnStatement(parent) && parent.expression === n) {
             const fn: any = findAncestor(parent.parent, isFunctionLike);
+            const typedReturn = this.rustMethodTypedReturnKind(fn); if (typedReturn !== undefined) return typedReturn === kind || typedReturn === `o${kind}` ? 'native' : undefined;
             return this.rustNativeStrReturnKind(fn) === 'str' || this.rustStrReturnSignature(fn, n) ? undefined : 'box';
         }
         if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.PlusToken) {
@@ -5264,6 +5363,7 @@ export class RustTranspiler extends BaseTranspiler {
         const base = optional ? kind.slice(1) : kind;
         const wrap = (t: string) => optional ? `Some(${t})` : t;
         if (this.literalKindOfNode(node) === 'null') return optional ? 'None' : undefined;
+        if (this.rustBaseTypedReturnKind(node) !== undefined && !(kind === 'int' && this.rustVenueParseToInt(node))) return this.rustBaseTypedText(kind, node);
         const paramText = this.rustOptParamText(kind, node); if (paramText !== undefined) return paramText;
         if (kind === 'oint' && this.rustLimitCall(node)) return this.rustLimitCallText(node);
         if (isConditionalExpression(node)) {
@@ -5306,6 +5406,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (clock !== undefined) return wrap(`format!("{}", ${this.rustScalarNativeText('int', clock)})`);
         const fallback: any = node.arguments[node.arguments.length - 1];
         const defaulted = this.rustScalarValueKind(node, true) === base;
+        if (kind === 'int' && this.rustVenueParseToInt(node) && this.rustBaseTypedReturnKind(node) === 'oint') return `${this.rustBaseTypedBareText(node)}.unwrap_or_default()`;
         if (kind === 'int' && (this.rustVenueIntCall(node) || this.rustVenueParseToInt(node))) return `${text}.as_i64().unwrap_or_default()`;
         if (kind === 'str' && defaulted) return `${text}.as_str().unwrap_or(${this.quotedStringLiteral(fallback.text)}).to_string()`;
         if (kind === 'int' && defaulted) return `${text}.as_i64().unwrap_or(${this.rustScalarIntLiteral(fallback)})`;
@@ -5581,7 +5682,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (own === undefined || (kind !== own && kind !== `o${own}` && !(kind === 'num' && own === 'int'))) return undefined;
         const name = String(node.expression.name.text);
         let text: string;
-        if (RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name)) text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or_default()`;
+        if (this.rustBaseTypedReturnKind(node) === 'int') text = this.rustBaseTypedBareText(node);
+        else if (RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name)) text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or_default()`;
         else if (RustTranspiler.RUST_SCALAR_INT_HELPERS[name] !== undefined) text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or(${this.rustScalarIntLiteral(node.arguments[node.arguments.length - 1])})`;
         else {
             const parts = Array.from(node.arguments).map((a) => this.rustScalarOperandText(own, a));
@@ -6834,7 +6936,9 @@ export class RustTranspiler extends BaseTranspiler {
     };
 
     rustRecordSignature(node: any, name: string, params: Array<{ name: string, rustType: string }>, returnType: string): void {
-        const ret: RustDispatchReturnKind = RustTranspiler.RUST_DISPATCH_RETURN_KINDS[returnType] ?? (returnType.startsWith('crate::Result<') ? 'typed' : 'other');
+        let ret: RustDispatchReturnKind = RustTranspiler.RUST_DISPATCH_RETURN_KINDS[returnType] ?? (returnType.startsWith('crate::Result<') ? 'typed' : 'other');
+        // a base method of the typed-return table keeps its by-name arm: `Option<i64>` / `Option<String>` box once inside it
+        if (this.rustMethodTypedReturnKind(node) !== undefined) ret = ({ 'Option<i64>': 'oint', 'Option<String>': 'keptostr', 'i64': 'keptint', 'String': 'keptstr' } as Record<string, RustDispatchReturnKind>)[returnType] ?? ret;
         this.rustSignatureTable.set(node, {
             file: node.getSourceFile?.(),
             name: this.toSnakeCaseName(name),
@@ -7615,6 +7719,7 @@ export class RustTranspiler extends BaseTranspiler {
         // An internal `: Str` method that proves the conversion prints the
         // native `Option<String>` (its returns run the conversion; callers
         // box back where a `Value` is still needed).
+        const typedReturn = this.rustMethodTypedReturnKind(node); if (typedReturn !== undefined) return RustTranspiler.RUST_SCALAR_TYPES[typedReturn];
         if (this.rustNativeStrReturnKind(node) === 'str') {
             return 'Option<String>';
         }
@@ -7997,6 +8102,7 @@ export class RustTranspiler extends BaseTranspiler {
         const scalarMethod = this.printRustScalarMethodCall(node); if (scalarMethod !== undefined) return scalarMethod;
         const limitCall = this.rustLimitCallText(node); if (limitCall !== undefined) return `Value::from(${limitCall})`;
         const strRuntime = this.printRustStrRuntimeCall(node, identation); if (strRuntime !== undefined) return strRuntime;
+        const typedReturn = this.printRustBaseTypedReturnCall(node); if (typedReturn !== undefined) return typedReturn;
         const arithCall = this.printRustArithCall(node); if (arithCall !== undefined) return arithCall;
         const marketRead = this.printTypedMarketRead(node);
         if (marketRead !== undefined) return marketRead;
@@ -10984,6 +11090,7 @@ export class RustTranspiler extends BaseTranspiler {
         // expression is still the `Value` box, so convert it back to the
         // native payload (a nullish literal is the `None` arm).
         const fn: any = findAncestor(node.parent, isFunctionLike);
+        const typedReturn = this.printRustBaseTypedReturn(fn, exp); if (typedReturn !== undefined) return `${idn}return ${typedReturn};`;
         if (this.rustNativeStrReturnKind(fn) === 'str' && this.rustStrReturnValueConverts(exp)) {
             if (this.literalKindOfNode(this.unwrapParensNode(exp)) === 'null') return `${idn}return None;`;
             const local = this.rustVenueStrReturnLocal(this.unwrapParensNode(exp));

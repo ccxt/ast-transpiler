@@ -44,6 +44,12 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; type: string; settle: Str; linear: boolean | undefined; info: any }\nexport interface Order { id: string; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    async loadMarkets (reload = false, params: Dict = {}): Promise<Dict> {\n        return this.markets;\n    }\n    async fetchOrders (symbol: Str = undefined, params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchA (symbol: Str = undefined, params: Dict = {}) {\n        await this.loadMarkets ();\n        let market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n        }\n        return this.hold (params, market);\n    }\n    async fetchB (symbol: string, params: Dict = {}) {\n        let market = this.market (symbol);\n        if (market['type'] === 'swap') {\n            market = this.market ('x');\n        }\n        return this.hold ({ 'k': market['settle'], 'l': market['linear'], 'b': market['baseId'] }, market);\n    }\n    async fetchC (symbol: string, params: Dict = {}) {\n        const orders = await this.fetchOrders (symbol, params);\n        return this.hold (orders);\n    }\n}\n"
  },
+ "base-typed-returns": {
+  "ts/src/base/functions/time.ts": "// @ts-nocheck\nconst now = Date.now;\nconst milliseconds = now;\nconst parse8601 = (x): number => undefined;\nexport { milliseconds, parse8601 };\n",
+  "ts/src/base/functions/number.ts": "// @ts-nocheck\nfunction numberToString (x: any): string | undefined { return x; }\nfunction omitZero (s: string | undefined) { return s; }\nconst parseTimeframe = (timeframe: string | undefined): number => 60;\nexport { numberToString, omitZero, parseTimeframe };\n",
+  "ts/src/base/Exchange.ts": "import { milliseconds, parse8601 } from './functions/time.js';\nimport { numberToString, omitZero, parseTimeframe } from './functions/number.js';\nexport interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    milliseconds = milliseconds;\n    parse8601 = parse8601;\n    numberToString = numberToString;\n    omitZero = omitZero;\n    parseTimeframe = parseTimeframe;\n    markets: Dict = {};\n    hold (x: any): any { return x; }\n    parseToInt (number: any): number {\n        const stringifiedNumber = this.numberToString (number) as string;\n        return parseInt (stringifiedNumber);\n    }\n    symbol (symbol: Str): string {\n        return this.markets[symbol];\n    }\n    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): Str {\n        if (networkId === undefined) {\n            return undefined;\n        }\n        return this.markets[networkId];\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (entry: Dict, since: number) {\n        const code = this.parseToInt (entry['c']);\n        if (code === 0) {\n            return undefined;\n        }\n        const ts = this.parse8601 (entry['t']);\n        const duration = this.parseTimeframe ('1m') * 1000;\n        const sym = this.symbol (entry['s']);\n        const network = this.networkIdToCode (entry['n']);\n        return this.hold ({ 'c': code, 't': ts, 'd': duration, 's': sym, 'n': network, 'z': this.omitZero (entry['z']) });\n    }\n}\n"
+ },
  "venue-int-ids": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    options: Dict = {};\n    sum (a: any, b: any): any { return a + b; }\n    safeInteger (o: any, k: any, d: any = undefined): any { return o; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    requestId (): int {\n        const requestId: int = this.sum (this.safeInteger (this.options, 'requestId', 0), 1);\n        this.options['requestId'] = requestId;\n        return requestId;\n    }\n    subscribe () {\n        const requestId: int = this.requestId ();\n        const request: Dict = { 'id': requestId };\n        const subscription: Dict = { 'id': requestId };\n        return this.hold ([ request, subscription ]);\n    }\n    single () {\n        const once: int = this.requestId ();\n        return this.hold ({ 'id': once });\n    }\n}\n"
@@ -5218,18 +5224,47 @@ describe('rust typed tuple-destructure slots', () => {
     });
 });
 
+describe('typed returns of base methods', () => {
+    let out: string;
+    let base: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'base-typed-returns', 'ts/src/venue.ts')).content;
+        base = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'base-typed-returns', 'ts/src/base/Exchange.ts')).content;
+    });
+    test('a table method prints the native return its TS declaration names', () => {
+        expect(base).toMatch(/pub fn parseToInt\(&self, number: Value\) -> Option<i64> \{/);
+        expect(base).toMatch(/pub fn symbol\(&self, [^)]*\) -> String \{/);
+        expect(base).toMatch(/pub fn networkIdToCode\(&self, optional_args: &\[Value\]\) -> Option<String> \{/);
+        expect(base).toContain('return None;');
+        expect(base).toMatch(/return parse_int\([^;]*\)\.as_i64\(\);|return [^;]*\.as_i64\(\);/);
+    });
+    test('locals from typed returns are native and box once at Value slots', () => {
+        expect(out).toMatch(/let mut code: Option<i64> = self\.parseToInt\([^;]*\);/);
+        expect(out).toMatch(/let mut ts: Option<i64> = self\.parse8601\([^;]*\);/);
+        expect(out).toMatch(/let mut sym: String = self\.symbol\([^;]*\);/);
+        expect(out).toMatch(/let mut network: Option<String> = self\.networkIdToCode\([^;]*\);/);
+        expect(out).toContain('Value::from(code)');
+        expect(out).toContain('Value::from(sym)');
+        expect(out).toContain('network.map(Value::from).unwrap_or(Value::Null)');
+        expect(out).toMatch(/Value::from\(self\.omitZero\([^;]*\)\)/);
+        expect(out).toContain('let mut duration: i64 = ((self.parseTimeframe(');
+        expect(out).not.toMatch(/let mut (code|ts|sym|network): Value/);
+    });
+});
+
 describe('request id locals from a venue int method', () => {
     let out: string;
     beforeAll(() => {
         out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'venue-int-ids', 'ts/src/venue.ts')).content;
     });
-    test('a venue int result boxed at two slots is an i64 local', () => {
-        expect(out).toContain('let mut requestId: i64 = self.requestId().as_i64().unwrap_or_default();');
+    test('a requestId override returns i64 and its locals take it as-is', () => {
+        expect(out).toMatch(/pub fn requestId\(&self\) -> i64 \{/);
+        expect(out).toContain('return requestId.as_i64().unwrap_or_default();');
+        expect(out).toContain('let mut requestId: i64 = self.requestId();');
         expect(out).toContain('Value::from(requestId)');
     });
-    test('a venue int result boxed once is an i64 local boxed at the hand-off', () => {
-        expect(out).toContain('let mut once: i64 = self.requestId().as_i64().unwrap_or_default();');
-        expect(out).toContain('Value::from(once)');
+    test('a requestId result boxed once is still the i64 the method returns', () => {
+        expect(out).toContain('let mut once: i64 = self.requestId();');
     });
 });
 
@@ -5239,8 +5274,9 @@ describe('scalar locals from venue methods with a declared scalar return', () =>
         out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'venue-scalar-returns', 'ts/src/venue.ts')).content;
     });
     test('an int venue method keeps its Value signature and the local reads it once as i64', () => {
-        expect(out).toMatch(/pub fn requestId\(&self\) -> Value \{/);
-        expect(out).toContain('let mut requestId: i64 = self.requestId().as_i64().unwrap_or_default();');
+        expect(out).toMatch(/pub fn mixedId\(&self\) -> Value \{/);
+        expect(out).toContain('let mut other: i64 = self.mixedId().as_i64().unwrap_or_default();');
+        expect(out).toContain('let mut requestId: i64 = self.requestId();');
         expect(out).toContain('format!("{}", requestId)');
     });
     test('a native-Str venue method result is taken as the Option<String> it returns', () => {
@@ -5292,7 +5328,7 @@ describe('clock locals bound to the base time functions', () => {
         out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'clock-bound-function', 'ts/src/venue.ts')).content;
     });
     test('a base property bound to Date.now is still an i64 clock', () => {
-        expect(out).toContain('let mut now: i64 = self.milliseconds().as_i64().unwrap_or_default();');
+        expect(out).toContain('let mut now: i64 = self.milliseconds();');
         expect(out).toContain('(now - 1000)');
         expect(out).toContain('let mut stamp: String = format!("{}", self.seconds().as_i64().unwrap_or_default());');
     });
@@ -5347,14 +5383,16 @@ describe('scalar locals from declared callee returns and string-list element rea
         out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'derived-scalar-returns', 'ts/src/venue.ts')).content;
     });
     test('a declared Str / int return and a split element read are Option locals with native tests', () => {
-        expect(out).toMatch(/let mut timeframe: Option<String> = self\.findTimeframe\(.*\)\.as_str\(\)\.map\(str::to_owned\);/);
-        expect(out).toMatch(/let mut nonce: Option<i64> = self\.incrementingNonce\(\)\.as_i64\(\);/);
+        expect(out).toMatch(/let mut timeframe: Option<String> = self\.findTimeframe\([^;]*\);/);
+        expect(out).not.toMatch(/let mut timeframe: Option<String> = [^;]*\.as_str\(\)/);
+        expect(out).toContain('let mut nonce: i64 = self.incrementingNonce();');
         expect(out).toMatch(/let mut first: Option<String> = parts\.get\(0\)\.and_then\(Value::as_str\)\.map\(str::to_owned\);/);
         expect(out).toContain('if (timeframe.is_none()) {');
         expect(out).toContain('first.as_deref() == Some("a")');
     });
-    test('a local with only Value hand-offs takes its producer type and boxes at the hand-off', () => {
+    test('a typed-return result handed only to a Value slot is typed and boxed once there', () => {
         expect(out).toMatch(/let mut boxedOnly: Option<String> = self\.findTimeframe\(/);
+        expect(out).toContain('m.insert("b".to_string(), boxedOnly.map(Value::from).unwrap_or(Value::Null));');
         expect(out).toContain('let mut key: Option<String> = keys.get(0).and_then(Value::as_str).map(str::to_owned);');
         expect(out).toContain('return self.hold(key.map(Value::from).unwrap_or(Value::Null));');
     });
@@ -8767,7 +8805,7 @@ describe('locals stored once and boxed back', () => {
         const ids = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'venue-int-ids', 'ts/src/venue.ts')).content;
         expect(order).toContain('let mut once: i64 = (t * 2);');
         expect(order).toContain('m.insert("o".to_string(), Value::from(once));');
-        expect(ids).toContain('let mut once: i64 = self.requestId().as_i64().unwrap_or_default();');
+        expect(ids).toContain('let mut once: i64 = self.requestId();');
         expect(ids).not.toContain('let mut once: Value');
     });
     test('a string tuple slot returned as-is is an Option<String> moved into the return box', () => {
@@ -8833,7 +8871,7 @@ describe('per-venue scalar parameters', () => {
         expect(out).toContain('self.pad("x", 4, true)');
         expect(out).toContain('self.pad("y", 2, !true)');
         expect(out).toContain('if left {');
-        expect(out).toContain('let mut size: i64 = self.parseToInt(length).as_i64().unwrap_or_default();');
+        expect(out).toContain('let mut size: i64 = self.parseToInt(length).unwrap_or_default();');
         expect(out).toContain('pub fn width(&self, n: f64) -> Value {');
         expect(out).toContain('self.width(7.0)');
     });
@@ -8924,6 +8962,16 @@ describe('rust by-name dispatch signature table', () => {
             'crate::Value::from(self.m(x))',
         ]);
         expect([ 'dict', 'list', 'optdict', 'struct', 'ostr', 'int', 'string', 'bool' ].every(rustDispatch.isNativeReturn)).toBe(false);
+    });
+
+    test('a typed-return base method keeps its arm, its Option<i64> / Option<String> boxed once inside it', () => {
+        expect(rustDispatch.isNativeReturn('oint')).toBe(true);
+        expect(rustDispatch.isNativeReturn('keptostr')).toBe(true);
+        expect(rustDispatch.result('self.parse_to_int(x)', 'oint')).toBe('crate::Value::from(self.parse_to_int(x))');
+        expect(rustDispatch.result('self.find_timeframe(x)', 'keptostr')).toBe('crate::Value::from(self.find_timeframe(x))');
+        expect([ 'oint', 'keptostr', 'keptint', 'keptstr' ].every(rustDispatch.isKeptReturn)).toBe(true);
+        expect([ 'int', 'string', 'ostr', 'value', 'void' ].some(rustDispatch.isKeptReturn)).toBe(false);
+        expect(rustDispatch.result('self.request_id()', 'keptint')).toBe('crate::Value::from(self.request_id())');
     });
 
     test('a sync scalar or struct return keeps its arm (it was dropped as non-Value before)', () => {
