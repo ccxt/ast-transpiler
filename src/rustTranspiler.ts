@@ -13495,7 +13495,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (marker < 0 || (method.getStart?.() ?? method.pos) < marker) return false;
         const type: any = param.type;
         const typeName = type?.kind === SyntaxKind.TypeReference && isIdentifier(type.typeName) && type.typeArguments === undefined ? String(type.typeName.text) : '';
-        return RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName);
+        return RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName) || this.rustRowListTypeNode(type);
+    }
+
+    /** `Dict[]` / `object[]`, optionally `| undefined`: a list of rows, the same Value list a `List` holds. */
+    rustRowListTypeNode(type: any): boolean {
+        const members: any[] = type?.kind === SyntaxKind.UnionType ? Array.from(type.types) : [ type ];
+        const rows = members.filter((t: any) => t?.kind !== SyntaxKind.UndefinedKeyword && !(t?.kind === SyntaxKind.LiteralType && t.literal?.kind === SyntaxKind.NullKeyword));
+        if (rows.length !== 1 || rows[0]?.kind !== SyntaxKind.ArrayType) return false;
+        const element: any = rows[0].elementType;
+        return element?.kind === SyntaxKind.ObjectKeyword || (element?.kind === SyntaxKind.TypeReference && isIdentifier(element.typeName) && element.typeArguments === undefined && String(element.typeName.text) === 'Dict');
     }
 
     /** A call argument landing in a lent list parameter of the callee. */

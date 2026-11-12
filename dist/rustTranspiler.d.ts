@@ -1772,6 +1772,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustParamIsLentList(param: any): boolean;
     private static readonly RUST_LENT_LIST_TYPES;
     rustParamIsLentListUncached(param: any): boolean;
+    /** `Dict[]` / `object[]`, optionally `| undefined`: a list of rows, the same Value list a `List` holds. */
+    rustRowListTypeNode(type: any): boolean;
     /** A call argument landing in a lent list parameter of the callee. */
     rustLentListSlot(call: any, arg: any): boolean;
     /** `&x` for a shared list local lent to a lent list parameter. */

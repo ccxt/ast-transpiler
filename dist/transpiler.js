@@ -64146,7 +64146,16 @@ ${iden}}`;
       return false;
     const type = param.type;
     const typeName = type?.kind === SyntaxKind7.TypeReference && isIdentifier3(type.typeName) && type.typeArguments === void 0 ? String(type.typeName.text) : "";
-    return _RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName);
+    return _RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName) || this.rustRowListTypeNode(type);
+  }
+  /** `Dict[]` / `object[]`, optionally `| undefined`: a list of rows, the same Value list a `List` holds. */
+  rustRowListTypeNode(type) {
+    const members = type?.kind === SyntaxKind7.UnionType ? Array.from(type.types) : [type];
+    const rows = members.filter((t) => t?.kind !== SyntaxKind7.UndefinedKeyword && !(t?.kind === SyntaxKind7.LiteralType && t.literal?.kind === SyntaxKind7.NullKeyword));
+    if (rows.length !== 1 || rows[0]?.kind !== SyntaxKind7.ArrayType)
+      return false;
+    const element = rows[0].elementType;
+    return element?.kind === SyntaxKind7.ObjectKeyword || element?.kind === SyntaxKind7.TypeReference && isIdentifier3(element.typeName) && element.typeArguments === void 0 && String(element.typeName.text) === "Dict";
   }
   /** A call argument landing in a lent list parameter of the callee. */
   rustLentListSlot(call, arg) {
