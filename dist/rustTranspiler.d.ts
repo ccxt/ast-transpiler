@@ -65,7 +65,7 @@ interface RustScopeIndex {
     byName: Map<string, number[]> | undefined;
 }
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'other';
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -91,6 +91,8 @@ export declare const rustDispatch: {
     fromValue(kind: string, v: string): string;
     /** A sync method with a native return still gets a by-name arm (it boxes back inside the arm). */
     isNativeReturn: (ret: string) => boolean;
+    /** A typed-return base method (or override): it keeps every arm it had as `-> Value`, sync ws handler arms too. */
+    isKeptReturn: (ret: string) => boolean;
     /** Every `args[i]` of a by-name dispatch arm, one conversion per parameter kind. */
     args: (kinds: string[]) => string[];
     /** A typed method's `Result<T>` boxed back to the dispatcher's `Value`. */
@@ -509,6 +511,21 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrRuntimeLocalCostly(declaration: any): boolean;
     /** Call hook: the `String` result is boxed once (`Value::from`) wherever a `Value` is expected. */
     printRustStrRuntimeCall(node: any, identation: any): string | undefined;
+    private static readonly RUST_BASE_TYPED_METHODS;
+    private static readonly RUST_BASE_TYPED_RUNTIME;
+    private rustBaseTypedBare;
+    /** The native kind a method declaration returns under the table, else undefined. */
+    rustMethodTypedReturnKind(node: any): string | undefined;
+    /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
+    rustBaseTypedReturnKind(expr: any): string | undefined;
+    /** The unboxed call text. */
+    rustBaseTypedBareText(node: any): string;
+    /** The call as a `kind` value: the bare text, or `Some(..)` of a non-optional one. */
+    rustBaseTypedText(kind: string, expr: any): string | undefined;
+    /** Call hook: a `Value` position takes the native result boxed once. */
+    printRustBaseTypedReturnCall(node: any): string | undefined;
+    /** `return x` in a typed method: the native value, converting a `Value` once. */
+    printRustBaseTypedReturn(fn: any, exp: any): string | undefined;
     rustClockCall(node: any): boolean;
     rustVenueReturnTypesHas(node: any, name: string): boolean;
     /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */

@@ -51309,7 +51309,8 @@ function rustScopeNameTable(index) {
   return byName;
 }
 var RUST_DISPATCH_TYPED_KINDS = /* @__PURE__ */ new Set(["str", "optstr", "f64", "optf64", "opti64", "i64", "optstrvec", "strvecvec", "orderreqs", "params", "flag", "dict", "list", "optdict", "optlist"]);
-var RUST_DISPATCH_NATIVE_RETURNS = /* @__PURE__ */ new Set(["int", "string", "bool", "dict", "list", "optdict", "struct"]);
+var RUST_DISPATCH_NATIVE_RETURNS = /* @__PURE__ */ new Set(["oint", "keptostr", "keptint", "keptstr", "int", "string", "bool", "dict", "list", "optdict", "struct"]);
+var RUST_DISPATCH_KEPT_RETURNS = /* @__PURE__ */ new Set(["oint", "keptostr", "keptint", "keptstr"]);
 var rustDispatch = {
   isTyped: (kind) => RUST_DISPATCH_TYPED_KINDS.has(kind),
   /** Tail of a dynamic-dispatch `args` list as a slice: the whole list, or the tail past index `i`. */
@@ -51400,6 +51401,8 @@ var rustDispatch = {
   },
   /** A sync method with a native return still gets a by-name arm (it boxes back inside the arm). */
   isNativeReturn: (ret) => RUST_DISPATCH_NATIVE_RETURNS.has(ret),
+  /** A typed-return base method (or override): it keeps every arm it had as `-> Value`, sync ws handler arms too. */
+  isKeptReturn: (ret) => RUST_DISPATCH_KEPT_RETURNS.has(ret),
   /** Every `args[i]` of a by-name dispatch arm, one conversion per parameter kind. */
   args: (kinds) => kinds.map((kind, i) => rustDispatch.arg(kind, i)),
   /** A typed method's `Result<T>` boxed back to the dispatcher's `Value`. */
@@ -51410,6 +51413,10 @@ var rustDispatch = {
       case "ostr":
       case "struct":
         return `crate::types::IntoRaw::into_raw(${call})`;
+      case "oint":
+      case "keptostr":
+      case "keptint":
+      case "keptstr":
       case "int":
       case "string":
       case "bool":
@@ -51476,6 +51483,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustScalarVetoed = /* @__PURE__ */ new WeakSet();
     this.rustScalarGuarded = /* @__PURE__ */ new WeakSet();
     this.rustStrRuntimeBare = /* @__PURE__ */ new Set();
+    this.rustBaseTypedBare = /* @__PURE__ */ new Set();
     // ── venue string-method results (rustVenueStrCall / rustVenueReturnTypes) ──
     // A call to a venue method already printed `-> Option<String>` is an optional-string source as it
     // stands, when every venue declaration of that name (REST, pro, prediction) declares a string return.
@@ -54967,6 +54975,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     const name = String(callee.name.text);
     const args = Array.from(node.arguments ?? []);
+    if (this.rustVenueParseToInt(node))
+      return "int";
+    const typedReturn = this.rustBaseTypedReturnKind(node);
+    if (typedReturn !== void 0)
+      return typedReturn;
     if (this.rustClockCall(node))
       return "int";
     if (this.rustStrRuntimeCall(node))
@@ -55077,6 +55090,95 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     const text = this.rustStrRuntimeBareText(node, identation);
     return this.rustStrRuntimeFormatOperand(node) ? text : `Value::from(${text})`;
+  }
+  /** The native kind a method declaration returns under the table, else undefined. */
+  rustMethodTypedReturnKind(node) {
+    if (node?.kind !== SyntaxKind7.MethodDeclaration || node.body === void 0 || this.isAsyncFunction(node) || !isIdentifier3(node.name))
+      return void 0;
+    const entry = _RustTranspiler.RUST_BASE_TYPED_METHODS[String(node.name.text)];
+    if (entry === void 0 || String(node.type?.getText?.() ?? "").trim() !== entry[0])
+      return void 0;
+    return /ts[\\/]src[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? "")) ? entry[1] : void 0;
+  }
+  /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
+  rustBaseTypedReturnKind(expr) {
+    const node = this.unwrapParens(expr);
+    if (node === void 0 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || this.checkerOrUndefined() === void 0)
+      return void 0;
+    const name = String(node.expression.name.text);
+    if (_RustTranspiler.RUST_BASE_TYPED_METHODS[name] === void 0 && _RustTranspiler.RUST_BASE_TYPED_RUNTIME[name] === void 0)
+      return void 0;
+    let member;
+    try {
+      member = this.getChecker().getSymbolAtLocation(node.expression.name)?.valueDeclaration;
+    } catch (e) {
+      return void 0;
+    }
+    member = member?.resolve?.() ?? member;
+    if (member === void 0)
+      return void 0;
+    if (member.kind === SyntaxKind7.MethodDeclaration)
+      return this.rustMethodTypedReturnKind(member);
+    const base = _RustTranspiler.RUST_BASE_TIER_FILE.test(String(member.getSourceFile?.()?.fileName ?? ""));
+    return base && member.kind === SyntaxKind7.PropertyDeclaration ? _RustTranspiler.RUST_BASE_TYPED_RUNTIME[name] : void 0;
+  }
+  /** The unboxed call text. */
+  rustBaseTypedBareText(node) {
+    this.rustBaseTypedBare.add(node);
+    try {
+      return this.printNode(node, 0).trim();
+    } finally {
+      this.rustBaseTypedBare.delete(node);
+    }
+  }
+  /** The call as a `kind` value: the bare text, or `Some(..)` of a non-optional one. */
+  rustBaseTypedText(kind, expr) {
+    const node = this.unwrapParens(expr);
+    const own = this.rustBaseTypedReturnKind(node);
+    if (own === void 0 || own !== kind && `o${own}` !== kind)
+      return void 0;
+    const text = this.rustBaseTypedBareText(node);
+    if (own === kind)
+      return text;
+    return `o${own}` === kind ? `Some(${text})` : void 0;
+  }
+  /** Call hook: a `Value` position takes the native result boxed once. */
+  printRustBaseTypedReturnCall(node) {
+    if (this.rustBaseTypedBare.has(node))
+      return void 0;
+    const kind = this.rustBaseTypedReturnKind(node);
+    if (kind === void 0)
+      return void 0;
+    const text = this.rustBaseTypedBareText(node);
+    return kind === "ostr" ? `Value::from(${text})` : this.rustScalarBoxText(kind, text, node);
+  }
+  /** `return x` in a typed method: the native value, converting a `Value` once. */
+  printRustBaseTypedReturn(fn, exp) {
+    const kind = this.rustMethodTypedReturnKind(fn);
+    if (kind === void 0)
+      return void 0;
+    const inner = this.unwrapParens(exp);
+    if (this.literalKindOfNode(inner) === "null")
+      return kind.startsWith("o") ? "None" : void 0;
+    const local = isIdentifier3(inner) ? this.rustScalarLocalOf(inner)?.kind : void 0;
+    if (local === kind)
+      return super.printIdentifier(inner);
+    if (local !== void 0 && `o${local}` === kind)
+      return `Some(${super.printIdentifier(inner)})`;
+    const callKind = this.rustBaseTypedReturnKind(inner);
+    if (callKind !== void 0 && `o${kind}` === callKind)
+      return `${this.rustBaseTypedBareText(this.unwrapParens(inner))}.unwrap_or_default()`;
+    const native = this.rustBaseTypedText(kind, inner) ?? (local === void 0 ? this.rustScalarNativeText(kind, inner) : void 0);
+    if (native !== void 0)
+      return native;
+    const text = this.printNode(exp, 0).trim();
+    if (kind === "int")
+      return `${text}.as_i64().unwrap_or_default()`;
+    if (kind === "oint")
+      return `${text}.as_i64()`;
+    if (kind === "ostr")
+      return `${text}.as_str().map(str::to_owned)`;
+    return `${text}.as_str().unwrap_or_default().to_owned()`;
   }
   // ── clock and cast initialisers (rustClockCall / rustStrCastCall) ──
   // The runtime `milliseconds()`/`seconds()` always return `Value::Int`, so with no venue override the
@@ -55345,7 +55447,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const node = this.unwrapParens(init);
     if (this.rustElementReadScalarKind(node) !== void 0 || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueParseToInt(node) || this.rustVenueTypedCall(node) !== void 0 || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== void 0 || this.rustClockString(node) || this.rustStrRuntimeCall(node))
       return true;
-    if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
+    if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || this.rustBaseTypedReturnKind(node) !== void 0)
       return false;
     return _RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(node.expression.name.text)] === void 0 && this.rustDerivedScalarKind(node) !== void 0;
   }
@@ -55374,7 +55476,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   /** A sync venue method (not a base one) every venue declaration of which returns `int`: it keeps its
    *  `-> Value` signature and dispatch arm, and its result holds an `Int`, read once as an `i64`. */
   rustVenueIntCall(node) {
-    if (node === void 0 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || node.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+    if (node === void 0 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || node.expression.expression.kind !== SyntaxKind7.ThisKeyword || this.rustBaseTypedReturnKind(node) !== void 0)
       return false;
     const declaration = this.rustScalarCallee(node);
     if (declaration === void 0 || !isMethodDeclaration5(declaration) || this.isAsyncFunction(declaration))
@@ -55463,7 +55565,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     const awaited = node.kind === SyntaxKind7.AwaitExpression;
     const call = awaited ? this.unwrapParens(node.expression) : node;
-    if (call === void 0 || !isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+    if (call === void 0 || !isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword || this.rustBaseTypedReturnKind(call) !== void 0)
       return void 0;
     const declaration = this.rustScalarCallee(call);
     if (declaration === void 0 || !isMethodDeclaration5(declaration) || this.isAsyncFunction(declaration) !== awaited)
@@ -55609,6 +55711,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return "box";
     if (isReturnStatement4(parent) && parent.expression === n) {
       const fn = findAncestor(parent.parent, isFunctionLike);
+      const typedReturn = this.rustMethodTypedReturnKind(fn);
+      if (typedReturn !== void 0)
+        return typedReturn === kind || typedReturn === `o${kind}` ? "native" : void 0;
       return this.rustNativeStrReturnKind(fn) === "str" || this.rustStrReturnSignature(fn, n) ? void 0 : "box";
     }
     if (isBinaryExpression5(parent) && parent.operatorToken.kind === SyntaxKind7.PlusToken) {
@@ -56309,6 +56414,8 @@ ${binding(plan.indent)}` : ""), head: "" };
     const wrap = (t) => optional ? `Some(${t})` : t;
     if (this.literalKindOfNode(node) === "null")
       return optional ? "None" : void 0;
+    if (this.rustBaseTypedReturnKind(node) !== void 0 && !(kind === "int" && this.rustVenueParseToInt(node)))
+      return this.rustBaseTypedText(kind, node);
     const paramText = this.rustOptParamText(kind, node);
     if (paramText !== void 0)
       return paramText;
@@ -56372,6 +56479,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       return wrap(`format!("{}", ${this.rustScalarNativeText("int", clock)})`);
     const fallback = node.arguments[node.arguments.length - 1];
     const defaulted = this.rustScalarValueKind(node, true) === base;
+    if (kind === "int" && this.rustVenueParseToInt(node) && this.rustBaseTypedReturnKind(node) === "oint")
+      return `${this.rustBaseTypedBareText(node)}.unwrap_or_default()`;
     if (kind === "int" && (this.rustVenueIntCall(node) || this.rustVenueParseToInt(node)))
       return `${text}.as_i64().unwrap_or_default()`;
     if (kind === "str" && defaulted)
@@ -56685,7 +56794,9 @@ ${binding(plan.indent)}` : ""), head: "" };
       return void 0;
     const name = String(node.expression.name.text);
     let text;
-    if (_RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name))
+    if (this.rustBaseTypedReturnKind(node) === "int")
+      text = this.rustBaseTypedBareText(node);
+    else if (_RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name))
       text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or_default()`;
     else if (_RustTranspiler.RUST_SCALAR_INT_HELPERS[name] !== void 0)
       text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or(${this.rustScalarIntLiteral(node.arguments[node.arguments.length - 1])})`;
@@ -57962,7 +58073,9 @@ ${classMethods}
     return `${this.getIden(identation + 1)}pub fn ${name}(${parsedArgs})${retStr}`;
   }
   rustRecordSignature(node, name, params, returnType) {
-    const ret = _RustTranspiler.RUST_DISPATCH_RETURN_KINDS[returnType] ?? (returnType.startsWith("crate::Result<") ? "typed" : "other");
+    let ret = _RustTranspiler.RUST_DISPATCH_RETURN_KINDS[returnType] ?? (returnType.startsWith("crate::Result<") ? "typed" : "other");
+    if (this.rustMethodTypedReturnKind(node) !== void 0)
+      ret = { "Option<i64>": "oint", "Option<String>": "keptostr", "i64": "keptint", "String": "keptstr" }[returnType] ?? ret;
     this.rustSignatureTable.set(node, {
       file: node.getSourceFile?.(),
       name: this.toSnakeCaseName(name),
@@ -58530,6 +58643,9 @@ ${i1}}`;
     return void 0;
   }
   printRustFunctionType(node) {
+    const typedReturn = this.rustMethodTypedReturnKind(node);
+    if (typedReturn !== void 0)
+      return _RustTranspiler.RUST_SCALAR_TYPES[typedReturn];
     if (this.rustNativeStrReturnKind(node) === "str") {
       return "Option<String>";
     }
@@ -58862,6 +58978,9 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const strRuntime = this.printRustStrRuntimeCall(node, identation);
     if (strRuntime !== void 0)
       return strRuntime;
+    const typedReturn = this.printRustBaseTypedReturnCall(node);
+    if (typedReturn !== void 0)
+      return typedReturn;
     const arithCall = this.printRustArithCall(node);
     if (arithCall !== void 0)
       return arithCall;
@@ -61726,6 +61845,9 @@ ${iden}}`;
     if (exp.kind === SyntaxKind7.ThisKeyword)
       return `${idn}return Value::Null;`;
     const fn = findAncestor(node.parent, isFunctionLike);
+    const typedReturn = this.printRustBaseTypedReturn(fn, exp);
+    if (typedReturn !== void 0)
+      return `${idn}return ${typedReturn};`;
     if (this.rustNativeStrReturnKind(fn) === "str" && this.rustStrReturnValueConverts(exp)) {
       if (this.literalKindOfNode(this.unwrapParensNode(exp)) === "null")
         return `${idn}return None;`;
@@ -68302,6 +68424,24 @@ _RustTranspiler.RUST_BASE_SCALAR_RETURNS = {
 // ── hand-written `-> String` runtime methods (rustStrRuntimeCall / printRustStrRuntimeCall) ──
 // Base methods the runtime implements by hand with the TS `string` return as a Rust `String`.
 _RustTranspiler.RUST_STR_RUNTIME_METHODS = /* @__PURE__ */ new Set(["implodeParams", "intToBase16"]);
+// ── typed returns of base methods (rustBaseTypedReturnKind / printRustBaseTypedReturnCall) ──
+// Generated base methods (and their overrides) print the native return their TS declaration names;
+// the hand-written runtime methods return the same native types. Each call boxes once at a `Value` slot.
+_RustTranspiler.RUST_BASE_TYPED_METHODS = {
+  parseToInt: ["number", "oint"],
+  incrementingNonce: ["int", "int"],
+  symbol: ["string", "str"],
+  findTimeframe: ["Str", "ostr"],
+  networkIdToCode: ["Str", "ostr"],
+  requestId: ["int", "int"]
+};
+_RustTranspiler.RUST_BASE_TYPED_RUNTIME = {
+  milliseconds: "int",
+  parse8601: "oint",
+  numberToString: "ostr",
+  omitZero: "ostr",
+  parseTimeframe: "int"
+};
 // rustWsClientCallArg: `client.resolve|reject|future|reusableFuture|send(.., x)` on a ws `Client`
 // receiver takes its arguments as plain `Value`s, so a string local boxes there.
 _RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS = /* @__PURE__ */ new Set(["resolve", "reject", "future", "reusableFuture", "send"]);
