@@ -469,6 +469,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNewShapeCostly(init: any, typedUses: number, copied: number): boolean;
     rustStrCastCall(node: any): any;
     rustDerivedScalarKind(call: any): string | undefined;
+    rustListLengthInit(node: any): boolean;
+    rustListLengthText(node: any): string;
     rustElementReadScalarKind(node: any): string | undefined;
     rustReaderDefaultKind(name: string, args: any[], fresh: boolean): string | undefined;
     rustReaderFallbackKind(fallback: any): string | undefined;

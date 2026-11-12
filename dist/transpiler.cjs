@@ -54775,6 +54775,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return "str";
     if (this.rustElementReadScalarKind(node) !== void 0)
       return this.rustElementReadScalarKind(node);
+    if (fresh && this.rustListLengthInit(node))
+      return "int";
     if (!_is.isCallExpression.call(void 0, node))
       return void 0;
     const callee = node.expression;
@@ -54887,6 +54889,19 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return "ostr";
     const base = _RustTranspiler.RUST_BASE_TIER_FILE.test(String(_nullishCoalesce(_optionalChain([declaration, 'access', _8659 => _8659.getSourceFile, 'optionalCall', _8660 => _8660(), 'optionalAccess', _8661 => _8661.fileName]), () => ( ""))));
     return base && this.primitiveKindOfType(this.typeOfNodeIfAny(call)) === "string" ? "ostr" : void 0;
+  }
+  // ── list lengths (rustListLengthInit / rustListLengthText) ──
+  // `xs.length` of a local or parameter always prints a `Value::Int` (native `len()` or `get_array_length`),
+  // so the local is an `i64` exactly; the string-local `.length` stays the expression rule's.
+  rustListLengthInit(node) {
+    if (node === void 0 || !_is.isPropertyAccessExpression.call(void 0, node) || !_is.isIdentifier.call(void 0, node.name) || node.name.text !== "length" || !_is.isIdentifier.call(void 0, node.expression))
+      return false;
+    return this.checkerOrUndefined() !== void 0 && this.rustScalarLengthRecv(node) === void 0;
+  }
+  rustListLengthText(node) {
+    const text = this.printNode(node, 0).trim();
+    const place = this.rustNativeLengths.get(node);
+    return place !== void 0 ? `${place}.len() as i64` : `${text}.as_i64().unwrap_or_default()`;
   }
   // `xs[i]` over a local string list (`string[]`, `split`, `Object.keys`): `Option<String>` from the element.
   rustElementReadScalarKind(node) {
@@ -55079,7 +55094,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
   rustScalarNeedsNativeUse(init) {
     const node = this.unwrapParens(init);
-    if (this.rustElementReadScalarKind(node) !== void 0 || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== void 0 || this.rustClockString(node))
+    if (this.rustElementReadScalarKind(node) !== void 0 || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== void 0 || this.rustClockString(node))
       return true;
     if (!_is.isCallExpression.call(void 0, node) || !_is.isPropertyAccessExpression.call(void 0, node.expression))
       return false;
@@ -55995,6 +56010,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       const format = this.rustScalarFormatText(node);
       return format === void 0 ? void 0 : wrap(format);
     }
+    if (kind === "int" && this.rustListLengthInit(node))
+      return this.rustListLengthText(node);
     if (kind === "ostr" && this.rustElementReadScalarKind(node) !== void 0) {
       const read = this.printNode(node, 0).trim();
       const tail = ".cloned().unwrap_or(Value::Null)";

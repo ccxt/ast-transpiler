@@ -53,6 +53,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "import { milliseconds, seconds } from './functions/time.js';\nexport default class Exchange {\n    milliseconds = milliseconds;\n    seconds = seconds;\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    window (since: number) {\n        const now = this.milliseconds ();\n        const start = now - 1000;\n        const stamp = this.seconds ().toString ();\n        if (since > start) {\n            return this.hold (stamp + 'x');\n        }\n        return start;\n    }\n}\n"
  },
+ "list-length-locals": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    hold (x: any): any { return x; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    count (resp: Dict, limit: number) {\n        const rows = this.safeList (resp, 'rows', []);\n        const rowsLength = rows.length;\n        if (rowsLength === 0) {\n            return undefined;\n        }\n        const last = rowsLength - 1;\n        if (rowsLength > 10) {\n            return this.hold (last);\n        }\n        return this.hold (rowsLength);\n    }\n}\n"
+ },
  "clock-sum-locals": {
   "ts/src/base/Exchange.ts": "export type Str = string | undefined;\nconst sum = (...xs: any[]) => xs[0];\nexport default class Exchange {\n    sum = sum;\n    milliseconds (): number { return 1; }\n    seconds (): number { return 1; }\n    numberToString (x: any): Str { return x; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    window (since: number) {\n        const now = this.milliseconds ();\n        const start = now - 1000;\n        const stamp = this.milliseconds ().toString ();\n        const signed = stamp + 'x';\n        const next = this.sum (start, 1);\n        const id = this.numberToString (next) as string;\n        if (id === '5') {\n            return this.hold (signed);\n        }\n        if (next > 10) {\n            return start;\n        }\n        return now;\n    }\n}\n"
@@ -8383,5 +8387,16 @@ describe('rust cache limit polls with typed arguments', () => {
         expect(text).toContain('limitResolved = trades.getLimit(first.as_deref(), limit.as_i64());');
         expect(text).toContain('Value::from(limitResolved)');
         expect(text).not.toContain('let mut limitResolved: Value');
+    });
+});
+
+describe('list length locals', () => {
+    test('a list length is an i64 local with native compares and arithmetic', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'list-length-locals', 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut rowsLength: i64 = /);
+        expect(out).toContain('if (rowsLength == 0) {');
+        expect(out).toContain('Value::Int((rowsLength - 1))');
+        expect(out).toContain('if rowsLength > 10 {');
+        expect(out).not.toContain('let mut rowsLength: Value');
     });
 });
