@@ -3884,6 +3884,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustStrRuntimeCall(node)) return 'str';
         const baseReturn = this.rustBaseReturnScalarKind(node, name);
         if (baseReturn !== undefined) return baseReturn;
+        if (this.rustVenueParseToInt(node)) return 'int';
         if (this.rustVenueInitializer(node) && this.rustVenueStrCall(node)) return 'ostr';
         if (fresh && this.rustVenueInitializer(node) && this.rustVenueIntCall(node)) return 'int';
         if (fresh && this.rustVenueInitializer(node) && this.rustVenueTypedCall(node) !== undefined) return this.rustVenueTypedCall(node);
@@ -4234,7 +4235,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
     rustScalarNeedsNativeUse(init): boolean {
         const node: any = this.unwrapParens(init);
-        if (this.rustElementReadScalarKind(node) !== undefined || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueTypedCall(node) !== undefined || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustStrRuntimeCall(node)) return true;
+        if (this.rustElementReadScalarKind(node) !== undefined || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueParseToInt(node) || this.rustVenueTypedCall(node) !== undefined || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustStrRuntimeCall(node)) return true;
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return false;
         return RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(node.expression.name.text)] === undefined && this.rustDerivedScalarKind(node) !== undefined;
     }
@@ -5182,7 +5183,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (clock !== undefined) return wrap(`format!("{}", ${this.rustScalarNativeText('int', clock)})`);
         const fallback: any = node.arguments[node.arguments.length - 1];
         const defaulted = this.rustScalarValueKind(node, true) === base;
-        if (kind === 'int' && this.rustVenueIntCall(node)) return `${text}.as_i64().unwrap_or_default()`;
+        if (kind === 'int' && (this.rustVenueIntCall(node) || this.rustVenueParseToInt(node))) return `${text}.as_i64().unwrap_or_default()`;
         if (kind === 'str' && defaulted) return `${text}.as_str().unwrap_or(${this.quotedStringLiteral(fallback.text)}).to_string()`;
         if (kind === 'int' && defaulted) return `${text}.as_i64().unwrap_or(${this.rustScalarIntLiteral(fallback)})`;
         if (kind === 'ostr' && this.rustVenueStrCall(node)) return this.rustVenueStrCallText(node);
@@ -5518,7 +5519,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // the typed argument's own `Value` rebinding read back as the native kind the signature declared
     private static readonly RUST_PARAM_READ: Record<string, string> = { oint: 'as_i64()', onum: 'as_f64()', ostr: 'as_str().map(str::to_owned)',
-        str: 'as_str().unwrap_or_default().to_string()', int: 'as_i64().unwrap_or_default()', num: 'as_f64().unwrap_or_default()' };
+        str: 'as_str().unwrap_or_default().to_string()', int: 'as_i64().unwrap_or_default()', num: 'as_f64().unwrap_or_default()', bool: 'as_bool().unwrap_or_default()' };
 
     rustOptParamText(kind: string, node): string | undefined {
         const narrowed = isConditionalExpression(node) ? this.rustOptParamDefault(node) : undefined;
@@ -6656,7 +6657,7 @@ export class RustTranspiler extends BaseTranspiler {
         // fixed-arity method drops a same-named signature left by an earlier file.
         const methods = node.members.filter(m => m.kind === SyntaxKind.MethodDeclaration);
         methods.forEach((method: any) => {
-            const requiredCount = method.parameters.filter(p => !p.initializer && !p.questionToken).length;
+            const requiredCount = method.parameters.filter(p => (!p.initializer && !p.questionToken) || this.rustVenuePositional(p)).length;
             if (requiredCount < method.parameters.length) {
                 this.methodSignatures[method.name.text] = { requiredCount };
             } else if (method.body !== undefined) {
@@ -6679,7 +6680,7 @@ export class RustTranspiler extends BaseTranspiler {
             return `${this.getIden(identation + 1)}pub fn ${name}(${args}) -> crate::Result<${typed.ret}>`;
         }
         const params = node.parameters;
-        const requiredParams = params.filter(p => !p.initializer && !p.questionToken);
+        const requiredParams = params.filter(p => (!p.initializer && !p.questionToken) || this.rustVenuePositional(p));
         let parsedArgs = ['&self', ...requiredParams.map(p => `${this.printNode(p.name, 0)}: ${this.rustParamType(p)}`)].join(', ');
         if (requiredParams.length < params.length) {
             parsedArgs += ', optional_args: &[Value]';
@@ -7407,7 +7408,7 @@ export class RustTranspiler extends BaseTranspiler {
     printMethodDeclaration(node, identation) {
         const methodDef = this.printMethodDefinition(node, identation);
         const params = node.parameters;
-        const optionalParams = params.filter(p => (p.initializer !== undefined || p.questionToken !== undefined) && !this.rustTypedFilterPositional(p));
+        const optionalParams = params.filter(p => (p.initializer !== undefined || p.questionToken !== undefined) && !this.rustTypedFilterPositional(p) && !this.rustVenuePositional(p));
 
         // Build optional param initializations
         const optionalInits = optionalParams.map((p, idx) => {
@@ -7524,7 +7525,7 @@ export class RustTranspiler extends BaseTranspiler {
                             ? this.rustBoolArgumentText(a, 0)
                             : this.printNode(a, 0));
                 const printArgs = (list, from = 0) => list.map((a, i) => this.rustWsWatchSlot(node, from + i) ? this.rustWsWatchSlotText(a, this.printNode(a, 0)) : printArg(a, from + i)).join(', ');
-                const requiredArgs = printArgs(args.slice(0, sig.requiredCount));
+                const requiredArgs = [ printArgs(args.slice(0, sig.requiredCount)), ...this.rustVenuePads(calleeParams, args.length, sig.requiredCount) ].filter((a) => a !== '').join(', ');
                 const reqPart = requiredArgs ? `${requiredArgs}, ` : '';
                 return `self.${methodName}(${reqPart}&[${printArgs(args.slice(sig.requiredCount), sig.requiredCount)}])`;
             }
@@ -7601,7 +7602,8 @@ export class RustTranspiler extends BaseTranspiler {
     printOptionalArgsSliceCall(node, receiver: string, methodName: string, fixed: number, identation: number): string | undefined {
         const args = this.rustPrintedArgs(node, identation);
         if (args.length < fixed || (args.length > 0 && args[args.length - 1].startsWith('&['))) return undefined;
-        const cloned = args.map((a, at) => this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : this.rustSliceArgText(a)));
+        const params = this.rustCalleeParams(node);
+        const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== undefined ? a : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : this.rustSliceArgText(a)));
         return `${receiver}.${methodName}(${cloned.slice(0, fixed).join(', ')}${fixed > 0 ? ', ' : ''}&[${cloned.slice(fixed).join(', ')}])`;
     }
 
@@ -7677,7 +7679,7 @@ export class RustTranspiler extends BaseTranspiler {
     printTranspiledVariadicCall(node, receiver: string, methodName: string, identation: number): string | undefined {
         const params = this.rustTranspiledCalleeParams(node, methodName);
         if (params === undefined || params.some((p: any) => p.dotDotDotToken !== undefined)) return undefined;
-        const required = params.filter((p: any) => !p.initializer && !p.questionToken).length;
+        const required = params.filter((p: any) => (!p.initializer && !p.questionToken) || this.rustVenuePositional(p)).length;
         return required === params.length ? undefined : this.printOptionalArgsSliceCall(node, receiver, methodName, required, identation);
     }
 
@@ -7718,7 +7720,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustPrintedArgs(node, identation, params = this.rustCalleeParams(node)): string[] {
         if (params === undefined) return Array.from(node.arguments).map((a: any) => this.printNode(a, identation).trim());
-        return Array.from(node.arguments).map((arg, at) => {
+        const pads: string[] = [];
+        for (let at = node.arguments.length; at < params.length && this.rustVenuePositional(params[at]); at++) pads.push('None');
+        return [ ...Array.from(node.arguments).map((arg, at) => {
             const venueStr = this.rustVenueStrSlot(params, at); if (venueStr !== undefined) return this.rustVenueStrArgText(arg, venueStr, identation);
             if (this.rustNativeMapArgumentSlot(params, at) !== undefined) {
                 return this.rustMapArgumentText(arg, identation);
@@ -7729,7 +7733,7 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustNativeBoolArgumentSlot(params, at)
                 ? this.rustBoolArgumentText(arg, identation)
                 : this.printNode(arg, identation).trim();
-        });
+        }), ...pads ];
     }
 
     // `Math.X(..)` / `Precise.X(..)` call the runtime namespaces by reference; the Precise
@@ -16372,7 +16376,9 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueStrParamTypeUncached(param: any): string | undefined {
         const method: any = param.parent;
         if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return undefined;
-        if (!isIdentifier(param.name) || param.initializer !== undefined || param.questionToken !== undefined || param.dotDotDotToken !== undefined || param.type === undefined) return undefined;
+        if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.type === undefined) return undefined;
+        const optional = param.initializer !== undefined || param.questionToken !== undefined;
+        if (optional && !this.rustVenueOptionalSlotOpen(method, param)) return undefined;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         if (file.search(/(?:^|\/)ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) < 0) return undefined;
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return undefined;
@@ -16385,23 +16391,70 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustParamPrintsStrVec(param) || this.rustParamReadsByReference(param)) return undefined;
         const type: any = this.typeOfNodeIfAny(param.name);
         if (type === undefined) return undefined;
-        let text = 0;
-        let nil = 0;
-        for (const part of (typeParts(type) ?? [ type ]) as any[]) {
-            if ((part.flags & (TypeFlags.String | TypeFlags.StringLiteral)) !== 0) text++;
-            else if ((part.flags & (TypeFlags.Undefined | TypeFlags.Null)) !== 0) nil++;
-            else return undefined;
-        }
-        if (text === 0) return undefined;
+        const declared = this.rustVenueScalarTypeOf(type, param.type);
+        if (declared === undefined || (optional && declared === 'bool')) return undefined;
+        const rustType = optional && !declared.startsWith('Option<') ? `Option<${declared}>` : declared;
+        if (rustType.includes('f64') && !this.rustVenueFloatUsesStayInside(method, param)) return undefined;
         // every caller in the method's own file passes a value the checker types (never `any`), no spread
         const at = Array.from(method.parameters).indexOf(param);
         for (const call of this.rustVenueStrCallSites(method)) {
             const args: any[] = Array.from(call.arguments);
             if (args.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return undefined;
+            if (optional && args[at] === undefined) continue;
             const argType: any = args[at] === undefined ? undefined : this.typeOfNodeIfAny(args[at]);
-            if (argType === undefined || (argType.flags & (TypeFlags.Any | TypeFlags.Unknown)) !== 0 || !this.rustVenueStrSimpleArg(args[at])) return undefined;
+            if (argType === undefined || (argType.flags & (TypeFlags.Any | TypeFlags.Unknown)) !== 0) return undefined;
+            if (!this.rustVenueStrSimpleArg(args[at]) && !(rustType === 'bool' && this.rustVenueNegatedArg(args[at]))) return undefined;
+            if (!this.rustVenueScalarArgExact(args[at], rustType)) return undefined;
+            // an arithmetic operand in the same call prints a long numeric match: keep its line short
+            if (!rustType.includes('str') && args.some((a: any) => this.rustVenueArithmeticArg(a))) return undefined;
         }
-        return nil > 0 ? 'Option<&str>' : '&str';
+        return rustType;
+    }
+
+    /** Rust type of a scalar TS parameter type: string -> `&str`, `number` / `Num` -> `f64`, `int` / `Int` -> `i64`,
+     *  boolean -> `bool`; a nullable part makes it an `Option` (never for `bool`). */
+    rustVenueScalarTypeOf(type: any, typeNode: any): string | undefined {
+        let text = 0;
+        let num = 0;
+        let flag = 0;
+        let nil = 0;
+        const parts: any[] = typeParts(type) ?? [ type ];
+        for (const part of parts) {
+            if ((part.flags & (TypeFlags.String | TypeFlags.StringLiteral)) !== 0) text++;
+            else if ((part.flags & (TypeFlags.Number | TypeFlags.NumberLiteral)) !== 0) num++;
+            else if ((part.flags & (TypeFlags.Boolean | TypeFlags.BooleanLiteral)) !== 0) flag++;
+            else if ((part.flags & (TypeFlags.Undefined | TypeFlags.Null)) !== 0) nil++;
+            else return undefined;
+        }
+        if ([ text, num, flag ].filter((c) => c > 0).length !== 1) return undefined;
+        if (text > 0) return nil > 0 ? 'Option<&str>' : '&str';
+        if (flag > 0) return nil > 0 ? undefined : 'bool';
+        const alias = typeNode?.kind === SyntaxKind.TypeReference && isIdentifier(typeNode.typeName) ? String(typeNode.typeName.text) : '';
+        const scalar = alias === 'int' || alias === 'Int' ? 'i64' : 'f64';
+        return nil > 0 ? `Option<${scalar}>` : scalar;
+    }
+
+    /** A caller argument that converts to a numeric / boolean slot without changing its value, decided on the
+     *  source alone: `null` only for an `Option`, and an `i64` slot takes an integer literal or a value declared
+     *  `int` / `Int` (a `number` could carry a fraction). */
+    rustVenueScalarArgExact(arg: any, rustType: string): boolean {
+        if (rustType === '&str' || rustType === 'Option<&str>') return true;
+        const inner: any = this.unwrapParens(arg);
+        if (this.literalKindOfNode(inner) === 'null') return rustType.startsWith('Option<');
+        if (!rustType.includes('i64')) return true;
+        if (this.rustScalarIntLiteral(inner) !== undefined) return true;
+        // a base integer reader / `parseToInt` holds an `Int` or `Null`, also through a `const` initialised from one
+        const source: any = isIdentifier(inner) ? this.rustDeclaredNode(inner) : inner;
+        const init: any = source !== inner && source !== undefined && isVariableDeclaration(source) && (source.parent.flags & NodeFlags.Const) !== 0 ? this.unwrapParens(source.initializer) : (source === inner ? inner : undefined);
+        const callee: any = init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) ? init.expression : undefined;
+        if (callee !== undefined && callee.expression.kind === SyntaxKind.ThisKeyword && RustTranspiler.RUST_EXACT_INT_PRODUCERS.has(String(callee.name.text)) && this.rustCalleeIsRuntimeBase(init)) {
+            return rustType === 'Option<i64>' || String(callee.name.text) === 'parseToInt';
+        }
+        if (isIdentifier(inner) && [ 'int', 'oint' ].includes(this.rustOptParamKind(inner) ?? '')) return this.rustOptParamKind(inner) === 'int' || rustType === 'Option<i64>';
+        const declaration: any = isIdentifier(inner) ? this.rustDeclaredNode(inner) : undefined;
+        const typeNode: any = declaration?.type;
+        const alias = typeNode?.kind === SyntaxKind.TypeReference && isIdentifier(typeNode.typeName) ? String(typeNode.typeName.text) : '';
+        return alias === 'int' || (alias === 'Int' && rustType === 'Option<i64>');
     }
 
     /** `this.<m>(..)` / `super.<m>(..)` calls in the method's own file that resolve to it. */
@@ -16428,7 +16481,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** Scalar-local kind of a per-venue string parameter read through its `Value` binding. */
     rustVenueStrParamKind(param: any): string | undefined {
         const type = this.rustVenueStrParamType(param);
-        return type === '&str' ? 'str' : (type === 'Option<&str>' ? 'ostr' : undefined);
+        return type === undefined ? undefined : ({ '&str': 'str', 'Option<&str>': 'ostr', 'f64': 'num', 'Option<f64>': 'onum', 'i64': 'int', 'Option<i64>': 'oint', 'bool': 'bool' })[type];
     }
 
     /** The per-venue string type of the callee parameter at `at`. */
@@ -16501,6 +16554,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (local !== undefined && this.rustVenueStrMovedInCall(arg)) return local.replace(/^(Some\()?([A-Za-z_]\w*)\./, '$1$2.clone().');
         if (local !== undefined) return local;
         const inner: any = this.unwrapParens(arg);
+        if (type !== '&str' && type !== 'Option<&str>') return this.rustVenueScalarArgText(arg, type, identation);
         // an `Option<String>` string local, or a call returning one, lends its text
         const slot: any = isIdentifier(inner) ? this.rustDeclaredNode(inner) : undefined;
         const optional = isIdentifier(inner) ? this.rustScalarIdentifierKind(inner) === 'ostr' || (slot?.kind === SyntaxKind.BindingElement && slot.name !== inner && this.rustTupleSlotKind(slot) === 'str')
@@ -16516,5 +16570,111 @@ export class RustTranspiler extends BaseTranspiler {
         const printed = this.printNode(arg, identation).trim();
         const recv = /^[A-Za-z_][A-Za-z0-9_]*$/.test(printed) ? printed : `(${printed})`;
         return type === '&str' ? `${recv}.as_str().unwrap_or_default()` : `${recv}.as_str()`;
+    }
+
+    /** Argument text for a numeric / boolean per-venue slot: literals natively, a typed parameter read back once,
+     *  any other value read once from its `Value`. */
+    rustVenueScalarArgText(arg: any, type: string, identation: number): string {
+        const inner: any = this.unwrapParens(arg);
+        const optional = type.startsWith('Option<');
+        if (type === 'bool' && this.rustVenueNegatedArg(inner)) return `!${this.rustVenueScalarArgText(inner.operand, type, identation)}`;
+        if (type === 'bool') return this.rustVenueBoolArgText(arg, identation);
+        if (this.literalKindOfNode(inner) === 'null') return 'None';
+        const integer = this.rustScalarIntLiteral(inner);
+        const literal = integer ?? (isNumericLiteral(inner) ? String(inner.text) : undefined);
+        if (literal !== undefined) {
+            const text = type.includes('f64') && integer !== undefined ? `${literal}.0` : literal;
+            return optional ? `Some(${text})` : text;
+        }
+        const read = type.includes('i64') ? 'as_i64()' : 'as_f64()';
+        // a typed integer local widens exactly; any other typed local is read back through its own box
+        const local = isIdentifier(inner) ? this.rustScalarLocalOf(inner) : undefined;
+        if (local !== undefined && local.kind === 'onum' && type === 'f64') return `${super.printIdentifier(inner)}.unwrap_or_default()`;
+        if (local !== undefined && local.kind === 'int' && type.includes('f64')) return optional ? `Some(${super.printIdentifier(inner)} as f64)` : `(${super.printIdentifier(inner)} as f64)`;
+        if (local !== undefined) return `Value::from(${super.printIdentifier(inner)}).${read}${optional ? '' : '.unwrap_or_default()'}`;
+        const printed = this.printNode(arg, identation).trim();
+        const recv = isIdentifier(inner) ? printed : `(${printed})`;
+        return optional ? `${recv}.${read}` : `${recv}.${read}.unwrap_or_default()`;
+    }
+
+    /** An `f64` rebinding turns an integer argument into a `Float`: admit it only when every body read is blind to
+     *  that variant (a null / truthiness test, an ordered comparison, or `numberToString` / `parseToInt`). */
+    rustVenueFloatUsesStayInside(method: any, param: any): boolean {
+        const uses: any[] = this.rustScopeNameNodes(method, String(param.name.text));
+        for (const n of uses) {
+            if (n === param.name || !isIdentifier(n) || this.rustDeclaredNode(n) !== param) continue;
+            let up: any = n.parent;
+            let at: any = n;
+            while (isParenthesizedExpression(up)) { at = up; up = up.parent; }
+            if (this.rustIdentifierUseIsCondition(n)) continue;
+            if (isBinaryExpression(up)) {
+                const op = up.operatorToken.kind;
+                const other: any = up.left === at ? up.right : up.left;
+                if (op === SyntaxKind.LessThanToken || op === SyntaxKind.GreaterThanToken || op === SyntaxKind.LessThanEqualsToken || op === SyntaxKind.GreaterThanEqualsToken) continue;
+                if (this.isEqualityOp(op) && this.literalKindOfNode(this.unwrapParens(other)) === 'null') continue;
+                return false;
+            }
+            const callee: any = isCallExpression(up) && up.arguments.length === 1 && up.arguments[0] === at ? up.expression : undefined;
+            if (callee !== undefined && isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword
+                && (callee.name.text === 'numberToString' || callee.name.text === 'parseToInt') && this.rustCalleeIsRuntimeBase(up)) continue;
+            return false;
+        }
+        return true;
+    }
+
+    rustVenueArithmeticArg(arg: any): boolean {
+        const inner: any = this.unwrapParens(arg);
+        if (!isBinaryExpression(inner)) return false;
+        const op = inner.operatorToken.kind;
+        return op === SyntaxKind.PlusToken || op === SyntaxKind.MinusToken || op === SyntaxKind.AsteriskToken || op === SyntaxKind.SlashToken || op === SyntaxKind.PercentToken;
+    }
+
+    /** `!x` over a simple operand: a `bool` slot reads it once as a native negation. */
+    rustVenueNegatedArg(arg: any): boolean {
+        const inner: any = this.unwrapParens(arg);
+        return isPrefixUnaryExpression(inner) && inner.operator === SyntaxKind.ExclamationToken && this.rustVenueStrSimpleArg(inner.operand);
+    }
+
+    /** Base `parseToInt(p)` over a required numeric per-venue parameter: an `Int` for every number (`parse_int` of
+     *  the float text), read once as an `i64`. */
+    rustVenueParseToInt(node: any): boolean {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (String(node.expression.name.text) !== 'parseToInt' || node.arguments.length !== 1 || !this.rustCalleeIsRuntimeBase(node)) return false;
+        const arg: any = this.unwrapParens(node.arguments[0]);
+        if (!isIdentifier(arg)) return false;
+        const param: any = this.rustDeclaredNode(arg);
+        return param?.kind === SyntaxKind.Parameter && [ 'f64', 'i64' ].includes(this.rustVenueStrParamType(param) ?? '');
+    }
+
+    /** An optional parameter may print positionally when its default is absent and every optional parameter before
+     *  it does too (they form the positional prefix of the optional tail). */
+    rustVenueOptionalSlotOpen(method: any, param: any): boolean {
+        if (param.initializer !== undefined && this.literalKindOfNode(this.unwrapParens(param.initializer)) !== 'null') return false;
+        const params: any[] = Array.from(method.parameters);
+        const before = params.slice(0, params.indexOf(param));
+        return before.every((p: any) => (p.initializer === undefined && p.questionToken === undefined) || this.rustVenueStrParamType(p) !== undefined);
+    }
+
+    /** An optional per-venue parameter that prints as a typed positional `Option`. */
+    rustVenuePositional(param: any): boolean {
+        return param?.kind === SyntaxKind.Parameter && (param.initializer !== undefined || param.questionToken !== undefined) && this.rustVenueStrParamType(param) !== undefined;
+    }
+
+    /** `None` for each positional optional slot a call leaves out. */
+    rustVenuePads(params: any[] | undefined, given: number, fixed: number): string[] {
+        if (params === undefined || given >= fixed) return [];
+        return params.slice(given, fixed).map(() => 'None');
+    }
+
+    /** A checker-`boolean` argument for a `bool` slot: native where it already is one, an `Option<bool>` local or a
+     *  `Value` compared with `Some(true)` (its variant is `Bool` or `Null`), else its truthiness. */
+    rustVenueBoolArgText(arg: any, identation: number): string {
+        const inner: any = this.unwrapParens(arg);
+        if (this.rustNativeBoolArgumentText(arg) !== undefined) return this.rustBoolArgumentText(arg, identation);
+        const local = isIdentifier(inner) ? this.rustScalarLocalOf(inner) : undefined;
+        if (local?.kind === 'bool') return super.printIdentifier(inner);
+        if (local?.kind === 'obool') return `(${super.printIdentifier(inner)} == Some(true))`;
+        if (local === undefined && isIdentifier(inner) && this.primitiveKindOfType(this.typeOfNodeIfAny(inner)) === 'boolean') return `(${this.printNode(arg, identation).trim()}.as_bool() == Some(true))`;
+        return this.rustBoolArgumentText(arg, identation);
     }
 }

@@ -5497,7 +5497,8 @@ describe('native `bool` parameters', () => {
     });
 
     test('a bool parameter read outside a bool sink keeps the box', () => {
-        expect(venue).toContain('pub fn boxed(&self, flag: Value) -> Value {');
+        expect(venue).toContain('pub fn boxed(&self, flag: bool) -> Value {');
+        expect(venue).toContain('let mut flag: Value = flag.into();');
         expect(venue).toContain('let mut held: Value = flag;');
     });
 
@@ -6318,7 +6319,7 @@ describe('rust string[] parameter used only by join', () => {
     });
 
     test('a joined-only string[] param is a Vec<String> with the std join and no closure', () => {
-        expect(output).toContain('pub fn fetchByIds(&self, ids: Vec<String>, optional_args: &[Value])');
+        expect(output).toContain('pub fn fetchByIds(&self, ids: Vec<String>, symbol: Option<&str>, optional_args: &[Value])');
         expect(output).toContain('Value::Str(ids.join(",").into())');
     });
 
@@ -8651,5 +8652,26 @@ describe('per-venue string parameters', () => {
         expect(out).toContain('self.orderRequest("sell", Some(name.clone().as_str()), &[Value::from(name.clone())])');
         expect(out).toContain('pub fn cleanPath(&self, path: &str) -> Option<String> {');
         expect(out).toContain('return Some(result);');
+    });
+});
+
+describe('per-venue scalar parameters', () => {
+    test('number / int / boolean parameters print f64 / i64 / bool, an optional one a positional Option', () => {
+        const dir = path.join (rustFixtureRoot, 'venue-scalar-params');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport type Num = number | undefined;\nexport type Int = number | undefined;\nexport type int = number;\nexport default class Exchange {\n    numberToString (n: any): Str { return undefined; }\n    parseToInt (n: any): number { return 0; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Num, Int, int, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    orderRequest (side: string, amount: Num, price: Num = undefined, params = {}) {\n        return { 'side': side, 'amount': this.numberToString (amount), 'price': this.numberToString (price) };\n    }\n    pad (value: string, length: int, left: boolean): string {\n        const size = this.parseToInt (length);\n        if (left) {\n            return value + size.toString ();\n        }\n        return value;\n    }\n    width (n: number): number {\n        const size = this.parseToInt (n);\n        return size + 1;\n    }\n    place (o: any, amount: Num) {\n        const a = this.orderRequest ('buy', amount);\n        const b = this.orderRequest ('sell', 1, 2.5);\n        const c = this.width (7);\n        return [ a, b, c, this.pad ('x', 4, true), this.pad ('y', 2, !true) ];\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('pub fn orderRequest(&self, side: &str, amount: Option<f64>, price: Option<f64>, optional_args: &[Value]) -> Value {');
+        expect(out).toContain('let mut price: Value = price.into();');
+        expect(out).toContain('self.orderRequest("buy", amount.as_f64(), None, &[])');
+        expect(out).toContain('self.orderRequest("sell", Some(1.0), Some(2.5), &[])');
+        expect(out).toContain('pub fn pad(&self, value: &str, length: i64, left: bool) -> Option<String> {');
+        expect(out).toContain('self.pad("x", 4, true)');
+        expect(out).toContain('self.pad("y", 2, !true)');
+        expect(out).toContain('if left {');
+        expect(out).toContain('let mut size: i64 = self.parseToInt(length).as_i64().unwrap_or_default();');
+        expect(out).toContain('pub fn width(&self, n: f64) -> Value {');
+        expect(out).toContain('self.width(7.0)');
     });
 });
