@@ -51358,6 +51358,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustScalarSeeding = false;
     this.rustScalarVetoed = /* @__PURE__ */ new WeakSet();
     this.rustScalarGuarded = /* @__PURE__ */ new WeakSet();
+    this.rustStrRuntimeBare = /* @__PURE__ */ new Set();
     // ── venue string-method results (rustVenueStrCall / rustVenueReturnTypes) ──
     // A call to a venue method already printed `-> Option<String>` is an optional-string source as it
     // stands, when every venue declaration of that name (REST, pro, prediction) declares a string return.
@@ -54657,6 +54658,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     if (this.rustFieldKeyCostly(declaration))
       return void 0;
+    if (this.rustStrRuntimeLocalCostly(declaration))
+      return void 0;
     if (copied > 0 && (kind === "str" || kind === "ostr") && this.rustStrMethodRecvLocal(declaration))
       return void 0;
     if (this.rustScalarOptKeyCostly(declaration, kind) === false && kind === "ostr" && this.rustScalarOptKeyCount(declaration) > 0)
@@ -54786,6 +54789,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const args = Array.from(node.arguments ?? []);
     if (this.rustClockCall(node))
       return "int";
+    if (this.rustStrRuntimeCall(node))
+      return "str";
     const baseReturn = this.rustBaseReturnScalarKind(node, name);
     if (baseReturn !== void 0)
       return baseReturn;
@@ -54828,6 +54833,66 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     const want = kind === "ostr" ? "string" : "number";
     return this.primitiveKindOfType(this.typeOfNodeIfAny(call)) === want ? kind : void 0;
+  }
+  /** `this.implodeParams(..)` / `this.intToBase16(..)` resolved to the base tier with a non-null `string` return. */
+  rustStrRuntimeCall(node) {
+    if (node === void 0 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || !_RustTranspiler.RUST_STR_RUNTIME_METHODS.has(String(node.expression.name.text)) || !this.rustScalarReceiver(node.expression.expression))
+      return false;
+    const declaration = this.rustScalarCallee(node);
+    if (declaration === void 0 || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? "")))
+      return false;
+    const type = this.typeOfNodeIfAny(node);
+    return type !== void 0 && this.isStringLikeType(type);
+  }
+  /** The bare `String` call text (no box), for typed string locals and `format!` operands. */
+  rustStrRuntimeBareText(node, identation = 0) {
+    this.rustStrRuntimeBare.add(node);
+    try {
+      return this.printNode(node, identation).trim();
+    } finally {
+      this.rustStrRuntimeBare.delete(node);
+    }
+  }
+  /** A `+` / `+=` operand the printer joins with `format!` (or a typed `String` push), where `Display` takes the `String` as-is. */
+  rustStrRuntimeFormatOperand(node) {
+    let current = node;
+    while (isParenthesizedExpression3(current.parent))
+      current = current.parent;
+    const parent = current.parent;
+    if (parent === void 0 || !isBinaryExpression5(parent))
+      return false;
+    const op = parent.operatorToken.kind;
+    if (op === SyntaxKind7.PlusEqualsToken && parent.right === current && this.rustScalarCompoundText(parent, true) !== void 0)
+      return true;
+    if (op !== SyntaxKind7.PlusToken && !(op === SyntaxKind7.PlusEqualsToken && parent.right === current && !isElementAccessExpression4(parent.left)))
+      return false;
+    const { left, right } = parent;
+    const other = left === current ? right : left;
+    const [leftType, rightType] = [this.typeOfNodeIfAny(left), this.typeOfNodeIfAny(right)];
+    return this.rustNumericOperand(other) !== void 0 || this.isNativeStringConcatPair(leftType, rightType) || this.concatIsAnchored(left, right, leftType, rightType) || this.strOrNullConcatIsAnchored(left, right, leftType, rightType);
+  }
+  /** A local seeded from such a call is not appended onto another local (that write would retype the other one). */
+  rustStrRuntimeLocalCostly(declaration) {
+    if (!this.rustStrRuntimeCall(this.unwrapParens(declaration.initializer)))
+      return false;
+    let appended = false;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      let top = n;
+      while (isParenthesizedExpression3(top.parent))
+        top = top.parent;
+      const parent = top.parent;
+      if (isBinaryExpression5(parent) && parent.right === top && (parent.operatorToken.kind === SyntaxKind7.PlusEqualsToken || parent.operatorToken.kind === SyntaxKind7.PlusToken && isBinaryExpression5(parent.parent) && parent.parent.operatorToken.kind === SyntaxKind7.EqualsToken))
+        appended = true;
+      return true;
+    });
+    return appended;
+  }
+  /** Call hook: the `String` result is boxed once (`Value::from`) wherever a `Value` is expected. */
+  printRustStrRuntimeCall(node, identation) {
+    if (this.rustStrRuntimeBare.has(node) || !this.rustStrRuntimeCall(node))
+      return void 0;
+    const text = this.rustStrRuntimeBareText(node, identation);
+    return this.rustStrRuntimeFormatOperand(node) ? text : `Value::from(${text})`;
   }
   // ── clock and cast initialisers (rustClockCall / rustStrCastCall) ──
   // The runtime `milliseconds()`/`seconds()` always return `Value::Int`, so with no venue override the
@@ -55081,7 +55146,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
   rustScalarNeedsNativeUse(init) {
     const node = this.unwrapParens(init);
-    if (this.rustElementReadScalarKind(node) !== void 0 || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== void 0 || this.rustClockString(node))
+    if (this.rustElementReadScalarKind(node) !== void 0 || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== void 0 || this.rustClockString(node) || this.rustStrRuntimeCall(node))
       return true;
     if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
       return false;
@@ -56011,6 +56076,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       return void 0;
     if (this.rustArithCombinator(node))
       return this.rustArithCallText(kind, node);
+    if (base === "str" && this.rustStrRuntimeCall(node))
+      return wrap(this.rustStrRuntimeBareText(node));
     const text = this.printNode(node, 0).trim();
     if (this.rustClockCall(node))
       return kind === "int" || kind === "oint" ? wrap(`${text}.as_i64().unwrap_or_default()`) : void 0;
@@ -58384,6 +58451,9 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const limitCall = this.rustLimitCallText(node);
     if (limitCall !== void 0)
       return `Value::from(${limitCall})`;
+    const strRuntime = this.printRustStrRuntimeCall(node, identation);
+    if (strRuntime !== void 0)
+      return strRuntime;
     const arithCall = this.printRustArithCall(node);
     if (arithCall !== void 0)
       return arithCall;
@@ -67043,6 +67113,9 @@ _RustTranspiler.RUST_BASE_SCALAR_RETURNS = {
   milliseconds: "oint",
   seconds: "oint"
 };
+// ── hand-written `-> String` runtime methods (rustStrRuntimeCall / printRustStrRuntimeCall) ──
+// Base methods the runtime implements by hand with the TS `string` return as a Rust `String`.
+_RustTranspiler.RUST_STR_RUNTIME_METHODS = /* @__PURE__ */ new Set(["implodeParams", "intToBase16"]);
 // rustWsClientCallArg: `client.resolve|reject|future|reusableFuture|send(.., x)` on a ws `Client`
 // receiver takes its arguments as plain `Value`s, so a string local boxes there.
 _RustTranspiler.RUST_WS_CLIENT_VALUE_METHODS = /* @__PURE__ */ new Set(["resolve", "reject", "future", "reusableFuture", "send"]);

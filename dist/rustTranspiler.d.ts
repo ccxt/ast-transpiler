@@ -459,6 +459,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarValueKind(expr: any, fresh: boolean): string | undefined;
     private static readonly RUST_BASE_SCALAR_RETURNS;
     rustBaseReturnScalarKind(call: any, name: string): string | undefined;
+    private static readonly RUST_STR_RUNTIME_METHODS;
+    private rustStrRuntimeBare;
+    /** `this.implodeParams(..)` / `this.intToBase16(..)` resolved to the base tier with a non-null `string` return. */
+    rustStrRuntimeCall(node: any): boolean;
+    /** The bare `String` call text (no box), for typed string locals and `format!` operands. */
+    rustStrRuntimeBareText(node: any, identation?: number): string;
+    /** A `+` / `+=` operand the printer joins with `format!` (or a typed `String` push), where `Display` takes the `String` as-is. */
+    rustStrRuntimeFormatOperand(node: any): boolean;
+    /** A local seeded from such a call is not appended onto another local (that write would retype the other one). */
+    rustStrRuntimeLocalCostly(declaration: any): boolean;
+    /** Call hook: the `String` result is boxed once (`Value::from`) wherever a `Value` is expected. */
+    printRustStrRuntimeCall(node: any, identation: any): string | undefined;
     rustClockCall(node: any): boolean;
     rustVenueReturnTypesHas(node: any, name: string): boolean;
     /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */

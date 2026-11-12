@@ -3769,6 +3769,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustScalarOptKeyCostly(declaration, kind)) return undefined;
         if (this.rustNewShapeCostly(declaration.initializer, typedUses, kind === 'str' || kind === 'ostr' ? copied : 0)) return undefined;
         if (this.rustFieldKeyCostly(declaration)) return undefined;
+        if (this.rustStrRuntimeLocalCostly(declaration)) return undefined;
         // a local typed for its string-method reads must not copy where the `Value` moved
         if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustStrMethodRecvLocal(declaration)) return undefined;
         // a key-admitted local converts once at its declaration: that line keeps the 400-char budget
@@ -3876,6 +3877,7 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(callee.name.text);
         const args: any[] = Array.from(node.arguments ?? []);
         if (this.rustClockCall(node)) return 'int';
+        if (this.rustStrRuntimeCall(node)) return 'str';
         const baseReturn = this.rustBaseReturnScalarKind(node, name);
         if (baseReturn !== undefined) return baseReturn;
         if (this.rustVenueInitializer(node) && this.rustVenueStrCall(node)) return 'ostr';
@@ -3918,6 +3920,69 @@ export class RustTranspiler extends BaseTranspiler {
         if (owner === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(owner.getSourceFile?.()?.fileName ?? ''))) return undefined;
         const want = kind === 'ostr' ? 'string' : 'number';
         return this.primitiveKindOfType(this.typeOfNodeIfAny(call)) === want ? kind : undefined;
+    }
+
+    // ── hand-written `-> String` runtime methods (rustStrRuntimeCall / printRustStrRuntimeCall) ──
+    // Base methods the runtime implements by hand with the TS `string` return as a Rust `String`.
+    private static readonly RUST_STR_RUNTIME_METHODS = new Set([ 'implodeParams', 'intToBase16' ]);
+    private rustStrRuntimeBare = new Set<Node>();
+
+    /** `this.implodeParams(..)` / `this.intToBase16(..)` resolved to the base tier with a non-null `string` return. */
+    rustStrRuntimeCall(node): boolean {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)
+            || !RustTranspiler.RUST_STR_RUNTIME_METHODS.has(String(node.expression.name.text)) || !this.rustScalarReceiver(node.expression.expression)) return false;
+        const declaration: any = this.rustScalarCallee(node);
+        if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return false;
+        const type: any = this.typeOfNodeIfAny(node);
+        return type !== undefined && this.isStringLikeType(type);
+    }
+
+    /** The bare `String` call text (no box), for typed string locals and `format!` operands. */
+    rustStrRuntimeBareText(node, identation = 0): string {
+        this.rustStrRuntimeBare.add(node);
+        try {
+            return this.printNode(node, identation).trim();
+        } finally {
+            this.rustStrRuntimeBare.delete(node);
+        }
+    }
+
+    /** A `+` / `+=` operand the printer joins with `format!` (or a typed `String` push), where `Display` takes the `String` as-is. */
+    rustStrRuntimeFormatOperand(node): boolean {
+        let current: any = node;
+        while (isParenthesizedExpression(current.parent)) current = current.parent;
+        const parent: any = current.parent;
+        if (parent === undefined || !isBinaryExpression(parent)) return false;
+        const op = parent.operatorToken.kind;
+        if (op === SyntaxKind.PlusEqualsToken && parent.right === current && this.rustScalarCompoundText(parent, true) !== undefined) return true;
+        if (op !== SyntaxKind.PlusToken && !(op === SyntaxKind.PlusEqualsToken && parent.right === current && !isElementAccessExpression(parent.left))) return false;
+        const { left, right } = parent;
+        const other = left === current ? right : left;
+        const [ leftType, rightType ] = [ this.typeOfNodeIfAny(left), this.typeOfNodeIfAny(right) ];
+        return this.rustNumericOperand(other) !== undefined || this.isNativeStringConcatPair(leftType, rightType)
+            || this.concatIsAnchored(left, right, leftType, rightType) || this.strOrNullConcatIsAnchored(left, right, leftType, rightType);
+    }
+
+    /** A local seeded from such a call is not appended onto another local (that write would retype the other one). */
+    rustStrRuntimeLocalCostly(declaration): boolean {
+        if (!this.rustStrRuntimeCall(this.unwrapParens(declaration.initializer))) return false;
+        let appended = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            let top: any = n;
+            while (isParenthesizedExpression(top.parent)) top = top.parent;
+            const parent: any = top.parent;
+            if (isBinaryExpression(parent) && parent.right === top && (parent.operatorToken.kind === SyntaxKind.PlusEqualsToken
+                || (parent.operatorToken.kind === SyntaxKind.PlusToken && isBinaryExpression(parent.parent) && parent.parent.operatorToken.kind === SyntaxKind.EqualsToken))) appended = true;
+            return true;
+        });
+        return appended;
+    }
+
+    /** Call hook: the `String` result is boxed once (`Value::from`) wherever a `Value` is expected. */
+    printRustStrRuntimeCall(node, identation): string | undefined {
+        if (this.rustStrRuntimeBare.has(node) || !this.rustStrRuntimeCall(node)) return undefined;
+        const text = this.rustStrRuntimeBareText(node, identation);
+        return this.rustStrRuntimeFormatOperand(node) ? text : `Value::from(${text})`;
     }
 
     // ── clock and cast initialisers (rustClockCall / rustStrCastCall) ──
@@ -4150,7 +4215,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
     rustScalarNeedsNativeUse(init): boolean {
         const node: any = this.unwrapParens(init);
-        if (this.rustElementReadScalarKind(node) !== undefined || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node)) return true;
+        if (this.rustElementReadScalarKind(node) !== undefined || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustStrRuntimeCall(node)) return true;
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return false;
         return RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(node.expression.name.text)] === undefined && this.rustDerivedScalarKind(node) !== undefined;
     }
@@ -5015,6 +5080,7 @@ export class RustTranspiler extends BaseTranspiler {
         const cast = this.rustStrCastCall(node); if (cast !== undefined) return kind === 'ostr' ? this.rustScalarNativeText(kind, cast) : undefined;
         if (!isCallExpression(node)) return undefined;
         if (this.rustArithCombinator(node)) return this.rustArithCallText(kind, node);
+        if (base === 'str' && this.rustStrRuntimeCall(node)) return wrap(this.rustStrRuntimeBareText(node));
         const text = this.printNode(node, 0).trim();
         if (this.rustClockCall(node)) return kind === 'int' || kind === 'oint' ? wrap(`${text}.as_i64().unwrap_or_default()`) : undefined;
         const clock: any = base === 'str' && this.rustClockString(node) && isPropertyAccessExpression(node.expression) ? node.expression.expression : undefined;
@@ -7585,6 +7651,7 @@ export class RustTranspiler extends BaseTranspiler {
         const handed = this.printHandedDictExtend(node, identation); if (handed !== undefined) return handed;
         const scalarMethod = this.printRustScalarMethodCall(node); if (scalarMethod !== undefined) return scalarMethod;
         const limitCall = this.rustLimitCallText(node); if (limitCall !== undefined) return `Value::from(${limitCall})`;
+        const strRuntime = this.printRustStrRuntimeCall(node, identation); if (strRuntime !== undefined) return strRuntime;
         const arithCall = this.printRustArithCall(node); if (arithCall !== undefined) return arithCall;
         const marketRead = this.printTypedMarketRead(node);
         if (marketRead !== undefined) return marketRead;
