@@ -527,6 +527,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueReturnTypes(srcRoot: string): Map<string, Set<string>>;
     /** The `Option<String>` text of a venue string-method call (the box a `Value` position adds is left off). */
     rustVenueStrCallText(node: any): string;
+    private rustVenueTypedDecisions;
+    rustVenueTypedCall(expr: any): string | undefined;
+    rustVenueTypedKindUncached(declaration: any): string | undefined;
+    /** The once-converted native text of a venue typed call (the method keeps `-> Value` and its dispatch arm). */
+    rustVenueTypedText(kind: string, expr: any): string | undefined;
+    /** A venue typed string is copied out of the `Value` once: a box short of a moving last use, or a hand-on, would copy it again. */
+    rustVenueTypedCostly(declaration: any, kind: string, copied: number): boolean;
     /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
     rustScalarFormatText(node: any): string | undefined;
     /** How a use of a scalar local prints: `test` (literal/null compare), `cond` (bool condition),

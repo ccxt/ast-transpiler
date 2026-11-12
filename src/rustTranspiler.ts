@@ -3679,7 +3679,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.literalKindOfNode(node) !== undefined || this.rustScalarIntLiteral(node) !== undefined || this.rustScalarFloatLiteral(node) !== undefined) return true;
         if (isBinaryExpression(node)) return RustTranspiler.RUST_SCALAR_ARITH_OPS.has(node.operatorToken.kind);
         if (isIdentifier(node) || isConditionalExpression(node) || this.rustScalarStrMethod(node, true) !== undefined || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node)) return true;
-        if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node)) return true;
+        if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustVenueTypedCall(node) !== undefined) return true;
         if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && isIdentifier(node.expression);
         if (isElementAccessExpression(node)) return isIdentifier(node.expression);
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustScalarReceiver(node.expression.expression)) return false;
@@ -3755,6 +3755,7 @@ export class RustTranspiler extends BaseTranspiler {
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration)) return undefined;
         if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration))) return undefined;
+        if (this.rustVenueTypedCostly(declaration, kind, copied)) return undefined;
         if (typedUses === 0 && this.rustTestTierSource(declaration)) return undefined;
         if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined) return undefined;
         if ((boxed > 0 || expressionUses) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
@@ -3859,6 +3860,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node === undefined) return undefined;
         const literal = this.literalKindOfNode(node);
         if (literal === 'null') return 'null';
+        if (fresh && node.kind === SyntaxKind.AwaitExpression && this.rustVenueInitializer(node)) return this.rustVenueTypedCall(node);
         if (fresh && literal === 'string') return node.text in this.StringLiteralReplacements ? undefined : 'str';
         if (fresh && literal === 'boolean') return 'bool';
         if (fresh && this.rustScalarIntLiteral(node) !== undefined) return 'int';
@@ -3883,6 +3885,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (baseReturn !== undefined) return baseReturn;
         if (this.rustVenueInitializer(node) && this.rustVenueStrCall(node)) return 'ostr';
         if (fresh && this.rustVenueInitializer(node) && this.rustVenueIntCall(node)) return 'int';
+        if (fresh && this.rustVenueInitializer(node) && this.rustVenueTypedCall(node) !== undefined) return this.rustVenueTypedCall(node);
         const declaration: any = this.rustScalarCallee(node);
         if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return undefined;
         const readerKind = this.rustReaderDefaultKind(name, args, fresh); if (readerKind !== undefined) return readerKind;
@@ -4230,7 +4233,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
     rustScalarNeedsNativeUse(init): boolean {
         const node: any = this.unwrapParens(init);
-        if (this.rustElementReadScalarKind(node) !== undefined || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustStrRuntimeCall(node)) return true;
+        if (this.rustElementReadScalarKind(node) !== undefined || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueTypedCall(node) !== undefined || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustStrRuntimeCall(node)) return true;
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return false;
         return RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(node.expression.name.text)] === undefined && this.rustDerivedScalarKind(node) !== undefined;
     }
@@ -4351,6 +4354,78 @@ export class RustTranspiler extends BaseTranspiler {
         const text = this.printNode(node, 0).trim();
         const box = '.map(Value::from).unwrap_or(Value::Null)';
         return text.endsWith(box) ? text.slice(0, -box.length) : text;
+    }
+
+    // ── typed results of per-venue helper methods (rustVenueTypedCall / rustVenueTypedText) ──
+    // A venue method (not base, not an override, no typed signature) still printed `-> Value` whose explicit
+    // return is `Str` / `string` / `boolean` / `int` (or a `Promise` of one, awaited) and every `return` proves it.
+    private rustVenueTypedDecisions = new WeakMap<Node, string | null>();
+
+    rustVenueTypedCall(expr): string | undefined {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined) return undefined;
+        const awaited = node.kind === SyntaxKind.AwaitExpression;
+        const call: any = awaited ? this.unwrapParens(node.expression) : node;
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const declaration: any = this.rustScalarCallee(call);
+        if (declaration === undefined || !isMethodDeclaration(declaration) || this.isAsyncFunction(declaration) !== awaited) return undefined;
+        let kind = this.rustVenueTypedDecisions.get(declaration);
+        if (kind === undefined) {
+            try {
+                kind = this.rustVenueTypedKindUncached(declaration) ?? null;
+            } catch (e) {
+                kind = null;
+            }
+            this.rustVenueTypedDecisions.set(declaration, kind);
+        }
+        return kind ?? undefined;
+    }
+
+    rustVenueTypedKindUncached(declaration: any): string | undefined {
+        const file = String(declaration.getSourceFile().fileName);
+        if (declaration.type === undefined || declaration.body === undefined || !/ts[\\/]src[\\/]/.test(file) || /ts[\\/]src[\\/]test[\\/]/.test(file)) return undefined;
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(file) || this.getMethodOverride(declaration) !== undefined || this.rustTypedSignature(declaration) !== undefined) return undefined;
+        if (this.rustNativeStrReturnKind(declaration) === 'str') return undefined;
+        let declared: any = declaration.type;
+        if (this.isAsyncFunction(declaration)) {
+            const promised = declared.kind === SyntaxKind.TypeReference && isIdentifier(declared.typeName) && declared.typeName.text === 'Promise' ? declared.typeArguments?.[0] : undefined;
+            if (promised === undefined) return undefined;
+            declared = promised;
+        }
+        const name = declared.kind === SyntaxKind.TypeReference && isIdentifier(declared.typeName) ? String(declared.typeName.text) : '';
+        const kind = declared.kind === SyntaxKind.StringKeyword || name === 'Str' ? 'ostr' : (declared.kind === SyntaxKind.BooleanKeyword ? 'bool' : (name === 'int' ? 'int' : undefined));
+        if (kind === undefined) return undefined;
+        const expected = kind === 'ostr' ? 'string' : (kind === 'bool' ? 'boolean' : 'number');
+        let ok = declaration.body.statements.length > 0;
+        const visit = (n: any) => {
+            if (!ok || (n !== declaration.body && isFunctionLike(n))) return;
+            if (isReturnStatement(n)) {
+                const value: any = this.unwrapParens(n.expression);
+                const nullish = value === undefined || this.literalKindOfNode(value) === 'null';
+                const type: any = nullish ? undefined : this.getCheckedTypeOf(value);
+                // `any` proves nothing; only a `Str` return may be absent
+                if (nullish ? kind !== 'ostr' : (type === undefined || (type.flags & TypeFlags.Any) !== 0 || this.primitiveKindOfType(type) !== expected
+                    || (kind !== 'ostr' && (type.flags & TypeFlags.Union) !== 0 && typeParts(type).some((t: any) => (t.flags & (TypeFlags.Undefined | TypeFlags.Null)) !== 0)))) ok = false;
+            }
+            n.forEachChild(visit);
+        };
+        declaration.body.forEachChild(visit);
+        return ok ? kind : undefined;
+    }
+
+    /** The once-converted native text of a venue typed call (the method keeps `-> Value` and its dispatch arm). */
+    rustVenueTypedText(kind: string, expr): string | undefined {
+        if (this.rustVenueTypedCall(expr) !== kind) return undefined;
+        const text = this.printNode(this.unwrapParens(expr), 0).trim();
+        if (kind === 'ostr') return `${text}.as_str().map(str::to_owned)`;
+        if (kind === 'bool') return `${text}.as_bool().unwrap_or_default()`;
+        return `${text}.as_i64().unwrap_or_default()`;
+    }
+
+    /** A venue typed string is copied out of the `Value` once: a box short of a moving last use, or a hand-on, would copy it again. */
+    rustVenueTypedCostly(declaration, kind: string, copied: number): boolean {
+        if (this.rustVenueTypedCall(declaration.initializer) === undefined) return false;
+        return (kind === 'ostr' && (copied > 0 || this.rustVenueLocalHandedOn(declaration))) || this.rustReaderDeclTooLong(declaration, kind);
     }
 
     /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
@@ -5094,6 +5169,7 @@ export class RustTranspiler extends BaseTranspiler {
             return read.endsWith(tail) ? `${read.slice(0, -tail.length)}.and_then(Value::as_str).map(str::to_owned)` : undefined;
         }
         const cast = this.rustStrCastCall(node); if (cast !== undefined) return kind === 'ostr' ? this.rustScalarNativeText(kind, cast) : undefined;
+        const venueTyped = this.rustVenueTypedText(kind, node); if (venueTyped !== undefined) return venueTyped;
         if (!isCallExpression(node)) return undefined;
         if (this.rustArithCombinator(node)) return this.rustArithCallText(kind, node);
         if (base === 'str' && this.rustStrRuntimeCall(node)) return wrap(this.rustStrRuntimeBareText(node));

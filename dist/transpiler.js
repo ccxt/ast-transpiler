@@ -51363,6 +51363,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // A call to a venue method already printed `-> Option<String>` is an optional-string source as it
     // stands, when every venue declaration of that name (REST, pro, prediction) declares a string return.
     this.rustVenueReturnTypesByRoot = /* @__PURE__ */ new Map();
+    // ── typed results of per-venue helper methods (rustVenueTypedCall / rustVenueTypedText) ──
+    // A venue method (not base, not an override, no typed signature) still printed `-> Value` whose explicit
+    // return is `Str` / `string` / `boolean` / `int` (or a `Promise` of one, awaited) and every `return` proves it.
+    this.rustVenueTypedDecisions = /* @__PURE__ */ new WeakMap();
     this.rustClientHandlePlans = /* @__PURE__ */ new WeakMap();
     this.rustClientHandleDeclPrinting = false;
     // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
@@ -54551,7 +54555,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return _RustTranspiler.RUST_SCALAR_ARITH_OPS.has(node.operatorToken.kind);
     if (isIdentifier3(node) || isConditionalExpression4(node) || this.rustScalarStrMethod(node, true) !== void 0 || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node))
       return true;
-    if (this.rustStrCastCall(node) !== void 0 || this.rustClockString(node))
+    if (this.rustStrCastCall(node) !== void 0 || this.rustClockString(node) || this.rustVenueTypedCall(node) !== void 0)
       return true;
     if (isPropertyAccessExpression3(node))
       return isIdentifier3(node.name) && node.name.text === "length" && isIdentifier3(node.expression);
@@ -54636,6 +54640,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!ok || unused || storeOnly || clientOnce || guarded && scope.kind !== SyntaxKind7.MethodDeclaration || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration))
       return void 0;
     if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration)))
+      return void 0;
+    if (this.rustVenueTypedCostly(declaration, kind, copied))
       return void 0;
     if (typedUses === 0 && this.rustTestTierSource(declaration))
       return void 0;
@@ -54758,6 +54764,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const literal2 = this.literalKindOfNode(node);
     if (literal2 === "null")
       return "null";
+    if (fresh && node.kind === SyntaxKind7.AwaitExpression && this.rustVenueInitializer(node))
+      return this.rustVenueTypedCall(node);
     if (fresh && literal2 === "string")
       return node.text in this.StringLiteralReplacements ? void 0 : "str";
     if (fresh && literal2 === "boolean")
@@ -54800,6 +54808,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return "ostr";
     if (fresh && this.rustVenueInitializer(node) && this.rustVenueIntCall(node))
       return "int";
+    if (fresh && this.rustVenueInitializer(node) && this.rustVenueTypedCall(node) !== void 0)
+      return this.rustVenueTypedCall(node);
     const declaration = this.rustScalarCallee(node);
     if (declaration === void 0 || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName)))
       return void 0;
@@ -55161,7 +55171,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
   rustScalarNeedsNativeUse(init) {
     const node = this.unwrapParens(init);
-    if (this.rustElementReadScalarKind(node) !== void 0 || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== void 0 || this.rustClockString(node) || this.rustStrRuntimeCall(node))
+    if (this.rustElementReadScalarKind(node) !== void 0 || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueTypedCall(node) !== void 0 || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== void 0 || this.rustClockString(node) || this.rustStrRuntimeCall(node))
       return true;
     if (!isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
       return false;
@@ -55274,6 +55284,81 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const text = this.printNode(node, 0).trim();
     const box = ".map(Value::from).unwrap_or(Value::Null)";
     return text.endsWith(box) ? text.slice(0, -box.length) : text;
+  }
+  rustVenueTypedCall(expr) {
+    const node = this.unwrapParens(expr);
+    if (node === void 0)
+      return void 0;
+    const awaited = node.kind === SyntaxKind7.AwaitExpression;
+    const call = awaited ? this.unwrapParens(node.expression) : node;
+    if (call === void 0 || !isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+      return void 0;
+    const declaration = this.rustScalarCallee(call);
+    if (declaration === void 0 || !isMethodDeclaration5(declaration) || this.isAsyncFunction(declaration) !== awaited)
+      return void 0;
+    let kind = this.rustVenueTypedDecisions.get(declaration);
+    if (kind === void 0) {
+      try {
+        kind = this.rustVenueTypedKindUncached(declaration) ?? null;
+      } catch (e) {
+        kind = null;
+      }
+      this.rustVenueTypedDecisions.set(declaration, kind);
+    }
+    return kind ?? void 0;
+  }
+  rustVenueTypedKindUncached(declaration) {
+    const file = String(declaration.getSourceFile().fileName);
+    if (declaration.type === void 0 || declaration.body === void 0 || !/ts[\\/]src[\\/]/.test(file) || /ts[\\/]src[\\/]test[\\/]/.test(file))
+      return void 0;
+    if (_RustTranspiler.RUST_BASE_TIER_FILE.test(file) || this.getMethodOverride(declaration) !== void 0 || this.rustTypedSignature(declaration) !== void 0)
+      return void 0;
+    if (this.rustNativeStrReturnKind(declaration) === "str")
+      return void 0;
+    let declared = declaration.type;
+    if (this.isAsyncFunction(declaration)) {
+      const promised = declared.kind === SyntaxKind7.TypeReference && isIdentifier3(declared.typeName) && declared.typeName.text === "Promise" ? declared.typeArguments?.[0] : void 0;
+      if (promised === void 0)
+        return void 0;
+      declared = promised;
+    }
+    const name = declared.kind === SyntaxKind7.TypeReference && isIdentifier3(declared.typeName) ? String(declared.typeName.text) : "";
+    const kind = declared.kind === SyntaxKind7.StringKeyword || name === "Str" ? "ostr" : declared.kind === SyntaxKind7.BooleanKeyword ? "bool" : name === "int" ? "int" : void 0;
+    if (kind === void 0)
+      return void 0;
+    const expected = kind === "ostr" ? "string" : kind === "bool" ? "boolean" : "number";
+    let ok = declaration.body.statements.length > 0;
+    const visit = (n) => {
+      if (!ok || n !== declaration.body && isFunctionLike(n))
+        return;
+      if (isReturnStatement4(n)) {
+        const value = this.unwrapParens(n.expression);
+        const nullish = value === void 0 || this.literalKindOfNode(value) === "null";
+        const type = nullish ? void 0 : this.getCheckedTypeOf(value);
+        if (nullish ? kind !== "ostr" : type === void 0 || (type.flags & TypeFlags6.Any) !== 0 || this.primitiveKindOfType(type) !== expected || kind !== "ostr" && (type.flags & TypeFlags6.Union) !== 0 && typeParts(type).some((t) => (t.flags & (TypeFlags6.Undefined | TypeFlags6.Null)) !== 0))
+          ok = false;
+      }
+      n.forEachChild(visit);
+    };
+    declaration.body.forEachChild(visit);
+    return ok ? kind : void 0;
+  }
+  /** The once-converted native text of a venue typed call (the method keeps `-> Value` and its dispatch arm). */
+  rustVenueTypedText(kind, expr) {
+    if (this.rustVenueTypedCall(expr) !== kind)
+      return void 0;
+    const text = this.printNode(this.unwrapParens(expr), 0).trim();
+    if (kind === "ostr")
+      return `${text}.as_str().map(str::to_owned)`;
+    if (kind === "bool")
+      return `${text}.as_bool().unwrap_or_default()`;
+    return `${text}.as_i64().unwrap_or_default()`;
+  }
+  /** A venue typed string is copied out of the `Value` once: a box short of a moving last use, or a hand-on, would copy it again. */
+  rustVenueTypedCostly(declaration, kind, copied) {
+    if (this.rustVenueTypedCall(declaration.initializer) === void 0)
+      return false;
+    return kind === "ostr" && (copied > 0 || this.rustVenueLocalHandedOn(declaration)) || this.rustReaderDeclTooLong(declaration, kind);
   }
   /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
   rustScalarFormatText(node) {
@@ -56089,6 +56174,9 @@ ${binding(plan.indent)}` : ""), head: "" };
     const cast = this.rustStrCastCall(node);
     if (cast !== void 0)
       return kind === "ostr" ? this.rustScalarNativeText(kind, cast) : void 0;
+    const venueTyped = this.rustVenueTypedText(kind, node);
+    if (venueTyped !== void 0)
+      return venueTyped;
     if (!isCallExpression6(node))
       return void 0;
     if (this.rustArithCombinator(node))
