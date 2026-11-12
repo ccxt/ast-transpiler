@@ -1971,6 +1971,7 @@ export class RustTranspiler extends BaseTranspiler {
         const builtListWrite = isAssign && isIdentifier(left) ? this.printBuiltListWrite(left, right) : undefined; if (builtListWrite !== undefined) return builtListWrite;
         const marketWrite = isAssign ? this.printTypedMarketWrite(left, right) : undefined;
         if (marketWrite !== undefined) return marketWrite;
+        if (isAssign && this.rustTypedListField(left)) return `${this.printNode(left, 0)} = ${this.printNode(right, 0).trim()}.into_list()`;
         const optContainerWrite = isAssign && isIdentifier(left) ? this.printOptContainerWrite(left, right) ?? this.printOptListWrite(left, right) : undefined;
         if (optContainerWrite !== undefined) return optContainerWrite;
         const nilWrite = isAssign && isIdentifier(left) ? this.printRustNilLocalWrite(left, right) : undefined;
@@ -2162,6 +2163,7 @@ export class RustTranspiler extends BaseTranspiler {
             const block = this.rustObjectLiteralBlock(this.rustSkipWrappers(declaration.initializer), identation);
             return `${indent}let mut ${varName}: indexmap::IndexMap<String, Value> = (${block})`;
         }
+        if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rustTypedListField(declaration.initializer)) return `${indent}let mut ${varName}: crate::value::List = self.${String(this.rustSkipWrappers(declaration.initializer).name.text)}.clone()`;
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue; return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
@@ -8228,6 +8230,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printPropertyAccessExpression(node, identation) {
+        const listField = this.printTypedListFieldRead(node); if (listField !== undefined) return listField;
         const dictKeyRead = this.printDictKeyRead(node); if (dictKeyRead !== undefined) return dictKeyRead;
         const handleField = this.printClientHandleField(node, true); if (handleField !== undefined) return handleField;
         const marketRead = this.printTypedMarketRead(node);
@@ -13150,6 +13153,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A call that yields a string list on every path (never `undefined`). */
     rustLentListSource(init: any): boolean {
+        if (this.rustTypedListField(init)) return true;
         if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression)) return false;
         const callee: any = init.expression;
         const method = String(callee.name.text);
@@ -13251,6 +13255,30 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustCallPrintsRuntimeSplit(init) && filterLent === 0) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         return true;
+    }
+
+    // ── typed list fields (rustTypedListField / printTypedListFieldRead) ──
+    // Base `Exchange` fields declared `string[]` are held as `crate::value::List`: a write converts once
+    // (`into_list`), `.length` reads the list, and every other read hands out the shared handle (an Arc bump).
+    private static readonly RUST_TYPED_LIST_FIELDS = new Set([ 'symbols' ]);
+
+    rustTypedListField(node: any): boolean {
+        node = this.rustSkipWrappers(node);
+        if (node === undefined || !isPropertyAccessExpression(node) || node.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(node.name)) return false;
+        if (!RustTranspiler.RUST_TYPED_LIST_FIELDS.has(String(node.name.text)) || this.checkerOrUndefined() === undefined) return false;
+        const declarations = symbolDeclarations(this.getChecker().getSymbolAtLocation(node.name));
+        return declarations.length > 0 && declarations.every((d: any) => d.kind === SyntaxKind.PropertyDeclaration && RustTranspiler.RUST_BASE_TIER_FILE.test(String(d.getSourceFile().fileName))
+            && this.getChecker().isArrayType(this.typeOfNodeIfAny(d.name)));
+    }
+
+    printTypedListFieldRead(node: any): string | undefined {
+        if (!this.rustTypedListField(node)) return undefined;
+        const place = `self.${String(node.name.text)}`;
+        const up: any = node.parent;
+        if (isPropertyAccessExpression(up) && up.expression === node && String(up.name.text) === 'length') return place;
+        if (isBinaryExpression(up) && up.left === node && rustIsAssignmentOperator(up.operatorToken.kind)) return place;
+        if (isCallExpression(up) && up.arguments[0] === node && this.rustBorrowedAnyKeyReader(up)) return `&${place}`;
+        return `Value::Arr(${place}.clone())`;
     }
 
     rustLentListUse(node: any): boolean {

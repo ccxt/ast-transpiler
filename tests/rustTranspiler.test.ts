@@ -8929,3 +8929,20 @@ describe('rust by-name dispatch signature table', () => {
         expect((out.rustSignatures ?? []).map((s) => s.name)).toEqual([ 'parse_ticker', 'market', 'market_non_virtual' ]);
     });
 });
+
+describe('typed list fields', () => {
+    test('a string-list base field is held as a shared list and read natively', () => {
+        const dir = path.join (rustFixtureRoot, 'typed-list-field');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), 'export default class Exchange {\n    symbols: string[] = [];\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n    reset (keys: any) {\n        this.symbols = keys;\n    }\n}\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    listAll () {\n        const symbols = this.symbols;\n        const result = [];\n        for (let i = 0; i < symbols.length; i++) {\n            result.push (symbols[i]);\n        }\n        return result;\n    }\n    first () {\n        const n = this.symbols.length;\n        const s = this.safeString (this.symbols, 0, '');\n        return this.hold ([ n, s, this.symbols ]);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut symbols: crate::value::List = self.symbols.clone();');
+        expect(out).toContain('symbols.get(i as usize).cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('self.safeString(&self.symbols, ');
+        expect(out).toContain('Value::Arr(self.symbols.clone())');
+        expect(out).not.toContain('let mut symbols: Value');
+        const base = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(base).toContain('self.symbols = keys.into_list()');
+    });
+});
