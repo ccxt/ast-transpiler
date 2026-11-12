@@ -43,6 +43,10 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    options: Dict = {};\n    sum (a: any, b: any): any { return a + b; }\n    safeInteger (o: any, k: any, d: any = undefined): any { return o; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    requestId (): int {\n        const requestId: int = this.sum (this.safeInteger (this.options, 'requestId', 0), 1);\n        this.options['requestId'] = requestId;\n        return requestId;\n    }\n    subscribe () {\n        const requestId: int = this.requestId ();\n        const request: Dict = { 'id': requestId };\n        const subscription: Dict = { 'id': requestId };\n        return this.hold ([ request, subscription ]);\n    }\n    single () {\n        const once: int = this.requestId ();\n        return this.hold ({ 'id': once });\n    }\n}\n"
  },
+ "venue-helper-returns": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: any = undefined): any { return o; }\n    hold (x: any): any { return x; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    isLinear (type: string): boolean {\n        return type === 'swap';\n    }\n    marketType (method: string): Str {\n        if (method === 'spot') {\n            return 'spot';\n        } else {\n            return this.safeString (this.options, method);\n        }\n    }\n    async height (): Promise<int> {\n        const h = this.safeInteger (this.options, 'h', 0) as int;\n        return h;\n    }\n    rawType (method: string): Str {\n        return this.options[method];\n    }\n    async run (method: string) {\n        const linear = this.isLinear (method);\n        if (linear) {\n            return 1;\n        }\n        const type = this.marketType (method);\n        if (type === undefined) {\n            return 2;\n        }\n        const latest = await this.height ();\n        const next = latest + 20;\n        const raw = this.rawType (method);\n        if (raw === undefined) {\n            return next;\n        }\n        const boxed = this.marketType ('x');\n        return this.hold ({ 'k': boxed });\n    }\n}\n"
+ },
  "venue-scalar-returns": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    options: Dict = {};\n    sum (a: any, b: any): any { return a + b; }\n    safeInteger (o: any, k: any, d: any = undefined): any { return o; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    requestId (): int {\n        const requestId = this.sum (this.safeInteger (this.options, 'requestId', 0), 1);\n        this.options['requestId'] = requestId;\n        return requestId;\n    }\n    topicName (symbol: Str): Str {\n        if (symbol === undefined) {\n            return undefined;\n        }\n        return 'topic:' + symbol;\n    }\n    mixedId (): int {\n        return 1;\n    }\n    subscribe (symbol: Str) {\n        const requestId = this.requestId ();\n        const request: Dict = { 'id': requestId.toString () };\n        const topic = this.topicName (symbol);\n        if (topic === undefined) {\n            return request;\n        }\n        const other = this.mixedId ();\n        return this.hold ([ request, other.toString () ]);\n    }\n}\n",
@@ -5233,8 +5237,24 @@ describe('scalar locals from venue methods with a declared scalar return', () =>
         expect(out).not.toMatch(/let mut topic: Option<String> = [^;]*\.map\(Value::from\)/);
         expect(out).toContain('topic.is_none()');
     });
-    test('a name another venue declares with a different return stays Value', () => {
-        expect(out).toContain('let mut other: Value = self.mixedId();');
+    test('a venue method is typed from its own checker-resolved declaration, whatever another venue declares', () => {
+        expect(out).toContain('let mut other: i64 = self.mixedId().as_i64().unwrap_or_default();');
+    });
+});
+
+describe('typed locals from venue helper methods with a declared scalar return', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'venue-helper-returns', 'ts/src/venue.ts')).content;
+    });
+    test('the helper keeps its Value signature and the local converts its result once', () => {
+        expect(out).toMatch(/pub fn isLinear\(&self, [^)]*\) -> Value \{/);
+        expect(out).toMatch(/let mut type_var: Option<String> = self\.marketType\([^;]*\)\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out).toMatch(/let mut latest: i64 = self\.height\([^;]*\)\.await\.as_i64\(\)\.unwrap_or_default\(\);/);
+    });
+    test('an any-typed return or a box-only use keeps the local a Value', () => {
+        expect(out).toMatch(/let mut raw: Value = self\.rawType\(/);
+        expect(out).toMatch(/let mut boxed: Value = self\.marketType\(/);
     });
 });
 
