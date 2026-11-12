@@ -3871,6 +3871,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.PlusToken
             && this.rustScalarFormatText(node) !== undefined) return 'str';
         if (this.rustElementReadScalarKind(node) !== undefined) return this.rustElementReadScalarKind(node);
+        if (fresh && this.rustListLengthInit(node)) return 'int';
         if (!isCallExpression(node)) return undefined;
         const callee: any = node.expression;
         if (!isPropertyAccessExpression(callee) || !this.rustScalarReceiver(callee.expression)) return undefined;
@@ -4044,6 +4045,20 @@ export class RustTranspiler extends BaseTranspiler {
         return base && this.primitiveKindOfType(this.typeOfNodeIfAny(call)) === 'string' ? 'ostr' : undefined;
     }
 
+    // ── list lengths (rustListLengthInit / rustListLengthText) ──
+    // `xs.length` of a local or parameter always prints a `Value::Int` (native `len()` or `get_array_length`),
+    // so the local is an `i64` exactly; the string-local `.length` stays the expression rule's.
+    rustListLengthInit(node): boolean {
+        if (node === undefined || !isPropertyAccessExpression(node) || !isIdentifier(node.name) || node.name.text !== 'length' || !isIdentifier(node.expression)) return false;
+        return this.checkerOrUndefined() !== undefined && this.rustScalarLengthRecv(node) === undefined;
+    }
+
+    rustListLengthText(node): string {
+        const text = this.printNode(node, 0).trim();
+        const place = this.rustNativeLengths.get(node);
+        return place !== undefined ? `${place}.len() as i64` : `${text}.as_i64().unwrap_or_default()`;
+    }
+
     // `xs[i]` over a local string list (`string[]`, `split`, `Object.keys`): `Option<String>` from the element.
     rustElementReadScalarKind(node): string | undefined {
         if (!isElementAccessExpression(node) || !isIdentifier(node.expression) || this.checkerOrUndefined() === undefined) return undefined;
@@ -4215,7 +4230,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
     rustScalarNeedsNativeUse(init): boolean {
         const node: any = this.unwrapParens(init);
-        if (this.rustElementReadScalarKind(node) !== undefined || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustStrRuntimeCall(node)) return true;
+        if (this.rustElementReadScalarKind(node) !== undefined || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustStrRuntimeCall(node)) return true;
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return false;
         return RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(node.expression.name.text)] === undefined && this.rustDerivedScalarKind(node) !== undefined;
     }
@@ -5072,6 +5087,7 @@ export class RustTranspiler extends BaseTranspiler {
             const format = this.rustScalarFormatText(node);
             return format === undefined ? undefined : wrap(format);
         }
+        if (kind === 'int' && this.rustListLengthInit(node)) return this.rustListLengthText(node);
         if (kind === 'ostr' && this.rustElementReadScalarKind(node) !== undefined) {
             const read = this.printNode(node, 0).trim();
             const tail = '.cloned().unwrap_or(Value::Null)';
