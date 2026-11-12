@@ -3623,7 +3623,7 @@ describe('rust native container reads on typed receivers', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut symbol: Value = get_value(&symbols, &i);');
+        expect(output).toContain('let mut symbol: Value = get_value(&symbols, &Value::Int(i));');
         expect(output).not.toContain(DYNAMIC);
     });
 
@@ -4411,7 +4411,7 @@ describe('rust order book sides keep the runtime helpers', () => {
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('get_array_length(&bids)');
         expect(output).toContain('get_value(&bids, &Value::Int(0))');
-        expect(output).toContain('get_value(&bids, &i)');
+        expect(output).toContain('get_value(&bids, &Value::Int(i))');
         expect(output).not.toContain('bids.len()');
         expect(output).not.toContain('bids.as_array()');
     });
@@ -4764,7 +4764,7 @@ describe('relaxed Vec locals and native list length', () => {
     test('index reads on a Vec local use Vec::get', () => {
         const out = rs('        const out = [];\n        out.push (1);\n        for (let i = 0; i < out.length; i++) {\n            const v = out[i];\n            this.parseX (v);\n        }\n        return out[0];');
         expect(out).toContain('let mut out: Vec<Value> = Vec::new();');
-        expect(out).toContain('let mut v: Value = out.get((i).as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null);');
+        expect(out).toContain('let mut v: Value = out.get(i as usize).cloned().unwrap_or(Value::Null);');
         expect(out).toContain('return out.get(0).cloned().unwrap_or(Value::Null);');
     });
     test('negative: in-loop this-call arg, element write, chained read, &mut self callee keep the box', () => {
@@ -8712,5 +8712,24 @@ describe('per-venue scalar parameters', () => {
         expect(out).toContain('let mut size: i64 = self.parseToInt(length).as_i64().unwrap_or_default();');
         expect(out).toContain('pub fn width(&self, n: f64) -> Value {');
         expect(out).toContain('self.width(7.0)');
+    });
+});
+
+describe('literal-initialised counters and flags', () => {
+    const dir = path.join (rustFixtureRoot, 'literal-counter-flags');
+    const write = () => {
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), 'export type Dict = { [key: string]: any };\nexport default class Exchange {\n    handleFlagAndParams (params: Dict, name: string, d: boolean): [boolean, Dict] { return [ d, params ]; }\n    hold (x: any): any { return x; }\n}\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    rows (params: Dict = {}) {\n        const data = [ 1, 2, 3 ];\n        const out = [];\n        for (let i = 0; i < data.length; i++) {\n            out.push (data[i]);\n        }\n        return out;\n    }\n    tag (response: any) {\n        for (let i = 0; i < response.length; i++) {\n            const entry = response[i];\n            this.hold (entry);\n        }\n        return response;\n    }\n    flag (params: Dict = {}) {\n        let paginate = false;\n        [ paginate, params ] = this.handleFlagAndParams (params, 'paginate', false);\n        if (paginate) {\n            return this.hold (params);\n        }\n        return undefined;\n    }\n}\n");
+    };
+    test('a counter indexing a typed list or a helper read is an i64, a destructured flag stays bool', () => {
+        write ();
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('out.push(data.get(i as usize).cloned().unwrap_or(Value::Null))');
+        expect(out).toContain('get_value(&response, &Value::Int(i))');
+        expect(out).not.toMatch(/let mut i: Value = Value::Int\(0\);/);
+        expect(out).toContain('let mut paginate: bool = false;');
+        expect(out).toContain('.as_bool() == Some(true); params = ');
+        expect(out).toContain('if paginate {');
     });
 });

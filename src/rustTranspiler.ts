@@ -1893,7 +1893,7 @@ export class RustTranspiler extends BaseTranspiler {
                 baseExpr = baseExpr.expression;
             }
             let acc = `&mut ${this.printNode(baseExpr, 0)}`;
-            const keyStrs = keys.map(k => this.printNode(k, 0));
+            const keyStrs = keys.map((k, at) => (at < keys.length - 1 ? this.rustI64HelperKeyText(k) : undefined) ?? this.printNode(k, 0));
             for (const key of keyStrs.slice(0, -1)) acc = `get_value_mut(${acc}, &${key})`;
             const rhs = this.printNode(right, 0);
             const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
@@ -2449,6 +2449,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Slot hook: an `Option<String>` local takes the slot's string. */
     printRustNilSlotWrite(element, read: string): string | undefined {
+        if (isIdentifier(element) && this.rustScalarUseForms.get(element) === 'bslot' && this.rustScalarLocalOf(element)?.kind === 'bool') return `${super.printIdentifier(element)} = ${read}.as_bool() == Some(true)`;
         if (isIdentifier(element) && this.rustNilLocalOfIdentifier(element)?.kind === 'bool') return `${super.printIdentifier(element)} = ${read}.as_bool()`;
         if (!isIdentifier(element) || this.rustScalarLocalOf(element)?.kind !== 'ostr' || this.rustScalarUseForms.get(element) !== 'slot') return undefined;
         return `${super.printIdentifier(element)} = ${read}.as_str().map(str::to_owned)`;
@@ -3746,6 +3747,7 @@ export class RustTranspiler extends BaseTranspiler {
             return form !== undefined;
         });
         this.rustScalarDecisions.set(declaration, previous);
+        if (ok && kind === 'bool' && !this.rustBoolSlotUsesOk(declaration)) return undefined;
         // boxed uses of the expression shapes are checked against the printed method lines
         const guarded = (widened || expressionUses || this.rustOptListParamInit(declaration.initializer)) && boxed > 0;
         // an expression-shape local stored once and boxed straight back buys nothing
@@ -4451,6 +4453,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarUseForm(n, kind: string): string | undefined {
         const parent: any = n.parent;
         if (parent === undefined) return undefined;
+        if (kind === 'bool' && this.rustBoolSlotWrite(n)) return 'bslot';
         if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
             if (parent.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
             return this.rustScalarWriteOk(kind, parent.right, 0) ? (this.rustLimitCall(parent.right) ? 'lwrite' : 'write') : undefined;
@@ -8611,7 +8614,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (!this.isRustValueIndexKey(keyNode) || this.isWriteBackBindRead(keyNode.parent)) return undefined;
             const place = this.printNode(keyNode, 0).trim();
             if (!place || place.startsWith('&')) return undefined;
-            return `${receiverText}.get((${place}).as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)`;
+            return `${receiverText}.get(${this.rustI64IndexText(keyNode, place)}).cloned().unwrap_or(Value::Null)`;
         }
         if (!this.isRustValueIndexKey(keyNode)) return undefined;
         // The ccxt `writeBackIndexedMutations` pass matches the `let x = get_value(&C, &K)` text to
@@ -9992,7 +9995,7 @@ export class RustTranspiler extends BaseTranspiler {
             const staticKey = native === undefined && !keepGetValue ? this.staticKeyLookup(key, receiver) : undefined;
             acc = native ?? (staticKey !== undefined
                 ? `crate::value::get_value_k(&${acc}, ${staticKey})`
-                : `get_value(&${acc}, &${this.printNode(key, 0)})`);
+                : `get_value(&${acc}, &${this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0)})`);
         }
         return acc;
     }
@@ -10124,6 +10127,48 @@ export class RustTranspiler extends BaseTranspiler {
         }
         return isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken && up.right === id
             && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left));
+    }
+
+    // ── boolean locals rewritten from a tuple slot (rustBoolSlotWrite) ──
+    // `[flag, params] = this.handle..AndParams (..)` into a `boolean` local whose every other use is a condition
+    // or a same-kind write: the condition reads `is_true`, which is `as_bool() == Some(true)` on a bool-or-null slot.
+    rustBoolSlotWrite(n: any): boolean {
+        if (!isIdentifier(n) || !this.rustNilSlotWrite(n)) return false;
+        const write: any = n.parent.parent;
+        return this.rustNativeListSource(write.right) && this.primitiveKindOfType(this.typeOfNodeIfAny(n)) === 'boolean';
+    }
+
+    rustBoolSlotUsesOk(declaration: any): boolean {
+        let slots = 0;
+        let others = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => {
+            const form = this.rustScalarUseForms.get(n);
+            if (form === 'bslot') { slots++; if (this.rustBoolSlotLineLong(n)) others = false; } else if (form !== 'cond' && form !== 'write') others = false;
+            return true;
+        });
+        return slots === 0 || others;
+    }
+
+    /** The destructuring statement keeps the 400-char line budget with the slot's `== Some(true)` read. */
+    rustBoolSlotLineLong(n: any): boolean {
+        const write: any = n.parent.parent;
+        let depth = 0;
+        for (let up: any = write.parent; up !== undefined; up = up.parent) if (isBlock(up)) depth++;
+        const slots = write.left.elements.reduce((sum: number, e: any) => sum + e.getText().length + 48, 0);
+        return depth * 4 + 72 + this.printNode(write.right, 0).trim().length + slots + 24 > 380;
+    }
+
+    // ── typed list index by an `i64` counter (rustI64IndexText) ──
+    /** The `usize` index text of a `Value` list read: a registered `i64` counter indexes directly. */
+    rustI64IndexText(keyNode: any, place: string): string {
+        return this.rustI64CounterUse(this.rustSkipWrappers(keyNode)) ? `${place} as usize` : `(${place}).as_i64().unwrap_or(-1) as usize`;
+    }
+
+    /** A registered `i64` counter as a helper key (`Value::Int(i)`); a read the ccxt write-back binds keeps the counter `Value`. */
+    rustI64HelperKeyText(keyNode: any, read?: any): string | undefined {
+        const key = this.rustSkipWrappers(keyNode);
+        if (this.rustI64CounterOf(key) === undefined || (read !== undefined && this.isWriteBackBindRead(read))) return undefined;
+        return this.rustI64CounterUse(key) ? `Value::Int(${String(key.text)})` : undefined;
     }
 
     /** The registered counter's symbol when `node` is a use of it, else undefined. */
@@ -15063,7 +15108,7 @@ export class RustTranspiler extends BaseTranspiler {
         const key: any = this.rustStripWrappers(node.argumentExpression);
         // `get_value`'s array arm: an Int index by `as usize` (negative misses), anything else misses.
         const index = isNumericLiteral(key) ? String(Number(key.text))
-            : `(${this.printNode(node.argumentExpression, 0).trim()}).as_i64().unwrap_or(-1) as usize`;
+            : this.rustI64IndexText(node.argumentExpression, this.printNode(node.argumentExpression, 0).trim());
         return `${name}.get(${index}).cloned().unwrap_or(Value::Null)`;
     }
 
