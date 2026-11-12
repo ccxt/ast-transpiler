@@ -2812,6 +2812,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustParamPrintsMap(param)) return '&mut indexmap::IndexMap<String, Value>';
         if (this.rustParamPrintsStrVec(param)) return 'Vec<String>';
         if (this.rustParamReadsByReference(param)) return 'impl KeyRead';
+        if (this.rustParamIsLentResponse(param)) return 'impl Into<crate::Value>';
         return 'Value';
     }
 
@@ -11173,7 +11174,7 @@ export class RustTranspiler extends BaseTranspiler {
     transformIdentifier(node, identifier) {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text); if (optList !== undefined) return optList;
-        const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -12274,6 +12275,7 @@ export class RustTranspiler extends BaseTranspiler {
         let keyReads = 0;
         let keySets = 0;
         let extendHeads = 0;
+        let lentResponses = 0;
         let mixed = false;
         const boxedElementUses: any[] = [];
         const accept = (n: any) => {
@@ -12314,6 +12316,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (this.rustExtendHeadUse(n)) return ++extendHeads > 0 && ++reads > 0;
             const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init)) && boxedElementUses.push(n) > 0;
+            if (this.rustLentResponseSlot(up, n) && this.rustLentResponseSource(init)) return ++lentResponses > 0 && ++reads > 0;
             if (!isCallExpression(up) || up.arguments[0] !== n) return handed();
             // An endpoint response may be a list or a map: only string-key reads agree for both.
             const keyArgs: any[] = up.arguments.slice(1, isPropertyAccessExpression(up.expression) && /2$/.test(String(up.expression.name.text)) ? 3 : 2).map((a: any) => this.rustSkipWrappers(a));
@@ -12331,6 +12334,7 @@ export class RustTranspiler extends BaseTranspiler {
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
         if ((keyReads > 0 || (init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init))) && !this.rustDictKeyReadLineOk(declaration, name)) return undefined;
         const optional = nilDeclared || nullTests > 0 || writes > 0;
+        if (lentResponses > 0 && optional) return undefined;
         if (extendHeads > 0 && (optional || from !== 'dict' && from !== 'api')) return undefined;
         if (optional && boxedElementUses.length > 0 && this.rustWsFieldRead(init) !== undefined) return undefined;
         if (keySets > 0 && (from !== 'dict' || optional || (init !== undefined && this.rustInitReadsTaggedStore(init)))) return undefined;
@@ -13600,6 +13604,86 @@ export class RustTranspiler extends BaseTranspiler {
         return `&${text}`;
     }
 
+    // ── lent response dicts (rustParamIsLentResponse / rustLentResponseSlot / printLentResponseArg) ──
+    // An override of a singular base `parse*` method whose response the base declares a dict takes it as
+    // `impl Into<crate::Value>`; a caller in the same class lends a local that always holds a map (`&x`).
+
+    private rustLentResponseDecisions = new WeakMap<any, boolean>();
+
+    rustParamIsLentResponse(param: any): boolean {
+        if (param?.kind !== SyntaxKind.Parameter) return false;
+        let decision = this.rustLentResponseDecisions.get(param);
+        if (decision === undefined) {
+            this.rustLentResponseDecisions.set(param, false); // re-entrancy guard
+            try {
+                decision = this.rustParamIsLentResponseUncached(param);
+            } catch (e) {
+                decision = false;
+            }
+            this.rustLentResponseDecisions.set(param, decision);
+        }
+        return decision;
+    }
+
+    private static readonly RUST_LENT_RESPONSE_TYPES = new Set([ 'Dict', 'NullableDict' ]);
+
+    rustParamIsLentResponseUncached(param: any): boolean {
+        const method: any = param.parent;
+        if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || method.parameters?.[0] !== param) return false;
+        if (!/^parse[A-Z]/.test(String(method.name.text)) || param.name?.kind !== SyntaxKind.Identifier) return false;
+        if (param.initializer !== undefined || param.questionToken !== undefined || param.dotDotDotToken !== undefined) return false;
+        if (!isClassDeclaration(method.parent) || (method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
+        if (!(method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword)) return false;
+        if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        if (file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) < 0) return false;
+        let base: any = this.getMethodOverride(method);
+        for (let hops = 0; base !== undefined && hops < 8 && !RustTranspiler.RUST_BASE_TIER_FILE.test(String(base.getSourceFile().fileName)); hops++) base = this.getMethodOverride(base);
+        if (base === undefined || base.body === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(base.getSourceFile().fileName))) return false;
+        const marker = String(base.getSourceFile().text ?? '').indexOf('METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT');
+        if (marker < 0 || (base.getStart?.() ?? base.pos) < marker) return false;
+        const type: any = base.parameters?.[0]?.type;
+        const typeName = type?.kind === SyntaxKind.TypeReference && isIdentifier(type.typeName) && type.typeArguments === undefined ? String(type.typeName.text) : '';
+        if (!RustTranspiler.RUST_LENT_RESPONSE_TYPES.has(typeName)) return false;
+        // one row in, one row out: a list-returning parser is plural
+        const checker: any = this.getChecker();
+        if (checker.isArrayType(checker.getReturnTypeOfSignature(checker.getSignatureFromDeclaration(base)))) return false;
+        return !this.rustParamPrintsBool(param) && !this.rustParamIsLentDict(param) && !this.rustParamIsLentList(param)
+            && !this.rustParamPrintsMap(param) && !this.rustParamPrintsStrVec(param) && !this.rustParamReadsByReference(param);
+    }
+
+    /** The response argument of a call to the class's own lent override (an inherited one is the `Value` trait method). */
+    rustLentResponseSlot(call: any, arg: any): boolean {
+        if (!isCallExpression(call) || call.arguments?.[0] !== arg || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const param: any = this.rustTranspiledCalleeParams(call, String(call.expression.name.text))?.[0];
+        if (param === undefined || !this.rustParamIsLentResponse(param)) return false;
+        let owner: any = call.parent;
+        while (owner !== undefined && !isClassDeclaration(owner)) owner = owner.parent;
+        return owner !== undefined && owner === param.parent.parent;
+    }
+
+    /** A base `extend` / `deepExtend`, or a `safeDict*` with an empty-map default: the local always holds a map. */
+    rustLentResponseSource(init: any): boolean {
+        if (init === undefined || !isCallExpression(init) || this.rustBorrowedSourceKind(init) !== 'dict') return false;
+        const name = String((init.expression as any).name.text);
+        return name === 'extend' || name === 'deepExtend' || (/^safeDict(?:2|N)?$/.test(name) && this.rustContainerInitNeverNull(init, 'map'));
+    }
+
+    /** `&x` for a shared dict local lent to a lent response slot; a container local boxes explicitly there (no `.into()`). */
+    printLentResponseArg(node: any, text: string): string | undefined {
+        if (!isIdentifier(node) || !this.rustLentResponseSlot(node.parent, node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
+        if (this.rustBorrowedLocalKind(declaration) === 'dict' && !this.rustOptContainerLocals.has(declaration)) return `&${text}`;
+        const form = this.rustContainerBoxUses.get(node);
+        const kind = form === undefined ? undefined : this.rustReadBearerKind(node);
+        if (kind === undefined) return undefined;
+        const value = form === 'move' ? text : `${text}.clone()`;
+        const listDecl: any = kind === 'list' ? this.rustDeclarationOfIdentifier(node) : undefined;
+        if (listDecl !== undefined && (this.rustAlwaysListProducer(this.rustSkipWrappers(listDecl.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(listDecl.initializer)))) return `Value::Arr(${value})`;
+        return kind === 'map' ? `Value::Map(${value})` : `Value::from(${value})`;
+    }
+
     // ── typed filter parameters (rustTypedFilterParams / printTypedFilterSignature / printTypedFilterCall) ──
     // The base `filterBy*` helpers take their optional `Int` / `Str` parameters as positional `Option<i64>` /
     // `Option<&str>` (with any optional parameter before them as a positional `Value`); the rest stay in the slice.
@@ -13916,7 +14000,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string {
-        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p));
+        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p));
         return lent.map((p: any) => {
             const name = this.printNode(p.name, 0);
             return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();\n`;
