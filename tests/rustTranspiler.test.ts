@@ -5666,7 +5666,7 @@ describe('lent params dicts', () => {
 describe('venue-local params dicts', () => {
     test('a read-only params dict of a method declared in one venue only is lent by reference from typed dict locals', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'venue-lent-params', 'ts/src/venue.ts')).content;
-        expect(out).toMatch(/fn venueFlag\(&self, params: impl Into<crate::Value>, methodName: Value\)/);
+        expect(out).toMatch(/fn venueFlag\(&self, params: impl Into<crate::Value>, methodName: &str\)/);
         expect(out).toContain('let mut params: Value = params.into();');
         expect(out).toMatch(/let mut paramsTag: crate::value::Dict = /);
         expect(out).toContain('self.venueFlag(&paramsTag, ');
@@ -6286,7 +6286,7 @@ describe('rust typed unified-method signatures', () => {
 
     test('without the config entry the method keeps the Value signature', () => {
         const plain = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'typed-unified', 'ts/src/venue.ts')).content;
-        expect(plain).toContain('pub fn fetchTicker(&self, symbol: Value, optional_args: &[Value]) -> Value');
+        expect(plain).toContain('pub fn fetchTicker(&self, symbol: &str, optional_args: &[Value]) -> Value');
     });
 });
 
@@ -6755,7 +6755,7 @@ describe ('rustDictParamBearers', () => {
         });
 
         test('the caller passes the bearer by reference', () => {
-            expect(rust).toContain('self.orderRequest(Value::Str("create".into()), Value::Map(request), &mut orderParams, &[params])');
+            expect(rust).toContain('self.orderRequest("create", Value::Map(request), &mut orderParams, &[params])');
             expect(rust).toContain('let mut orderParams: indexmap::IndexMap<String, Value> = (');
         });
 
@@ -6764,7 +6764,7 @@ describe ('rustDictParamBearers', () => {
         });
 
         test('a parameter called with a plain `Value` keeps the box and the guard', () => {
-            expect(rust).toContain('pub fn plainOrder(&self, method: Value, request: Value, orderParams: Value');
+            expect(rust).toContain('pub fn plainOrder(&self, method: &str, request: Value, orderParams: Value');
             expect(rust).toContain('if let Value::Dict(__d) = &mut orderParams');
         });
 
@@ -7465,7 +7465,7 @@ describe('rust message-hash string locals handed to the ws client', () => {
         expect(out).toContain('Value::from(messageHash.clone())]).await;');
     });
     test('negative: no hash or url local of these shapes keeps its box', () => {
-        expect(out).not.toMatch(/let mut (messageHash|url): Value/);
+        expect(out).not.toMatch(/let mut (messageHash|url): Value(?! = \1\.into\(\);)/);
         expect(out).not.toContain('client.resolve(&[');
     });
 });
@@ -8549,5 +8549,23 @@ describe('list length locals', () => {
         expect(out).toContain('Value::Int((rowsLength - 1))');
         expect(out).toContain('if rowsLength > 10 {');
         expect(out).not.toContain('let mut rowsLength: Value');
+    });
+});
+
+describe('per-venue string parameters', () => {
+    test('a required string parameter of a per-venue method is &str and callers convert once', () => {
+        const dir = path.join (rustFixtureRoot, 'venue-str-params');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), 'export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    hold (x: any): any { return x; }\n}\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    orderRequest (side: string, kind: Str, extra: any = undefined) {\n        const upper = side.toUpperCase ();\n        if (upper === 'BUY') {\n            return this.hold (kind);\n        }\n        return { 'side': upper };\n    }\n    place (o: any) {\n        const kind = this.safeString (o, 'type');\n        return this.orderRequest ('sell', kind);\n    }\n    twice (o: any) {\n        const name = 'ticker';\n        return this.orderRequest ('sell', name, name);\n    }\n    cleanPath (path: string): string {\n        let result = path.replace ('spot', '');\n        result = result.replace ('otc', '');\n        return result;\n    }\n    signPath (o: any) {\n        return this.cleanPath ('spot/x');\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('pub fn orderRequest(&self, side: &str, kind: Option<&str>, optional_args: &[Value]) -> Value {');
+        expect(out).toContain('let mut side: Value = side.into();');
+        expect(out).toContain('let mut upper: String = ');
+        expect(out).not.toContain('let mut upper: Value');
+        expect(out).toContain('self.orderRequest("sell", kind.as_deref(), &[])');
+        expect(out).toContain('self.orderRequest("sell", Some(name.clone().as_str()), &[Value::from(name.clone())])');
+        expect(out).toContain('pub fn cleanPath(&self, path: &str) -> Option<String> {');
+        expect(out).toContain('return Some(result);');
     });
 });
