@@ -1756,6 +1756,38 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentListSlot(call: any, arg: any): boolean;
     /** `&x` for a shared list local lent to a lent list parameter. */
     printLentListArg(node: any, text: string): string | undefined;
+    private static readonly RUST_TYPED_FILTER_METHODS;
+    private static readonly RUST_TYPED_FILTER_TYPES;
+    private rustTypedFilterDecisions;
+    /** Typed slots (parameter index -> Rust type; a symbol list is lent as `impl Into<crate::Value>`) and the positional
+     *  count of a base `filterBy*` method or its override. */
+    rustTypedFilterParams(method: any): {
+        typed: Map<number, string>;
+        positional: number;
+    } | undefined;
+    rustTypedFilterParamsUncached(method: any): {
+        typed: Map<number, string>;
+        positional: number;
+    } | undefined;
+    /** A parameter the typed filter signature takes positionally (typed or `Value`). */
+    rustTypedFilterPositional(param: any): boolean;
+    /** `let mut values: Value = values.into();` for each lent symbol-list parameter. */
+    rustTypedFilterBinding(node: any, identation: number): string;
+    /** A call argument landing in a lent symbol-list slot of a typed filter method. */
+    rustTypedFilterLentSlot(call: any, arg: any): boolean;
+    printTypedFilterSignature(node: any, identation: number): string | undefined;
+    /** The typed parameter an identifier reads inside its own filter method, else undefined. */
+    rustTypedFilterParamOf(node: any): {
+        param: any;
+        rustType: string;
+    } | undefined;
+    /** A read of a typed filter parameter in a `Value` position boxes it (both types are `Copy`). */
+    printTypedFilterParamRead(node: any): string | undefined;
+    /** The Rust type of a typed slot of a `this.filterBy*` call, else undefined. */
+    rustTypedFilterSlot(call: any, at: number): string | undefined;
+    rustTypedFilterArgText(arg: any, rustType: string, identation: number): string;
+    /** `self.m(array, <positional typed / Value args>, &[rest])` for a call of a typed filter method. */
+    printTypedFilterCall(node: any, identation: number): string | undefined;
     private rustLentParamDecisions;
     private rustLentOverrideNames;
     rustParamIsLentDict(param: any): boolean;
