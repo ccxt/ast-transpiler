@@ -2134,5 +2134,29 @@ export declare class RustTranspiler extends BaseTranspiler {
     looseSlice(name: string, start: string, end: string): string;
     looseIndexOf(name: string, needle: string): string;
     looseStrCase(name: string, method: string): string;
+    private rustVenueStrDecisions;
+    private rustVenueStrCallers;
+    rustVenueStrParamType(param: any): string | undefined;
+    rustVenueStrParamTypeUncached(param: any): string | undefined;
+    /** `this.<m>(..)` / `super.<m>(..)` calls in the method's own file that resolve to it. */
+    rustVenueStrCallSites(method: any): any[];
+    /** Scalar-local kind of a per-venue string parameter read through its `Value` binding. */
+    rustVenueStrParamKind(param: any): string | undefined;
+    /** The per-venue string type of the callee parameter at `at`. */
+    rustVenueStrSlot(params: any[] | undefined, at: number): string | undefined;
+    /** A typed scalar local handed whole to a per-venue string slot. */
+    rustVenueStrLocalArg(n: any): boolean;
+    /** A string local initialised from a string method or alias over a per-venue string parameter. */
+    rustVenueStrParamLocal(node: any): boolean;
+    /** `Option<String>` text of a typed string local returned from a native-`Str` method. */
+    rustVenueStrReturnLocal(node: any): string | undefined;
+    /** Another read of the same local inside the call the argument belongs to, not itself a borrowing slot. */
+    rustVenueStrMovedInCall(arg: any): boolean;
+    /** A literal, an identifier, a field read, or a call: the converted argument stays short. */
+    rustVenueStrSimpleArg(arg: any): boolean;
+    /** The argument node lands in a per-venue string slot of its call. */
+    rustVenueStrArgSlot(arg: any): boolean;
+    /** Argument text for a per-venue string slot: a typed local or literal natively, any other value read once. */
+    rustVenueStrArgText(arg: any, type: string, identation: number): string;
 }
 export {};
