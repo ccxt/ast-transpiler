@@ -481,6 +481,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `this`, or in a test source an identifier typed as the base `Exchange` class (it resolves to the base readers). */
     rustScalarReceiver(node: any): boolean;
     rustScalarLocalKindUncached(declaration: any): string | undefined;
+    /** A local some `return` of a method with a declared string return hands back as-is. */
+    rustStrReturnedLocal(declaration: any, scope: any): boolean;
     rustParamAliasSeedKind(declaration: any): string | undefined;
     rustLimitCall(expr: any): boolean;
     rustLimitArgUse(n: any, kind: string): boolean;
@@ -1762,6 +1764,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A base `safeList*` read with an empty `[]` default: a list on every path. */
     rustDefaultedListRead(init: any): boolean;
     rustLentListLocalUncached(declaration: any): boolean;
+    private static readonly RUST_TYPED_LIST_FIELDS;
+    rustTypedListField(node: any): boolean;
+    printTypedListFieldRead(node: any): string | undefined;
     rustLentListUse(node: any): boolean;
     /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
     printRustLentListBox(node: any, text: string): string | undefined;
@@ -1776,6 +1781,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     printWsUrlLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
     /** A `watch` url / hash slot takes `impl Into<Option<&str>>`: a string local or literal as `&str`, anything else lent as `&Value`. */
     rustWsWatchSlotText(arg: any, printed: string): string;
+    private static readonly RUST_FLIGHT_TYPE;
+    private rustWsFlightLocals;
+    rustWsFlightSource(init: any): boolean;
+    rustWsFlightLocal(declaration: any): boolean;
+    printWsFlightLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
+    /** A flight handle stays typed where it is awaited, a statement, or a `Flight` local's initializer; elsewhere it is boxed. */
+    rustWsFlightBox(node: any, text: string): string;
     printWsWatchCall(node: any, receiver: string, methodName: string, identation: number): string | undefined;
     /** A numeric or boolean hash argument: the runtime keys by its text, as `stringify_param` did. */
     rustWsNumberSlot(arg: any): boolean;

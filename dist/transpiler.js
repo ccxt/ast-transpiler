@@ -51576,6 +51576,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // `watch` / `watch_multiple` take the url as `impl Into<Option<&str>>`: a `this.urls[..]` read whose every use
     // is that slot is held as `Option<String>` and lent there.
     this.rustWsUrlLocals = /* @__PURE__ */ new Map();
+    this.rustWsFlightLocals = /* @__PURE__ */ new WeakMap();
     // ── built lists (rustBuiltListLocal / rustBuiltListWriteSource / printBuiltListDeclaration / printBuiltListWrite / printBuiltListPush) ──
     // A local built from an array literal, reassigned only from list producers (array literals, base `toArray` /
     // `arrayConcat`, a `[]`-defaulted `safeList*`) holds the shared list: pushes, length and index reads are native.
@@ -53005,6 +53006,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const marketWrite = isAssign ? this.printTypedMarketWrite(left, right) : void 0;
     if (marketWrite !== void 0)
       return marketWrite;
+    if (isAssign && this.rustTypedListField(left))
+      return `${this.printNode(left, 0)} = ${this.printNode(right, 0).trim()}.into_list()`;
     const optContainerWrite = isAssign && isIdentifier3(left) ? this.printOptContainerWrite(left, right) ?? this.printOptListWrite(left, right) : void 0;
     if (optContainerWrite !== void 0)
       return optContainerWrite;
@@ -53145,7 +53148,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!declaration.initializer) {
       return `${indent}let mut ${varName}: Value = Value::Null`;
     }
-    const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) : void 0;
+    const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) ?? this.printWsFlightLocalDeclaration(declaration, varName, indent) : void 0;
     if (scalarDecl !== void 0)
       return scalarDecl;
     const parsedValue = this.printNode(declaration.initializer, identation).trim();
@@ -53183,6 +53186,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const block = this.rustObjectLiteralBlock(this.rustSkipWrappers(declaration.initializer), identation);
       return `${indent}let mut ${varName}: indexmap::IndexMap<String, Value> = (${block})`;
     }
+    if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rustTypedListField(declaration.initializer))
+      return `${indent}let mut ${varName}: crate::value::List = self.${String(this.rustSkipWrappers(declaration.initializer).name.text)}.clone()`;
     if (node.declarations.length === 1 && this.rustLentListLocal(declaration))
       return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
     if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) {
@@ -54776,12 +54781,15 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (ok && kind === "bool" && !this.rustBoolSlotUsesOk(declaration))
       return void 0;
     const guarded = (widened || expressionUses || this.rustOptListParamInit(declaration.initializer)) && boxed > 0;
-    const storeOnly = guarded && nativeUses === 0 && boxed === 1;
-    const unused = typedUses === 0 && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
+    const handOff = nativeUses === 0 && boxed >= 1 && (copied === 0 || !(kind === "str" || kind === "ostr")) && !this.rustStrReturnedLocal(declaration, scope);
+    const storeOnly = guarded && nativeUses === 0 && boxed === 1 && !handOff;
+    const unused = typedUses === 0 && !handOff && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
     const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
     if (!ok || unused || storeOnly || clientOnce || guarded && scope.kind !== SyntaxKind7.MethodDeclaration || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration))
       return void 0;
-    if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 || this.rustVenueLocalHandedOn(declaration)))
+    if (handOff && isConditionalExpression4(this.unwrapParens(declaration.initializer)) && this.rustScalarNativeText(kind, declaration.initializer) === void 0)
+      return void 0;
+    if (this.rustVenueScalarSource(declaration.initializer) && (boxed > 0 && !handOff || this.rustVenueLocalHandedOn(declaration)))
       return void 0;
     if (this.rustVenueTypedCostly(declaration, kind, copied))
       return void 0;
@@ -54812,9 +54820,29 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     if (this.rustScalarOptKeyCostly(declaration, kind) === false && kind === "ostr" && this.rustScalarOptKeyCount(declaration) > 0)
       this.rustScalarGuarded.add(declaration);
-    if (guarded || this.rustStrMethodRecvLocal(declaration))
+    if (guarded || handOff || this.rustStrMethodRecvLocal(declaration))
       this.rustScalarGuarded.add(declaration);
     return kind;
+  }
+  /** A local some `return` of a method with a declared string return hands back as-is. */
+  rustStrReturnedLocal(declaration, scope) {
+    if (scope?.kind !== SyntaxKind7.MethodDeclaration || scope.type === void 0)
+      return false;
+    let declared;
+    try {
+      declared = this.getChecker().getTypeFromTypeNode(scope.type);
+    } catch (e) {
+      return false;
+    }
+    if (this.primitiveKindOfType(declared) !== "string")
+      return false;
+    let returned = false;
+    this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+      if (isReturnStatement4(n.parent) && n.parent.expression === n)
+        returned = true;
+      return true;
+    });
+    return returned;
   }
   // A local initialised as a plain alias of a typed optional `i64`/`f64` parameter takes the
   // parameter's kind (`p.as_i64()` is a copy, the `Value` is never cloned); it must earn a native use.
@@ -55744,7 +55772,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   printWsFlightCall(node, receiver, identation) {
     const arg = node.arguments[0];
     const hash = arg === void 0 ? "Value::Null" : this.rustWsStrKey(arg) ? this.rustWsKeyText(arg) : this.rustSliceArgText(this.printNode(arg, identation).trim());
-    return `${receiver}.${this.toSnakeCaseName(String(node.expression.name.text))}(${hash})`;
+    return this.rustWsFlightBox(node, `${receiver}.${this.toSnakeCaseName(String(node.expression.name.text))}(${hash})`);
   }
   /** Line of a node's first token (statements print one per line, so this orders reads and writes). */
   rustClientHandleLine(node) {
@@ -55950,12 +55978,13 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const name = access === void 0 || access.write ? void 0 : _RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
     if (name === void 0 || this.isNativeWriteTargetBase(node))
       return void 0;
+    const box = (text) => name === "future" ? this.rustWsFlightBox(node, text) : text;
     if (this.rustWsStrKey(node.argumentExpression))
-      return `${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(${this.rustWsKeyText(node.argumentExpression)})`;
+      return box(`${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(${this.rustWsKeyText(node.argumentExpression)})`);
     const key = this.printNode(node.argumentExpression, 0).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
       return void 0;
-    return `${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(&${key})`;
+    return box(`${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(&${key})`);
   }
   /** `Object.keys(client.subscriptions|futures)` bound to a key list: the handle's key list. */
   printClientHandleKeys(init) {
@@ -59023,6 +59052,9 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     return `crate::value::get_value_k(&${receiverText}, ${this.quotedStringLiteral(member)})`;
   }
   printPropertyAccessExpression(node, identation) {
+    const listField = this.printTypedListFieldRead(node);
+    if (listField !== void 0)
+      return listField;
     const dictKeyRead = this.printDictKeyRead(node);
     if (dictKeyRead !== void 0)
       return dictKeyRead;
@@ -59271,15 +59303,19 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     if (kind !== "string" && kind !== "boolean")
       return void 0;
     let nativeUses = 0;
+    let copies = 0;
     const safe = this.rustLocalUsesAll(element, name, true, (n) => {
       if (this.rustDeclaredNode(n) !== element || this.rustEnclosingFunction(n) !== fn)
         return false;
       const ok = kind === "string" ? this.rustStringLocalUseIsNative(n) || this.rustVenueStrArgSlot(n) : this.rustIdentifierUseIsCondition(n);
       if (ok)
         nativeUses++;
-      return ok || kind === "string" && this.rustStrSlotBoxUse(n) && (isCallExpression6(n.parent) || isReturnStatement4(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustSlotUseOutsideLoop(n, element));
+      const box = !ok && kind === "string" && this.rustStrSlotBoxUse(n) && (isCallExpression6(n.parent) || isReturnStatement4(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustSlotUseOutsideLoop(n, element));
+      if (box && !(isReturnStatement4(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustStrSlotLastUse(n, element)))
+        copies++;
+      return ok || box;
     });
-    return safe && nativeUses > 0 ? kind === "string" ? "str" : "bool" : void 0;
+    return safe && (nativeUses > 0 || kind === "string" && copies === 0) ? kind === "string" ? "str" : "bool" : void 0;
   }
   // ── optional params slots ────────────────────────────────────────────────
   // A literal-tested `Option<String>` tuple slot may also hand itself to a plain `Value` slot (a `this.`/`super.`
@@ -59418,6 +59454,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       return void 0;
     const kind = loose ? "onum" : want === "int" ? "oint" : "obool";
     let nativeUses = 0;
+    let boxes = 0;
     this.rustExactSlotDecisions.set(element, kind);
     let ok = false;
     try {
@@ -59440,12 +59477,14 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
           return false;
         if (form !== "box")
           nativeUses++;
+        else
+          boxes++;
         return true;
       });
     } finally {
       this.rustExactSlotDecisions.set(element, null);
     }
-    return ok && nativeUses > 0 ? kind : void 0;
+    return ok && (nativeUses > 0 || boxes > 0) ? kind : void 0;
   }
   /** The callee builds slot `at` from an exact Int-or-null (`int`) / Bool-or-null (`bool`) producer on every return. */
   rustExactSlotCallee(init, at, want) {
@@ -63840,6 +63879,8 @@ ${iden}}`;
   }
   /** A call that yields a string list on every path (never `undefined`). */
   rustLentListSource(init) {
+    if (this.rustTypedListField(init))
+      return true;
     if (!isCallExpression6(init) || !isPropertyAccessExpression3(init.expression))
       return false;
     const callee = init.expression;
@@ -63955,6 +63996,28 @@ ${iden}}`;
       this.rustLentListBoxes.set(n, form);
     return true;
   }
+  rustTypedListField(node) {
+    node = this.rustSkipWrappers(node);
+    if (node === void 0 || !isPropertyAccessExpression3(node) || node.expression.kind !== SyntaxKind7.ThisKeyword || !isIdentifier3(node.name))
+      return false;
+    if (!_RustTranspiler.RUST_TYPED_LIST_FIELDS.has(String(node.name.text)) || this.checkerOrUndefined() === void 0)
+      return false;
+    const declarations = symbolDeclarations(this.getChecker().getSymbolAtLocation(node.name));
+    return declarations.length > 0 && declarations.every((d) => d.kind === SyntaxKind7.PropertyDeclaration && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(d.getSourceFile().fileName)) && this.getChecker().isArrayType(this.typeOfNodeIfAny(d.name)));
+  }
+  printTypedListFieldRead(node) {
+    if (!this.rustTypedListField(node))
+      return void 0;
+    const place = `self.${String(node.name.text)}`;
+    const up = node.parent;
+    if (isPropertyAccessExpression3(up) && up.expression === node && String(up.name.text) === "length")
+      return place;
+    if (isBinaryExpression5(up) && up.left === node && rustIsAssignmentOperator(up.operatorToken.kind))
+      return place;
+    if (isCallExpression6(up) && up.arguments[0] === node && this.rustBorrowedAnyKeyReader(up))
+      return `&${place}`;
+    return `Value::Arr(${place}.clone())`;
+  }
   rustLentListUse(node) {
     node = this.rustSkipWrappers(node);
     if (node === void 0 || !isIdentifier3(node))
@@ -64059,6 +64122,54 @@ ${iden}}`;
     if (kind === "str")
       return `${super.printIdentifier(inner)}.as_str()`;
     return /^[A-Za-z_][A-Za-z0-9_]*$/.test(printed) ? `&${printed}` : `&(${printed})`;
+  }
+  rustWsFlightSource(init) {
+    const node = init === void 0 ? void 0 : this.unwrapParens(init);
+    if (node === void 0)
+      return false;
+    if (isCallExpression6(node))
+      return isPropertyAccessExpression3(node.expression) && isIdentifier3(node.expression.expression) && this.rustWsFlightCall(node);
+    if (!isElementAccessExpression4(node) || this.isNativeWriteTargetBase(node))
+      return false;
+    const access = this.rustClientHandleAccess(node.expression);
+    return access !== void 0 && !access.write && access.key === "futures" && isIdentifier3(node.argumentExpression);
+  }
+  rustWsFlightLocal(declaration) {
+    if (declaration === void 0 || !isVariableDeclaration3(declaration) || !isIdentifier3(declaration.name))
+      return false;
+    let known = this.rustWsFlightLocals.get(declaration);
+    if (known === void 0) {
+      known = false;
+      const list = declaration.parent;
+      if (list?.kind === SyntaxKind7.VariableDeclarationList && list.declarations.length === 1 && this.rustWsFlightSource(declaration.initializer)) {
+        let uses = 0;
+        known = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
+          const p = n.parent;
+          const settle = isPropertyAccessExpression3(p) && p.expression === n && isCallExpression6(p.parent) && p.parent.expression === p && (p.name.text === "resolve" || p.name.text === "reject");
+          uses++;
+          return p?.kind === SyntaxKind7.AwaitExpression && p.expression === n || settle;
+        }) && uses > 0;
+      }
+      this.rustWsFlightLocals.set(declaration, known);
+    }
+    return known;
+  }
+  printWsFlightLocalDeclaration(declaration, varName, indent) {
+    if (!this.rustWsFlightLocal(declaration))
+      return void 0;
+    return `${indent}let mut ${varName}: ${_RustTranspiler.RUST_FLIGHT_TYPE} = ${this.printNode(declaration.initializer, 0).trim()}`;
+  }
+  /** A flight handle stays typed where it is awaited, a statement, or a `Flight` local's initializer; elsewhere it is boxed. */
+  rustWsFlightBox(node, text) {
+    let up = node;
+    while (isParenthesizedExpression3(up.parent))
+      up = up.parent;
+    const p = up.parent;
+    if (p?.kind === SyntaxKind7.AwaitExpression || p?.kind === SyntaxKind7.ExpressionStatement)
+      return text;
+    if (p !== void 0 && isVariableDeclaration3(p) && p.initializer === up && this.rustWsFlightLocal(p))
+      return text;
+    return `Value::from(${text})`;
   }
   // ── watch positionals (printWsWatchCall / rustWsWatchDictSlot / rustWsSubscriptionWriteValue) ──
   // `watch(url, hash, message, subscribe_hash, subscription)` and `watch_multiple(url, hashes, message, subscribe_hashes,
@@ -65263,6 +65374,7 @@ ${iden}}`;
     if (this.rustTestTierSource(element))
       return void 0;
     let nativeUses = 0;
+    let copies = 0;
     this.rustExactSlotDecisions.set(element, "ostr");
     let ok = false;
     try {
@@ -65289,12 +65401,14 @@ ${iden}}`;
           return false;
         if (_RustTranspiler.RUST_NIL_SCALAR_NATIVE_FORMS.has(form) || form === "write")
           nativeUses++;
+        else if ((form === "box" || form === "xbox") && !(isReturnStatement4(n.parent) || this.rustLocalLastUse(n, element)))
+          copies++;
         return true;
       });
     } finally {
       this.rustExactSlotDecisions.set(element, null);
     }
-    return ok && nativeUses > 0 ? "ostr" : void 0;
+    return ok && (nativeUses > 0 || copies === 0) ? "ostr" : void 0;
   }
   // ── declared dict slots ──────────────────────────────────────────────────
   // A transpiled venue method declaring a `[.., Dict, ..]` (or `Promise<[..]>`) return builds that tuple on every
@@ -68821,6 +68935,14 @@ _RustTranspiler.RUST_BY_REF_GENERATED_READERS = /^safe(?:Dict|List|Bool|Number)(
 // ── rustRecordLookupSource: base record lookups (market / outcome resolvers) held as a shared map ──
 // Each returns a cached record map (or nothing); read only by key, the map form reads the same.
 _RustTranspiler.RUST_RECORD_LOOKUP_SOURCES = /* @__PURE__ */ new Set(["outcome", "safeOutcome", "loadOutcome", "getMarketFromSymbols", "safeMarket", "market"]);
+// ── typed list fields (rustTypedListField / printTypedListFieldRead) ──
+// Base `Exchange` fields declared `string[]` are held as `crate::value::List`: a write converts once
+// (`into_list`), `.length` reads the list, and every other read hands out the shared handle (an Arc bump).
+_RustTranspiler.RUST_TYPED_LIST_FIELDS = /* @__PURE__ */ new Set(["symbols"]);
+// ── ws flight locals (rustWsFlightLocal / printWsFlightLocalDeclaration / rustWsFlightBox) ──
+// `client.future|reusableFuture(h)` and a `client.futures[k]` read give the runtime's typed `Flight` handle. A local
+// bound to one is a `Flight` when every use awaits it or calls its `resolve` / `reject`; elsewhere the handle is boxed.
+_RustTranspiler.RUST_FLIGHT_TYPE = "crate::pro::ws_client::Flight";
 // ── optional list locals ─────────────────────────────────────────────────
 // A list local whose source may yield `undefined` (the permissive `marketSymbols`, `marketIds`, a `safeList*`
 // with no default) holds `Option<crate::value::List>` (`into_opt_list` moves the shared list out of the box).
