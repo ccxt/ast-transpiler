@@ -7982,6 +7982,39 @@ describe('rust params slots lent and also handed whole', () => {
     });
 });
 
+describe('rust params slots written at a key, tested with in, and string slots concatenated', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n" +
+            "    id: string = 'x';\n" +
+            "    handleOptionStringAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Str = undefined): [Str, Dict] {\n        return [ defaultValue, params ];\n    }\n" +
+            "    safeString (o: any, k: string, d: Str = undefined): Str { return o[k]; }\n" +
+            "    extend (a: any, b: any = undefined): Dict { return a; }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    fetchThing (params: Dict = {}) {\n        const [ tag, paramsTag ] = this.handleOptionStringAndParams (params, 'fetchThing', 'tag');\n" +
+            "        paramsTag['memo'] = 'y';\n        const has = 'network' in paramsTag;\n        const id = this.safeString (paramsTag, 'id');\n" +
+            "        const label = this.id + ':' + tag;\n        return [ has, id, label ];\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-mslots-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a params slot written at a literal key is a shared map with a copy-on-write insert and a native in', () => {
+        expect(out).toContain('let mut paramsTag: crate::value::Dict = ');
+        expect(out).toContain('std::sync::Arc::make_mut(&mut paramsTag).insert("memo".into(), ');
+        expect(out).toContain('paramsTag.contains_key("network")');
+    });
+    test('a string slot used only in a concatenation is Option<String>', () => {
+        expect(out).toContain('let mut tag: Option<String> = ');
+        expect(out).toContain('tag.as_deref().unwrap_or("null")');
+    });
+});
+
 describe('rust integer and boolean tuple slots typed from the callee', () => {
     const files: Record<string, string> = {
         'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Bool = boolean | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n" +
