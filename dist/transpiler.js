@@ -56131,7 +56131,7 @@ ${binding(plan.indent)}` : ""), head: "" };
     return nil === "str" ? "ostr" : nil === "int" ? "oint" : void 0;
   }
   /** `{ method, kind }` of a native string method on a typed string local receiver, else undefined. */
-  rustScalarStrMethod(node, syntactic = false) {
+  rustScalarStrMethod(node, syntactic = false, params = false) {
     const call = this.unwrapParens(node);
     if (call === void 0 || !isCallExpression6(call) || !isPropertyAccessExpression3(call.expression))
       return void 0;
@@ -56156,7 +56156,7 @@ ${binding(plan.indent)}` : ""), head: "" };
       return void 0;
     if (syntactic)
       return { recv, recvKind: "", method, kind: "" };
-    const recvKind = this.rustScalarIdentifierKind(recv);
+    const recvKind = this.rustScalarIdentifierKind(recv) ?? (params ? this.rustScalarParamRead(recv)?.kind : void 0);
     if (recvKind !== "str" && recvKind !== "ostr")
       return void 0;
     if (shape === "affix")
@@ -56273,11 +56273,11 @@ ${binding(plan.indent)}` : ""), head: "" };
     return isIdentifier3(callee.expression) && callee.expression.text === "Precise" && _RustTranspiler.RUST_NIL_PRECISE_STR.test(String(callee.name.text));
   }
   /** `s.length` on a typed string local. */
-  rustScalarLengthRecv(node) {
+  rustScalarLengthRecv(node, params = false) {
     const inner = this.unwrapParens(node);
     if (inner === void 0 || !isPropertyAccessExpression3(inner) || !isIdentifier3(inner.name) || inner.name.text !== "length")
       return void 0;
-    const kind = this.rustScalarIdentifierKind(inner.expression);
+    const kind = this.rustScalarIdentifierKind(inner.expression) ?? (params ? this.rustScalarParamRead(inner.expression)?.kind : void 0);
     return kind === "str" || kind === "ostr" ? inner.expression : void 0;
   }
   /** Non-optional numeric operand kind (`int|num`), optional (`oint|onum`), or undefined. */
@@ -56325,9 +56325,9 @@ ${binding(plan.indent)}` : ""), head: "" };
       }
       return this.rustScalarCompareText(node, true) !== void 0 ? "bool" : void 0;
     }
-    if (this.rustScalarLengthRecv(node) !== void 0)
+    if (this.rustScalarLengthRecv(node, true) !== void 0)
       return "int";
-    const method = this.rustScalarStrMethod(node);
+    const method = this.rustScalarStrMethod(node, false, true);
     if (method !== void 0)
       return method.kind;
     return this.rustScalarPreciseCall(node) ? "ostr" : void 0;
@@ -56477,6 +56477,23 @@ ${binding(plan.indent)}` : ""), head: "" };
       return void 0;
     return `${super.printIdentifier(node)}.${_RustTranspiler.RUST_PARAM_READ[own]}`;
   }
+  // ── typed scalar parameters as operands (rustScalarParamRead / rustScalarRecvName / rustScalarParamOperand) ──
+  // A typed parameter that is not a typed local is read back once through its own `Value` rebinding,
+  // so the string-method, comparison and ternary rules can take it as a native operand.
+  rustScalarParamRead(node) {
+    const inner = this.unwrapParens(node);
+    if (inner === void 0 || !isIdentifier3(inner) || this.rustScalarIdentifierKind(inner) !== void 0)
+      return void 0;
+    const kind = this.rustOptParamKind(inner);
+    return kind === void 0 ? void 0 : { kind, text: `${super.printIdentifier(inner)}.${_RustTranspiler.RUST_PARAM_READ[kind]}` };
+  }
+  rustScalarRecvName(node) {
+    return this.rustScalarParamRead(node)?.text ?? super.printIdentifier(this.unwrapParens(node));
+  }
+  rustScalarParamOperand(node) {
+    const inner = this.unwrapParens(node);
+    return this.rustScalarParamRead(inner) !== void 0 || this.rustScalarLengthRecv(inner, true) !== void 0 || this.rustScalarStrMethod(inner, false, true) !== void 0;
+  }
   /** `p === undefined ? d : p` (or `p !== undefined ? p : d`) over a typed optional parameter `p` and a
    *  literal or typed local `d`: never `Null`, printed `p.as_i64().unwrap_or(d)`. */
   rustOptParamDefault(node) {
@@ -56550,7 +56567,7 @@ ${binding(plan.indent)}` : ""), head: "" };
     const contains = this.rustScalarContainsTest(node, dry);
     if (contains !== void 0)
       return contains;
-    if (!this.rustScalarHasTypedOperand(node.left) && !this.rustScalarHasTypedOperand(node.right))
+    if (!this.rustScalarHasTypedOperand(node.left) && !this.rustScalarHasTypedOperand(node.right) && !this.rustScalarParamOperand(node.left) && !this.rustScalarParamOperand(node.right))
       return void 0;
     const left = this.unwrapParens(node.left);
     const right = this.unwrapParens(node.right);
@@ -56600,7 +56617,7 @@ ${binding(plan.indent)}` : ""), head: "" };
       return node.text in this.StringLiteralReplacements ? void 0 : "slit";
     if (this.literalKindOfNode(node) !== void 0 && this.literalKindOfNode(node) !== "number")
       return void 0;
-    return this.rustScalarNumericKind(node) ?? this.rustScalarExpressionKind(node);
+    return this.rustScalarNumericKind(node) ?? this.rustScalarExpressionKind(node) ?? this.rustScalarParamRead(node)?.kind;
   }
   /** `s.indexOf("lit") >= 0` / `> -1` / `!== -1` (contains) and `< 0` / `=== -1` (absent) on a typed string. */
   rustScalarContainsTest(node, dry) {
@@ -56608,7 +56625,7 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (!isCallExpression6(left) || !isPropertyAccessExpression3(left.expression) || left.expression.name.text !== "indexOf" || left.arguments.length !== 1)
       return void 0;
     const recv = left.expression.expression;
-    const kind = this.rustScalarIdentifierKind(recv);
+    const kind = this.rustScalarIdentifierKind(recv) ?? this.rustScalarParamRead(recv)?.kind;
     const needle = left.arguments[0];
     if (kind !== "str" && kind !== "ostr" || this.rustNativeStringLiteralArg(needle) === void 0 || needle.text === "")
       return void 0;
@@ -56625,7 +56642,7 @@ ${binding(plan.indent)}` : ""), head: "" };
       return void 0;
     if (dry)
       return "_";
-    const name = super.printIdentifier(recv);
+    const name = this.rustScalarRecvName(recv);
     const hay = kind === "str" ? name : `${name}.as_deref().unwrap_or_default()`;
     return `${present ? "" : "!"}${hay}.contains("${this.rustNativeStringLiteralArg(needle)}")`;
   }
@@ -56665,8 +56682,8 @@ ${binding(plan.indent)}` : ""), head: "" };
       return kind === "int" ? this.rustScalarIntLiteral(inner) : this.rustScalarFloatLiteral(inner);
     }
     if (isIdentifier3(inner)) {
-      const own2 = this.rustScalarIdentifierKind(inner);
-      const name = super.printIdentifier(inner);
+      const own2 = this.rustScalarIdentifierKind(inner) ?? this.rustScalarParamRead(inner)?.kind;
+      const name = this.rustScalarRecvName(inner);
       return kind === "num" && own2 === "int" ? `(${name} as f64)` : name;
     }
     const call = kind === "int" || kind === "num" ? this.rustArithCallText(kind, inner) : void 0;
@@ -56697,14 +56714,14 @@ ${binding(plan.indent)}` : ""), head: "" };
       const text = `(${this.rustScalarOperandText(own, node.left)} ${sign} ${this.rustScalarOperandText(own, node.right)})`;
       return kind === "num" && own === "int" ? `(${text} as f64)` : wrap(text);
     }
-    const length = this.rustScalarLengthRecv(node);
+    const length = this.rustScalarLengthRecv(node, true);
     if (length !== void 0) {
-      const name = super.printIdentifier(length);
-      return wrap(`(${this.rustScalarIdentifierKind(length) === "str" ? name : `${name}.as_deref().unwrap_or_default()`}.chars().count() as i64)`);
+      const name = this.rustScalarRecvName(length);
+      return wrap(`(${(this.rustScalarIdentifierKind(length) ?? this.rustScalarParamRead(length)?.kind) === "str" ? name : `${name}.as_deref().unwrap_or_default()`}.chars().count() as i64)`);
     }
-    const method = this.rustScalarStrMethod(node);
+    const method = this.rustScalarStrMethod(node, false, true);
     if (method !== void 0) {
-      const name = super.printIdentifier(method.recv);
+      const name = this.rustScalarRecvName(method.recv);
       const args = Array.from(node.arguments ?? []);
       const arg = (i) => this.rustNativeStringLiteralArg(args[i]);
       if (method.method === "startsWith" || method.method === "endsWith") {
@@ -56725,7 +56742,8 @@ ${binding(plan.indent)}` : ""), head: "" };
         return wrap(`${name}.trim().to_string()`);
       if (method.method === "toString") {
         const local = this.rustScalarLocalOf(method.recv);
-        return wrap(local !== void 0 && this.rustLocalLastUse(method.recv, local.declaration) ? name : `${name}.clone()`);
+        const moved = this.rustScalarParamRead(method.recv) !== void 0 || local !== void 0 && this.rustLocalLastUse(method.recv, local.declaration);
+        return wrap(moved ? name : `${name}.clone()`);
       }
       return wrap(`${name}.${fn}()`);
     }
