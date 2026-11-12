@@ -12336,6 +12336,7 @@ export class RustTranspiler extends BaseTranspiler {
         let extendHeads = 0;
         let lentResponses = 0;
         let mixed = false;
+        let defaultedBoxes = 0;
         const boxedElementUses: any[] = [];
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
@@ -12374,7 +12375,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             if (this.rustExtendHeadUse(n)) return ++extendHeads > 0 && ++reads > 0;
-            const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init)) && boxedElementUses.push(n) > 0;
+            const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0) && boxedElementUses.push(n) > 0;
             if (this.rustLentResponseSlot(up, n) && this.rustLentResponseSource(init)) return ++lentResponses > 0 && ++reads > 0;
             if (!isCallExpression(up) || up.arguments[0] !== n) return handed();
             // An endpoint response may be a list or a map: only string-key reads agree for both.
@@ -12395,7 +12396,7 @@ export class RustTranspiler extends BaseTranspiler {
         const optional = nilDeclared || nullTests > 0 || writes > 0;
         if (lentResponses > 0 && optional) return undefined;
         if (extendHeads > 0 && (optional || from !== 'dict' && from !== 'api')) return undefined;
-        if (optional && boxedElementUses.length > 0 && this.rustWsFieldRead(init) !== undefined) return undefined;
+        if (optional && boxedElementUses.length > 0 && (this.rustWsFieldRead(init) !== undefined || defaultedBoxes > 0)) return undefined;
         if (keySets > 0 && (from !== 'dict' || optional || (init !== undefined && this.rustInitReadsTaggedStore(init)))) return undefined;
         if (lengths > 0 && (from !== 'list' || optional)) return undefined;
         if (optional) {
@@ -12516,10 +12517,31 @@ export class RustTranspiler extends BaseTranspiler {
         return form === 'move' ? `Value::Arr(${text})` : `Value::Arr(${text}.clone())`;
     }
 
-    /** `Value::Dict(x)` at the last use (moved), else `Value::from(&x)` (the Arc bump the copied `Value` paid). */
+    /** `Value::Dict(x)` / `Value::Arr(x)` at the last use (moved), else `Value::from(&x)` (the Arc bump the copied `Value` paid). */
     printDictElementBox(node: any, text: string): string | undefined {
         const form = this.rustDictElementBoxes.get(node);
-        return form === undefined ? undefined : (form === 'move' ? `Value::Dict(${text})` : `Value::from(&${text})`);
+        if (form === undefined) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        const list = declaration !== undefined && this.rustBorrowedLocalKind(declaration) === 'list';
+        return form === 'move' ? `Value::${list ? 'Arr' : 'Dict'}(${text})` : `Value::from(&${text})`;
+    }
+
+    // ── rustDefaultedContainerBoxUse: a `safeDict*` / `safeList*` read with an empty literal default handed on whole ──
+    // The local always holds the container, so a plain `Value` slot of a `this.` method or an object literal value
+    // takes the shared handle (moved at the last use, else the Arc bump the boxed local's copy paid).
+    rustDefaultedContainerBoxUse(n: any, init: any): boolean {
+        const up: any = n.parent;
+        if (init === undefined || !isCallExpression(init) || up === undefined || this.rustScalarInNestedWrite(n)) return false;
+        const from = this.rustBorrowedSourceKind(init);
+        if ((from !== 'dict' && from !== 'list') || !/^safe(?:Dict|List)(?:2|N)?$/.test(String((init.expression as any).name?.text ?? ''))
+            || !this.rustContainerInitNeverNull(init, from === 'list' ? 'list' : 'map') || this.rustContainerInitReadsStore(init)) return false;
+        if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
+        if (isReturnStatement(up) && up.expression === n) return true;
+        if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const callee = String(up.expression.name.text);
+        if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
+        const at = Array.from(up.arguments).indexOf(n);
+        return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && this.rustNilBoxSlotOk(up, at);
     }
 
     // ── rustBorrowedKeySetUse / printBorrowedKeys / printBorrowedInOp: key sets of a shared dict local ──
