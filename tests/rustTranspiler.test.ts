@@ -4710,8 +4710,8 @@ describe('native string methods on proven strings', () => {
 
     test('toUpperCase / toLowerCase', () => {
         const o = out("        const u = a.toUpperCase();\n        const l = a.toLowerCase();\n        return [u, l];");
-        expect(o).toContain('let mut u: Value = (if let Some(__s) = a.as_str() { Value::Str(__s.to_uppercase().into()) } else { Value::Null });');
-        expect(o).toContain('let mut l: Value = (if let Some(__s) = a.as_str() { Value::Str(__s.to_lowercase().into()) } else { Value::Null });');
+        expect(o).toContain('let mut u: Option<String> = a.as_str().map(str::to_uppercase);');
+        expect(o).toContain('let mut l: Option<String> = a.as_str().map(str::to_lowercase);');
         expect(o).not.toContain('to_upper(&');
     });
     test('split with a literal separator', () => {
@@ -10217,5 +10217,55 @@ describe('ral-ie: split results and integer toString locals', () => {
         fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    stamp (n: number) {\n        const count = 5;\n        const text = count.toString ();\n        if (text === '5') {\n            return this.hold (text);\n        }\n        return this.hold (count.toString ());\n    }\n}\n");
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut text: String = format!("{}", count);');
+    });
+});
+
+describe('rust ternary-initialised scalar locals', () => {
+    const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchOHLCV'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    let n = 0;
+    const run = (body: string, extra = '') => {
+        const dir = path.join (rustFixtureRoot, 'ternary-locals', String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "type Num = number | undefined;\nexport default class Exchange {\n" +
+            "    parseNumber (value: any, d: Num = undefined): number { return value; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\ntype Int = number;\ninterface Dict { [key: string]: any }\n" +
+            "export default class venue extends Exchange {\n" +
+            "    async fetchOHLCV (symbol: string, timeframe: string = '1m', since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any[]> {\n" +
+            body + "    }\n" + extra + "}\n");
+        return typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+
+    test('parseNumber of literal decimal strings in both arms is a native Option<f64>', () => {
+        const out = run ("        const fee = (symbol === 'BTC') ? this.parseNumber ('0.0005') : this.parseNumber ('0.0010');\n" +
+            "        return [ { 'taker': fee, 'maker': fee } ];\n");
+        expect(out).toContain('let mut fee: Option<f64> = (if ');
+        expect(out).toContain('Some(0.0005_f64)');
+        expect(out).not.toContain('let mut fee: Value');
+    });
+
+    test('a bool arm joined with undefined is an Option<bool>', () => {
+        const out = run ("        const linear = (symbol === 'BTC') ? undefined : (timeframe === '1m');\n" +
+            "        return [ { 'linear': linear } ];\n");
+        expect(out).toContain('let mut linear: Option<bool> = ');
+        expect(out).toContain('linear.map_or(Value::Null, Value::Bool)');
+    });
+
+    test('a defaulted Math.min cap over an optional Int parameter is a native i64', () => {
+        const out = run ("        const count = (limit === undefined) ? 100 : Math.min (limit, 1000);\n" +
+            "        return [ { 'limit': count } ];\n");
+        expect(out).toContain('let mut count: i64 = i64::min(limit.as_i64().unwrap_or(100), 1000);');
+    });
+
+    test('negative: a default above the Math.min cap keeps the box', () => {
+        const out = run ("        const count = (limit === undefined) ? 5000 : Math.min (limit, 1000);\n" +
+            "        return [ { 'limit': count } ];\n");
+        expect(out).not.toContain('i64::min(limit');
+    });
+
+    test('a case conversion of a string-typed Value read once is an Option<String> with no copy', () => {
+        const out = run ("        const s = this.hold (symbol) as string;\n        const upper = s.toUpperCase ();\n" +
+            "        if (upper === 'BTC') {\n            return [];\n        }\n        return [ upper ];\n");
+        expect(out).toContain('let mut upper: Option<String> = s.as_str().map(str::to_uppercase);');
+        expect(out).not.toContain('upper.clone()');
     });
 });
