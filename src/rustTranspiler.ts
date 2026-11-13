@@ -505,7 +505,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_NUMBER_CONSTANT_IMPORTS.has(name) && this.rustIsImportedValueName(node)) {
             return `Value::Int(crate::runtime::${name})`;
         }
-        return this.printWsCacheLocalUse(node) ?? this.printClientHandleUse(node) ?? this.printTypedFilterParamRead(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node);
+        return this.printRustBytesLocalRead(node) ?? this.printWsCacheLocalUse(node) ?? this.printClientHandleUse(node) ?? this.printTypedFilterParamRead(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node);
     }
 
     /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
@@ -2004,6 +2004,8 @@ export class RustTranspiler extends BaseTranspiler {
         const nilMapWrite = isAssign && isIdentifier(left) ? this.printNilMapWrite(left, right, identation) : undefined; if (nilMapWrite !== undefined) return nilMapWrite;
         const nilWrite = isAssign && isIdentifier(left) ? this.printRustNilLocalWrite(left, right) : undefined;
         if (nilWrite !== undefined) return nilWrite;
+        const bytesWrite = isAssign && isIdentifier(left) ? this.printRustBytesLocalWrite(left, right) : undefined;
+        if (bytesWrite !== undefined) return bytesWrite;
         const scalarWrite = isAssign && isIdentifier(left) ? this.printRustScalarLocalWrite(left, right) : undefined;
         if (scalarWrite !== undefined) return scalarWrite;
         const scalarBinary = this.printRustScalarBinary(node); if (scalarBinary !== undefined) return scalarBinary;
@@ -2161,6 +2163,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!declaration.initializer) {
             return `${indent}let mut ${varName}: Value = Value::Null`;
         }
+        if (node.declarations.length === 1 && this.rustBytesLocal(declaration)) return `${indent}let mut ${varName}: crate::value::Bytes = ${this.rustBytesBareText(this.unwrapParens(declaration.initializer), identation)}`;
         const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) ?? this.printWsFlightLocalDeclaration(declaration, varName, indent) ?? this.printWsCacheLocalDeclaration(declaration, varName, indent) : undefined;
         if (scalarDecl !== undefined) return scalarDecl;
         const parsedValue = this.printNode(declaration.initializer, identation).trim();
@@ -2198,6 +2201,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rustTypedListField(declaration.initializer)) return `${indent}let mut ${varName}: crate::value::List = self.${String(this.rustSkipWrappers(declaration.initializer).name.text)}.clone()`;
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue; return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
@@ -3883,6 +3887,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustVenueTypedCall(node) !== undefined) return true;
         if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && isIdentifier(node.expression);
         if (isElementAccessExpression(node)) return isIdentifier(node.expression);
+        if (isCallExpression(node) && isIdentifier(node.expression) && RustTranspiler.RUST_STR_RUNTIME_FREE.has(String(node.expression.text))) return true;
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustScalarReceiver(node.expression.expression)) return false;
         // any `this.m(..)`: the kind comes from the callee's checker return
         return true;
@@ -4154,6 +4159,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustElementReadScalarKind(node) !== undefined) return this.rustElementReadScalarKind(node);
         if (fresh && this.rustListLengthInit(node)) return 'int';
         if (!isCallExpression(node)) return undefined;
+        if (isIdentifier(node.expression) && this.rustStrRuntimeCall(node)) return 'str';
         const callee: any = node.expression;
         if (!isPropertyAccessExpression(callee) || !this.rustScalarReceiver(callee.expression)) return undefined;
         const name = String(callee.name.text);
@@ -4212,18 +4218,50 @@ export class RustTranspiler extends BaseTranspiler {
     // ── hand-written `-> String` runtime methods (rustStrRuntimeCall / printRustStrRuntimeCall) ──
     // Base methods the runtime implements by hand with the TS `string` return as a Rust `String`.
     private static readonly RUST_STR_RUNTIME_METHODS = new Set([ 'implodeParams', 'intToBase16', 'hmac', 'uuid', 'uuid16', 'uuid22', 'urlencode', 'rawencode',
-        'urlencodeNested', 'urlencodeWithArrayRepeat' ]);
+        'urlencodeNested', 'urlencodeWithArrayRepeat', 'stringToBase64', 'binaryToBase16', 'binaryToBase64', 'binaryToBase58', 'binaryToString' ]);
     private static readonly RUST_STR_RUNTIME_APPEND_VETO = new Set([ 'implodeParams', 'intToBase16' ]);
+    // The runtime's free signers with a TS `string` return (`base/functions/crypto.ts`, `rsa.ts`).
+    private static readonly RUST_STR_RUNTIME_FREE = new Set([ 'eddsa', 'jwt', 'rsa' ]);
+
+    /** A call of an imported base function (`ts/src/base/functions/`) named in `names`. */
+    rustFreeSignerCall(node, names: Set<string>): boolean {
+        const callee: any = node.expression;
+        if (!isIdentifier(callee) || !names.has(String(callee.text))) return false;
+        const declaration: any = this.rustScalarCallee(node);
+        return declaration !== undefined && /ts[\\/]src[\\/]base[\\/]functions[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? ''))
+            && this.isStringLikeType(this.typeOfNodeIfAny(node));
+    }
     private rustStrRuntimeBare = new Set<Node>();
 
     /** `this.implodeParams(..)` / `this.intToBase16(..)` resolved to the base tier with a non-null `string` return. */
     rustStrRuntimeCall(node): boolean {
+        if (node !== undefined && isCallExpression(node) && isIdentifier(node.expression)) return this.rustFreeSignerCall(node, RustTranspiler.RUST_STR_RUNTIME_FREE);
         if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)
             || !RustTranspiler.RUST_STR_RUNTIME_METHODS.has(String(node.expression.name.text)) || !this.rustScalarReceiver(node.expression.expression)) return false;
         const declaration: any = this.rustScalarCallee(node);
-        if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return false;
+        if (declaration === undefined || (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? '')) && !this.rustBaseBoundHelper(node))) return false;
         const type: any = this.typeOfNodeIfAny(node);
         return type !== undefined && this.isStringLikeType(type);
+    }
+
+    /** A base `Exchange` property bound to an imported encoder (`binaryToBase16 = binaryToBase16`, `@scure/base` underneath). */
+    rustBaseBoundHelper(node): boolean {
+        let symbol: any;
+        try {
+            symbol = (this.getChecker() as any).getSymbolAtLocation(node.expression.name);
+        } catch (e) {
+            return false;
+        }
+        return symbolDeclarations(symbol).some((d: any) => d.kind === SyntaxKind.PropertyDeclaration && RustTranspiler.RUST_BASE_TIER_FILE.test(String(d.getSourceFile?.()?.fileName ?? '')));
+    }
+
+    /** A test helper's `exchange.m(..)` on an untyped receiver: the test crate hands it a concrete `Exchange`
+     *  (or the `ExchangeOps` shim on `Value`), whose `m` returns the same `String`, so the call boxes once. */
+    rustStrRuntimeTestCall(node): boolean {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !isIdentifier(node.expression.expression)
+            || !RustTranspiler.RUST_STR_RUNTIME_METHODS.has(String(node.expression.name.text)) || !this.rustTestTierSource(node)) return false;
+        const type: any = this.typeOfNodeIfAny(node.expression.expression);
+        return type !== undefined && (type.flags & TypeFlags.Any) !== 0;
     }
 
     /** The bare `String` call text (no box), for typed string locals and `format!` operands. */
@@ -4257,7 +4295,7 @@ export class RustTranspiler extends BaseTranspiler {
         const init: any = this.unwrapParens(declaration.initializer);
         if (!this.rustStrRuntimeCall(init)) return false;
         // a local returned from a declared string method leaves that method's own `Option<String>` decision to its box
-        if (!RustTranspiler.RUST_STR_RUNTIME_APPEND_VETO.has(String(init.expression.name.text))) return this.rustStrReturnedLocal(declaration, this.rustEnclosingFunction(declaration));
+        if (!RustTranspiler.RUST_STR_RUNTIME_APPEND_VETO.has(String((init.expression.name ?? init.expression).text))) return this.rustStrReturnedLocal(declaration, this.rustEnclosingFunction(declaration));
         let appended = false;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             let top: any = n;
@@ -4272,6 +4310,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Call hook: the `String` result is boxed once (`Value::from`) wherever a `Value` is expected. */
     printRustStrRuntimeCall(node, identation): string | undefined {
+        if (!this.rustStrRuntimeBare.has(node) && this.rustStrRuntimeTestCall(node)) return `Value::from(${this.rustStrRuntimeBareText(node, identation)})`;
         if (this.rustStrRuntimeBare.has(node) || !this.rustStrRuntimeCall(node)) return undefined;
         const text = this.rustStrRuntimeBareText(node, identation);
         return this.rustStrRuntimeFormatOperand(node) ? text : `Value::from(${text})`;
@@ -4365,6 +4404,142 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'oint') return `${text}.as_i64()`;
         if (kind === 'ostr') return `${text}.as_str().map(str::to_owned)`;
         return `${text}.as_str().unwrap_or_default().to_owned()`;
+    }
+
+    // ── byte buffers (rustBytesProducer / rustBytesSlot / rustBytesLocal) ──
+    // The hand-written producers of a TS `Uint8Array` return `crate::value::Bytes` (the `Value::Arr` of byte
+    // ints behind a typed handle) and the byte parameters of the hand-written consumers take `impl Into<Value>`.
+    // A producer call boxes once (`Value::from`, a move of the shared list) unless it sits in a consumer's byte
+    // slot; a local written only from producers holds the handle and lends it (`&x`, an `Arc` bump, no copy).
+    private static readonly RUST_BYTES_PRODUCERS = new Set([ 'encode', 'base16ToBinary', 'base64ToBinary', 'base58ToBinary', 'binaryConcat', 'numberToBE', 'stringToBinary' ]);
+    private static readonly RUST_BYTES_SLOTS: { [name: string]: number[] } = {
+        hmac: [ 0, 1 ], hash: [ 0 ], binaryToBase16: [ 0 ], binaryToBase64: [ 0 ], binaryToBase58: [ 0 ], binaryToString: [ 0 ], binaryLength: [ 0 ], binaryConcat: [ 0 ], urlencodeBase64: [ 0 ],
+    };
+    private static readonly RUST_BYTES_FREE_SLOTS: { [name: string]: number[] } = { eddsa: [ 0, 1 ], jwt: [ 1 ] };
+    private rustBytesBare = new Set<Node>();
+    private rustBytesDecisions = new Map<any, boolean>();
+    private rustBytesUseForms = new WeakMap<Node, string>();
+
+    /** `this.encode(..)` & co. resolved to the base tier, or such a call on a test's untyped `exchange`. */
+    rustBytesProducer(node): boolean {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !RustTranspiler.RUST_BYTES_PRODUCERS.has(String(node.expression.name.text))) return false;
+        const recv: any = node.expression.expression;
+        if (this.rustScalarReceiver(recv)) return this.rustCalleeIsRuntimeBase(node);
+        if (!isIdentifier(recv) || !this.rustTestTierSource(node)) return false;
+        const type: any = this.typeOfNodeIfAny(recv);
+        return type !== undefined && (type.flags & TypeFlags.Any) !== 0;
+    }
+
+    /** A call of the imported base `functions/` export `name`. */
+    rustBaseFunctionCall(node, name: string): boolean {
+        if (node === undefined || !isCallExpression(node) || !isIdentifier(node.expression) || String(node.expression.text) !== name) return false;
+        const declaration: any = this.rustScalarCallee(node);
+        return declaration !== undefined && /ts[\\/]src[\\/]base[\\/]functions[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
+    }
+
+    /** An argument in a byte parameter (`impl Into<Value>`) of a hand-written consumer, outside the test crate. */
+    rustBytesSlot(node): boolean {
+        let current: any = node;
+        while (isParenthesizedExpression(current.parent)) current = current.parent;
+        const call: any = current.parent;
+        if (call === undefined || !isCallExpression(call) || call.expression === current || this.rustTestTierSource(call)) return false;
+        const at = call.arguments.indexOf(current);
+        const callee: any = call.expression;
+        if (isIdentifier(callee)) return (RustTranspiler.RUST_BYTES_FREE_SLOTS[String(callee.text)] ?? []).includes(at) && this.rustBaseFunctionCall(call, String(callee.text));
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        return (RustTranspiler.RUST_BYTES_SLOTS[String(callee.name.text)] ?? []).includes(at) && this.rustCalleeIsRuntimeBase(call);
+    }
+
+    rustBytesBareText(node, identation = 0): string {
+        this.rustBytesBare.add(node);
+        try {
+            return this.printNode(node, identation).trim();
+        } finally {
+            this.rustBytesBare.delete(node);
+        }
+    }
+
+    /** Call hook: a producer call is the `Bytes` itself in a byte slot, boxed once anywhere else. */
+    printRustBytesCall(node, identation): string | undefined {
+        if (this.rustBytesBare.has(node) || !this.rustBytesProducer(node)) return undefined;
+        const text = this.rustBytesBareText(node, identation);
+        return this.rustBytesSlot(node) ? text : `Value::from(${text})`;
+    }
+
+    /** A local whose every write is a producer call and whose every read is a byte slot or a `Value` hand-off. */
+    rustBytesLocal(declaration): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration)) return false;
+        let decision = this.rustBytesDecisions.get(declaration);
+        if (decision === undefined) {
+            this.rustBytesDecisions.set(declaration, false);
+            try {
+                decision = this.rustBytesLocalUncached(declaration);
+            } catch (e) {
+                decision = false;
+            }
+            this.rustBytesDecisions.set(declaration, decision);
+        }
+        return decision;
+    }
+
+    rustBytesLocalUncached(declaration): boolean {
+        const list: any = declaration.parent;
+        if (!isIdentifier(declaration.name) || list?.declarations?.length !== 1 || list.parent?.kind !== SyntaxKind.VariableStatement || this.rustTestTierSource(declaration)) return false;
+        if (!this.rustBytesProducer(this.unwrapParens(declaration.initializer))) return false;
+        const fn: any = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || isSourceFile(fn)) return false;
+        const forms = new Map<Node, string>();
+        const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
+            if (this.rustEnclosingFunction(n) !== fn) return false;
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
+                return up.parent?.kind === SyntaxKind.ExpressionStatement && this.rustBytesProducer(this.unwrapParens(up.right)) && forms.set(n, 'write') !== undefined;
+            }
+            if (this.rustBytesSlot(n)) return forms.set(n, 'lend') !== undefined;
+            // a `Value` hand-off: shares the list (`Value::from(&x)`), or moves it at a `return`
+            if (isReturnStatement(up) && up.expression === n) return forms.set(n, 'move') !== undefined;
+            if ((isCallExpression(up) && up.expression !== n && up.arguments.includes(n)) || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n)
+                || isArrayLiteralExpression(up)) return forms.set(n, 'share') !== undefined;
+            return false;
+        });
+        if (!ok) return false;
+        for (const [ n, form ] of forms) this.rustBytesUseForms.set(n, form);
+        return true;
+    }
+
+    rustBytesLocalOf(node): any {
+        if (node === undefined || !isIdentifier(node) || this.checkerOrUndefined() === undefined) return undefined;
+        const declaration: any = this.rustDeclaredNode(node);
+        if (declaration === undefined || declaration.name === node || !this.rustBytesLocal(declaration)) return undefined;
+        return declaration;
+    }
+
+    /** Identifier hook: a byte slot borrows the handle, a `Value` slot shares or moves its list. */
+    printRustBytesLocalRead(node): string | undefined {
+        if (!isIdentifier(node) || this.rustBytesLocalOf(node) === undefined) return undefined;
+        const form = this.rustBytesUseForms.get(node);
+        const name = super.printIdentifier(node);
+        if (form === 'lend') return `&${name}`;
+        if (form === 'move') return `Value::from(${name})`;
+        if (form === 'share') return `Value::from(&${name})`;
+        return undefined;
+    }
+
+    /** Assignment hook: `x = <producer>` keeps the handle. */
+    printRustBytesLocalWrite(left, right): string | undefined {
+        if (this.rustBytesUseForms.get(left) !== 'write' || this.rustBytesLocalOf(left) === undefined) return undefined;
+        return `${super.printIdentifier(left)} = ${this.rustBytesBareText(this.unwrapParens(right))}`;
+    }
+
+    /** `ecdsa(..)` from `base/functions/crypto.ts`: the runtime returns its `{ r, s, v }` record as a `crate::value::Dict`. */
+    rustEcdsaCall(node): boolean {
+        return this.rustBaseFunctionCall(node, 'ecdsa');
+    }
+
+    printRustEcdsaCall(node, identation): string | undefined {
+        if (this.rustBytesBare.has(node) || !this.rustEcdsaCall(node)) return undefined;
+        return `Value::Dict(${this.rustBytesBareText(node, identation)})`;
     }
 
     // ── clock and cast initialisers (rustClockCall / rustStrCastCall) ──
@@ -4661,8 +4836,9 @@ export class RustTranspiler extends BaseTranspiler {
     /** True for the derived sources above, which must earn a native use (not only `Value` boxes). */
     rustScalarNeedsNativeUse(init): boolean {
         const node: any = this.unwrapParens(init);
-        if (this.rustElementReadScalarKind(node) !== undefined || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueParseToInt(node) || this.rustVenueTypedCall(node) !== undefined || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustStrRuntimeCall(node)) return true;
-        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || this.rustBaseTypedReturnKind(node) !== undefined) return false;
+        if (this.rustElementReadScalarKind(node) !== undefined || this.rustListLengthInit(node) || this.rustVenueIntCall(node) || this.rustVenueParseToInt(node) || this.rustVenueTypedCall(node) !== undefined || this.rustVenueStrCall(node) || this.rustSumShape(node) || this.rustStrCastCall(node) !== undefined || this.rustClockString(node)) return true;
+        // a hand-written `-> String` helper result is a `String` already: storing and boxing it back costs no conversion
+        if (!isCallExpression(node) || this.rustStrRuntimeCall(node) || !isPropertyAccessExpression(node.expression) || this.rustBaseTypedReturnKind(node) !== undefined) return false;
         return RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(node.expression.name.text)] === undefined && this.rustDerivedScalarKind(node) !== undefined;
     }
 
@@ -8542,6 +8718,15 @@ export class RustTranspiler extends BaseTranspiler {
         return `${path}::${name}(${args.map((a) => a.startsWith('&') ? a : `&${a}`).join(', ')})`;
     }
 
+    /** `eddsa` / `jwt` / `rsa` return a `String`: boxed once at a `Value` slot, bare for typed locals and `format!` operands. */
+    printRustSignerCallBoxed(node, identation): string | undefined {
+        const callee: any = node.expression;
+        if (!isIdentifier(callee) || !RustTranspiler.RUST_STR_RUNTIME_FREE.has(String(callee.text))) return undefined;
+        if (this.rustStrRuntimeBare.has(node) || !this.rustStrRuntimeCall(node)) return this.printRustSignerCall(node, identation);
+        const text = this.rustStrRuntimeBareText(node, identation);
+        return this.rustStrRuntimeFormatOperand(node) ? text : `Value::from(${text})`;
+    }
+
     // The runtime signers have fixed arities: `jwt(request, secret, hash, isRsa, opts)`, `rsa(request, secret, hash)`.
     printRustSignerCall(node, identation): string | undefined {
         const callee: any = node.expression;
@@ -8563,6 +8748,7 @@ export class RustTranspiler extends BaseTranspiler {
         const limitCall = this.rustLimitCallText(node); if (limitCall !== undefined) return `Value::from(${limitCall})`;
         const strRuntime = this.printRustStrRuntimeCall(node, identation); if (strRuntime !== undefined) return strRuntime;
         const typedReturn = this.printRustBaseTypedReturnCall(node); if (typedReturn !== undefined) return typedReturn;
+        const bytesCall = this.printRustBytesCall(node, identation); if (bytesCall !== undefined) return bytesCall;
         const arithCall = this.printRustArithCall(node); if (arithCall !== undefined) return arithCall;
         const marketRead = this.printTypedMarketRead(node);
         if (marketRead !== undefined) return marketRead;
@@ -8625,7 +8811,7 @@ export class RustTranspiler extends BaseTranspiler {
         const nativeParse = this.printNativeParseCall(node);
         if (nativeParse !== undefined) return nativeParse;
 
-        const runtimeCall = this.printRustNamespaceCall(node, identation) ?? this.printRustSignerCall(node, identation);
+        const runtimeCall = this.printRustNamespaceCall(node, identation) ?? this.printRustSignerCallBoxed(node, identation) ?? this.printRustEcdsaCall(node, identation);
         if (runtimeCall !== undefined) return runtimeCall;
 
         // `this.json(v)`: `Exchange::json` is exactly the free `json_stringify`, which takes the value
@@ -13125,7 +13311,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A `let` declared empty is filled later by container writes only (the optional form).
         const nilDeclared = (init === undefined || this.literalKindOfNode(init) === 'null') && (list.flags & NodeFlags.Const) === 0
             && list.parent?.kind === SyntaxKind.VariableStatement;
-        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? this.rustBorrowedSourceKind(init) ?? this.rustBuiltReturnSourceKind(init) : (this.rustDictElementSource(init) ? 'dict' : undefined);
+        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? (this.rustEcdsaCall(init) ? 'dict' : this.rustBorrowedSourceKind(init) ?? this.rustBuiltReturnSourceKind(init)) : (this.rustDictElementSource(init) ? 'dict' : undefined);
         const endpoint = from === 'api';
         if (endpoint) from = this.rustDeclaredEndpointKind(init) ?? 'api';
         if (from === undefined && !nilDeclared) return undefined;
@@ -13215,7 +13401,8 @@ export class RustTranspiler extends BaseTranspiler {
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
         // an endpoint written into an empty `let` may answer a list: `into_opt_dict` keeps only maps, so it is never lent whole
         if (this.rustNilResponseLocals.has(declaration) && (lentResponses > 0 || lentNullable > 0)) return undefined;
-        if ((keyReads > 0 || (init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init))) && !this.rustDictKeyReadLineOk(declaration, name)) return undefined;
+        // the `ecdsa(..)` declaration adds no `.into_dict()` suffix: its line keeps the boxed length plus the type name
+        if ((keyReads > 0 || (init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init))) && !this.rustEcdsaCall(init) && !this.rustDictKeyReadLineOk(declaration, name)) return undefined;
         // a nullable source lent whole keeps Null apart from an empty container: the optional form
         const optional = nilDeclared || nullTests > 0 || writes > 0 || lentNullable > 0;
         if (lentResponses > 0 && optional && !this.rustLentOptionalOk(declaration, name, fn, init, from)) return undefined;
