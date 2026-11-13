@@ -5719,6 +5719,8 @@ export class RustTranspiler extends BaseTranspiler {
             const form = this.rustScalarUseForms.get(n);
             // a `safeValue (this.orderbooks, k)` key was a by-value reader argument before the map was typed, never a field key
             if (form === 'fin' && this.rustWsBookKeyOf(n) && isCallExpression(this.rustWsBookKeyParent(n))) return true;
+            // so is a `safeValue (this.<cache map>, k)` key (trades, positionsByType)
+            if (form === 'fin' && isCallExpression(this.rustWsBookKeyParent(n)) && this.rustWsCacheMapLookup(this.rustWsBookKeyParent(n))) return true;
             if (form === 'fin' || form === 'frd' || (form === 'key' && this.rustFieldKeyReceiver(n.parent?.expression) !== undefined)) field = true;
             else if ((form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)) boxed = true;
             return true;
