@@ -9320,6 +9320,45 @@ describe('boxed-only params slots and lent strings', () => {
     });
 });
 
+describe('rust ws cache maps', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    trades: Dictionary<ArrayCache>;\n    tickers: Dictionary<any> = {};\n    safeValue (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    safeInteger (obj: any, key: string, defaultValue: number = undefined): number { return obj[key]; }\n    createSafeDictionary (isWs: boolean = false) { return {}; }\n    reset () {\n        this.trades = this.createSafeDictionary (true);\n    }\n    drop (symbol: string) {\n        if (symbol in this.trades) {\n            delete this.trades[symbol];\n        }\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    handleTrades (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        let stored = this.safeValue (this.trades, symbol);\n        if (stored === undefined) {\n            const limit = this.safeInteger (this.options, 'tradesLimit', 1000);\n            stored = new ArrayCache (limit);\n            this.trades[symbol] = stored;\n        }\n        stored.append (message);\n        client.resolve (stored, 'trades:' + symbol);\n    }\n    handleTrade (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        if (!(symbol in this.trades)) {\n            this.trades[symbol] = new ArrayCache (10);\n        }\n        const cache = this.trades[symbol];\n        cache.append (message);\n        client.resolve (this.trades[symbol], 'trade');\n        const snapshot = this.trades;\n        return snapshot;\n    }\n}\n",
+    };
+    let out: string;
+    let base: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-cachemap-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        base = transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a lookup in the map is an optional cache handle, written back with put', () => {
+        expect(out).toContain('let mut stored: Option<crate::pro::cache::Cache> = self.trades.lookup(&symbol);');
+        expect(out).toContain('stored = Some(ArrayCache::new(');
+        expect(out).toMatch(/CacheStore::put\(&mut self\.trades, &symbol, stored(\.clone\(\))?\);/);
+        expect(out).toContain('client.resolve(Value::from(&stored)');
+    });
+    test('membership, element reads and deletes on the map are typed', () => {
+        expect(out).toContain('self.trades.has(&symbol)');
+        expect(out).toContain('CacheStore::put(&mut self.trades, &symbol, ArrayCache::new(');
+        expect(out).toContain('let mut cache: Option<crate::pro::cache::Cache> = self.trades.at(&symbol);');
+        expect(out).toContain('Value::from(self.trades.at(&symbol))');
+        expect(base).toContain('self.trades = crate::pro::cache::CacheMap::new();');
+        expect(base).toContain('CacheStore::forget(&mut self.trades, &symbol)');
+    });
+    test('negative: any other read of the map is its boxed snapshot', () => {
+        expect(out).toContain('Value::from(&self.trades)');
+        expect(out).not.toContain('Value::Dict(__d) = &mut self.trades');
+    });
+});
+
 describe('rust ws cache handles', () => {
     const files: Record<string, string> = {
         "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: string | undefined, limit: number | undefined): number | undefined { return limit; }\n}\nexport class ArrayCacheBySymbolById extends ArrayCache {}\n",
