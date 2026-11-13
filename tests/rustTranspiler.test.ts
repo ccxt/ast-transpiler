@@ -8467,9 +8467,10 @@ describe('rust integer and boolean tuple slots typed from the callee', () => {
         expect(out).toContain('until.is_some()');
         expect(out).toContain('Value::from(until)');
     });
-    test('a pass-through integer option slot keeps the numeric literal compare', () => {
-        expect(out).toContain('let mut generation: Option<f64> = ');
-        expect(out).toContain('generation == Some(2.0)');
+    test('a checked integer option slot is Option<i64> (checkOptionInteger yields Int or null)', () => {
+        expect(out).toContain('let mut generation: Option<i64> = ');
+        expect(out).toContain('generation == Some(2)');
+        expect(out).not.toContain('let mut generation: Value');
     });
 });
 

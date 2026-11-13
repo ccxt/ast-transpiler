@@ -9960,7 +9960,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     private rustExactSlotDecisions = new WeakMap<Node, string | null>();
 
-    private static readonly RUST_EXACT_INT_PRODUCERS = new Set([ 'parseToInt', 'safeInteger', 'safeInteger2', 'safeIntegerN' ]);
+    // `checkOptionInteger` normalises like the typed ports: Int, an integral Float as Int, null, else a BadRequest panic
+    private static readonly RUST_EXACT_INT_PRODUCERS = new Set([ 'parseToInt', 'safeInteger', 'safeInteger2', 'safeIntegerN', 'checkOptionInteger' ]);
     private static readonly RUST_EXACT_BOOL_PRODUCERS = new Set([ 'checkOptionBool', 'safeBool', 'safeBool2', 'safeBoolN' ]);
 
     rustExactSlotKind(element: any): string | undefined {
