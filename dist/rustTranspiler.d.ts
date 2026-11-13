@@ -503,6 +503,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Every box of the string sits where the `Value` form cloned it (a `this.` / `super.` argument) or is its
      *  moving last use, and no use reads it by reference: lending there costs the one copy the clone made. */
     rustStrLendSites(declaration: any): boolean;
+    /** Every non-moving box of the string is a slot where the `Value` form cloned it (a `this.`/`super.` argument,
+     *  an object-literal value, a dict write or an array element), so lending there adds no copy. */
+    rustReaderLendBoxes(declaration: any, nativeKeys?: boolean): boolean;
     /** The key reads a local declared with a non-null initializer (nil-declared locals and slots keep their own rules). */
     rustInitKeyLocal(n: any): boolean;
     /** Some use of the local is a native map-key read (`okey`) or `in` test (`kin`). */
@@ -567,6 +570,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBytesUseForms;
     /** `this.encode(..)` & co. resolved to the base tier, or such a call on a test's untyped `exchange`. */
     rustBytesProducer(node: any): boolean;
+    /** `this.hash(data, algo, 'binary')`: the TS overload for a literal `'binary'` digest returns the bytes (`hash_binary`). */
+    rustHashBinaryCall(node: any): boolean;
+    /** `this.hash(.., digest)` with a non-literal digest: the runtime `hash` returns the text digest, boxed at once. */
+    rustHashOpenDigestCall(node: any): boolean;
+    rustLiteralDigest(arg: any): string | undefined;
     /** A call of the imported base `functions/` export `name`. */
     rustBaseFunctionCall(node: any, name: string): boolean;
     /** An argument in a byte parameter (`impl Into<Value>`) of a hand-written consumer, outside the test crate. */
@@ -622,6 +630,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustReaderIntDefaultNum(init: any): boolean;
     rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
     rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar?: boolean): boolean;
+    /** A String-helper result boxed as an object-literal value or as a one-level element write: the written
+     *  place is a `Value` either way, so no other local's decision reads this one's type. */
+    rustScalarBoxedField(n: any, write: any, declaration: any): boolean;
     rustScalarCounterCond(node: any, name: string): string | undefined;
     rustScalarCounterPlan(node: any, name: string): {
         cond: string;
@@ -748,6 +759,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `m[k] = v` as a statement: the element key of a native insert. */
     rustElemInsertKey(n: any): boolean;
     printElemKeyInOp(key: any, obj: any): string | undefined;
+    rustThisFieldLiteralWrite(n: any): boolean;
     rustScalarInNestedWrite(n: any): boolean;
     /** A write source the local's type holds exactly: a same-kind value, a typed scalar local of the
      *  same kind, or a ternary of those (its condition printed as a bool). */
@@ -830,6 +842,9 @@ export declare class RustTranspiler extends BaseTranspiler {
         text: string;
     } | undefined;
     rustOptParamWriteOk(kind: string, node: any): boolean;
+    /** `a || b` / `a && b` whose every leaf is a native `bool` and one is a `bool` scalar local: JS returns an
+     *  operand, which is then a boolean, so the Rust `||` / `&&` value is the same. */
+    rustScalarBoolLogicalText(expr: any): string | undefined;
     /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
     rustBoolNativeText(expr: any): string | undefined;
     /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */
@@ -844,6 +859,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarOperandText(kind: string, node: any): string;
     /** Native text of an expression shape for a local of `kind`, else undefined. */
     rustScalarExpressionText(kind: string, node: any): string | undefined;
+    /** `a OP b` with an optional operand: `Some(..)` only when every optional side is present, as the helpers
+     *  (`add`/`subtract`/`multiply`/`divide` by a non-zero literal) answer `Null` when either operand is `Null`. */
+    rustScalarOptArithText(base: string, node: any, sign: string): string;
     /** The `Value` box of a native scalar text. */
     rustScalarBoxText(kind: string, text: string, node: any): string;
     /** Binary hook: arithmetic/ordered comparisons over typed operands, and `+=`/`-=` on a typed local. */
@@ -864,6 +882,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustScalarGuardedBody(method: any, print: () => string): string;
     /** `m[k] = v` with `k` a `String` local whose single-key write prints a native insert. */
     rustScalarInsertKeyUse(n: any): boolean;
+    /** A key written `m[k as string]` / `m[(k)]`: the cast and parens print nothing, so the key is `k` itself. */
+    rustKeyWrapped(n: any): any;
     /** The insert key of a `String` scalar local, else undefined. */
     rustScalarInsertKeyArg(keyNode: any): string | undefined;
     rustScalarOptKeyUse(n: any): boolean;
@@ -1070,11 +1090,20 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustReturnsOptMarket(node: any): boolean;
     /** `this.getMarketFromSymbols (..)` resolving to the typed base method. */
     rustIsOptMarketCall(init: any): boolean;
+    /** `c ? undefined : this.market (s)` (either arm order): the `this.market` arm. */
+    rustOptMarketTernary(init: any): any;
+    /** `(if c { None } else { Some(market) })` for an `Option<Market>` ternary initializer. */
+    printOptMarketTernary(init: any): string | undefined;
     /** `return x` in an `Option<Market>` method. */
     printOptMarketReturnValue(exp: any): string;
     private rustOptMarketBoxing;
     /** An `Option<Market>` call in a `Value` place: boxed once (its record's `raw`). */
     printOptMarketCallBox(node: any, identation: number): string | undefined;
+    /** `m = s` as its own statement, `s` a `const s = this.market (..)` read only by key reads, null tests and
+     *  this write (syntactic, so the two decisions never wait on each other): the alias source `s`. */
+    rustMarketAliasWriteSource(n: any): any;
+    /** The `Option<Market>` local an alias write `m = s` stores the struct local `s` into. */
+    rustMarketAliasTargetOf(n: any): any;
     /** `m = undefined` as its own statement. */
     rustIsNullWriteOf(n: any): boolean;
     /** A later `m = this.market (y)` on a struct local (`Some(..)` on an `Option<Market>` one). */
@@ -1675,6 +1704,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Builders that hand back one of their own arguments: the container kind is
      *  the argument's (they only add fields to it). */
     private static readonly RUST_BUILDER_PASSTHROUGH;
+    private static readonly RUST_LIST_PASSTHROUGH;
+    /** `x` read as the list argument of a base pass-through (`filterBy* (x, ..)` / `sortBy* (x, ..)`). */
+    rustListPassthroughArg(node: any): boolean;
+    rustListPassthroughCall(call: any): boolean;
     /** `this.<m>(…)` whose every return is a fresh untagged
      *  container of `kind` — the method's own body, no venue override (the
      *  checker resolves the most derived declaration for `this`). */
@@ -1818,12 +1851,29 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustNilMapDecisions;
     rustNilMapLocal(declaration: any): boolean;
     rustNilMapLocalUncached(declaration: any): boolean;
+    private rustNilListLocals;
+    /** A list literal with no spread or bare-local element whose elements print natively (`vec![..]`). */
+    rustNilListLiteralOk(rhs: any): boolean;
+    /** Hand-offs past the object-literal value and return: another (untyped) local's initializer, or an argument of
+     *  `this.extend` / `this.watch*`, which take `Value`. */
+    rustNilMapExtraBox(n: any): boolean;
+    /** `x['k'] = v` at a literal key on the map local, as a statement, whose value does not read `x`. */
+    rustNilMapKeyWrite(n: any, declaration: any): boolean;
+    rustNilMapLetBoundAlias(declaration: any): boolean;
+    rustNilMapHasKeyWrite(declaration: any): boolean;
+    /** `if let Some(__d) = &mut x { Arc::make_mut(__d).insert("k".to_string(), v); }`: a `None` map drops the write as the boxed `Null` did. */
+    printNilMapKeyWrite(left: any, right: any, valueText: string): string | undefined;
     rustNilMapOf(node: any): any;
     /** `x = None` / `x = Some(crate::value::Dict::new({ .. }))`: the literal is built once behind the shared handle. */
     printNilMapWrite(left: any, right: any, identation: any): string | undefined;
     printNilMapNullTest(left: any, right: any, op: any): string | undefined;
     /** The `Value` hand-off: the map moved at the last use, else the Arc bump; `None` is `Value::Null`. */
     printNilMapBox(node: any, text: string): string | undefined;
+    private rustMutableBuiltLocals;
+    /** The source statement of a box (`Value::Dict(x)`, +13 chars) leaves the printed line within 400 chars. */
+    rustBoxLineOk(n: any): boolean;
+    /** The copy-on-write insert line (indent + `Arc::make_mut(&mut x).insert(..)`) stays within the 400-char budget. */
+    rustBuiltKeyWriteLineOk(n: any): boolean;
     rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean;
     rustDictElementSource(init: any): boolean;
     private rustDictElementBoxes;
@@ -1953,6 +2003,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsCacheFieldWriteBack(n: any): boolean;
     /** 'opt' for a local bound to a typed field, 'cache' for one bound to a constructor; undefined when it stays `Value`. */
     rustWsCacheLocal(declaration: any): 'opt' | 'cache' | undefined;
+    /** `x.length` read on an optional cache local: the slot's own `size()`. */
+    rustWsCacheLengthRead(n: any): boolean;
+    printWsCacheLength(node: any): string | undefined;
     printWsCacheLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
     /** A use of a typed cache local: the handle itself, or boxed once at a `Value` hand-off. */
     printWsCacheLocalUse(node: any): string | undefined;
@@ -1970,6 +2023,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustWsCacheMapFields;
     /** `this.F` for a base field declared `Dictionary<ArrayCache>`. */
     rustWsCacheMapField(node: any): boolean;
+    private static readonly RUST_CACHE_SHELF_TYPE;
+    private rustWsCacheShelfFields;
+    /** `this.F` for a base field declared `Dictionary<Dictionary<ArrayCache*>>`. */
+    rustWsCacheShelfField(node: any): boolean;
+    /** `this.F[k]` on a cache shelf. */
+    rustWsCacheShelfEntry(node: any): boolean;
+    /** `this.safeDict (this.F, k)` on a cache shelf. */
+    rustWsCacheShelfLookup(node: any): boolean;
+    /** A cache map: the map field itself or an inner map of a shelf. */
+    rustWsCacheMapLike(node: any): boolean;
+    /** The place text of a cache map (`self.F`, `self.F.shelf(&k)`, `self.F.shelf_text(&k)`). */
+    rustWsCacheMapPlace(node: any): string;
     /** The key of a cache-map access (`m[k]`, `k in m`, `safeValue (m, k)`): printed by reference. */
     rustWsCacheMapKeyUse(n: any): boolean;
     /** `this.F[k]` on a cache map. */
@@ -1995,6 +2060,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The value of `this.F[k] = x` for a cache local `x` (or a constructor). */
     rustWsCacheMapWriteValue(n: any): boolean;
     /** `this.F[k] = cache` and `this.F = {}` / `this.F = this.createSafeDictionary (..)`. */
+    /** `this.safeDict|safeValue (this.F, k, {})` on a shelf: the ensure source of `this.F[k] = ..`. */
+    rustWsCacheShelfEnsure(node: any): boolean;
     printWsCacheMapWrite(left: any, right: any): string | undefined;
     /** Any other read of the map field is its dict snapshot (each entry an Arc bump); a write is unproven. */
     printWsCacheMapField(node: any): string | undefined;
@@ -2572,6 +2639,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  ws or prediction): it prints as a lent `Option<&crate::types::Market>`; every use is a key read, a null
      *  test, a market slot or a `Value` hand-off (boxed once), and the parameter is never written. */
     rustParseMarketParam(method: any, param: any): boolean;
+    /** A `Market` type reference (or `MarketInterface` when `iface` is set). */
+    rustIsMarketTypeNode(type: any, iface: boolean): boolean;
     private static readonly RUST_LIST_MARKET_METHODS;
     /** The `market: Market = undefined` parameter of a listed helper: read-only, every parameter before it required
      *  (or `safeMarket`'s positional `marketId`). */
