@@ -4974,9 +4974,11 @@ export class RustTranspiler extends BaseTranspiler {
             if (!acceptUse(n)) return false;
             if (!scalar) continue;
             // a string re-boxed at a by-value slot copies where the `Value` moved: keep those boxed
+            // (a `this.` / `super.` argument is no such slot: ccxt clones the bare `Value` there too)
             const trial = this.rustScalarDecisions.get(declaration);
             const form = this.rustScalarUseForms.get(n);
-            if ((trial === 'str' || trial === 'ostr') && (form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)) return false;
+            if ((trial === 'str' || trial === 'ostr') && (form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)
+                && !(form === 'box' && this.rustElementReadScalarKind(this.unwrapParens(declaration.initializer)) !== undefined && this.rustScalarSelfArgBox(n))) return false;
             // a `.push(..)` argument: ccxt's native-push pass keys on the boxed operand text
             const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
             if (push !== undefined && isCallExpression(push)) return false;
@@ -5758,6 +5760,14 @@ export class RustTranspiler extends BaseTranspiler {
     /** A boxed use that takes the local by move (a `return`, or its last use); `err` always copies. */
     rustScalarBoxMoves(n: any, form: string, declaration: any): boolean {
         return form !== 'err' && (isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration));
+    }
+
+    /** A bare argument of a `this.` / `super.` call: ccxt's arg pass clones the `Value` local there, so a typed
+     *  string re-boxed at that slot pays the same one copy (`Value::from(x.as_deref())` / `x.clone().map(..)`). */
+    rustScalarSelfArgBox(n: any): boolean {
+        const up: any = n.parent;
+        return isCallExpression(up) && up.expression !== n && Array.from(up.arguments).includes(n) && isPropertyAccessExpression(up.expression)
+            && (up.expression.expression.kind === SyntaxKind.ThisKeyword || up.expression.expression.kind === SyntaxKind.SuperKeyword);
     }
 
     /** A local keyed on a field and re-boxed anywhere but a moving use would copy where the `Value` moved. */

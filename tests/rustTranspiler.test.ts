@@ -10544,3 +10544,16 @@ describe('rust parseNumber of a proven string', () => {
         expect(out).toContain('Value::from(fee)');
     });
 });
+
+describe('ral-jf: element-read string locals lent to this. arguments', () => {
+    test('a string element local rebound in a sibling block and boxed at a this. argument before its last use is typed (ccxt clones the Value there too)', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-jf-elem-selfarg');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): any { return o; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    pick (raw: any) {\n        const keys = Object.keys (raw);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const a = this.hold (key);\n            const b = this.safeDict (raw, key);\n            this.hold ([ a, b ]);\n        }\n        const more = Object.keys (raw['x']);\n        for (let i = 0; i < more.length; i++) {\n            const key = more[i];\n            this.hold (key);\n        }\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut key: Option<String> = keys.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('self.hold(Value::from(key.as_deref()))');
+        expect(out).toContain(', key.map(Value::from).unwrap_or(Value::Null), &[])');
+    });
+});
