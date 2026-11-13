@@ -1897,8 +1897,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
     rustBuiltMapKeyWriteOk(n: any, init: any): boolean;
-    /** jd's tag guard on the shared key-write rule: never a runtime meta key (book / subscription tags). */
-    rustBuiltKeyWriteUntagged(n: any, init: any): boolean;
     rustUntaggedMapOperand(arg: any): boolean;
     /** A whole hand-off of a nullable container local (a base `safeDict*` / `safeList*` with no or a nullish default,
      *  or a `let` filled by such writes) to a lent `impl Into<crate::Value>` slot. */
