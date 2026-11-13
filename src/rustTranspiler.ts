@@ -11892,7 +11892,8 @@ export class RustTranspiler extends BaseTranspiler {
     transformIdentifier(node, identifier) {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text); if (optList !== undefined) return optList;
-        const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const asLent = this.printLentAsArg(node, text); if (asLent !== undefined) return asLent;
+        const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -12894,6 +12895,13 @@ export class RustTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    /** The sole argument of a base `this.json (x)` (printed `json_stringify(&x)`, not a `self.` field). */
+    rustIsJsonOperand(node: any): boolean {
+        const call: any = node?.parent;
+        return isIdentifier(node) && isCallExpression(call) && call.arguments.length === 1 && call.arguments[0] === node
+            && isPropertyAccessExpression(call.expression) && call.expression.expression.kind === SyntaxKind.ThisKeyword && String(call.expression.name.text) === 'json';
+    }
+
     /** `Value::Map(x.clone())` / `Value::from(x.clone())` at an admitted boxing use, else undefined. */
     printRustContainerLocalBox(node: any, text: string): string | undefined {
         const form = this.rustContainerBoxUses.get(node);
@@ -12903,6 +12911,8 @@ export class RustTranspiler extends BaseTranspiler {
         const value = form === 'move' ? text : `${text}.clone()`;
         const listDecl: any = kind === 'list' ? this.rustDeclarationOfIdentifier(node) : undefined;
         if (listDecl !== undefined && (this.rustAlwaysListProducer(this.rustSkipWrappers(listDecl.initializer)) || this.rustDefaultedListRead(this.rustSkipWrappers(listDecl.initializer)))) return `Value::Arr(${value})`;
+        // `this.json (x)` prints `json_stringify(&x)` (`impl JsonOperand` takes `&Vec<Value>`): the typed list is lent as itself
+        if (this.rustIsJsonOperand(node) && kind === 'list') return text;
         // A call argument boxes through `Into` so ccxt's literal-key reader rewrite still parses the argument.
         if (isCallExpression(node.parent) && !(kind === 'map' && this.rustExtendHeadUse(node))) return `${value}.into()`;
         return kind === 'map' ? `Value::Map(${value})` : `Value::from(${value})`;
@@ -12996,6 +13006,7 @@ export class RustTranspiler extends BaseTranspiler {
         let keySets = 0;
         let extendHeads = 0;
         let lentResponses = 0;
+        let lentNullable = 0;
         let mixed = false;
         let defaultedBoxes = 0;
         const boxedElementUses: any[] = [];
@@ -13037,9 +13048,13 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (this.rustExtendHeadUse(n)) return ++extendHeads > 0 && ++reads > 0;
             const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0) && boxedElementUses.push(n) > 0;
+            const asArg: any = isAsExpression(up) && up.expression === n && isCallExpression(up.parent) && Array.from(up.parent.arguments).includes(up) ? up : undefined;
+            if (asArg !== undefined && this.rustLentAsHandOff(asArg, init, from, endpoint, nilDeclared)) return ++lentResponses > 0 && ++reads > 0 && (this.rustLentAsNullable(init, nilDeclared, endpoint) ? ++lentNullable > 0 : true);
             if (this.rustLentResponseSlot(up, n) && this.rustLentResponseSource(init)) return ++lentResponses > 0 && ++reads > 0;
             if ((endpoint || this.rustLentContainerSource(init)) && this.rustLentEndpointSlot(up, n, from)) return ++lentResponses > 0 && ++reads > 0;
-            if ((from === 'dict' || from === 'list') && this.rustLentHelperSlot(up, n, from)) return ++lentResponses > 0 && ++reads > 0;
+            // `json` tells Null from an empty container: only a never-null source lends there as the plain container
+            if ((from === 'dict' || from === 'list') && this.rustLentHelperSlot(up, n, from) && (String(up.expression.name.text) !== 'json' || endpoint || this.rustLentContainerSource(init))) return ++lentResponses > 0 && ++reads > 0;
+            if (this.rustLentOptionalHandOff(up, n, init, from, nilDeclared)) return ++lentNullable > 0 && ++reads > 0;
             if (!isCallExpression(up) || up.arguments[0] !== n) return handed();
             // An endpoint response may be a list or a map: only string-key reads agree for both.
             const keyArgs: any[] = up.arguments.slice(1, isPropertyAccessExpression(up.expression) && /2$/.test(String(up.expression.name.text)) ? 3 : 2).map((a: any) => this.rustSkipWrappers(a));
@@ -13055,9 +13070,12 @@ export class RustTranspiler extends BaseTranspiler {
         const safe = endpoint && !nilDeclared ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
         if (!safe || (reads === 0 && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
+        // an endpoint written into an empty `let` may answer a list: `into_opt_dict` keeps only maps, so it is never lent whole
+        if (this.rustNilResponseLocals.has(declaration) && (lentResponses > 0 || lentNullable > 0)) return undefined;
         if ((keyReads > 0 || (init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init))) && !this.rustDictKeyReadLineOk(declaration, name)) return undefined;
-        const optional = nilDeclared || nullTests > 0 || writes > 0;
-        if (lentResponses > 0 && optional) return undefined;
+        // a nullable source lent whole keeps Null apart from an empty container: the optional form
+        const optional = nilDeclared || nullTests > 0 || writes > 0 || lentNullable > 0;
+        if (lentResponses > 0 && optional && !this.rustLentOptionalOk(declaration, name, fn, init, from)) return undefined;
         if (extendHeads > 0 && (optional || from !== 'dict' && from !== 'api')) return undefined;
         if (optional && boxedElementUses.length > 0 && (this.rustWsFieldRead(init) !== undefined || defaultedBoxes > 0)) return undefined;
         if (keySets > 0 && (from !== 'dict' || optional || (init !== undefined && this.rustInitReadsTaggedStore(init)))) return undefined;
@@ -13072,6 +13090,85 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustOptContainerLocals = new WeakSet<any>();
+
+    // ── optional container hand-offs (rustLentOptionalHandOff / rustLentOptionalOk) ──
+    // An `Option<Dict>` / `Option<List>` local is lent whole as `&x` to a parameter taking `impl Into<crate::Value>`:
+    // `From<&Option<Dict|List>> for Value` gives the shared handle for `Some` and `Value::Null` for `None`, exactly
+    // what the box held (the optional form keeps Null apart from an empty container), with no copy.
+
+    /** A whole hand-off of a nullable container local (a base `safeDict*` / `safeList*` with no or a nullish default,
+     *  or a `let` filled by such writes) to a lent `impl Into<crate::Value>` slot. */
+    rustLentOptionalHandOff(call: any, arg: any, init: any, from: 'dict' | 'list' | 'api' | undefined, nilDeclared: boolean): boolean {
+        if (from !== 'dict' && from !== 'list') return false;
+        if (!nilDeclared && !(init !== undefined && isCallExpression(init) && this.rustOptContainerSourceOk(init, from))) return false;
+        if (this.rustLentResponseSlot(call, arg)) return from === 'dict';
+        if (this.rustLentEndpointSlot(call, arg, from)) return true;
+        if (this.rustLentWsSettleSlot(call, arg)) return true;
+        return this.rustLentHelperSlot(call, arg, from) && RustTranspiler.RUST_LENT_OPTIONAL_HELPERS.has(String(call.expression.name.text));
+    }
+
+    // hand-written helpers whose operand is `impl Into<crate::Value>` / `impl JsonText` (the optional form lends there too)
+    private static readonly RUST_LENT_OPTIONAL_HELPERS = new Set([ 'toArray', 'arrayConcat', 'json' ]);
+
+    /** `this.parseX (x as Dict, ..)`: the assertion only retypes the TS side, the argument lands in the same lent slot. */
+    rustLentAsHandOff(asArg: any, init: any, from: 'dict' | 'list' | 'api' | undefined, endpoint: boolean, nilDeclared: boolean): boolean {
+        const call: any = asArg.parent;
+        if (from !== 'dict' && from !== 'list') return false;
+        if (!this.rustLentResponseSlot(call, asArg) && !(this.rustLentListSlot(call, asArg) && !this.rustTypedFilterLentSlot(call, asArg) && (from === 'list' || this.rustLentAnyShapeSlot(call)))) return false;
+        if (this.rustLentResponseSlot(call, asArg) && from !== 'dict') return false;
+        return endpoint || this.rustLentContainerSource(init) || this.rustLentResponseSource(init) || nilDeclared || (init !== undefined && isCallExpression(init) && this.rustOptContainerSourceOk(init, from));
+    }
+
+    rustLentAsNullable(init: any, nilDeclared: boolean, endpoint: boolean): boolean {
+        return !endpoint && (nilDeclared || !(this.rustLentContainerSource(init) || this.rustLentResponseSource(init)));
+    }
+
+    /** Every never-null lent use of an optional local lands in a slot that also takes the optional form. */
+    rustLentOptionalOk(declaration: any, name: string, fn: any, init: any, from: 'dict' | 'list' | 'api' | undefined): boolean {
+        if (from !== 'dict' && from !== 'list') return false;
+        return this.rustLocalUsesAll(declaration, name, false, (n: any) => {
+            if (this.rustIdentifierIsPropertyName(n) || !this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return true;
+            const up: any = n.parent;
+            if (isAsExpression(up)) return true;
+            if (!isCallExpression(up) || !Array.from(up.arguments).includes(n)) return true;
+            if (this.rustLentResponseSlot(up, n) || this.rustLentEndpointSlot(up, n, from) || this.rustLentWsSettleSlot(up, n)) return true;
+            return !this.rustLentHelperSlot(up, n, from) || RustTranspiler.RUST_LENT_OPTIONAL_HELPERS.has(String(up.expression.name.text));
+        });
+    }
+
+    /** `&x` for an optional container local lent whole to an `impl Into<crate::Value>` slot (`None` arrives as Null). */
+    printLentOptionalArg(node: any, text: string): string | undefined {
+        if (!isIdentifier(node) || !isCallExpression(node.parent)) return undefined;
+        const local = this.rustOptContainerOf(node);
+        if (local === undefined || !this.rustPrintedOptional.has(local.declaration)) return undefined;
+        const call: any = node.parent;
+        const ok = this.rustLentResponseSlot(call, node) ? local.kind === 'dict' : (this.rustLentEndpointSlot(call, node, local.kind) || this.rustLentWsSettleSlot(call, node)
+            || (this.rustLentHelperSlot(call, node, local.kind) && RustTranspiler.RUST_LENT_OPTIONAL_HELPERS.has(String(call.expression.name.text))));
+        return ok ? `&${text}` : undefined;
+    }
+
+    /** `&x` for a container local lent through `x as T` to a lent parse slot (plain or optional form). */
+    printLentAsArg(node: any, text: string): string | undefined {
+        const asArg: any = node?.parent;
+        if (!isIdentifier(node) || !isAsExpression(asArg) || asArg.expression !== node || !isCallExpression(asArg.parent)) return undefined;
+        const call: any = asArg.parent;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
+        const kind = this.rustBorrowedLocalKind(declaration);
+        if (kind === undefined) return undefined;
+        const printed = this.rustOptContainerLocals.has(declaration) ? this.rustPrintedOptional.has(declaration) : this.rustPrintedBorrowed.has(declaration);
+        if (!printed) return undefined;
+        const slot = this.rustLentResponseSlot(call, asArg) ? kind === 'dict' : (this.rustLentListSlot(call, asArg) && !this.rustTypedFilterLentSlot(call, asArg) && (kind === 'list' || this.rustLentAnyShapeSlot(call)));
+        return slot ? `&${text}` : undefined;
+    }
+
+    // Optional container locals whose declaration printed `Option<..>` (an earlier declaration form may keep the box).
+    private rustPrintedOptional = new WeakSet<any>();
+
+    /** The value argument of `client.resolve|reject(value, hash)` on a ws handle: the hand-written method takes `impl Into<Value>`. */
+    rustLentWsSettleSlot(call: any, arg: any): boolean {
+        return isCallExpression(call) && call.arguments?.[0] === arg && isIdentifier(arg) && this.rustWsSettleCall(call);
+    }
 
     // ── rustNullTestedDictLocal: a base `safeDict*` result that is only tested against null ──
     // The optional map answers the test natively (`is_some()` / `is_none()`); a non-map reads as `None`, as the reader does.
@@ -13395,6 +13492,7 @@ export class RustTranspiler extends BaseTranspiler {
     printOptContainerDeclaration(declaration: any, varName: string, indent: string): string | undefined {
         const kind = this.rustBorrowedLocalKind(declaration);
         if (kind === undefined || !this.rustOptContainerLocals.has(declaration)) return undefined;
+        this.rustPrintedOptional.add(declaration);
         const type = kind === 'list' ? 'crate::value::List' : 'crate::value::Dict';
         const init: any = this.rustSkipWrappers(declaration.initializer);
         if (init === undefined || this.literalKindOfNode(init) === 'null') return `${indent}let mut ${varName}: Option<${type}> = None`;
@@ -14772,12 +14870,15 @@ export class RustTranspiler extends BaseTranspiler {
 
     private static readonly RUST_LENT_LIST_TYPES = new Set([ 'List', 'NullableList' ]);
 
+    private static readonly RUST_LENT_RESPONSE_READERS = new Set([ 'parseLedger', 'parseOpenInterestsHistory', 'parseBorrowRateHistory', 'convertTradingViewToOHLCV' ]);
+
     rustParamIsLentListUncached(param: any): boolean {
         const method: any = param.parent;
         if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || method.parameters?.[0] !== param) return false;
         const name = String(method.name.text);
         const record = name === 'parseOrderBook';
-        if (!(/^parse[A-Z]\w*s$/.test(name) || record) || param.name?.kind !== SyntaxKind.Identifier || param.initializer !== undefined || param.questionToken !== undefined) return false;
+        // these read their response whole (`toArray`, index / length, readers) like the plural parsers
+        if (!(/^parse[A-Z]\w*s$/.test(name) || RustTranspiler.RUST_LENT_RESPONSE_READERS.has(name) || record) || param.name?.kind !== SyntaxKind.Identifier || param.initializer !== undefined || param.questionToken !== undefined) return false;
         if (!isClassDeclaration(method.parent) || (method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
         if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
@@ -14793,7 +14894,8 @@ export class RustTranspiler extends BaseTranspiler {
         const type: any = param.type;
         const typeName = type?.kind === SyntaxKind.TypeReference && isIdentifier(type.typeName) && type.typeArguments === undefined ? String(type.typeName.text) : '';
         if (record) return this.rustLentRecordTypeNode(type);
-        return RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName) || this.rustRowListTypeNode(type) || type?.kind === SyntaxKind.AnyKeyword || type?.kind === SyntaxKind.ObjectKeyword;
+        return RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName) || this.rustRowListTypeNode(type) || type?.kind === SyntaxKind.AnyKeyword || type?.kind === SyntaxKind.ObjectKeyword
+            || (name === 'convertTradingViewToOHLCV' && typeName === 'NullableDict');
     }
 
     /** `object`, `Dict` or `any`, optionally `| undefined`: the parser reads its input as a `Value` of any shape. */
@@ -14802,7 +14904,7 @@ export class RustTranspiler extends BaseTranspiler {
         const rest = members.filter((t: any) => t?.kind !== SyntaxKind.UndefinedKeyword);
         if (rest.length !== 1) return false;
         const t: any = rest[0];
-        return t?.kind === SyntaxKind.ObjectKeyword || t?.kind === SyntaxKind.AnyKeyword || (t?.kind === SyntaxKind.TypeReference && isIdentifier(t.typeName) && t.typeArguments === undefined && String(t.typeName.text) === 'Dict');
+        return t?.kind === SyntaxKind.ObjectKeyword || t?.kind === SyntaxKind.AnyKeyword || (t?.kind === SyntaxKind.TypeReference && isIdentifier(t.typeName) && t.typeArguments === undefined && (String(t.typeName.text) === 'Dict' || String(t.typeName.text) === 'NullableDict'));
     }
 
     /** `Dict[]` / `object[]`, optionally `| undefined`: a list of rows, the same Value list a `List` holds. */
@@ -14901,12 +15003,13 @@ export class RustTranspiler extends BaseTranspiler {
      *  `impl Into<crate::Value>`: the shared map or list is lent as `&x`, the callee binds the `Value` once. */
     rustLentEndpointSlot(call: any, arg: any, kind: 'dict' | 'list' | 'api' | undefined): boolean {
         if (this.rustLentListSlot(call, arg) && !this.rustTypedFilterLentSlot(call, arg)) return kind === 'list' || this.rustLentAnyShapeSlot(call);
+        if (this.rustTypedFilterLentSlot(call, arg) && call.arguments[0] === arg && String(call.expression.name.text) === 'filterByArray') return kind === 'list' || kind === 'dict';
         return kind === 'dict' && this.rustLentResponseSlot(call, arg);
     }
 
     // Hand-written base helpers whose operand is lent (`impl Into<crate::Value>`, `OmitSource`, `MergeOperands`).
     private static readonly RUST_LENT_HELPER_SLOTS: Record<string, { at: number[], kinds: string[] }> = {
-        toArray: { at: [ 0 ], kinds: [ 'dict', 'list' ] },
+        toArray: { at: [ 0 ], kinds: [ 'dict', 'list' ] }, json: { at: [ 0 ], kinds: [ 'dict', 'list' ] },
         arrayConcat: { at: [ 0, 1 ], kinds: [ 'list' ] }, omit: { at: [ 0 ], kinds: [ 'dict' ] },
     };
 
@@ -15017,6 +15120,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (optional && rustType !== undefined && absent) typed.set(i, rustType);
             // a symbol-list (`Strings`, or an untyped list of values) is lent: a `Value` still passes
             else if (optional && absent && (declared === 'Strings' || p.type?.kind === SyntaxKind.AnyKeyword)) typed.set(i, lent);
+            // the objects `filterByArray` reads (`toArray (objects)`) are lent as well: a dict or list local passes as `&x`
+            else if (i === 0 && !optional && p.type?.kind === SyntaxKind.AnyKeyword && String(method.name.text) === 'filterByArray') typed.set(i, lent);
         });
         if (![ ...typed.values() ].some((t) => t !== lent)) {
             if (typed.size === 0 || String(method.name.text) !== 'filterByArray') return undefined;
@@ -15108,7 +15213,9 @@ export class RustTranspiler extends BaseTranspiler {
         const printed: string[] = [];
         for (let i = 0; i < sig.positional; i++) {
             const rustType = sig.typed.get(i);
-            if (rustType !== undefined) printed.push(this.rustTypedFilterArgText(args[i], rustType, identation));
+            // a required lent slot (the filterByArray objects) prints its argument as the plain `Value` slot did
+            if (rustType !== undefined && rustType.startsWith('impl') && i < required && args[i] !== undefined) printed.push(this.printNode(args[i], identation).trim());
+            else if (rustType !== undefined) printed.push(this.rustTypedFilterArgText(args[i], rustType, identation));
             else if (args[i] === undefined) printed.push('Value::Null');
             else printed.push(i < required ? this.printNode(args[i], identation).trim() : this.rustSliceArgText(this.printNode(args[i], identation).trim()));
         }
