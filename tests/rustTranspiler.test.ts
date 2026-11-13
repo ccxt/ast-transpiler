@@ -9187,9 +9187,10 @@ describe('rust built / reader locals (sibling bindings, key writes, deepExtend, 
         expect(text).toMatch(/let mut request: Value = /);
     });
 
-    test('negative: an extend of a non-params dict parameter (may carry a ws tag) keeps the helper', () => {
+    test('an extend of a non-params dict parameter follows the landed rule: extend answers a fresh map, the key write inserts natively', () => {
+        // RAL-INT-31: jd's negative contradicted the landed hb / ic key-write rule (gated on PR 31136); one mechanism kept
         const text = slice(out(), 'fn keyWriteForeign', 'fn fetchTicker');
-        expect(text).toMatch(/let mut request: Value = /);
+        expect(text).toContain('let mut request: crate::value::Dict = ');
     });
 
     test('a deepExtend of a literal and typed params is a map, lent to the watch message slot', () => {
@@ -10538,7 +10539,8 @@ describe('rust parseNumber of a proven string', () => {
         fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fees (o: any, n: number) {\n        const fee = this.parseNumber (this.safeString (o, 'fee'));\n        const taker = this.parseNumber ('0.001');\n        const raw = this.parseNumber (o);\n        const num = this.parseNumber (n);\n        if (fee === undefined) {\n            return [ taker, raw, num ];\n        }\n        return { 'fee': fee, 'taker': taker, 'raw': raw, 'num': num };\n    }\n}\n");
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toMatch(/let mut fee: Option<f64> = self\.parseNumber\(.*\)\.as_f64\(\);/);
-        expect(out).toMatch(/let mut taker: Option<f64> = self\.parseNumber\(Value::Str\("0\.001"\.into\(\)\), &\[\]\)\.as_f64\(\);/);
+        // the landed id rule folds a literal parseNumber to its number; either form is the Option<f64> local
+        expect(out).toMatch(/let mut taker: Option<f64> = (self\.parseNumber\(Value::Str\("0\.001"\.into\(\)\), &\[\]\)\.as_f64\(\)|Some\(0\.001_f64\));/);
         expect(out).toContain('let mut raw: Value = ');
         expect(out).toContain('let mut num: Value = ');
         expect(out).toContain('Value::from(fee)');

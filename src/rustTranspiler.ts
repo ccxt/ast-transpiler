@@ -13945,7 +13945,6 @@ export class RustTranspiler extends BaseTranspiler {
         let defaultedBoxes = 0;
         let optionalBoxes = 0;
         let paramsBoxes = 0;
-        let keyWrites = 0;
         const boxedElementUses: any[] = [];
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
@@ -13985,7 +13984,8 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (this.rustExtendHeadUse(n)) return ++extendHeads > 0 && ++reads > 0;
             // a fresh built map written at a literal key: copy-on-write insert on the shared handle
-            if (this.rustUntilHeadKeyWrite(n) !== undefined && init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) === 'dict') return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
+            // (jd's untagged indexBy / groupBy / extend table admits the same write through this one mechanism)
+            if (this.rustUntilHeadKeyWrite(n) !== undefined && init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) === 'dict' || this.rustBuiltMapKeyWriteOk(n, init)) && this.rustBuiltKeyWriteUntagged(n, init)) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
             const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0
                 || this.rustBuiltReturnBoxUse(n, init) && ++defaultedBoxes > 0 || this.rustOptReaderBoxUse(n, init) && ++optionalBoxes > 0
                 || this.rustOptionalParamsSlot(up, n) && (from === 'dict' || from === 'api' && this.rustDeclaredEndpointKind(init) === 'dict') && ++paramsBoxes > 0) && boxedElementUses.push(n) > 0;
@@ -14062,8 +14062,6 @@ export class RustTranspiler extends BaseTranspiler {
     // `Arc::make_mut(&mut x).insert("k".into(), v)`. `add_element_to_object` only differs on a tagged map (book meta,
     // ws subscription, cache bucket backrefs): those tags reach a built map only through an operand that carries
     // them, so every `extend` operand must be a plain literal, a parameter, or a dict local read from no tagged store.
-    private rustBuiltKeyWriteLocals = new WeakSet<any>();
-
     rustBuiltMapKeyWriteOk(n: any, init: any): boolean {
         const key = this.rustUntilHeadKeyWrite(n);
         if (key === undefined || key.startsWith('__') || RustTranspiler.RUST_BOOK_META_KEYS.has(key)) return false;
@@ -14071,6 +14069,13 @@ export class RustTranspiler extends BaseTranspiler {
         const method = String((init.expression as any).name?.text ?? '');
         if (method !== 'extend') return method === 'indexBy' || method === 'groupBy';
         return Array.from(init.arguments).every((a: any) => this.rustUntaggedMapOperand(a));
+    }
+
+    /** jd's tag guard on the shared key-write rule: never a runtime meta key (book / subscription tags). */
+    rustBuiltKeyWriteUntagged(n: any, init: any): boolean {
+        const key = this.rustUntilHeadKeyWrite(n);
+        // (operands: the landed hb / ic rule already proves `extend` answers a fresh map, so only the meta keys are kept out)
+        return !(key === undefined || key.startsWith('__') || RustTranspiler.RUST_BOOK_META_KEYS.has(key));
     }
 
     rustUntaggedMapOperand(arg: any): boolean {
@@ -16052,7 +16057,7 @@ export class RustTranspiler extends BaseTranspiler {
         try {
             const out = [ ...this.rustWsHashPatterns(declaration.initializer, depth + 1, seen) ];
             // every later write of the local joins the patterns
-            for (const r of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
+            for (const r of this.rustScopeNameNodes(scope, String((declaration.name as any).text))) {
                 const p: any = (r as any).parent;
                 if (isIdentifier(r) && isBinaryExpression(p) && p.left === r && rustIsAssignmentOperator(p.operatorToken.kind)) {
                     if (p.operatorToken.kind !== SyntaxKind.EqualsToken || this.rustDeclarationOfIdentifier(r) !== declaration) return any;
@@ -16213,7 +16218,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (awaited?.kind !== SyntaxKind.AwaitExpression) return undefined;
         const call: any = this.unwrapParens(awaited.expression);
         if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
-        let known = this.rustWsWatchKinds.get(call);
+        const known = this.rustWsWatchKinds.get(call);
         if (known !== undefined) return known ?? undefined;
         this.rustWsWatchKinds.set(call, null);
         const name = String(call.expression.name.text);
@@ -16226,14 +16231,14 @@ export class RustTranspiler extends BaseTranspiler {
         let hashes: Array<Array<string | null>>;
         const harg: any = this.rustStripWrappers(call.arguments[1]);
         if (name === 'watch') hashes = this.rustWsHashPatterns(harg, 0, new Set());
-        else if (isArrayLiteralExpression(harg)) hashes = Array.from(harg.elements as any[]).flatMap((e: any) => this.rustWsHashPatterns(e, 0, new Set()));
+        else if (isArrayLiteralExpression(harg)) hashes = Array.from((harg as any).elements).flatMap((e: any) => this.rustWsHashPatterns(e, 0, new Set()));
         else if (isIdentifier(harg)) {
             // a hash list local: its literal initializer plus `x.push (h)` statements, never reassigned or lent elsewhere
             const local: any = this.rustDeclarationOfIdentifier(harg);
             const init: any = local !== undefined && isVariableDeclaration(local) ? this.rustStripWrappers(local.initializer) : undefined;
             const scope: any = local === undefined ? undefined : findAncestor(local, isFunctionLike);
             if (init === undefined || !isArrayLiteralExpression(init) || scope === undefined || this.rustLocalReassigned(local)) return undefined;
-            hashes = Array.from(init.elements as any[]).flatMap((e: any) => this.rustWsHashPatterns(e, 0, new Set()));
+            hashes = Array.from((init as any).elements).flatMap((e: any) => this.rustWsHashPatterns(e, 0, new Set()));
             for (const r of this.rustScopeNameNodes(scope, String(local.name.text)) as any[]) {
                 if (!isIdentifier(r) || r === local.name || this.rustDeclarationOfIdentifier(r) !== local) continue;
                 const p: any = r.parent;
@@ -17319,8 +17324,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (recv === undefined || !isIdentifier(recv)) return undefined;
         const key = this.rustUntilHeadKeyWrite(recv);
         const declaration: any = this.rustDeclaredNode(recv);
-        if (key === undefined || declaration === recv || !(this.rustUntilHeadSlot(declaration) || this.rustMutableDictSlot(declaration)
-            || (this.rustBuiltKeyWriteLocals.has(declaration) && this.rustPrintedBorrowed.has(declaration)))) return undefined;
+        if (key === undefined || declaration === recv || !(this.rustUntilHeadSlot(declaration) || this.rustMutableDictSlot(declaration))) return undefined;
         const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
         const value = this.rustNodeIsBoolExpression(right) && this.literalKindOfNode(this.unwrapParens(right)) !== 'boolean' ? `Value::Bool(${valueText})` : valueText.trim();
         const insert = (v: string) => `std::sync::Arc::make_mut(&mut ${name}).insert(${this.quotedStringLiteral(key)}.into(), ${v})`;
