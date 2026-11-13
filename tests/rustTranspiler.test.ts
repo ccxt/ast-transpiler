@@ -7970,7 +7970,7 @@ describe('rust ws cache size locals', () => {
         expect(out).toContain('let mut limit: i64 = ');
         expect(out).toContain('let mut ordersLimit: Option<i64> = ');
         expect(out).toContain('ArrayCacheBySymbolById::new(Value::from(ordersLimit))');
-        expect(out).toContain('ArrayCacheBySymbolById::new(ordersLimit);');
+        expect(out).toContain('ArrayCacheBySymbolById::new(ordersLimit));');
         expect(out).not.toMatch(/let mut limit: Value/);
         expect(out).not.toMatch(/let mut ordersLimit: Value/);
     });
@@ -9167,5 +9167,48 @@ describe('boxed-only params slots and lent strings', () => {
         expect(out).toContain('self.hold(Value::from(t.as_deref()))');
         expect(out).toContain('t.map(Value::from).unwrap_or(Value::Null)');
         expect(out).not.toContain('t.clone()');
+    });
+});
+
+describe('rust ws cache handles', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: string | undefined, limit: number | undefined): number | undefined { return limit; }\n}\nexport class ArrayCacheBySymbolById extends ArrayCache {}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    orders: ArrayCache | undefined = undefined;\n    myTrades: ArrayCache | undefined;\n    positions: any = undefined;\n    safeInteger (obj: any, key: string, defaultValue: number = undefined): number { return obj[key]; }\n    filterBySinceLimit (a: any, since: number = undefined, limit: number = undefined): any { return a; }\n    reset () {\n        this.orders = undefined;\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache, ArrayCacheBySymbolById } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    handleOrder (client: Client, message: any) {\n        if (this.orders === undefined) {\n            const limit = this.safeInteger (this.options, 'ordersLimit', 1000);\n            this.orders = new ArrayCacheBySymbolById (limit);\n        }\n        const cachedOrders = this.orders;\n        cachedOrders.append (message);\n        client.resolve (cachedOrders, 'orders');\n        client.resolve (this.orders, 'orders:all');\n    }\n    handleMyTrade (client: Client, message: any) {\n        let trades = this.myTrades;\n        if (trades === undefined) {\n            trades = new ArrayCache (10);\n            this.myTrades = trades;\n        }\n        trades.append (message);\n        return this.filterBySinceLimit (trades);\n    }\n    handlePosition (message: any) {\n        const stored = new ArrayCache (5);\n        stored.append (message);\n        this.positions = new ArrayCacheBySymbolById ();\n        const loose = this.orders;\n        const copy = loose;\n        return [ stored, copy ];\n    }\n}\n",
+    };
+    let out: string;
+    let base: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-cache-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        base = transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a typed cache field is tested, written and boxed as an optional handle', () => {
+        expect(out).toContain('if (self.orders.is_none()) {');
+        expect(out).toContain('self.orders = Some(ArrayCacheBySymbolById::new(');
+        expect(out).toContain('client.resolve(Value::from(&self.orders), "orders:all")');
+        expect(base).toContain('self.orders = None;');
+    });
+    test('a local bound to a typed field keeps the optional handle', () => {
+        expect(out).toContain('let mut cachedOrders: Option<crate::pro::cache::Cache> = self.orders.clone();');
+        expect(out).toContain('client.resolve(Value::from(&cachedOrders), "orders")');
+        expect(out).toContain('let mut trades: Option<crate::pro::cache::Cache> = self.myTrades.clone();');
+        expect(out).toContain('trades.is_none()');
+        expect(out).toContain('trades = Some(ArrayCache::new(');
+        expect(out).toMatch(/self\.myTrades = trades(\.clone\(\))?;/);
+    });
+    test('a constructor-initialised local is a cache handle', () => {
+        expect(out).toContain('let mut stored: crate::pro::cache::Cache = ArrayCache::new(');
+        expect(out).toContain('Value::from(&stored)');
+    });
+    test('negative: a constructor stored in an untyped field is boxed and an aliased field local stays Value', () => {
+        expect(out).toContain('self.positions = Value::from(ArrayCacheBySymbolById::new(');
+        expect(out).toContain('let mut loose: Value = ');
     });
 });

@@ -499,7 +499,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_NUMBER_CONSTANT_IMPORTS.has(name) && this.rustIsImportedValueName(node)) {
             return `Value::Int(crate::runtime::${name})`;
         }
-        return this.printClientHandleUse(node) ?? this.printTypedFilterParamRead(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node);
+        return this.printWsCacheLocalUse(node) ?? this.printClientHandleUse(node) ?? this.printTypedFilterParamRead(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node);
     }
 
     /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
@@ -908,6 +908,7 @@ export class RustTranspiler extends BaseTranspiler {
     // Value variants line up; undefined keeps the is_equal() helper.
     printNativeEqualityComparison(left, right, op): string {
         const nilLocal = this.printRustNilLocalEquality(left, right, op); if (nilLocal !== undefined) return nilLocal;
+        const cacheTest = this.printWsCacheNullTest(left, right, op); if (cacheTest !== undefined) return cacheTest;
         const optContainer = this.printOptContainerNullTest(left, right, op) ?? this.printOptListNullTest(left, right, op); if (optContainer !== undefined) return optContainer;
         const optMarket = this.printOptMarketNullTest(left, right, op); if (optMarket !== undefined) return optMarket;
         const scalarLocal = this.printRustScalarLocalEquality(left, right, op); if (scalarLocal !== undefined) return scalarLocal;
@@ -1983,6 +1984,7 @@ export class RustTranspiler extends BaseTranspiler {
             const assignments = left.elements.map((e, idx) => this.printRustNilSlotWrite(e, slotRead(idx)) ?? `${this.printNode(e, 0)} = ${slotRead(idx)}`).join('; ');
             return `{ ${head}; ${assignments}; }`;
         }
+        const cacheWrite = isAssign ? this.printWsCacheWrite(left, right) : undefined; if (cacheWrite !== undefined) return cacheWrite;
         const builtListWrite = isAssign && isIdentifier(left) ? this.printBuiltListWrite(left, right) : undefined; if (builtListWrite !== undefined) return builtListWrite;
         const marketWrite = isAssign ? this.printTypedMarketWrite(left, right) : undefined;
         if (marketWrite !== undefined) return marketWrite;
@@ -2145,7 +2147,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!declaration.initializer) {
             return `${indent}let mut ${varName}: Value = Value::Null`;
         }
-        const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) ?? this.printWsFlightLocalDeclaration(declaration, varName, indent) : undefined;
+        const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) ?? this.printWsFlightLocalDeclaration(declaration, varName, indent) ?? this.printWsCacheLocalDeclaration(declaration, varName, indent) : undefined;
         if (scalarDecl !== undefined) return scalarDecl;
         const parsedValue = this.printNode(declaration.initializer, identation).trim();
         if (declaration.initializer.kind === SyntaxKind.NewExpression) {
@@ -8548,7 +8550,7 @@ export class RustTranspiler extends BaseTranspiler {
         const args = typeof expression === 'string'
             ? node.arguments.map((a, index) => this.printErrorConstructorArg(this.rustErrorConstructorName(expression), index, a, identation)).join(', ')
             : node.arguments.map(a => this.printNode(a, identation)).join(', ');
-        return `${expression}::new(${args})`;
+        return this.rustWsCacheCtorBox(node, `${expression}::new(${args})`);
     }
 
     /** Printed class expression of a `new` whose class is a runtime value, else undefined. */
@@ -8584,6 +8586,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printPropertyAccessExpression(node, identation) {
+        const cacheField = this.printWsCacheHashmapRead(node) ?? this.printWsCacheFieldRead(node); if (cacheField !== undefined) return cacheField;
         const listField = this.printTypedListFieldRead(node); if (listField !== undefined) return listField;
         const dictKeyRead = this.printDictKeyRead(node); if (dictKeyRead !== undefined) return dictKeyRead;
         const handleField = this.printClientHandleField(node, true); if (handleField !== undefined) return handleField;
@@ -13801,6 +13804,219 @@ export class RustTranspiler extends BaseTranspiler {
         const p: any = up.parent;
         if (p?.kind === SyntaxKind.AwaitExpression || p?.kind === SyntaxKind.ExpressionStatement) return text;
         if (p !== undefined && isVariableDeclaration(p) && p.initializer === up && this.rustWsFlightLocal(p)) return text;
+        return `Value::from(${text})`;
+    }
+
+    // ── ws cache handles (rustWsCacheField / rustWsCacheLocal / printWsCache*) ──
+    // `new ArrayCache*(..)` gives the runtime's typed `Cache`. The base fields declared `ArrayCache | undefined` hold an
+    // `Option<Cache>`; a local bound to one (or to a constructor) keeps the handle when every use is a null test, a cache
+    // method, a constructor / field write, or a hand-off that boxes it once (`Value::from(&x)`).
+    private static readonly RUST_CACHE_TYPE = 'pro::cache::Cache';
+    private static readonly RUST_CACHE_METHODS = new Set([ 'append', 'getLimit', 'clear', 'hashmap' ]);
+    private rustWsCacheFields = new WeakMap<Node, boolean>();
+    private rustWsCacheLocals = new WeakMap<Node, 'opt' | 'cache' | null>();
+    private rustWsCacheUses = new WeakMap<Node, 'bare' | 'box' | 'test'>();
+
+    /** `this.F` for a base field declared `ArrayCache | undefined`. */
+    rustWsCacheField(node: any): boolean {
+        const n: any = this.unwrapParens(node);
+        if (n === undefined || !isPropertyAccessExpression(n) || n.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(n.name)) return false;
+        const name = String(n.name.text);
+        if (name !== 'orders' && name !== 'myTrades' && name !== 'liquidations' && name !== 'myLiquidations') return false;
+        let declaration: any;
+        try {
+            declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(n.name));
+        } catch (e) {
+            return false;
+        }
+        if (declaration === undefined) return false;
+        let known = this.rustWsCacheFields.get(declaration);
+        if (known === undefined) {
+            known = false;
+            try {
+                const type: any = declaration.type;
+                const members: any[] = type?.kind === SyntaxKind.UnionType ? Array.from(type.types) : (type === undefined ? [] : [ type ]);
+                known = declaration.kind === SyntaxKind.PropertyDeclaration
+                    && /ts[\\/]src[\\/]base[\\/](?:\.__ExchangeNoOverloads|Exchange)\.ts$/.test(String(declaration.getSourceFile().fileName))
+                    && members.some((m: any) => m.kind === SyntaxKind.TypeReference && isIdentifier(m.typeName) && m.typeName.text === 'ArrayCache')
+                    && members.every((m: any) => m.kind === SyntaxKind.UndefinedKeyword || (m.kind === SyntaxKind.TypeReference && isIdentifier(m.typeName) && m.typeName.text === 'ArrayCache' && m.typeArguments === undefined));
+            } catch (e) {
+                known = false;
+            }
+            this.rustWsCacheFields.set(declaration, known);
+        }
+        return known;
+    }
+
+    /** `new ArrayCache*(..)` of a class declared in `base/ws/Cache.ts`. */
+    rustWsCacheCtor(node: any): boolean {
+        const n: any = this.unwrapParens(node);
+        if (n?.kind !== SyntaxKind.NewExpression || !isIdentifier(n.expression) || !RustTranspiler.RUST_CACHE_CTORS.has(String(n.expression.text))) return false;
+        // the REST base tests build their caches from the test crate's own `Value` stubs
+        if (/ts[\\/]src[\\/]test[\\/]/.test(String(n.getSourceFile().fileName))) return false;
+        const declaration: any = this.rustScalarCallee(n);
+        return declaration !== undefined && /ts[\\/]src[\\/]base[\\/]ws[\\/]Cache\.ts$/.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
+    }
+
+    rustWsCacheUndefined(node: any): boolean {
+        const n: any = this.unwrapParens(node);
+        return n !== undefined && (n.kind === SyntaxKind.UndefinedKeyword || (isIdentifier(n) && n.text === 'undefined'));
+    }
+
+    /** The receiver of a cache method (`x.append(v)` statement, `x.getLimit(..)`, `x.clear()`, a `x.hashmap` read). */
+    rustWsCacheMethodReceiver(n: any): boolean {
+        const p: any = n.parent;
+        if (!isPropertyAccessExpression(p) || p.expression !== n || !RustTranspiler.RUST_CACHE_METHODS.has(String(p.name.text))) return false;
+        const name = String(p.name.text);
+        if (name === 'hashmap') return !this.isNativeWriteTargetBase(p) && !(isCallExpression(p.parent) && p.parent.expression === p);
+        if (!isCallExpression(p.parent) || p.parent.expression !== p) return false;
+        if (name === 'getLimit') return this.rustLimitCall(p.parent);
+        return p.parent.parent?.kind === SyntaxKind.ExpressionStatement && (name === 'clear' ? p.parent.arguments.length === 0 : p.parent.arguments.length === 1);
+    }
+
+    /** A read that boxes the handle once: a call argument, a return, an element / length read, a dict-write value. */
+    rustWsCacheBoxUse(n: any): boolean {
+        let up: any = n;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        const p: any = up.parent;
+        if (p === undefined) return false;
+        if (isCallExpression(p)) return p.expression !== up && p.arguments.indexOf(up) >= 0;
+        if (isReturnStatement(p)) return p.expression === up;
+        if (isPropertyAccessExpression(p)) return p.expression === up && String(p.name.text) === 'length' && !this.isNativeWriteTargetBase(p);
+        if (isElementAccessExpression(p)) return p.expression === up && !this.isNativeWriteTargetBase(p) && !isDeleteExpression(p.parent);
+        if (isBinaryExpression(p)) return p.right === up && p.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(p.left);
+        if (p.kind === SyntaxKind.PropertyAssignment) return p.initializer === up;
+        if (isConditionalExpression(p)) return p.condition !== up;
+        return isArrayLiteralExpression(p);
+    }
+
+    /** `x = new ArrayCache*(..)` / `x = undefined` (an optional local) as a statement. */
+    rustWsCacheLocalWrite(n: any, optional: boolean): boolean {
+        const p: any = n.parent;
+        if (!isBinaryExpression(p) || p.left !== n || p.operatorToken.kind !== SyntaxKind.EqualsToken || p.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        return this.rustWsCacheCtor(p.right) || (optional && (this.rustWsCacheUndefined(p.right) || this.rustWsCacheField(p.right)));
+    }
+
+    /** `this.F = x` for a typed cache field. */
+    rustWsCacheFieldWriteBack(n: any): boolean {
+        let up: any = n;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        const p: any = up.parent;
+        return isBinaryExpression(p) && p.right === up && p.operatorToken.kind === SyntaxKind.EqualsToken && this.rustWsCacheField(p.left) && p.parent?.kind === SyntaxKind.ExpressionStatement;
+    }
+
+    /** 'opt' for a local bound to a typed field, 'cache' for one bound to a constructor; undefined when it stays `Value`. */
+    rustWsCacheLocal(declaration: any): 'opt' | 'cache' | undefined {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return undefined;
+        let known = this.rustWsCacheLocals.get(declaration);
+        if (known === undefined) {
+            known = null;
+            const list: any = declaration.parent;
+            const init: any = this.unwrapParens(declaration.initializer);
+            const kind = init === undefined ? undefined : (this.rustWsCacheField(init) ? 'opt' : (this.rustWsCacheCtor(init) ? 'cache' : undefined));
+            if (kind !== undefined && list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1) {
+                const forms = new Map<Node, 'bare' | 'box' | 'test'>();
+                const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+                    const p: any = n.parent;
+                    if ((isPropertyAccessExpression(p) || p?.kind === SyntaxKind.PropertyAssignment) && p.name === n) return true;
+                    if (kind === 'opt' && isBinaryExpression(p) && this.isEqualityOp(p.operatorToken.kind) && this.rustWsCacheUndefined(p.left === n ? p.right : p.left)) { forms.set(n, 'test'); return true; }
+                    if (this.rustWsCacheMethodReceiver(n) || this.rustWsCacheLocalWrite(n, kind === 'opt')) { forms.set(n, 'bare'); return true; }
+                    if (this.rustWsCacheFieldWriteBack(n)) { forms.set(n, kind === 'opt' ? 'bare' : 'box'); return true; }
+                    if (this.rustWsCacheBoxUse(n)) { forms.set(n, 'box'); return true; }
+                    return false;
+                });
+                if (ok) {
+                    known = kind;
+                    for (const [n, form] of forms) this.rustWsCacheUses.set(n, form);
+                }
+            }
+            this.rustWsCacheLocals.set(declaration, known);
+        }
+        return known ?? undefined;
+    }
+
+    printWsCacheLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined {
+        const kind = this.rustWsCacheLocal(declaration);
+        if (kind === undefined) return undefined;
+        const init: any = this.unwrapParens(declaration.initializer);
+        // the generated test crate reaches the runtime as `ccxt::`
+        const path = `${this.isTestSource(declaration) ? 'ccxt' : 'crate'}::${RustTranspiler.RUST_CACHE_TYPE}`;
+        const type = kind === 'opt' ? `Option<${path}>` : path;
+        const value = kind === 'opt' ? `self.${String(init.name.text)}.clone()` : this.printNode(init, 0).trim();
+        return `${indent}let mut ${varName}: ${type} = ${value}`;
+    }
+
+    /** A use of a typed cache local: the handle itself, or boxed once at a `Value` hand-off. */
+    printWsCacheLocalUse(node: any): string | undefined {
+        const form = this.rustWsCacheUses.get(node);
+        if (form === undefined || form === 'test') return undefined;
+        const name = super.printIdentifier(node);
+        if (form === 'bare') return name;
+        return `Value::from(&${name})`;
+    }
+
+    /** `x === undefined` on an optional cache local or a typed field. */
+    printWsCacheNullTest(left: any, right: any, op: any): string | undefined {
+        const l = this.unwrapParens(left);
+        const r = this.unwrapParens(right);
+        const subject = this.rustWsCacheUndefined(r) ? l : (this.rustWsCacheUndefined(l) ? r : undefined);
+        if (subject === undefined) return undefined;
+        let place: string | undefined;
+        if (this.rustWsCacheField(subject)) place = `self.${String(subject.name.text)}`;
+        else if (isIdentifier(subject) && this.rustWsCacheUses.get(subject) === 'test') place = super.printIdentifier(subject);
+        if (place === undefined) return undefined;
+        const equal = op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken;
+        return `${place}.${equal ? 'is_none' : 'is_some'}()`;
+    }
+
+    /** `x.hashmap` on a cache handle is the handle's own `hashmap()` snapshot. */
+    printWsCacheHashmapRead(node: any): string | undefined {
+        if (!isPropertyAccessExpression(node) || String(node.name.text) !== 'hashmap' || !this.rustWsCacheMethodReceiver(node.expression)) return undefined;
+        const recv: any = node.expression;
+        if (this.rustWsCacheField(recv)) return `self.${String(recv.name.text)}.hashmap()`;
+        return isIdentifier(recv) && this.rustWsCacheUses.get(recv) === 'bare' ? `${super.printIdentifier(recv)}.hashmap()` : undefined;
+    }
+
+    /** A read of a typed field: the slot itself for a cache method or a write, else boxed once. */
+    printWsCacheFieldRead(node: any): string | undefined {
+        if (!this.rustWsCacheField(node)) return undefined;
+        const place = `self.${String(node.name.text)}`;
+        const p: any = node.parent;
+        if (this.rustWsCacheMethodReceiver(node) || (isBinaryExpression(p) && p.left === node && rustIsAssignmentOperator(p.operatorToken.kind))) return place;
+        return `Value::from(&${place})`;
+    }
+
+    /** Writes of a typed field (`Some(ctor)`, `None`, a cache local) and of a cache local (a constructor). */
+    printWsCacheWrite(left: any, right: any): string | undefined {
+        const rhs: any = this.unwrapParens(right);
+        if (this.rustWsCacheField(left)) {
+            const place = `self.${String(left.name.text)}`;
+            if (this.rustWsCacheUndefined(rhs)) return `${place} = None`;
+            if (this.rustWsCacheCtor(rhs)) return `${place} = Some(${this.printNode(rhs, 0).trim()})`;
+            const local = isIdentifier(rhs) ? this.rustWsCacheUses.get(rhs) : undefined;
+            if (local === 'bare') return `${place} = ${super.printIdentifier(rhs)}`;
+            if (local === 'box') return `${place} = Some(${super.printIdentifier(rhs)}.clone())`;
+            throw new Error(`ws cache field ${String(left.name.text)} written from an unproven value`);
+        }
+        if (!isIdentifier(left) || this.rustWsCacheUses.get(left) !== 'bare') return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(left);
+        const kind = this.rustWsCacheLocal(declaration);
+        if (kind === 'opt' && this.rustWsCacheField(rhs)) return `${super.printIdentifier(left)} = self.${String(rhs.name.text)}.clone()`;
+        if (kind === 'opt') return `${super.printIdentifier(left)} = ${this.rustWsCacheUndefined(rhs) ? 'None' : `Some(${this.printNode(rhs, 0).trim()})`}`;
+        return kind === 'cache' ? `${super.printIdentifier(left)} = ${this.printNode(rhs, 0).trim()}` : undefined;
+    }
+
+    /** A constructor stays a `Cache` where a cache slot takes it (a typed field / local write, a cache local's initializer); elsewhere it is boxed. */
+    rustWsCacheCtorBox(node: any, text: string): string {
+        if (!this.rustWsCacheCtor(node)) return text;
+        let up: any = node;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        const p: any = up.parent;
+        if (p?.kind === SyntaxKind.ExpressionStatement) return text;
+        // a local initializer keeps the bare constructor: a `Cache` local takes it, an untyped `let x = ..` infers it
+        if (p !== undefined && isVariableDeclaration(p) && p.initializer === up) return text;
+        if (isBinaryExpression(p) && p.right === up && p.operatorToken.kind === SyntaxKind.EqualsToken
+            && (this.rustWsCacheField(p.left) || (isIdentifier(p.left) && this.rustWsCacheUses.get(p.left) === 'bare'))) return text;
         return `Value::from(${text})`;
     }
 
