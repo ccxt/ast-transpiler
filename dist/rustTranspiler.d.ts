@@ -64,7 +64,7 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'other';
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
 export interface RustMethodSignature {
     file: any;
@@ -89,6 +89,11 @@ export declare const rustDispatch: {
     wsArg(kind: string, i: number): string | undefined;
     /** The typed parameter `kind` read from the boxed `Value` expression `v` (a `DerivedExchange` slot argument). */
     fromValue(kind: string, v: string): string;
+    /** Parameter list of a `DerivedExchange` slot: its `market` argument (never the first) is a lent market. */
+    slotParams: (args: string[]) => string;
+    isSlotMarket: (arg: string, i: number) => boolean;
+    /** A `DerivedExchange` slot argument handed on in a `&[Value]` tail. */
+    slotValue: (arg: string, i: number) => string;
     /** A sync method with a native return still gets a by-name arm (it boxes back inside the arm). */
     isNativeReturn: (ret: string) => boolean;
     /** A typed-return base method (or override): it keeps every arm it had as `-> Value`, sync ws handler arms too. */
@@ -334,6 +339,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_NIL_SCALAR_NATIVE_FORMS;
     /** `ostr|oint|onum` for an empty local the scalar rule types, else undefined. */
     rustNilScalarKind(declaration: any): string | undefined;
+    rustNilScalarHandOff(declaration: any, scope: any, kind: string, boxed: any[]): boolean;
     rustNilOptStrConcatUse(n: any): boolean;
     /** A write that decodes a `Value` result (a call, or a ternary over one). */
     rustNilDecodedWrite(rhs: any): boolean;
@@ -482,7 +488,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTestTierSource(node: any): boolean;
     /** `this`, or in a test source an identifier typed as the base `Exchange` class (it resolves to the base readers). */
     rustScalarReceiver(node: any): boolean;
+    /** String hand-off locals boxed more than once: each box before the last lends the string. */
+    private rustStrLentLocals;
     rustScalarLocalKindUncached(declaration: any): string | undefined;
+    private rustStrNoLend;
+    rustStrLendOnly(declaration: any): boolean;
+    /** Every box of the string sits where the `Value` form cloned it (a `this.` / `super.` argument) or is its
+     *  moving last use, and no use reads it by reference: lending there costs the one copy the clone made. */
+    rustStrLendSites(declaration: any): boolean;
     /** A local some `return` of a method with a declared string return hands back as-is. */
     rustStrReturnedLocal(declaration: any, scope: any): boolean;
     rustParamAliasSeedKind(declaration: any): string | undefined;
@@ -500,6 +513,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_SCALAR_RETURNS;
     rustBaseReturnScalarKind(call: any, name: string): string | undefined;
     private static readonly RUST_STR_RUNTIME_METHODS;
+    private static readonly RUST_STR_RUNTIME_APPEND_VETO;
     private rustStrRuntimeBare;
     /** `this.implodeParams(..)` / `this.intToBase16(..)` resolved to the base tier with a non-null `string` return. */
     rustStrRuntimeCall(node: any): boolean;
@@ -838,6 +852,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustAncestorMethodTables;
     getMethodOverride(node: Node): Node;
     private rustNativeStrReturnDecisionUncached;
+    private static readonly RUST_BASE_NATIVE_STR_METHODS;
+    private rustBaseNativeStrBare;
+    /** A call resolving to a `-> Option<String>` base method of the table (or an override of one). */
+    rustBaseNativeStrCall(node: any): boolean;
+    /** The call's own `Option<String>`, unboxed. */
+    rustBaseNativeStrBareText(node: any): string;
+    /** A `: Str` method of the table declared in the base tier, or an override of one. */
+    rustBaseNativeStrMethod(node: any): boolean;
     /** Every `return` of the method's own body converts, and the body's last
      *  statement is one of them (so Rust sees no `()`-valued tail the
      *  `-> Value` post-passes would have patched with `Value::Null`). */
@@ -970,13 +992,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustMarketEmptyDefaultRead(call: any): boolean;
     /** A whole-value hand-off: a call argument, an array element, a dict value or a returned value. */
     rustMarketValueUse(n: any): boolean;
-    rustMarketLocalKind(declaration: any): false | 'struct' | 'opt' | 'call';
+    rustMarketLocalKind(declaration: any): false | 'struct' | 'opt' | 'call' | 'smkt';
     rustMarketLocalIsTyped(declaration: any): boolean;
-    /** `m = this.market (x)` as its own statement: a later write of the same struct. */
+    /** `m = this.market (x)` / `m = this.safeMarket (..)` as its own statement: a later write of the same struct. */
     rustIsTypedMarketWrite(n: any): boolean;
     /** `m === undefined` / `m !== undefined` (either side). */
     rustIsNullTestOf(n: any): boolean;
-    rustMarketLocalIsTypedUncached(declaration: any): false | 'struct' | 'opt' | 'call';
+    rustMarketLocalIsTypedUncached(declaration: any): false | 'struct' | 'opt' | 'call' | 'smkt';
     rustOptMarketKeyRead(n: any): boolean;
     /** `crate::value::KeyRead::key_read(&&m, "k")` for a direct read on an `Option<Market>` local. */
     printOptMarketKeyRead(node: any): string | undefined;
@@ -986,8 +1008,25 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOptMarketLocalOf(node: any): any;
     /** The typed `this.market (x)` call, unboxed; its `Err` re-raises as the untyped call did. */
     printTypedMarketValue(call: any): string | undefined;
+    /** `m = this.safeMarket (..)` as its own statement. */
+    rustIsSafeMarketWriteOf(n: any): boolean;
+    /** `m = this.getMarketFromSymbols (..)` as its own statement. */
+    rustIsOptMarketWriteOf(n: any): boolean;
+    private static readonly RUST_OPT_MARKET_RETURNS;
+    rustReturnsOptMarket(node: any): boolean;
+    /** `this.getMarketFromSymbols (..)` resolving to the typed base method. */
+    rustIsOptMarketCall(init: any): boolean;
+    /** `return x` in an `Option<Market>` method. */
+    printOptMarketReturnValue(exp: any): string;
+    private rustOptMarketBoxing;
+    /** An `Option<Market>` call in a `Value` place: boxed once (its record's `raw`). */
+    printOptMarketCallBox(node: any, identation: number): string | undefined;
+    /** `m = undefined` as its own statement. */
+    rustIsNullWriteOf(n: any): boolean;
     /** A later `m = this.market (y)` on a struct local (`Some(..)` on an `Option<Market>` one). */
     printTypedMarketWrite(left: any, right: any): string | undefined;
+    /** The null test sits in a `bool` place (a condition, a `!` / `&&` / `||` operand of one, or a ternary test). */
+    rustNullTestIsCondition(n: any): boolean;
     /** `m === undefined` on an `Option<Market>` local. */
     printOptMarketNullTest(left: any, right: any, op: any): string | undefined;
     /** The struct local behind an identifier use (never the declaration name). */
@@ -1016,6 +1055,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_TEST_VARIADIC_ARITY;
     printRuntimeVariadicCall(node: any, receiver: string, methodName: string, identation: number, testCrate?: boolean, handleProven?: boolean): string | undefined;
     printOptionalArgsSliceCall(node: any, receiver: string, methodName: string, fixed: number, identation: number): string | undefined;
+    /** A ws `super.parseX (x, market)` to a fixed-arity parser with a lent market slot: by-value locals are cloned
+     *  as on the slice path (the parent call takes them by value). */
+    printSuperMarketSlotCall(node: any, methodName: string, identation: number): string | undefined;
     rustSliceArgText(a: string): string;
     rustCalleeIsRuntimeBase(node: any): boolean;
     rustCallsTestExchange(node: any): boolean;
@@ -1805,6 +1847,39 @@ export declare class RustTranspiler extends BaseTranspiler {
     printWsFlightLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
     /** A flight handle stays typed where it is awaited, a statement, or a `Flight` local's initializer; elsewhere it is boxed. */
     rustWsFlightBox(node: any, text: string): string;
+    private static readonly RUST_CACHE_TYPE;
+    private static readonly RUST_CACHE_METHODS;
+    private rustWsCacheFields;
+    private rustWsCacheLocals;
+    private rustWsCacheUses;
+    /** `this.F` for a base field declared `ArrayCache | undefined`. */
+    rustWsCacheField(node: any): boolean;
+    /** `new ArrayCache*(..)` of a class declared in `base/ws/Cache.ts`. */
+    rustWsCacheCtor(node: any): boolean;
+    rustWsCacheUndefined(node: any): boolean;
+    /** The receiver of a cache method (`x.append(v)` statement, `x.getLimit(..)`, `x.clear()`, a `x.hashmap` read). */
+    rustWsCacheMethodReceiver(n: any): boolean;
+    /** A read that boxes the handle once: a call argument, a return, an element / length read, a dict-write value. */
+    rustWsCacheBoxUse(n: any): boolean;
+    /** `x = new ArrayCache*(..)` / `x = undefined` (an optional local) as a statement. */
+    rustWsCacheLocalWrite(n: any, optional: boolean): boolean;
+    /** `this.F = x` for a typed cache field. */
+    rustWsCacheFieldWriteBack(n: any): boolean;
+    /** 'opt' for a local bound to a typed field, 'cache' for one bound to a constructor; undefined when it stays `Value`. */
+    rustWsCacheLocal(declaration: any): 'opt' | 'cache' | undefined;
+    printWsCacheLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
+    /** A use of a typed cache local: the handle itself, or boxed once at a `Value` hand-off. */
+    printWsCacheLocalUse(node: any): string | undefined;
+    /** `x === undefined` on an optional cache local or a typed field. */
+    printWsCacheNullTest(left: any, right: any, op: any): string | undefined;
+    /** `x.hashmap` on a cache handle is the handle's own `hashmap()` snapshot. */
+    printWsCacheHashmapRead(node: any): string | undefined;
+    /** A read of a typed field: the slot itself for a cache method or a write, else boxed once. */
+    printWsCacheFieldRead(node: any): string | undefined;
+    /** Writes of a typed field (`Some(ctor)`, `None`, a cache local) and of a cache local (a constructor). */
+    printWsCacheWrite(left: any, right: any): string | undefined;
+    /** A constructor stays a `Cache` where a cache slot takes it (a typed field / local write, a cache local's initializer); elsewhere it is boxed. */
+    rustWsCacheCtorBox(node: any, text: string): string;
     printWsWatchCall(node: any, receiver: string, methodName: string, identation: number): string | undefined;
     /** A numeric or boolean hash argument: the runtime keys by its text, as `stringify_param` did. */
     rustWsNumberSlot(arg: any): boolean;
@@ -1859,6 +1934,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `this.m (..)` resolved to the base tier, `m` in `names`. */
     rustBaseCallNamed(call: any, names: Set<string>): boolean;
     rustHandedDictLocalUncached(declaration: any): boolean;
+    /** `[a, b] = this.m (.., n)`: printed as one `__destr_tmp` block line, kept within the line budget by the bare box. */
+    rustInDestructureWrite(n: any): boolean;
     private static readonly RUST_HANDED_DICT_OMIT;
     private static readonly RUST_HANDED_DICT_EXTEND;
     /** The sole extra operand of a base `this.extend (a, x)` / `this.deepExtend (a, x)` when it is a bare identifier. */
@@ -1885,6 +1962,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustParamIsLentList(param: any): boolean;
     private static readonly RUST_LENT_LIST_TYPES;
     rustParamIsLentListUncached(param: any): boolean;
+    /** `object`, `Dict` or `any`, optionally `| undefined`: the parser reads its input as a `Value` of any shape. */
+    rustLentRecordTypeNode(type: any): boolean;
     /** `Dict[]` / `object[]`, optionally `| undefined`: a list of rows, the same Value list a `List` holds. */
     rustRowListTypeNode(type: any): boolean;
     /** A call argument landing in a lent list parameter of the callee. */
@@ -1899,6 +1978,19 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentResponseSlot(call: any, arg: any): boolean;
     /** A base `extend` / `deepExtend`, or a `safeDict*` with an empty-map default: the local always holds a map. */
     rustLentResponseSource(init: any): boolean;
+    /** A declared endpoint response (`Promise<Dict>` / `Promise<List>`) handed whole to a parameter that is lent
+     *  `impl Into<crate::Value>`: the shared map or list is lent as `&x`, the callee binds the `Value` once. */
+    rustLentEndpointSlot(call: any, arg: any, kind: 'dict' | 'list' | 'api' | undefined): boolean;
+    private static readonly RUST_LENT_HELPER_SLOTS;
+    /** A whole dict / list local handed to a lent operand of a hand-written base helper. */
+    rustLentHelperSlot(call: any, arg: any, kind: 'dict' | 'list'): boolean;
+    private rustPrintedBorrowed;
+    /** `&x` for a non-optional borrowed local lent to a hand-written helper operand. */
+    printLentHelperArg(node: any, text: string): string | undefined;
+    /** A base `safeDict*` / `safeList*` read with an empty literal default: a container on every path. */
+    rustLentContainerSource(init: any): boolean;
+    /** A lent first parameter not declared a list (`any` / `object` / `Dict`): a dict lends there as well. */
+    rustLentAnyShapeSlot(call: any): boolean;
     /** `&x` for a shared dict local lent to a lent response slot; a container local boxes explicitly there (no `.into()`). */
     printLentResponseArg(node: any, text: string): string | undefined;
     private static readonly RUST_TYPED_FILTER_METHODS;
@@ -2280,6 +2372,65 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenuePositional(param: any): boolean;
     /** `None` for each positional optional slot a call leaves out. */
     rustVenuePads(params: any[] | undefined, given: number, fixed: number): string[];
+    private static readonly RUST_MARKET_SLOT_METHODS;
+    private rustMarketSlotDecisions;
+    /** A method declared `safeMarket (..): MarketInterface` with a body in `ts/src` (base or venue). */
+    rustReturnsMarket(node: any): boolean;
+    /** The `market` parameter of a base market-slot reader, read only by key readers, null tests or `Value` hand-offs. */
+    rustMarketSlotParam(param: any): boolean;
+    rustMarketSlotParamUncached(param: any): boolean;
+    /** `n` is the container of a base key reader, which borrows the record (`KeyRead` for `&Market`). */
+    rustMarketReaderArg(n: any): boolean;
+    /** `n` is an argument in a lent market slot of its call. */
+    rustMarketSlotUse(n: any): boolean;
+    /** The callee parameter at `at` is a lent market slot. */
+    rustMarketSlot(params: any[] | undefined, at: number): boolean;
+    /** A use (never the declaration) of a lent market parameter. */
+    rustMarketSlotParamOf(node: any): any;
+    /** A lent market parameter handed to a `Value` place: its record, boxed once. */
+    printMarketSlotParamValue(node: any): string | undefined;
+    /** The `market: Market = undefined` second parameter of a singular `parseX (x, market)` parser (base, venue,
+     *  ws or prediction): it prints as a lent `Option<&crate::types::Market>`; every use is a key read, a null
+     *  test, a market slot or a `Value` hand-off (boxed once), and the parameter is never written. */
+    rustParseMarketParam(method: any, param: any): boolean;
+    private static readonly RUST_LIST_MARKET_METHODS;
+    /** The `market: Market = undefined` parameter of a listed helper: read-only, every parameter before it required
+     *  (or `safeMarket`'s positional `marketId`). */
+    rustListMarketParam(method: any, param: any): boolean;
+    /** A per-venue helper's `market: Market` parameter that it forwards to a lent market slot: lent itself when every
+     *  caller in its file lends a typed market (or passes `undefined`), so no caller decodes. */
+    rustVenueMarketParam(method: any, param: any): boolean;
+    /** A market slot argument that lends without a decode (`rustMarketSlotArgText` takes no `FromRaw` path). */
+    rustMarketArgLends(arg: any): boolean;
+    /** `safeMarket`'s first parameter `marketId: Str = undefined`: a positional `Value` (padded with `Value::Null`). */
+    rustPositionalValueParam(param: any): boolean;
+    /** The text a call leaves in an omitted positional slot. */
+    rustPositionalPad(param: any): string;
+    /** `this.safeMarket (..)` / `super.safeMarket (..)` resolving to a method that returns the typed market. */
+    rustIsSafeMarketCall(init: any): boolean;
+    /** `const m = this.safeMarket (..)` whose every use reads a key, lends the record, or rewrites it from `safeMarket`. */
+    rustSafeMarketLocalOk(declaration: any): boolean;
+    /** A use of a `safeMarket` struct local. */
+    rustSafeMarketLocalOf(node: any): any;
+    /** Argument text for a lent market slot: a typed market lends itself, any other value decodes once. */
+    rustMarketSlotArgText(arg: any, identation: number): string;
+    /** `crate::types` in the library crates, `ccxt::types` in the test crate. */
+    rustTypesPath(node: any): string;
+    private rustSafeMarketBoxing;
+    /** A `safeMarket` call that lands where the struct goes as is (a struct local, a market return, a lent slot). */
+    rustSafeMarketCallNative(node: any): boolean;
+    /** A `safeMarket` call whose result goes to a `Value` place: the typed result boxed once. */
+    printSafeMarketCallBox(node: any, identation: number): string | undefined;
+    rustMarketStoreLocal(declaration: any): boolean;
+    /** `const m = markets[i]` over a store local: read by key readers and returned. */
+    rustMarketStoreElement(declaration: any): boolean;
+    rustMarketStoreOf(node: any): any;
+    rustMarketStoreElementOf(node: any): any;
+    printMarketStoreDeclaration(declaration: any, indent: string, varName: string): string | undefined;
+    rustMarketStoreElementDecl(declaration: any): boolean;
+    rustStoreIndexText(keyNode: any): string;
+    /** The `crate::types::Market` a market-returning method hands back for `return <exp>`. */
+    printMarketReturnValue(exp: any): string;
     /** A checker-`boolean` argument for a `bool` slot: native where it already is one, an `Option<bool>` local or a
      *  `Value` compared with `Some(true)` (its variant is `Bool` or `Null`), else its truthiness. */
     rustVenueBoolArgText(arg: any, identation: number): string;
