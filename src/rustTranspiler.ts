@@ -4130,7 +4130,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     // ── hand-written `-> String` runtime methods (rustStrRuntimeCall / printRustStrRuntimeCall) ──
     // Base methods the runtime implements by hand with the TS `string` return as a Rust `String`.
-    private static readonly RUST_STR_RUNTIME_METHODS = new Set([ 'implodeParams', 'intToBase16' ]);
+    private static readonly RUST_STR_RUNTIME_METHODS = new Set([ 'implodeParams', 'intToBase16', 'hmac', 'uuid', 'uuid16', 'uuid22', 'urlencode', 'rawencode',
+        'urlencodeNested', 'urlencodeWithArrayRepeat' ]);
+    private static readonly RUST_STR_RUNTIME_APPEND_VETO = new Set([ 'implodeParams', 'intToBase16' ]);
     private rustStrRuntimeBare = new Set<Node>();
 
     /** `this.implodeParams(..)` / `this.intToBase16(..)` resolved to the base tier with a non-null `string` return. */
@@ -4171,7 +4173,10 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A local seeded from such a call is not appended onto another local (that write would retype the other one). */
     rustStrRuntimeLocalCostly(declaration): boolean {
-        if (!this.rustStrRuntimeCall(this.unwrapParens(declaration.initializer))) return false;
+        const init: any = this.unwrapParens(declaration.initializer);
+        if (!this.rustStrRuntimeCall(init)) return false;
+        // a local returned from a declared string method leaves that method's own `Option<String>` decision to its box
+        if (!RustTranspiler.RUST_STR_RUNTIME_APPEND_VETO.has(String(init.expression.name.text))) return this.rustStrReturnedLocal(declaration, this.rustEnclosingFunction(declaration));
         let appended = false;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             let top: any = n;
