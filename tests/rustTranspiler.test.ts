@@ -9442,6 +9442,46 @@ describe('rust ws cache maps', () => {
     });
 });
 
+describe('rust ws cache shelves', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\nexport class ArrayCacheByTimestamp extends ArrayCache {}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCacheByTimestamp } from './ws/Cache.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    ohlcvs: Dictionary<Dictionary<ArrayCacheByTimestamp>>;\n    safeValue (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    safeDict (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    safeInteger (obj: any, key: string, defaultValue: number = undefined): number { return obj[key]; }\n    createSafeDictionary (isWs: boolean = false) { return {}; }\n    reset () {\n        this.ohlcvs = this.createSafeDictionary (true);\n    }\n    drop (symbol: string, timeframe: string) {\n        if (symbol in this.ohlcvs) {\n            if (timeframe in this.ohlcvs[symbol]) {\n                delete this.ohlcvs[symbol][timeframe];\n            }\n        }\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCacheByTimestamp } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    handleOHLCV (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        const timeframe = this.safeString (message, 'i');\n        this.ohlcvs[symbol] = this.safeDict (this.ohlcvs, symbol, {});\n        let stored = this.safeValue (this.safeDict (this.ohlcvs, symbol), timeframe);\n        if (stored === undefined) {\n            const limit = this.safeInteger (this.options, 'OHLCVLimit', 1000);\n            stored = new ArrayCacheByTimestamp (limit);\n            this.ohlcvs[symbol][timeframe] = stored;\n        }\n        stored.append (message);\n        const size = stored.length;\n        client.resolve (stored, 'ohlcv:' + symbol + ':' + size);\n    }\n    handleKline (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        const timeframe = this.safeString (message, 'i');\n        if (!(symbol in this.ohlcvs)) {\n            this.ohlcvs[symbol] = {};\n        }\n        if (!(timeframe in this.ohlcvs[symbol])) {\n            this.ohlcvs[symbol][timeframe] = new ArrayCacheByTimestamp (10);\n        }\n        const ohlcv = this.ohlcvs[symbol][timeframe];\n        ohlcv.append (message);\n        client.resolve (ohlcv, 'kline');\n        const snapshot = this.ohlcvs[symbol];\n        return snapshot;\n    }\n}\n",
+    };
+    let out: string;
+    let base: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-cacheshelf-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        base = transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the inner map of a nested cache field is read and written as a typed cache map', () => {
+        expect(out).toContain('CacheShelves::ensure(&mut self.ohlcvs, &symbol);');
+        expect(out).toContain('let mut stored: Option<crate::pro::cache::Cache> = self.ohlcvs.shelf_text(&symbol).lookup(&timeframe);');
+        expect(out).toMatch(/CacheShelves::put2\(&mut self\.ohlcvs, &symbol, &timeframe, stored(\.clone\(\))?\)/);
+        expect(out).toContain('client.resolve(Value::from(&stored)');
+        expect(out).toContain('CacheSlot::size(&stored)');
+    });
+    test('membership, reset, element reads and deletes on the nested map are typed', () => {
+        expect(out).toContain('CacheShelves::has(&self.ohlcvs, &symbol)');
+        expect(out).toContain('CacheShelves::reset(&mut self.ohlcvs, &symbol);');
+        expect(out).toContain('self.ohlcvs.shelf(&symbol).has(&timeframe)');
+        expect(out).toContain('let mut ohlcv: Option<crate::pro::cache::Cache> = self.ohlcvs.shelf(&symbol).at(&timeframe);');
+        expect(base).toContain('self.ohlcvs = crate::pro::cache::CacheShelf::new();');
+        expect(base).toContain('CacheShelves::forget2(&mut self.ohlcvs, &symbol, &timeframe)');
+    });
+    test('negative: any other read of an inner map is its boxed snapshot', () => {
+        expect(out).toContain('Value::from(self.ohlcvs.shelf(&symbol))');
+        expect(out).not.toContain('Value::Dict(__d) = &mut self.ohlcvs');
+    });
+});
+
 describe('rust ws cache handles', () => {
     const files: Record<string, string> = {
         "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: string | undefined, limit: number | undefined): number | undefined { return limit; }\n}\nexport class ArrayCacheBySymbolById extends ArrayCache {}\n",

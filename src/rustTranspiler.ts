@@ -999,7 +999,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printArrayLength(node, identation, leftExpr = undefined) {
-        const scalarLength = this.rustScalarLengthText(node, true) ?? this.printOptListLength(node); if (scalarLength !== undefined) return scalarLength;
+        const scalarLength = this.rustScalarLengthText(node, true) ?? this.printOptListLength(node) ?? this.printWsCacheLength(node); if (scalarLength !== undefined) return scalarLength;
         const receiver = leftExpr ?? this.printNode(node.expression, 0);
         if (!this.rustIsOrderBookSide(node.expression) && this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) return this.printNativeLength(node, receiver);
         // A read-only list bearer is a `Vec<Value>`; `len()` is the helper's answer.
@@ -14788,7 +14788,7 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_CACHE_METHODS = new Set([ 'append', 'getLimit', 'clear', 'hashmap' ]);
     private rustWsCacheFields = new WeakMap<Node, boolean>();
     private rustWsCacheLocals = new WeakMap<Node, 'opt' | 'cache' | null>();
-    private rustWsCacheUses = new WeakMap<Node, 'bare' | 'box' | 'test'>();
+    private rustWsCacheUses = new WeakMap<Node, 'bare' | 'box' | 'test' | 'len'>();
 
     /** `this.F` for a base field declared `ArrayCache | undefined`. */
     rustWsCacheField(node: any): boolean {
@@ -14888,7 +14888,7 @@ export class RustTranspiler extends BaseTranspiler {
             const init: any = this.unwrapParens(declaration.initializer);
             const kind = init === undefined ? undefined : (this.rustWsCacheField(init) || this.rustWsCacheOptSource(init, false) ? 'opt' : (this.rustWsCacheCtor(init) ? 'cache' : undefined));
             if (kind !== undefined && list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1) {
-                const forms = new Map<Node, 'bare' | 'box' | 'test'>();
+                const forms = new Map<Node, 'bare' | 'box' | 'test' | 'len'>();
                 const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
                     const p: any = n.parent;
                     if ((isPropertyAccessExpression(p) || p?.kind === SyntaxKind.PropertyAssignment) && p.name === n) return true;
@@ -14896,6 +14896,7 @@ export class RustTranspiler extends BaseTranspiler {
                     if (this.rustWsCacheMethodReceiver(n) || this.rustWsCacheLocalWrite(n, kind === 'opt')) { forms.set(n, 'bare'); return true; }
                     if (this.rustWsCacheFieldWriteBack(n)) { forms.set(n, kind === 'opt' ? 'bare' : 'box'); return true; }
                     if (this.rustWsCacheMapWriteValue(n)) { forms.set(n, 'bare'); return true; }
+                    if (kind === 'opt' && this.rustWsCacheLengthRead(n)) { forms.set(n, 'len'); return true; }
                     if (this.rustWsCacheBoxUse(n)) { forms.set(n, 'box'); return true; }
                     return false;
                 });
@@ -14907,6 +14908,18 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustWsCacheLocals.set(declaration, known);
         }
         return known ?? undefined;
+    }
+
+    /** `x.length` read on an optional cache local: the slot's own `size()`. */
+    rustWsCacheLengthRead(n: any): boolean {
+        const p: any = n.parent;
+        return isPropertyAccessExpression(p) && p.expression === n && String(p.name.text) === 'length' && !this.isNativeWriteTargetBase(p);
+    }
+
+    printWsCacheLength(node: any): string | undefined {
+        const recv: any = node.expression;
+        if (!isIdentifier(recv) || this.rustWsCacheUses.get(recv) !== 'len') return undefined;
+        return `Value::Int(CacheSlot::size(&${super.printIdentifier(recv)}))`;
     }
 
     printWsCacheLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined {
@@ -14923,7 +14936,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** A use of a typed cache local: the handle itself, or boxed once at a `Value` hand-off. */
     printWsCacheLocalUse(node: any): string | undefined {
         const form = this.rustWsCacheUses.get(node);
-        if (form === undefined || form === 'test') return undefined;
+        if (form === undefined || form === 'test' || form === 'len') return undefined;
         const name = super.printIdentifier(node);
         if (form === 'bare') return name;
         return `Value::from(&${name})`;
@@ -15033,21 +15046,84 @@ export class RustTranspiler extends BaseTranspiler {
         return known;
     }
 
+    // The base field `ohlcvs: Dictionary<Dictionary<ArrayCacheByTimestamp>>` is a `CacheShelf` (`IndexMap<String, CacheMap>`).
+    // Its inner map `this.F[k]` / `this.safeDict (this.F, k)` is read like a cache map; `this.F[k] = {}` resets and
+    // `this.F[k] = this.safeDict|safeValue (this.F, k, {})` ensures an entry. Any other write throws.
+    private static readonly RUST_CACHE_SHELF_TYPE = 'pro::cache::CacheShelf';
+    private rustWsCacheShelfFields = new WeakMap<Node, boolean>();
+
+    /** `this.F` for a base field declared `Dictionary<Dictionary<ArrayCache*>>`. */
+    rustWsCacheShelfField(node: any): boolean {
+        const n: any = this.unwrapParens(node);
+        if (n === undefined || !isPropertyAccessExpression(n) || n.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(n.name) || String(n.name.text) !== 'ohlcvs') return false;
+        let declaration: any;
+        try {
+            declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(n.name));
+        } catch (e) {
+            return false;
+        }
+        if (declaration === undefined) return false;
+        let known = this.rustWsCacheShelfFields.get(declaration);
+        if (known === undefined) {
+            known = false;
+            try {
+                const dict = (t: any) => t?.kind === SyntaxKind.TypeReference && isIdentifier(t.typeName) && t.typeName.text === 'Dictionary' && t.typeArguments?.length === 1;
+                const type: any = declaration.type;
+                const inner: any = dict(type) ? type.typeArguments[0] : undefined;
+                const leaf: any = dict(inner) ? inner.typeArguments[0] : undefined;
+                known = declaration.kind === SyntaxKind.PropertyDeclaration
+                    && /ts[\\/]src[\\/]base[\\/](?:\.__ExchangeNoOverloads|Exchange)\.ts$/.test(String(declaration.getSourceFile().fileName))
+                    && leaf?.kind === SyntaxKind.TypeReference && isIdentifier(leaf.typeName) && RustTranspiler.RUST_CACHE_CTORS.has(String(leaf.typeName.text));
+            } catch (e) {
+                known = false;
+            }
+            this.rustWsCacheShelfFields.set(declaration, known);
+        }
+        return known;
+    }
+
+    /** `this.F[k]` on a cache shelf. */
+    rustWsCacheShelfEntry(node: any): boolean {
+        const n: any = this.unwrapParens(node);
+        return n !== undefined && isElementAccessExpression(n) && this.rustWsCacheShelfField(n.expression);
+    }
+
+    /** `this.safeDict (this.F, k)` on a cache shelf. */
+    rustWsCacheShelfLookup(node: any): boolean {
+        const n: any = this.unwrapParens(node);
+        if (n === undefined || !isCallExpression(n) || !isPropertyAccessExpression(n.expression) || n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        return String(n.expression.name.text) === 'safeDict' && n.arguments.length === 2 && this.rustWsCacheShelfField(n.arguments[0]);
+    }
+
+    /** A cache map: the map field itself or an inner map of a shelf. */
+    rustWsCacheMapLike(node: any): boolean {
+        const n: any = this.rustStripWrappers(node);
+        return this.rustWsCacheMapField(n) || this.rustWsCacheShelfEntry(n) || this.rustWsCacheShelfLookup(n);
+    }
+
+    /** The place text of a cache map (`self.F`, `self.F.shelf(&k)`, `self.F.shelf_text(&k)`). */
+    rustWsCacheMapPlace(node: any): string {
+        const n: any = this.rustStripWrappers(node);
+        if (this.rustWsCacheMapField(n)) return `self.${String(n.name.text)}`;
+        if (this.rustWsCacheShelfEntry(n)) return `self.${String(this.unwrapParens(n.expression).name.text)}.shelf(&${this.rustWsCacheMapKey(n.argumentExpression)})`;
+        return `self.${String(this.unwrapParens(n.arguments[0]).name.text)}.shelf_text(&${this.rustWsCacheMapKey(n.arguments[1])})`;
+    }
+
     /** The key of a cache-map access (`m[k]`, `k in m`, `safeValue (m, k)`): printed by reference. */
     rustWsCacheMapKeyUse(n: any): boolean {
         let up: any = n;
         while (isParenthesizedExpression(up.parent) || isAsExpression(up.parent) || isNonNullExpression(up.parent)) up = up.parent;
         const p: any = up.parent;
         if (p === undefined) return false;
-        if (isElementAccessExpression(p)) return p.argumentExpression === up && this.rustWsCacheMapField(p.expression);
-        if (isBinaryExpression(p) && p.operatorToken.kind === SyntaxKind.InKeyword) return p.left === up && this.rustWsCacheMapField(this.rustStripWrappers(p.right));
-        return isCallExpression(p) && p.arguments[1] === up && this.rustWsCacheMapLookup(p);
+        if (isElementAccessExpression(p)) return p.argumentExpression === up && (this.rustWsCacheMapLike(p.expression) || this.rustWsCacheShelfField(p.expression));
+        if (isBinaryExpression(p) && p.operatorToken.kind === SyntaxKind.InKeyword) return p.left === up && (this.rustWsCacheMapLike(p.right) || this.rustWsCacheShelfField(this.rustStripWrappers(p.right)));
+        return isCallExpression(p) && p.arguments[1] === up && (this.rustWsCacheMapLookup(p) || this.rustWsCacheShelfLookup(p) || this.rustWsCacheShelfEnsure(p));
     }
 
     /** `this.F[k]` on a cache map. */
     rustWsCacheMapEntry(node: any): boolean {
         const n: any = this.unwrapParens(node);
-        return n !== undefined && isElementAccessExpression(n) && this.rustWsCacheMapField(n.expression);
+        return n !== undefined && isElementAccessExpression(n) && this.rustWsCacheMapLike(n.expression);
     }
 
     /** `this.safeValue|safeDict (this.F, k)` on a cache map. */
@@ -15055,7 +15131,7 @@ export class RustTranspiler extends BaseTranspiler {
         const n: any = this.unwrapParens(node);
         if (n === undefined || !isCallExpression(n) || !isPropertyAccessExpression(n.expression) || n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const name = String(n.expression.name.text);
-        return (name === 'safeValue' || name === 'safeDict') && n.arguments.length === 2 && this.rustWsCacheMapField(n.arguments[0]);
+        return (name === 'safeValue' || name === 'safeDict') && n.arguments.length === 2 && this.rustWsCacheMapLike(n.arguments[0]);
     }
 
     /** A source an optional cache local takes as `Option<Cache>`: a map read, `undefined` (with `orUndefined`), a typed
@@ -15095,8 +15171,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustWsCacheMapReadText(n: any): string {
-        const field = isElementAccessExpression(n) ? n.expression : n.arguments[0];
-        const place = `self.${String(this.unwrapParens(field).name.text)}`;
+        const place = this.rustWsCacheMapPlace(isElementAccessExpression(n) ? n.expression : n.arguments[0]);
         return isElementAccessExpression(n)
             ? `${place}.at(&${this.rustWsCacheMapKey(n.argumentExpression)})`
             : `${place}.lookup(&${this.rustWsCacheMapKey(n.arguments[1])})`;
@@ -15104,6 +15179,10 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A map read outside an optional-local slot (those print through `rustWsCacheOptText`): boxed once. */
     printWsCacheMapRead(node: any): string | undefined {
+        if (this.rustWsCacheShelfEntry(node) || this.rustWsCacheShelfLookup(node)) {
+            if (isElementAccessExpression(node) && (this.isNativeWriteTargetBase(node) || isDeleteExpression(node.parent))) throw new Error('ws cache shelf: an entry write reached the read path');
+            return `Value::from(${this.rustWsCacheMapPlace(node)})`;
+        }
         if (!this.rustWsCacheMapEntry(node) && !this.rustWsCacheMapLookup(node)) return undefined;
         if (isElementAccessExpression(node) && (this.isNativeWriteTargetBase(node) || isDeleteExpression(node.parent))) {
             throw new Error('ws cache map: an entry write reached the read path');
@@ -15118,23 +15197,37 @@ export class RustTranspiler extends BaseTranspiler {
         const subject = this.rustWsCacheUndefined(r) ? l : (this.rustWsCacheUndefined(l) ? r : undefined);
         if (subject === undefined) return undefined;
         const equal = op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken;
-        if (this.rustWsCacheMapField(subject)) return equal ? 'false' : 'true';
+        if (this.rustWsCacheMapField(subject) || this.rustWsCacheShelfField(subject)) return equal ? 'false' : 'true';
         if (!this.rustWsCacheMapEntry(subject) && !this.rustWsCacheMapLookup(subject)) return undefined;
         return `${this.rustWsCacheMapReadText(subject)}.${equal ? 'is_none' : 'is_some'}()`;
     }
 
     /** `k in this.F`. */
     printWsCacheMapHas(key: any, obj: any): string | undefined {
-        if (!this.rustWsCacheMapField(this.rustStripWrappers(obj))) return undefined;
-        const field = String(this.rustStripWrappers(obj).name.text);
-        return `Value::Bool(self.${field}.has(&${this.rustWsCacheMapKey(key)}))`;
+        const map: any = this.rustStripWrappers(obj);
+        if (this.rustWsCacheShelfField(map)) return `Value::Bool(CacheShelves::has(&self.${String(map.name.text)}, &${this.rustWsCacheMapKey(key)}))`;
+        if (!this.rustWsCacheMapLike(map)) return undefined;
+        return `Value::Bool(${this.rustWsCacheMapPlace(map)}.has(&${this.rustWsCacheMapKey(key)}))`;
     }
 
     /** `delete this.F[k]`. */
     printWsCacheMapDelete(node: any): string | undefined {
-        const target: any = node.expression;
+        const target: any = this.unwrapParens(node.expression);
+        if (this.rustWsCacheShelfEntry(target)) {
+            const key = this.rustWsCacheMapKey(target.argumentExpression);
+            const field = String(this.unwrapParens(target.expression).name.text);
+            return /\bself\b/.test(key) ? `{ let __ck = ${key}; CacheShelves::forget(&mut self.${field}, &__ck); }` : `CacheShelves::forget(&mut self.${field}, &${key})`;
+        }
         if (!this.rustWsCacheMapEntry(target)) return undefined;
         const key = this.rustWsCacheMapKey(target.argumentExpression);
+        const inner: any = this.rustStripWrappers(target.expression);
+        if (this.rustWsCacheShelfEntry(inner)) {
+            const outer = this.rustWsCacheMapKey(inner.argumentExpression);
+            const shelf = String(this.unwrapParens(inner.expression).name.text);
+            if (/\bself\b/.test(outer + key)) return `{ let __ck = ${outer}; let __cj = ${key}; CacheShelves::forget2(&mut self.${shelf}, &__ck, &__cj); }`;
+            return `CacheShelves::forget2(&mut self.${shelf}, &${outer}, &${key})`;
+        }
+        if (!this.rustWsCacheMapField(inner)) throw new Error('ws cache map: delete on an unproven map');
         const field = String(this.unwrapParens(target.expression).name.text);
         return /\bself\b/.test(key) ? `{ let __ck = ${key}; CacheStore::forget(&mut self.${field}, &__ck); }` : `CacheStore::forget(&mut self.${field}, &${key})`;
     }
@@ -15148,8 +15241,34 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** `this.F[k] = cache` and `this.F = {}` / `this.F = this.createSafeDictionary (..)`. */
+    /** `this.safeDict|safeValue (this.F, k, {})` on a shelf: the ensure source of `this.F[k] = ..`. */
+    rustWsCacheShelfEnsure(node: any): boolean {
+        const n: any = this.unwrapParens(node);
+        if (n === undefined || !isCallExpression(n) || !isPropertyAccessExpression(n.expression) || n.expression.expression.kind !== SyntaxKind.ThisKeyword || n.arguments.length !== 3) return false;
+        const name = String(n.expression.name.text);
+        const dflt: any = this.unwrapParens(n.arguments[2]);
+        return (name === 'safeDict' || name === 'safeValue') && this.rustWsCacheShelfField(n.arguments[0]) && isObjectLiteralExpression(dflt) && dflt.properties.length === 0;
+    }
+
     printWsCacheMapWrite(left: any, right: any): string | undefined {
         const rhs: any = this.unwrapParens(right);
+        const shelfPath = `${this.isTestSource(left) ? 'ccxt' : 'crate'}::${RustTranspiler.RUST_CACHE_SHELF_TYPE}`;
+        if (this.rustWsCacheShelfField(left)) {
+            const fresh = (isObjectLiteralExpression(rhs) && rhs.properties.length === 0)
+                || (isCallExpression(rhs) && isPropertyAccessExpression(rhs.expression) && rhs.expression.expression.kind === SyntaxKind.ThisKeyword && String(rhs.expression.name.text) === 'createSafeDictionary');
+            if (!fresh) throw new Error('ws cache shelf field written from an unproven value');
+            return `self.${String(this.unwrapParens(left).name.text)} = ${shelfPath}::new()`;
+        }
+        if (this.rustWsCacheShelfEntry(left)) {
+            const entry: any = this.unwrapParens(left);
+            const shelf = String(this.unwrapParens(entry.expression).name.text);
+            const key = this.rustWsCacheMapKey(entry.argumentExpression);
+            let op: string;
+            if (isObjectLiteralExpression(rhs) && rhs.properties.length === 0) op = 'reset';
+            else if (this.rustWsCacheShelfEntry(left) && this.rustWsCacheShelfEnsure(rhs) && this.rustWsCacheMapKey(rhs.arguments[1]) === key) op = 'ensure';
+            else throw new Error(`ws cache shelf ${shelf} entry written from an unproven value`);
+            return /\bself\b/.test(key) ? `{ let __ck = ${key}; CacheShelves::${op}(&mut self.${shelf}, &__ck); }` : `CacheShelves::${op}(&mut self.${shelf}, &${key})`;
+        }
         if (this.rustWsCacheMapField(left)) {
             const fresh = (isObjectLiteralExpression(rhs) && rhs.properties.length === 0)
                 || (isCallExpression(rhs) && isPropertyAccessExpression(rhs.expression) && rhs.expression.expression.kind === SyntaxKind.ThisKeyword && String(rhs.expression.name.text) === 'createSafeDictionary');
@@ -15159,7 +15278,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (!this.rustWsCacheMapEntry(left)) return undefined;
         const entry: any = this.unwrapParens(left);
-        const field = String(this.unwrapParens(entry.expression).name.text);
+        const inner: any = this.rustStripWrappers(entry.expression);
+        if (!this.rustWsCacheMapField(inner) && !this.rustWsCacheShelfEntry(inner)) throw new Error('ws cache map: write into an unproven map');
+        const field = String(this.unwrapParens(this.rustWsCacheShelfEntry(inner) ? inner.expression : entry.expression).name.text);
         let value: string;
         if (this.rustWsCacheCtor(rhs)) value = this.printNode(rhs, 0).trim();
         else if (isIdentifier(rhs) && this.rustWsCacheUses.get(rhs) === 'bare' && this.rustWsCacheLocal(this.rustDeclarationOfIdentifier(rhs)) !== undefined) {
@@ -15167,13 +15288,18 @@ export class RustTranspiler extends BaseTranspiler {
             value = `${super.printIdentifier(rhs)}${this.rustLocalLastUse(rhs, declaration) ? '' : '.clone()'}`;
         } else throw new Error(`ws cache map ${field} written from an unproven value`);
         const key = this.rustWsCacheMapKey(entry.argumentExpression);
+        if (this.rustWsCacheShelfEntry(inner)) {
+            const outer = this.rustWsCacheMapKey(inner.argumentExpression);
+            if (/\bself\b/.test(outer + key + value)) return `{ let __ck = ${outer}; let __cj = ${key}; let __cv = ${value}; CacheShelves::put2(&mut self.${field}, &__ck, &__cj, __cv); }`;
+            return `CacheShelves::put2(&mut self.${field}, &${outer}, &${key}, ${value})`;
+        }
         if (/\bself\b/.test(key) || /\bself\b/.test(value)) return `{ let __ck = ${key}; let __cv = ${value}; CacheStore::put(&mut self.${field}, &__ck, __cv); }`;
         return `CacheStore::put(&mut self.${field}, &${key}, ${value})`;
     }
 
     /** Any other read of the map field is its dict snapshot (each entry an Arc bump); a write is unproven. */
     printWsCacheMapField(node: any): string | undefined {
-        if (!this.rustWsCacheMapField(node)) return undefined;
+        if (!this.rustWsCacheMapField(node) && !this.rustWsCacheShelfField(node)) return undefined;
         if (this.isNativeWriteTargetBase(node)) throw new Error(`ws cache map ${String(node.name.text)} written outside a proven form`);
         return `Value::from(&self.${String(node.name.text)})`;
     }
