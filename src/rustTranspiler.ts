@@ -13592,7 +13592,9 @@ export class RustTranspiler extends BaseTranspiler {
         const safe = blockScoped ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
         // a fresh built container handed on whole (D11): every use is a box, the declaration converts once
         const builtBoxOnly = reads === 0 && boxedElementUses.length > 0 && nullTests === 0 && writes === 0 && init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) !== undefined;
-        if (!safe || (reads === 0 && !builtBoxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
+        // a map-list element handed on whole (hg): every use is a box of the shared map
+        const boxOnly = reads === 0 && boxedElementUses.length > 0 && this.rustDictElementSource(init) && nullTests === 0 && writes === 0;
+        if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
         // an endpoint written into an empty `let` may answer a list: `into_opt_dict` keeps only maps, so it is never lent whole
         if (this.rustNilResponseLocals.has(declaration) && (lentResponses > 0 || lentNullable > 0)) return undefined;
