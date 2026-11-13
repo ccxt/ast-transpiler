@@ -8402,8 +8402,18 @@ export class RustTranspiler extends BaseTranspiler {
             const callFile = String(declaration.getSourceFile?.()?.fileName ?? '');
             if (!/ts[/]src[/]/.test(callFile) || /ts[/]src[/](pro[/])?test[/]/.test(callFile)) return false;
             const callScope = this.rustEnclosingFunction(declaration);
-            return this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => this.rustEnclosingFunction(n) === callScope
-                && this.rustMarketValueUse(n)) ? 'call' : false;
+            // element reads / `.length` on a Vec or keyed reads on `Tickers` borrow the typed result; a whole-value
+            // hand-off as well would re-encode the record set, so the two never mix
+            const elem = this.rustTypedResultElemKind(declaration.initializer);
+            let valueUses = 0;
+            let elemUses = 0;
+            const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
+                if (this.rustEnclosingFunction(n) !== callScope) return false;
+                if (this.rustMarketValueUse(n)) { valueUses++; return true; }
+                if (elem !== undefined && this.rustTypedResultElemUse(n, elem)) { elemUses++; return true; }
+                return false;
+            });
+            return ok && (valueUses === 0 || elemUses === 0) ? 'call' : false;
         }
         const fromOpt = this.rustIsOptMarketCall(declaration.initializer) || this.rustOptMarketTernary(declaration.initializer) !== undefined;
         const empty = declaration.initializer === undefined || this.literalKindOfNode(declaration.initializer) === 'null' || fromOpt;
@@ -8486,6 +8496,65 @@ export class RustTranspiler extends BaseTranspiler {
         const ret = RustTranspiler.RUST_TYPED_RETURNS[String(call.expression.name.text)];
         if (ret === undefined || !/^(Vec<)?crate::types::/.test(ret) || ret === 'crate::types::Market') return undefined;
         return this.printTypedUnifiedCall(call) === undefined ? undefined : ret;
+    }
+
+    // Unified records whose `IntoRaw` hands back the decoded row itself (`raw`); `From<&T> for Value` shares it.
+    private static readonly RUST_RAW_RECORD_TYPES = new Set([
+        'Ticker', 'Trade', 'Order', 'Position', 'Transaction', 'DepositAddress', 'Transfer', 'LedgerEntry', 'TradingFee',
+        'DepositWithdrawFee', 'FundingRate', 'FundingRateHistory', 'FundingHistory', 'Leverage', 'MarginMode', 'MarginModification',
+        'OpenInterest', 'Liquidation', 'LeverageTier', 'Greeks', 'OptionContract', 'LastPrice', 'PredictionEvent', 'PredictionSettlement',
+        'Account', 'BorrowRate', 'IsolatedBorrowRate', 'MarginLoan', 'Conversion', 'ADL', 'LongShortRatio', 'BorrowInterest',
+    ]);
+
+    /** `'vec'` for a `Vec<record>` typed result, `'map'` for `Tickers` (`HashMap<String, Ticker>`). */
+    rustTypedResultElemKind(init: any): 'vec' | 'map' | undefined {
+        const ret = this.rustTypedCallResultType(init);
+        if (ret === 'crate::types::Tickers') return 'map';
+        const m = ret === undefined ? null : /^Vec<crate::types::(\w+)>$/.exec(ret);
+        return m !== null && RustTranspiler.RUST_RAW_RECORD_TYPES.has(m[1]) ? 'vec' : undefined;
+    }
+
+    /** `xs.length`, `xs[i]` (int literal / int-literal counter) on a Vec result, `xs[k]` (a `Value` key) on a map result. */
+    rustTypedResultElemUse(n: any, elem: 'vec' | 'map'): boolean {
+        const parent: any = n.parent;
+        if (parent === undefined) return false;
+        const up: any = parent.parent;
+        const readOnly = up !== undefined && !(isBinaryExpression(up) && up.left === parent && rustIsAssignmentOperator(up.operatorToken.kind))
+            && up.kind !== SyntaxKind.DeleteExpression && !isPrefixUnaryExpression(up) && up.kind !== SyntaxKind.PostfixUnaryExpression
+            && !(isCallExpression(up) && up.expression === parent);
+        if (elem === 'vec' && isPropertyAccessExpression(parent) && parent.expression === n && isIdentifier(parent.name) && parent.name.text === 'length') {
+            return readOnly && this.isValueLengthType(this.typeOfNodeIfAny(n));
+        }
+        if (!isElementAccessExpression(parent) || parent.expression !== n || !readOnly) return false;
+        if (isElementAccessExpression(up) && up.expression === parent) return false;
+        if (isPropertyAccessExpression(up) && up.expression === parent) return false;
+        const key: any = this.rustSkipWrappers(parent.argumentExpression);
+        if (key === undefined) return false;
+        if (elem === 'vec') {
+            if (isNumericLiteral(key)) return Number.isInteger(Number(key.text)) && Number(key.text) >= 0;
+            return this.isRustValueIndexKey(key);
+        }
+        if (!isIdentifier(key)) return false;
+        const keyDecl: any = this.rustDeclaredNode(key);
+        if (keyDecl === undefined || !(isVariableDeclaration(keyDecl) || isParameterDeclaration(keyDecl))) return false;
+        return this.rustScalarLocalOf(key) === undefined;
+    }
+
+    /** Element-access hook: the native read of a typed result element, boxed through its shared record handle. */
+    printTypedResultElemRead(node: any): string | undefined {
+        const recv: any = node.expression;
+        const declaration = recv !== undefined && isIdentifier(recv) ? this.rustCallLocalOf(recv) : undefined;
+        if (declaration === undefined) return undefined;
+        const elem = this.rustTypedResultElemKind(declaration.initializer);
+        if (elem === undefined || !this.rustTypedResultElemUse(recv, elem)) return undefined;
+        const name = super.printIdentifier(recv);
+        const key: any = this.rustSkipWrappers(node.argumentExpression);
+        if (elem === 'map') return `crate::value::KeyRead::read(&&${name}, &${this.printNode(key, 0).trim()})`;
+        let index: string;
+        if (isNumericLiteral(key)) index = String(Number(key.text));
+        else if (this.rustI64CounterUse(key)) index = `${super.printIdentifier(key)} as usize`;
+        else index = `${this.printNode(key, 0).trim()}.as_i64().unwrap_or(-1) as usize`;
+        return `${name}.get(${index}).map(crate::Value::from).unwrap_or_default()`;
     }
 
     rustCallLocalOf(node: any): any {
@@ -8857,7 +8926,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A whole-value hand-off of a struct local: the `Value` the untyped local held. */
     printTypedMarketValueUse(node: any): string | undefined {
-        if (this.rustCallLocalOf(node) !== undefined) return `crate::types::IntoRaw::into_raw(${super.printIdentifier(node)}.clone())`;
+        if (this.rustCallLocalOf(node) !== undefined) {
+            return this.rustMarketValueUse(node) ? `crate::types::IntoRaw::into_raw(${super.printIdentifier(node)}.clone())` : super.printIdentifier(node);
+        }
         if (this.rustOptMarketLocalOf(node) !== undefined && this.rustMarketValueUse(node)) {
             // the stored record's `raw` (an `Arc` bump), never a struct copy
             return `crate::Value::from(${super.printIdentifier(node)}.as_ref())`;
@@ -11586,6 +11657,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printElementAccessExpression(node, identation) {
         const bookRead = this.printWsBookMapRead(node) ?? this.printWsBookFieldRead(node); if (bookRead !== undefined) return bookRead;
+        const typedElem = this.printTypedResultElemRead(node); if (typedElem !== undefined) return typedElem;
         const mapRead = this.printWsCacheMapRead(node); if (mapRead !== undefined) return mapRead;
         const fieldRead = this.printFieldKeyRead(node); if (fieldRead !== undefined) return fieldRead;
         const dictKeyRead = this.printDictKeyRead(node); if (dictKeyRead !== undefined) return dictKeyRead;
