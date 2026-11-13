@@ -10238,6 +10238,32 @@ describe('safe scalar locals: optional arithmetic, bool logicals, lent reader st
     });
 });
 
+describe('safe scalar locals, third pass: element-write sources, field writes, cast split, closure-free slice', () => {
+    test('a reader local feeding an element write, a this-field write, a cast split and literal slices is typed', () => {
+        const dir = path.join (rustFixtureRoot, 'scalar-opt-arith');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport type Bool = boolean | undefined;\nexport default class Exchange {\n    options: any = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o[k]; }\n    safeBool (o: any, k: any, d: Bool = undefined): Bool { return o[k]; }\n    safeCurrencyCode (id: Str): Str { return id; }\n    milliseconds (): number { return 0; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue3.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue3 extends Exchange {\n    elem (a: any, request: any) {\n        const t = this.safeInteger (a, 't');\n        request['until'] = t;\n        if (t !== undefined) {\n            request['since'] = t - 1000;\n        }\n        return request;\n    }\n    field (a: any) {\n        const w = this.safeString (a, 'w');\n        if (w === undefined) {\n            return undefined;\n        }\n        this.options['cached'] = w;\n        return true;\n    }\n    parts (a: any) {\n        const id = this.safeString (a, 'id');\n        const p = (id as string).split ('_');\n        return { 'base': p[0] };\n    }\n    expiry (a: any) {\n        const raw = this.safeString (a, 'raw', '');\n        const d = this.safeString (a, 'd');\n        return [ raw.slice (2, 4), raw.slice (3), raw.slice (-2), d.slice (0, 13) ];\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue3.ts')).content;
+        // the element write's source boxes the Option (Null for None, exactly the Value it replaced)
+        expect(out).toContain('let mut t: Option<i64> = ');
+        expect(out).toContain('(if let Some(__l) = t { Some(__l - 1000) } else { None })');
+        // a `this.f['k'] = s` write that moves the string
+        expect(out).toContain('let mut w: Option<String> = ');
+        expect(out).toContain('w.map(Value::from).unwrap_or(Value::Null)');
+        // `(id as string).split(..)`: the cast prints nothing, None splits to []
+        expect(out).toContain('let mut id: Option<String> = ');
+        expect(out).toContain('if let Some(__s) = id.as_deref() { __s.split("_").map(Value::from).collect() } else { Vec::new() }');
+        // literal slices: char-indexed skip/take, no closure; a None receiver is Null
+        expect(out).toContain('let mut raw: String = ');
+        expect(out).toContain('Value::from(raw.chars().skip(2).take(2).collect::<String>())');
+        expect(out).toContain('Value::from(raw.chars().skip(3).collect::<String>())');
+        expect(out).toContain('Value::from(raw.chars().skip(raw.chars().count().saturating_sub(2)).collect::<String>())');
+        expect(out).toContain('(if let Some(__s) = d.as_deref() { Value::from(__s.chars().skip(0).take(13).collect::<String>()) } else { Value::Null })');
+        expect(out).not.toContain('|__s|');
+    });
+});
+
 describe('typed market locals across sibling blocks, lookup keys and ws callers', () => {
     test('a safeMarket local next to a same-named sibling binding, read as a lookup key, lends to a REST helper the ws class calls too', () => {
         const dir = path.join (rustFixtureRoot, 'typed-market-ia');

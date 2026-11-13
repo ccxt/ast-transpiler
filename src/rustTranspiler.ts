@@ -4984,7 +4984,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (push !== undefined && isCallExpression(push)) return false;
             // nor when it feeds a write to another local (ccxt passes read that write's printed source)
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
-            if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)) return false;
+            if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
+                && !this.rustScalarFeedsElementWrite(n, write)) return false;
         }
         return true;
     }
@@ -4997,6 +4998,18 @@ export class RustTranspiler extends BaseTranspiler {
         // a `format!` operand prints the same text whatever this local's type
         if (this.rustScalarUseForms.get(n) === 'concat') return true;
         return write.right === n && isElementAccessExpression(write.left) && isIdentifier(write.left.expression);
+    }
+
+    /** A scalar read anywhere inside the source of an element write `m[k] = ..` (one level, any key): the written
+     *  place is a `Value` slot of a map, so no other local's decision reads this one's type; the use itself was
+     *  already accepted with its own form (box / native / arg). */
+    rustScalarFeedsElementWrite(n: any, write: any): boolean {
+        const left: any = write.left;
+        if (!isElementAccessExpression(left)) return false;
+        const recv: any = this.unwrapParens(left.expression);
+        if (!isIdentifier(recv) && !(isPropertyAccessExpression(recv) && recv.expression.kind === SyntaxKind.ThisKeyword)) return false;
+        // the key is not this local (key writes keep their own rules)
+        return !this.isNodeInsideNode(n, left);
     }
 
     // ── scalar loop counters (rustScalarCounterCond) ──
@@ -5258,7 +5271,9 @@ export class RustTranspiler extends BaseTranspiler {
         if ((kind === 'str' || kind === 'ostr') && this.rustWsKeyUse(n)) return 'targ';
         if ((kind === 'str' || kind === 'ostr') && this.rustWsSubscriptionWriteValue(n)) return 'box';
         // one-level `this.f['k'] = n` of a Copy scalar boxes with `Value::from`, in the printer's own insert
-        if ((kind === 'int' || kind === 'num') && this.rustThisFieldLiteralWrite(n)) return 'box';
+        // (a string only where the write moves it: an earlier box would copy where the `Value` was shared)
+        if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustThisFieldLiteralWrite(n)) return 'box';
+        if ((kind === 'str' || kind === 'ostr') && this.rustThisFieldLiteralWrite(n) && this.rustLocalLastUse(n, this.rustDeclaredNode(n))) return 'box';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -6161,7 +6176,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustStrLocalSplitText(node): string | undefined {
         const call: any = this.unwrapParens(node);
         if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.name.text !== 'split') return undefined;
-        const recv: any = call.expression.expression;
+        // `(x as string).split(..)`: the cast and parentheses print nothing, the receiver is the local itself
+        const recv: any = this.rustStripWrappers(call.expression.expression);
         if (!isIdentifier(recv) || call.arguments.length !== 1) return undefined;
         const recvKind = this.rustScalarLocalOf(recv)?.kind;
         if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
@@ -6174,12 +6190,36 @@ export class RustTranspiler extends BaseTranspiler {
         return `Value::Array(if let Some(__s) = ${name}.as_deref() { __s.split(${sep}).map(Value::from).collect() } else { Vec::new() })`;
     }
 
+    /** `s.slice(a)` / `s.slice(a, b)` on a typed string local with literal bounds (a non-negative end): the runtime's
+     *  char-indexed slice without a closure. A start past the end clamps to an empty `skip`, `b < a` takes nothing (the
+     *  helper's `i <= j` arm), a negative start counts from the char length floored at 0; a `None` receiver is `Null`. */
+    rustStrLocalSliceText(node): string | undefined {
+        const call: any = this.unwrapParens(node);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.name.text !== 'slice') return undefined;
+        const recv: any = this.rustStripWrappers(call.expression.expression);
+        const args: any[] = Array.from(call.arguments ?? []);
+        if (!isIdentifier(recv) || args.length === 0 || args.length > 2) return undefined;
+        const recvKind = this.rustScalarLocalOf(recv)?.kind;
+        if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
+        const start = this.rustSliceLiteralBound(args[0]);
+        const end = args.length === 2 ? this.rustSliceLiteralBound(args[1]) : undefined;
+        if (start === undefined || (args.length === 2 && (end === undefined || end < 0 || start < 0))) return undefined;
+        const s = recvKind === 'str' ? super.printIdentifier(recv) : '__s';
+        const skip = start >= 0 ? `${start}` : `${s}.chars().count().saturating_sub(${-start})`;
+        const take = end === undefined ? '' : `.take(${Math.max(end - start, 0)})`;
+        const text = `Value::from(${s}.chars().skip(${skip})${take}.collect::<String>())`;
+        return recvKind === 'str' ? text : `(if let Some(__s) = ${super.printIdentifier(recv)}.as_deref() { ${text} } else { Value::Null })`;
+    }
+
     /** A string local read by `split` / `indexOf` / `replace` or appended a string `Value`: its printed lines keep the 400-char budget. */
     rustStrMethodRecvLocal(declaration): boolean {
         let hit = false;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
-            const call: any = isPropertyAccessExpression(n.parent) && n.parent.expression === n ? n.parent.parent : undefined;
-            if (call !== undefined && isCallExpression(call) && call.expression === n.parent && this.rustStrMethodNewUse(call)) hit = true;
+            // `(x as string).m(..)` reads the local itself, like `x.m(..)`
+            let recv: any = n;
+            while (isParenthesizedExpression(recv.parent) || recv.parent?.kind === SyntaxKind.AsExpression) recv = recv.parent;
+            const call: any = isPropertyAccessExpression(recv.parent) && recv.parent.expression === recv ? recv.parent.parent : undefined;
+            if (call !== undefined && isCallExpression(call) && call.expression === recv.parent && this.rustStrMethodNewUse(call)) hit = true;
             const append: any = n.parent;
             if (isBinaryExpression(append) && append.left === n && append.operatorToken.kind === SyntaxKind.PlusEqualsToken && this.rustStrPushValueText(n, this.unwrapParens(append.right), true) !== undefined) hit = true;
             return true;
@@ -6208,7 +6248,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** `split`, `replaceAll`, an optional receiver's `replace`, or an `indexOf` outside a literal contains test. */
     rustStrMethodNewUse(call): boolean {
         const method = String(call.expression.name.text);
-        if (method === 'split' || method === 'replaceAll') return true;
+        if (method === 'split' || method === 'replaceAll' || method === 'slice') return true;
         if (method === 'replace') return this.rustScalarLocalOf(call.expression.expression)?.kind !== 'str';
         if (method !== 'indexOf') return false;
         let top: any = call;
@@ -7040,7 +7080,7 @@ export class RustTranspiler extends BaseTranspiler {
         const parent: any = n.parent;
         if (isParenthesizedExpression(parent) || parent.kind === SyntaxKind.AsExpression) {
             const outer = this.rustScalarUseForm(parent, kind);
-            return outer === 'box' || outer === 'xbox' || (outer === 'native' && isParenthesizedExpression(parent)) ? outer : undefined;
+            return outer === 'box' || outer === 'xbox' || (outer === 'native' && (isParenthesizedExpression(parent) || this.rustCastSplitRecv(parent))) ? outer : undefined;
         }
         if (isBinaryExpression(parent)) {
             const op = parent.operatorToken.kind;
@@ -7062,7 +7102,7 @@ export class RustTranspiler extends BaseTranspiler {
             const call: any = parent.parent;
             if (kind === 'int' && this.rustVenueIntToString(call, parent)) return 'native';
             if (isCallExpression(call) && call.expression === parent) {
-                if (this.rustScalarStrMethod(call) !== undefined || this.rustStrLocalSplitText(call) !== undefined) return 'native';
+                if (this.rustScalarStrMethod(call) !== undefined || this.rustStrLocalSplitText(call) !== undefined || this.rustStrLocalSliceText(call) !== undefined) return 'native';
                 let top: any = call;
                 while (isParenthesizedExpression(top.parent)) top = top.parent;
                 if (isBinaryExpression(top.parent) && top.parent.left === top && this.rustScalarContainsTest(top.parent, true) !== undefined) return 'native';
@@ -7086,6 +7126,15 @@ export class RustTranspiler extends BaseTranspiler {
         // an alias initializer (a `bool` alias is the bool-initializer rule's)
         if (isVariableDeclaration(parent) && parent.initializer === n && isIdentifier(parent.name) && kind !== 'bool') return 'xbox';
         return undefined;
+    }
+
+    /** `(x as string).split(..)` on a string local: the split prints from the local itself (`rustStrLocalSplitText`). */
+    rustCastSplitRecv(cast): boolean {
+        let top: any = cast;
+        while (isParenthesizedExpression(top.parent) || top.parent?.kind === SyntaxKind.AsExpression) top = top.parent;
+        const access: any = top.parent;
+        return isPropertyAccessExpression(access) && access.expression === top && isCallExpression(access.parent) && access.parent.expression === access
+            && (this.rustStrLocalSplitText(access.parent) ?? this.rustStrLocalSliceText(access.parent)) !== undefined;
     }
 
     /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
@@ -12297,7 +12346,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printSliceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return this.printNativeStringSlice(node, name) ?? this.looseSlice(name, parsedArg, parsedArg2 ?? 'Value::Null');
+        return this.rustStrLocalSliceText(node) ?? this.printNativeStringSlice(node, name) ?? this.looseSlice(name, parsedArg, parsedArg2 ?? 'Value::Null');
     }
 
     printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
