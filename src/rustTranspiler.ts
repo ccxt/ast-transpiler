@@ -13985,7 +13985,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustExtendHeadUse(n)) return ++extendHeads > 0 && ++reads > 0;
             // a fresh built map written at a literal key: copy-on-write insert on the shared handle
             // (jd's untagged indexBy / groupBy / extend table admits the same write through this one mechanism)
-            if (this.rustUntilHeadKeyWrite(n) !== undefined && init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) === 'dict' || this.rustBuiltMapKeyWriteOk(n, init)) && this.rustBuiltKeyWriteUntagged(n, init)) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
+            if (this.rustUntilHeadKeyWrite(n) !== undefined && init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) === 'dict' || this.rustBuiltMapKeyWriteOk(n, init))) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
             const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0
                 || this.rustBuiltReturnBoxUse(n, init) && ++defaultedBoxes > 0 || this.rustOptReaderBoxUse(n, init) && ++optionalBoxes > 0
                 || this.rustOptionalParamsSlot(up, n) && (from === 'dict' || from === 'api' && this.rustDeclaredEndpointKind(init) === 'dict') && ++paramsBoxes > 0) && boxedElementUses.push(n) > 0;
@@ -14069,13 +14069,6 @@ export class RustTranspiler extends BaseTranspiler {
         const method = String((init.expression as any).name?.text ?? '');
         if (method !== 'extend') return method === 'indexBy' || method === 'groupBy';
         return Array.from(init.arguments).every((a: any) => this.rustUntaggedMapOperand(a));
-    }
-
-    /** jd's tag guard on the shared key-write rule: never a runtime meta key (book / subscription tags). */
-    rustBuiltKeyWriteUntagged(n: any, init: any): boolean {
-        const key = this.rustUntilHeadKeyWrite(n);
-        // (operands: the landed hb / ic rule already proves `extend` answers a fresh map, so only the meta keys are kept out)
-        return !(key === undefined || key.startsWith('__') || RustTranspiler.RUST_BOOK_META_KEYS.has(key));
     }
 
     rustUntaggedMapOperand(arg: any): boolean {

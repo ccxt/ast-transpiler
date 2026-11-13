@@ -9182,9 +9182,10 @@ describe('rust built / reader locals (sibling bindings, key writes, deepExtend, 
         expect(text).not.toContain('add_element_to_object');
     });
 
-    test('negative: a book-meta key write keeps the box', () => {
+    test('a meta-named key write on a fresh extend follows the landed rule (the map carries no tag): native insert', () => {
+        // RAL-INT-31: the landed hb / ic rule types parse* / extend results written at 'timestamp' / 'nonce'; one mechanism kept
         const text = slice(out(), 'fn keyWriteMeta', 'fn keyWriteForeign');
-        expect(text).toMatch(/let mut request: Value = /);
+        expect(text).toContain('let mut request: crate::value::Dict = ');
     });
 
     test('an extend of a non-params dict parameter follows the landed rule: extend answers a fresh map, the key write inserts natively', () => {
