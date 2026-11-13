@@ -650,6 +650,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A String-helper result boxed as an object-literal value or as a one-level element write: the written
      *  place is a `Value` either way, so no other local's decision reads this one's type. */
     rustScalarBoxedField(n: any, write: any, declaration: any): boolean;
+    /** A scalar read anywhere inside the source of an element write `m[k] = ..` (one level, any key): the written
+     *  place is a `Value` slot of a map, so no other local's decision reads this one's type; the use itself was
+     *  already accepted with its own form (box / native / arg). */
+    rustScalarFeedsElementWrite(n: any, write: any): boolean;
     rustScalarCounterCond(node: any, name: string): string | undefined;
     rustScalarCounterPlan(node: any, name: string): {
         cond: string;
@@ -822,6 +826,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrFindText(recvKind: string, name: string, needle: any): string;
     /** `s.split(d)` on a typed string local with a literal or `String` delimiter: the helper's array of parts, empty for null. */
     rustStrLocalSplitText(node: any): string | undefined;
+    /** `s.slice(a)` / `s.slice(a, b)` on a typed string local with literal bounds (a non-negative end): the runtime's
+     *  char-indexed slice without a closure. A start past the end clamps to an empty `skip`, `b < a` takes nothing (the
+     *  helper's `i <= j` arm), a negative start counts from the char length floored at 0; a `None` receiver is `Null`. */
+    rustStrLocalSliceText(node: any): string | undefined;
     /** A string local read by `split` / `indexOf` / `replace` or appended a string `Value`: its printed lines keep the 400-char budget. */
     rustStrMethodRecvLocal(declaration: any): boolean;
     /** `s += v` with `v` a string-typed `Value` (not a `+` chain): `Display` is the text the `add` helper concatenates. */
@@ -939,6 +947,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
     rustScalarExpressionUseForm(n: any, kind: string): string | undefined;
+    /** `(x as string).split(..)` on a string local: the split prints from the local itself (`rustStrLocalSplitText`). */
+    rustCastSplitRecv(cast: any): boolean;
     /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
     private static readonly RUST_CACHE_CTORS;
     /** An integer local as the size argument of `new ArrayCache*(limit)`: passed natively (`i64` / `Option<i64>` into `impl Into<Value>`). */
@@ -1117,6 +1127,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     printOptMarketKeyRead(node: any): string | undefined;
     /** The Rust result type of an awaited typed core call other than `market` that decodes into a struct. */
     rustTypedCallResultType(init: any): string | undefined;
+    private static readonly RUST_RAW_RECORD_TYPES;
+    /** `'vec'` for a `Vec<record>` typed result, `'map'` for `Tickers` (`HashMap<String, Ticker>`). */
+    rustTypedResultElemKind(init: any): 'vec' | 'map' | undefined;
+    /** `xs.length`, `xs[i]` (int literal / int-literal counter) on a Vec result, `xs[k]` (a `Value` key) on a map result. */
+    rustTypedResultElemUse(n: any, elem: 'vec' | 'map'): boolean;
+    /** Element-access hook: the native read of a typed result element, boxed through its shared record handle. */
+    printTypedResultElemRead(node: any): string | undefined;
     rustCallLocalOf(node: any): any;
     rustOptMarketLocalOf(node: any): any;
     /** The typed `this.market (x)` call, unboxed; its `Err` re-raises as the untyped call did. */
@@ -1952,6 +1969,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBuiltKeyWriteLineOk(n: any): boolean;
     rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean;
     rustDictElementSource(init: any): boolean;
+    rustListElementSource(init: any): boolean;
     private rustDictElementBoxes;
     /** A whole-value hand-off of a map element local: a plain `Value` argument of a `this.` method or an object literal value. */
     rustDictElementBoxUse(n: any, init: any): boolean;
@@ -2002,6 +2020,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustNilResponseLocals;
     /** The container kind of a write to a borrowed local; an endpoint write to an empty `let` counts as a map. */
     rustNilResponseWriteKind(rhs: any, nilDeclared: boolean, declaration: any): 'dict' | 'list' | 'api' | undefined;
+    /** ral-kc: `await this.<endpoint> (..)` whose abstract declaration spells `Promise<Dict>` / `Promise<List>`. */
+    rustDeclaredEndpointWrite(rhs: any): boolean;
     /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
     rustOptContainerSourceOk(call: any, kind: 'dict' | 'list' | 'api'): boolean;
     /** The optional form's local behind an identifier, else undefined. */
@@ -2178,8 +2198,19 @@ export declare class RustTranspiler extends BaseTranspiler {
     printWsCacheMapField(node: any): string | undefined;
     private rustWsResolveTables;
     private rustWsWatchKinds;
+    private rustWsHashEnv;
+    private rustWsFollowed;
     /** The hash patterns of `n`: segments are literal text or `null` (any text). */
     rustWsHashPatterns(n: any, depth: number, seen: Set<Node>): Array<Array<string | null>>;
+    /** `this.safeString (sub, 'k')` reads field k; `this.safeString (list, i)` / `list[i]` over `const list = this.safeList (sub, 'k', ..)`
+     *  reads an element of field k. Undefined for any other shape. */
+    rustWsSubscriptionKeyRead(init: any): {
+        key: string;
+        element: boolean;
+    } | undefined;
+    /** Patterns of every value the class writes under subscription key `key` (`{ 'key': v }`, `x['key'] = v`); a list
+     *  field takes the elements of its array literals. Any other write of the key is an unknown hash. */
+    rustWsSubscriptionKeyPatterns(at: any, key: string, element: boolean, depth: number, seen: Set<Node>): Array<Array<string | null>>;
     static rustWsPatternNorm(p: Array<string | null>): Array<string | null>;
     /** Whether some string matches both patterns (a sound over-approximation: prefix and suffix agree). */
     static rustWsPatternsMeet(a0: Array<string | null>, b0: Array<string | null>): boolean;
@@ -2197,6 +2228,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsHasWsRelatives(file: string, at: number): boolean;
     /** The proven kind of an `await this.watch|watchMultiple (..)` initializer, else undefined. */
     rustWsWatchResultKind(init: any): 'book' | 'cache' | undefined;
+    /** The hash patterns a `this.watch|watchMultiple (..)` call (or a venue wrapper whose every return is one) awaits;
+     *  undefined when the call is anything else. Runs with `rustWsHashEnv` binding the wrapper parameters. */
+    rustWsAwaitedHashes(call: any, cls: any, depth: number): Array<Array<string | null>> | undefined;
+    /** The patterns of a watchMultiple hash list: an array literal, a wrapper parameter bound to one, or a list local
+     *  initialised from a literal that only grows by `x.push (h)` statements and is read only as a watch argument. */
+    rustWsHashListPatterns(harg: any, depth: number): Array<Array<string | null>> | undefined;
     private static readonly RUST_BOOK_TYPE;
     private static readonly RUST_BOOK_MAP_TYPE;
     private static readonly RUST_BOOK_CTORS;
