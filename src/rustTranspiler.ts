@@ -3980,6 +3980,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustStrRuntimeLocalCostly(declaration)) return undefined;
         // a local typed for its string-method reads must not copy where the `Value` moved
         if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustStrMethodRecvLocal(declaration)) return undefined;
+        // an element of a typed list parameter keeps the 400-char guard and never copies at a box
+        // and never feeds another local's write (typing it flips that local's own decision and its method's return)
+        if (this.rustListParamElement(declaration.initializer) && (copied > 0 || (boxed > 0 && typedUses === 0) || this.rustScalarFeedsWrite(declaration))) return undefined;
+        if (this.rustListParamElement(declaration.initializer) && boxed > 0) this.rustScalarGuarded.add(declaration);
+        // a non-element local admitted by a map-key read or `in` test must not copy where the `Value` moved
+        if (copied > 0 && kind === 'ostr' && !this.rustElementReadScalarKind(this.unwrapParens(declaration.initializer)) && this.rustScalarKeyedLocal(declaration)) return undefined;
         // a key-admitted local converts once at its declaration: that line keeps the 400-char budget
         if (this.rustScalarOptKeyCostly(declaration, kind) === false && kind === 'ostr' && this.rustScalarOptKeyCount(declaration) > 0) this.rustScalarGuarded.add(declaration);
         if (guarded || handOff || this.rustStrMethodRecvLocal(declaration)) this.rustScalarGuarded.add(declaration);
@@ -4012,6 +4018,24 @@ export class RustTranspiler extends BaseTranspiler {
             return true;
         });
         return ok;
+    }
+
+    /** The key reads a local declared with a non-null initializer (nil-declared locals and slots keep their own rules). */
+    rustInitKeyLocal(n: any): boolean {
+        const declaration: any = this.rustDeclaredNode(n);
+        return declaration !== undefined && isVariableDeclaration(declaration) && declaration.initializer !== undefined
+            && this.literalKindOfNode(declaration.initializer) !== 'null';
+    }
+
+    /** Some use of the local is a native map-key read (`okey`) or `in` test (`kin`). */
+    rustScalarKeyedLocal(declaration): boolean {
+        let keyed = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const form = this.rustScalarUseForms.get(n);
+            if (form === 'okey' || form === 'kin') keyed = true;
+            return true;
+        });
+        return keyed;
     }
 
     /** A local some `return` of a method with a declared string return hands back as-is. */
@@ -4417,10 +4441,60 @@ export class RustTranspiler extends BaseTranspiler {
     // `xs[i]` over a local string list (`string[]`, `split`, `Object.keys`): `Option<String>` from the element.
     rustElementReadScalarKind(node): string | undefined {
         if (!isElementAccessExpression(node) || !isIdentifier(node.expression) || this.checkerOrUndefined() === undefined) return undefined;
-        if (!isVariableDeclaration(this.rustDeclaredNode(node.expression)) && !this.rustOptListParamRead(node)) return undefined;
+        const owner: any = this.rustDeclaredNode(node.expression);
+        // a parameter spelled `string[]` / `Strings` (never written in the body) holds the caller's string list
+        const listParam = owner !== undefined && isParameterDeclaration(owner) && owner.type !== undefined && !this.rustParamWritten(owner);
+        if (!isVariableDeclaration(owner) && !listParam && !this.rustOptListParamRead(node)) return undefined;
         const listType: any = this.typeOfNodeIfAny(node.expression);
         if (listType === undefined || !this.getChecker().isArrayType(listType)) return undefined;
         return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'string' ? 'ostr' : undefined;
+    }
+
+    /** `xs[i]` over a typed list parameter (the source the element-read rule admits from a parameter). */
+    rustListParamElement(init: any): boolean {
+        const node: any = this.unwrapParens(init);
+        if (node === undefined || !isElementAccessExpression(node) || !isIdentifier(node.expression)) return false;
+        const owner: any = this.rustDeclaredNode(node.expression);
+        return owner !== undefined && isParameterDeclaration(owner) && !this.rustOptListParamRead(node) && this.rustElementReadScalarKind(node) !== undefined;
+    }
+
+    /** The local's last use is the whole right side of a statement `y = x;`: the boxed local moves there,
+     *  a typed one keeps the clone ccxt adds to that write. */
+    rustScalarBareLastWrite(node: any): boolean {
+        const declaration: any = isIdentifier(node) ? this.rustDeclaredNode(node) : undefined;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        let moved = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(up.left)
+                && up.parent?.kind === SyntaxKind.ExpressionStatement && this.rustLocalLastUse(n, declaration)) moved = true;
+            return true;
+        });
+        return moved;
+    }
+
+    /** Some use of the local is the source of an assignment or of another declaration. */
+    rustScalarFeedsWrite(declaration: any): boolean {
+        let feeds = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            let up: any = n.parent;
+            while (up !== undefined && (isParenthesizedExpression(up) || up.kind === SyntaxKind.AsExpression || isConditionalExpression(up))) up = up.parent;
+            if ((isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken && up.left !== n) || (isVariableDeclaration(up) && up.initializer !== undefined)) feeds = true;
+            return true;
+        });
+        return feeds;
+    }
+
+    /** Some statement of the parameter's function assigns the parameter itself. */
+    rustParamWritten(param: any): boolean {
+        if (!isIdentifier(param.name)) return true;
+        let written = false;
+        this.rustLocalUsesAll(param, String(param.name.text), false, (n) => {
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && up.left === n && rustIsAssignmentOperator(up.operatorToken.kind)) written = true;
+            return true;
+        });
+        return written;
     }
 
     // ── reader defaults (rustReaderDefaultKind / rustReaderIntDefaultNum) ──
@@ -4818,8 +4892,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
         if (kind === 'ostr' && this.rustScalarOptKeyUse(n)) return 'key';
-        if (kind === 'ostr' && this.rustOkeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
-        if (kind === 'ostr' && this.rustOkeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
+        // an optional-string local keys a proven map read or an `in` test natively (a `None` key misses, as the `Null` did)
+        if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
+        if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
         if (isCallExpression(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== undefined) return 'native';
         if (this.rustVenueStrLocalArg(n)) return 'targ';
         if (this.rustLimitArgUse(n, kind)) return 'targ';
@@ -5434,7 +5509,8 @@ export class RustTranspiler extends BaseTranspiler {
         const node: any = this.unwrapParens(other);
         const literal = this.literalKindOfNode(node);
         const optional = kind.startsWith('o');
-        if (literal === 'null') return optional ? 'null' : undefined;
+        // a non-optional local (a literal-defaulted reader, a literal) is never `Null`: its null test is a constant
+        if (literal === 'null') return optional ? 'null' : 'never';
         const base = optional ? kind.slice(1) : kind;
         let text: string | undefined;
         if (base === 'str' && literal === 'string' && !(node.text in this.StringLiteralReplacements)) text = this.quotedStringLiteral(node.text);
@@ -5457,6 +5533,7 @@ export class RustTranspiler extends BaseTranspiler {
         const name = super.printIdentifier(self);
         const equal = op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken;
         if (test === 'null') return `${name}.${equal ? 'is_none' : 'is_some'}()`;
+        if (test === 'never') return equal ? 'false' : 'true';
         return `${local.kind === 'ostr' ? `${name}.as_deref()` : name} ${equal ? '==' : '!='} ${test}`;
     }
 
@@ -5966,7 +6043,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */
-    rustScalarCompareText(node, dry: boolean): string | undefined {
+    rustScalarCompareText(node, dry: boolean, literalKind?: string): string | undefined {
         const op = node.operatorToken.kind;
         const symbol = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
         const equality = this.isEqualityOp(op);
@@ -5978,8 +6055,9 @@ export class RustTranspiler extends BaseTranspiler {
         const left: any = this.unwrapParens(node.left);
         const right: any = this.unwrapParens(node.right);
         const text = (k: string, n) => dry ? '_' : this.rustScalarOperandText(k, n);
-        const lk = this.rustScalarCompareKind(left);
-        const rk = this.rustScalarCompareKind(right);
+        const literal = (n) => literalKind !== undefined && this.rustScalarIntLiteral(n) !== undefined ? literalKind : undefined;
+        const lk = literal(left) ?? this.rustScalarCompareKind(left);
+        const rk = literal(right) ?? this.rustScalarCompareKind(right);
         if (lk === undefined || rk === undefined) return undefined;
         const sign = equality ? (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken ? '==' : '!=') : symbol;
         if (equality && (lk === 'slit' || rk === 'slit')) {
@@ -5998,8 +6076,19 @@ export class RustTranspiler extends BaseTranspiler {
         if (lk === 'bool' || rk === 'bool' || base(lk) === 'str' || base(rk) === 'str') return undefined;
         const lo = lk.startsWith('o');
         const ro = rk.startsWith('o');
-        if (lo && ro) return undefined;
+        if (lo && ro) {
+            // two optional numbers of one kind: JS orders only two numbers (`undefined` compares false), and
+            // `Option` orders `Some` by its value once both are present (locals only: each is read twice)
+            if (equality || base(lk) !== base(rk) || !isIdentifier(left) || !isIdentifier(right)) return undefined;
+            // base tier: the moved `Value` at a bare last-use write `y = x;` becomes a ccxt-added clone of the typed local
+            if (/ts[\\/]src[\\/]base[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? '')) && (this.rustScalarBareLastWrite(left) || this.rustScalarBareLastWrite(right))) return undefined;
+            return `(${text(lk, left)}.is_some() && ${text(rk, right)}.is_some() && ${text(lk, left)} ${sign} ${text(rk, right)})`;
+        }
         if (lo || ro) {
+            // an integer literal against an optional float compares as that float (`Some(5.0)`)
+            const intLit = (k: string, n) => k === 'int' && this.rustScalarIntLiteral(n) !== undefined;
+            if (base(lk) === 'num' && intLit(rk, right)) return this.rustScalarCompareText(node, dry, 'num');
+            if (base(rk) === 'num' && intLit(lk, left)) return this.rustScalarCompareText(node, dry, 'num');
             if (base(lk) !== base(rk)) return undefined;
             // `None` orders below every `Some`; a JS compare with `undefined` is false, so the
             // smaller side of an ordering is tested with `is_some()` first (locals only: read twice)

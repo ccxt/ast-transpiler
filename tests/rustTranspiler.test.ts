@@ -8918,6 +8918,42 @@ describe('locals stored once and boxed back', () => {
     });
 });
 
+describe('scalar reader locals in compares, map keys and null tests', () => {
+    test('two optional numbers compare natively, an optional string keys a proven map, a defaulted local null test is constant', () => {
+        const dir = path.join (rustFixtureRoot, 'scalar-reader-uses');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), 'export type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o[k]; }\n    hold (x: any): any { return x; }\n}\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    newer (a: any, b: any) {\n        const x = this.safeInteger (a, 't');\n        const y = this.safeInteger (b, 't');\n        if (x > y) {\n            return 1;\n        }\n        return 0;\n    }\n    priced (a: any) {\n        const p = this.safeNumber (a, 'p');\n        return p > 0;\n    }\n    known (a: any) {\n        const id = this.safeString (a, 'id');\n        const kinds: { [key: string]: any } = this.hold (a);\n        if ((id !== undefined) && (id in kinds)) {\n            return 1;\n        }\n        return 0;\n    }\n    fixed (a: any) {\n        const k = this.safeInteger (a, 'k', 5);\n        if (k !== undefined) {\n            return this.hold (k);\n        }\n        return 0;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut x: Option<i64> = ');
+        expect(out).toContain('(x.is_some() && y.is_some() && x > y)');
+        expect(out).toContain('let mut p: Option<f64> = ');
+        expect(out).toContain('p > Some(0.0)');
+        expect(out).toContain('let mut id: Option<String> = ');
+        expect(out).toContain('(&kinds, id.as_deref())');
+        expect(out).toContain('let mut k: i64 = ');
+        expect(out).toMatch(/if \(?true\)? \{/);
+    });
+});
+
+describe('elements of typed list parameters', () => {
+    test('an element of an unwritten Strings parameter compared natively is Option<String>; one boxed by copy stays Value', () => {
+        const dir = path.join (rustFixtureRoot, 'list-param-elements');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), 'export default class Exchange {\n    hold (x: any): any { return x; }\n}\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport type Strings = string[] | undefined;\nexport default class venue extends Exchange {\n    route (symbols: Strings = undefined) {\n        const ids = [];\n        if (symbols !== undefined) {\n            for (let i = 0; i < symbols.length; i++) {\n                const symbol = symbols[i];\n                if (symbol === 'BTC') {\n                    ids.push (symbol);\n                }\n            }\n        }\n        return ids;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut symbol: Option<String> = ');
+        expect(out).toContain('symbol.as_deref() == Some(\"BTC\")');
+        fs.writeFileSync (path.join (dir, 'ts/src/venue2.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue2 extends Exchange {\n    pick (subs: string[]): string {\n        let found = '';\n        for (let i = 0; i < subs.length; i++) {\n            const sub = subs[i];\n            if (sub === 'spot') {\n                found = sub;\n                break;\n            }\n        }\n        return found;\n    }\n}\n");
+        const fed = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue2.ts')).content;
+        expect(fed).toMatch(/pub fn pick\(&self, [^)]*\) -> Option<String> \{/);
+        expect(fed).toMatch(/let mut sub: Value = /);
+        const copy = transpiler.transpileRust("class X {\n    hold (x: any): any { return x; }\n    copy (section: string[]) {\n        const head = section[0];\n        this.hold (head);\n        return this.hold (head);\n    }\n}\n").content;
+        expect(copy).toMatch(/let mut head: Value = /);
+    });
+});
+
 describe('locals returned from a string method', () => {
     test('a local only handed to the return of a declared string method keeps the method signature', () => {
         const dir = path.join (rustFixtureRoot, 'str-return-handoff');
