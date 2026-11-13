@@ -10529,3 +10529,18 @@ describe('option, route and safe* results typed at the declaration', () => {
         expect(venue).toContain('self.send(&[Value::from(symbol.as_deref())]);');
     });
 });
+
+describe('rust parseNumber of a proven string', () => {
+    test('a one-argument parseNumber of a string reader / literal is an Option<f64>; any or number arguments keep the box', () => {
+        const dir = path.join (rustFixtureRoot, 'parse-number-str');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    parseNumber (value: any, d: Num = undefined): number { return value; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fees (o: any, n: number) {\n        const fee = this.parseNumber (this.safeString (o, 'fee'));\n        const taker = this.parseNumber ('0.001');\n        const raw = this.parseNumber (o);\n        const num = this.parseNumber (n);\n        if (fee === undefined) {\n            return [ taker, raw, num ];\n        }\n        return { 'fee': fee, 'taker': taker, 'raw': raw, 'num': num };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut fee: Option<f64> = self\.parseNumber\(.*\)\.as_f64\(\);/);
+        expect(out).toMatch(/let mut taker: Option<f64> = self\.parseNumber\(Value::Str\("0\.001"\.into\(\)\), &\[\]\)\.as_f64\(\);/);
+        expect(out).toContain('let mut raw: Value = ');
+        expect(out).toContain('let mut num: Value = ');
+        expect(out).toContain('Value::from(fee)');
+    });
+});

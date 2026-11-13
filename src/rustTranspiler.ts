@@ -4246,6 +4246,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustStrRuntimeCall(node)) return 'str';
         const baseReturn = this.rustBaseReturnScalarKind(node, name);
         if (baseReturn !== undefined) return baseReturn;
+        if (this.rustParseNumberStrCall(node)) return 'onum';
         if (this.rustVenueParseToInt(node)) return 'int';
         if (this.rustVenueInitializer(node) && this.rustVenueStrCall(node)) return 'ostr';
         if (fresh && this.rustVenueInitializer(node) && this.rustVenueIntCall(node)) return 'int';
@@ -4740,6 +4741,24 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(node.expression);
         if (!isCallExpression(inner) || !isPropertyAccessExpression(inner.expression) || !this.rustScalarReceiver(inner.expression.expression)) return undefined;
         return RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(inner.expression.name.text)] === 'ostr' ? inner : undefined;
+    }
+
+    // ── parseNumber of a string (rustParseNumberStrCall) ──
+    // The runtime `parse_number` answers `Float` for a parsable `Str` and its default (`Null` when none is
+    // passed) for every other `Str` or `Null`, so a one-argument call whose argument the checker proves a
+    // string (or nullish string) is exactly an `Option<f64>`. `Int` passes through unchanged, so a numeric
+    // or `any` argument stays a `Value`.
+    rustParseNumberStrCall(call): boolean {
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(call.expression.name.text) !== 'parseNumber' || call.arguments.length !== 1) return false;
+        const declaration: any = this.rustScalarCallee(call);
+        if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return false;
+        // the argument's runtime value is a `Str` or `Null` by the printer's own proof (a literal, a typed string
+        // local, a string reader / Precise / numberToString result), not by its checker type alone: a `string`
+        // parameter can still carry an `Int` that `parse_number` would pass through
+        const arg: any = this.unwrapParens(call.arguments[0]);
+        const kind = isIdentifier(arg) ? this.rustScalarIdentifierKind(arg) : this.rustScalarValueKind(arg, true);
+        return kind === 'str' || kind === 'ostr';
     }
 
     // Any other callee: a base one whose checker return is a string, or one declaring `string`/`Str`/`int`/`Int`
