@@ -4633,8 +4633,14 @@ export class RustTranspiler extends BaseTranspiler {
     /** A cast, clock-string or `sum` local must earn a native use, and a string one never copies where the `Value` moved. */
     rustNewShapeCostly(init, typedUses: number, copied: number): boolean {
         const node: any = this.unwrapParens(init);
-        if (this.rustStrCastCall(node) === undefined && !this.rustClockString(node) && !this.rustSumShape(node)) return false;
+        if (this.rustStrCastCall(node) === undefined && !this.rustClockString(node) && !this.rustSumShape(node) && !this.rustIntToStringShape(node)) return false;
         return typedUses === 0 || copied > 0;
+    }
+
+    /** `n.toString()` of an `i64` scalar local. */
+    rustIntToStringShape(node): boolean {
+        const method = node !== undefined ? this.rustScalarStrMethod(node, false, true) : undefined;
+        return method !== undefined && method.recvKind === 'int';
     }
 
     rustStrCastCall(node): any {
@@ -5948,6 +5954,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (shape === undefined) return undefined;
         if (syntactic) return { recv, recvKind: '', method, kind: '' };
         const recvKind = this.rustScalarIdentifierKind(recv) ?? (params ? this.rustScalarParamRead(recv)?.kind : undefined);
+        // `n.toString()` of an `i64` local: `format!("{}", n)`, the decimal text `Display` gives the `Int` box
+        if (recvKind === 'int' && method === 'toString') return { recv, recvKind, method, kind: 'str' };
         if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
         if (shape === 'affix') return { recv, recvKind, method, kind: 'bool' };
         if (shape === 'find') return this.rustStrFindNeedle(args[0], false) === undefined ? undefined : { recv, recvKind, method, kind: 'int' };
@@ -6491,6 +6499,7 @@ export class RustTranspiler extends BaseTranspiler {
             const fn = method.method === 'toLowerCase' ? 'to_lowercase' : 'to_uppercase';
             if (method.recvKind === 'ostr') return wrap(`${name}.as_deref().map(str::${fn})`);
             if (method.method === 'trim') return wrap(`${name}.trim().to_string()`);
+            if (method.method === 'toString' && method.recvKind === 'int') return wrap(`format!("{}", ${name})`);
             if (method.method === 'toString') {
                 const local = this.rustScalarLocalOf(method.recv);
                 // an equality operand is only borrowed by `==`: the text itself, no copy
@@ -6888,7 +6897,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** Call hook: a string method of a typed string local, boxed back to `Value`. */
     printRustScalarMethodCall(node): string | undefined {
         const method = this.rustScalarStrMethod(node);
-        if (method === undefined || this.rustScalarLocalOf(method.recv) === undefined) return undefined;
+        // an inline `n.toString()` keeps its own print (printRustVenueIntToString); only a declaration takes the `String`
+        if (method === undefined || method.recvKind === 'int' || this.rustScalarLocalOf(method.recv) === undefined) return undefined;
         const text = this.rustScalarExpressionText(method.kind, node);
         // a bool result keeps the `Value::Bool(..)` box the condition printer peels
         if (text !== undefined && method.kind === 'bool') return `Value::Bool(${text})`;
@@ -14668,8 +14678,9 @@ export class RustTranspiler extends BaseTranspiler {
         const callee: any = init.expression;
         const method = String(callee.name.text);
         if (isIdentifier(callee.expression) && callee.expression.text === 'Object') return method === 'keys' || method === 'values';
-        // a typed string local split natively: a list on every path (empty for `None`)
-        if (method === 'split' && this.rustStrLocalSplitText(init) !== undefined) return true;
+        // a split is a list on every path: the native split of a typed string local (empty for `None`), or the
+        // runtime `split`, which answers the empty list for a non-string receiver or delimiter
+        if (method === 'split' && (this.rustStrLocalSplitText(init) !== undefined || this.rustCallPrintsRuntimeSplit(init))) return true;
         if (callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const declaration: any = this.rustScalarCallee(init);
         if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
@@ -14716,7 +14727,6 @@ export class RustTranspiler extends BaseTranspiler {
         if (String(declaration.initializer.getText()).split('\n')[0].length > 240) return false;
         const boxes: [any, 'clone' | 'move'][] = [];
         let natives = 0;
-        let filterLent = 0;
         // a same-named `let`/`const` in a sibling block is another binding
         const usesAll = (accept: (n: any) => boolean): boolean => (defaulted ? this.rustScalarUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept));
         const safe = usesAll((n: any) => {
@@ -14747,13 +14757,15 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (at === n && this.rustLentListSlot(up, n)) {
                 natives++;
-                if (this.rustTypedFilterLentSlot(up, n)) filterLent++;
                 return true;
             }
             if (isCallExpression(up) && up.expression !== n && up.arguments.some((a: any) => a === n)) {
                 const callee: any = up.expression;
                 if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
                     || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n)) ) return false;
+                // ccxt's string-native pass proves an `array_slice` result's string elements from the boxed split
+                // local it slices (`elemKind`): a runtime split handed there keeps that box
+                if (this.rustCallPrintsRuntimeSplit(init) && String(callee.name.text) === 'arraySlice') return false;
                 boxes.push([n, 'clone']);
                 return true;
             }
@@ -14761,8 +14773,6 @@ export class RustTranspiler extends BaseTranspiler {
         });
         // A list that is only handed on would trade each box for a handle box.
         if (!safe || natives === 0 || (defaulted && indexed === 0 && boxes.some(([, form]) => form === 'clone'))) return false;
-        // a split list is admitted only for its hand-off to a typed filter slot
-        if (this.rustCallPrintsRuntimeSplit(init) && filterLent === 0) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         return true;
     }
