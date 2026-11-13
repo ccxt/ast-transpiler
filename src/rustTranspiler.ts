@@ -14127,7 +14127,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A `let` declared empty is filled later by container writes only (the optional form).
         const nilDeclared = (init === undefined || this.literalKindOfNode(init) === 'null') && (list.flags & NodeFlags.Const) === 0
             && list.parent?.kind === SyntaxKind.VariableStatement;
-        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? (this.rustEcdsaCall(init) ? 'dict' : this.rustBorrowedSourceKind(init) ?? this.rustBuiltReturnSourceKind(init)) : (this.rustDictElementSource(init) ? 'dict' : undefined);
+        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? (this.rustEcdsaCall(init) ? 'dict' : this.rustBorrowedSourceKind(init) ?? this.rustBuiltReturnSourceKind(init)) : (this.rustDictElementSource(init) ? 'dict' : (this.rustListElementSource(init) ? 'list' : undefined));
         const endpoint = from === 'api';
         if (endpoint) from = this.rustDeclaredEndpointKind(init) ?? 'api';
         if (from === undefined && !nilDeclared) return undefined;
@@ -14237,10 +14237,12 @@ export class RustTranspiler extends BaseTranspiler {
             // a never-null `safeDict*` / `safeList*` container handed on whole (D11): `into_*` keeps the exact map / list
             || (defaultedBoxes === boxedElementUses.length && optionalBoxes === 0 && paramsBoxes === 0 && this.rustDefaultedContainerBoxUse(boxedElementUses[0], init))
             || (optionalBoxes === boxedElementUses.length && nullTests === 0 && writes === 0 && this.rustOptReaderBoxUse(boxedElementUses[0], init)));
-        // a map-list element handed on whole (hg): every use is a box of the shared map
-        const boxOnly = reads === 0 && boxedElementUses.length > 0 && this.rustDictElementSource(init) && nullTests === 0 && writes === 0;
+        // a map-list element handed on whole (hg), or an element of a typed `Dict[]` / list-of-lists list (ral-kf): every use
+        // is a box of the shared container; the element converts once at the declaration (D11)
+        const boxOnly = reads === 0 && boxedElementUses.length > 0 && (this.rustDictElementSource(init) || this.rustListElementSource(init)) && nullTests === 0 && writes === 0;
         if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
-            || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
+            || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
+            || (this.rustListElementSource(init) && (nullTests > 0 || lengths > 0))) return undefined;
         // ral-kc: a declared endpoint answering off its declared shape is `None` in the optional form: a null test would tell it apart
         if (declaredEndpointWrites > 0 && nullTests > 0) return undefined;
         // an endpoint written into an empty `let` may answer a list: `into_opt_dict` keeps only maps, so it is never lent whole
@@ -14626,13 +14628,33 @@ export class RustTranspiler extends BaseTranspiler {
             && !this.getChecker().isArrayType(element);
     }
 
+    // ── rustListElementSource: `rows[i]` over a list declared as a list of lists (`string[][]`, `any[][]`) ──
+    // The row leaves its copied box as the shared list (the same Arc bump). A missing row reads as an empty list,
+    // where a positional read answers undefined exactly as on Null; length and null tests keep the box.
+    rustListElementSource(init: any): boolean {
+        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression) || this.checkerOrUndefined() === undefined) return false;
+        const key: any = this.rustSkipWrappers(init.argumentExpression);
+        if (key === undefined || (!isNumericLiteral(key) && this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== 'number')) return false;
+        const listType: any = this.typeOfNodeIfAny(init.expression);
+        if (listType === undefined || !this.getChecker().isArrayType(listType)) return false;
+        const element: any = this.typeOfNodeIfAny(init);
+        if (element === undefined || (element.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Union)) !== 0) return false;
+        return this.getChecker().isArrayType(element);
+    }
+
     private rustDictElementBoxes = new WeakMap<any, 'move' | 'share'>();
 
     /** A whole-value hand-off of a map element local: a plain `Value` argument of a `this.` method or an object literal value. */
     rustDictElementBoxUse(n: any, init: any): boolean {
         const up: any = n.parent;
-        if (!this.rustDictElementSource(init) || up === undefined || this.rustScalarInNestedWrite(n)) return false;
+        if (!this.rustDictElementSource(init) && !this.rustListElementSource(init) || up === undefined || this.rustScalarInNestedWrite(n)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
+        // `rows.push (row)` into another local list: the list keeps its own type, the element enters as the shared map
+        if (isCallExpression(up) && isPropertyAccessExpression(up.expression) && isIdentifier(up.expression.expression) && up.arguments.length === 1 && up.arguments[0] === n
+            && String(up.expression.name.text) === 'push') return !this.rustIdentifierRefersToDeclaration(up.expression.expression, this.rustDeclarationOfIdentifier(n));
+        // `m[k] = el` stores the shared map into another container (the value slot of the write)
+        if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(up.left)
+            && up.parent?.kind === SyntaxKind.ExpressionStatement) return !this.rustIdentifierRefersToDeclaration(this.rustSkipWrappers(up.left.expression), this.rustDeclarationOfIdentifier(n));
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
