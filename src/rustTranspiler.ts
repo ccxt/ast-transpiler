@@ -16110,6 +16110,9 @@ export class RustTranspiler extends BaseTranspiler {
     // matching hash fails the proof and the local stays `Value`.
     private rustWsResolveTables = new WeakMap<Node, Array<{ pats: Array<Array<string | null>>, kind: string }> | null>();
     private rustWsWatchKinds = new WeakMap<Node, 'book' | 'cache' | null>();
+    // wrapper parameter -> the caller's argument (and the caller's own bindings) while a wrapper hash is read
+    private rustWsHashEnv: Map<Node, { arg: any, env: Map<Node, any> | undefined }> | undefined = undefined;
+    private rustWsFollowed = new Set<Node>();
 
     /** The hash patterns of `n`: segments are literal text or `null` (any text). */
     rustWsHashPatterns(n: any, depth: number, seen: Set<Node>): Array<Array<string | null>> {
@@ -16131,7 +16134,31 @@ export class RustTranspiler extends BaseTranspiler {
         if (isConditionalExpression(n)) return [ ...this.rustWsHashPatterns(n.whenTrue, depth + 1, seen), ...this.rustWsHashPatterns(n.whenFalse, depth + 1, seen) ].slice(0, 16);
         if (!isIdentifier(n)) return any;
         const declaration: any = this.rustDeclarationOfIdentifier(n);
+        const bound = declaration === undefined ? undefined : this.rustWsHashEnv?.get(declaration);
+        if (bound !== undefined) {
+            // a venue wrapper's parameter stands for the caller's argument (its default when omitted)
+            if (bound.arg === undefined || seen.has(declaration)) return any;
+            const save = this.rustWsHashEnv;
+            this.rustWsHashEnv = bound.env;
+            seen.add(declaration);
+            try {
+                return this.rustWsHashPatterns(bound.arg, depth + 1, seen);
+            } finally {
+                seen.delete(declaration);
+                this.rustWsHashEnv = save;
+            }
+        }
         if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined || seen.has(declaration)) return any;
+        const keyed = this.rustWsSubscriptionKeyRead(declaration.initializer);
+        if (keyed !== undefined && !this.rustLocalReassigned(declaration)) {
+            // a hash read back from a subscription field: every value the venue class writes under that key
+            seen.add(declaration);
+            try {
+                return this.rustWsSubscriptionKeyPatterns(declaration, keyed.key, keyed.element, depth, seen);
+            } finally {
+                seen.delete(declaration);
+            }
+        }
         const scope: any = findAncestor(declaration, isFunctionLike);
         if (scope === undefined) return any;
         seen.add(declaration);
@@ -16141,7 +16168,19 @@ export class RustTranspiler extends BaseTranspiler {
             for (const r of this.rustScopeNameNodes(scope, String((declaration.name as any).text))) {
                 const p: any = (r as any).parent;
                 if (isIdentifier(r) && isBinaryExpression(p) && p.left === r && rustIsAssignmentOperator(p.operatorToken.kind)) {
-                    if (p.operatorToken.kind !== SyntaxKind.EqualsToken || this.rustDeclarationOfIdentifier(r) !== declaration) return any;
+                    if (this.rustDeclarationOfIdentifier(r) !== declaration) return any;
+                    if (p.operatorToken.kind === SyntaxKind.PlusEqualsToken) {
+                        // `x += s` outside a loop appends s to every value the local can hold at that point (writes in order)
+                        for (let a: any = p.parent; a !== undefined && a !== scope; a = a.parent) {
+                            if (a.kind === SyntaxKind.ForStatement || a.kind === SyntaxKind.WhileStatement || a.kind === SyntaxKind.DoStatement || isForInStatement(a) || isForOfStatement(a)) return any;
+                        }
+                        const tail = this.rustWsHashPatterns(p.right, depth + 1, seen);
+                        const grown: Array<Array<string | null>> = [];
+                        for (const x of out) for (const y of tail) if (grown.length < 16) grown.push([ ...x, ...y ]);
+                        out.push(...grown);
+                        continue;
+                    }
+                    if (p.operatorToken.kind !== SyntaxKind.EqualsToken) return any;
                     out.push(...this.rustWsHashPatterns(p.right, depth + 1, seen));
                 }
             }
@@ -16149,6 +16188,64 @@ export class RustTranspiler extends BaseTranspiler {
         } finally {
             seen.delete(declaration);
         }
+    }
+
+    /** `this.safeString (sub, 'k')` reads field k; `this.safeString (list, i)` / `list[i]` over `const list = this.safeList (sub, 'k', ..)`
+     *  reads an element of field k. Undefined for any other shape. */
+    rustWsSubscriptionKeyRead(init: any): { key: string, element: boolean } | undefined {
+        const n: any = this.rustStripWrappers(init);
+        const listKey = (x: any): string | undefined => {
+            x = this.rustStripWrappers(x);
+            if (!isIdentifier(x)) return undefined;
+            const d: any = this.rustDeclarationOfIdentifier(x);
+            if (d === undefined || !isVariableDeclaration(d) || this.rustLocalReassigned(d)) return undefined;
+            const i: any = this.rustStripWrappers(d.initializer);
+            if (!isCallExpression(i) || !isPropertyAccessExpression(i.expression) || i.expression.expression.kind !== SyntaxKind.ThisKeyword
+                || String(i.expression.name.text) !== 'safeList' || !isStringLiteralLikeNode(i.arguments[1])) return undefined;
+            return String(i.arguments[1].text);
+        };
+        if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword
+            && String(n.expression.name.text) === 'safeString' && n.arguments.length === 2) {
+            if (isStringLiteralLikeNode(n.arguments[1])) return { key: String(n.arguments[1].text), element: false };
+            const k = listKey(n.arguments[0]);
+            return k === undefined ? undefined : { key: k, element: true };
+        }
+        if (isElementAccessExpression(n)) {
+            const k = listKey(n.expression);
+            return k === undefined ? undefined : { key: k, element: true };
+        }
+        return undefined;
+    }
+
+    /** Patterns of every value the class writes under subscription key `key` (`{ 'key': v }`, `x['key'] = v`); a list
+     *  field takes the elements of its array literals. Any other write of the key is an unknown hash. */
+    rustWsSubscriptionKeyPatterns(at: any, key: string, element: boolean, depth: number, seen: Set<Node>): Array<Array<string | null>> {
+        const any: Array<Array<string | null>> = [[ null ]];
+        const cls: any = findAncestor(at, isClassDeclaration);
+        if (cls === undefined) return any;
+        const values: any[] = [];
+        let unknown = false;
+        this.rustWalkScope(cls, (n: any) => {
+            if (n.kind === SyntaxKind.PropertyAssignment && isStringLiteralLikeNode(n.name) && String(n.name.text) === key) values.push(n.initializer);
+            else if (n.kind === SyntaxKind.ShorthandPropertyAssignment && String(n.name.text) === key) unknown = true;
+            else if (isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && isElementAccessExpression(this.rustStripWrappers(n.left))
+                && isStringLiteralLikeNode(this.rustStripWrappers(n.left).argumentExpression) && String(this.rustStripWrappers(n.left).argumentExpression.text) === key) {
+                if (n.operatorToken.kind !== SyntaxKind.EqualsToken) unknown = true;
+                else values.push(n.right);
+            }
+            return unknown ? RUST_WALK_STOP : undefined;
+        });
+        if (unknown || values.length === 0) return any;
+        const out: Array<Array<string | null>> = [];
+        for (const v of values) {
+            if (element) {
+                const ps = this.rustWsHashListPatterns(v, 1);
+                if (ps === undefined) return any;
+                out.push(...ps);
+            } else out.push(...this.rustWsHashPatterns(v, depth + 1, seen));
+            if (out.length > 32) return any;
+        }
+        return out;
     }
 
     static rustWsPatternNorm(p: Array<string | null>): Array<string | null> {
@@ -16230,7 +16327,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (isCallExpression(init) && isPropertyAccessExpression(init.expression) && init.expression.name.text === 'safeValue' && isPropertyAccessExpression(this.rustStripWrappers(init.arguments[0])) && this.rustStripWrappers(init.arguments[0]).name.text === 'futures') return init.arguments[1] ?? null;
             return undefined;
         };
-        const add = (hash: any, x: any, kind?: string) => table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), kind: kind ?? this.rustWsResolvedKind(x) ?? 'other' });
+        // a resolve with no value (or `undefined`) settles the await with Null, which the Option conversion maps to None
+        const nothing = (x: any) => x === undefined || this.rustStripWrappers(x)?.kind === SyntaxKind.UndefinedKeyword || (isIdentifier(this.rustStripWrappers(x)) && this.rustStripWrappers(x).text === 'undefined');
+        const add = (hash: any, x: any, kind?: string) => table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), kind: kind ?? (nothing(x) ? 'none' : (this.rustWsResolvedKind(x) ?? 'other')) });
         this.rustWalkScope(cls, (n: any) => {
             if (!isCallExpression(n) || !isPropertyAccessExpression(n.expression)) return;
             const name = String(n.expression.name.text);
@@ -16302,42 +16401,23 @@ export class RustTranspiler extends BaseTranspiler {
         const known = this.rustWsWatchKinds.get(call);
         if (known !== undefined) return known ?? undefined;
         this.rustWsWatchKinds.set(call, null);
-        const name = String(call.expression.name.text);
-        if ((name !== 'watch' && name !== 'watchMultiple') || call.arguments.length < 2 || this.isTestSource(call)) return undefined;
-        const declaration: any = this.rustScalarCallee(call);
-        if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return undefined;
+        if (this.isTestSource(call)) return undefined;
         const cls: any = findAncestor(call, isClassDeclaration);
         const table = cls === undefined ? null : this.rustWsResolveTable(cls);
         if (table === null) return undefined;
-        let hashes: Array<Array<string | null>>;
-        const harg: any = this.rustStripWrappers(call.arguments[1]);
-        if (name === 'watch') hashes = this.rustWsHashPatterns(harg, 0, new Set());
-        else if (isArrayLiteralExpression(harg)) hashes = Array.from((harg as any).elements).flatMap((e: any) => this.rustWsHashPatterns(e, 0, new Set()));
-        else if (isIdentifier(harg)) {
-            // a hash list local: its literal initializer plus `x.push (h)` statements, never reassigned or lent elsewhere
-            const local: any = this.rustDeclarationOfIdentifier(harg);
-            const init: any = local !== undefined && isVariableDeclaration(local) ? this.rustStripWrappers(local.initializer) : undefined;
-            const scope: any = local === undefined ? undefined : findAncestor(local, isFunctionLike);
-            if (init === undefined || !isArrayLiteralExpression(init) || scope === undefined || this.rustLocalReassigned(local)) return undefined;
-            hashes = Array.from((init as any).elements).flatMap((e: any) => this.rustWsHashPatterns(e, 0, new Set()));
-            for (const r of this.rustScopeNameNodes(scope, String(local.name.text)) as any[]) {
-                if (!isIdentifier(r) || r === local.name || this.rustDeclarationOfIdentifier(r) !== local) continue;
-                const p: any = r.parent;
-                if (isPropertyAccessExpression(p) && p.expression === r && String(p.name.text) === 'push' && isCallExpression(p.parent) && p.parent.expression === p
-                    && p.parent.arguments.length === 1 && p.parent.parent?.kind === SyntaxKind.ExpressionStatement) {
-                    hashes.push(...this.rustWsHashPatterns(p.parent.arguments[0], 0, new Set()));
-                    continue;
-                }
-                // read as the watch's hash / subscribe-hash argument only
-                if (isCallExpression(p) && p.arguments.indexOf(r) >= 0 && isPropertyAccessExpression(p.expression) && p.expression.expression.kind === SyntaxKind.ThisKeyword && String(p.expression.name.text) === 'watchMultiple') continue;
-                return undefined;
-            }
-        } else return undefined;
-        if (hashes.length === 0 || hashes.some((p) => p.every((s) => s === null))) return undefined;
+        const save = this.rustWsHashEnv;
+        let hashes: Array<Array<string | null>> | undefined;
+        try {
+            this.rustWsHashEnv = undefined;
+            hashes = this.rustWsAwaitedHashes(call, cls, 0);
+        } finally {
+            this.rustWsHashEnv = save;
+        }
+        if (hashes === undefined || hashes.length === 0 || hashes.some((p) => p.every((s) => s === null))) return undefined;
         let kind: 'book' | 'cache' | undefined;
         let matched = 0;
         for (const r of table) {
-            if (!r.pats.some((rp) => hashes.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
+            if (r.kind === 'none' || !r.pats.some((rp) => hashes!.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
             if (r.kind !== 'book' && r.kind !== 'cache') return undefined;
             if (kind !== undefined && kind !== r.kind) return undefined;
             kind = r.kind;
@@ -16346,6 +16426,97 @@ export class RustTranspiler extends BaseTranspiler {
         if (matched === 0 || kind === undefined) return undefined;
         this.rustWsWatchKinds.set(call, kind);
         return kind;
+    }
+
+    /** The hash patterns a `this.watch|watchMultiple (..)` call (or a venue wrapper whose every return is one) awaits;
+     *  undefined when the call is anything else. Runs with `rustWsHashEnv` binding the wrapper parameters. */
+    rustWsAwaitedHashes(call: any, cls: any, depth: number): Array<Array<string | null>> | undefined {
+        const name = String(call.expression.name.text);
+        const declaration: any = this.rustScalarCallee(call);
+        if (declaration === undefined) return undefined;
+        if (name === 'watch' || name === 'watchMultiple') {
+            if (call.arguments.length < 2 || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return undefined;
+            const harg: any = this.rustStripWrappers(call.arguments[1]);
+            if (name === 'watch') return this.rustWsHashPatterns(harg, 0, new Set());
+            return this.rustWsHashListPatterns(harg, 0);
+        }
+        // a venue wrapper of the same ws class: a method whose every return is `await this.watch|watchMultiple (..)`
+        // (or one further wrapper); its parameters stand for this call's arguments
+        if (depth >= 3 || !isMethodDeclaration(declaration) || declaration.body === undefined || findAncestor(declaration, isClassDeclaration) !== cls) return undefined;
+        const inner: any[] = [];
+        let other = false;
+        this.rustWalkScope(declaration.body, (n: any) => {
+            if (n !== declaration.body && isFunctionLike(n)) return RUST_WALK_SKIP;
+            if (!isReturnStatement(n)) return;
+            const awaited: any = this.unwrapParens(n.expression);
+            const c: any = awaited?.kind === SyntaxKind.AwaitExpression ? this.unwrapParens(awaited.expression) : undefined;
+            if (c === undefined || !isCallExpression(c) || !isPropertyAccessExpression(c.expression) || c.expression.expression.kind !== SyntaxKind.ThisKeyword) {
+                other = true;
+                return RUST_WALK_STOP;
+            }
+            inner.push(c);
+        });
+        if (other || inner.length === 0) return undefined;
+        const env = new Map<Node, { arg: any, env: Map<Node, any> | undefined }>();
+        const params: any[] = Array.from(declaration.parameters as any);
+        if (call.arguments.length > params.length || params.some((p) => p.dotDotDotToken !== undefined || !isIdentifier(p.name))) return undefined;
+        params.forEach((p, i) => env.set(p, { arg: call.arguments[i] ?? p.initializer, env: this.rustWsHashEnv }));
+        const save = this.rustWsHashEnv;
+        this.rustWsHashEnv = env;
+        this.rustWsFollowed.add(call);
+        try {
+            const out: Array<Array<string | null>> = [];
+            for (const c of inner) {
+                const h = this.rustWsAwaitedHashes(c, cls, depth + 1);
+                if (h === undefined) return undefined;
+                out.push(...h);
+            }
+            return out;
+        } finally {
+            this.rustWsFollowed.delete(call);
+            this.rustWsHashEnv = save;
+        }
+    }
+
+    /** The patterns of a watchMultiple hash list: an array literal, a wrapper parameter bound to one, or a list local
+     *  initialised from a literal that only grows by `x.push (h)` statements and is read only as a watch argument. */
+    rustWsHashListPatterns(harg: any, depth: number): Array<Array<string | null>> | undefined {
+        harg = this.rustStripWrappers(harg);
+        if (harg === undefined || depth > 4) return undefined;
+        if (isArrayLiteralExpression(harg)) return Array.from((harg as any).elements).flatMap((e: any) => this.rustWsHashPatterns(e, 0, new Set()));
+        if (!isIdentifier(harg)) return undefined;
+        const local: any = this.rustDeclarationOfIdentifier(harg);
+        const bound = local === undefined ? undefined : this.rustWsHashEnv?.get(local);
+        if (bound !== undefined) {
+            if (bound.arg === undefined) return undefined;
+            const save = this.rustWsHashEnv;
+            this.rustWsHashEnv = bound.env;
+            try {
+                return this.rustWsHashListPatterns(bound.arg, depth + 1);
+            } finally {
+                this.rustWsHashEnv = save;
+            }
+        }
+        const init: any = local !== undefined && isVariableDeclaration(local) ? this.rustStripWrappers(local.initializer) : undefined;
+        const scope: any = local === undefined ? undefined : findAncestor(local, isFunctionLike);
+        if (init === undefined || !isArrayLiteralExpression(init) || scope === undefined || this.rustLocalReassigned(local)) return undefined;
+        const hashes = Array.from((init as any).elements).flatMap((e: any) => this.rustWsHashPatterns(e, 0, new Set()));
+        for (const r of this.rustScopeNameNodes(scope, String(local.name.text)) as any[]) {
+            if (!isIdentifier(r) || r === local.name || this.rustDeclarationOfIdentifier(r) !== local) continue;
+            const p: any = r.parent;
+            if (isPropertyAccessExpression(p) && p.expression === r && String(p.name.text) === 'push' && isCallExpression(p.parent) && p.parent.expression === p
+                && p.parent.arguments.length === 1 && p.parent.parent?.kind === SyntaxKind.ExpressionStatement) {
+                hashes.push(...this.rustWsHashPatterns(p.parent.arguments[0], 0, new Set()));
+                continue;
+            }
+            // read as an argument of a watch (or of the venue wrapper being followed) only
+            if (isCallExpression(p) && p.arguments.indexOf(r) >= 0 && isPropertyAccessExpression(p.expression) && p.expression.expression.kind === SyntaxKind.ThisKeyword
+                && (String(p.expression.name.text) === 'watchMultiple' || this.rustWsFollowed.has(p))) continue;
+            // stored as a subscription field (`'messageHashes': list`)
+            if (p?.kind === SyntaxKind.PropertyAssignment && p.initializer === r) continue;
+            return undefined;
+        }
+        return hashes;
     }
 
     // ── ws order books (rustWsBookMapField / rustWsBookLocal / printWsBook*) ──

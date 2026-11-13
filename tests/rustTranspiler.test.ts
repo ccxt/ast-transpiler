@@ -10579,3 +10579,35 @@ describe('ral-jf: element-read string locals lent to this. arguments', () => {
         expect(out).toContain(', key.map(Value::from).unwrap_or(Value::Null), &[])');
     });
 });
+
+describe('rust ws watch results through venue wrappers and subscription-key hashes', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/OrderBook.ts": "export class WsOrderBook {\n    cache: any[] = [];\n    constructor (snapshot: any = {}, depth: any = undefined) {}\n    limit () { return this; }\n    reset (snapshot: any = {}) {}\n}\n",
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: any, limit: any): any { return limit; }\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { WsOrderBook } from './ws/OrderBook.js';\nimport { ArrayCache } from './ws/Cache.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport type Int = number | undefined;\nexport default class Exchange {\n    orderbooks: Dictionary<WsOrderBook> = {};\n    trades: Dictionary<ArrayCache> = {};\n    newUpdates: boolean = true;\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterBySinceLimit (array: object[] | undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return [];\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async subscribe (topic: string, symbol: string, params = {}) {\n        const messageHash = topic + ':' + symbol;\n        return await this.watch ('wss://x', messageHash, params, messageHash);\n    }\n    async watchTrades (symbol: string, since: any = undefined, limit: any = undefined) {\n        const trades = await this.subscribe ('trades', symbol);\n        if (this.newUpdates) {\n            limit = trades.getLimit (symbol, limit);\n        }\n        return this.filterBySinceLimit (trades, since, limit);\n    }\n    async watchOHLCV (symbol: string, since: any = undefined, limit: any = undefined) {\n        const messageHash = 'ohlcv:' + symbol;\n        const ohlcv = await this.watch ('wss://x', messageHash, {}, messageHash);\n        return this.filterBySinceLimit (ohlcv, since, limit);\n    }\n    async watchTicker (symbol: string) {\n        const ticker = await this.subscribe ('ticker', symbol);\n        return ticker;\n    }\n    async watchOrders (symbol: string = undefined) {\n        let messageHash = 'orders';\n        if (symbol !== undefined) {\n            messageHash += ':' + symbol;\n        }\n        const orders = await this.watch ('wss://x', messageHash, {}, 'orders');\n        return this.filterBySinceLimit (orders);\n    }\n    async unWatchOHLCV (symbol: string) {\n        const subHash = 'ohlcv:' + symbol;\n        const unsubHash = 'unsubscribe:' + subHash;\n        const subscription = { 'subHash': subHash, 'unsubHash': unsubHash };\n        return await this.watch ('wss://x', unsubHash, {}, unsubHash, subscription);\n    }\n    handleTrades (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        let stored = this.trades[symbol];\n        if (stored === undefined) {\n            stored = new ArrayCache (10);\n            this.trades[symbol] = stored;\n        }\n        stored.append (message);\n        client.resolve (stored, 'trades:' + symbol);\n        client.resolve (undefined, 'trades:' + symbol);\n    }\n    handleOHLCV (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        const stored = this.trades[symbol];\n        client.resolve (stored, 'ohlcv:' + symbol);\n    }\n    handleOrders (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        const stored = this.trades[symbol];\n        client.resolve (stored, 'orders');\n        client.resolve (stored, 'orders:' + symbol);\n    }\n    handleTicker (client: Client, message: any) {\n        client.resolve (message, 'ticker:' + this.safeString (message, 's'));\n    }\n    handleUnsubscription (client: Client, subscription: any) {\n        const unsubHash = this.safeString (subscription, 'unsubHash');\n        client.resolve (true, unsubHash);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-watchwrap-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a venue wrapper returning `await this.watch (..)` is followed with the caller\'s arguments in the hash; an undefined resolve is neutral', () => {
+        expect(out).toMatch(/let mut trades: Option<crate::pro::cache::Cache> = self\.subscribe\([\s\S]*?\)\.await\.into\(\);/);
+    });
+    test('an unsubscribe ack resolved under a hash read from the subscription\'s `unsubHash` field cannot meet a subscribe hash', () => {
+        expect(out).toMatch(/let mut ohlcv: Option<crate::pro::cache::Cache> = self\.watch\([\s\S]*?\)\.await\.into\(\);/);
+    });
+    test('a hash grown by `x += s` outside a loop takes both the initial and the appended pattern', () => {
+        expect(out).toMatch(/let mut orders: Option<crate::pro::cache::Cache> = self\.watch\([\s\S]*?\)\.await\.into\(\);/);
+    });
+    test('negative: the same wrapper awaiting a hash resolved with a dict stays a Value', () => {
+        expect(out).toMatch(/let mut ticker: Value = self\.subscribe\(/);
+    });
+});
