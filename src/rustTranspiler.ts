@@ -14651,10 +14651,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
         // `rows.push (row)` into another local list: the list keeps its own type, the element enters as the shared map
         if (isCallExpression(up) && isPropertyAccessExpression(up.expression) && isIdentifier(up.expression.expression) && up.arguments.length === 1 && up.arguments[0] === n
-            && String(up.expression.name.text) === 'push') return !this.rustIdentifierRefersToDeclaration(up.expression.expression, this.rustDeclarationOfIdentifier(n));
+            && String(up.expression.name.text) === 'push') return !this.rustIdentifierRefersToDeclaration(up.expression.expression, this.rustDeclarationOfIdentifier(n) as any);
         // `m[k] = el` stores the shared map into another container (the value slot of the write)
         if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(up.left)
-            && up.parent?.kind === SyntaxKind.ExpressionStatement) return !this.rustIdentifierRefersToDeclaration(this.rustSkipWrappers(up.left.expression), this.rustDeclarationOfIdentifier(n));
+            && up.parent?.kind === SyntaxKind.ExpressionStatement) return !this.rustIdentifierRefersToDeclaration(this.rustSkipWrappers(up.left.expression), this.rustDeclarationOfIdentifier(n) as any);
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
