@@ -1529,6 +1529,33 @@ ${body}
     }
 }`;
 
+        test('ral-hd: nil map locals written by literal key, aliased or passed to this.extend keep Option<Dict>; list literals hold Option<List>', () => {
+            const out = transpiler.transpileRust(listCls(`        let headers = undefined;
+        if (kind === 'a') {
+            headers = { 'K': 'v' };
+            headers['Content-Type'] = 'application/json';
+        }
+        const resolved = headers;
+        return this.hold(resolved);`)).content;
+            expect(out).toContain('let mut headers: Option<crate::value::Dict> = None;');
+            expect(out).toContain('if let Some(__d) = &mut headers { std::sync::Arc::make_mut(__d).insert("Content-Type".to_string(), Value::Str("application/json".into())); }');
+            expect(out).toContain('headers.map_or(Value::Null, Value::Dict)');
+            const ext = transpiler.transpileRust(listCls(`        let request = undefined;
+        if (kind === 'a') { request = { 'op': 'sub' }; } else { request = { 'op': 'unsub' }; }
+        return this.extend(request, {});`)).content;
+            expect(ext).toContain('let mut request: Option<crate::value::Dict> = None;');
+            const list = transpiler.transpileRust(listCls(`        let keys = undefined;
+        if (kind === 'a') { keys = [ 'a', 'b' ]; }
+        return { 'keys': keys };`)).content;
+            expect(list).toContain('let mut keys: Option<crate::value::List> = None;');
+            expect(list).toContain('keys.map_or(Value::Null, Value::Arr)');
+            // a bare local element keeps the box (the list would clone it)
+            const bare = transpiler.transpileRust(listCls(`        let keys = undefined;
+        if (kind === 'a') { keys = [ kind ]; }
+        return { 'keys': keys };`)).content;
+            expect(bare).toContain('let mut keys: Value = Value::Null;');
+        });
+
         test('ral-gf: a dead typed source written into a nil scalar moves (take), a live one keeps the box', () => {
             const out = transpiler.transpileRust(listCls(`        let size = undefined;
         const base = parts[0];
@@ -4532,7 +4559,7 @@ describe('native element writes on plain-dict locals', () => {
     });
 
     test('an undefined-initialised local reassigned only to literals inserts natively', () => {
-        expect(output).toContain(insert('headers', 'Content-Type', 'Value::Str("application/json".into())'));
+        expect(output).toContain('if let Some(__d) = &mut headers { std::sync::Arc::make_mut(__d).insert("Content-Type".to_string(), Value::Str("application/json".into())); }');
     });
 
     test('element 0 of handleUntilOption on a plain request inserts natively', () => {

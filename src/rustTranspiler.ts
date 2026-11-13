@@ -2022,7 +2022,7 @@ export class RustTranspiler extends BaseTranspiler {
             const keyStrs = keys.map((k, at) => (at < keys.length - 1 ? this.rustI64HelperKeyText(k) : undefined) ?? this.printNode(k, 0));
             for (const key of keyStrs.slice(0, -1)) acc = `get_value_mut(${acc}, &${key})`;
             const rhs = this.printNode(right, 0);
-            const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
+            const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) ?? this.printNilMapKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
             const helperCall = `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
             // a nested helper write whose value was read natively binds the value first, like the ccxt hoist did
             const helperWrite = this.rustDictHoistHosts.has(node)
@@ -2162,7 +2162,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (marketStore !== undefined) return marketStore;
         const nilScalar = node.declarations.length === 1 ? this.printRustNilScalarDeclaration(declaration, varName, indent) : undefined;
         if (nilScalar !== undefined) return nilScalar;
-        if (node.declarations.length === 1 && this.rustNilMapLocal(declaration)) return `${indent}let mut ${varName}: Option<crate::value::Dict> = None`;
+        if (node.declarations.length === 1 && this.rustNilMapLocal(declaration)) return `${indent}let mut ${varName}: Option<crate::value::${this.rustNilListLocals.has(declaration) ? 'List' : 'Dict'}> = None`;
         if (!declaration.initializer) {
             return `${indent}let mut ${varName}: Value = Value::Null`;
         }
@@ -13739,6 +13739,7 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustBorrowedLocalKind(declaration) !== undefined || this.rustMarketLocalKind(declaration) !== false) return false;
         let writes = 0;
         let boxes = 0;
+        let kind: 'dict' | 'list' | undefined;
         const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             if (this.rustEnclosingFunction(n) !== scope) return false;
@@ -13747,8 +13748,15 @@ export class RustTranspiler extends BaseTranspiler {
                 if (parent.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
                 const rhs: any = this.unwrapParens(parent.right);
                 if (this.literalKindOfNode(rhs) === 'null') return true;
-                if (!isObjectLiteralExpression(rhs) || rhs.properties.some((p: any) => p.kind !== SyntaxKind.PropertyAssignment)) return false;
+                const k = isObjectLiteralExpression(rhs) && !rhs.properties.some((p: any) => p.kind !== SyntaxKind.PropertyAssignment) ? 'dict'
+                    : (isArrayLiteralExpression(rhs) && this.rustNilListLiteralOk(rhs) ? 'list' : undefined);
+                if (k === undefined || (kind !== undefined && kind !== k)) return false;
+                kind = k;
                 writes++;
+                return true;
+            }
+            if (this.rustNilMapKeyWrite(n, declaration) || this.rustNilMapExtraBox(n)) {
+                if (!this.rustNilMapKeyWrite(n, declaration)) boxes++;
                 return true;
             }
             if (isBinaryExpression(parent) && this.isEqualityOp(parent.operatorToken.kind)) {
@@ -13761,7 +13769,78 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return false;
         });
-        return ok && writes > 0 && boxes > 0;
+        if (!ok || writes === 0 || boxes === 0 || kind === undefined) return false;
+        // element writes only on maps; list locals declared as dicts are not lists
+        if (kind === 'list' && (this.rustNilMapHasKeyWrite(declaration) || (declaration.type !== undefined && /Dict/.test(String(declaration.type.getText()))))) return false;
+        if (kind === 'list') this.rustNilListLocals.add(declaration);
+        // a written map that a let-bound literal aliases keeps the helper ccxt's alias write-back keys on
+        if (kind === 'dict' && this.rustNilMapHasKeyWrite(declaration) && this.rustNilMapLetBoundAlias(declaration)) return false;
+        return true;
+    }
+
+    private rustNilListLocals = new WeakSet<any>();
+
+    /** A list literal with no spread or bare-local element whose elements print natively (`vec![..]`). */
+    rustNilListLiteralOk(rhs: any): boolean {
+        // a bare local element would be cloned into the list where the boxed form moved it
+        return !rhs.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement || isIdentifier(this.unwrapParens(e))) && this.rustVecNativeLiteral({ initializer: rhs }) !== undefined;
+    }
+
+    /** Hand-offs past the object-literal value and return: another (untyped) local's initializer, or an argument of
+     *  `this.extend` / `this.watch*`, which take `Value`. */
+    rustNilMapExtraBox(n: any): boolean {
+        const parent: any = n.parent;
+        if (parent?.kind === SyntaxKind.VariableDeclaration && parent.initializer === n) {
+            const alias: any = parent;
+            return this.rustNilLocalKind(alias) === undefined && this.rustScalarLocalKind(alias) === undefined && this.rustBorrowedLocalKind(alias) === undefined
+                && !this.rustDictLocalIsTyped(alias) && !this.rustVecLocalIsTyped(alias) && this.rustMarketLocalKind(alias) === false && !this.rustOptListLocal(alias);
+        }
+        if (isCallExpression(parent) && parent.expression !== n && isPropertyAccessExpression(parent.expression)
+            && parent.expression.expression.kind === SyntaxKind.ThisKeyword) {
+            return /^(?:extend|watch|watchMultiple)$/.test(String(parent.expression.name.text));
+        }
+        return false;
+    }
+
+    /** `x['k'] = v` at a literal key on the map local, as a statement, whose value does not read `x`. */
+    rustNilMapKeyWrite(n: any, declaration: any): boolean {
+        const access: any = n.parent;
+        if (!isElementAccessExpression(access) || access.expression !== n) return false;
+        const assign: any = access.parent;
+        if (!isBinaryExpression(assign) || assign.left !== access || assign.operatorToken.kind !== SyntaxKind.EqualsToken || assign.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const key: any = this.unwrapParens(access.argumentExpression);
+        if (!isStringLiteralLikeNode(key) || String(key.text) in this.StringLiteralReplacements) return false;
+        const name = String(declaration.name.text);
+        const reads = (m: any): boolean => (isIdentifier(m) && m.text === name) || (m.forEachChild(reads) ?? false);
+        return !reads(assign.right);
+    }
+
+    rustNilMapLetBoundAlias(declaration: any): boolean {
+        let found = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            const parent: any = n.parent;
+            if (parent?.kind === SyntaxKind.PropertyAssignment && parent.initializer === n && parent.parent?.parent?.kind === SyntaxKind.VariableDeclaration) found = true;
+            return true;
+        });
+        return found;
+    }
+
+    rustNilMapHasKeyWrite(declaration: any): boolean {
+        let found = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => { if (this.rustNilMapKeyWrite(n, declaration)) found = true; return true; });
+        return found;
+    }
+
+    /** `if let Some(__d) = &mut x { Arc::make_mut(__d).insert("k".to_string(), v); }`: a `None` map drops the write as the boxed `Null` did. */
+    printNilMapKeyWrite(left: any, right: any, valueText: string): string | undefined {
+        const recv: any = isElementAccessExpression(left) ? left.expression : undefined;
+        const declaration = recv === undefined ? undefined : this.rustNilMapOf(recv);
+        if (declaration === undefined || this.rustNilListLocals.has(declaration) || !this.rustNilMapKeyWrite(recv, declaration)) return undefined;
+        const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+        const key = String(this.unwrapParens(left.argumentExpression).text);
+        const raw = this.rustNodeIsBoolExpression(right) && this.literalKindOfNode(this.unwrapParens(right)) !== 'boolean' ? `Value::Bool(${valueText})` : valueText.trim();
+        const value = isIdentifier(this.unwrapParens(right)) ? RustTranspiler.cloneIfBareLocal(raw) : raw;
+        return `if let Some(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${this.quotedStringLiteral(key)}.to_string(), ${value}); }`;
     }
 
     rustNilMapOf(node): any {
@@ -13777,6 +13856,7 @@ export class RustTranspiler extends BaseTranspiler {
         const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
         const rhs: any = this.unwrapParens(right);
         if (this.literalKindOfNode(rhs) === 'null') return `${name} = None`;
+        if (isArrayLiteralExpression(rhs)) return `${name} = Some(${this.printBuiltListLiteral(rhs)})`;
         return `${name} = Some(crate::value::Dict::new(${this.rustObjectLiteralBlock(rhs, identation)}))`;
     }
 
@@ -13793,11 +13873,12 @@ export class RustTranspiler extends BaseTranspiler {
     /** The `Value` hand-off: the map moved at the last use, else the Arc bump; `None` is `Value::Null`. */
     printNilMapBox(node, text: string): string | undefined {
         const parent: any = node?.parent;
-        if (parent === undefined || !((parent.kind === SyntaxKind.PropertyAssignment && parent.initializer === node) || (isReturnStatement(parent) && parent.expression === node))) return undefined;
+        if (parent === undefined || !((parent.kind === SyntaxKind.PropertyAssignment && parent.initializer === node) || (isReturnStatement(parent) && parent.expression === node)
+            || this.rustNilMapExtraBox(node))) return undefined;
         const declaration = this.rustNilMapOf(node);
         if (declaration === undefined) return undefined;
         const moves = isReturnStatement(parent) || this.rustLocalLastUse(node, declaration);
-        return `${text}${moves ? '' : '.clone()'}.map_or(Value::Null, Value::Dict)`;
+        return `${text}${moves ? '' : '.clone()'}.map_or(Value::Null, Value::${this.rustNilListLocals.has(declaration) ? 'Arr' : 'Dict'})`;
     }
 
     private rustMutableBuiltLocals = new WeakSet<any>();
