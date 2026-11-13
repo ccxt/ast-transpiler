@@ -9293,3 +9293,185 @@ describe('rust base safeCurrencyCode returns Option<String>', () => {
         expect(caller).not.toMatch(/let mut code: Option<String> = self\.safeCurrencyCode\([^;]*\.as_str\(\)\.map\(str::to_owned\);/);
     });
 });
+
+describe('rust base safeCurrency / safeCurrencyCode take a lent Option<&Currency>', () => {
+    const fixture = (rel: string, text: string): string => {
+        const out = path.join(rustFixtureRoot, 'base-currency-slot', rel);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, text);
+        return out;
+    };
+    let base = '';
+    let venue = '';
+    let caller = '';
+    beforeAll(() => {
+        const baseFile = fixture('ts/src/base/Exchange.ts', 'type Str = string | undefined;\n'
+            + 'type Currency = any;\n'
+            + 'export default class Exchange {\n'
+            + '    currencies_by_id: any = undefined;\n'
+            + '    safeCurrency (currencyId: Str, currency: Currency = undefined): any {\n'
+            + '        if ((currencyId === undefined) && (currency !== undefined)) {\n'
+            + '            return currency;\n'
+            + '        }\n'
+            + "        return { 'id': currencyId, 'code': currencyId };\n"
+            + '    }\n'
+            + '    safeCurrencyCode (currencyId: Str, currency: Currency = undefined): Str {\n'
+            + '        const currencyResolved = this.safeCurrency (currencyId, currency);\n'
+            + "        return currencyResolved['code'];\n"
+            + '    }\n'
+            + '}\n');
+        base = transpiler.transpileRustByPath(baseFile).content;
+        const file = fixture('ts/src/venue.ts', "import Exchange from './base/Exchange.js';\n"
+            + 'type Str = string | undefined;\n'
+            + 'type Currency = any;\n'
+            + 'export default class venue extends Exchange {\n'
+            + '    safeCurrencyCode (currencyId: Str, currency: Currency = undefined): Str {\n'
+            + '        if (currencyId === undefined) {\n'
+            + '            return currencyId;\n'
+            + '        }\n'
+            + '        return super.safeCurrencyCode (currencyId, currency);\n'
+            + '    }\n'
+            + '}\n');
+        venue = transpiler.transpileRustByPath(file).content;
+        const other = fixture('ts/src/other.ts', "import Exchange from './base/Exchange.js';\n"
+            + 'type Currency = any;\n'
+            + 'export default class other extends Exchange {\n'
+            + '    parseIt (o: any, currency: Currency = undefined): any {\n'
+            + "        const code = this.safeCurrencyCode (this.safeString (o, 'c'), currency);\n"
+            + "        const bare = this.safeCurrencyCode (this.safeString (o, 'd'));\n"
+            + "        return { 'code': code, 'bare': bare };\n"
+            + '    }\n'
+            + '    safeString (o: any, k: string): any {\n'
+            + '        return o[k];\n'
+            + '    }\n'
+            + '}\n');
+        caller = transpiler.transpileRustByPath(other).content;
+    });
+    test('the base methods print the lent currency slot positionally', () => {
+        expect(base).toContain('fn safeCurrency(&self, currencyId: Value, currency: Option<&crate::types::Currency>) -> Value');
+        expect(base).toContain('fn safeCurrencyCode(&self, currencyId: Value, currency: Option<&crate::types::Currency>) ->');
+        expect(base).toContain('(currency.is_some())');
+        expect(base).toContain('return crate::Value::from(currency);');
+        expect(base).toContain('self.safeCurrency(currencyId, currency)');
+    });
+    test('the override follows the base signature and hands its slot to super as is', () => {
+        expect(venue).toContain('fn safeCurrencyCode(&self, currencyId: Value, currency: Option<&crate::types::Currency>) ->');
+        expect(venue).toContain('super.safeCurrencyCode(currencyId, currency)');
+    });
+    test('a caller converts once: absent is None, a Value currency decodes once', () => {
+        expect(caller).toContain('<Option<crate::types::Currency> as crate::types::FromRaw>::from_raw(currency.clone()).as_ref())');
+        expect(caller).toMatch(/self\.safeCurrencyCode\([^;]*'?d'?[^;]*, None\)/);
+        expect(caller).not.toContain('&[currency');
+    });
+});
+
+describe('rust currency parsers take a lent Option<&Currency> slot', () => {
+    const fixture = (rel: string, text: string): string => {
+        const out = path.join(rustFixtureRoot, 'parse-currency-slot', rel);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, text);
+        return out;
+    };
+    let venue = '';
+    beforeAll(() => {
+        const file = fixture('ts/src/venue.ts', 'type Currency = any;\n'
+            + 'type Dict = any;\n'
+            + 'export default class venue {\n'
+            + '    safeString (o: any, k: string): any { return o[k]; }\n'
+            + '    safeCurrencyCode (currencyId: any, currency: Currency = undefined): any { return currencyId; }\n'
+            + '    parseTransaction (transaction: Dict, currency: Currency = undefined): any {\n'
+            + "        const code = this.safeCurrencyCode (this.safeString (transaction, 'coin'), currency);\n"
+            + '        if (currency === undefined) {\n'
+            + "            return { 'code': code };\n"
+            + '        }\n'
+            + "        return { 'code': code, 'id': currency['id'] };\n"
+            + '    }\n'
+            + '    parseConversion (conversion: Dict, fromCurrency: Currency = undefined, toCurrency: Currency = undefined): any {\n'
+            + "        return { 'from': this.safeCurrencyCode (this.safeString (conversion, 'f'), fromCurrency), 'to': this.safeCurrencyCode (this.safeString (conversion, 't'), toCurrency) };\n"
+            + '    }\n'
+            + '    fetchIt (r: Dict): any {\n'
+            + '        return this.parseTransaction (r);\n'
+            + '    }\n'
+            + '}\n');
+        venue = transpiler.transpileRustByPath(file).content;
+    });
+    test('the parsers print the lent currency slots positionally', () => {
+        expect(venue).toContain('fn parseTransaction(&self, transaction: Value, currency: Option<&crate::types::Currency>)');
+        expect(venue).toContain('fromCurrency: Option<&crate::types::Currency>, toCurrency: Option<&crate::types::Currency>)');
+    });
+    test('slot args pass the parameter itself, null tests are native, key reads go through KeyRead', () => {
+        expect(venue).not.toContain('from_raw(currency');
+        expect(venue).toContain('currency.is_none()');
+        expect(venue).toContain('crate::value::KeyRead::key_read(&currency, "id")');
+        expect(venue).toMatch(/self\.parseTransaction\(r[^;]*, None\)/);
+    });
+});
+
+describe('rust currency producers return crate::types::Currency and their locals are typed', () => {
+    const fixture = (rel: string, text: string): string => {
+        const out = path.join(rustFixtureRoot, 'currency-producer', rel);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, text);
+        return out;
+    };
+    let base = '';
+    beforeAll(() => {
+        const file = fixture('ts/src/base/Exchange.ts', 'type Str = string | undefined;\n'
+            + 'type Dict = any;\n'
+            + 'interface CurrencyInterface { id: Str; code: Str; }\n'
+            + 'type Currency = CurrencyInterface | undefined;\n'
+            + 'export default class Exchange {\n'
+            + '    currencies: Dict = {};\n'
+            + '    currencies_by_id: Dict = {};\n'
+            + '    safeString (o: any, k: string): any { return o[k]; }\n'
+            + '    safeCurrencyStructure (c: Dict): CurrencyInterface { return c; }\n'
+            + '    parseTransaction (transaction: Dict, currency: Currency = undefined): any { return transaction; }\n'
+            + '    safeCurrency (currencyId: Str, currency: Currency = undefined): CurrencyInterface {\n'
+            + '        if ((currencyId === undefined) && (currency !== undefined)) {\n'
+            + '            return currency;\n'
+            + '        }\n'
+            + '        if ((currencyId !== undefined) && (currencyId in this.currencies_by_id)) {\n'
+            + '            return this.currencies_by_id[currencyId];\n'
+            + '        }\n'
+            + "        return this.safeCurrencyStructure ({ 'id': currencyId, 'code': currencyId });\n"
+            + '    }\n'
+            + '    currency (code: Str): CurrencyInterface {\n'
+            + '        const currencies = this.currencies;\n'
+            + '        if (code in currencies) {\n'
+            + '            return currencies[code];\n'
+            + '        }\n'
+            + "        throw new Error ('no currency');\n"
+            + '    }\n'
+            + '    fetchIt (code: Str, r: Dict): any {\n'
+            + '        const currency = this.currency (code);\n'
+            + "        const request: Dict = { 'coin': currency['id'] };\n"
+            + '        return this.parseTransaction ([ request, r ], currency);\n'
+            + '    }\n'
+            + '    fetchMaybe (code: Str, r: Dict): any {\n'
+            + '        let currency = undefined;\n'
+            + '        if (code !== undefined) {\n'
+            + '            currency = this.currency (code);\n'
+            + '        }\n'
+            + '        return this.parseTransaction (r, currency);\n'
+            + '    }\n'
+            + '}\n');
+        base = transpiler.transpileRustByPath(file).content;
+    });
+    test('currency / safeCurrency return the struct from the typed stores', () => {
+        expect(base).toContain('fn currency(&self, code: Value) -> crate::types::Currency');
+        expect(base).toContain('-> crate::types::Currency {');
+        expect(base).toContain('self.currencies_by_code_typed().records_by_id(');
+        expect(base).toContain('self.currencies_by_id_typed().records_by_id(');
+        expect(base).toContain('return currency.cloned().unwrap_or_default();');
+        expect(base).toContain('<crate::types::Currency as crate::types::FromRaw>::from_raw(self.safeCurrencyStructure(');
+    });
+    test('currency locals are typed: native key reads, lent slot args, Option for nil-declared', () => {
+        expect(base).toContain('let mut currency: crate::types::Currency = self.currency(code);');
+        expect(base).toContain('crate::value::KeyRead::key_read(&&currency, "id")');
+        expect(base).toContain('Some(&currency)');
+        expect(base).toContain('let mut currency: Option<crate::types::Currency> = None;');
+        expect(base).toContain('currency = Some(self.currency(code));');
+        expect(base).toContain('currency.as_ref()');
+        expect(base).not.toMatch(/FromRaw>::from_raw\(currency/);
+    });
+});
