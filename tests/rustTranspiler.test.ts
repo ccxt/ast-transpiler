@@ -9475,3 +9475,21 @@ describe('rust currency producers return crate::types::Currency and their locals
         expect(base).not.toMatch(/FromRaw>::from_raw\(currency/);
     });
 });
+
+describe('typed market slots of read-only venue helpers', () => {
+    test('a helper that only key-reads its market lends it once every caller lends; safeOpenInterest lends its market', () => {
+        const dir = path.join (rustFixtureRoot, 'typed-venue-market');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: number = undefined): number { return o; }\n    market (symbol: string): MarketInterface { return undefined; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeOpenInterest (interest: Dict, market: Market = undefined): Dict {\n        let symbol = this.safeString (interest, 'symbol');\n        if (symbol === undefined) {\n            symbol = this.safeString (market, 'symbol');\n        }\n        return { 'symbol': symbol, 'info': interest };\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Market, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fromEp (ep: any, market: Market = undefined) {\n        if ((ep === undefined) || (market === undefined)) {\n            return ep;\n        }\n        return this.safeInteger (market, 'priceScale');\n    }\n    parseOpenInterest (interest: Dict, market: Market = undefined): Dict {\n        const value = this.fromEp (this.safeString (interest, 'v'), market);\n        return this.safeOpenInterest ({ 'v': value }, market);\n    }\n    async fetchPrice (symbol: string, params: Dict = {}): Promise<any> {\n        const market = this.market (symbol);\n        return this.fromEp (this.safeString (params, 'p'), market);\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const base = typed.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(base).toContain('interest: Value, market: Option<&crate::types::Market>) -> Value');
+        const out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('ep: Value, market: Option<&crate::types::Market>) -> Value');
+        expect(out).toContain('let mut market: crate::types::Market =');
+        expect(out).toContain('Some(&market))');
+        expect(out).not.toContain('FromRaw>::from_raw(market');
+        expect(out).not.toContain('crate::Value::from(market)');
+    });
+});

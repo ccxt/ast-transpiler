@@ -7598,13 +7598,25 @@ export class RustTranspiler extends BaseTranspiler {
         let decision = this.rustMarketLocalDecisions.get(declaration);
         if (decision === undefined) {
             this.rustMarketLocalDecisions.set(declaration, false); // re-entrancy guard
+            this.rustMarketPending.add(declaration);
+            const hits = this.rustMarketGuardHits;
+            this.rustMarketDepth++;
             try {
                 decision = this.rustMarketLocalIsTypedUncached(declaration);
+                // an outermost decision taken under an assumption is taken again on the settled caches
+                for (let round = 0; round < 3 && this.rustMarketDepth === 1 && this.rustMarketGuardHits > hits; round++) {
+                    const again = this.rustMarketGuardHits;
+                    const next = this.rustMarketLocalIsTypedUncached(declaration);
+                    if (next === decision && this.rustMarketGuardHits === again) break;
+                    decision = next;
+                }
             } catch (e) {
                 decision = false;
+            } finally {
+                this.rustMarketDepth--;
             }
-            this.rustMarketLocalDecisions.set(declaration, decision);
-        }
+            this.rustMarketSettle(this.rustMarketLocalDecisions, declaration, decision, hits);
+        } else if (this.rustMarketPending.has(declaration)) this.rustMarketGuardHits++;
         return decision;
     }
 
@@ -7658,6 +7670,7 @@ export class RustTranspiler extends BaseTranspiler {
         let writes = 0;
         let slotUses = 0;
         let valueUses = 0;
+        let keyReads = 0;
         const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
             if (this.rustEnclosingFunction(n) !== scope) return false; // a closure capture keeps the box
             if (this.rustIsTypedMarketWrite(n)) {
@@ -7682,6 +7695,7 @@ export class RustTranspiler extends BaseTranspiler {
                     || RustTranspiler.RUST_MARKET_OPT_BOOL_FIELDS.has(key) || RustTranspiler.RUST_MARKET_OPT_STR_FIELDS[key] !== undefined) {
                     if (!isCallExpression(n.parent) || !this.rustMarketEmptyDefaultRead(n.parent)) fieldReads++;
                 }
+                keyReads++;
                 return true;
             }
             if (this.rustMarketSlotUse(n) || this.rustMarketReaderArg(n) || (isReturnStatement(n.parent) && this.rustReturnsOptMarket(findAncestor(n.parent.parent, isFunctionLike)))) {
@@ -7695,7 +7709,8 @@ export class RustTranspiler extends BaseTranspiler {
         // direct key reads go through the reader trait; with a whole-value hand-off as well the box would come back
         if (empty) return writes > 0 || fromOpt ? 'opt' : false;
         // a lent market slot takes the struct as is: without a `Value` hand-off the record is never boxed again
-        return fieldReads > 0 || (slotUses > 0 && valueUses === 0) ? 'struct' : false;
+        // key reads with a default borrow the record too (`KeyRead` for `&Market`): with no `Value` hand-off it stays a struct
+        return fieldReads > 0 || ((slotUses > 0 || keyReads > 0) && valueUses === 0) ? 'struct' : false;
     }
 
     // ── rustOptMarketKeyRead / printOptMarketKeyRead: literal-key reads on an `Option<Market>` local ──
@@ -18272,14 +18287,47 @@ export class RustTranspiler extends BaseTranspiler {
         let decision = this.rustMarketSlotDecisions.get(param);
         if (decision === undefined) {
             this.rustMarketSlotDecisions.set(param, false); // re-entrancy guard
+            this.rustMarketPending.add(param);
+            const hits = this.rustMarketGuardHits;
+            this.rustMarketDepth++;
             try {
                 decision = this.rustMarketSlotParamUncached(param);
+                // an outermost decision taken under an assumption is taken again on the settled caches
+                for (let round = 0; round < 3 && this.rustMarketDepth === 1 && this.rustMarketGuardHits > hits; round++) {
+                    const again = this.rustMarketGuardHits;
+                    const next = this.rustMarketSlotParamUncached(param);
+                    if (next === decision && this.rustMarketGuardHits === again) break;
+                    decision = next;
+                }
             } catch (e) {
                 decision = false;
+            } finally {
+                this.rustMarketDepth--;
             }
-            this.rustMarketSlotDecisions.set(param, decision);
+            this.rustMarketSettle(this.rustMarketSlotDecisions, param, decision, hits);
+        } else if (this.rustMarketPending.has(param)) {
+            // inside its own decision a slot is assumed lent (greatest fixpoint); every decision taken under that
+            // assumption is provisional and is taken again once the slot is settled
+            this.rustMarketGuardHits++;
+            return true;
         }
         return decision;
+    }
+
+    // Market slot / market local decisions call each other (a helper's slot is typed when its callers lend; a
+    // caller's local is typed when its uses are typed slots). A decision taken while a cycle member was still
+    // pending (its guard answered `false`) is provisional: it is dropped again unless it is the outermost one.
+    private rustMarketDepth = 0;
+    private rustMarketGuardHits = 0;
+    private rustMarketPending = new Set<any>();
+
+    rustMarketSettle(map: any, key: any, decision: any, hitsBefore: number): void {
+        this.rustMarketPending.delete(key);
+        if (this.rustMarketGuardHits > hitsBefore && this.rustMarketDepth > 0) {
+            map.delete(key);
+            return;
+        }
+        map.set(key, decision);
     }
 
     rustMarketSlotParamUncached(param: any): boolean {
@@ -18368,7 +18416,7 @@ export class RustTranspiler extends BaseTranspiler {
     // slot prints as a lent `Option<&crate::types::Market>`. `safeMarket`'s leading optional `marketId` prints as a
     // positional `Value` before it (callers pad `Value::Null`).
     private static readonly RUST_LIST_MARKET_METHODS = new Set([
-        'parseTrades', 'parseWsTrades', 'parseTradesHelper', 'parseOrders', 'handleMarketTypeAndParams', 'handleSubTypeAndParams', 'safeMarket',
+        'parseTrades', 'parseWsTrades', 'parseTradesHelper', 'parseOrders', 'handleMarketTypeAndParams', 'handleSubTypeAndParams', 'safeMarket', 'safeOpenInterest',
     ]);
 
     /** The `market: Market = undefined` parameter of a listed helper: read-only, every parameter before it required
@@ -18408,12 +18456,19 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(param.name.text);
         if (this.rustLocalIsReassigned(param, name)) return false;
         let forwards = 0;
+        let reads = 0;
+        let others = 0;
         const ok = this.rustLocalUsesAll(param, name, true, (n: any) => {
             if (this.isNativeWriteTargetBase(n) || isDeleteExpression(n.parent?.parent)) return false;
             if (this.rustMarketSlotUse(n)) forwards++;
+            else if (this.rustMarketReaderArg(n) || this.rustIsNullTestOf(n)) reads++;
+            else others++;
             return true;
         });
-        if (!ok || forwards === 0) return false;
+        // a helper that only reads the record (key readers, null tests) borrows it as well as one that forwards it
+        if (!ok || (forwards === 0 && (reads === 0 || others > 0))) return false;
+        // a REST helper is also called from the venue's ws class, which this program may not load: keep it boxed then
+        if (this.rustCalledFromWsSibling(method)) return false;
         const calls = this.rustVenueStrCallSites(method);
         return calls.length > 0 && calls.every((call: any) => {
             const args: any[] = Array.from(call.arguments);
@@ -18422,11 +18477,33 @@ export class RustTranspiler extends BaseTranspiler {
         });
     }
 
+    /** `ts/src/<id>.ts`'s method `m` is called as `this.m (` / `super.m (` in `ts/src/pro/<id>.ts`. */
+    rustCalledFromWsSibling(method: any): boolean {
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const m = file.match(/^(.*(?:^|\/)ts\/src\/)([^/]+\.ts)$/);
+        if (m === null) return false;
+        const fs: any = (globalThis as any).process?.getBuiltinModule?.('fs');
+        if (fs === undefined) return true;
+        let text: string;
+        try {
+            text = fs.readFileSync(m[1] + 'pro/' + m[2], 'utf8');
+        } catch (e) {
+            return false;
+        }
+        return new RegExp('\\b(?:this|super)\\.' + String(method.name.text) + '\\s*\\(').test(text);
+    }
+
     /** A market slot argument that lends without a decode (`rustMarketSlotArgText` takes no `FromRaw` path). */
     rustMarketArgLends(arg: any): boolean {
         const inner: any = this.unwrapParens(arg);
         if (this.literalKindOfNode(inner) === 'null') return true;
         if (isIdentifier(inner)) {
+            // a `this.market (..)` local still being decided (it waits on this slot): assumed typed, provisionally
+            const pending: any = this.rustDeclarationOfIdentifier(inner);
+            if (pending !== undefined && pending.name !== inner && this.rustMarketPending.has(pending) && pending.kind === SyntaxKind.VariableDeclaration) {
+                this.rustMarketGuardHits++;
+                return true;
+            }
             return this.rustMarketSlotParamOf(inner) !== undefined || this.rustSafeMarketLocalOf(inner) !== undefined
                 || this.rustTypedMarketLocalOf(inner) !== undefined || this.rustOptMarketLocalOf(inner) !== undefined;
         }
