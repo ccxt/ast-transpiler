@@ -1498,6 +1498,53 @@ ${body}
             expect(aliased).toContain('let mut last: Value = Value::Null;');
         });
 
+        test('ral-gf: nil-declared map literal locals hold Option<Dict>, moved at the last hand-off', () => {
+            const out = transpiler.transpileRust(cls(`        let fee = undefined;
+        const cost = this.safeString(o, 'fee');
+        if (cost !== undefined) { fee = { 'cost': cost, 'currency': 'USD' }; }
+        return { 'id': 'x', 'fee': fee };`)).content;
+            expect(out).toContain('let mut fee: Option<crate::value::Dict> = None;');
+            expect(out).toContain('fee = Some(crate::value::Dict::new({');
+            expect(out).toContain('m.insert("fee".to_string(), fee.map_or(Value::Null, Value::Dict));');
+            // an element write or a call argument keeps the box
+            const boxed = transpiler.transpileRust(cls(`        let fee = undefined;
+        if (kind === 'a') { fee = { 'cost': 1 }; }
+        return this.hold(fee);`)).content;
+            expect(boxed).toContain('let mut fee: Value = Value::Null;');
+        });
+
+        const listCls = (body: string) => `class A {
+    hold(x: any): any { return x; }
+    run(o: any, kind: string, parts: string[]) {
+${body}
+    }
+}`;
+
+        test('ral-gf: a dead typed source written into a nil scalar moves (take), a live one keeps the box', () => {
+            const out = transpiler.transpileRust(listCls(`        let size = undefined;
+        const base = parts[0];
+        if (base !== undefined) { size = base; } else { size = parts[1]; }
+        return { 'amount': size };`)).content;
+            expect(out).toContain('let mut size: Option<String> = None;');
+            expect(out).toContain('size = base.take();');
+            const live = transpiler.transpileRust(listCls(`        let size = undefined;
+        const base = parts[0];
+        if (base !== undefined) { size = base; }
+        return { 'amount': size, 'b': base };`)).content;
+            expect(live).not.toContain('.take()');
+            expect(live).toContain('let mut size: Value = Value::Null;');
+        });
+
+        test('ral-gf: a nil string boxed before its last use lends at this. arguments', () => {
+            const out = transpiler.transpileRust(listCls(`        let baseId = undefined;
+        let base = undefined;
+        if (kind === 'a') { baseId = parts[1]; base = this.hold(baseId); }
+        return { 'baseId': baseId, 'base': base };`)).content;
+            expect(out).toContain('let mut baseId: Option<String> = None;');
+            expect(out).toContain('self.hold(Value::from(baseId.as_deref()))');
+            expect(out).toContain('m.insert("baseId".to_string(), baseId.map(Value::from).unwrap_or(Value::Null));');
+        });
+
         test('a read outside the proven sinks keeps the Value box', () => {
             const out = transpiler.transpileRust(cls(`        let s = undefined;
         s = 'x';
