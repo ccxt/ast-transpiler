@@ -4118,8 +4118,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustBaseReturnScalarKind(call, name: string): string | undefined {
         const kind = RustTranspiler.RUST_BASE_SCALAR_RETURNS[name] ?? this.rustDerivedScalarKind(call);
-        // a callee already printed `-> Option<String>` is the native-`Str` rule's
-        if (kind === undefined || this.rustNativeStrCalleeKind(call) === 'str') return undefined;
+        // a callee already printed `-> Option<String>` is the native-`Str` rule's (a base one stays the scalar rule's)
+        if (kind === undefined || (this.rustNativeStrCalleeKind(call) === 'str' && !this.rustBaseNativeStrCall(call))) return undefined;
         // the member is declared on the base class (an override keeps the base signature)
         const member: any = this.getChecker().getSymbolAtLocation(call.expression.name)?.valueDeclaration;
         const owner: any = member?.resolve?.() ?? member;
@@ -4555,7 +4555,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustVenueStrCall(node): boolean {
         if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)
-            || node.expression.expression.kind !== SyntaxKind.ThisKeyword || this.rustNativeStrCalleeKind(node) !== 'str') return false;
+            || node.expression.expression.kind !== SyntaxKind.ThisKeyword || this.rustNativeStrCalleeKind(node) !== 'str' || this.rustBaseNativeStrCall(node)) return false;
         const file = String(this.rustScalarCallee(node)?.getSourceFile?.()?.fileName ?? '');
         const at = file.search(/[/\\]ts[/\\]src[/\\]/);
         if (at < 0) return false;
@@ -5491,6 +5491,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'str' && defaulted) return `${text}.as_str().unwrap_or(${this.quotedStringLiteral(fallback.text)}).to_string()`;
         if (kind === 'int' && defaulted) return `${text}.as_i64().unwrap_or(${this.rustScalarIntLiteral(fallback)})`;
         if (kind === 'ostr' && this.rustVenueStrCall(node)) return this.rustVenueStrCallText(node);
+        if (kind === 'ostr' && this.rustBaseNativeStrCall(node)) return this.rustBaseNativeStrBareText(node);
         if (kind === 'ostr') return `${text}.as_str().map(str::to_owned)`;
         if (kind === 'oint') return `${text}.as_i64()`;
         if (kind === 'onum') return `${text}.as_f64()`;
@@ -6530,8 +6531,9 @@ export class RustTranspiler extends BaseTranspiler {
         // An override's base/trait copy prints `-> Value`. The base classes are hand-tuned across the
         // whole tree: their methods are called from ~every derived file (and the hand-written runtime),
         // where the boxed `Value` ABI is load-bearing. Only per-exchange
-        if (node.type === undefined || this.isAsyncFunction(node) || this.getMethodOverride(node) !== undefined
-            || RustTranspiler.RUST_BASE_TIER_FILE.test(node.getSourceFile().fileName)) {
+        if (node.type === undefined || this.isAsyncFunction(node)) return false;
+        if (!this.rustBaseNativeStrMethod(node) && (this.getMethodOverride(node) !== undefined
+            || RustTranspiler.RUST_BASE_TIER_FILE.test(node.getSourceFile().fileName))) {
             return false;
         }
         let type: Type;
@@ -6541,6 +6543,38 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         return this.primitiveKindOfType(type) === 'string' && this.rustStrReturnPathsConvert(node.body);
+    }
+
+    // Base methods printed `-> Option<String>` in the base tier and in every override (their only hand-written
+    // caller, kraken's `super_safe_currency_code` shim, returns the same type); the by-name arm boxes back once.
+    private static readonly RUST_BASE_NATIVE_STR_METHODS = new Set([ 'safeCurrencyCode' ]);
+
+    private rustBaseNativeStrBare = new Set<Node>();
+
+    /** A call resolving to a `-> Option<String>` base method of the table (or an override of one). */
+    rustBaseNativeStrCall(node: any): boolean {
+        if (node === undefined || !isCallExpression(node) || this.rustNativeStrCalleeKind(node) !== 'str') return false;
+        const declaration: any = this.rustCallDeclarations.get(node);
+        return declaration !== undefined && declaration !== null && this.rustBaseNativeStrMethod(declaration);
+    }
+
+    /** The call's own `Option<String>`, unboxed. */
+    rustBaseNativeStrBareText(node: any): string {
+        this.rustBaseNativeStrBare.add(node);
+        try {
+            return this.printNode(node, 0).trim();
+        } finally {
+            this.rustBaseNativeStrBare.delete(node);
+        }
+    }
+
+    /** A `: Str` method of the table declared in the base tier, or an override of one. */
+    rustBaseNativeStrMethod(node: any): boolean {
+        if (node?.kind !== SyntaxKind.MethodDeclaration || !isIdentifier(node.name) || !RustTranspiler.RUST_BASE_NATIVE_STR_METHODS.has(String(node.name.text))) return false;
+        if (String(node.type?.getText?.() ?? '').trim() !== 'Str') return false;
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile?.()?.fileName ?? ''))) return true;
+        const hidden: any = this.getMethodOverride(node);
+        return hidden !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(hidden.getSourceFile?.()?.fileName ?? ''));
     }
 
     /** Every `return` of the method's own body converts, and the body's last
@@ -6580,6 +6614,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // a local typed only through a per-venue string parameter keeps the decision its boxed form had
         if (this.rustVenueStrReturnLocal(inner) !== undefined && this.rustVenueStrParamLocal(inner)) return true;
+        // a base-tier `Str` method's override returning a parameter the checker narrowed to `undefined` (it reads `None`)
+        if (isIdentifier(inner) && this.rustBaseNativeStrMethod(findAncestor(inner, isFunctionLike) as any)
+            && ((this.getCheckedTypeOf(inner)?.flags ?? 0) & ~(TypeFlags.Undefined | TypeFlags.Null)) === 0) return true;
         return this.printsValueExpression(inner) && this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string';
     }
 
@@ -6654,7 +6691,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** Wrap a call text when the callee returns a native `Option<String>`
      *  and the position still needs a `Value`. */
     rustBoxNativeStrCallIfNeeded(node: Node, text: string): string {
-        return this.rustNativeStrCalleeKind(node) === 'str' && this.rustNativeStrCallNeedsBox(node)
+        return this.rustNativeStrCalleeKind(node) === 'str' && !this.rustBaseNativeStrBare.has(node) && this.rustNativeStrCallNeedsBox(node)
             ? this.rustNativeStrValueBox(text) : text;
     }
 
@@ -7019,6 +7056,8 @@ export class RustTranspiler extends BaseTranspiler {
         let ret: RustDispatchReturnKind = RustTranspiler.RUST_DISPATCH_RETURN_KINDS[returnType] ?? (returnType.startsWith('crate::Result<') ? 'typed' : 'other');
         // a base method of the typed-return table keeps its by-name arm: `Option<i64>` / `Option<String>` box once inside it
         if (this.rustMethodTypedReturnKind(node) !== undefined) ret = ({ 'Option<i64>': 'oint', 'Option<String>': 'keptostr', 'i64': 'keptint', 'String': 'keptstr' } as Record<string, RustDispatchReturnKind>)[returnType] ?? ret;
+        // ral-fb: a base method printing `Option<String>` (safeCurrencyCode and its overrides) keeps its `-> Value` arms the same way
+        if (ret === 'ostr' && this.rustBaseNativeStrMethod(node)) ret = 'keptostr';
         this.rustSignatureTable.set(node, {
             file: node.getSourceFile?.(),
             name: this.toSnakeCaseName(name),
