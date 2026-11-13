@@ -35,7 +35,7 @@ export default class Transpiler {
     cloneSharingProgramCache(config?: any): Transpiler;
     private setSnapshotContext;
     createProgramInMemoryAndSetContext(content: any): ITranspileContext;
-    createProgramByPathAndSetContext(filePath: any): ITranspileContext;
+    createProgramByPathAndSetContext(filePath: any, extraRoots?: string[]): ITranspileContext;
     setSharedProgram(paths: string[]): void;
     private findSharedProgramFile;
     createProgramBatch(paths: string[]): TranspileProgramBatch;

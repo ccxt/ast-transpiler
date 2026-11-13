@@ -512,6 +512,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpSourceLocalType(node: any): string | undefined;
     printVariableDeclarationList(node: any, identation: any): string;
     csharpOmitMemberLocalType(declaration: any): string | undefined;
+    csharpWsCacheMapEntryLocalType(declaration: any): string | undefined;
     csharpMemberAliasLocalType(declaration: any): string | undefined;
     csharpElementRowLocalType(declaration: any): string | undefined;
     csharpElementRowKeyIsString(node: any): boolean;
