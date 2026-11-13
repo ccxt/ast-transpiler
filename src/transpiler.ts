@@ -308,6 +308,18 @@ function createSnapshotProgram(cache: ITranspileProgramCache, rootFiles: string[
     return [snapshot, program, checker];
 }
 
+// A REST venue `ts/src/<id>.ts` with a ws class `ts/src/pro/<id>.ts`: the Rust printer proves a REST helper's typed
+// slot from every caller, so its program loads the ws subclass too (the ws program already imports the REST file;
+// both programs then hold the same callers and take the same decision).
+function wsSiblingRoots(file: string): string[] {
+    const m = String(file).replace(/\\/g, "/").match(/^(.*(?:^|\/)ts\/src\/)([^/]+\.ts)$/);
+    if (m === null) {
+        return [];
+    }
+    const sibling = m[1] + "pro/" + m[2];
+    return fs.existsSync(sibling) ? [sibling] : [];
+}
+
 export default class Transpiler {
     config;
     pythonTranspiler: PythonTranspiler;
@@ -407,12 +419,12 @@ export default class Transpiler {
         return this.setSnapshotContext(snapshot, program, checker, inMemoryFilePath);
     }
 
-    createProgramByPathAndSetContext(filePath): ITranspileContext {
-        const shared = this.findSharedProgramFile(filePath);
+    createProgramByPathAndSetContext(filePath, extraRoots: string[] = []): ITranspileContext {
+        const shared = extraRoots.length === 0 ? this.findSharedProgramFile(filePath) : undefined;
         if (shared !== undefined) {
             return this.setContext(shared);
         }
-        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [filePath, globalsShimPath], { [globalsShimPath]: globalsShim });
+        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [filePath, ...extraRoots, globalsShimPath], { [globalsShimPath]: globalsShim });
         return this.setSnapshotContext(snapshot, program, checker, filePath);
     }
 
@@ -501,7 +513,7 @@ export default class Transpiler {
         // improve this logic later
         if (createContext) {
             if (mode === TranspilationMode.ByPath) {
-                this.createProgramByPathAndSetContext(file);
+                this.createProgramByPathAndSetContext(file, lang === Languages.Rust ? wsSiblingRoots(file) : []);
             } else {
                 this.createProgramInMemoryAndSetContext(file);
             }

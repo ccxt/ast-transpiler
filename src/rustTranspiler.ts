@@ -8077,6 +8077,25 @@ export class RustTranspiler extends BaseTranspiler {
             && parent.parent?.kind === SyntaxKind.ExpressionStatement && this.rustIsTypedMarketCall(parent.right);
     }
 
+    /** `rustLocalUsesAll` (property names skipped) for a market local; a same-named `let`/`const` in a sibling block
+     *  is another Rust binding, so its uses are left to its own decision. */
+    rustMarketLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean {
+        const scope = this.rustEnclosingFunction(declaration);
+        const rebound = scope !== undefined && (this.rustScopeNameNodes(scope, name) as any[]).some((n) => n !== declaration && this.rustBindsName(n, name));
+        if (!rebound) return this.rustLocalUsesAll(declaration, name, true, acceptUse);
+        return this.rustBlockLocalUsesAll(declaration, name, (n: any) => this.rustIdentifierIsPropertyName(n) || acceptUse(n));
+    }
+
+    /** `x[m['k']]` / `this.f[m['k']] = v` with a listed string field `k`: the key read of a market struct. */
+    rustMarketKeyOfLookup(n: any): boolean {
+        const up: any = n.parent;
+        if (up === undefined || !isElementAccessExpression(up) || up.expression !== n || !isStringLiteralLikeNode(up.argumentExpression)) return false;
+        const key = String(up.argumentExpression.text);
+        if (RustTranspiler.RUST_MARKET_STR_FIELDS[key] === undefined) return false;
+        const use: any = up.parent;
+        return use !== undefined && isElementAccessExpression(use) && use.argumentExpression === up;
+    }
+
     /** `m === undefined` / `m !== undefined` (either side). */
     rustIsNullTestOf(n: any): boolean {
         const parent: any = n.parent;
@@ -8110,7 +8129,7 @@ export class RustTranspiler extends BaseTranspiler {
         let slotUses = 0;
         let valueUses = 0;
         let keyReads = 0;
-        const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
+        const ok = this.rustMarketLocalUsesAll(declaration, String(declaration.name.text), (n) => {
             if (this.rustEnclosingFunction(n) !== scope) return false; // a closure capture keeps the box
             if (this.rustIsTypedMarketWrite(n)) {
                 writes++;
@@ -13193,7 +13212,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A printed `Value`: a box, a match arm, or a map read (`get_value` /
         // `unwrap_or(Value::Null)`) — a `string | undefined` member read prints the
         // box, so the type alone would refuse a place that really is a `Value`.
-        if (/^(?:Value::|\(match |\(if |get_value|crate::value::get_value_k)|unwrap_or\(Value::Null\)/.test(text)) {
+        if (/^(?:Value::|\(match |\(if |get_value|crate::value::get_value_k|crate::value::KeyRead::key_read\()|unwrap_or\(Value::Null\)/.test(text)) {
             return true;
         }
         return this.keyPrintsAsValue(this.typeOfNodeIfAny(key));
@@ -14163,6 +14182,9 @@ export class RustTranspiler extends BaseTranspiler {
     printDictKeyRead(node: any): string | undefined {
         const currencyRead = this.printCurrencyKeyRead(node); if (currencyRead !== undefined) return currencyRead;
         const recv: any = node.expression;
+        if (recv !== undefined && isIdentifier(recv) && this.rustMarketKeyOfLookup(recv) && this.rustSafeMarketLocalOf(recv) !== undefined) {
+            return `crate::value::KeyRead::key_read(&&${super.printIdentifier(recv)}, "${this.escapeRustStringLiteral(String(node.argumentExpression.text))}")`;
+        }
         if (recv === undefined || !isIdentifier(recv) || !this.rustDictKeyReadUse(recv)) return undefined;
         const optMarket = this.printOptMarketKeyRead(node); if (optMarket !== undefined) return optMarket;
         if (this.rustMarketSlotParamOf(recv) !== undefined) {
@@ -19658,6 +19680,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A `Market` type reference (or `MarketInterface` when `iface` is set). */
     rustIsMarketTypeNode(type: any, iface: boolean): boolean {
+        // a required `Market | undefined` (a caller passes no market) is the same lent `Option<&Market>`
+        if (iface && type?.kind === SyntaxKind.UnionType && type.types.length === 2 && type.types[1].kind === SyntaxKind.UndefinedKeyword) type = type.types[0];
         if (type?.kind !== SyntaxKind.TypeReference || !isIdentifier(type.typeName)) return false;
         const name = String(type.typeName.text);
         return name === 'Market' || (iface && name === 'MarketInterface');
@@ -19718,14 +19742,38 @@ export class RustTranspiler extends BaseTranspiler {
         });
         // a helper that only reads the record (key readers, null tests) borrows it as well as one that forwards it
         if (!ok || (forwards === 0 && (reads === 0 || others > 0))) return false;
-        // a REST helper is also called from the venue's ws class, which this program may not load: keep it boxed then
-        if (this.rustCalledFromWsSibling(method)) return false;
-        const calls = this.rustVenueStrCallSites(method);
+        // a REST helper is also called from the venue's ws class: those callers must lend too (the ws file is a root of
+        // this program); a ws class this program does not load keeps the helper boxed
+        const sibling = this.rustWsSiblingCallSites(method);
+        if (sibling === undefined) return false;
+        const calls = [ ...this.rustVenueStrCallSites(method), ...sibling ];
         return calls.length > 0 && calls.every((call: any) => {
             const args: any[] = Array.from(call.arguments);
             if (args.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
             return args[at] === undefined ? param.initializer !== undefined : this.rustMarketArgLends(args[at]);
         });
+    }
+
+    /** The calls of REST method `m` from `ts/src/pro/<id>.ts` (checker-resolved to `m`): none when the ws class does
+     *  not call it, undefined when it does but this program does not load the ws file. */
+    rustWsSiblingCallSites(method: any): any[] | undefined {
+        if (!this.rustCalledFromWsSibling(method)) return [];
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const m = file.match(/^(.*(?:^|\/)ts\/src\/)([^/]+\.ts)$/);
+        const program: any = this.getProgram();
+        const sibling: any = m === null ? undefined : (program.getSourceFile?.(m[1] + 'pro/' + m[2]) ?? Array.from((program.getSourceFileNames?.() ?? []) as string[])
+            .map((n: string) => String(n).replace(/\\/g, '/')).filter((n: string) => n.endsWith('/ts/src/pro/' + m[2])).map((n: string) => program.getSourceFile(n))[0]);
+        if (sibling === undefined) return undefined;
+        const calls: any[] = [];
+        let unresolved = false;
+        for (const n of this.rustScopeIndex(sibling).nodes as any[]) {
+            if (!isCallExpression(n) || !isPropertyAccessExpression(n.expression) || String(n.expression.name.text) !== String(method.name.text)) continue;
+            const recv = n.expression.expression.kind;
+            if (recv !== SyntaxKind.ThisKeyword && recv !== SyntaxKind.SuperKeyword) continue;
+            if (this.rustScalarCallee(n) === method) calls.push(n);
+            else unresolved = true;
+        }
+        return unresolved || calls.length === 0 ? undefined : calls;
     }
 
     /** `ts/src/<id>.ts`'s method `m` is called as `this.m (` / `super.m (` in `ts/src/pro/<id>.ts`. */
@@ -19794,13 +19842,15 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(declaration.name.text);
         const scope = this.rustEnclosingFunction(declaration);
         if (scope === undefined || isSourceFile(scope) || !this.rustDictKeyReadLineOk(declaration, name)) return false;
-        return this.rustLocalUsesAll(declaration, name, true, (n: any) => {
+        return this.rustMarketLocalUsesAll(declaration, name, (n: any) => {
             if (this.rustEnclosingFunction(n) !== scope) return false;
             const up: any = n.parent;
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
                 return up.parent?.kind === SyntaxKind.ExpressionStatement && this.rustIsSafeMarketCall(up.right);
             }
             if (this.rustDictKeyReadUse(n)) return true;
+            // `m['symbol']` keying another lookup reads the struct's own field (a `Value` key either way)
+            if (this.rustMarketKeyOfLookup(n)) return true;
             // `safeMarket` always hands back a record: a null test of it is constant
             if (this.rustIsNullTestOf(n) && this.rustNullTestIsCondition(n)) return true;
             if (!isCallExpression(up) || up.expression === n) return false;

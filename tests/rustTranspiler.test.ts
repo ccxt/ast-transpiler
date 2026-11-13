@@ -9949,3 +9949,24 @@ describe('safe scalar locals: optional arithmetic, bool logicals, lent reader st
         expect(out).not.toContain('id.clone()');
     });
 });
+
+describe('typed market locals across sibling blocks, lookup keys and ws callers', () => {
+    test('a safeMarket local next to a same-named sibling binding, read as a lookup key, lends to a REST helper the ws class calls too', () => {
+        const dir = path.join (rustFixtureRoot, 'typed-market-ia');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; id: Str; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport default class Exchange {\n    tickers: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    market (symbol: string): MarketInterface { return undefined; }\n    safeMarket (marketId: Str = undefined, market: Market = undefined, delimiter: Str = undefined, marketType: Str = undefined): MarketInterface { return undefined; }\n    parseTicker (ticker: Dict, market: Market = undefined): Dict { return ticker; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Market, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    helperId (market: Market): Str {\n        return market['id'];\n    }\n    handleTickers (data: Dict[]): Dict {\n        const result: Dict = {};\n        for (let i = 0; i < data.length; i++) {\n            const market = this.safeMarket (this.safeString (data[i], 'id'));\n            const ticker = this.parseTicker (data[i], market);\n            this.tickers[market['symbol']] = ticker;\n            result[this.helperId (market)] = ticker;\n        }\n        if (data.length === 0) {\n            const market = this.safeString (data, 'x');\n            return { 'm': market };\n        }\n        return result;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import venueRest from '../venue.js';\nimport type { Dict, Market, Str } from '../base/Exchange.js';\nexport default class venue extends venueRest {\n    async watchPublic (topic: Str, market: Market | undefined, params: Dict = {}): Promise<any> {\n        return [ topic, this.safeString (market, 'id') ];\n    }\n    async watchTicker (symbol: string, params: Dict = {}): Promise<any> {\n        const market = this.market (symbol);\n        return [ this.helperId (market), await this.watchPublic ('t', market, params) ];\n    }\n    async watchAll (params: Dict = {}): Promise<any> {\n        return await this.watchPublic ('all', undefined, params);\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut market: crate::types::Market = self.safeMarket(');
+        expect(out).toContain('crate::value::KeyRead::key_read(&&market, "symbol")');
+        expect(out).toContain('pub fn helperId(&self, market: Option<&crate::types::Market>)');
+        expect(out).not.toContain('FromRaw>::from_raw(market');
+        const ws = typed.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+        expect(ws).toContain('market: Option<&crate::types::Market>, optional_args: &[Value]) -> Value');
+        expect(ws).toContain('self.helperId(Some(&market))');
+        expect(ws).not.toContain('FromRaw>::from_raw(');
+    });
+});
