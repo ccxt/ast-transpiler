@@ -221,7 +221,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     isDictionaryTsType(type: any, checker: any, depth: number): boolean;
     isVarargsArrayReference(node: any, depth?: number): any;
     isJavaListType(type: any): boolean;
-    javaLengthKind(expression: any): "String" | "List" | "StringOrNull" | "ListOrNull";
+    javaLengthKind(expression: any): "List" | "ListOrNull" | "String" | "StringOrNull";
     isJavaListValueType(type: any): any;
     isJavaListBackedClassType(type: any): boolean;
     isJavaNullishUnion(type: any, isMember: any): any;
@@ -334,14 +334,14 @@ export declare class JavaTranspiler extends BaseTranspiler {
     }): string | undefined;
     equalityOperandFamily(type: any): string | undefined;
     isNullishLiteral(node: any): boolean;
-    javaEqualityLiteralKind(node: any): "int" | "double" | "long";
+    javaEqualityLiteralKind(node: any): "double" | "int" | "long";
     javaEqualityNumberKind(node: any): any;
     javaCrc32Local(node: any): boolean;
     printNativeEqualityIfProvable(node: any, leftText: string, rightText: string): string | undefined;
     javaPrimitiveOperandKind(node: any): any;
     javaPrintedIntCounter(node: any): boolean;
     isJavaFloatLiteral(node: any): boolean;
-    javaPrintedCallKind(node: any): "int" | "double" | "long";
+    javaPrintedCallKind(node: any): "double" | "int" | "long";
     javaComparisonOperandsAreExact(left: any, leftKind: any, right: any, rightKind: any): boolean;
     javaComparisonOperandIsExactAgainstDouble(node: any, kind: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
@@ -400,7 +400,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeMathMinMaxResultIsPlainValue(node: any): boolean;
     printNativeMathMinMax(node: any, left: any, right: any, leftText: any, rightText: any, name: any): string;
     javaUnwrapParentheses(node: any): any;
-    javaNativeArithmeticType(node: any): "String" | "Long" | "Double";
+    javaNativeArithmeticType(node: any): "Double" | "Long" | "String";
     javaEnclosingFunction(node: any): any;
     javaArithmeticWriteIsSafe(right: any, javaType: any): boolean;
     javaScopingBlock(node: any): any;
@@ -408,7 +408,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaBindingsAreDisjoint(declaration: any, other: any): boolean;
     javaArithmeticLocalUseIsSafe(node: any, declaration: any, javaType: any): boolean;
     javaArithmeticLocalIsSafeToType(scope: any, declaration: any, javaType: any): boolean;
-    javaArithmeticLocalType(declaration: any): "String" | "Long" | "Double";
+    javaArithmeticLocalType(declaration: any): "Double" | "Long" | "String";
     javaProvableNumericDoubleOperand(node: any): boolean;
     javaPrintsIntegralNumber(node: any): boolean;
     printPostFixUnaryExpression(node: any, identation: any): string;

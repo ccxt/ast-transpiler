@@ -1207,6 +1207,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `eddsa` / `jwt` / `rsa` return a `String`: boxed once at a `Value` slot, bare for typed locals and `format!` operands. */
     printRustSignerCallBoxed(node: any, identation: any): string | undefined;
     printRustSignerCall(node: any, identation: any): string | undefined;
+    private static readonly RUST_BY_VALUE_CALLEE;
+    /** `x = y;` / `let mut x: Value = y;` on its own line moves `y`: the source is cloned so it stays usable. */
+    static cloneAliasSources(text: string, commented?: boolean): string;
+    /** Clone every bare-local argument of each by-value call in `text` (an argument already `x.clone()` is left). */
+    private static readonly RUST_BY_VALUE_CALLEE_NO_SUPER;
+    static cloneByValueCallArgs(text: string, superCalls?: boolean): string;
+    private static rustBalancedClose;
+    private static rustSplitTopLevel;
     printCallExpression(node: any, identation: any): string;
     printFreeFnDefaultArgsCall(node: any, identation: any): string | undefined;
     printDynamicSelfRead(node: any): string | undefined;
@@ -1481,6 +1489,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Statement-like nodes whose finished lines the 400-char budget is measured on. */
     private rustDictIsOwner;
     printNode(node: any, identation?: number): string;
+    private printNodeUncloned;
     /** Print a statement; when a finished line of it passes 400 chars, decide each dict site against the
      *  line it sits on (the budget the closure-free / closure / helper forms are chosen under). */
     private rustDictPrintOwner;
@@ -1588,7 +1597,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): string;
+    printLogicalInBooleanContext(node: any): any;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
