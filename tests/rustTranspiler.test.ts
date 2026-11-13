@@ -10155,3 +10155,37 @@ describe('typed market locals across sibling blocks, lookup keys and ws callers'
         expect(ws).not.toContain('FromRaw>::from_raw(');
     });
 });
+
+describe('singular parse results stored in a base cache field', () => {
+    const ts = "class T {\n" +
+        "    tickers: any = {};\n" +
+        "    parseTicker (t: any): any { return { 'symbol': t['s'], 'last': t['p'] }; }\n" +
+        "    parseBidAsk (t: any): any[] { return [ t['p'], t['a'] ]; }\n" +
+        "    handleSel (m: string, params: any): any[] { return [ true, params ]; }\n" +
+        "    f (client: any, side: any, msg: any, symbol: string) {\n" +
+        "        const ticker = this.parseTicker (msg);\n" +
+        "        this.tickers[symbol] = ticker;\n" +
+        "        client.resolve (ticker, 'h');\n" +
+        "        const bidAsk = this.parseBidAsk (msg);\n" +
+        "        side.storeArray (bidAsk);\n" +
+        "        const sel = this.handleSel ('f', msg);\n" +
+        "        return [ this.hold (sel), this.tickers ];\n" +
+        "    }\n" +
+        "    hold (x: any): any { return x; }\n" +
+        "}";
+    test('a fresh parsed map stored at one key of a plain cache field is held as the shared Dict', () => {
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut ticker: crate::value::Dict = ');
+        expect(out).toContain('Value::from(&ticker)');
+        expect(out).toContain('Value::Dict(ticker)');
+    });
+    test('a fresh parsed list handed to storeArray is held as the shared List', () => {
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut bidAsk: crate::value::List = ');
+        expect(out).toContain('Value::Arr(bidAsk)');
+    });
+    test('a venue handle* whose body builds its tuple is a fresh List', () => {
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut sel: crate::value::List = ');
+    });
+});
