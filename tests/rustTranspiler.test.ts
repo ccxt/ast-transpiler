@@ -9944,7 +9944,8 @@ describe('safe scalar locals: optional arithmetic, bool logicals, lent reader st
         fs.writeFileSync (path.join (dir, 'ts/src/venue2.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue2 extends Exchange {\n    same (a: any) {\n        const id = this.safeString (a, 'id', 'x');\n        return (id.toString () === id) && (id.length === 36);\n    }\n}\n");
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue2.ts')).content;
         expect(out).toContain('let mut id: String = ');
-        expect(out).toContain('Value::Bool((id == id) && ');
+        // one mechanism with the landed INT-28 rule (an equality operand's toString() borrows): same text, no copy
+        expect(out).toContain('Value::Bool(((id) == id) && ');
         expect(out).not.toContain('id.clone()');
     });
 });

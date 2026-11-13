@@ -57640,8 +57640,6 @@ ${binding(plan.indent)}` : ""), head: "" };
   /** Native text of an operand in `kind` (an `int` operand of an `f64` expression is cast). */
   rustScalarOperandText(kind, node) {
     const inner = this.unwrapParens(node);
-    if (kind === "str" && _is.isCallExpression.call(void 0, inner) && inner.arguments.length === 0 && _is.isPropertyAccessExpression.call(void 0, inner.expression) && inner.expression.name.text === "toString" && _is.isIdentifier.call(void 0, inner.expression.expression) && this.rustScalarIdentifierKind(inner.expression.expression) === "str")
-      return this.rustScalarRecvName(inner.expression.expression);
     if (kind === "num" && this.rustScalarIntLiteral(inner) !== void 0)
       return this.rustScalarFloatLiteral(inner);
     if ((kind === "int" || kind === "num") && (_nullishCoalesce(this.rustScalarIntLiteral(inner), () => ( this.rustScalarFloatLiteral(inner)))) !== void 0) {

@@ -6430,9 +6430,6 @@ export class RustTranspiler extends BaseTranspiler {
     /** Native text of an operand in `kind` (an `int` operand of an `f64` expression is cast). */
     rustScalarOperandText(kind: string, node): string {
         const inner: any = this.unwrapParens(node);
-        // `s.toString()` of a `String` local read by a comparison operand: `==` borrows, so no copy
-        if (kind === 'str' && isCallExpression(inner) && inner.arguments.length === 0 && isPropertyAccessExpression(inner.expression) && inner.expression.name.text === 'toString'
-            && isIdentifier(inner.expression.expression) && this.rustScalarIdentifierKind(inner.expression.expression) === 'str') return this.rustScalarRecvName(inner.expression.expression);
         if (kind === 'num' && this.rustScalarIntLiteral(inner) !== undefined) return this.rustScalarFloatLiteral(inner);
         if ((kind === 'int' || kind === 'num') && (this.rustScalarIntLiteral(inner) ?? this.rustScalarFloatLiteral(inner)) !== undefined) {
             return kind === 'int' ? this.rustScalarIntLiteral(inner) : this.rustScalarFloatLiteral(inner);
