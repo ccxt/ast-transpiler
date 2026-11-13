@@ -1456,17 +1456,44 @@ ${body}
             expect(out).toContain('marketType.as_deref() == Some("spot")');
         });
 
-        test('a single write boxed straight back keeps the Value box', () => {
+        test('a single write boxed straight back keeps its scalar type (D11), an aliased string keeps the box', () => {
             const out = transpiler.transpileRust(cls(`        let p = undefined;
         p = (kind === 'a') ? 'x' : 'y';
         return this.hold(p);`)).content;
-            expect(out).toContain('let mut p: Value = Value::Null;');
+            expect(out).toContain('let mut p: Option<String> = None;');
+            expect(out).toContain('self.hold(p.map(Value::from).unwrap_or(Value::Null))');
             const decoded = transpiler.transpileRust(cls(`        let q = undefined;
         if (kind === 'a') { q = this.safeString(o, 'a'); } else { q = this.safeString(o, 'b'); }
         let r = undefined;
         r = q;
         return this.hold(r);`)).content;
             expect(decoded).toContain('let mut q: Value = Value::Null;');
+        });
+
+        test('nil-declared scalars only handed back to Value slots take their kind, one conversion per box', () => {
+            const out = transpiler.transpileRust(cls(`        let side = undefined;
+        let ts = undefined;
+        if (kind === 'a') { side = this.safeString(o, 'side'); ts = this.safeInteger(o, 't'); }
+        const first = this.hold(ts);
+        return { 'side': side, 'ts': ts, 'first': first };`)).content;
+            expect(out).toContain('let mut side: Option<String> = None;');
+            expect(out).toContain('side = self.safeString(o, Value::Str("side".into()), &[]).as_str().map(str::to_owned);');
+            expect(out).toContain('m.insert("side".to_string(), side');
+            expect(out).toContain('let mut ts: Option<i64> = None;');
+            expect(out).toContain('self.hold(Value::from(ts))');
+            expect(out).toContain('m.insert("ts".to_string(), Value::from(ts));');
+            // a string handed on to another local would need a copy: it keeps the box
+            const copied = transpiler.transpileRust(cls(`        let s = undefined;
+        if (kind === 'a') { s = this.safeString(o, 's'); }
+        const t = s;
+        return this.hold(t);`)).content;
+            expect(copied).toContain('let mut s: Value = Value::Null;');
+            // an int written from another local stays boxed (the alias write would copy at the text pass)
+            const aliased = transpiler.transpileRust(cls(`        const t = this.safeInteger(o, 't');
+        let last = undefined;
+        if (kind === 'a') { last = t; }
+        return { 'last': last, 't': t };`)).content;
+            expect(aliased).toContain('let mut last: Value = Value::Null;');
         });
 
         test('a read outside the proven sinks keeps the Value box', () => {

@@ -2523,11 +2523,36 @@ export class RustTranspiler extends BaseTranspiler {
             if (RustTranspiler.RUST_NIL_SCALAR_NATIVE_FORMS.has(form)) native++;
             return form !== undefined;
         });
-        // without a native read, only repeated native writes (no `Value` decode) earn the type
-        if (!ok || (native === 0 && writes <= 1) || (boxed.length > 0 && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
+        // without a native read, only repeated native writes (no `Value` decode) or a moving hand-off earn the type
+        if (!ok || (native === 0 && writes <= 1 && !this.rustNilScalarHandOff(declaration, scope, kind, boxed))
+            || (boxed.length > 0 && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
         // boxed uses are checked against the printed method lines
         if (boxed.length > 0) this.rustScalarGuarded.add(declaration);
         return kind;
+    }
+
+    // ── nil scalar hand-off (rustNilScalarHandOff) ──
+    // An empty local written from known scalar sources and only boxed back keeps that type: each box
+    // converts once; a string box must move it (return or last use), so no string is copied.
+    rustNilScalarHandOff(declaration, scope, kind: string, boxed: any[]): boolean {
+        if (boxed.length === 0 || this.rustStrReturnedLocal(declaration, scope)) return false;
+        // a string read anywhere but a moving box, or any local written from another local, would copy (or retype that local)
+        let ok = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const form = this.rustScalarUseForms.get(n);
+            if (form === 'slot' || form === 'test') return true;
+            const parent: any = n.parent;
+            if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
+                if (isIdentifier(this.unwrapParens(parent.right))) ok = false;
+                return true;
+            }
+            if (kind !== 'ostr') return true;
+            // an alias or another local's write would take a copy
+            if (parent?.kind === SyntaxKind.VariableDeclaration || (isBinaryExpression(parent) && parent.right === n)) ok = false;
+            if (!((form === 'box' || form === 'xbox') && this.rustScalarBoxMoves(n, form, declaration))) ok = false;
+            return true;
+        });
+        return ok;
     }
 
     // An optional string joins a `format!` concat whose other operand is always a string: the
