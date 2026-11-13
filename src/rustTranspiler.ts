@@ -6390,7 +6390,11 @@ export class RustTranspiler extends BaseTranspiler {
             if (method.method === 'trim') return wrap(`${name}.trim().to_string()`);
             if (method.method === 'toString') {
                 const local = this.rustScalarLocalOf(method.recv);
-                const moved = this.rustScalarParamRead(method.recv) !== undefined || (local !== undefined && this.rustLocalLastUse(method.recv, local.declaration));
+                // an equality operand is only borrowed by `==`: the text itself, no copy
+                let up: any = node.parent;
+                while (up !== undefined && up.kind === SyntaxKind.ParenthesizedExpression) up = up.parent;
+                const compared = up !== undefined && isBinaryExpression(up) && this.isEqualityOp(up.operatorToken.kind);
+                const moved = compared || this.rustScalarParamRead(method.recv) !== undefined || (local !== undefined && this.rustLocalLastUse(method.recv, local.declaration));
                 return wrap(moved ? name : `${name}.clone()`);
             }
             return wrap(`${name}.${fn}()`);

@@ -9725,3 +9725,15 @@ describe('results of methods whose every return builds a fresh container', () =>
         expect(out).toContain('let mut kept: Value = ');
     });
 });
+
+describe('toString of a String local inside a comparison', () => {
+    test('an equality operand borrows the text, no clone', () => {
+        const dir = path.join (rustFixtureRoot, 'str-tostring-compare');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export default class Exchange {\n    uuid (): string { return 'x'; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    check () {\n        const id1: string = this.uuid ();\n        const ok = id1.toString () === id1;\n        this.hold (ok);\n        return this.hold (id1.length);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut id1: String = ');
+        expect(out).not.toContain('id1.clone()) == id1');
+    });
+});
