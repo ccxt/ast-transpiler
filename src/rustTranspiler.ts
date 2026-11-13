@@ -2211,7 +2211,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue; return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
-        if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue}.into_dict()`;
+        if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
         if (boolValue !== undefined) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -6912,6 +6912,30 @@ export class RustTranspiler extends BaseTranspiler {
         return `(if let (Some(__m), Some(__k)) = (${recv}.as_map(), ${name}.as_deref()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
     }
 
+    private static readonly RUST_SCALAR_VALUE_OPERAND_OPS = new Set<SyntaxKind>([
+        SyntaxKind.PlusToken, SyntaxKind.MinusToken, SyntaxKind.AsteriskToken, SyntaxKind.SlashToken,
+    ]);
+
+    /** A number local as one operand of `+ - * /` whose other operand prints as a `Value` (ordered compares keep their own native form). */
+    rustScalarValueOperandUse(parent, n, kind: string): boolean {
+        if (kind !== 'int' && kind !== 'num' && kind !== 'oint' && kind !== 'onum') return false;
+        if (!RustTranspiler.RUST_SCALAR_VALUE_OPERAND_OPS.has(parent.operatorToken.kind)) return false;
+        const other: any = this.unwrapParens(parent.left === n ? parent.right : parent.left);
+        if (other === undefined || this.literalKindOfNode(other) === 'string') return false;
+        // a `for` counter decides its own i64 plan from a native bound
+        const counter: any = isIdentifier(other) ? this.rustDeclaredNode(other) : undefined;
+        if (counter !== undefined && isVariableDeclaration(counter) && counter.parent?.parent?.kind === SyntaxKind.ForStatement) return false;
+        if (this.rustScalarExprHasForCounter(other)) return false;
+        return this.primitiveKindOfType(this.typeOfNodeIfAny(parent.left === n ? parent.right : parent.left)) === 'number';
+    }
+
+    rustScalarExprHasForCounter(node): boolean {
+        const inner: any = this.unwrapParens(node);
+        if (inner === undefined) return false;
+        if (isIdentifier(inner)) { const d: any = this.rustDeclaredNode(inner); return d !== undefined && isVariableDeclaration(d) && d.parent?.parent?.kind === SyntaxKind.ForStatement; }
+        return isBinaryExpression(inner) && (this.rustScalarExprHasForCounter(inner.left) || this.rustScalarExprHasForCounter(inner.right));
+    }
+
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
     rustScalarExpressionUseForm(n, kind: string): string | undefined {
@@ -6930,6 +6954,9 @@ export class RustTranspiler extends BaseTranspiler {
                 return this.rustScalarPlainValueTarget(parent.left) ? 'xbox' : undefined;
             }
             if (RustTranspiler.RUST_SCALAR_ARITH_OPS.has(op) && this.rustScalarExpressionKind(parent) !== undefined) return 'native';
+            // the other operand is still a `Value`: the runtime arithmetic reads this one boxed
+            // (`Value::from` of a Copy number is the Int / Float / Null the `Value` local held), decided with that operand
+            if (this.rustScalarValueOperandUse(parent, n, kind)) return 'xbox';
             return undefined;
         }
         if (isPropertyAccessExpression(parent) && parent.expression === n) {
@@ -14527,6 +14554,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(node)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration.name === node || !isIdentifier(declaration.name)) return false;
+        if (this.rustDictTernarySlotArm(node, declaration)) return true;
         if (isParameterDeclaration(declaration)) {
             const dflt: any = this.rustSkipWrappers(declaration.initializer);
             if (dflt === undefined || !isObjectLiteralExpression(dflt) || dflt.properties.length !== 0) return false;
@@ -14544,6 +14572,69 @@ export class RustTranspiler extends BaseTranspiler {
             if (up.operatorToken.kind !== SyntaxKind.EqualsToken || !isCallExpression(rhs) || !this.rustDictTernaryCall(rhs)) return false;
         }
         return true;
+    }
+
+    /** A local as one arm of a ternary that initialises another `let`, with no loop or closure in between. */
+    rustDictTernaryArmPlace(node: any, declaration: any): boolean {
+        if (declaration?.kind !== SyntaxKind.BindingElement && !isVariableDeclaration(declaration)) return false;
+        let arm: any = node;
+        let up: any = node.parent;
+        while (up !== undefined && up.kind === SyntaxKind.ParenthesizedExpression) { arm = up; up = up.parent; }
+        if (!isConditionalExpression(up) || up.condition === arm || !isVariableDeclaration(up.parent) || up.parent.initializer !== up || !isIdentifier(up.parent.name)) return false;
+        for (let p: any = up.parent; p !== undefined && !(p.pos <= declaration.pos && declaration.end <= p.end); p = p.parent) {
+            if (isFunctionLike(p) || p.kind === SyntaxKind.ForStatement || p.kind === SyntaxKind.ForOfStatement || p.kind === SyntaxKind.ForInStatement
+                || p.kind === SyntaxKind.WhileStatement || p.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
+    }
+
+    /** The arm is the local's last read: every other read precedes the declaring statement or sits in the
+     *  other arm (only one arm runs), so the arm moves the map. */
+    rustDictTernaryArmMoves(node: any, declaration: any): boolean {
+        if (!this.rustDictTernaryArmPlace(node, declaration)) return false;
+        let arm: any = node;
+        while (arm.parent?.kind === SyntaxKind.ParenthesizedExpression) arm = arm.parent;
+        const cond: any = arm.parent;
+        const sibling: any = cond.whenTrue === arm ? cond.whenFalse : cond.whenTrue;
+        const statement: any = cond.parent?.parent?.parent;
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined || statement === undefined || !isStatement(statement)) return false;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text)) as any[]) {
+            if (n === node || n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n) || !this.rustIdentifierRefersToDeclaration(n, declaration)) continue;
+            if (n.pos >= sibling.pos && n.end <= sibling.end) continue;
+            if (n.end > statement.pos) return false;
+        }
+        return true;
+    }
+
+    /** A `let x = c ? <map> : <map>` local: like a params slot, it may also go whole into a plain `Value` argument. */
+    rustHandedTernaryLocal(declaration: any): boolean {
+        return declaration !== undefined && isVariableDeclaration(declaration) && this.rustDictTernaryInit(declaration.initializer);
+    }
+
+    /** A typed dict local (handed slot / handed local / printed borrowed map) as such an arm: it goes in as the map. */
+    rustDictTernarySlotArm(node: any, declaration: any): boolean {
+        if (!this.rustDictTernaryArmPlace(node, declaration)) return false;
+        if (this.rustHandedDictLocal(declaration)) return true;
+        return this.rustBorrowedLocalKind(declaration) === 'dict' && this.rustPrintedBorrowed.has(declaration) && !this.rustOptContainerLocals.has(declaration);
+    }
+
+    /** `let x: crate::value::Dict = if c { a } else { b }` with each arm native: a base `extend`/`omit` result unboxed
+     *  once, a moved handed slot as is. Only when an arm is such a slot; other ternaries keep the boxed if-expression. */
+    printDictTernaryArms(init: any, identation: number): string | undefined {
+        const node: any = this.rustSkipWrappers(init);
+        if (node === undefined || !isConditionalExpression(node)) return undefined;
+        const slot = (arm: any) => { const a: any = this.rustSkipWrappers(arm); if (!isIdentifier(a)) return false; const d: any = this.rustDeclarationOfIdentifier(a); return d !== undefined && this.rustDictTernarySlotArm(a, d); };
+        if (!slot(node.whenTrue) && !slot(node.whenFalse)) return undefined;
+        const arm = (n: any) => {
+            const a: any = this.rustSkipWrappers(n);
+            if (slot(a)) { const text = String(a.text); const name = super.transformIdentifier(a, this.ReservedKeywordsReplacements[text] ?? text); return this.rustDictTernaryArmMoves(a, this.rustDeclarationOfIdentifier(a)) ? name : `${name}.clone()`; }
+            if (!isCallExpression(a)) return undefined;
+            return `${this.printNode(a, identation).trim()}.into_dict()`;
+        };
+        const t = arm(node.whenTrue); const f = arm(node.whenFalse);
+        if (t === undefined || f === undefined) return undefined;
+        return `(if ${this.printCondition(node.condition, 0)} { ${t} } else { ${f} })`;
     }
 
     rustDictTernaryCall(call: any): boolean {
@@ -16952,6 +17043,7 @@ export class RustTranspiler extends BaseTranspiler {
             const call: any = n.parent;
             const mutable = isCallExpression(call) ? undefined : this.rustMutableSlotUse(n, declaration); if (mutable === 'native') uses++;
             if (!isCallExpression(call)) {
+                if (mutable === undefined && isVariableDeclaration(declaration) && this.rustDictTernaryArmPlace(n, declaration)) { boxes++; return true; }
                 if (mutable === 'box' || (mutable === undefined && this.rustHandedSlotBoxUse(n, declaration))) boxes++;
                 return mutable !== undefined || this.rustHandedSlotBoxUse(n, declaration);
             }
@@ -16966,7 +17058,7 @@ export class RustTranspiler extends BaseTranspiler {
             return ok || boxed;
         });
         // a params slot only handed back to `Value` slots shares its map there (moved at the last use, lent before it)
-        return safe && (uses > 0 || (declaration.kind === SyntaxKind.BindingElement && boxes > 0 && !longBox));
+        return safe && (uses > 0 || ((declaration.kind === SyntaxKind.BindingElement || this.rustHandedTernaryLocal(declaration)) && boxes > 0 && !longBox));
     }
 
     /** `[a, b] = this.m (.., n)`: printed as one `__destr_tmp` block line, kept within the line budget by the bare box. */
@@ -17802,7 +17894,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustHandedSlotBoxUse(n: any, declaration: any): boolean {
         const up: any = n.parent;
-        if (declaration?.kind !== SyntaxKind.BindingElement || up === undefined || this.rustScalarInNestedWrite(n)) return false;
+        if ((declaration?.kind !== SyntaxKind.BindingElement && !this.rustHandedTernaryLocal(declaration)) || up === undefined || this.rustScalarInNestedWrite(n)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression)
             || (up.expression.expression.kind !== SyntaxKind.ThisKeyword && up.expression.expression.kind !== SyntaxKind.SuperKeyword)) return false;
@@ -17826,7 +17918,10 @@ export class RustTranspiler extends BaseTranspiler {
     printHandedSlotBox(node: any, text: string): string | undefined {
         if (!isIdentifier(node)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
-        if (declaration?.kind !== SyntaxKind.BindingElement || declaration.name === node || !(this.rustHandedSlotBoxUse(node, declaration) || this.rustMutableSlotUse(node, declaration) === 'box') || !this.rustHandedDictLocal(declaration)) return undefined;
+        const local = declaration !== undefined && isVariableDeclaration(declaration) && declaration.name !== node
+            && (this.rustDictTernaryArmPlace(node, declaration) || (this.rustHandedTernaryLocal(declaration) && this.rustHandedSlotBoxUse(node, declaration)));
+        if (!local && (declaration?.kind !== SyntaxKind.BindingElement || declaration.name === node || !(this.rustHandedSlotBoxUse(node, declaration) || this.rustMutableSlotUse(node, declaration) === 'box'))) return undefined;
+        if (!this.rustHandedDictLocal(declaration)) return undefined;
         return this.rustLocalLastUse(node, declaration) ? `Value::Dict(${text})` : `Value::from(&${text})`;
     }
 

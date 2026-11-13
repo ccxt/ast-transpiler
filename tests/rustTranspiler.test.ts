@@ -6009,7 +6009,9 @@ describe('handed-on dict locals', () => {
         expect(out).toContain('self.safe_string_k(&picked, "s", &[])');
         expect(out).toContain('&[&picked])');
         expect(out).not.toContain('picked: Value');
-        expect(out).toContain('let mut back: Value = ');
+        // a dict ternary handed straight back is stored-and-boxed-back (D11): typed, and the box moves the map
+        expect(out).toContain('let mut back: crate::value::Dict = ');
+        expect(out).toContain('self.hold(Value::Dict(back))');
     });
 });
 
@@ -10403,5 +10405,54 @@ describe('rust ws watch results typed by a resolve proof', () => {
     });
     test('negative: a hash resolved with two kinds (a dict and a book) stays a Value', () => {
         expect(out).toMatch(/let mut ticker: Value = self\.watch\(/);
+    });
+});
+
+describe('dict ternaries and arithmetic with a Value operand', () => {
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (rustFixtureRoot, 'je-ternary', String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\n" +
+            "const omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n" +
+            "    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    parseTimeframe (t: string): number { return 60; }\n    hold (x: any): any { return x; }\n" +
+            "    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n" +
+            "    handleParamString (params: Dict, paramName: string, defaultValue: Str = undefined): [Str, Dict] {\n        const value = this.safeString (params, paramName, defaultValue);\n        const paramsOmitted = (value !== undefined) ? this.omit (params, paramName) : params;\n        return [ value, paramsOmitted ];\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+
+    test('c ? this.omit (slot, k) : slot over a handed params slot is a Dict with each arm native', () => {
+        const out = run ("    fetchThing (params: Dict = {}) {\n        const [ tag, paramsTag ] = this.handleParamString (params, 'tag');\n" +
+            "        const paramsOmitted = (tag !== undefined) ? this.omit (paramsTag, 'x') : paramsTag;\n        return this.extend ({ 'tag': tag }, paramsOmitted);\n    }\n");
+        expect(out).toContain('let mut paramsOmitted: crate::value::Dict = (if ');
+        expect(out).toContain('.into_dict() } else { paramsTag })');
+        expect(out).toContain('&[&paramsOmitted]');
+        expect(out).not.toContain('Value::from(&paramsTag) })');
+    });
+
+    test('a dict ternary local handed whole to a Value argument moves its map there', () => {
+        const out = run ("    fetchThing (params: Dict = {}) {\n        const id = this.safeString (params, 'id');\n" +
+            "        const paramsOmitted = (id !== undefined) ? this.omit (params, 'id') : params;\n        return this.hold (paramsOmitted);\n    }\n");
+        expect(out).toContain('let mut paramsOmitted: crate::value::Dict = ');
+        expect(out).toContain('Value::Dict(paramsOmitted)');
+    });
+
+    test('an i64 clock local minus a Value operand is boxed once at the runtime arithmetic', () => {
+        const dir = path.join (rustFixtureRoot, 'je-clock');
+        fs.mkdirSync (path.join (dir, 'ts/src/base/functions'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/functions/time.ts'), "// @ts-nocheck\nconst now = Date.now;\nconst milliseconds = now;\nexport { milliseconds };\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "import { milliseconds } from './functions/time.js';\nexport default class Exchange {\n    milliseconds = milliseconds;\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    window (since: number) {\n" +
+            "        const now = this.milliseconds ();\n        const ago = now - since;\n        if (now > 5) {\n            return this.hold (ago);\n        }\n        return now;\n    }\n}\n");
+        const out = new Transpiler({ 'verbose': false }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut now: i64 = ');
+        expect(out).toContain('(&(Value::from(now)), &(since))');
+    });
+
+    test('negative: a for counter bound by an i64 keeps its own native compare', () => {
+        const out = run ("    fetchThing (rows: any[]) {\n        const count = rows.length;\n        let s: any = 0;\n" +
+            "        for (let i = 0; i < count; i++) {\n            s = this.hold (rows[i]);\n        }\n        return s;\n    }\n");
+        expect(out).not.toContain('is_less_than(&i');
     });
 });
