@@ -3995,6 +3995,8 @@ export class RustTranspiler extends BaseTranspiler {
         const keyLent = !this.rustStrNoLend && this.rustScalarOptKeyCostly(declaration, kind) && this.rustReaderLendBoxes(declaration, true);
         if (this.rustScalarOptKeyCostly(declaration, kind) && !keyLent) return undefined;
         if (keyLent) this.rustStrLentLocals.add(declaration);
+        // a market-field string boxed before its last use copies the field where the `Value` was shared
+        if (strKind && copied > 0 && this.rustMarketFieldScalar(this.unwrapParens(declaration.initializer)) !== undefined) return undefined;
         // D11: a proven integer / number `sum` handed on boxes a Copy scalar (`Value::from`), no copy to earn back
         const numericSum = (kind === 'int' || kind === 'num') && this.rustSumShape(this.unwrapParens(declaration.initializer));
         if (!numericSum && this.rustNewShapeCostly(declaration.initializer, typedUses, kind === 'str' || kind === 'ostr' ? copied : 0)) return undefined;
@@ -4189,6 +4191,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && this.rustScalarFloatLiteral(node) !== undefined) return 'num';
         const expressionKind = this.rustScalarExpressionKind(node);
         if (expressionKind !== undefined) return expressionKind;
+        const marketField = fresh ? this.rustMarketFieldScalar(node) : undefined; if (marketField !== undefined) return marketField.kind;
+        // a comparison over reader / literal operands that already prints as a native `bool`
+        if (fresh && isBinaryExpression(node) && RustTranspiler.COMPARISON_OPS.has(node.operatorToken.kind) && this.rustBoolCompareSeed(node)) return 'bool';
         const cast = this.rustStrCastCall(node); if (cast !== undefined) return this.rustScalarValueKind(cast, fresh) === 'ostr' ? 'ostr' : undefined;
         if (fresh && this.rustClockString(node)) return 'str';
         if (this.rustArithCombinator(node)) return this.rustArithCallKind(node);
@@ -5922,6 +5927,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const expressionText = this.rustScalarExpressionText(kind, node);
         if (expressionText !== undefined) return expressionText;
+        const marketField = this.rustMarketFieldScalar(node); if (marketField !== undefined) return marketField.kind === kind ? marketField.text : undefined;
         const boolText = kind === 'bool' && this.literalKindOfNode(node) !== 'boolean' ? this.rustBoolNativeText(node) : undefined; if (boolText !== undefined) return boolText;
         if (base === 'str' && this.literalKindOfNode(node) === 'string') return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
         if (base === 'bool' && this.literalKindOfNode(node) === 'boolean') return wrap(node.kind === SyntaxKind.TrueKeyword ? 'true' : 'false');
@@ -8569,6 +8575,47 @@ export class RustTranspiler extends BaseTranspiler {
         return value === undefined ? undefined : `${indent}let mut ${varName}: crate::types::Market = ${value}`;
     }
 
+    /** A `const x = <comparison>` initializer whose native text exists and whose local's checker type is `boolean`. */
+    rustBoolCompareSeed(node: any): boolean {
+        let top: any = node;
+        while (top.parent !== undefined && isParenthesizedExpression(top.parent)) top = top.parent;
+        if (!isVariableDeclaration(top.parent) || top.parent.initializer !== top || !isIdentifier(top.parent.name)) return false;
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(top.parent.name)) !== 'boolean') return false;
+        // printing an operand that reads another local would decide that local while this one is open: params and members only
+        let readsLocal = false;
+        const visit = (n: any) => {
+            if (readsLocal) return;
+            if (isIdentifier(n) && !this.rustIdentifierIsPropertyName(n)) {
+                const d: any = this.rustDeclaredNode(n);
+                if (d !== undefined && !isParameterDeclaration(d)) readsLocal = true;
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        visit(node);
+        return !readsLocal && this.rustBoolNativeText(node) !== undefined;
+    }
+
+    // ── string fields of a typed market local as scalar seeds (rustMarketFieldScalar) ──
+    /** `m['symbol']` / `m.id` off a loaded `crate::types::Market` local: the field's own `String` / `Option<String>`
+     *  (the boxed read cloned the same field), so a local initialised from it is a typed string. */
+    rustMarketFieldScalar(node: any): { kind: string, text: string } | undefined {
+        if (node === undefined || !(isElementAccessExpression(node) || isPropertyAccessExpression(node))) return undefined;
+        // only as a `const`/`let` initializer: a write into another (nil-declared) local keeps that rule's decision
+        let top: any = node;
+        while (top.parent !== undefined && (isParenthesizedExpression(top.parent) || top.parent.kind === SyntaxKind.AsExpression)) top = top.parent;
+        if (!isVariableDeclaration(top.parent) || top.parent.initializer !== top) return undefined;
+        const declaration = this.rustTypedMarketLocalOf(node.expression);
+        if (declaration === undefined || this.rustMarketLocalKind(declaration) !== 'struct') return undefined;
+        const key = this.rustMarketReadKey(node.expression);
+        if (key === undefined) return undefined;
+        const recv = `(${this.printNode(declaration.name, 0)})`;
+        const field = RustTranspiler.RUST_MARKET_STR_FIELDS[key];
+        if (field !== undefined) return { kind: 'str', text: `${recv}.${field}.clone()` };
+        const optField = RustTranspiler.RUST_MARKET_OPT_STR_FIELDS[key];
+        return optField !== undefined ? { kind: 'ostr', text: `${recv}.${optField}.as_deref().map(str::to_owned)` } : undefined;
+    }
+
     /** A read off a struct local: a listed field natively, any other key off `raw`; `asBool` for a condition slot. */
     printTypedMarketRead(node: any, asBool = false): string | undefined {
         const receiver: any = (isElementAccessExpression(node) || isPropertyAccessExpression(node)) ? node.expression
@@ -9830,6 +9877,14 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(node)) return false;
         const declaration: any = this.rustDeclaredNode(node);
         if (declaration === undefined || this.rustEnclosingFunction(declaration) !== method) return false;
+        // a `const [ a, .. ] = this.m (..)` slot whose producer is itself exact at that index
+        if (declaration.kind === SyntaxKind.BindingElement) {
+            const pattern: any = declaration.parent;
+            const owner: any = pattern?.parent;
+            if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || !isVariableDeclaration(owner) || owner.initializer === undefined
+                || (owner.parent.flags & NodeFlags.Const) === 0 || declaration.initializer !== undefined || declaration.dotDotDotToken !== undefined) return false;
+            return this.rustExactSlotCallee(owner.initializer, pattern.elements.indexOf(declaration), want);
+        }
         if (isParameterDeclaration(declaration)) {
             const type: any = declaration.type;
             const keyword = want === 'bool' ? SyntaxKind.BooleanKeyword : SyntaxKind.NumberKeyword;

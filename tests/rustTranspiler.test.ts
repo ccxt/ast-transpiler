@@ -10269,3 +10269,44 @@ describe('rust ternary-initialised scalar locals', () => {
         expect(out).not.toContain('upper.clone()');
     });
 });
+
+describe('literal and boxed-field locals typed at the declaration', () => {
+    const fx = (name: string, base: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('a string field of a typed market local is a String / Option<String> local', () => {
+        const file = fx ('ig-market-field',
+            "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; spot: boolean; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n",
+            "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    one (symbol: string) {\n        const market = this.market (symbol);\n        const symbolValue = market['symbol'];\n        const marketId = market['id'];\n        if (marketId === undefined) {\n            return this.hold (symbolValue);\n        }\n        return this.hold (marketId);\n    }\n    two (symbol: string) {\n        const market = this.market (symbol);\n        const copied = market['symbol'];\n        this.hold (copied, 1);\n        return this.hold (copied);\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = typed.transpileRustByPath (file).content;
+        expect(out).toContain('let mut symbolValue: String = (market).symbol.clone();');
+        expect(out).toContain('let mut marketId: Option<String> = (market).id.as_deref().map(str::to_owned);');
+        expect(out).toContain('marketId.is_none()');
+        // negative: a field string boxed before its last use would copy where the `Value` was shared
+        expect(out).toContain('let mut copied: Value = Value::from((market).symbol.clone());');
+    });
+    test('a comparison initialiser that prints a native bool is a bool local', () => {
+        const file = fx ('ig-bool-compare',
+            "export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    hold (m: any): any { return m; }\n}\n",
+            "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parse (market: any) {\n        const active = this.safeString (market, 'status') === 'TRADING';\n        const flagged: any = this.safeString (market, 'x') === 'y';\n        return { 'active': active, 'flagged': this.hold (flagged) };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        expect(out).toContain('let mut active: bool = (self.safeString(');
+        expect(out).toContain('Value::Bool(active)');
+        // negative: an `any`-annotated local keeps its box
+        expect(out).toContain('let mut flagged: Value = ');
+    });
+    test('a tuple slot returned from an exact slot of another call stays exact', () => {
+        const file = fx ('ig-exact-slot-chain',
+            "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nexport default class Exchange {\n    safeValue (d: any, k: any, dflt: any = undefined): any { return d[k]; }\n    checkOptionBool (methodName: string, optionName: string, value: any): Bool {\n        if (value === undefined) {\n            return undefined;\n        }\n        return value === true;\n    }\n    handleOptionBoolAndParams (params: Dict, methodName: string, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const value = this.safeValue (params, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), params ];\n    }\n    handleOptionAndParams (params: Dict, methodName: string, optionName: string, defaultValue: any = undefined): [any, Dict] {\n        return [ this.safeValue (params, optionName, defaultValue), params ];\n    }\n}\n",
+            "import Exchange from './base/Exchange.js';\nimport type { Dict, Bool } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleFlag (params: Dict, methodName: string, defaultValue: boolean = false): [Bool, Dict] {\n        const [ flag, rest ] = this.handleOptionBoolAndParams (params, methodName, 'flag');\n        if (flag !== undefined) {\n            return [ flag, rest ];\n        }\n        return [ defaultValue, rest ];\n    }\n    handleLoose (params: Dict, methodName: string): [Bool, Dict] {\n        const [ flag, rest ] = this.handleOptionAndParams (params, methodName, 'flag');\n        return [ flag, rest ];\n    }\n    one (params: Dict) {\n        const [ chained, rest ] = this.handleFlag (params, 'one');\n        const [ loose, rest2 ] = this.handleLoose (rest, 'one');\n        return { 'a': chained, 'b': loose, 'c': rest2 };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        expect(out).toContain('let mut chained: Option<bool> = ');
+        // negative: a slot fed by an `any` producer keeps its box
+        expect(out).toContain('let mut loose: Value = ');
+    });
+});
