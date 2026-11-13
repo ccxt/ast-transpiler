@@ -12985,7 +12985,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A `let` declared empty is filled later by container writes only (the optional form).
         const nilDeclared = (init === undefined || this.literalKindOfNode(init) === 'null') && (list.flags & NodeFlags.Const) === 0
             && list.parent?.kind === SyntaxKind.VariableStatement;
-        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? this.rustBorrowedSourceKind(init) : (this.rustDictElementSource(init) ? 'dict' : undefined);
+        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? this.rustBorrowedSourceKind(init) ?? this.rustBuiltReturnSourceKind(init) : (this.rustDictElementSource(init) ? 'dict' : undefined);
         const endpoint = from === 'api';
         if (endpoint) from = this.rustDeclaredEndpointKind(init) ?? 'api';
         if (from === undefined && !nilDeclared) return undefined;
@@ -13047,7 +13047,8 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             if (this.rustExtendHeadUse(n)) return ++extendHeads > 0 && ++reads > 0;
-            const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0) && boxedElementUses.push(n) > 0;
+            const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0
+                || this.rustBuiltReturnBoxUse(n, init) && ++defaultedBoxes > 0) && boxedElementUses.push(n) > 0;
             const asArg: any = isAsExpression(up) && up.expression === n && isCallExpression(up.parent) && Array.from(up.parent.arguments).includes(up) ? up : undefined;
             if (asArg !== undefined && this.rustLentAsHandOff(asArg, init, from, endpoint, nilDeclared)) return ++lentResponses > 0 && ++reads > 0 && (this.rustLentAsNullable(init, nilDeclared, endpoint) ? ++lentNullable > 0 : true);
             if (this.rustLentResponseSlot(up, n) && this.rustLentResponseSource(init)) return ++lentResponses > 0 && ++reads > 0;
@@ -13068,7 +13069,9 @@ export class RustTranspiler extends BaseTranspiler {
         };
         // an endpoint response may share its name with a `let`/`const` in a sibling block (another Rust binding)
         const safe = endpoint && !nilDeclared ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
-        if (!safe || (reads === 0 && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
+        // a fresh built container handed on whole (D11): every use is a box, the declaration converts once
+        const builtBoxOnly = reads === 0 && boxedElementUses.length > 0 && nullTests === 0 && writes === 0 && init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) !== undefined;
+        if (!safe || (reads === 0 && !builtBoxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
         // an endpoint written into an empty `let` may answer a list: `into_opt_dict` keeps only maps, so it is never lent whole
         if (this.rustNilResponseLocals.has(declaration) && (lentResponses > 0 || lentNullable > 0)) return undefined;
@@ -13586,6 +13589,46 @@ export class RustTranspiler extends BaseTranspiler {
             declaration = (owner !== undefined && isClassDeclaration(owner) ? Array.from(owner.members) : []).find((m: any) => isMethodDeclaration(m) && m.body !== undefined && isIdentifier(m.name) && String(m.name.text) === name);
         }
         return declaration !== undefined && this.rustParamReadsByReference(declaration.parameters?.[0]);
+    }
+
+    // ── rustBuiltReturnSourceKind / rustBuiltReturnBoxUse: results of methods whose every return builds a fresh container ──
+    // `this.m (..)` whose resolved body returns a fresh, untagged map (list) on every path (`rustCallBuildsContainer`, the
+    // proof the dict producers already use) always answers `Value::Dict` (`Value::Arr`), so `into_dict()` / `into_list()`
+    // moves the handle out of the box exactly. A base-tier call of a trait-dispatched method may run a venue override
+    // whose body the proof never saw: rejected. Readers, `handle*` tuples, watch/subscribe futures and market /
+    // currency lookups have their own rules.
+    rustBuiltReturnSourceKind(call: any): 'dict' | 'list' | undefined {
+        const callee: any = call?.expression;
+        if (!isCallExpression(call) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(callee.name)) return undefined;
+        const method = String(callee.name.text);
+        if (/^(?:safe|handle[A-Z]|extend$|deepExtend$|omit$|keysort$|parseJson$|watch|subscribe|unsubscribe|market$|currency$)/.test(method)) return undefined;
+        if (this.rustTestTierSource(call) || this.rustTypedUnified.has(method)) return undefined;
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(String(call.getSourceFile?.()?.fileName ?? '')) && this.rustVirtualDispatch[this.toSnakeCaseName(method)] !== undefined) return undefined;
+        // an async base method may answer through `dispatch_to_derived` (a venue override the checker cannot see here)
+        const callee0: any = this.rustScalarCallee(call);
+        if (callee0 === undefined || (this.isAsyncFunction(callee0) && RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee0.getSourceFile?.()?.fileName ?? '')))) return undefined;
+        if (this.rustCallBuildsContainer(call, 'map', 0)) return 'dict';
+        return this.rustCallBuildsContainer(call, 'list', 0) ? 'list' : undefined;
+    }
+
+    // The box that hands such a local on whole: a plain `Value` slot of a `this.` method, `return x`, an object literal
+    // value, an array literal element, or the value argument of a `Value` receiver's `push` / `append` / `reset` /
+    // ws `resolve` (moved at the last use, else the Arc bump the boxed local's copy paid).
+    private static readonly RUST_BUILT_BOX_RECEIVER_METHODS = new Set([ 'push', 'append', 'reset', 'resolve' ]);
+
+    rustBuiltReturnBoxUse(n: any, init: any): boolean {
+        const up: any = n.parent;
+        if (init === undefined || !isCallExpression(init) || up === undefined || this.rustBuiltReturnSourceKind(init) === undefined || this.rustScalarInNestedWrite(n)) return false;
+        if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
+        if (isReturnStatement(up)) return up.expression === n;
+        if (isArrayLiteralExpression(up)) return true;
+        if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression)) return false;
+        const callee = String(up.expression.name.text);
+        const at = Array.from(up.arguments).indexOf(n);
+        if (isIdentifier(up.expression.expression)) return at === 0 && RustTranspiler.RUST_BUILT_BOX_RECEIVER_METHODS.has(callee) && !this.rustIdentifierRefersToDeclaration(up.expression.expression, this.rustDeclarationOfIdentifier(n));
+        if (up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
+        return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && this.rustNilBoxSlotOk(up, at);
     }
 
     /** `'dict' | 'list' | 'api'` for a container source the local may hold by reference. */

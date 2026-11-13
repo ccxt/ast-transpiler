@@ -6715,12 +6715,13 @@ describe ('rustCallInitContainerLocals', () => {
             expect(out).not.toContain('add_element_to_object(&mut orderbook');
         });
 
-        test('a produced local that only escapes keeps the box (no helper folds)', () => {
+        test('a produced local that only escapes holds the shared map and moves it into the box (D11)', () => {
             const out = rust('    onlyEscaped (response: any) {\n'
                 + '        const orderbook = this.parseOrderBook (response, "BTC/USDT");\n'
                 + '        return this.use (orderbook);\n'
                 + '    }\n');
-            expect(out).toContain('let mut orderbook: Value = self.parseOrderBook(response, Value::Str("BTC/USDT".into()));');
+            expect(out).toContain('let mut orderbook: crate::value::Dict = self.parseOrderBook(response, Value::Str("BTC/USDT".into())).into_dict();');
+            expect(out).toContain('self.use(Value::Dict(orderbook))');
         });
 
         test('a local read out of the live ws order cache keeps the helper', () => {
@@ -9534,5 +9535,35 @@ describe('typed market slots of read-only venue helpers', () => {
         expect(out).toContain('Some(&market))');
         expect(out).not.toContain('FromRaw>::from_raw(market');
         expect(out).not.toContain('crate::Value::from(market)');
+    });
+});
+
+describe('results of methods whose every return builds a fresh container', () => {
+    const ts = "class T {\n" +
+        "    parseRow (row: any): any { return { 'id': row['id'], 'v': 1 }; }\n" +
+        "    parseRows (rows: any): any[] { const out = []; out.push (rows); return out; }\n" +
+        "    hold (x: any): any { return x; }\n" +
+        "    passThrough (x: any): any { return x; }\n" +
+        "    f (raw: any, cache: any) {\n" +
+        "        const row = this.parseRow (raw);\n" +
+        "        const id = this.hold (row['id']);\n" +
+        "        cache.append (row);\n" +
+        "        const rows = this.parseRows (raw);\n" +
+        "        this.hold (rows);\n" +
+        "        const kept = this.passThrough (raw);\n" +
+        "        cache.append (kept);\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}";
+    test('a built map / list result is held as the shared container and handed on once', () => {
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut row: crate::value::Dict = self.parseRow(raw).into_dict();');
+        expect(out).toContain('cache.append(Value::Dict(row));');
+        expect(out).toContain('let mut rows: crate::value::List = ');
+        expect(out).toContain('self.hold(Value::Arr(rows))');
+    });
+    test('negative: a method that hands back its argument keeps the box', () => {
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut kept: Value = ');
     });
 });
