@@ -166,6 +166,7 @@ const JAVA_MAP_WRITE_FIELDS: Set<string> = new Set([
     'quoteCurrencies',
     'tickers',
     'trades',
+    'positionsByType',
     'transformedApi',
     'urls',
     'userAgents',
@@ -195,6 +196,7 @@ const JAVA_PLAIN_MAP_FIELDS: Set<string> = new Set([
     'tickers',
     'timeframes',
     'trades',
+    'positionsByType',
     'transformedApi',
 ]);
 
@@ -211,7 +213,7 @@ const JAVA_OWNER_MEMBER_NAME = /^(?:handle[A-Z]\w*|parseWSBalances)$/;
 // deliberately absent: assigning them to a Map needs a cast javaBaseMapFieldLocalType forbids.
 const JAVA_DECLARED_MAP_FIELD_NAMES: Set<string> = new Set<string>([
     'markets', 'markets_by_id', 'has', 'features', 'options', 'balance',
-    'tickers', 'fundingRates', 'bidsasks', 'trades', 'orderbooks', 'ohlcvs',
+    'tickers', 'fundingRates', 'bidsasks', 'trades', 'orderbooks', 'ohlcvs', 'positionsByType',
     'commonCurrencies', 'networkAliases',
 ]);
 
@@ -672,6 +674,7 @@ const JAVA_HASH_MAP_FIELDS: { [name: string]: true } = {
     'tickers': true,
     'bidsasks': true,
     'trades': true,
+    'positionsByType': true,
     'fees': true,
     'urls': true,
     'markets_by_id': true,

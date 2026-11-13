@@ -8944,7 +8944,7 @@ describe('rust watch takes message and subscribe hash as positional parameters',
 describe('rust filter helpers take their optional scalars as typed positional parameters', () => {
     test('the base helpers print Option<i64> / Option<&str> slots and keep the rest in the slice', () => {
         const base = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'typed-filter-params', 'ts/src/base/Exchange.ts')).content;
-        expect(base).toContain('fn filterBySinceLimit(&self, array: Value, since: Option<i64>, limit: Option<i64>, optional_args: &[Value])');
+        expect(base).toContain('fn filterBySinceLimit(&self, array: impl Rows, since: Option<i64>, limit: Option<i64>, optional_args: &[Value])');
         expect(base).toContain('fn filterBySymbolSinceLimit(&self, array: Value, symbol: Option<&str>, since: Option<i64>, limit: Option<i64>, optional_args: &[Value])');
         expect(base).toContain('let key = get_arg(optional_args, 0, Value::Str("timestamp".into()));');
         expect(base).toMatch(/return self\.filterBySinceLimit\(array, since, limit, &\[Value::Str\("timestamp"\.into\(\)\), tail(\.clone\(\))?\]\);/);
@@ -9456,11 +9456,101 @@ describe('rust ws cache maps', () => {
         expect(out).toContain('let mut cache: Option<crate::pro::cache::Cache> = self.trades.at(&symbol);');
         expect(out).toContain('Value::from(self.trades.at(&symbol))');
         expect(base).toContain('self.trades = crate::pro::cache::CacheMap::new();');
-        expect(base).toContain('CacheStore::forget(&mut self.trades, &symbol)');
+        expect(base).toContain('self.trades.forget(&symbol)');
+    });
+    test('a delete names the field as its receiver, so the ccxt self-field auto-clone leaves it alone', () => {
+        // ccxt build/rustTranspiler.ts getRustRegexes: bare `self.F` not followed by `.`, `(`, `[` or `=` gets `.clone()`.
+        const autoClone = (t: string) => t.replace(/(?<!&)\bself\.([a-zA-Z_][a-zA-Z0-9_]*)\b(?![.\(\[]|\s*=[^=])/g, (_: string, n: string) => `self.${n}.clone()`);
+        const line = base.split('\n').find((l) => l.includes('.forget(')) as string;
+        expect(line).toBeDefined();
+        expect(line).not.toContain('&mut self.trades');
+        expect(autoClone(line)).toBe(line);
+        expect(autoClone('CacheStore::forget(&mut self.trades, &symbol)')).toContain('self.trades.clone()');
     });
     test('negative: any other read of the map is its boxed snapshot', () => {
         expect(out).toContain('Value::from(&self.trades)');
         expect(out).not.toContain('Value::Dict(__d) = &mut self.trades');
+    });
+});
+
+describe('rust ws order books', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/OrderBook.ts": "export class WsOrderBook {\\n    cache: any[] = [];\\n    constructor (snapshot: any = {}, depth: any = undefined) {}\\n    limit () { return this; }\\n    reset (snapshot: any = {}) {}\\n}\\nexport class CountedOrderBook extends WsOrderBook {}\\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\\n    resolve (result: any, messageHash: string): any { return result; }\\n}\\n",
+        "ts/src/base/Exchange.ts": "import { WsOrderBook, CountedOrderBook } from './ws/OrderBook.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    orderbooks: Dictionary<WsOrderBook> = {};\n    safeValue (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    safeInteger (obj: any, key: any, defaultValue: number = undefined): number { return obj[key]; }\n    createSafeDictionary (isWs: boolean = false) { return {}; }\n    orderBook (snapshot = {}, depth = 100): WsOrderBook { return new WsOrderBook (snapshot, depth); }\n    countedOrderBook (snapshot = {}, depth = 100): CountedOrderBook { return new CountedOrderBook (snapshot, depth); }\n    reset () {\n        this.orderbooks = this.createSafeDictionary (true);\n    }\n    drop (symbol: string) {\n        if (symbol in this.orderbooks) {\n            delete this.orderbooks[symbol];\n        }\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n    handleOrderBook (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = this.orderBook ({}, 10);\n        }\n        const orderbook = this.orderbooks[symbol];\n        orderbook.reset (message);\n        orderbook['nonce'] = this.safeInteger (message, 'u');\n        const bids = orderbook['bids'];\n        client.resolve (orderbook, 'orderbook:' + symbol);\n        return bids;\n    }\n    handleSnapshot (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        const ob = this.countedOrderBook (message);\n        this.orderbooks[symbol] = ob;\n        if (this.safeValue (this.orderbooks, symbol) === undefined) {\n            return;\n        }\n        client.resolve (ob, symbol);\n    }\n    handleLoose (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        const stored = this.orderbooks[symbol];\n        stored.cache.push (message);\n        this.orderbooks[symbol] = stored;\n    }\n}\n",
+    };
+    let out: string;
+    let base: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-books-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        base = transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the book map field is tested, written, read and deleted as a typed BookMap', () => {
+        expect(out).toContain('self.orderbooks.has(&symbol)');
+        expect(out).toMatch(/CacheStore::put\(&mut self\.orderbooks, &symbol, (__cv|self\.orderBook\()/);
+        expect(out).toContain('self.orderbooks.lookup(&symbol).is_none()');
+        expect(base).toContain('self.orderbooks = crate::pro::order_book::BookMap::new();');
+        expect(base).toContain('self.orderbooks.forget(&symbol)');
+    });
+    test('a local bound to a map read is an optional book with native side and meta access', () => {
+        expect(out).toContain('let mut orderbook: Option<crate::pro::order_book::Book> = self.orderbooks.at(&symbol);');
+        expect(out).toContain('orderbook.reset(');
+        expect(out).toContain('orderbook.set_book_meta("nonce", ');
+        expect(out).toContain('orderbook.book_field("bids")');
+        expect(out).toContain('client.resolve(Value::from(&orderbook)');
+    });
+    test('a constructor-initialised local is a book and is stored without a box', () => {
+        expect(out).toContain('let mut ob: crate::pro::order_book::Book = self.countedOrderBook(');
+        expect(out).toMatch(/CacheStore::put\(&mut self\.orderbooks, &symbol, ob(\.clone\(\))?\)/);
+        expect(out).toContain('client.resolve(Value::from(&ob)');
+    });
+    test('negative: a local whose cache buffer is pushed stays a boxed Value and is stored through the marker test', () => {
+        expect(out).toContain('let mut stored: Value = Value::from(self.orderbooks.at(&symbol));');
+        expect(out).not.toContain('Value::Dict(__d) = &mut self.orderbooks');
+    });
+});
+
+describe('rust filter rows', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport type Int = number | undefined;\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    orders: ArrayCache | undefined = undefined;\n    toArray (x: any): any[] { return Object.values (x); }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterBySinceLimit (array: object[] | undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        if (array === undefined) {\n            return [];\n        }\n        const parsedArray: any[] = this.toArray (array);\n        return parsedArray;\n    }\n    filterBySymbolSinceLimit (array: object[] | undefined, symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return this.filterBySinceLimit (array, since, limit, tail);\n    }\n    filterBySymbolsSinceLimit (array: any, symbols: Strings = undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return this.filterBySinceLimit (array, since, limit, tail);\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    watchOrders (symbol: string = undefined, since: number = undefined, limit: number = undefined) {\n        return this.filterBySymbolSinceLimit (this.orders, symbol, since, limit, true);\n    }\n    handleOrders (client: Client, message: any) {\n        const cache = new ArrayCache (10);\n        cache.append (message);\n        client.resolve (cache, 'orders');\n        return this.filterBySinceLimit (cache, undefined, undefined);\n    }\n    rows (message: any) {\n        return this.filterBySinceLimit (message, undefined, 5);\n    }\n}\n",
+    };
+    let out: string;
+    let base: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-rows-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        base = transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('a rows parameter declared object[] takes impl Rows, with no body binding', () => {
+        expect(base).toContain('array: impl Rows, since: Option<i64>');
+        expect(base).toContain('if (Rows::absent(&array))');
+        expect(base).toContain('self.toArray(Rows::rows(array))');
+        expect(base).not.toMatch(/let mut array: Value = array\.into\(\);/);
+        // an own rows parameter moves on to the next rows slot
+        expect(base).toMatch(/self\.filterBySinceLimit\(array, since, limit/);
+    });
+    test('a typed cache field or cache local is lent, a Value passes as before', () => {
+        expect(out).toContain('self.filterBySymbolSinceLimit(&self.orders, ');
+        expect(out).toContain('self.filterBySinceLimit(&cache, None, None');
+        expect(out).toMatch(/self\.filterBySinceLimit\(message, None, Some\(5\)/);
+    });
+    test('negative: an `any` rows parameter stays Value', () => {
+        expect(base).toMatch(/filterBySymbolsSinceLimit\(&self, (mut )?array: Value/);
     });
 });
 
@@ -9496,7 +9586,8 @@ describe('rust ws cache shelves', () => {
         expect(out).toContain('self.ohlcvs.shelf(&symbol).has(&timeframe)');
         expect(out).toContain('let mut ohlcv: Option<crate::pro::cache::Cache> = self.ohlcvs.shelf(&symbol).at(&timeframe);');
         expect(base).toContain('self.ohlcvs = crate::pro::cache::CacheShelf::new();');
-        expect(base).toContain('CacheShelves::forget2(&mut self.ohlcvs, &symbol, &timeframe)');
+        expect(base).toContain('self.ohlcvs.forget2(&symbol, &timeframe)');
+        expect(base).not.toContain('&mut self.ohlcvs, &symbol, &timeframe');
     });
     test('negative: any other read of an inner map is its boxed snapshot', () => {
         expect(out).toContain('Value::from(self.ohlcvs.shelf(&symbol))');
@@ -9504,12 +9595,46 @@ describe('rust ws cache shelves', () => {
     });
 });
 
+describe('rust ws positions caches', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\nexport class ArrayCacheBySymbolBySide extends ArrayCache {}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    positions: ArrayCache | undefined = undefined;\n    positionsByType: Dictionary<ArrayCache> = {};\n    safeValue (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    reset () {\n        this.positions = undefined;\n        this.positionsByType = {};\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCacheBySymbolBySide } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    handlePositions (client: Client, message: any) {\n        if (this.positions === undefined) {\n            this.positions = new ArrayCacheBySymbolBySide ();\n        }\n        const cache = this.positions;\n        cache.append (message);\n        client.resolve (cache, 'positions');\n    }\n    handleTypedPositions (client: Client, message: any) {\n        const type = this.safeString (message, 't');\n        if (!(type in this.positionsByType)) {\n            this.positionsByType[type] = new ArrayCacheBySymbolBySide ();\n        }\n        const cache = this.positionsByType[type];\n        cache.append (message);\n        client.resolve (cache, type + ':positions');\n        return this.safeValue (this.positionsByType, type);\n    }\n}\n",
+    };
+    let out: string;
+    let base: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-positions-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        base = transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the single positions field is an optional cache handle and its local is typed', () => {
+        expect(out).toContain('if (self.positions.is_none()) {');
+        expect(out).toContain('self.positions = Some(ArrayCacheBySymbolBySide::new(');
+        expect(out).toContain('let mut cache: Option<crate::pro::cache::Cache> = self.positions.clone();');
+        expect(base).toContain('self.positions = None;');
+    });
+    test('the per-type positions field is a cache map', () => {
+        expect(out).toContain('self.positionsByType.has(&type_var)');
+        expect(out).toContain('CacheStore::put(&mut self.positionsByType, &type_var, ArrayCacheBySymbolBySide::new())');
+        expect(out).toContain('let mut cache: Option<crate::pro::cache::Cache> = self.positionsByType.at(&type_var);');
+        expect(out).toContain('Value::from(self.positionsByType.lookup(&type_var))');
+        expect(base).toContain('self.positionsByType = crate::pro::cache::CacheMap::new();');
+    });
+});
+
 describe('rust ws cache handles', () => {
     const files: Record<string, string> = {
         "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: string | undefined, limit: number | undefined): number | undefined { return limit; }\n}\nexport class ArrayCacheBySymbolById extends ArrayCache {}\n",
         "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
-        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    orders: ArrayCache | undefined = undefined;\n    myTrades: ArrayCache | undefined;\n    positions: any = undefined;\n    safeInteger (obj: any, key: string, defaultValue: number = undefined): number { return obj[key]; }\n    filterBySinceLimit (a: any, since: number = undefined, limit: number = undefined): any { return a; }\n    reset () {\n        this.orders = undefined;\n    }\n}\n",
-        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache, ArrayCacheBySymbolById } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    handleOrder (client: Client, message: any) {\n        if (this.orders === undefined) {\n            const limit = this.safeInteger (this.options, 'ordersLimit', 1000);\n            this.orders = new ArrayCacheBySymbolById (limit);\n        }\n        const cachedOrders = this.orders;\n        cachedOrders.append (message);\n        client.resolve (cachedOrders, 'orders');\n        client.resolve (this.orders, 'orders:all');\n    }\n    handleMyTrade (client: Client, message: any) {\n        let trades = this.myTrades;\n        if (trades === undefined) {\n            trades = new ArrayCache (10);\n            this.myTrades = trades;\n        }\n        trades.append (message);\n        return this.filterBySinceLimit (trades);\n    }\n    handlePosition (message: any) {\n        const stored = new ArrayCache (5);\n        stored.append (message);\n        this.positions = new ArrayCacheBySymbolById ();\n        const loose = this.orders;\n        const copy = loose;\n        return [ stored, copy ];\n    }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    orders: ArrayCache | undefined = undefined;\n    myTrades: ArrayCache | undefined;\n    loosePositions: any = undefined;\n    safeInteger (obj: any, key: string, defaultValue: number = undefined): number { return obj[key]; }\n    filterBySinceLimit (a: any, since: number = undefined, limit: number = undefined): any { return a; }\n    reset () {\n        this.orders = undefined;\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache, ArrayCacheBySymbolById } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    handleOrder (client: Client, message: any) {\n        if (this.orders === undefined) {\n            const limit = this.safeInteger (this.options, 'ordersLimit', 1000);\n            this.orders = new ArrayCacheBySymbolById (limit);\n        }\n        const cachedOrders = this.orders;\n        cachedOrders.append (message);\n        client.resolve (cachedOrders, 'orders');\n        client.resolve (this.orders, 'orders:all');\n    }\n    handleMyTrade (client: Client, message: any) {\n        let trades = this.myTrades;\n        if (trades === undefined) {\n            trades = new ArrayCache (10);\n            this.myTrades = trades;\n        }\n        trades.append (message);\n        return this.filterBySinceLimit (trades);\n    }\n    handlePosition (message: any) {\n        const stored = new ArrayCache (5);\n        stored.append (message);\n        this.loosePositions = new ArrayCacheBySymbolById ();\n        const loose = this.orders;\n        const copy = loose;\n        return [ stored, copy ];\n    }\n}\n",
     };
     let out: string;
     let base: string;
@@ -9542,7 +9667,7 @@ describe('rust ws cache handles', () => {
         expect(out).toContain('Value::from(&stored)');
     });
     test('negative: a constructor stored in an untyped field is boxed and an aliased field local stays Value', () => {
-        expect(out).toContain('self.positions = Value::from(ArrayCacheBySymbolById::new(');
+        expect(out).toContain('self.loosePositions = Value::from(ArrayCacheBySymbolById::new(');
         expect(out).toContain('let mut loose: Value = ');
     });
 });

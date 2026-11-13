@@ -8124,6 +8124,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         const localType = isNew ? 'var' : this.getCSharpLocalType(declaration);
         const declaredType = (localType === this.VAR_TOKEN && node.declarations.length === 1)
             ? (this.csharpOmitMemberLocalType(declaration) ?? this.csharpMemberAliasLocalType(declaration) ?? localType) : localType;
+        const cacheEntryType = (!isNew && declaredType === this.VAR_TOKEN && node.declarations.length === 1) ? this.csharpWsCacheMapEntryLocalType(declaration) : undefined;
+        if (cacheEntryType !== undefined) {
+            this.csharpTypedLocals.set(declaration, cacheEntryType);
+            return this.getIden(identation) + cacheEntryType + " " + this.printNode(declaration.name) + " = ((" + cacheEntryType + ")" + parsedValue + ")";
+        }
         if (!isNew && declaredType === this.VAR_TOKEN && node.declarations.length === 1) {
             const rowType = this.csharpElementRowLocalType(declaration);
             if (rowType !== undefined) {
@@ -8157,6 +8162,38 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const member = this.csharpMemberReceiver(this.csharpUnwrapAssertion(call.arguments[0]));
         return (member !== undefined && member.kind === 'dict' && member.declared) ? 'Dictionary<string, object>' : undefined;
+    }
+
+    // `const x = this.F[k]` / `const x = this.safeValue (this.F, k)` where the base field F is declared
+    // `Dictionary<ArrayCache>` (ts/src/base/Exchange.ts): every entry is an ArrayCache-family box or absent,
+    // so the const local names the cache class and its `append` binds natively; a miss reads null either way.
+    csharpWsCacheMapEntryLocalType(declaration): string | undefined {
+        if (declaration?.name?.kind !== SyntaxKind.Identifier || ((declaration.parent?.flags & NodeFlags.Const) === 0)) {
+            return undefined;
+        }
+        const init = this.csharpUnwrapAssertion(declaration.initializer);
+        let field: any = undefined;
+        if (init?.kind === SyntaxKind.ElementAccessExpression) {
+            field = init.expression;
+        } else if (init?.kind === SyntaxKind.CallExpression && init.arguments?.length === 2 && isPropertyAccessExpression(init.expression)
+            && init.expression.expression?.kind === SyntaxKind.ThisKeyword && init.expression.name?.text === 'safeValue') {
+            field = init.arguments[0];
+        }
+        if (field === undefined || !isPropertyAccessExpression(field) || field.expression?.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        let declared: any;
+        try {
+            declared = this.getChecker().getSymbolAtLocation(field.name)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return undefined;
+        }
+        const type: any = declared?.type;
+        const ok = declared?.kind === SyntaxKind.PropertyDeclaration
+            && /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(String(declared.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/'))
+            && type?.kind === SyntaxKind.TypeReference && type.typeName?.text === 'Dictionary' && type.typeArguments?.length === 1
+            && type.typeArguments[0].kind === SyntaxKind.TypeReference && type.typeArguments[0].typeName?.text === 'ArrayCache';
+        return ok ? 'ccxt.pro.ArrayCache' : undefined;
     }
 
     // `const x = this.<member>` over a member DECLARED a string-keyed dictionary (Exchange.Options.cs): the const

@@ -505,7 +505,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_NUMBER_CONSTANT_IMPORTS.has(name) && this.rustIsImportedValueName(node)) {
             return `Value::Int(crate::runtime::${name})`;
         }
-        return this.printRustBytesLocalRead(node) ?? this.printWsCacheLocalUse(node) ?? this.printClientHandleUse(node) ?? this.printTypedFilterParamRead(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node);
+        return this.printRustBytesLocalRead(node) ?? this.printWsBookLocalUse(node) ?? this.printWsCacheLocalUse(node) ?? this.printClientHandleUse(node) ?? this.printTypedFilterParamRead(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node);
     }
 
     /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
@@ -914,8 +914,9 @@ export class RustTranspiler extends BaseTranspiler {
     // Value variants line up; undefined keeps the is_equal() helper.
     printNativeEqualityComparison(left, right, op): string {
         const nilLocal = this.printRustNilLocalEquality(left, right, op); if (nilLocal !== undefined) return nilLocal;
+        const bookTest = this.printWsBookNullTest(left, right, op); if (bookTest !== undefined) return bookTest;
         const mapTest = this.printWsCacheMapNullTest(left, right, op); if (mapTest !== undefined) return mapTest;
-        const cacheTest = this.printWsCacheNullTest(left, right, op); if (cacheTest !== undefined) return cacheTest;
+        const cacheTest = this.printWsCacheNullTest(left, right, op) ?? this.printFilterRowsNullTest(left, right, op); if (cacheTest !== undefined) return cacheTest;
         const optContainer = this.printOptContainerNullTest(left, right, op) ?? this.printOptListNullTest(left, right, op) ?? this.printNilMapNullTest(left, right, op); if (optContainer !== undefined) return optContainer;
         const optMarket = this.printOptMarketNullTest(left, right, op); if (optMarket !== undefined) return optMarket;
         const currencySlot = this.printCurrencySlotNullTest(left, right, op) ?? this.printCurrencyLocalNullTest(left, right, op); if (currencySlot !== undefined) return currencySlot;
@@ -1992,6 +1993,7 @@ export class RustTranspiler extends BaseTranspiler {
             const assignments = left.elements.map((e, idx) => this.printRustNilSlotWrite(e, slotRead(idx)) ?? `${this.printNode(e, 0)} = ${slotRead(idx)}`).join('; ');
             return `{ ${head}; ${assignments}; }`;
         }
+        const bookWrite = isAssign ? this.printWsBookMetaWrite(left, right) ?? this.printWsBookMapWrite(left, right) ?? this.printWsBookLocalWrite(left, right) : undefined; if (bookWrite !== undefined) return bookWrite;
         const mapWrite = isAssign ? this.printWsCacheMapWrite(left, right) : undefined; if (mapWrite !== undefined) return mapWrite;
         const cacheWrite = isAssign ? this.printWsCacheWrite(left, right) : undefined; if (cacheWrite !== undefined) return cacheWrite;
         const builtListWrite = isAssign && isIdentifier(left) ? this.printBuiltListWrite(left, right) : undefined; if (builtListWrite !== undefined) return builtListWrite;
@@ -2070,7 +2072,7 @@ export class RustTranspiler extends BaseTranspiler {
         // `in` — wrapped as Value so it composes in any context
         if (op === SyntaxKind.InKeyword) {
             const shadow = this.rustParamShadowOf(right);
-            return this.printWsCacheMapHas(left, right) ?? this.printBorrowedInOp(left, right) ?? this.printFieldKeyInOp(left, right) ?? this.printElemKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
+            return this.printWsBookMapHas(left, right) ?? this.printWsCacheMapHas(left, right) ?? this.printBorrowedInOp(left, right) ?? this.printFieldKeyInOp(left, right) ?? this.printElemKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
                 ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right)
                 ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right)
                 ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
@@ -2134,6 +2136,7 @@ export class RustTranspiler extends BaseTranspiler {
         const handleDecl = this.printClientHandleDeclaration(node, identation); if (handleDecl !== undefined) return handleDecl;
         const declaration = node.declarations[0];
         const indent = this.getIden(identation);
+        const bookDecl = node.declarations.length === 1 && declaration?.name.kind === SyntaxKind.Identifier ? this.printWsBookLocalDeclaration(declaration, this.printNode(declaration.name, 0), indent) : undefined; if (bookDecl !== undefined) return bookDecl;
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
             const parsedElements = declaration.name.elements.map(e => this.printNode(e.name, 0));
             const syntheticName = parsedElements.join('') + 'Variable';
@@ -5646,6 +5649,8 @@ export class RustTranspiler extends BaseTranspiler {
         let boxed = false;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             const form = this.rustScalarUseForms.get(n);
+            // a `safeValue (this.orderbooks, k)` key was a by-value reader argument before the map was typed, never a field key
+            if (form === 'fin' && this.rustWsBookKeyOf(n) && isCallExpression(this.rustWsBookKeyParent(n))) return true;
             if (form === 'fin' || form === 'frd' || (form === 'key' && this.rustFieldKeyReceiver(n.parent?.expression) !== undefined)) field = true;
             else if ((form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)) boxed = true;
             return true;
@@ -7489,7 +7494,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustSignatureTable: Map<any, RustMethodSignature> = new Map();
 
     private static readonly RUST_DISPATCH_PARAM_KINDS: Record<string, RustDispatchParamKind> = {
-        'Value': 'value', 'impl Into<crate::Value>': 'value', '&[Value]': 'slice', '&mut indexmap::IndexMap<String, Value>': 'map',
+        'Value': 'value', 'impl Into<crate::Value>': 'value', 'impl Rows': 'value', '&[Value]': 'slice', '&mut indexmap::IndexMap<String, Value>': 'map',
         'Vec<String>': 'strvec', 'bool': 'flag', '&str': 'str', 'Option<&str>': 'optstr', 'f64': 'f64',
         'Option<f64>': 'optf64', 'Option<i64>': 'opti64', 'i64': 'i64', 'Option<Vec<String>>': 'optstrvec', 'Vec<Vec<String>>': 'strvecvec',
         'impl Into<crate::Params> + Send': 'params', 'crate::value::Dict': 'dict', 'crate::value::List': 'list',
@@ -8941,6 +8946,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printCallExpression(node, identation) {
         const expression = node.expression;
+        const bookCall = this.printWsBookMapRead(node) ?? this.printWsBookCtorCall(node, identation); if (bookCall !== undefined) return bookCall;
         const mapLookup = this.printWsCacheMapRead(node); if (mapLookup !== undefined) return mapLookup;
         const borrowedRead = this.printBorrowedDictRead(node, identation); if (borrowedRead !== undefined) return borrowedRead;
         const handed = this.printHandedDictExtend(node, identation); if (handed !== undefined) return handed;
@@ -9187,6 +9193,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printPropertyAccessExpression(node, identation) {
+        const bookField = this.printWsBookFieldRead(node) ?? this.printWsBookMapField(node); if (bookField !== undefined) return bookField;
         const cacheField = this.printWsCacheHashmapRead(node) ?? this.printWsCacheFieldRead(node) ?? this.printWsCacheMapField(node); if (cacheField !== undefined) return cacheField;
         const listField = this.printTypedListFieldRead(node); if (listField !== undefined) return listField;
         const dictKeyRead = this.printDictKeyRead(node); if (dictKeyRead !== undefined) return dictKeyRead;
@@ -11133,6 +11140,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpression(node, identation) {
+        const bookRead = this.printWsBookMapRead(node) ?? this.printWsBookFieldRead(node); if (bookRead !== undefined) return bookRead;
         const mapRead = this.printWsCacheMapRead(node); if (mapRead !== undefined) return mapRead;
         const fieldRead = this.printFieldKeyRead(node); if (fieldRead !== undefined) return fieldRead;
         const dictKeyRead = this.printDictKeyRead(node); if (dictKeyRead !== undefined) return dictKeyRead;
@@ -11642,7 +11650,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printDeleteExpression(node, identation) {
-        return this.printWsCacheMapDelete(node) ?? this.printClientHandleDelete(node) ?? this.provenDictFieldDelete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
+        return this.printWsBookMapDelete(node) ?? this.printWsCacheMapDelete(node) ?? this.printClientHandleDelete(node) ?? this.provenDictFieldDelete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
     }
 
     printInstanceOfExpression(node, identation) {
@@ -14851,7 +14859,7 @@ export class RustTranspiler extends BaseTranspiler {
         const n: any = this.unwrapParens(node);
         if (n === undefined || !isPropertyAccessExpression(n) || n.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(n.name)) return false;
         const name = String(n.name.text);
-        if (name !== 'orders' && name !== 'myTrades' && name !== 'liquidations' && name !== 'myLiquidations') return false;
+        if (name !== 'orders' && name !== 'myTrades' && name !== 'liquidations' && name !== 'myLiquidations' && name !== 'positions') return false;
         let declaration: any;
         try {
             declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(n.name));
@@ -15076,7 +15084,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** `this.F` for a base field declared `Dictionary<ArrayCache>`. */
     rustWsCacheMapField(node: any): boolean {
         const n: any = this.unwrapParens(node);
-        if (n === undefined || !isPropertyAccessExpression(n) || n.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(n.name) || String(n.name.text) !== 'trades') return false;
+        if (n === undefined || !isPropertyAccessExpression(n) || n.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(n.name) || (String(n.name.text) !== 'trades' && String(n.name.text) !== 'positionsByType')) return false;
         let declaration: any;
         try {
             declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(n.name));
@@ -15171,6 +15179,7 @@ export class RustTranspiler extends BaseTranspiler {
         while (isParenthesizedExpression(up.parent) || isAsExpression(up.parent) || isNonNullExpression(up.parent)) up = up.parent;
         const p: any = up.parent;
         if (p === undefined) return false;
+        if (this.rustWsBookMapKeyUse(up)) return true;
         if (isElementAccessExpression(p)) return p.argumentExpression === up && (this.rustWsCacheMapLike(p.expression) || this.rustWsCacheShelfField(p.expression));
         if (isBinaryExpression(p) && p.operatorToken.kind === SyntaxKind.InKeyword) return p.left === up && (this.rustWsCacheMapLike(p.right) || this.rustWsCacheShelfField(this.rustStripWrappers(p.right)));
         return isCallExpression(p) && p.arguments[1] === up && (this.rustWsCacheMapLookup(p) || this.rustWsCacheShelfLookup(p) || this.rustWsCacheShelfEnsure(p));
@@ -15269,10 +15278,11 @@ export class RustTranspiler extends BaseTranspiler {
     /** `delete this.F[k]`. */
     printWsCacheMapDelete(node: any): string | undefined {
         const target: any = this.unwrapParens(node.expression);
+        const base = RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile().fileName));
         if (this.rustWsCacheShelfEntry(target)) {
             const key = this.rustWsCacheMapKey(target.argumentExpression);
             const field = String(this.unwrapParens(target.expression).name.text);
-            return /\bself\b/.test(key) ? `{ let __ck = ${key}; CacheShelves::forget(&mut self.${field}, &__ck); }` : `CacheShelves::forget(&mut self.${field}, &${key})`;
+            return this.rustWsCacheForget(base, 'CacheShelves', field, [key]);
         }
         if (!this.rustWsCacheMapEntry(target)) return undefined;
         const key = this.rustWsCacheMapKey(target.argumentExpression);
@@ -15280,12 +15290,24 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustWsCacheShelfEntry(inner)) {
             const outer = this.rustWsCacheMapKey(inner.argumentExpression);
             const shelf = String(this.unwrapParens(inner.expression).name.text);
-            if (/\bself\b/.test(outer + key)) return `{ let __ck = ${outer}; let __cj = ${key}; CacheShelves::forget2(&mut self.${shelf}, &__ck, &__cj); }`;
-            return `CacheShelves::forget2(&mut self.${shelf}, &${outer}, &${key})`;
+            return this.rustWsCacheForget(base, 'CacheShelves', shelf, [outer, key]);
         }
         if (!this.rustWsCacheMapField(inner)) throw new Error('ws cache map: delete on an unproven map');
         const field = String(this.unwrapParens(target.expression).name.text);
-        return /\bself\b/.test(key) ? `{ let __ck = ${key}; CacheStore::forget(&mut self.${field}, &__ck); }` : `CacheStore::forget(&mut self.${field}, &${key})`;
+        return this.rustWsCacheForget(base, 'CacheStore', field, [key]);
+    }
+
+    /** One forget/forget2 call. In the base tier the field is the method receiver (`self.F.forget(&k)`): a `&mut self.F`
+     *  argument there gets `.clone()` from the ccxt self-field rule (the base fns are not `pub`, so its strip pass skips
+     *  them) and the delete hit a copy. Pro handlers keep the `&mut self.F` argument, which is what promotes them to
+     *  `&mut self` in ccxt. Keys mentioning `self` are bound first so the field borrow does not overlap them. */
+    rustWsCacheForget(base: boolean, trait: string, field: string, keys: string[]): string {
+        const op = keys.length === 2 ? 'forget2' : 'forget';
+        const bound = /\bself\b/.test(keys.join(' '));
+        const names = bound ? keys.map((_, i) => i === 0 ? '__ck' : '__cj') : keys;
+        const call = base ? `self.${field}.${op}(${names.map((k) => '&' + k).join(', ')})` : `${trait}::${op}(&mut self.${field}, ${names.map((k) => '&' + k).join(', ')})`;
+        if (!bound) return call;
+        return `{ ${keys.map((k, i) => `let ${names[i]} = ${k};`).join(' ')} ${call}; }`;
     }
 
     /** The value of `this.F[k] = x` for a cache local `x` (or a constructor). */
@@ -15358,6 +15380,416 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustWsCacheMapField(node) && !this.rustWsCacheShelfField(node)) return undefined;
         if (this.isNativeWriteTargetBase(node)) throw new Error(`ws cache map ${String(node.name.text)} written outside a proven form`);
         return `Value::from(&self.${String(node.name.text)})`;
+    }
+
+    // ── ws order books (rustWsBookMapField / rustWsBookLocal / printWsBook*) ──
+    // The base field `orderbooks: Dictionary<WsOrderBook>` is a `BookMap` (`IndexMap<String, Book>`) and the base
+    // `orderBook / indexedOrderBook / countedOrderBook` return the runtime's typed `Book`. Every use of the field is
+    // proven here with the cache-map key rules (`has` / `at` / `lookup` / `put` / `forget`); any other write throws.
+    // A local bound to a map read is an `Option<Book>`, one bound to a constructor a `Book`, when every use is a null
+    // test, a side / meta read (`book_field`), a meta write (`set_book_meta`), `limit()` / `reset(..)` as a statement,
+    // a write from a book source, a write back into the map, or a hand-off that boxes it once (`Value::from(&x)`).
+    private static readonly RUST_BOOK_TYPE = 'pro::order_book::Book';
+    private static readonly RUST_BOOK_MAP_TYPE = 'pro::order_book::BookMap';
+    private static readonly RUST_BOOK_CTORS = new Set([ 'orderBook', 'indexedOrderBook', 'countedOrderBook' ]);
+    private static readonly RUST_BOOK_SIDE_FIELDS = new Set([ 'bids', 'asks', 'timestamp', 'datetime', 'nonce', 'symbol', 'cache' ]);
+    // `set_book_meta` writes these to the shared store (`cache` replaces the shared delta buffer)
+    private static readonly RUST_BOOK_META_WRITES = new Set([ 'timestamp', 'datetime', 'nonce', 'symbol', 'cache' ]);
+    private rustWsBookMapFields = new WeakMap<Node, boolean>();
+    private rustWsBookLocals = new WeakMap<Node, 'opt' | 'book' | null>();
+    private rustWsBookUses = new WeakMap<Node, 'bare' | 'box' | 'test' | 'field' | 'meta'>();
+    private rustWsBookCtorPrinting = new WeakSet<Node>();
+    private rustWsBookCtorBare = new WeakSet<Node>();
+
+    /** `this.F` for a base field declared `Dictionary<WsOrderBook>`. */
+    rustWsBookMapField(node: any): boolean {
+        const n: any = this.rustStripWrappers(node);
+        if (n === undefined || !isPropertyAccessExpression(n) || n.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(n.name) || String(n.name.text) !== 'orderbooks') return false;
+        let declaration: any;
+        try {
+            declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(n.name));
+        } catch (e) {
+            return false;
+        }
+        if (declaration === undefined) return false;
+        let known = this.rustWsBookMapFields.get(declaration);
+        if (known === undefined) {
+            known = false;
+            try {
+                const type: any = declaration.type;
+                const leaf: any = type?.kind === SyntaxKind.TypeReference && isIdentifier(type.typeName) && type.typeName.text === 'Dictionary' && type.typeArguments?.length === 1 ? type.typeArguments[0] : undefined;
+                known = declaration.kind === SyntaxKind.PropertyDeclaration
+                    && /ts[\\/]src[\\/]base[\\/](?:\.__ExchangeNoOverloads|Exchange)\.ts$/.test(String(declaration.getSourceFile().fileName))
+                    && leaf?.kind === SyntaxKind.TypeReference && isIdentifier(leaf.typeName) && leaf.typeName.text === 'WsOrderBook' && leaf.typeArguments === undefined;
+            } catch (e) {
+                known = false;
+            }
+            this.rustWsBookMapFields.set(declaration, known);
+        }
+        return known;
+    }
+
+    /** `this.orderBook|indexedOrderBook|countedOrderBook (..)` resolved to the base declaration. */
+    rustWsBookCtor(node: any): boolean {
+        const n: any = this.unwrapParens(node);
+        if (n === undefined || !isCallExpression(n) || !isPropertyAccessExpression(n.expression) || n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (!RustTranspiler.RUST_BOOK_CTORS.has(String(n.expression.name.text)) || n.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+        const declaration: any = this.rustScalarCallee(n);
+        return declaration !== undefined && /ts[\\/]src[\\/]base[\\/](?:\.__ExchangeNoOverloads|Exchange)\.ts$/.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
+    }
+
+    /** A constructor, or a ternary whose arms are both book constructors. */
+    rustWsBookCtorLike(node: any): boolean {
+        const n: any = this.unwrapParens(node);
+        if (n !== undefined && isConditionalExpression(n)) return this.rustWsBookCtorLike(n.whenTrue) && this.rustWsBookCtorLike(n.whenFalse);
+        return this.rustWsBookCtor(n);
+    }
+
+    /** `this.F[k]` on the book map. */
+    rustWsBookMapEntry(node: any): boolean {
+        const n: any = this.rustStripWrappers(node);
+        return n !== undefined && isElementAccessExpression(n) && this.rustWsBookMapField(n.expression);
+    }
+
+    /** `this.safeValue|safeDict (this.F, k)` on the book map. */
+    rustWsBookMapLookup(node: any): boolean {
+        const n: any = this.rustStripWrappers(node);
+        if (n === undefined || !isCallExpression(n) || !isPropertyAccessExpression(n.expression) || n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(n.expression.name.text);
+        if (name !== 'safeValue' && name !== 'safeDict') return false;
+        return this.rustWsBookMapField(n.arguments[0]) && (n.arguments.length === 2 || (n.arguments.length === 3 && this.rustWsBookCtor(n.arguments[2])));
+    }
+
+    rustWsBookMapRead(node: any): boolean {
+        return this.rustWsBookMapEntry(node) || this.rustWsBookMapLookup(node);
+    }
+
+    /** The `Option<Book>` text of a map read. */
+    rustWsBookMapReadText(node: any): string {
+        const n: any = this.rustStripWrappers(node);
+        if (isElementAccessExpression(n)) return `self.orderbooks.at(&${this.rustWsCacheMapKey(n.argumentExpression)})`;
+        if (n.arguments.length === 3) {
+            this.rustWsBookCtorBare.add(this.unwrapParens(n.arguments[2]));
+            try {
+                return `Some(self.orderbooks.lookup_or(&${this.rustWsCacheMapKey(n.arguments[1])}, ${this.printNode(n.arguments[2], 0).trim()}))`;
+            } finally {
+                this.rustWsBookCtorBare.delete(this.unwrapParens(n.arguments[2]));
+            }
+        }
+        return `self.orderbooks.lookup(&${this.rustWsCacheMapKey(n.arguments[1])})`;
+    }
+
+    /** The key of a book-map access: printed by reference (the cache-map key form). */
+    rustWsBookMapKeyUse(up: any): boolean {
+        const p: any = up.parent;
+        if (p === undefined) return false;
+        if (isElementAccessExpression(p)) return p.argumentExpression === up && this.rustWsBookMapField(p.expression);
+        if (isBinaryExpression(p) && p.operatorToken.kind === SyntaxKind.InKeyword) return p.left === up && this.rustWsBookMapField(p.right);
+        return isCallExpression(p) && p.arguments[1] === up && this.rustWsBookMapLookup(p);
+    }
+
+    rustWsBookKeyParent(n: any): any {
+        let up: any = n;
+        while (isParenthesizedExpression(up.parent) || isAsExpression(up.parent) || isNonNullExpression(up.parent)) up = up.parent;
+        return up.parent;
+    }
+
+    rustWsBookKeyOf(n: any): boolean {
+        let up: any = n;
+        while (isParenthesizedExpression(up.parent) || isAsExpression(up.parent) || isNonNullExpression(up.parent)) up = up.parent;
+        return this.rustWsBookMapKeyUse(up);
+    }
+
+    /** A source an optional book local takes: a map read, `undefined` (with `orUndefined`), a constructor (boxed as
+     *  `Some`), or a ternary of those with at least one map read. */
+    rustWsBookOptSource(node: any, orUndefined: boolean): boolean {
+        const n: any = this.rustStripWrappers(node);
+        if (n === undefined) return false;
+        if (this.rustWsBookMapRead(n)) return true;
+        if (orUndefined && (this.rustWsCacheUndefined(n) || this.rustWsBookCtor(n))) return true;
+        if (isConditionalExpression(n)) {
+            return this.rustWsBookOptSource(n.whenTrue, true) && this.rustWsBookOptSource(n.whenFalse, true)
+                && (this.rustWsBookOptSource(n.whenTrue, false) || this.rustWsBookOptSource(n.whenFalse, false));
+        }
+        return false;
+    }
+
+    rustWsBookOptText(node: any): string {
+        const n: any = this.rustStripWrappers(node);
+        if (this.rustWsCacheUndefined(n)) return 'None';
+        if (this.rustWsBookMapRead(n)) return this.rustWsBookMapReadText(n);
+        if (this.rustWsBookCtor(n)) {
+            this.rustWsBookCtorBare.add(n);
+            try {
+                return `Some(${this.printNode(n, 0).trim()})`;
+            } finally {
+                this.rustWsBookCtorBare.delete(n);
+            }
+        }
+        if (isConditionalExpression(n)) return `(if ${this.printCondition(n.condition, 0).trim()} { ${this.rustWsBookOptText(n.whenTrue)} } else { ${this.rustWsBookOptText(n.whenFalse)} })`;
+        throw new Error('ws order book: not an optional book source');
+    }
+
+    /** `x.limit()` / `x.reset(..)` as a statement. */
+    rustWsBookMethodReceiver(n: any): boolean {
+        const p: any = n.parent;
+        if (!isPropertyAccessExpression(p) || p.expression !== n || !isCallExpression(p.parent) || p.parent.expression !== p) return false;
+        if (p.parent.parent?.kind !== SyntaxKind.ExpressionStatement || p.parent.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+        const name = String(p.name.text);
+        return (name === 'limit' && p.parent.arguments.length === 0) || (name === 'reset' && p.parent.arguments.length <= 1);
+    }
+
+    /** The literal key of a side / meta access on `x` (`x['bids']`, `x.nonce`), else undefined. */
+    rustWsBookFieldKey(n: any): string | undefined {
+        const p: any = n.parent;
+        if (isPropertyAccessExpression(p) && p.expression === n && isIdentifier(p.name)) return String(p.name.text);
+        if (isElementAccessExpression(p) && p.expression === n && isStringLiteralLikeNode(p.argumentExpression)) return String(p.argumentExpression.text);
+        return undefined;
+    }
+
+    /** A hand-off that boxes the handle once: a call argument, a return, a non-literal element read, a literal value. */
+    rustWsBookBoxUse(n: any): boolean {
+        let up: any = n;
+        while (isParenthesizedExpression(up.parent) || isAsExpression(up.parent) || isNonNullExpression(up.parent)) up = up.parent;
+        const p: any = up.parent;
+        if (p === undefined) return false;
+        if (isCallExpression(p)) return p.expression !== up && p.arguments.indexOf(up) >= 0;
+        if (isReturnStatement(p)) return p.expression === up;
+        if (isElementAccessExpression(p)) return p.expression === up && !isStringLiteralLikeNode(p.argumentExpression) && !this.isNativeWriteTargetBase(p) && !isDeleteExpression(p.parent);
+        if (p.kind === SyntaxKind.PropertyAssignment) return p.initializer === up;
+        if (isConditionalExpression(p)) return p.condition !== up;
+        return isArrayLiteralExpression(p) && !this.isNativeWriteTargetBase(p) && !(isBinaryExpression(p.parent) && p.parent.left === p);
+    }
+
+    /** `this.F[k] = x` for a book local `x`. */
+    rustWsBookMapWriteValue(n: any): boolean {
+        let up: any = n;
+        while (isParenthesizedExpression(up.parent) || isAsExpression(up.parent)) up = up.parent;
+        const p: any = up.parent;
+        return isBinaryExpression(p) && p.right === up && p.operatorToken.kind === SyntaxKind.EqualsToken && this.rustWsBookMapEntry(p.left) && p.parent?.kind === SyntaxKind.ExpressionStatement;
+    }
+
+    /** 'opt' for a local bound to a map read, 'book' for one bound to a constructor; undefined when it stays `Value`. */
+    rustWsBookLocal(declaration: any): 'opt' | 'book' | undefined {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return undefined;
+        let known = this.rustWsBookLocals.get(declaration);
+        if (known === undefined) {
+            known = null;
+            this.rustWsBookLocals.set(declaration, null); // re-entrancy guard
+            const list: any = declaration.parent;
+            const init: any = this.rustStripWrappers(declaration.initializer);
+            const kind = init === undefined || this.isTestSource(declaration) ? undefined
+                : (this.rustWsBookOptSource(init, false) || this.rustWsCacheUndefined(init) ? 'opt' : (this.rustWsBookCtorLike(init) ? 'book' : undefined));
+            if (kind !== undefined && list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1) {
+                const forms = new Map<Node, 'bare' | 'box' | 'test' | 'field' | 'meta'>();
+                let reads = 0;
+                let sourced = !this.rustWsCacheUndefined(init);
+                const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+                    const p: any = n.parent;
+                    if ((isPropertyAccessExpression(p) || p?.kind === SyntaxKind.PropertyAssignment) && p.name === n) return true;
+                    if (kind === 'opt' && isBinaryExpression(p) && this.isEqualityOp(p.operatorToken.kind) && this.rustWsCacheUndefined(p.left === n ? p.right : p.left)) { forms.set(n, 'test'); return true; }
+                    if (this.rustWsBookMethodReceiver(n)) { forms.set(n, 'bare'); reads++; return true; }
+                    const key = this.rustWsBookFieldKey(n);
+                    if (key !== undefined && RustTranspiler.RUST_BOOK_SIDE_FIELDS.has(key)) {
+                        const access: any = p;
+                        const write: any = access.parent;
+                        if (isBinaryExpression(write) && write.left === access && write.operatorToken.kind === SyntaxKind.EqualsToken) {
+                            if (!RustTranspiler.RUST_BOOK_META_WRITES.has(key) || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+                            forms.set(n, 'meta'); reads++; return true;
+                        }
+                        if (this.isNativeWriteTargetBase(access) || isDeleteExpression(write) || (isCallExpression(write) && write.expression === access)) return false;
+                        // `x.cache.push (..)` / `x.cache.length = 0` keep the boxed receiver the ccxt field-append pass keys on
+                        let outer: any = access;
+                        while (isParenthesizedExpression(outer.parent) || isAsExpression(outer.parent)) outer = outer.parent;
+                        if (isPropertyAccessExpression(outer.parent) && outer.parent.expression === outer && (String(outer.parent.name.text) !== 'length' || this.isNativeWriteTargetBase(outer.parent))) return false;
+                        forms.set(n, 'field'); reads++; return true;
+                    }
+                    if (key !== undefined && isPropertyAccessExpression(p)) return false;
+                    if (isBinaryExpression(p) && p.left === n && p.operatorToken.kind === SyntaxKind.EqualsToken) {
+                        if (p.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+                        const ok = kind === 'opt' ? this.rustWsBookOptSource(p.right, true) : this.rustWsBookCtorLike(p.right);
+                        if (ok) forms.set(n, 'bare');
+                        if (ok && !this.rustWsCacheUndefined(p.right)) sourced = true;
+                        return ok;
+                    }
+                    if (this.rustWsBookMapWriteValue(n)) { forms.set(n, 'bare'); return true; }
+                    if (this.rustWsBookBoxUse(n)) { forms.set(n, 'box'); reads++; return true; }
+                    return false;
+                });
+                if (ok && sourced) {
+                    known = kind;
+                    for (const [n, form] of forms) this.rustWsBookUses.set(n, form);
+                }
+            }
+            this.rustWsBookLocals.set(declaration, known);
+        }
+        return known ?? undefined;
+    }
+
+    rustWsBookLocalOf(node: any): 'opt' | 'book' | undefined {
+        if (!isIdentifier(node) || this.rustWsBookUses.get(node) === undefined) return undefined;
+        return this.rustWsBookLocal(this.rustDeclarationOfIdentifier(node));
+    }
+
+    rustWsBookPath(node: any, type: string): string {
+        return `${this.isTestSource(node) ? 'ccxt' : 'crate'}::${type}`;
+    }
+
+    printWsBookLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined {
+        const kind = this.rustWsBookLocal(declaration);
+        if (kind === undefined) return undefined;
+        const init: any = this.rustStripWrappers(declaration.initializer);
+        const path = this.rustWsBookPath(declaration, RustTranspiler.RUST_BOOK_TYPE);
+        if (kind === 'opt') return `${indent}let mut ${varName}: Option<${path}> = ${this.rustWsBookOptText(init)}`;
+        return `${indent}let mut ${varName}: ${path} = ${this.printNode(init, 0).trim()}`;
+    }
+
+    /** A use of a typed book local: the handle itself, or boxed once at a `Value` hand-off. */
+    printWsBookLocalUse(node: any): string | undefined {
+        const form = this.rustWsBookUses.get(node);
+        if (form !== 'bare' && form !== 'box') return undefined;
+        if (this.rustWsBookLocalOf(node) === undefined) return undefined;
+        const name = super.printIdentifier(node);
+        return form === 'bare' ? name : `Value::from(&${name})`;
+    }
+
+    /** `x['bids']` / `x.nonce` on a book local: the shared-store read. */
+    printWsBookFieldRead(node: any): string | undefined {
+        const recv: any = node.expression;
+        if (!isIdentifier(recv) || this.rustWsBookUses.get(recv) !== 'field' || this.rustWsBookLocalOf(recv) === undefined) return undefined;
+        return `${super.printIdentifier(recv)}.book_field("${this.rustWsBookFieldKey(recv)}")`;
+    }
+
+    /** `x['nonce'] = v` on a book local, and `this.F[k]['symbol'] = v` on a map entry: the shared-store write. */
+    printWsBookMetaWrite(left: any, right: any): string | undefined {
+        const access: any = this.unwrapParens(left);
+        if (!isElementAccessExpression(access) && !isPropertyAccessExpression(access)) return undefined;
+        const recv: any = this.rustStripWrappers(access.expression);
+        let receiver: string | undefined;
+        let entry = false;
+        if (isIdentifier(recv) && this.rustWsBookUses.get(recv) === 'meta' && this.rustWsBookLocalOf(recv) !== undefined) receiver = super.printIdentifier(recv);
+        else if (this.rustWsBookMapEntry(recv)) { receiver = '__b'; entry = true; }
+        if (receiver === undefined) return undefined;
+        const key = isPropertyAccessExpression(access) ? String(access.name.text) : (isStringLiteralLikeNode(access.argumentExpression) ? String(access.argumentExpression.text) : undefined);
+        if (key === undefined || !RustTranspiler.RUST_BOOK_META_WRITES.has(key) || (entry && key === 'cache')) {
+            if (entry) throw new Error('ws order book map: an entry written outside a proven form');
+            return undefined;
+        }
+        let value = this.printNode(right, 0).trim();
+        if (this.rustPrintedBoolArg(value)) value = `Value::Bool(${value})`;
+        if (entry) return `{ let mut __b = ${this.rustWsBookMapReadText(recv)}; __b.set_book_meta("${key}", ${RustTranspiler.cloneIfBareLocal(value)}); }`;
+        if (new RegExp(`\\b${receiver}\\b`).test(value)) return `{ let __be_tmp = ${value}; ${receiver}.set_book_meta("${key}", __be_tmp); }`;
+        return `${receiver}.set_book_meta("${key}", ${RustTranspiler.cloneIfBareLocal(value)})`;
+    }
+
+    /** A write of a book local: a map read, `undefined` or a constructor. */
+    printWsBookLocalWrite(left: any, right: any): string | undefined {
+        if (!isIdentifier(left) || this.rustWsBookUses.get(left) !== 'bare') return undefined;
+        const kind = this.rustWsBookLocalOf(left);
+        if (kind === undefined) return undefined;
+        const name = super.printIdentifier(left);
+        return kind === 'opt' ? `${name} = ${this.rustWsBookOptText(right)}` : `${name} = ${this.printNode(this.unwrapParens(right), 0).trim()}`;
+    }
+
+    /** A constructor stays a `Book` where a book slot takes it (a book local, a map write, a discarded statement); elsewhere it is boxed. */
+    printWsBookCtorCall(node: any, identation: number): string | undefined {
+        if (this.rustWsBookCtorPrinting.has(node) || !this.rustWsBookCtor(node)) return undefined;
+        this.rustWsBookCtorPrinting.add(node);
+        let text: string;
+        try {
+            text = this.printCallExpression(node, identation);
+        } finally {
+            this.rustWsBookCtorPrinting.delete(node);
+        }
+        return this.rustWsBookCtorBare.has(node) || this.rustWsBookCtorSlot(node) ? text : `Value::from(${text})`;
+    }
+
+    rustWsBookCtorSlot(node: any): boolean {
+        let up: any = node;
+        while (isParenthesizedExpression(up.parent) || (isConditionalExpression(up.parent) && up.parent.condition !== up)) up = up.parent;
+        const p: any = up.parent;
+        if (p === undefined) return false;
+        if (p.kind === SyntaxKind.ExpressionStatement) return true;
+        if (isConditionalExpression(up) && !this.rustWsBookCtorLike(up)) return false;
+        if (isVariableDeclaration(p) && p.initializer === up) return this.rustWsBookLocal(p) !== undefined;
+        if (isBinaryExpression(p) && p.right === up && p.operatorToken.kind === SyntaxKind.EqualsToken) {
+            if (this.rustWsBookMapEntry(p.left)) return true;
+            return isIdentifier(p.left) && this.rustWsBookUses.get(p.left) === 'bare' && this.rustWsBookLocalOf(p.left) !== undefined;
+        }
+        return false;
+    }
+
+    /** A map read outside an optional-local slot: boxed once. */
+    printWsBookMapRead(node: any): string | undefined {
+        if (!this.rustWsBookMapRead(node)) return undefined;
+        if (isElementAccessExpression(node) && (this.isNativeWriteTargetBase(node) || isDeleteExpression(node.parent))) throw new Error('ws order book map: an entry write reached the read path');
+        return `Value::from(${this.rustWsBookMapReadText(node)})`;
+    }
+
+    /** `x === undefined` on an optional book local or a map read, and the always-false test of the map field. */
+    printWsBookNullTest(left: any, right: any, op: any): string | undefined {
+        const l = this.rustStripWrappers(left);
+        const r = this.rustStripWrappers(right);
+        const subject = this.rustWsCacheUndefined(r) ? l : (this.rustWsCacheUndefined(l) ? r : undefined);
+        if (subject === undefined) return undefined;
+        const equal = op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken;
+        if (this.rustWsBookMapField(subject)) return equal ? 'false' : 'true';
+        let place: string | undefined;
+        if (this.rustWsBookMapRead(subject)) place = this.rustWsBookMapReadText(subject);
+        else if (isIdentifier(subject) && this.rustWsBookUses.get(subject) === 'test' && this.rustWsBookLocalOf(subject) === 'opt') place = super.printIdentifier(subject);
+        if (place === undefined) return undefined;
+        return `${place}.${equal ? 'is_none' : 'is_some'}()`;
+    }
+
+    /** `k in this.F`. */
+    printWsBookMapHas(key: any, obj: any): string | undefined {
+        if (!this.rustWsBookMapField(obj)) return undefined;
+        return `Value::Bool(self.orderbooks.has(&${this.rustWsCacheMapKey(key)}))`;
+    }
+
+    /** `delete this.F[k]`. */
+    printWsBookMapDelete(node: any): string | undefined {
+        const target: any = this.rustStripWrappers(node.expression);
+        if (!this.rustWsBookMapEntry(target)) return undefined;
+        const base = RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile().fileName));
+        return this.rustWsCacheForget(base, 'CacheStore', 'orderbooks', [ this.rustWsCacheMapKey(target.argumentExpression) ]);
+    }
+
+    /** `this.F[k] = book` and `this.F = {}` / `this.F = this.createSafeDictionary (..)`. */
+    printWsBookMapWrite(left: any, right: any): string | undefined {
+        const rhs: any = this.rustStripWrappers(right);
+        if (this.rustWsBookMapField(left)) {
+            const fresh = (isObjectLiteralExpression(rhs) && rhs.properties.length === 0)
+                || (isCallExpression(rhs) && isPropertyAccessExpression(rhs.expression) && rhs.expression.expression.kind === SyntaxKind.ThisKeyword && String(rhs.expression.name.text) === 'createSafeDictionary');
+            if (!fresh) throw new Error('ws order book map written from an unproven value');
+            return `self.orderbooks = ${this.rustWsBookPath(left, RustTranspiler.RUST_BOOK_MAP_TYPE)}::new()`;
+        }
+        if (!this.rustWsBookMapEntry(left)) return undefined;
+        const entry: any = this.rustStripWrappers(left);
+        let value: string;
+        if (this.rustWsBookCtorLike(rhs)) value = this.printNode(rhs, 0).trim();
+        else if (isIdentifier(rhs) && this.rustWsBookUses.get(rhs) === 'bare' && this.rustWsBookLocalOf(rhs) !== undefined) {
+            value = `${super.printIdentifier(rhs)}${this.rustLocalLastUse(rhs, this.rustDeclarationOfIdentifier(rhs)) ? '' : '.clone()'}`;
+        } else {
+            // a boxed book (a local that stays `Value`): the slot takes it through the marker test
+            const declaration: any = isIdentifier(rhs) ? this.rustDeclarationOfIdentifier(rhs) : undefined;
+            value = this.printNode(rhs, 0).trim();
+            if (declaration !== undefined && isVariableDeclaration(declaration) && /^[A-Za-z_]\w*$/.test(value) && !this.rustLocalLastUse(rhs, declaration)) value += '.clone()';
+        }
+        const key = this.rustWsCacheMapKey(entry.argumentExpression);
+        // the base tier names the field as the receiver (see rustWsCacheForget); pro handlers keep the `&mut self.F` argument
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(String(entry.getSourceFile().fileName))) return `{ let __ck = ${key}; let __cv = ${value}; self.orderbooks.put(&__ck, __cv); }`;
+        // the value is built before the field is borrowed; a key naming `self` is bound first, any other key is lent
+        if (/\bself\b/.test(key)) return `{ let __ck = ${key}; let __cv = ${value}; CacheStore::put(&mut self.orderbooks, &__ck, __cv); }`;
+        if (/\bself\b/.test(value)) return `{ let __cv = ${value}; CacheStore::put(&mut self.orderbooks, &${key}, __cv); }`;
+        return `CacheStore::put(&mut self.orderbooks, &${key}, ${value})`;
+    }
+
+    /** Any other read of the map field is its dict snapshot (each entry an Arc bump); a write is unproven. */
+    printWsBookMapField(node: any): string | undefined {
+        if (!this.rustWsBookMapField(node)) return undefined;
+        if (this.isNativeWriteTargetBase(node)) throw new Error('ws order book map written outside a proven form');
+        return 'Value::from(&self.orderbooks)';
     }
 
     // ── watch positionals (printWsWatchCall / rustWsWatchDictSlot / rustWsSubscriptionWriteValue) ──
@@ -16267,7 +16699,9 @@ export class RustTranspiler extends BaseTranspiler {
         const params: any[] = Array.from(method.parameters);
         if (params.some((p: any) => p.dotDotDotToken !== undefined || !isIdentifier(p.name))) return undefined;
         const typed = new Map<number, string>();
+        if (this.rustFilterRowsParamOk(params[0])) typed.set(0, RustTranspiler.RUST_FILTER_ROWS);
         params.forEach((p: any, i: number) => {
+            if (typed.has(i)) return;
             const optional = p.initializer !== undefined || p.questionToken !== undefined;
             const declared = p.type?.kind === SyntaxKind.TypeReference && isIdentifier(p.type.typeName) && p.type.typeArguments === undefined ? String(p.type.typeName.text) : '';
             const rustType = RustTranspiler.RUST_TYPED_FILTER_TYPES[declared];
@@ -16279,7 +16713,7 @@ export class RustTranspiler extends BaseTranspiler {
             // the objects `filterByArray` reads (`toArray (objects)`) are lent as well: a dict or list local passes as `&x`
             else if (i === 0 && !optional && p.type?.kind === SyntaxKind.AnyKeyword && String(method.name.text) === 'filterByArray') typed.set(i, lent);
         });
-        if (![ ...typed.values() ].some((t) => t !== lent)) {
+        if (![ ...typed.values() ].some((t) => t !== lent && t !== RustTranspiler.RUST_FILTER_ROWS)) {
             if (typed.size === 0 || String(method.name.text) !== 'filterByArray') return undefined;
         }
         const positional = Math.max(...typed.keys()) + 1;
@@ -16298,7 +16732,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustTypedFilterBinding(node: any, identation: number): string {
         const sig = this.rustTypedFilterParams(node);
         if (sig === undefined) return '';
-        return Array.from(node.parameters).filter((p: any, i: number) => sig.typed.get(i)?.startsWith('impl')).map((p: any) => {
+        return Array.from(node.parameters).filter((p: any, i: number) => sig.typed.get(i) === 'impl Into<crate::Value>').map((p: any) => {
             const name = this.printNode(p.name, 0);
             return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();\n`;
         }).join('');
@@ -16336,6 +16770,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A read of a typed filter parameter in a `Value` position boxes it (both types are `Copy`). */
     printTypedFilterParamRead(node: any): string | undefined {
+        const rows = this.printFilterRowsParamRead(node); if (rows !== undefined) return rows;
         return this.rustTypedFilterParamOf(node) === undefined ? undefined : `Value::from(${super.printIdentifier(node)})`;
     }
 
@@ -16350,6 +16785,10 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustTypedFilterArgText(arg: any, rustType: string, identation: number): string {
         const node: any = this.unwrapParens(arg);
+        if (rustType === RustTranspiler.RUST_FILTER_ROWS && arg !== undefined) {
+            // a required slot: any other argument prints as the plain `Value` argument it was
+            return this.rustFilterRowsArgText(node) ?? this.printNode(arg, identation).trim();
+        }
         if (rustType.startsWith('impl')) return arg === undefined ? 'Value::Null' : this.rustSliceArgText(this.printNode(arg, identation).trim());
         if (node === undefined || this.literalKindOfNode(node) === 'null') return 'None';
         const own = this.rustTypedFilterParamOf(node);
@@ -16378,6 +16817,102 @@ export class RustTranspiler extends BaseTranspiler {
         const rest = args.slice(sig.positional).map((a: any) => this.rustSliceArgText(this.printNode(a, identation).trim()));
         const tail = params.length > sig.positional ? `, &[${rest.join(', ')}]` : '';
         return `self.${callee.name.text}(${printed.join(', ')}${tail})`;
+    }
+
+    // ── filter rows (rustFilterRowsParamOk / rustFilterRowsArgText / printFilterRows*) ──
+    // The rows argument of a typed base `filterBy*` method declared `object[]` (or a map/list union, never `any`)
+    // takes `impl Rows` (re-exported by the runtime prelude): a `Value` still passes by value, and a shared list / ws cache handle is lent as
+    // `&x` (the same Arc bump its `Value::from(&x)` box paid). The body never binds it: its only uses are the
+    // `=== undefined` test (`Rows::absent`) and ONE hand-off, to a rows slot (moved) or a `Value` slot (`Rows::rows`).
+    private static readonly RUST_FILTER_ROWS = 'impl Rows';
+
+    private static readonly RUST_LOOP_KINDS = new Set([ SyntaxKind.ForStatement, SyntaxKind.ForInStatement, SyntaxKind.ForOfStatement, SyntaxKind.WhileStatement, SyntaxKind.DoStatement ]);
+
+    private rustFilterRowsDecisions = new WeakMap<any, boolean>();
+
+    rustFilterRowsParamOk(param: any): boolean {
+        if (param?.kind !== SyntaxKind.Parameter) return false;
+        let decision = this.rustFilterRowsDecisions.get(param);
+        if (decision === undefined) {
+            this.rustFilterRowsDecisions.set(param, false); // re-entrancy guard
+            try {
+                decision = this.rustFilterRowsParamOkUncached(param);
+            } catch (e) {
+                decision = false;
+            }
+            this.rustFilterRowsDecisions.set(param, decision);
+        }
+        return decision;
+    }
+
+    /** `object[]`, `Dict[]` or a union of those with `Dictionary<..>` / `undefined` (never `any`). */
+    rustFilterRowsTypeNode(type: any): boolean {
+        const members: any[] = type?.kind === SyntaxKind.UnionType ? Array.from(type.types) : [ type ];
+        let rows = 0;
+        for (const t of members) {
+            if (t?.kind === SyntaxKind.UndefinedKeyword) continue;
+            if (t?.kind === SyntaxKind.ArrayType && (t.elementType?.kind === SyntaxKind.ObjectKeyword || this.rustRowListTypeNode(t))) { rows++; continue; }
+            if (t?.kind === SyntaxKind.TypeReference && isIdentifier(t.typeName) && String(t.typeName.text) === 'Dictionary') continue;
+            return false;
+        }
+        return rows > 0;
+    }
+
+    rustFilterRowsParamOkUncached(param: any): boolean {
+        const method: any = param.parent;
+        if (!isMethodDeclaration(method) || method.body === undefined || method.parameters?.[0] !== param || !isIdentifier(param.name)) return false;
+        if (param.initializer !== undefined || param.questionToken !== undefined || param.dotDotDotToken !== undefined) return false;
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(method.getSourceFile().fileName)) || !this.rustFilterRowsTypeNode(param.type)) return false;
+        let handoffs = 0;
+        const ok = this.rustLocalUsesAll(param, String(param.name.text), true, (n: any) => {
+            if (this.rustIdentifierIsPropertyName(n)) return false;
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && this.isEqualityOp(up.operatorToken.kind)) {
+                return handoffs === 0 && this.rustWsCacheUndefined(up.left === n ? up.right : up.left);
+            }
+            if (!isCallExpression(up) || up.expression === n || !up.arguments.some((a: any) => a === n)) return false;
+            const callee: any = up.expression;
+            if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+            // the hand-off is the last statement-level use: nothing reads the moved argument after it
+            return ++handoffs === 1 && findAncestor(up, (a: any) => RustTranspiler.RUST_LOOP_KINDS.has(a.kind) || isFunctionLike(a)) === method;
+        });
+        return ok && handoffs === 1;
+    }
+
+    /** The rows parameter a read refers to inside its own filter method, else undefined. */
+    rustFilterRowsParamOf(node: any): any {
+        if (!isIdentifier(node)) return undefined;
+        const param: any = this.rustDeclaredNode(node);
+        if (param === undefined || !isParameterDeclaration(param) || param.name === node) return undefined;
+        const sig = this.rustTypedFilterParams(param.parent);
+        return sig?.typed.get(Array.from(param.parent.parameters).indexOf(param)) === RustTranspiler.RUST_FILTER_ROWS ? param : undefined;
+    }
+
+    /** A rows slot argument: an own rows parameter moves on, a typed cache field / local or a lent list is lent. */
+    rustFilterRowsArgText(node: any): string | undefined {
+        if (node === undefined) return undefined;
+        if (this.rustFilterRowsParamOf(node) !== undefined) return super.printIdentifier(node);
+        if (this.rustWsCacheField(node)) return `&self.${String(node.name.text)}`;
+        if (isIdentifier(node) && this.rustWsCacheUses.get(node) === 'box') return `&${super.printIdentifier(node)}`;
+        return undefined;
+    }
+
+    /** `Rows::rows(x)` where the rows parameter is handed to a `Value` slot. */
+    printFilterRowsParamRead(node: any): string | undefined {
+        if (this.rustFilterRowsParamOf(node) === undefined) return undefined;
+        const up: any = node.parent;
+        if (isBinaryExpression(up)) return undefined;
+        return `Rows::rows(${super.printIdentifier(node)})`;
+    }
+
+    /** `x === undefined` on a rows parameter. */
+    printFilterRowsNullTest(left: any, right: any, op: any): string | undefined {
+        const l = this.unwrapParens(left);
+        const r = this.unwrapParens(right);
+        const subject = this.rustWsCacheUndefined(r) ? l : (this.rustWsCacheUndefined(l) ? r : undefined);
+        if (subject === undefined || this.rustFilterRowsParamOf(subject) === undefined) return undefined;
+        const equal = op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken;
+        return `${equal ? '' : '!'}Rows::absent(&${super.printIdentifier(subject)})`;
     }
 
     // ── lent params dicts ────────────────────────────────────────────────────
