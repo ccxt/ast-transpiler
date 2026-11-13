@@ -8984,7 +8984,9 @@ describe('elements of typed list parameters', () => {
         expect(fed).toMatch(/pub fn pick\(&self, [^)]*\) -> Option<String> \{/);
         expect(fed).toMatch(/let mut sub: Value = /);
         const copy = transpiler.transpileRust("class X {\n    hold (x: any): any { return x; }\n    copy (section: string[]) {\n        const head = section[0];\n        this.hold (head);\n        return this.hold (head);\n    }\n}\n").content;
-        expect(copy).toMatch(/let mut head: Value = /);
+        // ral-fd lends a multiply-boxed string: the first box borrows, the last moves
+        expect(copy).toContain('self.hold(Value::from(head.as_deref()));');
+        expect(copy).toContain('return self.hold(head.map(Value::from).unwrap_or(Value::Null));');
     });
 });
 
