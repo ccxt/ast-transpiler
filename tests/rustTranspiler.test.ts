@@ -9737,3 +9737,21 @@ describe('toString of a String local inside a comparison', () => {
         expect(out).not.toContain('id1.clone()) == id1');
     });
 });
+
+describe('typed market slots of required / plural parse methods', () => {
+    test('a required parse market, a list parse market, a ternary market local and a market alias lend without a decode', () => {
+        const dir = path.join (rustFixtureRoot, 'typed-required-market');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; id: Str; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    market (symbol: string): MarketInterface { return undefined; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    parseOHLCVs (ohlcvs: any[], market: Market = undefined, timeframe: string = '1m'): any[] {\n        const symbol = this.safeString (market, 'symbol');\n        return [ ohlcvs, symbol, timeframe ];\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Market, MarketInterface, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseSettlement (settlement: Dict, market: MarketInterface): Dict {\n        return { 'symbol': this.safeString (market, 'symbol'), 'info': settlement };\n    }\n    requestId (market: Market) {\n        return market['id'];\n    }\n    async fetchSettlement (symbol: Str = undefined, params: Dict = {}): Promise<any> {\n        const market = (symbol === undefined) ? undefined : this.market (symbol);\n        return this.parseSettlement (params, market);\n    }\n    async fetchCandles (symbol: Str = undefined, params: Dict = {}): Promise<any> {\n        let market = undefined;\n        if (symbol !== undefined) {\n            const symbolMarket = this.market (symbol);\n            market = symbolMarket;\n            params['id'] = symbolMarket['id'];\n        }\n        return [ this.requestId (market), this.parseOHLCVs ([], market) ];\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const base = typed.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(base).toContain('ohlcvs: Value, market: Option<&crate::types::Market>, optional_args: &[Value]) -> Value');
+        const out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('settlement: Value, market: Option<&crate::types::Market>) -> Value');
+        expect(out).toContain('pub fn requestId(&self, market: Option<&crate::types::Market>)');
+        expect(out).toContain('let mut market: Option<crate::types::Market> = (if ');
+        expect(out).toContain('market = Some(crate::types::Market::clone(&symbolMarket));');
+        expect(out).not.toContain('FromRaw>::from_raw(market');
+    });
+});
