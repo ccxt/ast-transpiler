@@ -3929,13 +3929,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (scope === undefined || isSourceFile(scope)) return undefined;
         // a proof the existing typed-local rules already take keeps their spelling
         let kind = this.rustScalarValueKind(declaration.initializer, true) ?? this.rustParamAliasSeedKind(declaration);
+        const boolTested = kind === undefined && this.rustAnyBoolTestedLocal(declaration);
+        if (boolTested) kind = 'obool';
         if (kind === undefined || kind === 'null') return undefined;
         if (this.rustSafeStringLocalIsTyped(declaration) || this.rustStringMethodLocalInit(declaration) !== undefined
             || (kind === 'bool' && this.getRustBoolLocalInitializer(declaration, this.printNode(declaration.initializer, 0)) !== undefined)) return undefined;
         const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
         const expected = kind === 'ostr' || kind === 'str' ? 'string' : (kind === 'bool' || kind === 'obool' ? 'boolean' : 'number');
         // an all-`i64` base `sum` is an `Int` whatever its `any` checker type says
-        if (checked !== expected && !(kind === 'int' && this.rustArithCombinator(this.unwrapParens(declaration.initializer)) && this.rustArithCallKind(declaration.initializer) === 'int')) return undefined;
+        if (checked !== expected && !boolTested && !(kind === 'int' && this.rustArithCombinator(this.unwrapParens(declaration.initializer)) && this.rustArithCallKind(declaration.initializer) === 'int')) return undefined;
         const seeded = kind;
         kind = this.rustScalarWidenedKind(declaration, kind);
         const widened = kind !== seeded || this.rustScalarExpressionKind(declaration.initializer) !== undefined;
@@ -4019,6 +4021,33 @@ export class RustTranspiler extends BaseTranspiler {
         // only a local the lending admits lends (a string typed by another rule keeps its boxes)
         if (handOff && copied > 0 && strKind && this.rustStrLendOnly(declaration)) this.rustStrLentLocals.add(declaration);
         return kind;
+    }
+
+    // ── bool-tested option reads (rustAnyBoolTestedLocal) ──
+    // `const x = this.m(..)` of a sync base-tier method whose checker return is `any` (e.g. `handleOption`),
+    // read only by `x === true|false` tests. TS `===` is strict, so `Option<bool>` from `.as_bool()` tested as
+    // `x == Some(b)` is that comparison exactly (an un-annotated local used to print the coercing `is_equal`, where
+    // an Int 1 option equalled `true`; a `Bool`-annotated one already printed `x.as_bool() == Some(b)`).
+    rustAnyBoolTestedLocal(declaration): boolean {
+        if ((declaration.parent?.flags & NodeFlags.Const) === 0) return false;
+        const init: any = this.unwrapParens(declaration.initializer);
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const callee: any = this.rustScalarCallee(init);
+        if (callee === undefined || callee.kind !== SyntaxKind.MethodDeclaration || this.isAsyncFunction(callee)
+            || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile?.()?.fileName ?? ''))) return false;
+        const type: any = this.typeOfNodeIfAny(init);
+        if (type === undefined || (type.flags & TypeFlags.Any) === 0) return false;
+        let tests = 0;
+        const ok = this.rustScalarUsesAll(declaration, String(declaration.name.text), (n) => {
+            if (this.rustIdentifierIsPropertyName(n)) return false;
+            const parent: any = n.parent;
+            if (!isBinaryExpression(parent) || !this.isEqualityOp(parent.operatorToken.kind)) return false;
+            const other: any = this.unwrapParens(parent.left === n ? parent.right : parent.left);
+            if (this.literalKindOfNode(other) !== 'boolean') return false;
+            tests++;
+            return true;
+        });
+        return ok && tests > 0;
     }
 
     private rustStrNoLend = false;
@@ -5716,6 +5745,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustFieldKeyCostly(declaration: any): boolean {
         let field = false;
         let boxed = false;
+        let lendable = true;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             const form = this.rustScalarUseForms.get(n);
             // a `safeValue (this.orderbooks, k)` key was a by-value reader argument before the map was typed, never a field key
@@ -5723,10 +5753,49 @@ export class RustTranspiler extends BaseTranspiler {
             // so is a `safeValue (this.<cache map>, k)` key (trades, positionsByType)
             if (form === 'fin' && isCallExpression(this.rustWsBookKeyParent(n)) && this.rustWsCacheMapLookup(this.rustWsBookKeyParent(n)) && this.rustWsCacheMapField(this.rustWsBookKeyParent(n).arguments[0])) return true;
             if (form === 'fin' || form === 'frd' || (form === 'key' && this.rustFieldKeyReceiver(n.parent?.expression) !== undefined)) field = true;
-            else if ((form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)) boxed = true;
+            else if ((form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)) {
+                boxed = true;
+                // a `this.` / `super.` argument cloned the `Value`: lending the string there costs that same one copy
+                if (form !== 'box' || !this.rustSelfCallArg(n) || this.rustLoopAfterDeclaration(n, declaration) || this.rustStatementReadsTwice(n, declaration)) lendable = false;
+            }
             return true;
         });
+        if (field && boxed && lendable && !this.rustStrNoLend) {
+            this.rustStrLentLocals.add(declaration);
+            return false;
+        }
         return field && boxed;
+    }
+
+    /** A loop (or closure) lies between the declaration and `n`: a box there repeats. */
+    rustLoopAfterDeclaration(n: any, declaration: any): boolean {
+        for (let up: any = n.parent; up !== undefined && up !== declaration.parent; up = up.parent) {
+            if (this.isNodeInsideNode(declaration, up)) return false;
+            if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForInStatement || up.kind === SyntaxKind.ForOfStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return true;
+        }
+        return false;
+    }
+
+    /** The statement holding `n` reads the local again. */
+    rustStatementReadsTwice(n: any, declaration: any): boolean {
+        let st: any = n;
+        while (st.parent !== undefined && !isBlock(st.parent) && !isSourceFile(st.parent)) st = st.parent;
+        let reads = 0;
+        const name = String(declaration.name.text);
+        const visit = (x: any) => {
+            if (isIdentifier(x) && String(x.text) === name && x !== declaration.name && this.rustIdentifierRefersToDeclaration(x, declaration)) reads++;
+            x.forEachChild(visit);
+        };
+        visit(st);
+        return reads > 1;
+    }
+
+    /** `n` is an argument of a `this.m(..)` / `super.m(..)` call. */
+    rustSelfCallArg(n: any): boolean {
+        const up: any = n.parent;
+        return isCallExpression(up) && up.expression !== n && Array.from(up.arguments).includes(n) && isPropertyAccessExpression(up.expression)
+            && (up.expression.expression.kind === SyntaxKind.ThisKeyword || up.expression.expression.kind === SyntaxKind.SuperKeyword);
     }
 
     printFieldKeyInOp(key: any, obj: any): string | undefined {
@@ -13036,6 +13105,14 @@ export class RustTranspiler extends BaseTranspiler {
     /** Builders that hand back one of their own arguments: the container kind is
      *  the argument's (they only add fields to it). */
     private static readonly RUST_BUILDER_PASSTHROUGH = new Set([ 'safeTicker', 'safeOrder', 'safeTrade', 'safePosition' ]);
+    /** Same pass-through builders (they write fields into their argument and return it), admitted only while the
+     *  Arc-moving returned-container rule asks (`rustFreshWide`): the copying `IndexMap` bearer rules keep the old set. */
+    private static readonly RUST_BUILDER_PASSTHROUGH_WIDE = new Set([ 'safeLiquidation', 'safeBalance' ]);
+    private rustFreshWide = false;
+
+    rustBuilderPassthrough(method: string): boolean {
+        return RustTranspiler.RUST_BUILDER_PASSTHROUGH.has(method) || (this.rustFreshWide && RustTranspiler.RUST_BUILDER_PASSTHROUGH_WIDE.has(method));
+    }
 
     // Base list filters / sorts hand back their list argument (or a slice / filtered copy of it): a built list stays one.
     private static readonly RUST_LIST_PASSTHROUGH = new Set([ 'sortBy', 'sortBy2', 'filterByLimit', 'filterBySinceLimit', 'filterByValueSinceLimit',
@@ -13069,7 +13146,7 @@ export class RustTranspiler extends BaseTranspiler {
         const passCallee: any = (call as any)?.expression;
         const passMethod = isPropertyAccessExpression(passCallee) ? String((passCallee as any).name?.text) : undefined;
         if (passMethod !== undefined && this.rustListPassthroughCall(call)) return kind === 'list' && this.rustBuiltContainerKind(call.arguments[0], depth) === 'list';
-        if (passMethod !== undefined && RustTranspiler.RUST_BUILDER_PASSTHROUGH.has(passMethod)) {
+        if (passMethod !== undefined && this.rustBuilderPassthrough(passMethod)) {
             const passArgs: any[] = (call as any).arguments ?? [];
             if (passArgs.length === 0) return false;
             return this.rustBuiltContainerKind(passArgs[0], depth + 1) === kind;
@@ -13108,7 +13185,7 @@ export class RustTranspiler extends BaseTranspiler {
             // hands the container to the runtime store, which tags it: a later
             // native write would bypass the store, so such a callee is out.
             if (isBinaryExpression(node) && rustIsAssignmentOperator(node.operatorToken.kind)
-                && this.rustThisRootedPlace(node.left)) {
+                && this.rustThisRootedPlace(node.left) && !(kind === 'map' && this.rustScalarStoreValue(node.right))) {
                 ok = false;
                 return;
             }
@@ -13116,6 +13193,20 @@ export class RustTranspiler extends BaseTranspiler {
         };
         body.forEachChild(visit);
         return ok && returns > 0;
+    }
+
+    /** A store write's value that can never be a container: a scalar literal, or a checker-primitive
+     *  (`string`/`number`/`boolean`) expression. Writing it into a `this.` store tags no returned container.
+     *  Maps only: a list proof would type `Vec<Value>` locals that copy the array out (`.as_array().cloned()`). */
+    rustScalarStoreValue(value: any): boolean {
+        const node: any = this.rustSkipWrappers(value);
+        if (node === undefined) return false;
+        const literal = this.literalKindOfNode(node);
+        if (literal === 'string' || literal === 'boolean' || literal === 'number') return true;
+        const type: any = this.typeOfNodeIfAny(node);
+        if (type === undefined || (type.flags & (TypeFlags.Any | TypeFlags.Unknown)) !== 0) return false;
+        const primitive = this.primitiveKindOfType(type);
+        return primitive === 'string' || primitive === 'number' || primitive === 'boolean';
     }
 
     /** A call operand that hands back a live-store map: `x.hashmap()` (the ws
@@ -13157,7 +13248,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.name === expr) return undefined;
             // a literal initializer is a leaf: it costs no proof depth
             const literal: any = this.rustSkipWrappers(declaration.initializer);
-            const leaf = literal !== undefined && isArrayLiteralExpression(literal) && this.rustListPassthroughArg(expr);
+            const leaf = literal !== undefined && ((isArrayLiteralExpression(literal) && this.rustListPassthroughArg(expr))
+                || (this.rustFreshWide && isObjectLiteralExpression(literal) && this.rustPlainDictLiteral(literal)));
             const built = this.rustBuiltContainerKind(declaration.initializer, leaf ? depth : depth + 1);
             if (built === undefined || !this.rustLocalContainerWritesOnly(declaration, String(expr.text), built, leaf ? depth : depth + 1)) return undefined;
             return built;
@@ -13169,7 +13261,7 @@ export class RustTranspiler extends BaseTranspiler {
         const owner: any = callee.expression;
         const args: any[] = (expr as any).arguments ?? [];
         if (owner.kind === SyntaxKind.ThisKeyword) {
-            if (RustTranspiler.RUST_BUILDER_PASSTHROUGH.has(method) && args.length > 0) {
+            if (this.rustBuilderPassthrough(method) && args.length > 0) {
                 return this.rustBuiltContainerKind(args[0], depth + 1);
             }
             // a pass-through re-yields its argument: no extra proof depth
@@ -14806,7 +14898,13 @@ export class RustTranspiler extends BaseTranspiler {
         // an async base method may answer through `dispatch_to_derived` (a venue override the checker cannot see here)
         const callee0: any = this.rustScalarCallee(call);
         if (callee0 === undefined || (this.isAsyncFunction(callee0) && RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee0.getSourceFile?.()?.fileName ?? '')))) return undefined;
-        if (this.rustCallBuildsContainer(call, 'map', 0)) return 'dict';
+        const wide = this.rustFreshWide;
+        this.rustFreshWide = true;
+        try {
+            if (this.rustCallBuildsContainer(call, 'map', 0)) return 'dict';
+        } finally {
+            this.rustFreshWide = wide;
+        }
         return this.rustCallBuildsContainer(call, 'list', 0) ? 'list' : undefined;
     }
 

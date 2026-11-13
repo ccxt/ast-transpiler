@@ -8130,8 +8130,13 @@ describe('rust string locals moved at their last use', () => {
         expect(fn('handleA')).not.toContain('moved.clone()');
     });
 
-    test('negative: an earlier box, a box inside a loop, or two reads in one statement keep the local a Value', () => {
-        expect(fn('handleB')).toMatch(/let mut twice: Value =/);
+    test('an earlier box at a self-call argument lends the field-keyed string (the one copy the Value clone made)', () => {
+        expect(fn('handleB')).toMatch(/let mut twice: String =/);
+        expect(fn('handleB')).toContain('Value::from(twice.as_str())');
+        expect(fn('handleB')).toContain('return self.hold(Value::from(twice));');
+    });
+
+    test('negative: a box inside a loop, or two reads in one statement keep the local a Value', () => {
         expect(fn('handleC')).toMatch(/let mut looped: Value =/);
         expect(fn('handleD')).toMatch(/let mut same: Value =/);
     });
@@ -10454,5 +10459,73 @@ describe('dict ternaries and arithmetic with a Value operand', () => {
         const out = run ("    fetchThing (rows: any[]) {\n        const count = rows.length;\n        let s: any = 0;\n" +
             "        for (let i = 0; i < count; i++) {\n            s = this.hold (rows[i]);\n        }\n        return s;\n    }\n");
         expect(out).not.toContain('is_less_than(&i');
+    });
+});
+
+describe('option, route and safe* results typed at the declaration', () => {
+    const fixture = (rel: string, text: string): string => {
+        const out = path.join(rustFixtureRoot, 'jg-results', rel);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, text);
+        return out;
+    };
+    let venue = '';
+    beforeAll(() => {
+        fixture('ts/src/base/Exchange.ts', 'export interface Dict { [key: string]: any }\n'
+            + 'export default class Exchange {\n'
+            + '    options: Dict = {};\n'
+            + '    orderbooks: any = {};\n'
+            + '    handleOption (methodName: string, optionName: string, defaultValue: any = undefined) {\n'
+            + '        return this.options[optionName];\n'
+            + '    }\n'
+            + '    omit (x: any, k: any): any { return x; }\n'
+            + '    safeString (o: any, k: any): string | undefined { return o[k]; }\n'
+            + '    safeSymbol (id: string | undefined): string | undefined { return id; }\n'
+            + '    safeLiquidation (l: Dict): any {\n'
+            + "        l['price'] = 1;\n"
+            + '        return l;\n'
+            + '    }\n'
+            + '    hold (x: any): any { return x; }\n'
+            + '    send (x: any): any { return x; }\n'
+            + '}\n');
+        const file = fixture('ts/src/venue.ts', "import Exchange from './base/Exchange.js';\n"
+            + 'export default class venue extends Exchange {\n'
+            + '    handleRoute (m: string, params: any = {}): any {\n'
+            + "        this.options['route'] = 'x';\n"
+            + "        return this.omit ({ 'a': 1 }, [ 'route' ]);\n"
+            + '    }\n'
+            + '    parseLiq (l: any): any {\n'
+            + "        return this.safeLiquidation ({ 'info': l, 'symbol': this.safeString (l, 's') });\n"
+            + '    }\n'
+            + '    f (m: any, params: any = {}) {\n'
+            + "        const checksum = this.handleOption ('watchOrderBook', 'checksum', true);\n"
+            + '        if (checksum === true) {\n'
+            + '            return 1;\n'
+            + '        }\n'
+            + "        const depth = this.handleOption ('watchOrderBook', 'depth', 5);\n"
+            + '        const routed = this.handleRoute (\'f\', params);\n'
+            + '        const liq = this.parseLiq (m);\n'
+            + "        const symbol = this.safeSymbol (this.safeString (m, 's'));\n"
+            + '        const book = this.orderbooks[symbol];\n'
+            + '        this.send (symbol);\n'
+            + '        return [ this.hold (routed), this.hold (liq), this.hold (depth), this.hold (book), this.hold (symbol) ];\n'
+            + '    }\n'
+            + '}\n');
+        venue = transpiler.transpileRustByPath(file).content;
+    });
+    test('a base any-returning option read only tested against a boolean literal is an Option<bool>', () => {
+        expect(venue).toMatch(/let mut checksum: Option<bool> = self\.handleOption\([^;]*\)\.as_bool\(\);/);
+        expect(venue).toContain('if (checksum == Some(true))');
+        expect(venue).toMatch(/let mut depth: Value = self\.handleOption/);
+    });
+    test('a venue method whose only this-store writes are scalars still returns a fresh map', () => {
+        expect(venue).toMatch(/let mut routed: crate::value::Dict = /);
+    });
+    test('a safeLiquidation-style pass-through of a literal built in the callee is a fresh map', () => {
+        expect(venue).toMatch(/let mut liq: crate::value::Dict = /);
+    });
+    test('a field-keyed safeSymbol string boxed again at a self-call argument is lent there', () => {
+        expect(venue).toMatch(/let mut symbol: Option<String> = /);
+        expect(venue).toContain('self.send(&[Value::from(symbol.as_deref())]);');
     });
 });
