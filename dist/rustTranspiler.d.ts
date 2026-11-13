@@ -64,7 +64,7 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'other';
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
 export interface RustMethodSignature {
     file: any;
@@ -89,9 +89,10 @@ export declare const rustDispatch: {
     wsArg(kind: string, i: number): string | undefined;
     /** The typed parameter `kind` read from the boxed `Value` expression `v` (a `DerivedExchange` slot argument). */
     fromValue(kind: string, v: string): string;
-    /** Parameter list of a `DerivedExchange` slot: its `market` argument (never the first) is a lent market. */
+    /** Parameter list of a `DerivedExchange` slot: its `market` and currency arguments (never the first) are lent structs. */
     slotParams: (args: string[]) => string;
     isSlotMarket: (arg: string, i: number) => boolean;
+    isSlotCurrency: (arg: string, i: number) => boolean;
     /** A `DerivedExchange` slot argument handed on in a `&[Value]` tail. */
     slotValue: (arg: string, i: number) => string;
     /** A sync method with a native return still gets a by-name arm (it boxes back inside the arm). */
@@ -340,6 +341,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `ostr|oint|onum` for an empty local the scalar rule types, else undefined. */
     rustNilScalarKind(declaration: any): string | undefined;
     rustNilScalarHandOff(declaration: any, scope: any, kind: string, boxed: any[]): boolean;
+    private rustNilStrLentLocals;
+    private rustNilAliasMoves;
+    rustNilAliasMove(rhs: any, kind: string): boolean;
+    /** Every box before the last sits at a `this.` / `super.` argument (where the `Value` form was cloned); no free-function,
+     *  `Precise`, `Math` or `new` operand, which read `&Value` and would take a copy only because of the lending. */
+    rustNilStrLendSites(declaration: any): boolean;
     rustNilOptStrConcatUse(n: any): boolean;
     /** A write that decodes a `Value` result (a call, or a ternary over one). */
     rustNilDecodedWrite(rhs: any): boolean;
@@ -496,6 +503,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Every box of the string sits where the `Value` form cloned it (a `this.` / `super.` argument) or is its
      *  moving last use, and no use reads it by reference: lending there costs the one copy the clone made. */
     rustStrLendSites(declaration: any): boolean;
+    /** The key reads a local declared with a non-null initializer (nil-declared locals and slots keep their own rules). */
+    rustInitKeyLocal(n: any): boolean;
+    /** Some use of the local is a native map-key read (`okey`) or `in` test (`kin`). */
+    rustScalarKeyedLocal(declaration: any): boolean;
     /** A local some `return` of a method with a declared string return hands back as-is. */
     rustStrReturnedLocal(declaration: any, scope: any): boolean;
     rustParamAliasSeedKind(declaration: any): string | undefined;
@@ -514,9 +525,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBaseReturnScalarKind(call: any, name: string): string | undefined;
     private static readonly RUST_STR_RUNTIME_METHODS;
     private static readonly RUST_STR_RUNTIME_APPEND_VETO;
+    private static readonly RUST_STR_RUNTIME_FREE;
+    /** A call of an imported base function (`ts/src/base/functions/`) named in `names`. */
+    rustFreeSignerCall(node: any, names: Set<string>): boolean;
     private rustStrRuntimeBare;
     /** `this.implodeParams(..)` / `this.intToBase16(..)` resolved to the base tier with a non-null `string` return. */
     rustStrRuntimeCall(node: any): boolean;
+    /** A base `Exchange` property bound to an imported encoder (`binaryToBase16 = binaryToBase16`, `@scure/base` underneath). */
+    rustBaseBoundHelper(node: any): boolean;
+    /** A test helper's `exchange.m(..)` on an untyped receiver: the test crate hands it a concrete `Exchange`
+     *  (or the `ExchangeOps` shim on `Value`), whose `m` returns the same `String`, so the call boxes once. */
+    rustStrRuntimeTestCall(node: any): boolean;
     /** The bare `String` call text (no box), for typed string locals and `format!` operands. */
     rustStrRuntimeBareText(node: any, identation?: number): string;
     /** A `+` / `+=` operand the printer joins with `format!` (or a typed `String` push), where `Display` takes the `String` as-is. */
@@ -540,6 +559,32 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustBaseTypedReturnCall(node: any): string | undefined;
     /** `return x` in a typed method: the native value, converting a `Value` once. */
     printRustBaseTypedReturn(fn: any, exp: any): string | undefined;
+    private static readonly RUST_BYTES_PRODUCERS;
+    private static readonly RUST_BYTES_SLOTS;
+    private static readonly RUST_BYTES_FREE_SLOTS;
+    private rustBytesBare;
+    private rustBytesDecisions;
+    private rustBytesUseForms;
+    /** `this.encode(..)` & co. resolved to the base tier, or such a call on a test's untyped `exchange`. */
+    rustBytesProducer(node: any): boolean;
+    /** A call of the imported base `functions/` export `name`. */
+    rustBaseFunctionCall(node: any, name: string): boolean;
+    /** An argument in a byte parameter (`impl Into<Value>`) of a hand-written consumer, outside the test crate. */
+    rustBytesSlot(node: any): boolean;
+    rustBytesBareText(node: any, identation?: number): string;
+    /** Call hook: a producer call is the `Bytes` itself in a byte slot, boxed once anywhere else. */
+    printRustBytesCall(node: any, identation: any): string | undefined;
+    /** A local whose every write is a producer call and whose every read is a byte slot or a `Value` hand-off. */
+    rustBytesLocal(declaration: any): boolean;
+    rustBytesLocalUncached(declaration: any): boolean;
+    rustBytesLocalOf(node: any): any;
+    /** Identifier hook: a byte slot borrows the handle, a `Value` slot shares or moves its list. */
+    printRustBytesLocalRead(node: any): string | undefined;
+    /** Assignment hook: `x = <producer>` keeps the handle. */
+    printRustBytesLocalWrite(left: any, right: any): string | undefined;
+    /** `ecdsa(..)` from `base/functions/crypto.ts`: the runtime returns its `{ r, s, v }` record as a `crate::value::Dict`. */
+    rustEcdsaCall(node: any): boolean;
+    printRustEcdsaCall(node: any, identation: any): string | undefined;
     rustClockCall(node: any): boolean;
     rustVenueReturnTypesHas(node: any, name: string): boolean;
     /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
@@ -553,6 +598,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustListLengthInit(node: any): boolean;
     rustListLengthText(node: any): string;
     rustElementReadScalarKind(node: any): string | undefined;
+    /** `xs[i]` over a typed list parameter (the source the element-read rule admits from a parameter). */
+    rustListParamElement(init: any): boolean;
+    /** The local's last use is the whole right side of a statement `y = x;`: the boxed local moves there,
+     *  a typed one keeps the clone ccxt adds to that write. */
+    rustScalarBareLastWrite(node: any): boolean;
+    /** Some use of the local is the source of an assignment or of another declaration. */
+    rustScalarFeedsWrite(declaration: any): boolean;
+    /** Some statement of the parameter's function assigns the parameter itself. */
+    rustParamWritten(param: any): boolean;
     rustReaderDefaultKind(name: string, args: any[], fresh: boolean): string | undefined;
     rustReaderFallbackKind(fallback: any): string | undefined;
     /** The checker scalar of a default that is a field, parameter or local (never a call: its `Value` may differ). */
@@ -779,7 +833,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
     rustBoolNativeText(expr: any): string | undefined;
     /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */
-    rustScalarCompareText(node: any, dry: boolean): string | undefined;
+    rustScalarCompareText(node: any, dry: boolean, literalKind?: string): string | undefined;
     rustScalarCompareKind(node: any): string | undefined;
     /** `s.indexOf("lit") >= 0` / `> -1` / `!== -1` (contains) and `< 0` / `=== -1` (absent) on a typed string. */
     rustScalarContainsTest(node: any, dry: boolean): string | undefined;
@@ -1069,6 +1123,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustPrintedArgs(node: any, identation: any, params?: any[]): string[];
     private static readonly RUST_PRECISE_TRIMMED;
     printRustNamespaceCall(node: any, identation: any): string | undefined;
+    /** `eddsa` / `jwt` / `rsa` return a `String`: boxed once at a `Value` slot, bare for typed locals and `format!` operands. */
+    printRustSignerCallBoxed(node: any, identation: any): string | undefined;
     printRustSignerCall(node: any, identation: any): string | undefined;
     printCallExpression(node: any, identation: any): string;
     printFreeFnDefaultArgsCall(node: any, identation: any): string | undefined;
@@ -1727,6 +1783,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** How a non-read use boxes: an argument of a plain `Value` slot of a `this.` method, the value of an object
      *  literal property or array element, or `return x`; a nullable local only feeds base `safe*` readers. */
     rustContainerBoxForm(n: any, neverNull: boolean): 'clone' | 'move' | undefined;
+    /** The sole argument of a base `this.json (x)` (printed `json_stringify(&x)`, not a `self.` field). */
+    rustIsJsonOperand(node: any): boolean;
     /** `Value::Map(x.clone())` / `Value::from(x.clone())` at an admitted boxing use, else undefined. */
     printRustContainerLocalBox(node: any, text: string): string | undefined;
     private static readonly RUST_BORROWED_DICT_READERS;
@@ -1741,6 +1799,31 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    /** A whole hand-off of a nullable container local (a base `safeDict*` / `safeList*` with no or a nullish default,
+     *  or a `let` filled by such writes) to a lent `impl Into<crate::Value>` slot. */
+    rustLentOptionalHandOff(call: any, arg: any, init: any, from: 'dict' | 'list' | 'api' | undefined, nilDeclared: boolean): boolean;
+    private static readonly RUST_LENT_OPTIONAL_HELPERS;
+    /** `this.parseX (x as Dict, ..)`: the assertion only retypes the TS side, the argument lands in the same lent slot. */
+    rustLentAsHandOff(asArg: any, init: any, from: 'dict' | 'list' | 'api' | undefined, endpoint: boolean, nilDeclared: boolean): boolean;
+    rustLentAsNullable(init: any, nilDeclared: boolean, endpoint: boolean): boolean;
+    /** Every never-null lent use of an optional local lands in a slot that also takes the optional form. */
+    rustLentOptionalOk(declaration: any, name: string, fn: any, init: any, from: 'dict' | 'list' | 'api' | undefined): boolean;
+    /** `&x` for an optional container local lent whole to an `impl Into<crate::Value>` slot (`None` arrives as Null). */
+    printLentOptionalArg(node: any, text: string): string | undefined;
+    /** `&x` for a container local lent through `x as T` to a lent parse slot (plain or optional form). */
+    printLentAsArg(node: any, text: string): string | undefined;
+    private rustPrintedOptional;
+    /** The value argument of `client.resolve|reject(value, hash)` on a ws handle: the hand-written method takes `impl Into<Value>`. */
+    rustLentWsSettleSlot(call: any, arg: any): boolean;
+    private rustNilMapDecisions;
+    rustNilMapLocal(declaration: any): boolean;
+    rustNilMapLocalUncached(declaration: any): boolean;
+    rustNilMapOf(node: any): any;
+    /** `x = None` / `x = Some(crate::value::Dict::new({ .. }))`: the literal is built once behind the shared handle. */
+    printNilMapWrite(left: any, right: any, identation: any): string | undefined;
+    printNilMapNullTest(left: any, right: any, op: any): string | undefined;
+    /** The `Value` hand-off: the map moved at the last use, else the Arc bump; `None` is `Value::Null`. */
+    printNilMapBox(node: any, text: string): string | undefined;
     rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean;
     rustDictElementSource(init: any): boolean;
     private rustDictElementBoxes;
@@ -1802,6 +1885,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustParamReadsByReferenceUncached(param: any): boolean;
     /** A call to a generated base reader (any overload) whose container parameter prints `impl KeyRead`. */
     rustReaderTakesContainerByReference(call: any): boolean;
+    rustBuiltReturnSourceKind(call: any): 'dict' | 'list' | undefined;
+    private static readonly RUST_BUILT_BOX_RECEIVER_METHODS;
+    rustBuiltReturnBoxUse(n: any, init: any): boolean;
     /** `'dict' | 'list' | 'api'` for a container source the local may hold by reference. */
     rustBorrowedSourceKind(call: any): 'dict' | 'list' | 'api' | undefined;
     rustDeclaredEndpointKind(call: any): 'dict' | 'list' | undefined;
@@ -1880,6 +1966,38 @@ export declare class RustTranspiler extends BaseTranspiler {
     printWsCacheWrite(left: any, right: any): string | undefined;
     /** A constructor stays a `Cache` where a cache slot takes it (a typed field / local write, a cache local's initializer); elsewhere it is boxed. */
     rustWsCacheCtorBox(node: any, text: string): string;
+    private static readonly RUST_CACHE_MAP_TYPE;
+    private rustWsCacheMapFields;
+    /** `this.F` for a base field declared `Dictionary<ArrayCache>`. */
+    rustWsCacheMapField(node: any): boolean;
+    /** The key of a cache-map access (`m[k]`, `k in m`, `safeValue (m, k)`): printed by reference. */
+    rustWsCacheMapKeyUse(n: any): boolean;
+    /** `this.F[k]` on a cache map. */
+    rustWsCacheMapEntry(node: any): boolean;
+    /** `this.safeValue|safeDict (this.F, k)` on a cache map. */
+    rustWsCacheMapLookup(node: any): boolean;
+    /** A source an optional cache local takes as `Option<Cache>`: a map read, `undefined` (with `orUndefined`), a typed
+     *  cache field, or a ternary of those with at least one map read or field. */
+    rustWsCacheOptSource(node: any, orUndefined: boolean): boolean;
+    /** The `Option<Cache>` text of an optional source. */
+    rustWsCacheOptText(node: any): string;
+    /** The borrowed key of a map access: a typed string local by reference, else the printed `Value`. */
+    rustWsCacheMapKey(keyNode: any): string;
+    rustWsCacheMapReadText(n: any): string;
+    /** A map read outside an optional-local slot (those print through `rustWsCacheOptText`): boxed once. */
+    printWsCacheMapRead(node: any): string | undefined;
+    /** `x === undefined` on a map read, and the always-false test of the map field itself. */
+    printWsCacheMapNullTest(left: any, right: any, op: any): string | undefined;
+    /** `k in this.F`. */
+    printWsCacheMapHas(key: any, obj: any): string | undefined;
+    /** `delete this.F[k]`. */
+    printWsCacheMapDelete(node: any): string | undefined;
+    /** The value of `this.F[k] = x` for a cache local `x` (or a constructor). */
+    rustWsCacheMapWriteValue(n: any): boolean;
+    /** `this.F[k] = cache` and `this.F = {}` / `this.F = this.createSafeDictionary (..)`. */
+    printWsCacheMapWrite(left: any, right: any): string | undefined;
+    /** Any other read of the map field is its dict snapshot (each entry an Arc bump); a write is unproven. */
+    printWsCacheMapField(node: any): string | undefined;
     printWsWatchCall(node: any, receiver: string, methodName: string, identation: number): string | undefined;
     /** A numeric or boolean hash argument: the runtime keys by its text, as `stringify_param` did. */
     rustWsNumberSlot(arg: any): boolean;
@@ -1961,6 +2079,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustLentListParamDecisions;
     rustParamIsLentList(param: any): boolean;
     private static readonly RUST_LENT_LIST_TYPES;
+    private static readonly RUST_LENT_RESPONSE_READERS;
     rustParamIsLentListUncached(param: any): boolean;
     /** `object`, `Dict` or `any`, optionally `| undefined`: the parser reads its input as a `Value` of any shape. */
     rustLentRecordTypeNode(type: any): boolean;
@@ -2370,6 +2489,62 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueOptionalSlotOpen(method: any, param: any): boolean;
     /** An optional per-venue parameter that prints as a typed positional `Option`. */
     rustVenuePositional(param: any): boolean;
+    private static readonly RUST_CURRENCY_SLOT_METHODS;
+    private rustCurrencySlotDecisions;
+    rustCurrencySlotParam(param: any): boolean;
+    /** `currency: Currency = undefined`, the second parameter of a listed base method (or of an override of one), never written. */
+    rustCurrencySlotParamUncached(param: any): boolean;
+    private static readonly RUST_CURRENCY_PARSE_METHODS;
+    /** A `Currency = undefined` parameter of a listed currency parser: every parameter before it required (or itself a lent
+     *  currency), never written. */
+    rustParseCurrencyParam(method: any, param: any): boolean;
+    /** The callee parameter at `at` is a lent currency slot. */
+    rustCurrencySlot(params: any[] | undefined, at: number): boolean;
+    /** A use (never the declaration) of a lent currency parameter. */
+    rustCurrencySlotParamOf(node: any): any;
+    /** A lent currency parameter in a `Value` place: its record, boxed once. */
+    printCurrencySlotParamValue(node: any): string | undefined;
+    /** `currency === undefined` on a lent currency parameter. */
+    printCurrencySlotNullTest(left: any, right: any, op: any): string | undefined;
+    /** Argument text for a lent currency slot: `None`, a slot parameter as is, any other value decoded once. */
+    rustCurrencySlotArgText(arg: any, identation: number): string;
+    private static readonly RUST_CURRENCY_RETURN_METHODS;
+    /** Base `currency (code)` / `safeCurrency (..)` declared `: CurrencyInterface` with a body. */
+    rustReturnsCurrency(node: any): boolean;
+    /** `this.currency (..)` / `this.safeCurrency (..)` resolving to a typed producer. */
+    rustIsTypedCurrencyCall(init: any): boolean;
+    private rustCurrencyBoxing;
+    /** The typed call as printed, never boxed. */
+    printCurrencyCallRaw(node: any, identation: number): string;
+    /** A typed currency call that lands where the struct goes as is. */
+    rustCurrencyCallNative(node: any): boolean;
+    /** A typed currency call in a `Value` place: its record boxed once. */
+    printCurrencyCallBox(node: any, identation: number): string | undefined;
+    private rustCurrencyLocalDecisions;
+    rustCurrencyLocalKind(declaration: any): false | 'cstruct' | 'copt';
+    /** `c = <typed currency call>` / `c = undefined` as its own statement. */
+    rustCurrencyWriteOf(n: any): 'call' | 'null' | undefined;
+    /** A whole-value hand-off: a call argument, an array element, a dict value or a returned value. */
+    rustCurrencyValueUse(n: any): boolean;
+    rustCurrencyLocalKindUncached(declaration: any): false | 'cstruct' | 'copt';
+    /** The literal key of a read-only `c['k']` / `c.k` (never written, deleted or stepped): it reads the record's map. */
+    rustCurrencyKeyReadKey(n: any): string | undefined;
+    /** `crate::value::KeyRead::key_read(&&c, "k")` for a read off a typed currency local. */
+    printCurrencyKeyRead(node: any): string | undefined;
+    /** The null test sits in a `bool` place (a condition, a `!` / `&&` / `||` operand of one, or a ternary test). */
+    rustCurrencyNullTestIsCondition(n: any): boolean;
+    /** The typed currency local behind a use (never the declaration name). */
+    rustCurrencyLocalOf(node: any): any;
+    printCurrencyLocalDeclaration(declaration: any, indent: string, varName: string): string | undefined;
+    printCurrencyLocalWrite(left: any, right: any): string | undefined;
+    /** `c === undefined`: `is_none` on an `Option<Currency>`, constant on a `Currency` (a producer always answers a record). */
+    printCurrencyLocalNullTest(left: any, right: any, op: any): string | undefined;
+    /** A typed currency local in a `Value` place: the stored record (one shared handle, as the boxed local's copy). */
+    printCurrencyLocalValue(node: any): string | undefined;
+    /** `this.currencies` / `this.currencies_by_id`, directly or through a const alias. */
+    rustCurrencyStoreOf(node: any): string | undefined;
+    /** The `crate::types::Currency` a currency-returning method hands back for `return <exp>`. */
+    printCurrencyReturnValue(exp: any): string;
     /** `None` for each positional optional slot a call leaves out. */
     rustVenuePads(params: any[] | undefined, given: number, fixed: number): string[];
     private static readonly RUST_MARKET_SLOT_METHODS;
@@ -2378,6 +2553,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustReturnsMarket(node: any): boolean;
     /** The `market` parameter of a base market-slot reader, read only by key readers, null tests or `Value` hand-offs. */
     rustMarketSlotParam(param: any): boolean;
+    private rustMarketDepth;
+    private rustMarketGuardHits;
+    private rustMarketPending;
+    rustMarketSettle(map: any, key: any, decision: any, hitsBefore: number): void;
     rustMarketSlotParamUncached(param: any): boolean;
     /** `n` is the container of a base key reader, which borrows the record (`KeyRead` for `&Market`). */
     rustMarketReaderArg(n: any): boolean;
@@ -2400,6 +2579,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A per-venue helper's `market: Market` parameter that it forwards to a lent market slot: lent itself when every
      *  caller in its file lends a typed market (or passes `undefined`), so no caller decodes. */
     rustVenueMarketParam(method: any, param: any): boolean;
+    /** `ts/src/<id>.ts`'s method `m` is called as `this.m (` / `super.m (` in `ts/src/pro/<id>.ts`. */
+    rustCalledFromWsSibling(method: any): boolean;
     /** A market slot argument that lends without a decode (`rustMarketSlotArgText` takes no `FromRaw` path). */
     rustMarketArgLends(arg: any): boolean;
     /** `safeMarket`'s first parameter `marketId: Str = undefined`: a positional `Value` (padded with `Value::Null`). */
