@@ -14033,6 +14033,7 @@ export class RustTranspiler extends BaseTranspiler {
         let defaultedBoxes = 0;
         let optionalBoxes = 0;
         let paramsBoxes = 0;
+        let declaredEndpointWrites = 0;
         const boxedElementUses: any[] = [];
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
@@ -14049,7 +14050,9 @@ export class RustTranspiler extends BaseTranspiler {
                 writes++;
                 if (this.literalKindOfNode(rhs) === 'null') return true;
                 const kind = this.rustNilResponseWriteKind(rhs, nilDeclared, declaration);
-                if (kind === undefined || kind === 'api' || !this.rustOptContainerSourceOk(rhs, kind) && !this.rustNilResponseLocals.has(declaration)) return false;
+                const declaredWrite = nilDeclared && this.rustDeclaredEndpointWrite(rhs);
+                if (declaredWrite) declaredEndpointWrites++;
+                if (kind === undefined || kind === 'api' || !this.rustOptContainerSourceOk(rhs, kind) && !this.rustNilResponseLocals.has(declaration) && !declaredWrite) return false;
                 if (from !== undefined && from !== kind) mixed = true;
                 from = from ?? kind;
                 return String(rhs.getText()).split('\n')[0].length <= 240;
@@ -14116,6 +14119,8 @@ export class RustTranspiler extends BaseTranspiler {
         const boxOnly = reads === 0 && boxedElementUses.length > 0 && this.rustDictElementSource(init) && nullTests === 0 && writes === 0;
         if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))) return undefined;
+        // ral-kc: a declared endpoint answering off its declared shape is `None` in the optional form: a null test would tell it apart
+        if (declaredEndpointWrites > 0 && nullTests > 0) return undefined;
         // an endpoint written into an empty `let` may answer a list: `into_opt_dict` keeps only maps, so it is never lent whole
         if (this.rustNilResponseLocals.has(declaration) && (lentResponses > 0 || lentNullable > 0)) return undefined;
         // the `ecdsa(..)` declaration adds no `.into_dict()` suffix: its line keeps the boxed length plus the type name
@@ -14865,8 +14870,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (call?.kind === SyntaxKind.AwaitExpression) call = this.rustSkipWrappers(call.expression);
         const kind = isCallExpression(call) ? this.rustBorrowedSourceKind(call) : undefined;
         if (kind !== 'api' || !nilDeclared) return kind;
+        // ral-kc: a declared `Promise<Dict>` / `Promise<List>` endpoint fills the optional form of its own kind
+        const declared = this.rustDeclaredEndpointKind(call);
+        if (declared !== undefined) return declared;
         this.rustNilResponseLocals.add(declaration);
         return 'dict';
+    }
+
+    /** ral-kc: `await this.<endpoint> (..)` whose abstract declaration spells `Promise<Dict>` / `Promise<List>`. */
+    rustDeclaredEndpointWrite(rhs: any): boolean {
+        let call: any = rhs;
+        if (call?.kind === SyntaxKind.AwaitExpression) call = this.rustSkipWrappers(call.expression);
+        return call !== undefined && isCallExpression(call) && this.rustBorrowedSourceKind(call) === 'api' && this.rustDeclaredEndpointKind(call) !== undefined;
     }
 
     /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
