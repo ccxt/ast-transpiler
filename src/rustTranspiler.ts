@@ -3818,6 +3818,9 @@ export class RustTranspiler extends BaseTranspiler {
         return declaration !== undefined && /ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
     }
 
+    /** String hand-off locals boxed more than once: each box before the last lends the string. */
+    private rustStrLentLocals = new WeakSet<any>();
+
     rustScalarLocalKindUncached(declaration): string | undefined {
         if (this.rustScalarVetoed.has(declaration)) return undefined;
         if (declaration.initializer === undefined || this.literalKindOfNode(declaration.initializer) === 'null') return this.rustNilScalarKind(declaration);
@@ -3867,7 +3870,8 @@ export class RustTranspiler extends BaseTranspiler {
         const guarded = (widened || expressionUses || this.rustOptListParamInit(declaration.initializer)) && boxed > 0;
         // a local only handed back to `Value` slots keeps its producer's type: one conversion per box, no extra string copy
         // (never a local returned from a method declaring a string return: that signature decides from the boxed local)
-        const handOff = nativeUses === 0 && boxed >= 1 && (copied === 0 || !(kind === 'str' || kind === 'ostr')) && !this.rustStrReturnedLocal(declaration, scope);
+        const strKind = kind === 'str' || kind === 'ostr';
+        const handOff = nativeUses === 0 && boxed >= 1 && (copied === 0 || !strKind || (!this.rustStrNoLend && this.rustStrLendSites(declaration))) && !this.rustStrReturnedLocal(declaration, scope);
         const storeOnly = guarded && nativeUses === 0 && boxed === 1 && !handOff;
         const unused = typedUses === 0 && !handOff && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
         // a string handed once to a ws client call and nothing else stays a `Value`
@@ -3897,7 +3901,35 @@ export class RustTranspiler extends BaseTranspiler {
         // a key-admitted local converts once at its declaration: that line keeps the 400-char budget
         if (this.rustScalarOptKeyCostly(declaration, kind) === false && kind === 'ostr' && this.rustScalarOptKeyCount(declaration) > 0) this.rustScalarGuarded.add(declaration);
         if (guarded || handOff || this.rustStrMethodRecvLocal(declaration)) this.rustScalarGuarded.add(declaration);
+        // only a local the lending admits lends (a string typed by another rule keeps its boxes)
+        if (handOff && copied > 0 && strKind && this.rustStrLendOnly(declaration)) this.rustStrLentLocals.add(declaration);
         return kind;
+    }
+
+    private rustStrNoLend = false;
+
+    rustStrLendOnly(declaration): boolean {
+        this.rustStrNoLend = true;
+        try {
+            return this.rustScalarLocalKindUncached(declaration) === undefined;
+        } finally {
+            this.rustStrNoLend = false;
+        }
+    }
+
+    /** Every box of the string sits where the `Value` form cloned it (a `this.` / `super.` argument) or is its
+     *  moving last use, and no use reads it by reference: lending there costs the one copy the clone made. */
+    rustStrLendSites(declaration): boolean {
+        let ok = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            const up: any = n.parent;
+            const selfArg = isCallExpression(up) && up.expression !== n && isPropertyAccessExpression(up.expression)
+                && (up.expression.expression.kind === SyntaxKind.ThisKeyword || up.expression.expression.kind === SyntaxKind.SuperKeyword);
+            if ((isCallExpression(up) && up.expression !== n && !selfArg) || up?.kind === SyntaxKind.NewExpression) ok = false;
+            else if (!selfArg && !isReturnStatement(up) && !this.rustLocalLastUse(n, declaration)) ok = false;
+            return true;
+        });
+        return ok;
     }
 
     /** A local some `return` of a method with a declared string return hands back as-is. */
@@ -5361,10 +5393,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
-        const moved = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration)
-            || this.rustLocalLastUse(node, local.declaration) ? name : `${name}.clone()`;
-        if (local.kind === 'ostr') return `${moved}.map(Value::from).unwrap_or(Value::Null)`;
-        if (local.kind === 'str') return `Value::from(${moved})`;
+        const last = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration)
+            || this.rustLocalLastUse(node, local.declaration);
+        const moved = last ? name : `${name}.clone()`;
+        // a string boxed more than once is lent before its last box (`From<&str>`: the one copy the `Value` clone made)
+        const lent = !last && this.rustStrLentLocals.has(local.declaration);
+        if (local.kind === 'ostr') return lent ? `Value::from(${name}.as_deref())` : `${moved}.map(Value::from).unwrap_or(Value::Null)`;
+        if (local.kind === 'str') return lent ? `Value::from(${name}.as_str())` : `Value::from(${moved})`;
         if (local.kind === 'obool') return `${name}.map_or(Value::Null, Value::Bool)`;
         return local.kind === 'bool' ? `Value::Bool(${name})` : `Value::from(${name})`;
     }
@@ -14222,20 +14257,39 @@ export class RustTranspiler extends BaseTranspiler {
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn) || this.rustLocalIsReassigned(declaration, name)) return false;
         let uses = 0;
+        let boxes = 0;
+        let longBox = false;
         const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (this.rustDeclaredNode(n) !== declaration || this.rustEnclosingFunction(n) !== fn) return false;
             const call: any = n.parent;
             const mutable = isCallExpression(call) ? undefined : this.rustMutableSlotUse(n, declaration); if (mutable === 'native') uses++;
-            if (!isCallExpression(call)) return mutable !== undefined || this.rustHandedSlotBoxUse(n, declaration);
+            if (!isCallExpression(call)) {
+                if (mutable === 'box' || (mutable === undefined && this.rustHandedSlotBoxUse(n, declaration))) boxes++;
+                return mutable !== undefined || this.rustHandedSlotBoxUse(n, declaration);
+            }
             const ok = (call.arguments[0] === n && this.rustBorrowedDictReader(call) !== undefined)
                 || (call.arguments[0] === n && call.arguments.length === 2 && this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_OMIT))
                 || this.rustHandedDictExtendOperand(call) === n || this.rustLentParamsSlot(call, n) || this.rustExtendHeadUse(n);
             if (ok) uses++;
             // an optional-slice hand-off boxes the shared map back, so it only rides along with a by-reference use
-            return ok || this.rustOptionalParamsSlot(call, n) || this.rustHandedSlotBoxUse(n, declaration);
+            const boxed = this.rustOptionalParamsSlot(call, n) || this.rustHandedSlotBoxUse(n, declaration);
+            if (boxed) boxes++;
+            if (boxed && uses === 0 && this.rustInDestructureWrite(n)) longBox = true;
+            return ok || boxed;
         });
-        return safe && uses > 0;
+        // a params slot only handed back to `Value` slots shares its map there (moved at the last use, lent before it)
+        return safe && (uses > 0 || (declaration.kind === SyntaxKind.BindingElement && boxes > 0 && !longBox));
+    }
+
+    /** `[a, b] = this.m (.., n)`: printed as one `__destr_tmp` block line, kept within the line budget by the bare box. */
+    rustInDestructureWrite(n: any): boolean {
+        let up: any = n.parent;
+        while (up !== undefined && !isStatement(up)) {
+            if (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken && isArrayLiteralExpression(up.left)) return true;
+            up = up.parent;
+        }
+        return false;
     }
 
     private static readonly RUST_HANDED_DICT_OMIT = new Set([ 'omit' ]);

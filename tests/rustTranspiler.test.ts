@@ -5752,7 +5752,9 @@ describe('venue-local params dicts', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'venue-lent-params', 'ts/src/venue.ts')).content;
         expect(out).toMatch(/fn venueWritten\(&self, params: Value\)/);
         expect(out).toMatch(/fn handleShared\(&self, params: Value\)/);
-        expect(out).toMatch(/let mut paramsKind: Value = /);
+        // a slot only handed to the Value parameter is the shared map, moved there
+        expect(out).toMatch(/let mut paramsKind: crate::value::Dict = /);
+        expect(out).toContain('self.venueWritten(Value::Dict(paramsKind))');
     });
 });
 
@@ -9115,5 +9117,28 @@ describe('whole responses lent to base parameters', () => {
     test('negative: a nullable safeDict result keeps its box at a lent parse parameter', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'lent-response-handoffs', 'ts/src/venue.ts')).content;
         expect(out).toMatch(/let mut data: Value = self\.safe_dict_k\(&response, "data", &\[\]\);/);
+    });
+});
+
+describe('boxed-only params slots and lent strings', () => {
+    const dir = path.join (rustFixtureRoot, 'boxed-params-slots');
+    beforeAll (() => {
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleMarketTypeAndParams (methodName: string, market: any = undefined, params: Dict = {}, defaultValue: Str = undefined): [string, Dict] {\n        return [ defaultValue, params ];\n    }\n    hold (x: any): any { return x; }\n    pair (a: any, b: any): any { return a; }\n    tag (s: string): Str { return s; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        const [ marketType, query ] = this.handleMarketTypeAndParams ('fetchThing', undefined, params);\n        this.hold (query);\n        return this.pair (marketType, query);\n    }\n    label (x: string) {\n        const t = this.tag (x);\n        this.hold (t);\n        return this.pair (t, 1);\n    }\n}\n");
+    });
+    test('a params slot only handed to Value slots is a shared Dict: lent before its last use, moved there', () => {
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut query: crate::value::Dict = ');
+        expect(out).toContain('self.hold(Value::from(&query))');
+        expect(out).toContain('Value::Dict(query)');
+        expect(out).not.toContain('let mut query: Value');
+    });
+    test('a string result boxed twice is lent to the first box and moved into the last', () => {
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut t: Option<String> = ');
+        expect(out).toContain('self.hold(Value::from(t.as_deref()))');
+        expect(out).toContain('t.map(Value::from).unwrap_or(Value::Null)');
+        expect(out).not.toContain('t.clone()');
     });
 });
