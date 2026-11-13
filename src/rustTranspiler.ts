@@ -5929,7 +5929,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const expressionText = this.rustScalarExpressionText(kind, node);
         if (expressionText !== undefined) return expressionText;
-        const marketField = this.rustMarketFieldScalar(node); if (marketField !== undefined) return marketField.kind === kind ? marketField.text : undefined;
+        const marketFieldInit = this.rustMarketFieldScalar(node); if (marketFieldInit !== undefined) return marketFieldInit.kind === kind ? marketFieldInit.text : undefined;
         const boolText = kind === 'bool' && this.literalKindOfNode(node) !== 'boolean' ? this.rustBoolNativeText(node) : undefined; if (boolText !== undefined) return boolText;
         if (base === 'str' && this.literalKindOfNode(node) === 'string') return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
         if (base === 'bool' && this.literalKindOfNode(node) === 'boolean') return wrap(node.kind === SyntaxKind.TrueKeyword ? 'true' : 'false');
@@ -12781,12 +12781,17 @@ export class RustTranspiler extends BaseTranspiler {
         let decision = this.rustDictBearerDecisions.get(declaration);
         if (decision === undefined) {
             this.rustDictBearerDecisions.set(declaration, false); // re-entrancy guard
+            const outerOpen = this.rustBearerSawOpenKey;
+            this.rustBearerSawOpenKey = false;
             try {
                 decision = this.rustDictLocalIsTypedUncached(declaration);
             } catch (e) {
                 decision = false; // no proof -> the local keeps its `Value` box
             }
-            this.rustDictBearerDecisions.set(declaration, decision);
+            // asked while a key local's scalar decision was open: answer, but decide again once that scope is solved
+            if (this.rustBearerSawOpenKey) this.rustDictBearerDecisions.delete(declaration);
+            else this.rustDictBearerDecisions.set(declaration, decision);
+            this.rustBearerSawOpenKey = outerOpen || this.rustBearerSawOpenKey;
         }
         return decision;
     }
@@ -13352,7 +13357,20 @@ export class RustTranspiler extends BaseTranspiler {
      *  native `Option<String>` place. A key that names the receiver is out (the
      *  insert holds its `&mut`). */
     rustBearerWriteKeyOk(keyNode: any, receiverName: string): boolean {
+        // a key local whose scalar decision is still open may yet stay `Value`: the bearer decision that leans on it is not cached
+        if (this.rustKeyScalarDecisionOpen(keyNode)) this.rustBearerSawOpenKey = true;
         return this.rustBearerWriteKeyArg(keyNode, this.printNode(keyNode, 0), receiverName) !== undefined;
+    }
+
+    private rustBearerSawOpenKey = false;
+
+    rustKeyScalarDecisionOpen(keyNode: any): boolean {
+        const key: any = this.rustSkipWrappers(keyNode);
+        if (key === undefined || !isIdentifier(key)) return false;
+        const declaration: any = this.rustDeclaredNode(key);
+        if (declaration === undefined || !isVariableDeclaration(declaration)) return false;
+        const scope: any = this.rustEnclosingFunction(declaration);
+        return scope !== undefined && this.rustScalarSolving.has(scope) && !this.rustScalarSolved.has(scope);
     }
 
     /** `m[k] = v` on a bearer with `k` a native `Option<String>` local. */
@@ -16788,7 +16806,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** A call argument landing in a lent list parameter of the callee. */
     rustLentListSlot(call: any, arg: any): boolean {
         if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
-        if (this.rustTypedFilterLentSlot(call, arg)) return true;
+        if (this.rustTypedFilterSymbolSlot(call, arg)) return true;
         if (call.arguments?.[0] !== arg) return false;
         const params = this.rustTranspiledCalleeParams(call, String(call.expression.name.text));
         return params !== undefined && params.length > 0 && this.rustParamIsLentList(params[0]);
@@ -16796,7 +16814,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `&x` for a shared list local lent to a lent list parameter. */
     printLentListArg(node: any, text: string): string | undefined {
-        if (!isIdentifier(node) || !this.rustLentListSlot(node.parent, node)) return undefined;
+        // the `impl Rows` rows slot takes `&List` too (ral-ib), so a lent / borrowed list local is lent there as well
+        if (!isIdentifier(node) || !(this.rustLentListSlot(node.parent, node) || this.rustTypedFilterLentSlot(node.parent, node))) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
         if (!this.rustLentListLocal(declaration) && !(this.rustBorrowedLocalKind(declaration) !== undefined && this.rustPrintedBorrowed.has(declaration) && !this.rustOptContainerLocals.has(declaration))) return undefined;
@@ -17027,6 +17046,15 @@ export class RustTranspiler extends BaseTranspiler {
         return at >= 0 && this.rustTypedFilterSlot(call, at)?.startsWith('impl') === true;
     }
 
+    /** A lent symbol-list slot of a typed filter method other than the `impl Rows` rows slot (ral-ib). `rustLentListSlot`
+     *  asks this one: the rows slot then falls through to the callee's own first-parameter test, as before ib, while
+     *  the lent-as / borrowed / endpoint rules keep their own filterByArray rows handling. */
+    rustTypedFilterSymbolSlot(call: any, arg: any): boolean {
+        const at = isCallExpression(call) ? Array.from(call.arguments).indexOf(arg) : -1;
+        const slot = at >= 0 ? this.rustTypedFilterSlot(call, at) : undefined;
+        return slot !== undefined && slot.startsWith('impl') && slot !== RustTranspiler.RUST_FILTER_ROWS;
+    }
+
     printTypedFilterSignature(node: any, identation: number): string | undefined {
         const sig = this.rustTypedFilterParams(node);
         if (sig === undefined) return undefined;
@@ -17092,7 +17120,7 @@ export class RustTranspiler extends BaseTranspiler {
         for (let i = 0; i < sig.positional; i++) {
             const rustType = sig.typed.get(i);
             // a required lent slot (the filterByArray objects) prints its argument as the plain `Value` slot did
-            if (rustType !== undefined && rustType.startsWith('impl') && i < required && args[i] !== undefined) printed.push(this.printNode(args[i], identation).trim());
+            if (rustType !== undefined && rustType.startsWith('impl') && rustType !== RustTranspiler.RUST_FILTER_ROWS && i < required && args[i] !== undefined) printed.push(this.printNode(args[i], identation).trim());
             else if (rustType !== undefined) printed.push(this.rustTypedFilterArgText(args[i], rustType, identation));
             else if (args[i] === undefined) printed.push('Value::Null');
             else printed.push(i < required ? this.printNode(args[i], identation).trim() : this.rustSliceArgText(this.printNode(args[i], identation).trim()));
@@ -17168,7 +17196,7 @@ export class RustTranspiler extends BaseTranspiler {
         const param: any = this.rustDeclaredNode(node);
         if (param === undefined || !isParameterDeclaration(param) || param.name === node) return undefined;
         const sig = this.rustTypedFilterParams(param.parent);
-        return sig?.typed.get(Array.from(param.parent.parameters).indexOf(param)) === RustTranspiler.RUST_FILTER_ROWS ? param : undefined;
+        return sig?.typed.get(Array.from((param.parent as any).parameters).indexOf(param)) === RustTranspiler.RUST_FILTER_ROWS ? param : undefined;
     }
 
     /** A rows slot argument: an own rows parameter moves on, a typed cache field / local or a lent list is lent. */

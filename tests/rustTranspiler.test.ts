@@ -5239,13 +5239,15 @@ describe('plain-dict sources in the base tier and pro files', () => {
         expect(base).toContain('accountsByType.get(account.as_str().unwrap_or("")).cloned().unwrap_or(Value::Null)');
     });
 
-    test('base extend of an any parameter keeps the helper', () => {
-        expect(base).toContain('add_element_to_object(&mut r, &Value::Str("x".into()), Value::Int(1));');
+    test('base extend of an any parameter: extend always answers a fresh map, so the key write inserts natively (ic helper table + hb key writes)', () => {
+        expect(base).toContain('let mut r: crate::value::Dict = self.extend(');
+        expect(base).toContain('std::sync::Arc::make_mut(&mut r).insert("x".into(), Value::Int(1));');
     });
 
     test('pro extend of a proven local inserts natively; extend of a handler parameter keeps the helper', () => {
-        expect(pro).toContain('if let Value::Dict(__d) = &mut request { std::sync::Arc::make_mut(__d).insert("id".into(), Value::Int(1)); }');
-        expect(pro).toContain('add_element_to_object(&mut loose, &Value::Str("id".into()), Value::Int(2));');
+        // extend always answers a fresh map (ic helper table), so both key writes insert natively (hb key writes)
+        expect(pro).toContain('std::sync::Arc::make_mut(&mut request).insert("id".into(), Value::Int(1));');
+        expect(pro).toContain('std::sync::Arc::make_mut(&mut loose).insert("id".into(), Value::Int(2));');
     });
 
     test('pro safeDict(this.options, k, {}) local reads natively', () => {
@@ -9581,8 +9583,8 @@ describe('rust filter rows', () => {
     const files: Record<string, string> = {
         "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n",
         "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
-        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport type Int = number | undefined;\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    orders: ArrayCache | undefined = undefined;\n    toArray (x: any): any[] { return Object.values (x); }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterBySinceLimit (array: object[] | undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        if (array === undefined) {\n            return [];\n        }\n        const parsedArray: any[] = this.toArray (array);\n        return parsedArray;\n    }\n    filterBySymbolSinceLimit (array: object[] | undefined, symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return this.filterBySinceLimit (array, since, limit, tail);\n    }\n    filterBySymbolsSinceLimit (array: any, symbols: Strings = undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return this.filterBySinceLimit (array, since, limit, tail);\n    }\n}\n",
-        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    watchOrders (symbol: string = undefined, since: number = undefined, limit: number = undefined) {\n        return this.filterBySymbolSinceLimit (this.orders, symbol, since, limit, true);\n    }\n    handleOrders (client: Client, message: any) {\n        const cache = new ArrayCache (10);\n        cache.append (message);\n        client.resolve (cache, 'orders');\n        return this.filterBySinceLimit (cache, undefined, undefined);\n    }\n    rows (message: any) {\n        return this.filterBySinceLimit (message, undefined, 5);\n    }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport type Int = number | undefined;\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    orders: ArrayCache | undefined = undefined;\n    toArray (x: any): any[] { return Object.values (x); }\n    sortBy (array: any[], key: any, descending = false): any[] { return array; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterBySinceLimit (array: object[] | undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        if (array === undefined) {\n            return [];\n        }\n        const parsedArray: any[] = this.toArray (array);\n        return parsedArray;\n    }\n    filterBySymbolSinceLimit (array: object[] | undefined, symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return this.filterBySinceLimit (array, since, limit, tail);\n    }\n    filterBySymbolsSinceLimit (array: any, symbols: Strings = undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return this.filterBySinceLimit (array, since, limit, tail);\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    watchOrders (symbol: string = undefined, since: number = undefined, limit: number = undefined) {\n        return this.filterBySymbolSinceLimit (this.orders, symbol, since, limit, true);\n    }\n    handleOrders (client: Client, message: any) {\n        const cache = new ArrayCache (10);\n        cache.append (message);\n        client.resolve (cache, 'orders');\n        return this.filterBySinceLimit (cache, undefined, undefined);\n    }\n    rows (message: any) {\n        return this.filterBySinceLimit (message, undefined, 5);\n    }\n    sortedRows (message: any) {\n        const built = [ message ];\n        const sorted = this.sortBy (built, 'timestamp');\n        return this.filterBySinceLimit (sorted, undefined, 5);\n    }\n}\n",
     };
     let out: string;
     let base: string;
@@ -9608,6 +9610,8 @@ describe('rust filter rows', () => {
         expect(out).toContain('self.filterBySymbolSinceLimit(&self.orders, ');
         expect(out).toContain('self.filterBySinceLimit(&cache, None, None');
         expect(out).toMatch(/self\.filterBySinceLimit\(message, None, Some\(5\)/);
+        // the rows slot is no lent symbol-list slot: a sortBy list local stays the shared List and boxes there (INT-30)
+        expect(out).toContain('let mut sorted: crate::value::List = ');
     });
     test('negative: an `any` rows parameter stays Value', () => {
         expect(base).toMatch(/filterBySymbolsSinceLimit\(&self, (mut )?array: Value/);
