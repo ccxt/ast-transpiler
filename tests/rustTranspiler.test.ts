@@ -72,6 +72,14 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    count (resp: Dict, limit: number) {\n        const rows = this.safeList (resp, 'rows', []);\n        const rowsLength = rows.length;\n        if (rowsLength === 0) {\n            return undefined;\n        }\n        const last = rowsLength - 1;\n        if (rowsLength > 10) {\n            return this.hold (last);\n        }\n        return this.hold (rowsLength);\n    }\n}\n"
  },
+ "plural-parse-filters": {
+  "ts/src/base/Exchange.ts": "export default class Exchange {\n    sortBy (a: any, k: any): any { return a; }\n    filterBySinceLimit (array: object[] | undefined, since: number = undefined): any[] { if (array === undefined) { return []; } return array; }\n    filterBySymbolSinceLimit (array: any, symbol: string = undefined, since: number = undefined): any[] { return this.filterBySinceLimit (array, since); }\n    parseRow (r: any): any { return { 'id': r }; }\n    parseRows (rows: any, since: number = undefined): any[] {\n        let results = [];\n        for (let i = 0; i < rows.length; i++) {\n            results.push (this.parseRow (rows[i]));\n        }\n        results = this.sortBy (results, 'timestamp');\n        return this.filterBySymbolSinceLimit (results, undefined, since);\n    }\n    hold (x: any): any { return x; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    f (raw: any) {\n        const rows = this.parseRows (raw);\n        return this.hold (rows);\n    }\n}\n"
+ },
+ "sum-handoff": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nconst sum = (...xs: any[]) => xs[0];\nexport default class Exchange {\n    options: Dict = {};\n    sum = sum;\n    milliseconds (): number { return 1; }\n    hold (x: any): any { return x; }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    sign (lifetime: number) {\n        const now = this.milliseconds ();\n        const expiry = this.sum (now, 60);\n        this.options['expiry'] = expiry;\n        return this.hold ({ 'e': expiry });\n    }\n}\n"
+ },
  "clock-sum-locals": {
   "ts/src/base/Exchange.ts": "export type Str = string | undefined;\nconst sum = (...xs: any[]) => xs[0];\nexport default class Exchange {\n    sum = sum;\n    milliseconds (): number { return 1; }\n    seconds (): number { return 1; }\n    numberToString (x: any): Str { return x; }\n    hold (x: any): any { return x; }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    window (since: number) {\n        const now = this.milliseconds ();\n        const start = now - 1000;\n        const stamp = this.milliseconds ().toString ();\n        const signed = stamp + 'x';\n        const next = this.sum (start, 1);\n        const id = this.numberToString (next) as string;\n        if (id === '5') {\n            return this.hold (signed);\n        }\n        if (next > 10) {\n            return start;\n        }\n        return now;\n    }\n}\n"
@@ -4516,8 +4524,10 @@ describe('native element writes on plain-dict locals', () => {
     });
 
     test('a base-tier account () builder local inserts natively (sibling-block bindings)', () => {
-        expect(output).toContain(insert('account', 'free', 'Value::Str("1".into())'));
-        expect(output).toContain(insert('account', 'used', 'Value::Str("0".into())'));
+        // the fresh map is held as the shared Dict: copy-on-write insert, no Value guard
+        expect(output).toContain('std::sync::Arc::make_mut(&mut account).insert("free".into(), Value::Str("1".into()))');
+        expect(output).toContain('std::sync::Arc::make_mut(&mut account).insert("used".into(), Value::Str("0".into()))');
+        expect(output).toContain('let mut account: crate::value::Dict = self.account().into_dict();');
         expect(output).not.toContain('add_element_to_object(&mut account');
     });
 
@@ -4895,7 +4905,7 @@ describe('safeDict / builder plain dicts and bool-value truthiness', () => {
     });
 
     test('a same-file sync builder returning literals / extend of them inserts natively', () => {
-        expect(output).toContain(insert('request', 'clientOid', 'Value::Str("1".into())'));
+        expect(output).toContain('std::sync::Arc::make_mut(&mut request).insert("clientOid".into(), Value::Str("1".into()))');
     });
 
     test('a non-plain default and a pass-through method keep the helper', () => {
@@ -6099,7 +6109,8 @@ describe('generated readers lend their container', () => {
     test('negative: a container parameter that escapes stays a Value, and so does its caller local', () => {
         expect(base()).toMatch(/fn safeKept\(&self, dictionaryOrList: Value/);
         const o = out();
-        expect(o).toContain('let mut kept: Value = ');
+        // D11: the optional list is moved into the escaping slot, never lent
+        expect(o).toContain('let mut kept: Option<crate::value::List> = ');
         expect(o).not.toContain('&kept');
     });
 });
@@ -7777,7 +7788,7 @@ describe('rust string lists lent to base methods', () => {
 
     test('negative: a list that may be undefined keeps its box', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'lent-string-list', 'ts/src/venue.ts')).content;
-        expect(out).toContain('let mut maybe: Value = ');
+        expect(out).not.toContain('let mut maybe: crate::value::List = ');
         expect(out).toContain('let mut keys: Vec<Value> = ');
     });
 });
@@ -7842,9 +7853,10 @@ describe('rust optional list locals', () => {
         expect(out).toContain('let mut access: Option<String> = api.get(0).and_then(Value::as_str).map(str::to_owned);');
     });
 
-    test('negative: a list that is only handed on keeps its box', () => {
+    test('a list that is only handed on is held optional and moved at its last hand-off (D11)', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'optional-string-list', 'ts/src/venue.ts')).content;
-        expect(out).toContain('let mut passed: Value = ');
+        expect(out).toContain('let mut passed: Option<crate::value::List> = ');
+        expect(out).toContain('passed.map_or(Value::Null, Value::Arr)');
     });
 });
 
@@ -9753,5 +9765,53 @@ describe('typed market slots of required / plural parse methods', () => {
         expect(out).toContain('let mut market: Option<crate::types::Market> = (if ');
         expect(out).toContain('market = Some(crate::types::Market::clone(&symbolMarket));');
         expect(out).not.toContain('FromRaw>::from_raw(market');
+    });
+});
+
+describe('fresh built maps written by key', () => {
+    const ts = "class T {\n" +
+        "    account (): any { return { 'free': undefined, 'used': undefined }; }\n" +
+        "    hold (x: any): any { return x; }\n" +
+        "    f (rows: any, flag: boolean) {\n" +
+        "        const result: any = {};\n" +
+        "        if (flag) {\n" +
+        "            const account = this.account ();\n" +
+        "            account['free'] = rows['a'];\n" +
+        "            result['x'] = account;\n" +
+        "        } else {\n" +
+        "            const account = this.hold (rows);\n" +
+        "            result['y'] = account;\n" +
+        "        }\n" +
+        "        const wide = this.account ();\n" +
+        "        wide['used'] = this.hold ('" + 'x'.repeat(340) + "');\n" +
+        "        return [ result, wide ];\n" +
+        "    }\n" +
+        "}";
+    test('a key-written built map is held as the shared Dict with copy-on-write inserts', () => {
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut account: crate::value::Dict = self.account().into_dict();');
+        expect(out).toContain('std::sync::Arc::make_mut(&mut account).insert("free".into(), ');
+        expect(out).toContain('Value::Dict(account)');
+    });
+    test('negative: an insert line over the 400-char budget keeps the box', () => {
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut wide: Value = ');
+    });
+});
+
+describe('integer sums handed on whole', () => {
+    test('an all-integer base sum stored and returned holds an i64 (D11)', () => {
+        const fixture = path.join (rustFixtureRoot, 'sum-handoff');
+        const out = transpiler.transpileRustByPath(path.join (fixture, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut expiry: i64 = /);
+        expect(out).toContain('Value::from(expiry)');
+    });
+});
+
+describe('plural parse results through the base list filters', () => {
+    test('a parse result filtered by a base list pass-through is held as the shared List', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'plural-parse-filters', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut rows: crate::value::List = ');
+        expect(out).toContain('Value::Arr(rows)');
     });
 });
