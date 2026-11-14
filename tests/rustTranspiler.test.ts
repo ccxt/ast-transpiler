@@ -1739,8 +1739,27 @@ ${body}
         const resolved = headers;
         return this.hold(resolved);`)).content;
             expect(out).toContain('let mut headers: Option<crate::value::Dict> = None;');
+            expect(out).toContain('let mut resolved: Value = headers.map_or(Value::Null, Value::Dict);');
             expect(out).toContain('if let Some(__d) = &mut headers { std::sync::Arc::make_mut(__d).insert("Content-Type".to_string(), Value::Str("application/json".into())); }');
-            expect(out).toContain('headers.map_or(Value::Null, Value::Dict)');
+            // og: a whole alias boxed only as a literal value / return takes the shared handle (moved: the source is dead after it)
+            const alias = transpiler.transpileRust(listCls(`        let headers = undefined;
+        if (kind === 'a') { headers = { 'K': 'v' }; }
+        const resolved = headers;
+        return { 'h': resolved };`)).content;
+            expect(alias).toContain('let mut resolved: Option<crate::value::Dict> = headers;');
+            expect(alias).toContain('resolved.map_or(Value::Null, Value::Dict)');
+            expect(alias).not.toContain('headers.clone()');
+            const live = transpiler.transpileRust(listCls(`        let headers = undefined;
+        if (kind === 'a') { headers = { 'K': 'v' }; }
+        const resolved = headers;
+        return { 'a': resolved, 'b': headers };`)).content;
+            expect(live).toContain('let mut resolved: Option<crate::value::Dict> = headers.clone();');
+            const reset = transpiler.transpileRust(listCls(`        let headers = undefined;
+        if (kind === 'a') { headers = { 'K': 'v' }; } else { headers = undefined; }
+        const resolved = headers;
+        return { 'h': resolved };`)).content;
+            expect(reset).toContain('headers = None;');
+            expect(reset).not.toContain('None.clone()');
             const ext = transpiler.transpileRust(listCls(`        let request = undefined;
         if (kind === 'a') { request = { 'op': 'sub' }; } else { request = { 'op': 'unsub' }; }
         return this.extend(request, {});`)).content;
@@ -1793,6 +1812,26 @@ ${body}
             expect(out).toContain('let mut body: Option<String> = None;');
             expect(out).toContain('let mut result: Option<String> = body;');
             expect(out).toContain('m.insert("body".to_string(), result.map(Value::from).unwrap_or(Value::Null));');
+        });
+
+        test('og: a nil string local whose name is bound again in a sibling block is typed when its boxes move', () => {
+            const out = transpiler.transpileRust(listCls(`        if (kind === 'a') {
+            const base = parts[0];
+            return { 'base': base };
+        }
+        let base = undefined;
+        if (kind === 'b') { base = 'x'; }
+        return { 'base': base };`)).content;
+            expect(out).toContain('let mut base: Option<String> = None;');
+            // a box before the last use would copy where the Value moved: stays boxed
+            const kept = transpiler.transpileRust(listCls(`        if (kind === 'a') {
+            const base = parts[0];
+            return { 'base': base };
+        }
+        let base = undefined;
+        if (kind === 'b') { base = 'x'; }
+        return { 'base': base, 'b2': base };`)).content;
+            expect(kept).toContain('let mut base: Value = Value::Null;');
         });
 
         test('ral-gf: a nil string boxed before its last use lends at this. arguments', () => {

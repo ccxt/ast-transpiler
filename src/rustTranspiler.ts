@@ -2277,7 +2277,11 @@ export class RustTranspiler extends BaseTranspiler {
         const nilScalar = node.declarations.length === 1 ? this.printRustNilScalarDeclaration(declaration, varName, indent) : undefined;
         if (nilScalar !== undefined) return nilScalar;
         if (node.declarations.length === 1 && this.rustNilSlotDictLocal(declaration)) return `${indent}let mut ${varName}: crate::value::Dict = Default::default()`;
-        if (node.declarations.length === 1 && this.rustNilMapLocal(declaration)) return `${indent}let mut ${varName}: Option<crate::value::${this.rustNilListLocals.has(declaration) ? 'List' : 'Dict'}> = None`;
+        if (node.declarations.length === 1 && this.rustNilMapLocal(declaration)) {
+            const type = `Option<crate::value::${this.rustNilListLocals.has(declaration) ? 'List' : 'Dict'}>`;
+            if (this.rustNilMapAliasSource(declaration) === undefined) return `${indent}let mut ${varName}: ${type} = None`;
+            return `${indent}let mut ${varName}: ${type} = ${this.printNode(declaration.initializer, 0).trim()}`;
+        }
         if (!declaration.initializer) {
             return `${indent}let mut ${varName}: Value = Value::Null`;
         }
@@ -2420,7 +2424,8 @@ export class RustTranspiler extends BaseTranspiler {
             kind = k;
             return true;
         };
-        const ok = this.rustLocalUsesAll(declaration, declaration.name.text, false, (n) => {
+        // og: a same-named `let`/`const` in a sibling block is another binding (Rust scopes it to its block too)
+        const ok = this.rustBlockLocalUsesAll(declaration, String(declaration.name.text), (n) => {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             if (this.rustEnclosingFunction(n) !== scope) return false;
             const parent: any = n.parent;
@@ -2453,7 +2458,24 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustNilSlotWrite(n)) return true;
             return this.rustNilReadForm(n, kind) !== undefined;
         });
+        if (readsOk && kind === 'str' && !this.rustSiblingStrBoxesMove(declaration, scope)) return undefined;
         return readsOk ? kind : undefined;
+    }
+
+    /** og: past a same-named sibling binding, a string local is typed only when each of its boxed hand-offs (a literal
+     *  value / element, a return) is its last use: the box moves it where the `Value` moved, so no copy is added. */
+    rustSiblingStrBoxesMove(declaration: any, scope: any): boolean {
+        const name = String(declaration.name.text);
+        if (!this.rustScopeNameNodes(scope, name).some((m: any) => m !== declaration && isVariableDeclaration(m))) return true;
+        let moves = true;
+        const walked = this.rustBlockLocalUsesAll(declaration, name, (n: any) => {
+            if (this.rustIdentifierIsPropertyName(n)) return true;
+            const parent: any = n.parent;
+            const box = (parent?.kind === SyntaxKind.PropertyAssignment && parent.initializer === n) || isArrayLiteralExpression(parent);
+            if (box && !this.rustLocalLastUse(n, declaration)) moves = false;
+            return true;
+        });
+        return walked && moves;
     }
 
     /** Static kind of a write's right-hand side: `null`, or the `Option` payload it yields exactly. */
@@ -2657,12 +2679,14 @@ export class RustTranspiler extends BaseTranspiler {
         const declared = declaration.type === undefined ? undefined : this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
         if (declared !== undefined && declared !== (joined === 'ostr' ? 'string' : 'number')) return undefined;
         const kind = joined;
+        if (kind === 'ostr' && !this.rustSiblingStrBoxesMove(declaration, scope)) return undefined;
         // nc: while the function's solver seeds, assume the kind (as the initialised path does), so an alias chain
         // whose links hold each other converges to its largest consistent set; the later passes re-prove every link
         if (this.rustScalarSeeding) return kind;
         const boxed: any[] = [];
         let native = 0;
-        const ok = this.rustLocalUsesAll(declaration, name, false, (n) => {
+        // og: a same-named `let`/`const` in a sibling block is another binding (Rust scopes it to its block too)
+        const ok = this.rustBlockLocalUsesAll(declaration, name, (n) => {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             if (this.rustEnclosingFunction(n) !== scope) return false;
             // an optional string has no native `+`: the concat would fall back to the `add` helper
@@ -15180,8 +15204,11 @@ export class RustTranspiler extends BaseTranspiler {
     rustNilMapLocalUncached(declaration): boolean {
         const list: any = declaration.parent;
         if (!isIdentifier(declaration.name) || list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1
-            || (list.flags & NodeFlags.Const) !== 0 || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
-        if (declaration.initializer !== undefined && this.literalKindOfNode(declaration.initializer) !== 'null') return false;
+            || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
+        // og: `const x = y` / `let x = y` of a nil-declared map local in the same function takes y's shared handle
+        const aliasOf = this.rustNilMapAliasSource(declaration);
+        if (aliasOf === undefined && (list.flags & NodeFlags.Const) !== 0) return false;
+        if (aliasOf === undefined && declaration.initializer !== undefined && this.literalKindOfNode(declaration.initializer) !== 'null') return false;
         // market / currency records belong to their own typed forms
         if (declaration.type !== undefined) {
             const text = String(declaration.type.getText()).trim();
@@ -15194,9 +15221,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (scope === undefined || isSourceFile(scope)) return false;
         if (this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined
             || this.rustBorrowedLocalKind(declaration) !== undefined || this.rustMarketLocalKind(declaration) !== false) return false;
-        let writes = 0;
+        let writes = aliasOf === undefined ? 0 : 1;
         let boxes = 0;
-        let kind: 'dict' | 'list' | undefined;
+        let kind: 'dict' | 'list' | undefined = aliasOf === undefined ? undefined : (this.rustNilListLocals.has(aliasOf) ? 'list' : 'dict');
         const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             if (this.rustEnclosingFunction(n) !== scope) return false;
@@ -15236,6 +15263,23 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustNilListLocals = new WeakSet<any>();
+
+    /** og: the nil-declared map local a declaration aliases whole (`const x = y`, same function, no closure between). */
+    rustNilMapAliasSource(declaration: any): any {
+        const init: any = declaration.initializer === undefined ? undefined : this.unwrapParens(declaration.initializer);
+        if (init === undefined || !isIdentifier(init)) return undefined;
+        const source: any = this.rustDeclarationOfIdentifier(init);
+        if (source === undefined || source === declaration || source.name === init || !isVariableDeclaration(source)) return undefined;
+        if (this.rustEnclosingFunction(source) !== this.rustEnclosingFunction(declaration) || this.rustNilMapAliasSource(source) !== undefined) return undefined;
+        return this.rustNilMapLocal(source) ? source : undefined;
+    }
+
+    /** og: `y` as the whole initializer of a nil-map alias: the handle moves at y's last use, else an Arc bump. */
+    rustNilMapAliasInit(n: any): any {
+        const parent: any = n?.parent;
+        if (parent?.kind !== SyntaxKind.VariableDeclaration || parent.initializer !== n) return undefined;
+        return this.rustNilMapAliasSource(parent) !== undefined && this.rustNilMapLocal(parent) ? parent : undefined;
+    }
 
     /** A list literal with no spread or bare-local element whose elements print natively (`vec![..]`). */
     rustNilListLiteralOk(rhs: any): boolean {
@@ -15312,7 +15356,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustNilMapOf(left) === undefined) return undefined;
         const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
         const rhs: any = this.unwrapParens(right);
-        if (this.literalKindOfNode(rhs) === 'null') return `${name} = None`;
+        if (this.literalKindOfNode(rhs) === 'null') return `${name} = \u0004None`;
         if (isArrayLiteralExpression(rhs)) return `${name} = Some(${this.printBuiltListLiteral(rhs)})`;
         return `${name} = Some(crate::value::Dict::new(${this.rustObjectLiteralBlock(rhs, identation)}))`;
     }
@@ -15335,6 +15379,7 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration = this.rustNilMapOf(node);
         if (declaration === undefined) return undefined;
         const moves = isReturnStatement(parent) || this.rustLocalLastUse(node, declaration);
+        if (this.rustNilMapAliasInit(node) !== undefined) return moves ? `\u0004${text}` : `${text}.clone()`;
         return `${text}${moves ? '' : '.clone()'}.map_or(Value::Null, Value::${this.rustNilListLocals.has(declaration) ? 'Arr' : 'Dict'})`;
     }
 
