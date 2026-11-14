@@ -12199,8 +12199,10 @@ describe('pg: precision formatters answer Option<String> (results of other self 
         expect(out).toMatch(/let mut px: Option<String> = self\.priceToPrecision\(/);
         expect(out).toContain('Value::from(self.amountToPrecision(');
     });
-    test('negative: a precision string read again as a Precise operand stays a Value (no copy at the &Value reader)', () => {
-        expect(out).toMatch(/let mut q: Value = /);
+    test('uc: a precision string read again as a Precise operand is lent there (no copy), moved at its last box', () => {
+        expect(out).toMatch(/let mut q: Option<String> = self\.amountToPrecision\(/);
+        expect(out).toContain('crate::precise::Precise::stringMul(&Value::from(q.as_deref()), ');
+        expect(out).not.toContain('q.clone()');
     });
 });
 
@@ -12248,6 +12250,41 @@ describe('tc: hand-written runtime helpers typed by their TS return (other self 
     });
     test('microseconds answers an i64: its local is an i64', () => {
         expect(out).toMatch(/let mut now: i64 = self\.microseconds\(\)/);
+    });
+});
+
+describe('uc: a venue map builder handed to a typed unified params slot (other self method results, eighth pass)', () => {
+    let out: string;
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'uc-params-slot');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Ticker { symbol: string }\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    extend = extend;\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue14.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Ticker } from './base/Exchange.js';\nexport default class venue14 extends Exchange {\n    routeIt (methodName: string, params: Dict = {}): Dict {\n        const request: Dict = { 'm': methodName };\n        return this.extend (request, params);\n    }\n    async fetchTicker (symbol: string, params: Dict = {}): Promise<Ticker> {\n        return { 'symbol': symbol } as any;\n    }\n    async tickIt (symbol: string, params: Dict = {}) {\n        const resolved = this.routeIt ('tickIt', params);\n        const ticker = await this.fetchTicker (symbol, resolved);\n        return this.hold (ticker);\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTicker'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue14.ts')).content;
+    });
+    test('the built map is a shared Dict local, moved into the typed params slot', () => {
+        expect(out).toMatch(/let mut resolved: crate::value::Dict = self\.routeIt\(/);
+        expect(out).toContain('Value::Dict(resolved)');
+        expect(out).not.toContain('resolved.clone()');
+    });
+});
+
+describe('uc: a venue string handed on to a solver-decided local or ternary (other self method results, eighth pass)', () => {
+    let out: string;
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'uc-venue-handon');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue15.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue15 extends Exchange {\n    fixIt (s: Str): Str {\n        if (s === undefined) {\n            return undefined;\n        }\n        return s + '!';\n    }\n    moveIt (order: Dict) {\n        const amount = this.fixIt (this.safeString (order, 'a'));\n        let remaining = this.fixIt (this.safeString (order, 'r'));\n        if (remaining === undefined) {\n            remaining = amount;\n        }\n        return this.hold ({ 'r': remaining });\n    }\n    pickIt (flag: boolean, order: Dict) {\n        const first = this.fixIt (this.safeString (order, 'a'));\n        const second = this.fixIt (this.safeString (order, 'b'));\n        const hash = first + ':x';\n        const chosen = flag ? first : second;\n        return this.hold (this.hold (chosen) + hash);\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue15.ts')).content;
+    });
+    test('a venue string moved into another typed local at its last use is typed', () => {
+        expect(out).toMatch(/let mut amount: Option<String> = self\.fixIt\(/);
+        expect(out).toMatch(/let mut remaining: Option<String> = self\.fixIt\(/);
+    });
+    test('a venue string that is an arm of a ternary initialising another local is typed', () => {
+        expect(out).toMatch(/let mut first: Option<String> = self\.fixIt\(/);
     });
 });
 

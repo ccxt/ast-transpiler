@@ -4297,7 +4297,11 @@ export class RustTranspiler extends BaseTranspiler {
         // a hand-off ternary whose arms print only as a `Value` keeps the box its uses would read
         if (handOff && isConditionalExpression(this.unwrapParens(declaration.initializer)) && this.rustScalarNativeText(kind, declaration.initializer) === undefined) return undefined;
         // pg: a string the precision formatters write (or a precision override returns) stays boxed where it is a `Precise.*` operand
-        if (strKind && copied > 0 && this.rustPrecisionTouched(declaration, scope) && this.rustPreciseOperandLocal(declaration)) return undefined;
+        // uc: unless every copying box is a lending slot or a `Precise` operand: the string is lent there (`&Value::from(x.as_deref())`)
+        if (strKind && copied > 0 && this.rustPrecisionTouched(declaration, scope) && this.rustPreciseOperandLocal(declaration)) {
+            if (this.rustStrNoLend || this.rustStrReturnedLocal(declaration, scope) || this.rustVenueLocalHandedOn(declaration) || this.rustReaderDeclTooLong(declaration, kind) || !this.rustReaderLendBoxes(declaration, false, true)) return undefined;
+            this.rustStrLentLocals.add(declaration);
+        }
         if (this.rustVenueScalarSource(declaration.initializer) && ((boxed > 0 && !handOff) || this.rustVenueLocalHandedOn(declaration))) {
             // od: unless every copying box sits at a lending slot (`Value::from(x.as_deref())`: the copy the `Value` clone made)
             if (!strKind || this.rustStrNoLend || this.rustOdExcludedCallee(declaration.initializer) || this.rustStrReturnedLocal(declaration, scope) || this.rustVenueLocalHandedOn(declaration) || this.rustReaderDeclTooLong(declaration, kind) || !this.rustReaderLendBoxes(declaration)) return undefined;
@@ -4444,7 +4448,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Every non-moving box of the string is a slot where the `Value` form cloned it (a `this.`/`super.` argument,
      *  an object-literal value, a dict write or an array element), so lending there adds no copy. */
-    rustReaderLendBoxes(declaration, nativeKeys = false): boolean {
+    rustReaderLendBoxes(declaration, nativeKeys = false, preciseSlots = false): boolean {
         let ok = true;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
             const form = this.rustScalarUseForms.get(n);
@@ -4455,7 +4459,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (isReturnStatement(up) || this.rustLocalLastUse(n, declaration)) return true;
             const selfArg = isCallExpression(up) && up.expression !== n && isPropertyAccessExpression(up.expression)
                 && (up.expression.expression.kind === SyntaxKind.ThisKeyword || up.expression.expression.kind === SyntaxKind.SuperKeyword);
-            const slot = selfArg || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n) || this.rustDictWriteValue(n)
+            const precise = preciseSlots && isCallExpression(up) && up.expression !== n && isPropertyAccessExpression(up.expression)
+                && isIdentifier(up.expression.expression) && String(up.expression.expression.text) === 'Precise';
+            const slot = selfArg || precise || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n) || this.rustDictWriteValue(n)
                 || (isArrayLiteralExpression(up) && !(isBinaryExpression(up.parent) && up.parent.left === up));
             if (!slot) ok = false;
             return true;
@@ -5416,6 +5422,28 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** A string local that is the source of another local's write: that local then copies at its own uses. */
+    /** sd: a bare string hand-off `y = x` / `const y = x` that needs no veto: `moved` at the local's last use into a
+     *  receiver with a value (the receiver decides alone), or `solved` when that receiver is a scalar-shape candidate of
+     *  the same function, decided together with the local (a copy where both are typed is the copy the `Value` clone made). */
+    rustStrHandOffDecided(n: any, top: any, declaration: any): { moved: boolean, solved: boolean } {
+        const target: any = isVariableDeclaration(top.parent) ? top.parent : isBinaryExpression(top.parent) && isIdentifier(top.parent.left) ? this.rustDeclaredNode(top.parent.left) : undefined;
+        const moved = top === n && this.rustLocalLastUse(n, declaration) && target !== undefined && isVariableDeclaration(target)
+            && target.initializer !== undefined && this.literalKindOfNode(target.initializer) !== 'null';
+        const solved = !moved && top === n && target !== undefined && isVariableDeclaration(target) && target !== declaration
+            && target.initializer !== undefined && this.literalKindOfNode(target.initializer) !== 'null'
+            && this.rustScalarInitShape(target.initializer) && this.rustEnclosingFunction(target) === this.rustEnclosingFunction(declaration);
+        return { moved, solved };
+    }
+
+    /** uc: `const y = c ? x : z` in the local's own function, `y` a scalar-shape candidate: decided with the local. */
+    rustStrTernaryArmSolved(ternary: any, declaration: any): boolean {
+        let up: any = ternary;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        const target: any = up.parent;
+        return isVariableDeclaration(target) && target.initializer === up && target !== declaration && isIdentifier(target.name)
+            && this.rustScalarInitShape(target.initializer) && this.rustEnclosingFunction(target) === this.rustEnclosingFunction(declaration);
+    }
+
     rustReaderStrHandedOn(declaration): boolean {
         let handed = false;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
@@ -5424,14 +5452,7 @@ export class RustTranspiler extends BaseTranspiler {
             // an element / field write `m[k] = s` boxes into a Value slot: no other local's decision reads it
             // a bare hand-off at the local's last use moves it: the receiver decides alone, nothing is copied
             // (never into a nil-declared receiver: those locals are another group's)
-            const target: any = isVariableDeclaration(top.parent) ? top.parent : isBinaryExpression(top.parent) && isIdentifier(top.parent.left) ? this.rustDeclaredNode(top.parent.left) : undefined;
-            const moved = top === n && this.rustLocalLastUse(n, declaration) && target !== undefined && isVariableDeclaration(target)
-                && target.initializer !== undefined && this.literalKindOfNode(target.initializer) !== 'null';
-            // sd: a receiver initialised in the same function from a scalar shape is a candidate of rustScalarSolveScope,
-            // so both locals are decided together there (a copy where both are typed is the copy the `Value` clone made)
-            const solved = !moved && top === n && target !== undefined && isVariableDeclaration(target) && target !== declaration
-                && target.initializer !== undefined && this.literalKindOfNode(target.initializer) !== 'null'
-                && this.rustScalarInitShape(target.initializer) && this.rustEnclosingFunction(target) === this.rustEnclosingFunction(declaration);
+            const { moved, solved } = this.rustStrHandOffDecided(n, top, declaration);
             if (isBinaryExpression(top.parent) && top.parent.right === top && top.parent.operatorToken.kind === SyntaxKind.EqualsToken
                 && !isElementAccessExpression(this.unwrapParens(top.parent.left)) && !isPropertyAccessExpression(this.unwrapParens(top.parent.left)) && !moved && !solved) handed = true;
             if (isVariableDeclaration(top.parent) && top.parent.initializer === top && !moved && !solved) handed = true;
@@ -5668,8 +5689,15 @@ export class RustTranspiler extends BaseTranspiler {
             while (isParenthesizedExpression(top.parent)) top = top.parent;
             const parent: any = top.parent;
             // rc: an element / field write (`request['k'] = x`) is a box slot the lending rules price; only another local takes it over
-            if ((isBinaryExpression(parent) && parent.right === top && parent.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(this.unwrapParens(parent.left)))
-                || (isVariableDeclaration(parent) && parent.initializer === top) || isConditionalExpression(parent)) handed = true;
+            // uc: a bare hand-off sd's reader rule decides (moved at the last use, or solved with its receiver) is no veto either
+            const bare = (isBinaryExpression(parent) && parent.right === top && parent.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(this.unwrapParens(parent.left)))
+                || (isVariableDeclaration(parent) && parent.initializer === top);
+            if (bare) {
+                const { moved, solved } = this.rustStrHandOffDecided(n, top, declaration);
+                if (!moved && !solved) handed = true;
+            }
+            // uc: an arm of a ternary that is a whole solver-candidate initializer is decided with that receiver too
+            if (isConditionalExpression(parent) && !(parent.condition !== top && this.rustStrTernaryArmSolved(parent, declaration))) handed = true;
             return true;
         });
         return handed;
@@ -5837,7 +5865,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** A venue typed string is copied out of the `Value` once: a box short of a moving last use, or a hand-on, would copy it again. */
     rustVenueTypedCostly(declaration, kind: string, copied: number): boolean {
         // pg: a precision-formatter string read as a `Precise.*` operand (a `&Value` reader) would be boxed by copy there
-        if (kind === 'ostr' && copied > 0 && this.rustPrecisionCall(declaration.initializer) && this.rustPreciseOperandLocal(declaration)) return true;
+        // (uc: unless that local is lent at every copying box, `Precise` operands included)
+        if (kind === 'ostr' && copied > 0 && this.rustPrecisionCall(declaration.initializer) && this.rustPreciseOperandLocal(declaration) && !this.rustStrLentLocals.has(declaration)) return true;
         if (this.rustVenueTypedCall(declaration.initializer) === undefined) return false;
         return (kind === 'ostr' && (copied > 0 || this.rustVenueLocalHandedOn(declaration))) || this.rustReaderDeclTooLong(declaration, kind);
     }
@@ -17429,7 +17458,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (callee === 'append' && at === 0 && up.arguments.length === 1 && up.parent?.kind === SyntaxKind.ExpressionStatement && this.rustWsCacheField(up.expression.expression)) return true;
         if (up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
-        if (this.rustTypedParamsSlot(up, at)) return literalDict || RustTranspiler.RUST_BUILT_HELPER_RETURNS[String((init.expression as any).name.text)] === 'dict';
+        // uc: a venue method building its map on every path (a REST `handleRouteAndParams` reached from ws) boxes there too
+        if (this.rustTypedParamsSlot(up, at)) return literalDict || RustTranspiler.RUST_BUILT_HELPER_RETURNS[String((init.expression as any).name.text)] === 'dict'
+            || (RustTranspiler.RUST_BUILT_HELPER_RETURNS[String((init.expression as any).name.text)] === undefined && this.rustBuiltReturnSourceKind(init) === 'dict');
         return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && this.rustNilBoxSlotOk(up, at);
     }
 
