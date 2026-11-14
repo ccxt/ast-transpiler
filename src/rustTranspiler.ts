@@ -2585,6 +2585,8 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustNilLiteralTest(kind, other) !== undefined ? 'test' : undefined;
         }
         if (kind === 'bool' && this.rustIdentifierUseIsCondition(n)) return 'cond';
+        // rb: `y = !x` into another typed bool local: `!x` prints `!(x == Some(true))`, the truthiness `is_true` gave
+        if (kind === 'bool' && this.rustNilNegatedBoolWrite(n)) return 'cond';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxCallOk(parent, parent.arguments.indexOf(n)) ? 'box' : undefined;
         }
@@ -2594,6 +2596,17 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike) as any) === 'str' ? undefined : 'box';
         }
         return undefined;
+    }
+
+    /** rb: `y = !x;` as a whole statement, where `y` is another nil local typed `Option<bool>` (decided first; a cycle stays boxed). */
+    rustNilNegatedBoolWrite(n): boolean {
+        const not: any = n.parent;
+        if (not === undefined || !isPrefixUnaryExpression(not) || not.operator !== SyntaxKind.ExclamationToken || not.operand !== n) return false;
+        let up: any = not.parent;
+        while (up?.kind === SyntaxKind.ParenthesizedExpression) up = up.parent;
+        if (!isBinaryExpression(up) || up.operatorToken.kind !== SyntaxKind.EqualsToken || !isIdentifier(up.left) || this.unwrapParens(up.right) !== not
+            || up.parent?.kind !== SyntaxKind.ExpressionStatement || up.left.text === n.text) return false;
+        return this.rustNilLocalOfIdentifier(up.left)?.kind === 'bool';
     }
 
     /** Box reads go only into plain `Value` slots: no `&mut` receivers, no native-typed callee slots. */
@@ -2847,8 +2860,12 @@ export class RustTranspiler extends BaseTranspiler {
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) return true;
             const selfArg = isCallExpression(up) && up.expression !== n && isPropertyAccessExpression(up.expression)
                 && (up.expression.expression.kind === SyntaxKind.ThisKeyword || up.expression.expression.kind === SyntaxKind.SuperKeyword);
+            // rb: a literal value / element or a one-level dict write value is a by-value `Value` slot too, where the
+            // `Value` form printed `x.clone()`: lending there (`Value::from(x.as_deref())`) costs that same copy
+            const literalSlot = (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n) || this.rustDictWriteValue(n)
+                || (isArrayLiteralExpression(up) && !(isBinaryExpression(up.parent) && up.parent.left === up));
             if ((isCallExpression(up) && up.expression !== n && !selfArg) || up?.kind === SyntaxKind.NewExpression) ok = false;
-            else if (!selfArg && !this.rustScalarBoxMoves(n, form, declaration)) ok = false;
+            else if (!selfArg && !literalSlot && !this.rustScalarBoxMoves(n, form, declaration)) ok = false;
             return true;
         });
         return ok;
@@ -2949,6 +2966,8 @@ export class RustTranspiler extends BaseTranspiler {
         const pick = this.printRustNilBoolTernary(node); if (pick !== undefined) return `${name} = Some(${pick})`;
         const bool = this.peelValueBoolBox(this.stripOuterParens(text));
         if (bool !== undefined) return `${name} = Some(${bool})`;
+        // rb: `!x` of a typed `Option<bool>` nil local prints `!(x == Some(true))`, already a Rust bool
+        if (isPrefixUnaryExpression(node) && node.operator === SyntaxKind.ExclamationToken && this.rustNilLocalOfIdentifier(this.unwrapParens(node.operand))?.kind === 'bool') return `${name} = Some(${text})`;
         return `${name} = Some(${this.printedBoolHelperCall(this.stripOuterParens(text)) ? text : `is_true(&(${text}))`})`;
     }
 

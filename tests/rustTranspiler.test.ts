@@ -1848,6 +1848,37 @@ ${body}
             expect(out).toContain('m.insert("baseId".to_string(), baseId.map(Value::from).unwrap_or(Value::Null));');
         });
 
+        test('rb: a nil bool local read only as `y = !x` into another bool nil local is Option<bool>', () => {
+            const out = transpiler.transpileRust(listCls(`        let inverse = undefined;
+        let linear = undefined;
+        if (kind === 'a') { inverse = (parts[0] === parts[1]); linear = !inverse; }
+        return { 'inverse': inverse, 'linear': linear };`)).content;
+            expect(out).toContain('let mut inverse: Option<bool> = None;');
+            expect(out).toContain('linear = Some(!(inverse == Some(true)));');
+            // `!x` as a value anywhere else (a literal value) keeps the box
+            const kept = transpiler.transpileRust(listCls(`        let inverse = undefined;
+        if (kind === 'a') { inverse = (parts[0] === parts[1]); }
+        return { 'inverse': inverse, 'linear': !inverse };`)).content;
+            expect(kept).toContain('let mut inverse: Value = Value::Null;');
+        });
+
+        test('rb: a box-only nil string boxed before its last use lends at literal values and dict writes', () => {
+            const out = transpiler.transpileRust(listCls(`        let code = undefined;
+        if (kind === 'a') { code = parts[1]; } else { code = 'USD'; }
+        const inner = { 'currency': code };
+        inner['c2'] = code;
+        return { 'inner': inner, 'code': code };`)).content;
+            expect(out).toContain('let mut code: Option<String> = None;');
+            expect(out).toContain('m.insert("currency".to_string(), Value::from(code.as_deref()));');
+            expect(out).toContain('m.insert("code".to_string(), code.map(Value::from).unwrap_or(Value::Null));');
+            // a free-function / Precise operand reads `&Value`: lending there would add a copy, so it stays boxed
+            const kept = transpiler.transpileRust(listCls(`        let code = undefined;
+        if (kind === 'a') { code = parts[1]; } else { code = 'USD'; }
+        const n = Precise.stringAbs (code);
+        return { 'code': code, 'n': n };`)).content;
+            expect(kept).toContain('let mut code: Value = Value::Null;');
+        });
+
         test('a read outside the proven sinks keeps the Value box', () => {
             const out = transpiler.transpileRust(cls(`        let s = undefined;
         s = 'x';
@@ -6472,8 +6503,10 @@ describe('empty-declared endpoint responses and flag slots', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'nil-declared-endpoint-boxes', 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut kind: Option<String> = None');
         expect(out).toContain('kind.map(Value::from).unwrap_or(Value::Null)');
-        // negative: a string stored twice would copy at the first store
-        expect(out).toContain('let mut twice: Value = Value::Null');
+        // rb: a string stored twice lends at the first store (`Value::from(x.as_deref())`, the copy the `Value` clone made) and moves at the last
+        expect(out).toContain('let mut twice: Option<String> = None');
+        expect(out).toContain('request.insert("kind".into(), Value::from(twice.as_deref()));');
+        expect(out).toContain('other.insert("kind".into(), twice.map(Value::from).unwrap_or(Value::Null));');
     });
 
     test('ral-nd: a nil-declared params slot written only from map slots holds the shared map', () => {
