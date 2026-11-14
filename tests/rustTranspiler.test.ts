@@ -12829,3 +12829,27 @@ describe('ral-ub: boxed typed values remainder (round 34)', () => {
         expect(out).toContain('let mut c: Value = ');
     });
 });
+
+describe('ral-uh: string-literal ternary locals key a proven map read', () => {
+    const DICT_DECL = "interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\n";
+    test('a `c ? \'a\' : \'b\'` local read only as a Dict key is a String and reads the entry natively', () => {
+        const ts = DICT_DECL +
+            "class X {\n    f (market: Dict, inverse: boolean) {\n        const codeCurrency = inverse ? 'base' : 'quote';\n        return market[codeCurrency];\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut codeCurrency: String = (if inverse { "base".to_string() } else { "quote".to_string() });');
+        expect(output).toContain('market.as_map() { __m.get(codeCurrency.as_str()).cloned().unwrap_or(Value::Null) } else { Value::Null })');
+        expect(output).not.toContain('let mut codeCurrency: Value');
+    });
+    test('negative: arms of different kinds (number | string) stay a Value', () => {
+        const ts = DICT_DECL +
+            "class X {\n    f (market: Dict, spot: boolean) {\n        const key = spot ? 0 : 'p';\n        return market[key];\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toMatch(/let mut key: Value = /);
+    });
+    test('negative: a non-literal string arm keeps the reader rules (no new okey)', () => {
+        const ts = DICT_DECL +
+            "class X {\n    f (market: Dict, inverse: boolean, other: string) {\n        const k = inverse ? 'base' : other;\n        return market[k];\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__m.get(k.as_str())');
+    });
+});

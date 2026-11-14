@@ -6117,6 +6117,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustScalarOptKeyUse(n)) return 'key';
         // an optional-string local keys a proven map read or an `in` test natively (a `None` key misses, as the `Null` did)
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
+        // uh: a ternary of two string literals keys a proven map read natively (`m.get(k)` is the entry `get_value` reads)
+        if (kind === 'str' && this.rustStrLiteralTernaryLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
         // qf: the key of any other `k in obj` test boxes once (`in_op` reads a `Str` key or misses on `Null`, as the `Value` local did)
         // td: also through a `(k as string)` cast of the key (the cast prints nothing)
@@ -8522,12 +8524,24 @@ export class RustTranspiler extends BaseTranspiler {
         return kind === 'map' || (kind === 'value' && RUST_PLAIN_PLACE.test(this.printNode(read.expression, 0).trim()));
     }
 
+    /** uh: the use's local is initialised by `c ? 'a' : 'b'` (both arms string literals). */
+    rustStrLiteralTernaryLocal(n: any): boolean {
+        const declaration: any = this.rustDeclaredNode(n);
+        const init: any = declaration !== undefined && isVariableDeclaration(declaration) ? this.unwrapParens(declaration.initializer) : undefined;
+        return init !== undefined && isConditionalExpression(init) && this.literalKindOfNode(this.unwrapParens(init.whenTrue)) === 'string' && this.literalKindOfNode(this.unwrapParens(init.whenFalse)) === 'string';
+    }
+
     /** Element-access hook: the native read of an `okey` use. */
     printOkeyRead(node: any): string | undefined {
         const key: any = node.argumentExpression;
-        if (!isIdentifier(key) || this.rustScalarUseForms.get(key) !== 'okey' || this.rustScalarLocalOf(key)?.kind !== 'ostr') return undefined;
+        const keyKind = isIdentifier(key) && this.rustScalarUseForms.get(key) === 'okey' ? this.rustScalarLocalOf(key)?.kind : undefined;
+        if (keyKind !== 'ostr' && keyKind !== 'str') return undefined;
         const recv = this.printNode(node.expression, 0).trim();
         const name = super.printIdentifier(key);
+        if (keyKind === 'str') {
+            if (this.rustOkeyKind(node.expression, node) === 'map') return `${recv}.get(${name}.as_str()).cloned().unwrap_or(Value::Null)`;
+            return `(if let Some(__m) = ${recv}.as_map() { __m.get(${name}.as_str()).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
+        }
         if (this.rustOkeyKind(node.expression, node) === 'map') return `${recv}.get(${name}.as_deref().unwrap_or("")).cloned().unwrap_or(Value::Null)`;
         return `(if let (Some(__m), Some(__k)) = (${recv}.as_map(), ${name}.as_deref()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
     }
