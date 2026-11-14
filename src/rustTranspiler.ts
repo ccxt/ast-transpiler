@@ -4710,6 +4710,7 @@ export class RustTranspiler extends BaseTranspiler {
             && this.rustScalarFormatText(node) !== undefined) return 'str';
         if (this.rustElementReadScalarKind(node) !== undefined) return this.rustElementReadScalarKind(node);
         if (fresh && this.rustRowFieldStrText(node) !== undefined) return 'ostr';
+        if (fresh && this.rustNilElemStrText(node) !== undefined) return 'ostr';
         if (fresh) { const field = this.rustMarketArmStrKind(node); if (field !== undefined) return field; }
         if (fresh && this.rustListLengthInit(node)) return 'int';
         if (!isCallExpression(node)) return undefined;
@@ -5913,6 +5914,26 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isBinaryExpression(up) || up.right !== current || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         const declaration: any = isIdentifier(up.left) ? this.rustDeclaredNode(up.left) : undefined;
         return declaration !== undefined && isVariableDeclaration(declaration) && (declaration.initializer === undefined || this.literalKindOfNode(declaration.initializer) === 'null');
+    }
+
+    // ral-xa: unified string keys of a market / currency record (an exchange id key may hold a number, which `as_str` drops)
+    private static readonly RUST_NIL_ELEM_STR_KEYS = new Set([ 'symbol', 'base', 'quote', 'settle', 'code' ]);
+
+    /** ral-xa: `m['symbol']` as the whole right side of `x = m['k'];` into a nil-declared local, printed as an owned
+     *  `KeyRead::key_read(..)` temporary the checker types string: the string moves out of that temporary
+     *  (`.into_opt_string()`: `Some` for a `Str`, `None` otherwise, as `as_str()` reads it), so no copy is added. */
+    rustNilElemStrText(node: any): string | undefined {
+        if (node === undefined || !isElementAccessExpression(node) || !isIdentifier(node.expression) || !isStringLiteralLikeNode(node.argumentExpression)) return undefined;
+        if (!RustTranspiler.RUST_NIL_ELEM_STR_KEYS.has(String(node.argumentExpression.text)) || this.checkerOrUndefined() === undefined) return undefined;
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(node)) !== 'string') return undefined;
+        // the whole right side, or (through parens) an arm of a ternary that is the whole right side
+        let arm: any = node;
+        while (isParenthesizedExpression(arm.parent)) arm = arm.parent;
+        const whole = isConditionalExpression(arm.parent) && arm.parent.condition !== arm ? arm.parent : node;
+        if (!this.rustNilVenueWrite(whole)) return undefined;
+        const read = this.printNode(node, 0).trim();
+        if (!/^(?:crate|ccxt)::value::KeyRead::key_read\(&{1,2}[A-Za-z_][A-Za-z0-9_]*, "[A-Za-z]+"\)$/.test(read)) return undefined;
+        return `${read}.into_opt_string()`;
     }
 
     /** The whole initializer of a `let`/`const` (writes and ternary arms keep their `Value`). */
@@ -7582,6 +7603,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (kind === 'int' && this.rustListLengthInit(node)) return this.rustListLengthText(node);
         if (kind === 'ostr') { const row = this.rustRowFieldStrText(node); if (row !== undefined) return row; }
+        if (kind === 'ostr') { const owned = this.rustNilElemStrText(node); if (owned !== undefined) return owned; }
         if (kind === 'ostr' && this.rustElementReadScalarKind(node) !== undefined) {
             const read = this.printNode(node, 0).trim();
             const tail = '.cloned().unwrap_or(Value::Null)';
