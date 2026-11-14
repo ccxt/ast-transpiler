@@ -2264,7 +2264,7 @@ describe('rust checker-typed native container access', () => {
         'const a = g();\n' +
         'const c = a + "y";';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::Str(format!("{}{}", a, Value::Str("y".into())).into())');
+        expect(output).toContain('Value::Str(format!("{}{}", a, "y").into())');
         expect(output).not.toContain('add(');
     });
 
@@ -2275,7 +2275,7 @@ describe('rust checker-typed native container access', () => {
         'let s = g();\n' +
         's += "b";';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('s = Value::Str(format!("{}{}", s, Value::Str("b".into())).into());');
+        expect(output).toContain('s = Value::Str(format!("{}{}", s, "b").into());');
         expect(output).not.toContain('add(');
     });
 
@@ -2337,7 +2337,7 @@ describe('rust checker-typed native container access', () => {
     test('string += string emits native concat', () => {
         const ts = 'let s: string = "a";\ns += "b";';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('s = Value::Str(format!("{}{}", s, Value::Str("b".into())).into());');
+        expect(output).toContain('s = Value::Str(format!("{}{}", s, "b").into());');
         expect(output).not.toContain('add(');
     });
 
@@ -2348,7 +2348,7 @@ describe('rust checker-typed native container access', () => {
         '    run(): string { return this.id + "x"; }\n' +
         '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::Str(format!("{}{}", self.id, Value::Str("x".into())).into())');
+        expect(output).toContain('Value::Str(format!("{}{}", self.id, "x").into())');
     });
 
     // Dictionary reads with a string-literal key skip the `Value::Str`
@@ -2406,20 +2406,20 @@ describe('rust error constructor message arguments', () => {
     test('a string concat message drops its Value::Str box', () => {
         const ts = "function f(id: string) {\n    throw new NotSupported(id + ' handleDelta not supported yet');\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" handleDelta not supported yet".into())))');
+        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, " handleDelta not supported yet"))');
         expect(output).not.toContain('not_supported(Value::Str(');
     });
 
     test('a parenthesised concat message drops its Value::Str box', () => {
         const ts = "function f(id: string) {\n    throw new NotSupported((id + ' msg'));\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" msg".into())))');
+        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, " msg"))');
     });
 
     test('every ccxt error class constructs through its runtime fn with an unboxed message', () => {
         const ts = "function f(id: string) {\n    throw new BadRequest (id + ' msg');\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('crate::exchange_errors::bad_request(format!("{}{}", id, Value::Str(" msg".into())))');
+        expect(output).toContain('crate::exchange_errors::bad_request(format!("{}{}", id, " msg"))');
         expect(output).not.toContain('BadRequest::new(');
     });
 
@@ -2498,7 +2498,7 @@ describe('rust borrowed string literals (Cow payload)', () => {
     test('an error-ctor concat message drops the Cow conversion', () => {
         const ts = "function f(id: string) {\n    throw new NotSupported(id + ' msg');\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('not_supported(format!("{}{}", id, Value::Str(" msg".into())))');
+        expect(output).toContain('not_supported(format!("{}{}", id, " msg"))');
         expect(output).not.toContain('Value::Str(" msg".into())).into())');
     });
 });
@@ -5190,7 +5190,7 @@ describe('proven-Str safeString locals: native equality / replace / split / toSt
         expect(replaceOut).toContain('let mut marketId: Value = subscription.as_str().zip(prefix.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, "").into())).unwrap_or_else(|| subscription.clone());');
         expect(replaceOut).toContain('code = code.as_str().zip(net.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, "").into())).unwrap_or_else(|| code.clone());');
         expect(replaceOut).toContain('let mut parts: Value = Value::Array(code.as_str().zip(id.as_str()).map(|(__s, __d)| __s.split(__d).map(Value::from).collect()).unwrap_or_default());');
-        expect(replaceOut).toContain('.as_str().zip((Value::Str(format!("{}{}", Value::Str(".".into()), crate::value::get_value_k(&o, "x")).into())).as_str())');
+        expect(replaceOut).toContain('.as_str().zip((Value::Str(format!("{}{}", ".", crate::value::get_value_k(&o, "x")).into())).as_str())');
         expect(replaceOut).toContain('let mut s: Value = Value::Str(format!("{}", id).into());');
         expect(replaceOut).not.toContain('replace_str(');
     });
@@ -5325,9 +5325,9 @@ describe('string helpers and anchored concat', () => {
         expect(o).toContain('match (code.as_str(), s.as_str(), h.as_str()) { (Some(__s), Some(__p), Some(__r)) => Value::Str(__s.replace(__p, __r).into()), _ => code.clone() }');
     });
     test('concat anchored on an always-Str side goes native for any non-Precise box', () => {
-        expect(o).toContain('Value::Str(format!("{}{}", Value::Str(format!("{}{}", self.id, Value::Str(" x ".into())).into()), x).into())');
-        expect(o).toContain('Value::Str(format!("{}{}", Value::Str("n".into()), n).into())');
-        expect(o).toContain('Value::Str(format!("{}{}", x, Value::Str("y".into())).into())');
+        expect(o).toContain('Value::Str(format!("{}{}", Value::Str(format!("{}{}", self.id, " x ").into()), x).into())');
+        expect(o).toContain('Value::Str(format!("{}{}", "n", n).into())');
+        expect(o).toContain('Value::Str(format!("{}{}", x, "y").into())');
     });
     test('Precise operands and any receivers keep the helpers', () => {
         expect(o).toContain('add(&Value::Str("p".into()), &p)');
@@ -6138,7 +6138,7 @@ describe('bearer write shapes', () => {
     test('a string-proven computed key writes the bare map', () => {
         const out = rs("        const m = {};\n        m['a' + k] = v;\n        return m;", 'v: any, k: string');
         expect(out).toContain('let mut m: indexmap::IndexMap<String, Value> = ({');
-        expect(out).toContain('m.insert(format!("{}{}", Value::Str("a".into()), k), v.clone())');
+        expect(out).toContain('m.insert(format!("{}{}", "a", k), v.clone())');
         expect(out).not.toContain('add_element_to_object');
     });
 
@@ -8074,7 +8074,8 @@ describe('rust literal containers handed off by move', () => {
 
     test('an in-check on such a key reads the map and a cast return still moves', () => {
         expect(output).toContain('let mut seen: indexmap::IndexMap<String, Value> = (');
-        expect(output).toContain('seen.contains_key(__k.as_ref())');
+        expect(output).toContain('matches!(id.as_deref(), Some(__k) if seen.contains_key(__k))');
+        expect(output).toContain('seen.insert(id.as_deref().unwrap_or("null").to_string(), Value::Bool(true))');
         expect(output).not.toContain('&seen, &id');
         expect(output).toContain('return Value::Map(seen);');
     });
@@ -10611,6 +10612,23 @@ describe('safe scalar locals, fourth pass: element-write hand-offs, null-printin
         expect(out).toContain('self.iso8601(Value::from(ts))');
         // `k in seen` on an object-literal map local: the bearer's own lookup of the borrowed key, None never contained
         expect(out).toContain('let mut k: Option<String> = ');
+        expect(out).toContain('matches!(k.as_deref(), Some(__k) if seen.contains_key(__k))');
+    });
+});
+
+describe('safe scalar locals, fifth pass: literal concat operands, in-tested insert keys', () => {
+    test('a concat literal prints as a bare &str and an in-tested key also written as an insert key is typed', () => {
+        const dir = path.join (rustFixtureRoot, 'scalar-nf');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue5.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue5 extends Exchange {\n    sym (a: any) {\n        const base = this.safeString (a, 'base');\n        const quote = this.safeString (a, 'quote');\n        return { 'symbol': base + '/' + quote };\n    }\n    uniq (rows: any[]) {\n        const seen: Dict = {};\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const k = this.safeString (rows[i], 'k');\n            if (!(k in seen)) {\n                seen[k] = true;\n                out.push (rows[i]);\n            }\n        }\n        return out;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue5.ts')).content;
+        // Display of Value::Str(s) is s: the literal operand drops its box, same text
+        expect(out).toContain('format!("{}{}", base.as_deref().unwrap_or("null"), "/")');
+        expect(out).not.toContain('Value::Str("/".into())');
+        // the insert key prints its own key text (the allocation stringify_param made), the in test borrows it
+        expect(out).toContain('let mut k: Option<String> = ');
+        expect(out).toContain('k.as_deref().unwrap_or("null").to_string()');
         expect(out).toContain('matches!(k.as_deref(), Some(__k) if seen.contains_key(__k))');
     });
 });
