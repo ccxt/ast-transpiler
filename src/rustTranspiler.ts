@@ -2119,7 +2119,7 @@ export class RustTranspiler extends BaseTranspiler {
         const marketWrite = isAssign ? this.printTypedMarketWrite(left, right) : undefined;
         if (marketWrite !== undefined) return marketWrite;
         if (isAssign && this.rustTypedListField(left)) return `${this.printNode(left, 0)} = ${this.printNode(right, 0).trim()}.into_list()`;
-        const optContainerWrite = isAssign && isIdentifier(left) ? this.printOptContainerWrite(left, right) ?? this.printOptListWrite(left, right) ?? this.printExtendReuseWrite(left, right) : undefined;
+        const optContainerWrite = isAssign && isIdentifier(left) ? this.printOptContainerWrite(left, right) ?? this.printOptListWrite(left, right) ?? this.printExtendReuseWrite(left, right) ?? this.printSbAliasWrite(node, left, right) : undefined;
         if (optContainerWrite !== undefined) return optContainerWrite;
         const nilMapWrite = isAssign && isIdentifier(left) ? this.printNilMapWrite(left, right, identation) : undefined; if (nilMapWrite !== undefined) return nilMapWrite;
         // ral-ra: a reassigned handed map takes the written map back (`omit (x, k)` of itself moves the map through the call)
@@ -2344,7 +2344,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rustTypedListField(declaration.initializer)) return `${indent}let mut ${varName}: crate::value::List = self.${String(this.rustSkipWrappers(declaration.initializer).name.text)}.clone()`;
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue; return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
         if (boolValue !== undefined) {
@@ -4181,6 +4181,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node === undefined) return false;
         if (this.literalKindOfNode(node) !== undefined || this.rustScalarIntLiteral(node) !== undefined || this.rustScalarFloatLiteral(node) !== undefined) return true;
         if (isBinaryExpression(node)) return RustTranspiler.RUST_SCALAR_ARITH_OPS.has(node.operatorToken.kind);
+        if (this.rustSbJoinShape(node)) return true;
         if (isIdentifier(node) || isConditionalExpression(node) || this.rustScalarStrMethod(node, true) !== undefined || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node)) return true;
         if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustVenueTypedCall(node) !== undefined) return true;
         if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && isIdentifier(node.expression);
@@ -4573,6 +4574,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && isBinaryExpression(node) && RustTranspiler.COMPARISON_OPS.has(node.operatorToken.kind) && this.rustBoolCompareSeed(node)) return 'bool';
         const cast = this.rustStrCastCall(node); if (cast !== undefined) return this.rustScalarValueKind(cast, fresh) === 'ostr' ? 'ostr' : undefined;
         if (fresh && this.rustClockString(node)) return 'str';
+        if (fresh && this.rustSbJoinShape(node)) return 'str';
         if (this.rustArithCombinator(node)) return this.rustArithCallKind(node);
         if (fresh && isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.PlusToken
             && this.rustScalarFormatText(node) !== undefined) return 'str';
@@ -5770,6 +5772,135 @@ export class RustTranspiler extends BaseTranspiler {
     /** How a use of a scalar local prints: `test` (literal/null compare), `cond` (bool condition),
      *  `write` (same-kind assignment statement), `concat` (a `format!` operand) or `box` (a by-value `Value` slot). */
     rustScalarUseForm(n, kind: string): string | undefined {
+        const form = this.rustScalarUseFormOwn(n, kind);
+        return form === undefined && this.rustSbCopyBoxUse(n, kind) ? 'xbox' : form;
+    }
+
+    /** sb: a Copy number local (`i64` / `f64` / `Option<..>`) initialised from a typed base call that the `Value` local only boxed
+     *  (`Value::from(self.parse_to_int(..))`) keeps the typed value and boxes it at any plain read no other rule prints natively:
+     *  `Value::from(x)` is the Int / Float / Null the `Value` local held (the same conversion the initialiser did), and a Copy
+     *  value boxes with no clone. Writes, nested-write operands, element keys and receivers keep their own rules. */
+    rustSbCopyBoxUse(n, kind: string): boolean {
+        if (kind !== 'int' && kind !== 'num' && kind !== 'oint' && kind !== 'onum') return false;
+        const parent: any = n.parent;
+        if (parent === undefined || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) return false;
+        const declaration: any = this.rustDeclaredNode(n);
+        if (!this.rustSbTypedCallInit(declaration) || this.rustSbHasPartner(declaration)) return false;
+        // operands keep the inline runtime arithmetic / compare the `Value` local printed (a boxed operand would print the helper call)
+        if (isBinaryExpression(parent) || parent.kind === SyntaxKind.ConditionalExpression || this.rustIdentifierUseIsCondition(n)) return false;
+        if (isParenthesizedExpression(parent) || parent.kind === SyntaxKind.AsExpression || parent.kind === SyntaxKind.NonNullExpression) return false;
+        if (parent.kind === SyntaxKind.PrefixUnaryExpression || parent.kind === SyntaxKind.PostfixUnaryExpression || parent.kind === SyntaxKind.DeleteExpression
+            || parent.kind === SyntaxKind.TypeOfExpression || parent.kind === SyntaxKind.ShorthandPropertyAssignment) return false;
+        // `x.toString()` reads the box once (`format!("{}", Value::from(x))`: the Display the `Value` local had)
+        if (isPropertyAccessExpression(parent) && parent.expression === n && parent.name.text === 'toString' && isCallExpression(parent.parent)
+            && parent.parent.expression === parent && parent.parent.arguments.length === 0) return true;
+        if (isElementAccessExpression(parent) || (isPropertyAccessExpression(parent) && parent.expression === n)) return false;
+        if (isArrayLiteralExpression(parent) && isBinaryExpression(parent.parent) && parent.parent.left === parent) return false;
+        if (this.rustScalarInNestedWrite(n)) return false;
+        return true;
+    }
+
+    /** sb: `const x = this.m(..)` where `m` is a typed base method / runtime call (no `safe*` / `handle*` reader). */
+    rustSbTypedCallInit(declaration: any): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined) return false;
+        const init: any = this.unwrapParens(declaration.initializer);
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (/^(safe|handle)/.test(String(init.expression.name.text))) return false;
+        return this.rustBaseTypedReturnKind(init) !== undefined;
+    }
+
+    private rustSbPartnerMemo = new Map<any, boolean>();
+
+    /** sb: typing this local could flip another local's decision (it meets another identifier in a compare / arithmetic /
+     *  `Math.*` / ternary, or initialises / is written into another local): those partners belong to other groups. */
+    rustSbHasPartner(declaration: any): boolean {
+        const memo = this.rustSbPartnerMemo.get(declaration);
+        if (memo !== undefined) return memo;
+        this.rustSbPartnerMemo.set(declaration, true);
+        const own = String(declaration.name.text);
+        const hasOtherIdent = (node: any): boolean => {
+            let found = false;
+            const visit = (m: any): void => {
+                if (found || m === undefined) return;
+                if (isIdentifier(m) && String(m.text) !== own && !this.rustIdentifierIsPropertyName(m) && m.text !== 'Math' && m.text !== 'undefined') {
+                    const d: any = this.rustDeclaredNode(m);
+                    if (d !== undefined && (isVariableDeclaration(d) || isBindingElement(d) || isParameterDeclaration(d))) { found = true; return; }
+                }
+                if (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.expression.kind === SyntaxKind.ThisKeyword) { m.arguments.forEach(visit); return; }
+                m.forEachChild?.(visit);
+            };
+            visit(node);
+            return found;
+        };
+        let partner = false;
+        this.rustLocalUsesAll(declaration, own, false, (n: any) => {
+            let top: any = n;
+            while (top.parent !== undefined && (isParenthesizedExpression(top.parent) || top.parent.kind === SyntaxKind.AsExpression || top.parent.kind === SyntaxKind.NonNullExpression
+                || (isBinaryExpression(top.parent) && !this.rustAssignmentOpKind(top.parent.operatorToken.kind)) || top.parent.kind === SyntaxKind.ConditionalExpression
+                || top.parent.kind === SyntaxKind.PrefixUnaryExpression
+                || (isCallExpression(top.parent) && isPropertyAccessExpression(top.parent.expression) && isIdentifier(top.parent.expression.expression) && top.parent.expression.expression.text === 'Math'))) top = top.parent;
+            if (top !== n && hasOtherIdent(top)) partner = true;
+            const holder: any = top.parent;
+            if (holder !== undefined && isVariableDeclaration(holder) && holder.initializer === top) partner = true;
+            if (holder !== undefined && isBinaryExpression(holder) && holder.right === top && this.rustAssignmentOpKind(holder.operatorToken.kind) && isIdentifier(this.unwrapParens(holder.left))) partner = true;
+            if (holder !== undefined && isBinaryExpression(holder) && holder.left === top && this.rustAssignmentOpKind(holder.operatorToken.kind) && hasOtherIdent(holder.right)) partner = true;
+            return true;
+        });
+        this.rustSbPartnerMemo.set(declaration, partner);
+        return partner;
+    }
+
+    private rustSbJoinMemo = new Map<any, string>();
+
+    /** sb: `xs.join(sep)` as a local's initializer: every printed join form is `Value::Str(<String>.into())` (a non-list
+     *  receiver joins to `""`, never `Null`), so the local is that `String`. Only at a declaration initializer. */
+    rustSbJoinShape(node: any): boolean {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || String(node.expression.name.text) !== 'join'
+            || node.arguments.length !== 1 || this.literalKindOfNode(this.unwrapParens(node.arguments[0])) !== 'string') return false;
+        const recv: any = this.unwrapParens(node.expression.expression);
+        if (!isIdentifier(recv)) return false;
+        const decl: any = node.parent;
+        return decl !== undefined && isVariableDeclaration(decl) && decl.initializer === node && isIdentifier(decl.name);
+    }
+
+    /** The `String` inside the printed join, printed at emission only (a print inside a decision perturbs other locals);
+     *  any other printed form reads its `Str` back (`join` always answers a `Str`). */
+    rustSbJoinText(node: any): string {
+        const memo = this.rustSbJoinMemo.get(node);
+        if (memo !== undefined && memo !== null) return memo;
+        const text = this.printNode(node, 0).trim();
+        const m = /^Value::Str\(([\s\S]*)\.into\(\)\)$/.exec(text);
+        const inner = m !== null && /\.join\([^()]*\)(\)\.unwrap_or_default\(\))?$/.test(m[1]) && !m[1].includes('\n') ? m[1] : `${text}.as_str().unwrap_or_default().to_string()`;
+        this.rustSbJoinMemo.set(node, inner);
+        return inner;
+    }
+
+    /** sb: an identifier initializer naming a local already decided as a shared `Dict` (decided before this one: no pending cycle). */
+    rustSbDictAliasSource(init: any): boolean {
+        if (init === undefined || !isIdentifier(init)) return false;
+        const source: any = this.rustDeclaredNode(init);
+        if (source !== undefined && source.kind === SyntaxKind.BindingElement) {
+            if (this.rustHandedPending.has(source)) { this.rustSbAliasDeferred.add(init.parent); return false; }
+            return this.rustHandedDictLocal(source);
+        }
+        if (source === undefined || !isVariableDeclaration(source) || this.rustBorrowedPending.has(source)) return false;
+        return this.rustBorrowedLocalKind(source) === 'dict';
+    }
+
+    private rustHandedPending = new WeakSet<any>();
+
+    /** sb: the alias declaration shares its source's Arc (`Value::from(&x).into_dict()`, the bump the `Value` alias made). */
+    rustSbDictAliasDecl(declaration: any): boolean {
+        const init: any = this.rustSkipWrappers(declaration?.initializer);
+        return init !== undefined && isIdentifier(init) && this.rustBorrowedLocalKind(declaration) === 'dict' && this.rustSbDictAliasSource(init);
+    }
+    private rustSbAliasDeferred = new WeakSet<any>();
+
+    rustAssignmentOpKind(op): boolean {
+        return op >= SyntaxKind.FirstAssignment && op <= SyntaxKind.LastAssignment;
+    }
+
+    rustScalarUseFormOwn(n, kind: string): string | undefined {
         const parent: any = n.parent;
         if (parent === undefined) return undefined;
         if (kind === 'bool' && this.rustBoolSlotWrite(n)) return 'bslot';
@@ -6746,6 +6877,7 @@ export class RustTranspiler extends BaseTranspiler {
         const base = optional ? kind.slice(1) : kind;
         const wrap = (t: string) => optional ? `Some(${t})` : t;
         if (this.literalKindOfNode(node) === 'null') return optional ? 'None' : undefined;
+        if (kind === 'str' && this.rustSbJoinShape(node)) return this.rustSbJoinText(node);
         if (this.rustBaseTypedReturnKind(node) !== undefined && !(kind === 'int' && this.rustVenueParseToInt(node))) return this.rustBaseTypedText(kind, node);
         const paramText = this.rustOptParamText(kind, node); if (paramText !== undefined) return paramText;
         if (kind === 'oint' && this.rustLimitCall(node)) return this.rustLimitCallText(node);
@@ -15530,6 +15662,8 @@ export class RustTranspiler extends BaseTranspiler {
                 this.rustBorrowedPending.delete(declaration);
             }
             this.rustBorrowedKinds.set(declaration, kind);
+            // sb: an alias refused while its slot source was still deciding is asked again once that source settles
+            if (kind === undefined && this.rustSbAliasDeferred.has(declaration)) { this.rustSbAliasDeferred.delete(declaration); this.rustBorrowedKinds.delete(declaration); return undefined; }
         }
         return this.rustBorrowedKinds.get(declaration);
     }
@@ -15558,6 +15692,10 @@ export class RustTranspiler extends BaseTranspiler {
         // a string key exactly as the empty map `into_dict()` leaves, so the local holds the shared map
         const keyReadOnly = from === undefined && !nilDeclared && init !== undefined && this.rustSafeValueKeyReadSource(init);
         if (keyReadOnly) from = 'dict';
+        // sb: `const y = x` of a typed shared-map local holds the same map (`Value::from(&x).into_dict()` shares the Arc, no copy)
+        const sbAlias = from === undefined && !nilDeclared && this.rustSbDictAliasSource(init);
+        if (sbAlias) from = 'dict';
+        let sbMapWrites = 0;
         if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
@@ -15604,6 +15742,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
                 if (extendReuse) return this.rustSelfExtendWrite(n, declaration) && ++extendWrites > 0;
                 const rhs: any = this.rustSkipWrappers(up.right);
+                // sb: an alias of a shared map rewritten only as an `omit` of a proven map holds a map on every path (not optional)
+                if (sbAlias && this.rustOmitOfDict(rhs) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
                 writes++;
                 if (this.literalKindOfNode(rhs) === 'null') return ++nullWrites > 0;
                 const kind = this.rustNilResponseWriteKind(rhs, nilDeclared, declaration);
@@ -15851,6 +15991,15 @@ export class RustTranspiler extends BaseTranspiler {
         let up: any = call?.parent;
         while (up !== undefined && (isParenthesizedExpression(up) || isAsExpression(up))) up = up.parent;
         return isCallExpression(call) && call.arguments[0] === node && isBinaryExpression(up) && isIdentifier(up.left) && this.rustSelfExtendWrite(up.left, declaration);
+    }
+
+    /** sb: `y = self.omit(&x, ..).into_dict()` for a shared-map alias (`omit` of a proven map answers `Value::Map`: the Arc moves back). */
+    private rustSbAliasWrites = new WeakSet<any>();
+    printSbAliasWrite(node: any, left: any, right: any): string | undefined {
+        const declaration: any = this.rustDeclarationOfIdentifier(left);
+        if (declaration === undefined || !this.rustSbAliasWrites.has(node) || !this.rustPrintedBorrowed.has(declaration) || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
+        const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
+        return `${name} = ${this.printNode(right, 0).trim()}.into_dict()`;
     }
 
     /** `x = self.extend(x, ..).into_dict()` for a reuse local (`extend` answers `Value::Map`: the Arc moves back). */
@@ -19651,10 +19800,13 @@ export class RustTranspiler extends BaseTranspiler {
         let decision = this.rustHandedDictDecisions.get(declaration);
         if (decision === undefined) {
             this.rustHandedDictDecisions.set(declaration, false); // re-entrancy guard
+            this.rustHandedPending.add(declaration);
             try {
                 decision = this.rustHandedDictLocalUncached(declaration);
             } catch (e) {
                 decision = false;
+            } finally {
+                this.rustHandedPending.delete(declaration);
             }
             this.rustHandedDictDecisions.set(declaration, decision);
         }
@@ -21689,6 +21841,9 @@ export class RustTranspiler extends BaseTranspiler {
     // Typed `Option<String>` receivers have no `Display`, so they keep the helper.
     printRustNativeToString(node, name: string): string | undefined {
         const receiver = node?.expression?.expression;
+        // sb: a Copy number local boxed at its `.toString()` read displays the box (`format!("{}", Value::from(x))`)
+        const sbLocal = receiver !== undefined && isIdentifier(receiver) ? this.rustScalarLocalOf(receiver) : undefined;
+        if (sbLocal !== undefined && this.rustScalarUseForms.get(receiver) === 'xbox' && this.rustSbCopyBoxUse(receiver, sbLocal.kind)) return `Value::Str(format!("{}", ${name}).into())`;
         const kind = this.rustOperandKind(receiver);
         if (kind !== 'number' && kind !== 'string') return undefined;
         const inner = this.unwrapParensNode(receiver);

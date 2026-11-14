@@ -12233,3 +12233,42 @@ describe('rf: ws-tier handler tables, symbols field and typed insert keys', () =
         expect(restOut).toContain('let mut symbols: Value = ');
     });
 });
+
+describe('ral-sb: boxed typed values', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    id: string = 'x';\n    parseToInt (n: any): number { return n; }\n    hold (x: any): any { return x; }\n    take (a: any, b: any): any { return a; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a parseToInt local read as a slice bound keeps Option<i64> and boxes there (Value::from of a Copy, no clone)', () => {
+        const out = write ('sb-pti', "    m (s: any, q: string) {\n        const quoteLength = this.parseToInt (-1 * q.length);\n        const baseId = s.slice (0, quoteLength);\n        return this.hold (baseId);\n    }\n");
+        expect(out).toContain('let mut quoteLength: Option<i64> = self.parseToInt(');
+        expect(out).toContain('Value::from(quoteLength)');
+        expect(out).not.toContain('quoteLength.clone()');
+    });
+    test('a parseToInt local read by toString() displays its box (format! of Value::from, the Display the Value had)', () => {
+        const out = write ('sb-pts', "    m (nonce: any) {\n        const timestamp = this.parseToInt (nonce);\n        const s = timestamp.toString ();\n        return this.hold (s);\n    }\n");
+        expect(out).toContain('let mut timestamp: Option<i64> = self.parseToInt(');
+        expect(out).toContain('format!("{}", Value::from(timestamp))');
+    });
+    test('negative: a parseToInt local compared with another local stays a Value (the partner is another rule\'s)', () => {
+        const out = write ('sb-ptn', "    m (rate: Dict, n: any) {\n        const maxAttempts = this.parseToInt (rate['x']);\n        const tries = n;\n        if (tries < maxAttempts) {\n            return this.hold (maxAttempts);\n        }\n        return this.hold (tries);\n    }\n");
+        expect(out).toContain('let mut maxAttempts: Value = ');
+    });
+    test('an alias of a typed params slot rewritten only by omit shares the Arc (Value::from(&x).into_dict(), no copy)', () => {
+        const dir = path.join (rustFixtureRoot, 'sb-alias');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    handlePostOnly (a: boolean, b: boolean, params: Dict = {}): [ boolean, Dict ] { return [ a, params ]; }\n    omit (x: any, k: any): any { return x; }\n    safeString (o: any, k: any): string { return o[k]; }\n    extend (a: any, b: any): any { return a; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (params: Dict = {}) {\n        const [ postOnly, paramsPostOnly ] = this.handlePostOnly (true, false, params);\n        let paramsStopLoss = paramsPostOnly;\n        if (postOnly) {\n            paramsStopLoss = this.omit (paramsPostOnly, 'stopLoss');\n        }\n        const x = this.safeString (paramsPostOnly, 'a');\n        return this.hold (this.extend ({ 'x': x }, paramsStopLoss));\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut paramsStopLoss: crate::value::Dict = Value::from(&paramsPostOnly).into_dict();');
+        expect(out).toContain('paramsStopLoss = self.omit(&paramsPostOnly, Value::Str("stopLoss".into()), &[]).into_dict();');
+    });
+    test('a join local is the String inside the printed join (join always answers a Str)', () => {
+        const out = write ('sb-join', "    m (ids: string[]) {\n        const oids = ids.join (',');\n        const request = { 'ids': oids };\n        return this.hold (request);\n    }\n");
+        expect(out).toMatch(/let mut oids: String = ids[^;]*\.join\(","\)[^;]*;/);
+        expect(out).not.toContain('let mut oids: Value');
+    });
+});
