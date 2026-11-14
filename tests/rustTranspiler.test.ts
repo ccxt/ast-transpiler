@@ -9445,7 +9445,7 @@ describe('typed safeMarket and market slots', () => {
         expect(out).toContain('let mut resolved: crate::types::Market = self.safeMarket(');
         expect(out).toContain('crate::value::KeyRead::key_read(&&resolved, "symbol")');
         expect(out).toContain('Some(&resolved))');
-        expect(out).toContain('return self.safeTrade(trade.clone(), market.clone());');
+        expect(out).toContain('return self.safeTrade(trade.clone(), market);');
         expect(out).not.toContain('resolved.as_map()');
     });
 });
@@ -9458,7 +9458,7 @@ describe('typed market slots of the singular parsers', () => {
         fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Market } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTicker (ticker: Dict, market: Market = undefined): Dict {\n        const symbol = this.safeString (market, 'symbol');\n        const id = (market !== undefined) ? market['id'] : undefined;\n        return { 'symbol': symbol, 'id': id, 'market': this.hold (market) };\n    }\n    hold (m: any): any {\n        return m;\n    }\n    async fetchTicker (symbol: string): Promise<Dict> {\n        const market = this.market (symbol);\n        const id = this.safeString (market, 'id');\n        return this.parseTicker ({ 'id': id }, market);\n    }\n}\n");
         const base = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
         expect(base).toContain('ticker: Value, market: Option<&crate::types::Market>) -> Value');
-        expect(base).toContain('self.parseTicker(tickers.get(0).cloned().unwrap_or(Value::Null), market.clone())');
+        expect(base).toContain('self.parseTicker(tickers.get(0).cloned().unwrap_or(Value::Null), market)');
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('market: Option<&crate::types::Market>) -> Value');
         expect(out).toContain('self.safe_string_k(&market, \"symbol\"');
@@ -10134,6 +10134,21 @@ describe('toString of a String local inside a comparison', () => {
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut id1: String = ');
         expect(out).not.toContain('id1.clone()) == id1');
+    });
+});
+
+describe('typed outcome fallback slot', () => {
+    test('safeOutcome takes its market fallback as a lent market slot', () => {
+        const dir = path.join (rustFixtureRoot, 'typed-outcome-market');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    market (symbol: string): MarketInterface { return undefined; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeOutcome (outcomeIdOrSymbol: Str, market: Market = undefined): MarketInterface {\n        if (market !== undefined) {\n            return market;\n        }\n        const stub: any = { 'outcome': outcomeIdOrSymbol };\n        return stub;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Market, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTicker (ticker: Dict, market: Market = undefined): Dict {\n        const outcomeObj = this.safeOutcome (this.safeString (ticker, 'id'), market);\n        return { 'outcome': this.safeString (outcomeObj, 'outcome'), 'info': ticker };\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const base = typed.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(base).toContain('outcomeIdOrSymbol: Value, market: Option<&crate::types::Market>) -> Value');
+        const out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).not.toContain('FromRaw>::from_raw(market');
+        expect(out).not.toContain('crate::Value::from(market)');
     });
 });
 

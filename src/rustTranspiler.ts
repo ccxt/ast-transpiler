@@ -9308,7 +9308,8 @@ export class RustTranspiler extends BaseTranspiler {
         for (let at = node.arguments.length; at < params.length && this.rustVenuePositional(params[at]); at++) pads.push(this.rustPositionalPad(params[at]));
         return [ ...Array.from(node.arguments).map((arg, at) => {
             const venueStr = this.rustVenueStrSlot(params, at); if (venueStr !== undefined) return this.rustVenueStrArgText(arg, venueStr, identation);
-            if (this.rustMarketSlot(params, at)) return this.rustMarketSlotArgText(arg, identation);
+            // a lent `Option<&Market>` is `Copy`: a bare one is marked so the by-value clone step leaves it
+            if (this.rustMarketSlot(params, at)) return RustTranspiler.rustLentMark(this.rustMarketSlotArgText(arg, identation));
             if (this.rustCurrencySlot(params, at)) return this.rustCurrencySlotArgText(arg, identation);
             if (this.rustNativeMapArgumentSlot(params, at) !== undefined) {
                 return this.rustMapArgumentText(arg, identation);
@@ -9378,6 +9379,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** Clone every bare-local argument of each by-value call in `text` (an argument already `x.clone()` is left). */
+    /** `\u0004` before a bare lent argument: not a bare local to `cloneByValueCallArgs`, stripped from the file text. */
+    static rustLentMark(text: string): string {
+        return RustTranspiler.isBareLocal(text) ? `\u0004${text}` : text;
+    }
+
     private static readonly RUST_BY_VALUE_CALLEE_NO_SUPER = new RegExp(RustTranspiler.RUST_BY_VALUE_CALLEE.source.replace('(?:self|super)', 'self'));
 
     static cloneByValueCallArgs(text: string, superCalls = true): string {
@@ -11280,7 +11286,7 @@ export class RustTranspiler extends BaseTranspiler {
             const file = String((node as any).fileName ?? '');
             const test = /ts[/]src[/](?:pro[/])?test[/]/.test(file);
             const ws = /ts[/]src[/]pro[/]/.test(file);
-            return RustTranspiler.cloneByValueCallArgs(RustTranspiler.cloneAliasSources(this.printNodeUncloned(node, identation), !test), !ws);
+            return RustTranspiler.cloneByValueCallArgs(RustTranspiler.cloneAliasSources(this.printNodeUncloned(node, identation), !test), !ws).replaceAll('\u0004', '');
         }
         return this.printNodeUncloned(node, identation);
     }
@@ -21551,7 +21557,7 @@ export class RustTranspiler extends BaseTranspiler {
     // positional `Value` before it (callers pad `Value::Null`).
     private static readonly RUST_LIST_MARKET_METHODS = new Set([
         'parseTrades', 'parseWsTrades', 'parseTradesHelper', 'parseOrders', 'handleMarketTypeAndParams', 'handleSubTypeAndParams', 'safeMarket', 'safeOpenInterest',
-        'parseOHLCVs', 'parseTradingViewOHLCV', 'parseOpenInterestsHistory', 'parseLiquidations',
+        'parseOHLCVs', 'parseTradingViewOHLCV', 'parseOpenInterestsHistory', 'parseLiquidations', 'safeOutcome',
     ]);
 
     /** The `market: Market = undefined` parameter of a listed helper: read-only, every parameter before it required
