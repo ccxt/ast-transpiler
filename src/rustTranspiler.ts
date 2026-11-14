@@ -4236,7 +4236,9 @@ export class RustTranspiler extends BaseTranspiler {
             && !this.rustVenueLocalHandedOn(declaration) && !this.rustReaderDeclTooLong(declaration, kind) && this.rustReaderLendBoxes(declaration);
         if (venueLent) this.rustStrLentLocals.add(declaration);
         else if (this.rustVenueTypedCostly(declaration, kind, copied)) return undefined;
-        if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined) return undefined;
+        // pd: a box-only alias of a typed numeric / bool parameter is stored and boxed back (D11): the Copy scalar boxes
+        // with `Value::from` and no copy, where the `Value` alias cloned the parameter's binding; strings keep the veto
+        if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined && !RustTranspiler.RUST_COPY_SCALAR_KINDS.has(kind)) return undefined;
         if ((boxed > 0 || expressionUses) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
         // a reader-default string re-boxed anywhere but a moving `return` would copy where the `Value` moved
         const readerTouched = this.rustReaderDefaultTouched(declaration);
@@ -4420,6 +4422,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     // A local initialised as a plain alias of a typed optional `i64`/`f64` parameter takes the
     // parameter's kind (`p.as_i64()` is a copy, the `Value` is never cloned); it must earn a native use.
+    private static readonly RUST_COPY_SCALAR_KINDS = new Set([ 'int', 'oint', 'num', 'onum', 'bool', 'obool' ]);
+
     rustParamAliasSeedKind(declaration): string | undefined {
         const init: any = this.unwrapParens(declaration?.initializer);
         return init !== undefined && isIdentifier(init) ? this.rustOptParamKind(init) : undefined;

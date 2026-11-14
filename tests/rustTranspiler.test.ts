@@ -6080,10 +6080,11 @@ describe('native `bool` parameters', () => {
         expect(venue).toContain('return self.settlementData(raw.is_truthy(), Value::Int(2));');
     });
 
-    test('a bool parameter read outside a bool sink keeps the box', () => {
+    test('a bool parameter read outside a bool sink keeps its own box; its alias is boxed back (pd: D11)', () => {
         expect(venue).toContain('pub fn boxed(&self, flag: bool) -> Value {');
         expect(venue).toContain('let mut flag: Value = flag.into();');
-        expect(venue).toContain('let mut held: Value = flag;');
+        expect(venue).toContain('let mut held: bool = flag.as_bool().unwrap_or_default();');
+        expect(venue).toContain('return Value::Bool(held);');
     });
 
     test('the base tier and base overrides keep the `Value` ABI', () => {
@@ -8983,6 +8984,19 @@ describe('rust optional typed parameter defaults and boolean writes', () => {
         expect(output).not.toContain('let mut limitResolved: Value');
     });
 
+    test('pd: a box-only alias of an optional Int parameter is Option<i64> (D11, no copy)', () => {
+        const output = run((
+            "        const request = {};\n" +
+            "        const startTime = since;\n" +
+            "        request['startTime'] = startTime;\n" +
+            "        const userLimit = limit;\n" +
+            "        return this.g ([ request, userLimit ]);\n"));
+        expect(output).toContain('let mut startTime: Option<i64> = since.as_i64();');
+        expect(output).toContain('request.insert("startTime".into(), Value::from(startTime));');
+        expect(output).toContain('let mut userLimit: Option<i64> = limit.as_i64();');
+        expect(output).not.toContain('startTime.clone()');
+    });
+
     test('an alias of a required string parameter of a typed signature is a native String', () => {
         const output = run((
             "        let side = symbol;\n" +
@@ -9016,11 +9030,12 @@ describe('rust optional typed parameter defaults and boolean writes', () => {
         expect(output).not.toContain('let mut limitResolved: Value');
     });
 
-    test('an alias of an optional Int parameter that is only handed on keeps its Value', () => {
+    test('an alias of an optional Int parameter that is only handed on is boxed back (pd: D11, a Copy box)', () => {
         const output = run((
             "        const limitResolved = limit;\n" +
             "        return this.g (limitResolved);\n"));
-        expect(output).toContain('let mut limitResolved: Value = limit');
+        expect(output).toContain('let mut limitResolved: Option<i64> = limit.as_i64();');
+        expect(output).toContain('self.g(Value::from(limitResolved))');
     });
 
     test('a boolean literal local joins comparison writes', () => {
