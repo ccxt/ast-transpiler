@@ -12226,6 +12226,31 @@ describe('rc: a venue string written once into a dict slot is no hand-on (result
     });
 });
 
+describe('tc: hand-written runtime helpers typed by their TS return (other self method results, seventh pass)', () => {
+    let out: string;
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'tc-runtime-returns');
+        fs.mkdirSync (path.join (dir, 'ts/src/base/functions'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "import { capitalize } from './functions/string.js';\nimport { microseconds } from './functions/time.js';\nexport interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    capitalize = capitalize;\n    microseconds = microseconds;\n    hold (x: any): any { return x; }\n    sum (...args: any[]): any { return args[0]; }\n    randomBytes (length: number): string {\n        return '' + length;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/base/functions/string.ts'), "export const capitalize = (s: string | undefined): string => s;\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/base/functions/time.ts'), "export const microseconds = () => 1000;\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue13.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue13 extends Exchange {\n    sideIt (side: string) {\n        const cap = this.capitalize (side);\n        if (cap === 'Buy') {\n            return this.hold (1);\n        }\n        return this.hold ({ 's': this.capitalize (side) });\n    }\n    nonceIt () {\n        const nonce = this.randomBytes (16);\n        return this.hold ({ 'a': nonce, 'b': this.hold (nonce) });\n    }\n    clockIt () {\n        const now = this.microseconds ();\n        return this.hold (now - 5);\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue13.ts')).content;
+    });
+    test('capitalize answers a String: its local is a String compared natively, a Value slot boxes once', () => {
+        expect(out).toMatch(/let mut cap: String = self\.capitalize\(/);
+        expect(out).toContain('Value::from(self.capitalize(');
+    });
+    test('randomBytes answers a String: its local is a String, lent before its last box', () => {
+        expect(out).toMatch(/let mut nonce: String = self\.randomBytes\(/);
+        expect(out).toContain('Value::from(nonce.as_str())');
+        expect(out).not.toContain('nonce.clone()');
+    });
+    test('microseconds answers an i64: its local is an i64', () => {
+        expect(out).toMatch(/let mut now: i64 = self\.microseconds\(\)/);
+    });
+});
+
 describe('sc: a venue string boxed only at lending slots is handed off (other self method results, sixth pass)', () => {
     let out: string;
     beforeAll(() => {
