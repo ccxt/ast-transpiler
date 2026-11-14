@@ -14667,3 +14667,76 @@ describe('zi: tuple slots fifth pass', () => {
         expect(out).toContain('let mut spotOther: Value = ');
     });
 });
+
+describe('ral-zg: a Dict[] row next to a differently sourced same-named sibling binding is typed; a row handed on whole takes the optional form', () => {
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-zg-row-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    safeDict (o: any, k: any, d: any = undefined): any { return d; }\n    safeList (o: any, k: any, d: any = undefined): any { return d; }\n    safeOrder (o: Dict): Dict { return o; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    const body = (sibling: string, use: string) => "    run (response: Dict) {\n        const rows: Dict[] = this.safeList (response, 'data', []);\n        const result = [];\n        if (rows.length > 0) {\n            " + sibling + "\n            result.push (this.safeString (row, 'id'));\n        }\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            " + use + "\n        }\n        return result;\n    }";
+    test('read only by a safe* reader: the plain shared map (a Null row reads Null at every string key, as into_dict leaves)', () => {
+        const out = mk(body("const row = this.safeDict (response, 'first');", "result.push (this.safeString (row, 'id'));"));
+        expect(out).toMatch(/let mut row: crate::value::Dict = rows\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+    });
+    test('handed on whole into a map literal: Option<Dict>, boxed back to exactly Null or the map', () => {
+        const out = mk(body("const row = this.safeDict (response, 'first');", "result.push (this.safeOrder ({ 'info': row, 'id': this.safeString (row, 'id') }));"));
+        expect(out).toMatch(/let mut row: Option<crate::value::Dict> = rows\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_opt_dict\(\);/);
+        expect(out).toContain('m.insert(\"info\".to_string(), row.clone().map_or(Value::Null, Value::Dict));');
+    });
+    test('negative: a sibling declared with var (function-scoped) keeps the row Value', () => {
+        const out = mk(body("var row = this.safeDict (response, 'first');", "result.push (this.safeString (row, 'id'));"));
+        expect(out).toMatch(/let mut row: Value = rows\.get\(i as usize\)/);
+    });
+});
+
+describe('ral-zg: a Dict[] row assigned whole into an outer let keeps Option<Dict> and boxes back to exactly Null or the map', () => {
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-zg-assign-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    safeList (o: any, k: any, d: any = undefined): any { return d; }\n    parseRow (o: Dict): Dict { return o; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    const body = (target: string) => "    pick (response: Dict, id: Str) {\n        const rows: Dict[] = this.safeList (response, 'data', []);\n        " + target + "\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            if (this.safeString (row, 'id') === id) {\n                found = row;\n                break;\n            }\n        }\n        return this.parseRow (found);\n    }";
+    test('found = row: the row is Option<Dict> and the write boxes it back', () => {
+        const out = mk(body('let found: Dict = {};'));
+        expect(out).toMatch(/let mut row: Option<crate::value::Dict> = rows\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_opt_dict\(\);/);
+        expect(out).toContain('found = row.map_or(Value::Null, Value::Dict);');
+    });
+    test('negative: a target declared after the row (a var hoisted past it) keeps the row Value', () => {
+        const out = mk(body('var found: Dict = {};'));
+        expect(out).toMatch(/let mut row: Value = rows\.get\(i as usize\)/);
+    });
+});
+
+describe('ral-zg: a Dict[] row appended whole to a cache local takes Option<Dict> (append boxes exactly Null or the map)', () => {
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-zg-append-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    toArray (o: any): any { return o; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    const body = (target: string) => "    prune (newCache: any, cache: any, symbol: Str) {\n        const entries: Dict[] = this.toArray (cache);\n        for (let i = 0; i < entries.length; i++) {\n            const entry = entries[i];\n            if (this.safeString (entry, 'symbol') !== symbol) {\n                " + target + ".append (entry);\n            }\n        }\n        return newCache;\n    }";
+    test('newCache.append (entry): Option<Dict> boxed back at the append', () => {
+        const out = mk(body('newCache'));
+        expect(out).toMatch(/let mut entry: Option<crate::value::Dict> = entries\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_opt_dict\(\);/);
+        expect(out).toContain('newCache.append(entry.map_or(Value::Null, Value::Dict));');
+    });
+    test('negative: appending to the row itself keeps it Value', () => {
+        const out = mk(body('entry'));
+        expect(out).toMatch(/let mut entry: Value = entries\.get\(i as usize\)/);
+    });
+});
