@@ -9124,10 +9124,12 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Venue methods (class -> method names) whose `: Str` return was spelled after their by-name arm existed: the arm
     // stays (it boxes the `Option<String>` once), so the dispatch-arm name set is unchanged.
-    private static readonly RUST_VENUE_KEPT_STR_ARMS: Record<string, string[]> = { coinbaseinternational: [ 'parseTimeInForce' ], bitfinex: [ 'convertDerivativesId' ], blofin: [ 'networkCodeToChainId' ] };
+    private static readonly RUST_VENUE_KEPT_STR_ARMS: Record<string, string[]> = { coinbaseinternational: [ 'parseTimeInForce' ], bitfinex: [ 'convertDerivativesId' ], blofin: [ 'networkCodeToChainId' ], dydx: [ 'hashMessage' ], modetrade: [ 'hashMessage' ], polymarket: [ 'hashMessage' ] };
 
     rustVenueKeptStrArm(node: any): boolean {
         if (node?.kind !== SyntaxKind.MethodDeclaration || !isIdentifier(node.name)) return false;
+        // vc: the table names REST venue classes; a prediction class of the same name (polymarket) is another venue
+        if (/ts[\\/]src[\\/]prediction[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? ''))) return false;
         const cls: any = node.parent;
         const clsName = cls?.name !== undefined && isIdentifier(cls.name) ? String(cls.name.text) : undefined;
         return clsName !== undefined && (RustTranspiler.RUST_VENUE_KEPT_STR_ARMS[clsName] ?? []).includes(String(node.name.text));

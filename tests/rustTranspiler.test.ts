@@ -11729,6 +11729,40 @@ describe('mh1: safeSymbol concat operands, venue kept-str arms', () => {
     });
 });
 
+describe('ral-vc: venue hash helpers whose `: string` return is spelled keep their by-name arm', () => {
+    test('modetrade hashMessage prints -> Option<String> and records a kept arm; its result local types', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-vc-hash');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), 'export default class Exchange {\n'
+            + "    hash (request: any, algo: any, digest: string = 'hex'): string { return ''; }\n"
+            + '    hold (x: any): any { return x; }\n'
+            + '}\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/modetrade.ts'), "import Exchange from './base/Exchange.js';\n"
+            + 'export default class modetrade extends Exchange {\n'
+            + "    hashMessage (message: any): string {\n        return '0x' + this.hash (message, 'keccak', 'hex');\n    }\n"
+            + "    pack (m: any): any {\n        const dataHash = this.hashMessage (m);\n        return this.hold ({ 'data': dataHash });\n    }\n"
+            + '}\n');
+        const r = transpiler.transpileRustByPath (path.join (dir, 'ts/src/modetrade.ts'));
+        expect(r.content).toMatch(/pub fn hashMessage\([^)]*\) -> Option<String>/);
+        expect((r.rustSignatures ?? []).find((s: any) => s.name === 'hash_message')?.ret).toBe('keptostr');
+        expect(r.content).toMatch(/let mut dataHash: Option<String> = /);
+    });
+    test('a prediction class of the same name (polymarket) gets no kept arm from the REST table', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-vc-hash-pred');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/prediction'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), 'export default class Exchange {\n'
+            + "    hash (request: any, algo: any, digest: string = 'hex'): string { return ''; }\n"
+            + '}\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/prediction/polymarket.ts'), "import Exchange from '../base/Exchange.js';\n"
+            + 'export default class polymarket extends Exchange {\n'
+            + "    hashMessage (message: any): string {\n        return '0x' + this.hash (message, 'keccak', 'hex');\n    }\n"
+            + '}\n');
+        const r = transpiler.transpileRustByPath (path.join (dir, 'ts/src/prediction/polymarket.ts'));
+        expect((r.rustSignatures ?? []).find((s: any) => s.name === 'hash_message')?.ret).toBe('ostr');
+    });
+});
+
 describe('ral-md: market-field strings boxed before their last use', () => {
     test('a market-field string handed to a self call before its last box is lent there, not copied', () => {
         const dir = path.join (rustFixtureRoot, 'ral-md-market-lent');
