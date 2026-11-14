@@ -2107,8 +2107,12 @@ export class RustTranspiler extends BaseTranspiler {
                 : `let ${tmpName} = ${rhs}`;
             const slotRead = (idx: number) => (nativeList ? this.printTypedVecElementRead(tmpName, idx) : `get_value(&${tmpName}, &Value::Int(${idx}))`);
             // a string slot of a native list reads the element through `as_str` (the tuple-slot spelling, no Null box)
-            const assignments = left.elements.map((e, idx) => this.printRustNilSlotWrite(e, slotRead(idx), nativeList && /(?:^|[\\/])ts[\\/]src[\\/]pro[\\/]/.test(String(node.getSourceFile().fileName)) ? `${tmpName}.get(${idx}).and_then(Value::as_str)` : undefined,
-                nativeList ? `${tmpName}.get(${idx}).and_then(Value::as_bool)` : undefined) ?? `${this.printNode(e, 0)} = ${slotRead(idx)}`).join('; ');
+            const typedSlots = left.elements.map((e, idx) => this.printRustNilSlotWrite(e, slotRead(idx), nativeList && /(?:^|[\\/])ts[\\/]src[\\/]pro[\\/]/.test(String(node.getSourceFile().fileName)) ? `${tmpName}.get(${idx}).and_then(Value::as_str)` : undefined,
+                nativeList ? `${tmpName}.get(${idx}).and_then(Value::as_bool)` : undefined));
+            const assignments = typedSlots.map((t, idx) => t ?? `${this.printNode(left.elements[idx], 0)} = ${slotRead(idx)}`).join('; ');
+            // sa: every slot typed (no boxed slot read left for ccxt's `Vec<Value>` temp passes): `Value::into_list` moves the
+            // list out (an empty list for anything else), exactly `.as_array().cloned().unwrap_or_default()` without the copy
+            if (nativeList && typedSlots.every((t) => t !== undefined) && this.rustShortDestrHeads.has(node)) return `{ let ${tmpName} = ${rhs}.into_list(); ${assignments}; }`;
             return `{ ${head}; ${assignments}; }`;
         }
         const bookWrite = isAssign ? this.printWsBookMetaWrite(left, right) ?? this.printWsBookMapWrite(left, right) ?? this.printWsBookLocalWrite(left, right) : undefined; if (bookWrite !== undefined) return bookWrite;
@@ -2516,6 +2520,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(node) && RustTranspiler.COMPARISON_OPS.has(node.operatorToken.kind)) return 'bool';
         if (this.rustNilDefiniteBool(node)) return 'bool';
         if (!isCallExpression(node)) return undefined;
+        // ta: a base call of the typed-return table answering a Rust `bool` (`isPostOnly`, runtime `inArray`): never undefined
+        if (this.rustBaseTypedReturnKind(node) === 'bool') return 'bool';
         const callee: any = node.expression;
         if (isPropertyAccessExpression(callee) && isIdentifier(callee.expression) && callee.expression.text === 'Precise') {
             return RustTranspiler.RUST_NIL_PRECISE_STR.test(String(callee.name.text)) ? 'str' : undefined;
@@ -2587,6 +2593,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'bool' && this.rustIdentifierUseIsCondition(n)) return 'cond';
         // rb: `y = !x` into another typed bool local: `!x` prints `!(x == Some(true))`, the truthiness `is_true` gave
         if (kind === 'bool' && this.rustNilNegatedBoolWrite(n)) return 'cond';
+        // ta: a read inside a `&&` / `||` / `!` chain the printer already prints as a Rust `bool` (a `let x: bool`
+        // initializer, a boxed logical): `(x == Some(true))` is the truthiness `x.as_bool() == Some(true)` gave, None -> false
+        if (kind === 'bool' && this.rustClimbLogicalWrappers(n) !== n && this.rustConditionBoolSlot(n)) return 'cond';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxCallOk(parent, parent.arguments.indexOf(n)) ? 'box' : undefined;
         }
@@ -2658,6 +2667,11 @@ export class RustTranspiler extends BaseTranspiler {
     printRustNilLocalCondition(node): string | undefined {
         const inner = this.unwrapParens(node);
         const local = this.rustNilLocalOfIdentifier(inner);
+        if (local === undefined && inner !== node && isPrefixUnaryExpression(inner) && inner.operator === SyntaxKind.ExclamationToken) {
+            // ta: `(!x)` of a bool nil local is the negated truthiness, already a Rust bool
+            const operand = this.unwrapParens(inner.operand);
+            if (this.rustNilLocalOfIdentifier(operand)?.kind === 'bool') return `(!(${super.printIdentifier(operand)} == Some(true)))`;
+        }
         return local?.kind === 'bool' ? `(${super.printIdentifier(inner)} == Some(true))` : undefined;
     }
 
@@ -2962,6 +2976,7 @@ export class RustTranspiler extends BaseTranspiler {
             return `${name} = ${text}.as_str().map(str::to_owned)`;
         }
         if (local.kind === 'int') return `${name} = ${text}.as_i64()`;
+        if (isCallExpression(node) && this.rustBaseTypedReturnKind(node) === 'bool') return `${name} = Some(${this.rustBaseTypedBareText(node)})`;
         if (isCallExpression(node)) return `${name} = ${text}.as_bool()`;
         const pick = this.printRustNilBoolTernary(node); if (pick !== undefined) return `${name} = Some(${pick})`;
         const bool = this.peelValueBoolBox(this.stripOuterParens(text));
@@ -20337,8 +20352,18 @@ export class RustTranspiler extends BaseTranspiler {
                 if (this.primitiveKindOfType(this.typeOfNodeIfAny(el)) === 'string') reserve += '.as_str().map(str::to_owned)'.length;
             }
         }
-        return width + reserve + '.into_dict()'.length + 'Value::Dict()'.length <= 400;
+        const budget = width + reserve + '.into_dict()'.length + 'Value::Dict()'.length;
+        if (budget <= 400) return true;
+        // sa: a destructure over a native list whose slots all print typed binds the temp `= X.into_list()` instead of
+        // `: Vec<Value> = X.as_array().cloned().unwrap_or_default()` (41 chars shorter); the print falls back when a slot stays boxed
+        const short = ': Vec<Value>'.length + '.as_array().cloned().unwrap_or_default()'.length - '.into_list()'.length;
+        if (write === undefined || !isBinaryExpression(write) || !isArrayLiteralExpression(write.left) || !this.rustNativeListSource(write.right) || budget - short > 400) return false;
+        if (!(write.left.elements as any).every((el: any) => isIdentifier(el) && this.rustNilSlotWrite(el))) return false;
+        this.rustShortDestrHeads.add(write);
+        return true;
     }
+
+    rustShortDestrHeads = new WeakSet<any>();
 
     /** A nil-declared slot local typed as the map. */
     rustNilSlotDictLocal(declaration: any): boolean {
