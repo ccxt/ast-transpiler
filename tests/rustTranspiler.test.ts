@@ -195,6 +195,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "typed-filter-params": {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport type IndexType = number | string;\nexport default class Exchange {\n    toArray (x: any): any[] { return x; }\n    marketSymbols (s: Strings = undefined, t: Str = undefined, allowEmpty = true): Strings { return s; }\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterBySinceLimit (array: object[] | undefined, since: Int = undefined, limit: Int = undefined, key: IndexType = 'timestamp', tail = false): any[] {\n        if (since !== undefined && limit !== undefined) {\n            return this.toArray (array);\n        }\n        return [ key, tail ];\n    }\n    filterBySymbolSinceLimit (array: any, symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return this.filterBySinceLimit (array, since, limit, 'timestamp', tail);\n    }\n    filterByArray (objects: any, key: IndexType, values: any = undefined, indexed = true) {\n        return [ objects, key, values, indexed ];\n    }\n    filterByOther (array: any, since: Int = 5): any[] {\n        return [ array, since ];\n    }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Str, Strings } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchA (rows: any, market: Dict, since: Int = undefined, limit: Int = undefined) {\n        let symbolResolved = undefined;\n        if (market !== undefined) {\n            symbolResolved = this.safeString (market, 'symbol');\n        }\n        return this.filterBySymbolSinceLimit (rows, symbolResolved, since, limit, true);\n    }\n    fetchB (rows: any, symbols: Strings = undefined) {\n        const symbolsNormalized = this.marketSymbols (symbols);\n        return this.filterByArray (rows, 'symbol', symbolsNormalized, false);\n    }\n    fetchC (rows: any, since: Int = undefined) {\n        return this.filterByOther (rows, since);\n    }\n}\n"},
   "optional-list-join": {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Strings = string[] | undefined;\nexport default class Exchange {\n    marketIds (symbols: Strings = undefined): Strings { return symbols; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchA (symbols: string[] = undefined) {\n        const ids = this.marketIds (symbols);\n        const request: Dict = { 'symbols': ids.join (',') };\n        return this.hold (request);\n    }\n    fetchB (params: Dict) {\n        let rows = this.safeList (params, 'rows');\n        if (rows === undefined) {\n            rows = [ 'x' ];\n        }\n        const request: Dict = { 'rows': rows };\n        return this.hold (request);\n    }\n}\n"},
   "field-string-key": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    orderbooks: any = {};\n    trades: any = {};\n    tickers: any = {};\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    orderBook (): any { return {}; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleTicker (message: any) {\n        const symbol = this.safeString (message, 's');\n        this.tickers[symbol] = message;\n    }\n    handleBook (message: any) {\n        const symbol = this.safeString (message, 's', '');\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = this.orderBook ();\n        }\n        const book = this.orderbooks[symbol];\n        return book;\n    }\n    handleTrade (message: any) {\n        const symbol = this.safeString (message, 's', '');\n        this.trades[symbol] = message;\n        return this.hold (symbol);\n    }\n}\n"},
+  "in-tested-dicts": {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: any = {};\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    isLegal (code: any, row: Dict) {\n        const legal = this.safeDict (this.options, 'legalMoney', {});\n        const kind = this.safeString (row, 'kind');\n        const types = this.safeDict (this.options, 'types', {});\n        return (code in legal) && (kind !== undefined) && (kind in types);\n    }\n}\n"},
   "null-tested-dicts": {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    loadThing (resp: Dict, reload: boolean) {\n        const cached = this.safeDict (this.options, 'cached');\n        if (cached === undefined || reload) {\n            this.hold (reload);\n        }\n        const stop = this.safeDict (resp, 'stop');\n        const hasStop = stop !== undefined;\n        const boxed = this.safeDict (resp, 'boxed');\n        if (boxed === undefined) {\n            return this.hold (boxed);\n        }\n        const filled = this.safeDict (resp, 'filled', { 'x': 1 });\n        return hasStop && (filled !== undefined);\n    }\n}\n"}
 };
 const rustFixtureRoot = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-'));
@@ -5354,7 +5355,7 @@ describe('collection helpers on proven plain-dict / Arr-only locals', () => {
     });
 
     test('literal-key in on a plain-dict local is contains_key', () => {
-        expect(rest).toContain('if (matches!(&account, Value::Dict(__d) if __d.contains_key("free"))) {');
+        expect(rest).toContain('if (account.contains_key("free")) {');
         expect(rest).toContain('in_op(&response, &Value::Str("code".into()))');
     });
 
@@ -6463,6 +6464,18 @@ describe('optional dict and list locals', () => {
         expect(out).toContain('let mut lost: Value = ');
         expect(out).toContain('kept.map_or(Value::Null, Value::Dict)'); // a nullable map handed on whole: the optional form
         expect(out).not.toContain('Option<crate::value::Dict> = self.safeDict(resp.clone(), "filled"');
+    });
+});
+
+describe('dict locals tested by `in`', () => {
+    test('a defaulted base safeDict result tested by `k in m` is the shared map and tests contains_key', () => {
+        const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'in-tested-dicts', 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut legal: crate::value::Dict = ');
+        expect(out).toContain('matches!(&code, Value::Str(__k) if legal.contains_key(__k.as_ref()))');
+        expect(out).toContain('let mut types: crate::value::Dict = ');
+        expect(out).toContain('matches!(kind.as_deref(), Some(__k) if types.contains_key(__k))');
+        expect(out).not.toContain('legal: Value');
+        expect(out).not.toContain('types: Value');
     });
 });
 
@@ -8955,7 +8968,7 @@ describe('rust string list elements as map keys', () => {
         const text = out();
         const held = text.slice(text.indexOf('fn parseHeld'), text.indexOf('fn parseCopied'));
         expect(held).toContain('let mut id: Option<String> = ');
-        expect(held).toContain('(Value::Dict(__d), Some(__k)) if __d.contains_key(__k)');
+        expect(held).toContain('matches!(id.as_deref(), Some(__k) if balances.contains_key(__k))');
         expect(held).not.toContain('in_op(');
         expect(held).not.toContain('id.clone()');
     });

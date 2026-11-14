@@ -6222,7 +6222,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (own === undefined && isIdentifier(recv)) return false;
         if (own !== undefined && (!isVariableDeclaration(own) || own.initializer === undefined)) return false;
         if (own !== undefined && isObjectLiteralExpression(this.rustSkipWrappers(own.initializer))) return true;
-        if (this.rustBorrowedDictName(recv) !== undefined || this.rustParamShadowOf(recv) !== undefined || this.rustFieldKeyReceiver(recv) !== undefined
+        // a borrowed map receiver tests the key by `printBorrowedInOp` (`rustBorrowedStrKeyTest` reads the `kin` form)
+        if (this.rustParamShadowOf(recv) !== undefined || this.rustFieldKeyReceiver(recv) !== undefined
             || this.rustClientHandleAccess(recv) !== undefined || (isPropertyAccessExpression(recv) && RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(recv.name.text)))) return false;
         return this.isDictShapedType(this.typeOfNodeIfAny(test.right)) || this.rustDictLocalProof(recv) === 'plain';
     }
@@ -14934,6 +14935,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustBorrowedKeySetUse(n)) {
                 keyReads++;
                 keySets++;
+                // `k in m` is the map's own `contains_key`: a native read of the shared map (the boxed `in_op` Dict arm)
+                if (isBinaryExpression(n.parent)) reads++;
                 return true;
             }
             if (this.rustExtendHeadUse(n)) return ++extendHeads > 0 && ++reads > 0;
@@ -15571,7 +15574,40 @@ export class RustTranspiler extends BaseTranspiler {
             return literal === undefined ? undefined : { literal: true, text: literal };
         }
         const text = this.bearerInOpKeyText(key);
+        if (text === undefined && node !== undefined && isIdentifier(node) && this.rustStrKeyIdentifier(node)) return { literal: false, text: String(node.text) };
         return text === undefined ? undefined : { literal: false, text };
+    }
+
+    /** A `string` / `Str` identifier key of `k in m`: a local whose print is decided at the test
+     *  (`rustBorrowedStrKeyTest`), so the receiver's proof never waits on the key's own scalar decision. */
+    rustStrKeyIdentifier(node: any): boolean {
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration.name === node || !isVariableDeclaration(declaration) && !this.rustStrKeyParam(declaration)) return false;
+        const type: any = this.typeOfNodeIfAny(node);
+        if (type === undefined) return false;
+        const parts: any[] = (type.flags & TypeFlags.Union) ? ((typeParts(type) ?? []) as any[]) : [ type ];
+        return parts.length > 0 && parts.some((p: any) => (p.flags & TypeFlags.StringLike) !== 0)
+            && parts.every((p: any) => (p.flags & (TypeFlags.StringLike | TypeFlags.Undefined | TypeFlags.Null)) !== 0);
+    }
+
+    /** `contains_key` on the shared map for a string identifier key, printed from the key's settled decision: a
+     *  `String` local by `as_str`, an `Option<String>` local by `as_deref` (`None` misses, as `in_op` on `Null`),
+     *  a boxed key by the `Str` arm `in_op` takes (any other variant misses). */
+    /** A parameter key prints as its signature type: a boxed `Value`, `&str` or `Option<&str>` (per-venue string slots). */
+    rustStrKeyParam(declaration: any): boolean {
+        return declaration?.kind === SyntaxKind.Parameter && [ 'Value', '&str', 'Option<&str>' ].includes(this.rustParamType(declaration));
+    }
+
+    rustBorrowedStrKeyTest(name: string, node: any): string {
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        const param = declaration?.kind === SyntaxKind.Parameter ? this.rustParamType(declaration) : undefined;
+        if (param === '&str') return `${name}.contains_key(${super.printIdentifier(node)})`;
+        if (param === 'Option<&str>') return `matches!(${super.printIdentifier(node)}, Some(__k) if ${name}.contains_key(__k))`;
+        const kind = param === undefined ? this.rustScalarLocalOf(node)?.kind : undefined;
+        const key = super.printIdentifier(node);
+        if (kind === 'str') return `${name}.contains_key(${key}.as_str())`;
+        if (kind === 'ostr') return `matches!(${key}.as_deref(), Some(__k) if ${name}.contains_key(__k))`;
+        return `matches!(&${key}, Value::Str(__k) if ${name}.contains_key(__k.as_ref()))`;
     }
 
     rustBorrowedDictName(node: any): string | undefined {
@@ -15593,7 +15629,10 @@ export class RustTranspiler extends BaseTranspiler {
         const name = this.rustBorrowedDictName(obj);
         const k = name === undefined ? undefined : this.rustBorrowedInOpKey(key);
         if (k === undefined) return undefined;
-        return k.literal ? `Value::Bool(${name}.contains_key(${k.text}))` : `Value::Bool(matches!(&${k.text}, Value::Str(__k) if ${name}.contains_key(__k.as_ref())))`;
+        if (k.literal) return `Value::Bool(${name}.contains_key(${k.text}))`;
+        const inner: any = this.rustSkipWrappers(key);
+        if (this.bearerInOpKeyText(key) === undefined && isIdentifier(inner)) return `Value::Bool(${this.rustBorrowedStrKeyTest(name, inner)})`;
+        return `Value::Bool(matches!(&${k.text}, Value::Str(__k) if ${name}.contains_key(__k.as_ref())))`;
     }
 
     // ── rustDictKeyReadUse / printDictKeyRead: direct literal-key reads (`m['k']`, `m.k`) on a dict local ──
