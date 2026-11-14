@@ -4339,6 +4339,9 @@ export class RustTranspiler extends BaseTranspiler {
         });
         this.rustScalarDecisions.set(declaration, previous);
         if (ok && kind === 'bool' && !this.rustBoolSlotUsesOk(declaration)) return undefined;
+        // vg: an element of a never-written all-string list borrows (`Option<&str>`): no copy at the declaration or any box
+        this.rustBorrowedStrElems.delete(declaration);
+        if (ok && kind === 'ostr' && this.rustBorrowStrElem(declaration)) { this.rustBorrowedStrElems.add(declaration); return kind; }
         // boxed uses of the expression shapes are checked against the printed method lines
         const guarded = (widened || expressionUses || this.rustOptListParamInit(declaration.initializer)) && boxed > 0;
         // a local only handed back to `Value` slots keeps its producer's type: one conversion per box, no extra string copy
@@ -7176,6 +7179,52 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** The needle of a base `inArray` call outside the test crate: the hand-written `in_array(needle: impl Into<Value>, ..)`
      *  takes an optional string lent as `&x` (`From<&Option<String>>`: `None` is Null, `Some(s)` a `Str`, as the box gave). */
+    /** vg: element locals printed as a borrowed `Option<&str>` off their list (`recv.get(i).and_then(Value::as_str)`). */
+    private rustBorrowedStrElems = new WeakSet<any>();
+
+    /** vg: `const k = recv[i]` where `recv` is a local list every element of which is a string (`Object.keys (..)`, a literal of
+     *  string literals) and every use of `recv` is an element read or `.length` (never written, pushed, moved or handed on, so the
+     *  borrow stays valid while `k` lives and no non-string can reach `k`: out of range reads `None`, the `Null` the box held).
+     *  Every use of `k` reads the borrow: literal tests, `format!` operands, map-key reads / `in` tests, and boxes at a call
+     *  argument, object-literal value, array element, dict write or `+` operand (`Value::from(k.as_deref())`: the copy the `Value`
+     *  clone made, never more). */
+    rustBorrowStrElem(declaration: any): boolean {
+        if (this.rustTestTierSource(declaration) || !isIdentifier(declaration.name)) return false;
+        const init: any = this.unwrapParens(declaration.initializer);
+        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression) || this.rustElementReadScalarKind(init) !== 'ostr') return false;
+        const owner: any = this.rustDeclaredNode(init.expression);
+        if (owner === undefined || !isVariableDeclaration(owner) || !isIdentifier(owner.name) || !this.rustExactStrListInit(owner.initializer)) return false;
+        const recvOk = this.rustLocalUsesAll(owner, String(owner.name.text), true, (n: any) => {
+            const up: any = n.parent;
+            if (up !== undefined && isElementAccessExpression(up) && up.expression === n) {
+                const top: any = up.parent;
+                return !(top !== undefined && ((isBinaryExpression(top) && top.left === up && this.rustAssignmentOpKind(top.operatorToken.kind))
+                    || top.kind === SyntaxKind.DeleteExpression || top.kind === SyntaxKind.PrefixUnaryExpression || top.kind === SyntaxKind.PostfixUnaryExpression));
+            }
+            return up !== undefined && isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length';
+        });
+        if (!recvOk) return false;
+        return this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
+            const form = this.rustScalarUseForms.get(n);
+            if (form === 'test' || form === 'concat' || form === 'okey' || form === 'kin' || form === 'key' || form === 'inbox') return true;
+            if (form !== 'box' && form !== 'xbox') return false;
+            const up: any = n.parent;
+            return (isCallExpression(up) && up.expression !== n) || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n)
+                || (isArrayLiteralExpression(up) && !(isBinaryExpression(up.parent) && up.parent.left === up)) || this.rustDictWriteValue(n)
+                || (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.PlusToken);
+        });
+    }
+
+    /** vg: `Object.keys (x)` (never a ws client handle's key list) or a non-empty literal of string literals: only strings. */
+    rustExactStrListInit(init: any): boolean {
+        const node: any = this.unwrapParens(init);
+        if (node === undefined) return false;
+        if (isArrayLiteralExpression(node)) return node.elements.length > 0 && node.elements.every((e: any) => this.literalKindOfNode(e) === 'string');
+        return isCallExpression(node) && node.arguments.length === 1 && isPropertyAccessExpression(node.expression)
+            && node.expression.getText().replace(/\s+/g, '') === 'Object.keys' && this.printClientHandleKeys(node) === undefined;
+    }
+
     rustInArrayNeedle(node): boolean {
         const call: any = node?.parent;
         return !this.rustTestTierSource(node) && isCallExpression(call) && call.arguments[0] === node && isPropertyAccessExpression(call.expression)
@@ -7187,6 +7236,8 @@ export class RustTranspiler extends BaseTranspiler {
         const local = this.rustScalarLocalOf(node);
         const form = local === undefined ? undefined : this.rustScalarUseForms.get(node);
         // an optional key that reaches a helper write (no native insert) takes the helper's boxed key
+        // vg: a borrowed element lends at every box (`From<Option<&str>>`: `None` is Null, `Some(s)` the `Str` the box held)
+        if (local?.kind === 'ostr' && this.rustBorrowedStrElems.has(local.declaration) && (form === 'key' || form === 'inbox' || form === 'box' || form === 'xbox')) return `Value::from(${super.printIdentifier(node)}.as_deref())`;
         if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}${this.rustLocalLastUse(node, local.declaration) ? '' : '.clone()'}.map(Value::from).unwrap_or(Value::Null)`;
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form === 'concat' && local.kind === 'ostr') return `${super.printIdentifier(node)}.as_deref().unwrap_or("null")`;
@@ -7298,6 +7349,11 @@ export class RustTranspiler extends BaseTranspiler {
     printRustScalarLocalDeclaration(declaration, varName: string, indent: string): string | undefined {
         const kind = this.rustScalarLocalKind(declaration);
         const init = kind === undefined ? undefined : this.rustScalarNativeText(kind, declaration.initializer);
+        const owned = '.and_then(Value::as_str).map(str::to_owned)';
+        const recvName = kind === 'ostr' && this.rustBorrowedStrElems.has(declaration) ? super.printIdentifier(this.unwrapParens(declaration.initializer).expression) : undefined;
+        // only a read straight off the list place (no temporary the borrow could outlive)
+        const placeRead = recvName !== undefined && init !== undefined && (init.startsWith(`${recvName}.get(`) || init.startsWith(`${recvName}.as_array().map(Vec::as_slice).unwrap_or_default().get(`));
+        if (placeRead && init.endsWith(owned)) return `${indent}let mut ${varName}: Option<&str> = ${init.slice(0, -'.map(str::to_owned)'.length)}`;
         return init === undefined ? undefined : `${indent}let mut ${varName}: ${RustTranspiler.RUST_SCALAR_TYPES[kind]} = ${init}`;
     }
 

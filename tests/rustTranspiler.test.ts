@@ -8664,14 +8664,14 @@ describe('rust scalar residual locals', () => {
 describe('rust string key elements', () => {
     test('a key list element used as a map key reads the map natively as an optional string', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'string-key-element', 'ts/src/venue.ts')).content;
-        expect(out).toContain('let mut key: Option<String> = keys.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('let mut key: Option<&str> = keys.get(i as usize).and_then(Value::as_str);');
         expect(out).toContain('(if let (Some(__m), Some(__k)) = (response.as_map(), key.as_deref()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })');
     });
 
     test('a key that is also boxed at its last use is typed and moves into that slot', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'string-key-element', 'ts/src/venue.ts')).content;
-        expect(out).toContain('let mut id: Option<String> = ids.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
-        expect(out).toContain('result.push(self.safeMarket(&[id.map(Value::from).unwrap_or(Value::Null)]));');
+        expect(out).toContain('let mut id: Option<&str> = ids.get(i as usize).and_then(Value::as_str);');
+        expect(out).toContain('result.push(self.safeMarket(&[Value::from(id.as_deref())]));');
     });
 });
 
@@ -9366,15 +9366,17 @@ describe('rust string list elements as map keys', () => {
     test('an element tested with `in` on a map local is an optional string borrowed by the test', () => {
         const text = out();
         const held = text.slice(text.indexOf('fn parseHeld'), text.indexOf('fn parseCopied'));
-        expect(held).toContain('let mut id: Option<String> = ');
+        expect(held).toContain('let mut id: Option<&str> = ');
         expect(held).toContain('matches!(id.as_deref(), Some(__k) if balances.contains_key(__k))');
         expect(held).not.toContain('in_op(');
         expect(held).not.toContain('id.clone()');
     });
 
-    test('negative: an element boxed where its value would be copied keeps its box', () => {
+    test('ral-vg: an element boxed where its value would be copied borrows and lends there (no copy)', () => {
         const text = out();
-        expect(text.slice(text.indexOf('fn parseCopied'))).toMatch(/let mut id: Value = /);
+        const copied = text.slice(text.indexOf('fn parseCopied'));
+        expect(copied).toMatch(/let mut id: Option<&str> = /);
+        expect(copied).not.toContain('id.clone()');
     });
 });
 
@@ -13103,5 +13105,28 @@ describe('ral-vf: a built list stored at a key of another local map at its last 
     test('negative: a list pushed to after it was stored (the stored handle is shared) keeps the box', () => {
         const body = out.slice (out.indexOf ('fn pushedAfter'));
         expect(body).toMatch(/let mut args: Value = /);
+    });
+});
+
+describe('ral-vg: a string element of a never-written all-string list borrows as Option<&str>', () => {
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-vg-elem-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('an Object.keys element handed to a reader and used as a format operand lends, never copies', () => {
+        const out = mk("    sign (params: Dict) {\n        const keys = Object.keys (params);\n        const auth = [];\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const value = this.safeString (params, key, '');\n            auth.push (key + '=' + value);\n        }\n        return auth;\n    }");
+        expect(out).toMatch(/let mut key: Option<&str> = keys\.get\(i as usize\)\.and_then\(Value::as_str\);/);
+        expect(out).not.toContain('key.clone()');
+        expect(out).toContain('Value::from(key.as_deref())');
+    });
+    test('negative: a list that is written (pushed) keeps the Value element', () => {
+        const out = mk("    sign (params: Dict) {\n        const keys = Object.keys (params);\n        keys.push ('extra');\n        const r = [];\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            r.push (this.safeString (params, key));\n        }\n        return r;\n    }");
+        expect(out).not.toContain('Option<&str>');
     });
 });
