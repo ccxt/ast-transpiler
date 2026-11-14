@@ -19928,7 +19928,7 @@ export class RustTranspiler extends BaseTranspiler {
             const up: any = n.parent;
             if (isBinaryExpression(up) && up.left === n) {
                 return up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
-                    && (this.rustBuiltListWriteSource(up.right) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== undefined) && String(up.parent.getText()).split('\n')[0].length <= 200;
+                    && (this.rustBuiltListWriteSource(up.right) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== undefined || this.rustDefaultedAliasMove(up) !== undefined) && String(up.parent.getText()).split('\n')[0].length <= 200;
             }
             if (isElementAccessExpression(up) && up.expression === n) {
                 natives++;
@@ -19947,6 +19947,11 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             if (isReturnStatement(up) && up.expression === n) {
+                boxes.push([n, 'move']);
+                return true;
+            }
+            // ral-uf: `return x as T[]` hands the list on whole too (the cast prints nothing)
+            if (up?.kind === SyntaxKind.AsExpression && up.expression === n && isReturnStatement(up.parent) && up.parent.expression === up) {
                 boxes.push([n, 'move']);
                 return true;
             }
@@ -20009,7 +20014,7 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         });
         // a list with no native use is typed only when every use is a hand-off that moves or lends it (a `return x` move included)
-        if (!safe || (natives === 0 && (handOffs === 0 || handOffs + boxes.filter(([b]) => isReturnStatement(b.parent)).length !== boxes.length || boxes.some(([, form]) => form === 'clone')))) return false;
+        if (!safe || (natives === 0 && (handOffs === 0 || handOffs + boxes.filter(([b]) => isReturnStatement(b.parent) || (b.parent?.kind === SyntaxKind.AsExpression && isReturnStatement(b.parent.parent))).length !== boxes.length || boxes.some(([, form]) => form === 'clone')))) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         this.rustBuiltLists.add(declaration);
         return true;
@@ -20106,14 +20111,65 @@ export class RustTranspiler extends BaseTranspiler {
         if (tested === undefined || !isIdentifier(tested) || tested.text !== y.text) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(y);
         if (declaration === undefined || declaration.name === y || !(isVariableDeclaration(declaration) || isParameterDeclaration(declaration))) return false;
-        if (this.rustDeclarationOfIdentifier(tested) !== declaration || this.rustLocalIsReassigned(declaration, String(y.text))) return false;
+        if (this.rustDeclarationOfIdentifier(tested) !== declaration) return false;
+        // ral-uf: earlier writes are fine (the move is the last use, so no write follows); the binding must still print bare
+        if (this.rustLocalIsReassigned(declaration, String(y.text)) && !(isVariableDeclaration(declaration) && this.rustWritesAllBefore(declaration, write))) return false;
         if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(write)) return false;
         if (isVariableDeclaration(declaration) && (this.rustLentListLocal(declaration) || this.rustBorrowedLocalKind(declaration) !== undefined
             || this.rustScalarLocalKind(declaration) !== undefined || this.rustNilLocalKind(declaration) !== undefined)) return false;
         // the printer may mark the bare move owned (`\u0004`): still the plain `Value` binding
         const printedY = this.printNode(y, 0).trim();
         if ((printedY.startsWith('\u0004') ? printedY.slice(1) : printedY) !== String(y.text)) return false;
-        return this.rustLocalLastUse(y, declaration);
+        return this.rustLocalLastUse(y, declaration) || this.rustGuardedBranchLastUse(y, declaration, guard);
+    }
+
+    /** ral-uf: every later read of `node`'s local lies in the else branch of `guard` (a path disjoint from the move) and
+     *  nothing reads it after the if statement; no loop or closure sits between the move and the declaration. */
+    rustGuardedBranchLastUse(node: any, declaration: any, guard: any): boolean {
+        const other: any = guard?.elseStatement;
+        const own = this.rustSymbolOf(node);
+        const scope = this.rustEnclosingFunction(declaration);
+        if (other === undefined || own === undefined || scope === undefined || !(guard.thenStatement.pos <= node.pos && node.end <= guard.thenStatement.end)) return false;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
+            if (n === node || n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) continue;
+            if (n === (scope as any).name && (scope as any).kind === SyntaxKind.MethodDeclaration) continue;
+            const symbol = this.rustSymbolOf(n);
+            if (symbol !== undefined && symbol !== own) continue;
+            if (n.pos > node.pos && !(other.pos <= n.pos && n.end <= other.end)) return false;
+        }
+        for (let up: any = node.parent; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
+    }
+
+    /** ral-uf: `x = y`, y a never-written `[]`-defaulted `safeList*` local still printed as the plain `Value` binding, at its
+     *  last use (or read again only in the else branch of the if whose then-branch holds the write): y is always an Arr. */
+    /** Every write to the local (`x = ..`) sits at or before `write` in source order. */
+    rustWritesAllBefore(declaration: any, write: any): boolean {
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined) return false;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && up.left === n && rustIsAssignmentOperator(up.operatorToken.kind) && up.pos > write.pos) return false;
+            if ((up?.kind === SyntaxKind.PrefixUnaryExpression || up?.kind === SyntaxKind.PostfixUnaryExpression) && n.pos > write.pos) return false;
+        }
+        return true;
+    }
+
+    rustDefaultedAliasMove(write: any): any {
+        if (!isBinaryExpression(write)) return undefined;
+        const y: any = this.rustSkipWrappers(write.right);
+        if (y === undefined || !isIdentifier(y)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(y);
+        if (declaration === undefined || declaration.name === y || !isVariableDeclaration(declaration)) return undefined;
+        if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(write) || this.rustLocalIsReassigned(declaration, String(y.text))) return undefined;
+        if (!this.rustDefaultedListValue(declaration, y)) return undefined;
+        let branch: any = write.parent?.parent;
+        if (!isBlock(branch)) branch = write.parent;
+        const guard: any = branch?.parent?.kind === SyntaxKind.IfStatement && branch.parent.thenStatement === branch ? branch.parent : undefined;
+        return this.rustLocalLastUse(y, declaration) || (guard !== undefined && this.rustGuardedBranchLastUse(y, declaration, guard)) ? declaration : undefined;
     }
 
     rustBuiltListOf(node: any): any {
@@ -20179,7 +20235,7 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(y);
         if (declaration === undefined || declaration.name === y || !isVariableDeclaration(declaration) || this.rustDeclarationOfIdentifier(tested) !== declaration) return undefined;
         if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(write) || this.rustLocalIsReassigned(declaration, String(y.text))) return undefined;
-        if (!this.rustLocalLastUse(y, declaration)) return undefined;
+        if (!this.rustLocalLastUse(y, declaration) && !this.rustGuardedBranchLastUse(y, declaration, guard)) return undefined;
         // a plain `Value` local read by a `[]`-defaulted `safeList*` is always an Arr: `y.into_list()` moves it exactly
         if (this.rustDefaultedListValue(declaration, y)) return declaration;
         const optList = this.rustOptListLocal(declaration)
@@ -20202,13 +20258,19 @@ export class RustTranspiler extends BaseTranspiler {
         const rhs: any = this.rustSkipWrappers(right);
         const guarded: any = isIdentifier(rhs) && isBinaryExpression(rhs.parent) ? this.rustOptListGuardedMove(rhs.parent) : undefined;
         if (guarded !== undefined) return `${this.printNode(left, 0).trim()} = ${rhs.text}.${this.rustDefaultedListValue(guarded, rhs) ? 'into_list' : 'unwrap_or_default'}()`;
+        if (isIdentifier(rhs) && isBinaryExpression(rhs.parent) && this.rustDefaultedAliasMove(rhs.parent) !== undefined) return `${this.printNode(left, 0).trim()} = ${rhs.text}.into_list()`;
         const value = isArrayLiteralExpression(rhs) ? this.printBuiltListLiteral(rhs) : `${this.printNode(right, 0).trim()}.into_list()`;
         return `${this.printNode(left, 0).trim()} = ${value}`;
     }
 
     printBuiltListPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined {
         if (name === undefined || parsedArg === undefined || this.rustBuiltListOf(node?.expression?.expression) === undefined) return undefined;
-        return `std::sync::Arc::make_mut(&mut ${name}).push(${RustTranspiler.cloneIfBareLocal(parsedArg.trim())})`;
+        // ral-uf: a bare local pushed at its last use moves (the boxed `append_to_array` form moved it too)
+        const arg: any = node?.arguments?.[0];
+        const decl: any = arg !== undefined && isIdentifier(arg) ? this.rustDeclarationOfIdentifier(arg) : undefined;
+        const moves = decl !== undefined && decl.name !== arg && (isVariableDeclaration(decl) || isParameterDeclaration(decl))
+            && this.rustEnclosingFunction(decl) === this.rustEnclosingFunction(arg) && this.rustLocalLastUse(arg, decl);
+        return `std::sync::Arc::make_mut(&mut ${name}).push(${moves ? parsedArg.trim() : RustTranspiler.cloneIfBareLocal(parsedArg.trim())})`;
     }
 
     // ── optional list locals ─────────────────────────────────────────────────
