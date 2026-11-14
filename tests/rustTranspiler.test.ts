@@ -10053,9 +10053,9 @@ describe('rust built helper results', () => {
         expect(slice(out(), 'fn buildG', 'fn signI')).toMatch(/let mut request: Value = /);
     });
 
-    test('negative: an omit of a params dict (a list body passes through omit) keeps its box', () => {
+    test('an omit of a params dict used only by urlencode holds the Dict (ral-xh: urlencode answers "" for a list body as for the empty map)', () => {
         const text = slice(out(), 'fn signI', 'fn buildH');
-        expect(text).toMatch(/let mut query: Value = /);
+        expect(text).toMatch(/let mut query: crate::value::Dict = /);
     });
 
     test('negative: an extend result rewritten by a destructuring assignment keeps its box', () => {
@@ -13679,5 +13679,43 @@ describe('int44 glue: a borrowed string element (wg) as an inArray needle (wd) a
         expect(out).not.toContain('let mut tokens: Value = ');
         expect(out).toContain('let mut label: Option<&str> = ');
         expect(out).not.toContain('(tokens.as_map(), label.as_deref())');
+    });
+});
+
+describe('ral-wh: Promise.all results over a built list hold the List', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    async fetchA (params: Dict = {}): Promise<any> { return {}; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    isDictionary (v: any): boolean { return true; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeDict (dictionaryOrList: any, key: any, defaultValue: Dict = undefined): Dict | undefined {\n        const value = this.safeValue (dictionaryOrList, key, defaultValue);\n        if (value === undefined) {\n            return defaultValue;\n        }\n        if (this.isDictionary (value)) {\n            return value;\n        }\n        return defaultValue;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('Promise.all over a pushed list of promises read by safeDict at an index is a List', () => {
+        const out = write ('wh-pall', "    async m (params: Dict = {}) {\n        const promises: Promise<any>[] = [\n            this.fetchA (params),\n            this.fetchA (params),\n        ];\n        promises.push (this.fetchA ());\n        const results = await Promise.all (promises);\n        const a = this.safeDict (results, 0, {});\n        const b = this.safeDict (results, 1, {});\n        return [ this.hold (a), this.hold (b) ];\n    }\n");
+        expect(out).toContain('let mut results: crate::value::List = promise_all(');
+        expect(out).toContain('.await.into_list()');
+    });
+    test('negative: Promise.all over a parameter of unknown kind stays a Value', () => {
+        const out = write ('wh-palln', "    async m (promises: any) {\n        const results = await Promise.all (promises);\n        const a = this.safeDict (results, 0, {});\n        return this.hold (a);\n    }\n");
+        expect(out).toContain('let mut results: Value = promise_all(');
+    });
+});
+
+describe('ral-xh: omit results lent to the encoder slots', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    omit (x: any, ...args: any): any { return x; }\n    extractParams (s: string): string[] { return []; }\n    urlencode (o: any): string { return ''; }\n    isEmpty (o: any): boolean { return true; }\n    json (o: any): string { return ''; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('an omit of sign params read by Object.keys and urlencode holds the Dict and lends it', () => {
+        const out = write ('xh-url', "    sign (path: string, params: Dict = {}) {\n        let url = '/' + path;\n        const query = this.omit (params, this.extractParams (path));\n        if (Object.keys (query).length) {\n            url += '?' + this.urlencode (query);\n        }\n        return url;\n    }\n");
+        expect(out).toContain('let mut query: crate::value::Dict = ');
+        expect(out).toContain('self.urlencode(&query');
+    });
+    test('negative: the same omit also handed to isEmpty stays a Value (isEmpty tells a list from the empty map)', () => {
+        const out = write ('xh-urln', "    sign (path: string, params: Dict = {}) {\n        let url = '/' + path;\n        const query = this.omit (params, this.extractParams (path));\n        if (!this.isEmpty (query)) {\n            url += '?' + this.urlencode (query);\n        }\n        return url;\n    }\n");
+        expect(out).toContain('let mut query: Value = ');
     });
 });

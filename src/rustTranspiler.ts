@@ -16958,7 +16958,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A `let` declared empty is filled later by container writes only (the optional form).
         const nilDeclared = (init === undefined || this.literalKindOfNode(init) === 'null') && (list.flags & NodeFlags.Const) === 0
             && list.parent?.kind === SyntaxKind.VariableStatement;
-        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? (this.rustEcdsaCall(init) ? 'dict' : this.rustBorrowedSourceKind(init) ?? this.rustBuiltReturnSourceKind(init) ?? this.rustVenueContainerReturnKind(init)?.kind) : (this.rustDictElementSource(init) ? 'dict' : (this.rustListElementSource(init) ? 'list' : undefined));
+        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? (this.rustEcdsaCall(init) ? 'dict' : this.rustBorrowedSourceKind(init) ?? this.rustBuiltReturnSourceKind(init) ?? this.rustVenueContainerReturnKind(init)?.kind ?? this.rustPromiseAllListKind(init)) : (this.rustDictElementSource(init) ? 'dict' : (this.rustListElementSource(init) ? 'list' : undefined));
         const endpoint = from === 'api';
         if (endpoint) from = this.rustDeclaredEndpointKind(init) ?? 'api';
         // ral-oc: a plain map literal rebuilt only as `x = this.extend (x, y)` holds a map on every path (`extend` answers
@@ -17101,7 +17101,7 @@ export class RustTranspiler extends BaseTranspiler {
             // `json` tells Null from an empty container: only a never-null source lends there as the plain container
             // `omit` hands a list through unchanged: its result reaches the encoder slots only when its head is a proven map
             if ((from === 'dict' || from === 'list') && this.rustLentHelperSlot(up, n, from) && (String(up.expression.name.text) !== 'json' || endpoint || this.rustLentContainerSource(init))
-                && !(RustTranspiler.RUST_LENT_ENCODER_SLOTS.has(String(up.expression.name.text)) && this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_OMIT) && !this.rustOmitOfDict(init))) return ++lentResponses > 0 && ++reads > 0;
+                && !(RustTranspiler.RUST_LIST_TELLING_SLOTS.has(String(up.expression.name.text)) && this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_OMIT) && !this.rustOmitOfDict(init))) return ++lentResponses > 0 && ++reads > 0;
             if (this.rustLentOptionalHandOff(up, n, init, from, nilDeclared)) return ++lentNullable > 0 && ++reads > 0;
             // a lent params slot (`watch` message, a lent `params`) takes the built map by reference, as the handed rule lends it
             if (from === 'dict' && isCallExpression(up) && this.rustLentParamsSlot(up, n) && (extendReuse || init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) === 'dict')) return ++reads > 0;
@@ -17208,6 +17208,19 @@ export class RustTranspiler extends BaseTranspiler {
     // ── ral-wh: index / variable-key reads on held Dict / List locals (rustBorrowedIndexReadUse) ──
     // `KeyRead::read(&&x, &k)` is `get_map_value` / `get_list_value`, the arm `get_value` takes for that variant.
     private rustBorrowedIndexReads = new WeakSet<any>();
+
+    /** `Promise.all ([..])` (an array literal operand): runtime `promise_all` hands its operand back, so it is always a list. */
+    rustPromiseAllListKind(call: any): 'list' | undefined {
+        const callee: any = call?.expression;
+        if (!isCallExpression(call) || !isPropertyAccessExpression(callee) || !isIdentifier(callee.expression) || String(callee.expression.text) !== 'Promise'
+            || String(callee.name.text) !== 'all' || call.arguments.length !== 1 || this.rustTestTierSource(call)) return undefined;
+        const arg: any = this.rustSkipWrappers(call.arguments[0]);
+        if (isArrayLiteralExpression(arg)) return 'list';
+        // a typed `Vec<Value>` / built `List` local always boxes a `Value::Arr` into the helper
+        const d: any = isIdentifier(arg) ? this.rustDeclarationOfIdentifier(arg) : undefined;
+        if (d === undefined || !isVariableDeclaration(d) || d.name === arg) return undefined;
+        return this.rustVecLocalIsTyped(d) || this.rustLentListLocal(d) ? 'list' : undefined;
+    }
 
     /** `x[k]`, read only (no write, call, property or nested element target), with a numeric literal key or a key local
      *  that prints as a `Value` (a literal-initialised counter, or an untyped `let`/`const` of number / string type). */
@@ -17514,12 +17527,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustLentResponseSlot(call, arg)) return from === 'dict';
         if (this.rustLentEndpointSlot(call, arg, from)) return true;
         if (this.rustLentWsSettleSlot(call, arg)) return true;
-        if (RustTranspiler.RUST_LENT_ENCODER_SLOTS.has(String(call.expression?.name?.text ?? '')) && init !== undefined && this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_OMIT) && !this.rustOmitOfDict(init)) return false;
+        if (RustTranspiler.RUST_LIST_TELLING_SLOTS.has(String(call.expression?.name?.text ?? '')) && init !== undefined && this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_OMIT) && !this.rustOmitOfDict(init)) return false;
         return this.rustLentHelperSlot(call, arg, from) && RustTranspiler.RUST_LENT_OPTIONAL_HELPERS.has(String(call.expression.name.text));
     }
 
     // hand-written helpers whose operand is `impl Into<crate::Value>` / `impl JsonText` (the optional form lends there too)
     private static readonly RUST_LENT_ENCODER_SLOTS = new Set([ 'urlencode', 'rawencode', 'urlencodeNested', 'urlencodeWithArrayRepeat', 'isEmpty' ]);
+
+    // ral-xh: of the lent encoder slots only `isEmpty` tells a list from the empty map (`is_empty(Arr[..])` is false):
+    // `urlencode` / `rawencode` / `urlencodeNested` / `urlencodeWithArrayRepeat` answer `""` for every non-map operand,
+    // exactly what they answer for the empty map `into_dict()` leaves, so an `omit` whose head may be a list body
+    // (`sign`'s `params`) still lends there; `json` keeps its own never-null guard.
+    private static readonly RUST_LIST_TELLING_SLOTS = new Set([ 'isEmpty' ]);
 
     private static readonly RUST_LENT_OPTIONAL_HELPERS = new Set([ 'toArray', 'arrayConcat', 'json', 'urlencode', 'rawencode', 'urlencodeNested', 'urlencodeWithArrayRepeat', 'isEmpty' ]);
 
