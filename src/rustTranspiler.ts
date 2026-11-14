@@ -5700,7 +5700,15 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.literalKindOfNode(fallback) === 'null') return strBase !== undefined ? 'ostr' : (intBase !== undefined ? 'oint' : (numBase !== undefined ? 'onum' : undefined));
             return undefined;
         }
-        const kind = this.rustReaderFallbackKind(fallback);
+        let kind = this.rustReaderFallbackKind(fallback);
+        // 40d: a typed-signature parameter never written in the body holds only its declared kind or `Null`
+        // (rustOptParamKind): the same proof a typed local gives, taken only for a reader of that same kind
+        // (an integer parameter under a number reader is an Int / Float mix and stays)
+        if (kind === undefined && isIdentifier(fallback)) {
+            const pk = this.rustOptParamKind(fallback);
+            const same = pk === undefined ? false : (strBase !== undefined ? (pk === 'str' || pk === 'ostr') : (intBase !== undefined ? (pk === 'int' || pk === 'oint') : (numBase !== undefined && (pk === 'num' || pk === 'onum'))));
+            if (same) kind = pk;
+        }
         // wd: a venue method already printed `-> Option<String>` is a string-or-Null default as it stands
         if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && (this.rustReaderFallbackChecked(fallback) === 'string' || this.rustVenueStrCall(fallback) || this.rustOptionsElemKind(fallback) === 'ostr')) ? 'ostr' : undefined;
         if (intBase !== undefined) return kind === 'int' || kind === 'oint' ? 'oint' : undefined;
@@ -5959,6 +5967,9 @@ export class RustTranspiler extends BaseTranspiler {
             const trial = this.rustScalarDecisions.get(declaration);
             const form = this.rustScalarUseForms.get(n);
             if ((trial === 'str' || trial === 'ostr') && (form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)
+                // 40d: an optional-string insert key prints its key text (`as_deref().unwrap_or("null").to_string()`): one fresh
+                // `String`, exactly the allocation the `stringify_param(&k)` of the boxed key made, so no copy where the `Value` moved
+                && !(form === 'key' && trial === 'ostr')
                 && !(form === 'box' && this.rustElementReadScalarKind(this.unwrapParens(declaration.initializer)) !== undefined && this.rustScalarSelfArgBox(n))
                 && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && this.rustScalarSelfArgBox(n) && this.rustFormatLendLocal(declaration))
                 && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && this.rustClockString(this.unwrapParens(declaration.initializer)) && this.rustLendSlot(n))
@@ -5966,7 +5977,7 @@ export class RustTranspiler extends BaseTranspiler {
                 && !(form === 'box' && !this.rustStrNoLend && this.rustUdReaderStr(declaration.initializer) && this.rustLendSlot(n) && this.rustUdLent.add(declaration))) return false;
             // a `.push(..)` argument: ccxt's native-push pass keys on the boxed operand text
             const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
-            if (push !== undefined && isCallExpression(push)) return false;
+            if (push !== undefined && isCallExpression(push) && !this.rustCopyPushPairElement(n, push, trial)) return false;
             // nor when it feeds a write to another local (ccxt passes read that write's printed source)
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
@@ -5980,12 +5991,33 @@ export class RustTranspiler extends BaseTranspiler {
      *  local held (`Value::Int` / `Value::Null`), so no other local's decision reads this one's type. */
     rustScalarCacheFieldCtor(n: any, write: any): boolean {
         const left: any = this.unwrapParens(write.left);
-        if (!isPropertyAccessExpression(left) || left.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (!(isPropertyAccessExpression(left) && left.expression.kind === SyntaxKind.ThisKeyword) && !this.rustWsCacheCtorSizeWrite(n, write)) return false;
         const right: any = this.unwrapParens(write.right);
         if (right?.kind !== SyntaxKind.NewExpression || right.arguments?.length !== 1 || this.unwrapParens(right.arguments[0]) !== n) return false;
         const kind = this.rustScalarDecisions.get(this.rustDeclaredNode(n));
         const form = this.rustScalarUseForms.get(n);
         return this.rustCacheCtorLimitArg(n, kind) && (form === 'targ' || form === 'box');
+    }
+
+    /** 40d: a Copy number that is a direct element of the array literal pushed whole (`rows.push ([ price, amount ])`):
+     *  the element prints `Value::from(x)` (the Int / Float / Null its box held, no copy) inside `Value::from(vec![..])`,
+     *  which ccxt's rustVecPushInline (build/rustTranspiler.ts) already treats as a marker-free source whatever the
+     *  elements print, so no text pass reads this local's type. */
+    rustCopyPushPairElement(n: any, push: any, kind: string | undefined): boolean {
+        if (kind !== 'int' && kind !== 'oint' && kind !== 'num' && kind !== 'onum') return false;
+        const list: any = n.parent;
+        if (!isArrayLiteralExpression(list) || push.arguments.length !== 1 || this.unwrapParens(push.arguments[0]) !== list) return false;
+        const form = this.rustScalarUseForms.get(n);
+        return form === 'box' || form === 'xbox';
+    }
+
+    /** 40d: `n` is the one argument of a base `ws/Cache.ts` constructor that is the whole source of a ws cache-map entry
+     *  write (`this.trades[k] = new ArrayCache (n)`, `this.ohlcvs[k][tf] = new ArrayCacheByTimestamp (n)`), which
+     *  printWsCacheMapWrite prints as `CacheStore::put` / `CacheShelves::put2` around the constructor text. */
+    rustWsCacheCtorSizeWrite(n: any, write: any): boolean {
+        if (write === undefined || !isBinaryExpression(write) || write.operatorToken.kind !== SyntaxKind.EqualsToken || !this.rustWsCacheMapEntry(write.left)) return false;
+        const right: any = this.unwrapParens(write.right);
+        return this.rustWsCacheCtor(right) && right.arguments?.length === 1 && this.unwrapParens(right.arguments[0]) === n;
     }
 
     /** vi: a `Precise.string*` result moved at its last use into an operand of a `Precise.*` chain that is the whole
@@ -7452,7 +7484,9 @@ export class RustTranspiler extends BaseTranspiler {
         // `this.balance|options[..]` stores (the r05 insert copies the value text verbatim; zf measured it type-agnostic)
         // and the typed params-slot insert the printer itself prints (printSlotNestedInsert; nativeInserts never sees it)
         if (boxUse === true && (this.rustBalanceOptionsPlace(write.left) || this.rustPrintedSlotNestedWrite(write.left))) return false;
-        return true;
+        // 40d: the size of `this.<cache>[k] (|[k2]) = new ArrayCache*(n)`: the printer's own `CacheStore::put` /
+        // `CacheShelves::put2` prints that write (no ccxt text pass reads it) and the size boxes into `::new`
+        return !this.rustWsCacheCtorSizeWrite(n, write);
     }
 
     // ── nested plain-field writes (rustNestedFieldKeyUse / printNestedFieldKeyWrite) ──
@@ -9566,6 +9600,15 @@ export class RustTranspiler extends BaseTranspiler {
             && init.expression.expression.kind === SyntaxKind.ThisKeyword && String(init.expression.name.text) === 'parseToInt';
     }
 
+    /** 40d: `const n = this.safeInteger* (.., <integer literal>)`: the reader answers an `Int` on every path (parsed or the
+     *  literal default), printed `i64` by the existing int reader form: an exact `i64` bound like a `parseToInt` one. */
+    rustIntReaderLitDefault(declaration: any): boolean {
+        const init: any = declaration === undefined || !isVariableDeclaration(declaration) ? undefined : this.unwrapParens(declaration.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const base = RustTranspiler.RUST_SCALAR_INT_HELPERS[String(init.expression.name.text)];
+        return base !== undefined && init.arguments.length === base + 1 && this.rustScalarIntLiteral(this.unwrapParens(init.arguments[base])) !== undefined;
+    }
+
     /** wi: a tuple slot whose producer builds an exact Int-or-null on every return (`checkOptionInteger`): an `i64` bound too. */
     rustTbExactIntSlot(declaration: any): boolean {
         if (declaration === undefined || !isBindingElement(declaration)) return false;
@@ -9619,7 +9662,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustTbCounterBound(cond: any, n: any, kind: string): any {
         if ((kind !== 'int' && kind !== 'oint') || !isBinaryExpression(cond) || this.unwrapParens(cond.right) !== n && cond.right !== n) return undefined;
         if (RustTranspiler.NATIVE_COMPARISON_OPERATORS[cond.operatorToken.kind] === undefined || this.isEqualityOp(cond.operatorToken.kind)) return undefined;
-        if (!isIdentifier(n) || !(this.rustTbParseToIntInit(this.rustDeclaredNode(n)) || this.rustTbExactIntSlot(this.rustDeclaredNode(n))) || this.rustTbBoundHasPartner(this.rustDeclaredNode(n), cond)) return undefined;
+        if (!isIdentifier(n) || !(this.rustTbParseToIntInit(this.rustDeclaredNode(n)) || this.rustTbExactIntSlot(this.rustDeclaredNode(n)) || this.rustIntReaderLitDefault(this.rustDeclaredNode(n))) || this.rustTbBoundHasPartner(this.rustDeclaredNode(n), cond)) return undefined;
         const counter: any = cond.left;
         if (!isIdentifier(counter)) return undefined;
         const d: any = this.rustDeclaredNode(counter);

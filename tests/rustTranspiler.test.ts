@@ -14922,3 +14922,83 @@ describe('ral-40f: while (true) prints as loop (moved from ccxt build/ whileTrue
         expect(out).toContain('while i > 0 {');
     });
 });
+
+describe('40d: a reader integer that sizes a ws cache-map entry constructor types (`this.trades[k] = new ArrayCache (limit)`)', () => {
+    test('the size boxes into ::new as Value::from(limit) inside the printer CacheStore::put; a second use keeps it typed too', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-40d-cachemapctor-'));
+        const files: Record<string, string> = {
+            'ts/src/base/ws/Cache.ts': 'export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n',
+            'ts/src/base/Exchange.ts': "import { ArrayCache } from './ws/Cache.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    trades: Dictionary<ArrayCache>;\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    safeInteger (obj: any, key: string, defaultValue: number = undefined): number { return obj[key]; }\n}\n",
+            'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    handleTrades (message: any) {\n        const symbol = this.safeString (message, 's');\n        if (!(symbol in this.trades)) {\n            const limit = this.safeInteger (this.options, 'tradesLimit', 1000);\n            this.trades[symbol] = new ArrayCache (limit);\n        }\n        return message;\n    }\n}\n",
+        };
+        for (const [rel, text] of Object.entries(files)) {
+            fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+            fs.writeFileSync(path.join(root, rel), text);
+        }
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        expect(out).toMatch(/let mut limit: i64 = /);
+        expect(out).toContain('CacheStore::put(&mut self.trades, &symbol, ArrayCache::new(Value::from(limit)))');
+        expect(out).not.toContain('limit.clone()');
+    });
+});
+
+describe('40d: an optional-string reader keying a map insert before a later box types (the key text is the one allocation stringify_param made)', () => {
+    test('the first code keys holdingCodes and this.balance[..] as as_deref().unwrap_or("null").to_string(); a same-named sibling stays typed', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-40d-optkey-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface BalanceAccount { free: Str; used: Str; total: Str; }\nexport default class Exchange {\n    options: Dict = {};\n    balance: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k] ?? d; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o[k] ?? d; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    account (): BalanceAccount { return { 'free': undefined, 'used': undefined, 'total': undefined }; }\n    prune (a: any, b: Dict): any { return a; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleBalance (holding: Dict, other: Dict) {\n        const holdingCodes: Dict = {};\n        for (let i = 0; i < 2; i++) {\n            const code = this.safeCurrencyCode (this.safeString (holding, 'k'));\n            if (code !== undefined) {\n                holdingCodes[code] = true;\n                this.balance['cash'][code] = {};\n            }\n        }\n        for (let i = 0; i < 2; i++) {\n            const code = this.safeCurrencyCode (this.safeString (other, 'k'));\n            this.balance['margin'] = code;\n        }\n        return holdingCodes;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        expect(out).not.toMatch(/let mut code: Value = /);
+        expect((out.match(/let mut code: Option<String> = /g) ?? []).length).toBe(2);
+        expect(out).toContain('holdingCodes.insert(code.as_deref().unwrap_or("null").to_string(), Value::Bool(true));');
+        expect(out).not.toContain('code.clone()');
+    });
+});
+
+describe('40d: number readers that are the elements of an array literal pushed whole type (Value::from(x) per element inside vec![..])', () => {
+    test('[ price, amount ] rows in two sibling loops box each Option<f64> element', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-40d-pushpair-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o[k] ?? d; }\n    sortBy (a: any, k: any): any { return a; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    rows (asks: any[], bids: any[]) {\n        const asksResult = [];\n        const bidsResult = [];\n        for (let i = 0; i < asks.length; i += 2) {\n            const price = this.safeNumber (asks, i);\n            const amount = this.safeNumber (asks, i + 1);\n            asksResult.push ([ price, amount ]);\n        }\n        for (let i = 0; i < bids.length; i += 2) {\n            const price = this.safeNumber (bids, i);\n            const amount = this.safeNumber (bids, i + 1);\n            bidsResult.push ([ price, amount ]);\n        }\n        return { 'asks': this.sortBy (asksResult, 0), 'bids': this.sortBy (bidsResult, 0) };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        expect(out).not.toMatch(/let mut (price|amount): Value = /);
+        expect((out.match(/let mut (price|amount): Option<f64> = /g) ?? []).length).toBe(4);
+        expect((out.match(/vec!\[Value::from\(price\), Value::from\(amount\)\]/g) ?? []).length).toBe(2);
+    });
+});
+
+describe('40d: an integer reader whose default is a typed Option<i64> parameter of a typed signature types (the parameter holds Int or Null only)', () => {
+    const mk = (reader: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-40d-paramdflt-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport type Str = string | undefined;\nexport interface Trade { id: string }\nexport default class Exchange {\n    markets: Dict = undefined;\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k] ?? d; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o[k] ?? d; }\n    omit (o: any, k: any): Dict { return o; }\n    ymd (x: any): string { return ''; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Str, Trade } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchMyTrades (symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<Trade[]> {\n        const sinceValue = this." + reader + " (params, 'start_date', since);\n        const paramsOmitted: Dict = this.omit (params, 'start_date');\n        const request: Dict = {};\n        if (limit !== undefined) {\n            request['size'] = limit;\n        }\n        if (sinceValue !== undefined) {\n            request['start_date'] = this.ymd (sinceValue);\n        }\n        return [ request, paramsOmitted ] as any;\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchMyTrades'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = typed.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('safeInteger (params, k, since) prints Option<i64>', () => {
+        expect(mk('safeInteger')).toMatch(/let mut sinceValue: Option<i64> = /);
+    });
+    test('safeNumber over the same Int parameter (an Int / Float mix) stays Value', () => {
+        expect(mk('safeNumber')).toMatch(/let mut sinceValue: Value = /);
+    });
+});
+
+describe('40d: an integer reader with an integer-literal default bounding its own for counter types (an exact Int, like a parseToInt bound)', () => {
+    test('const maxPages = this.safeInteger (this.options, k, 20) as a for bound prints i64 and the bound compares natively', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-40d-litbound-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k] ?? d; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    pages () {\n        const maxPages = this.safeInteger (this.options, 'maxPages', 20);\n        for (let page = 0; page < maxPages; page++) {\n            this.hold (page);\n        }\n        return 1;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        expect(out).toMatch(/let mut maxPages: i64 = .*\.as_i64\(\)\.unwrap_or\(20\);/);
+    });
+});
