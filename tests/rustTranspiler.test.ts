@@ -11188,3 +11188,26 @@ describe('ral-md: market-field strings boxed before their last use', () => {
         expect(out).not.toContain('let mut symbol: Value');
     });
 });
+
+describe('ral-mg: string methods on per-venue string params, Math results on typed numbers', () => {
+    test('cast param receivers, typed Math.floor/round/ceil/abs/pow and optional Math.min/max print native forms that keep the missing value', () => {
+        const dir = path.join (rustFixtureRoot, 'mg-method-local');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venuemg.ts'), "import Exchange from './base/Exchange.js';\nexport default class venuemg extends Exchange {\n    side (a: any) {\n        return this.req ('buy', a);\n    }\n    req (side: string, a: any) {\n        const upper = (side as string).toUpperCase ();\n        const head = side.slice (0, 2);\n        return this.hold ({ 'side': upper, 'isBuy': upper === 'BUY', 'head': head + '-' });\n    }\n    nums (a: any) {\n        const n = this.safeInteger (a, 'n', 7);\n        const o = this.safeInteger (a, 'o');\n        const f = Math.floor (n / 3);\n        const r = Math.round (o);\n        const p = Math.pow (10, n);\n        const capped = Math.min (o, 1000);\n        return this.hold ([ f + 1, r, p, capped ]);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venuemg.ts')).content;
+        // `(side as string).toUpperCase()` on a `&str` per-venue param: the assertion is not a receiver change
+        expect(out).toContain('pub fn req(&self, side: &str, a: Value)');
+        expect(out).toContain('let mut upper: String = side.as_str().unwrap_or_default().to_string().to_uppercase();');
+        expect(out).toContain('let mut head: String = side.as_str().unwrap_or_default().to_string().chars().skip(0).take(2).collect::<String>();');
+        // Math.floor of a never-null number: f64 (the helper's Float), path form
+        expect(out).toContain('let mut f: f64 = f64::floor(');
+        // Math.round of an optional int: None where the helper answers Null
+        expect(out).toContain('let mut r: Option<f64> = (if let Some(__x) = o { Some(f64::round(__x as f64)) } else { None });');
+        expect(out).toContain('let mut p: f64 = f64::powf(10.0, (n as f64));');
+        // Math.min with an optional int operand: Int stays Int, Null when missing
+        expect(out).toContain('let mut capped: Option<i64> = (if let Some(__m0) = o { Some(i64::min(__m0, 1000)) } else { None });');
+        expect(out).not.toContain('Math::min(');
+        expect(out).not.toContain('math_round(');
+    });
+});

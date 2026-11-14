@@ -6402,8 +6402,10 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarStrMethod(node, syntactic = false, params = false): { recv: any, recvKind: string, method: string, kind: string } | undefined {
         const call: any = this.unwrapParens(node);
         if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression)) return undefined;
-        const recv: any = call.expression.expression;
-        if (!isIdentifier(recv) || call.expression.expression.kind === SyntaxKind.ThisKeyword) return undefined;
+        // `(p as string).m()`: a type assertion never changes the runtime value, so the receiver is `p` itself
+        let recv: any = call.expression.expression;
+        while (recv !== undefined && (recv.kind === SyntaxKind.ParenthesizedExpression || recv.kind === SyntaxKind.AsExpression)) recv = recv.expression;
+        if (recv === undefined || !isIdentifier(recv)) return undefined;
         const method = String(call.expression.name.text);
         const args: any[] = Array.from(call.arguments ?? []);
         const lit = (a) => a !== undefined && this.rustNativeStringLiteralArg(a) !== undefined;
@@ -6423,8 +6425,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
         if (shape === 'affix') return { recv, recvKind, method, kind: 'bool' };
         if (shape === 'find') return this.rustStrFindNeedle(args[0], false) === undefined ? undefined : { recv, recvKind, method, kind: 'int' };
-        // pad / slice only on a typed local (a parameter read would copy its `Value` and turn a null into "")
-        if ((shape === 'pad' || shape === 'slice') && this.rustScalarIdentifierKind(recv) === undefined) return undefined;
+        // pad / slice on a typed local, or on a typed parameter read: a `&str` parameter's binding is never `Null`
+        // (callers and dispatch arms convert once), an `Option<&str>` one keeps `None` through the `if let` form
+        if ((shape === 'pad' || shape === 'slice') && this.rustScalarIdentifierKind(recv) === undefined && this.rustScalarParamRead(recv) === undefined) return undefined;
         if (recvKind === 'ostr' && shape !== 'case' && shape !== 'replace' && shape !== 'pad' && shape !== 'slice') return undefined;
         return { recv, recvKind, method, kind: recvKind };
     }
@@ -6644,6 +6647,8 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(node.expression.name.text);
         const args: any[] = Array.from(node.arguments ?? []);
         const math = isIdentifier(recv) && recv.text === 'Math' && (name === 'min' || name === 'max') && args.length === 2;
+        const unary = this.rustMathFloatCall(node);
+        if (unary !== undefined) return unary;
         if (!math && recv.kind !== SyntaxKind.ThisKeyword) return undefined;
         if (!math) {
             if (!this.rustArithBaseCallee(node, name)) return undefined;
@@ -6654,6 +6659,10 @@ export class RustTranspiler extends BaseTranspiler {
             if (name !== 'sum' || args.length < 2) return undefined;
         }
         const kinds = args.map((a) => this.rustArithOperandKind(a));
+        // `Math.min|max` with an optional operand: the helper answers `Null` when either side is missing
+        if (math && kinds.every((k) => k !== undefined) && kinds.some((k) => k === 'oint' || k === 'onum')) {
+            return kinds.every((k) => k === 'int' || k === 'oint') ? 'oint' : 'onum';
+        }
         if (kinds.some((k) => k !== 'int' && k !== 'num')) return undefined;
         // the helper folds left through Int sums before a Float joins; only two operands are exactly one f64 op
         return kinds.every((k) => k === 'int') ? 'int' : (args.length === 2 ? 'num' : undefined);
@@ -6687,7 +6696,44 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return false;
         const name = String(node.expression.name.text);
         const recv: any = node.expression.expression;
-        return (name === 'sum' && recv.kind === SyntaxKind.ThisKeyword) || ((name === 'min' || name === 'max') && isIdentifier(recv) && recv.text === 'Math');
+        return (name === 'sum' && recv.kind === SyntaxKind.ThisKeyword) || ((name === 'min' || name === 'max') && isIdentifier(recv) && recv.text === 'Math')
+            || this.rustMathFloatShape(node);
+    }
+
+    // ── Math.floor / round / ceil / abs / pow over typed numeric operands (rustMathFloatCall) ──
+    // The runtime helpers answer `Float(op(as_f64(x)))` (`Float(x.powf(y))`) for a numeric operand and `Null` for a
+    // missing one, so over an `int` / `num` operand the result is exactly an `f64`, and over an `oint` / `onum`
+    // operand exactly an `Option<f64>` (`None` where the helper answers `Null`). `Math.abs` keeps an `Int` as `Int`,
+    // so it is taken only over `num` / `onum` operands.
+    private static readonly RUST_MATH_FLOAT_OPS = new Set([ 'floor', 'round', 'ceil', 'abs', 'pow' ]);
+
+    rustMathFloatShape(node): boolean {
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return false;
+        const recv: any = node.expression.expression;
+        const name = String(node.expression.name.text);
+        return isIdentifier(recv) && recv.text === 'Math' && RustTranspiler.RUST_MATH_FLOAT_OPS.has(name) && node.arguments.length === (name === 'pow' ? 2 : 1)
+            && !Array.from(node.arguments).some((a: any) => a.kind === SyntaxKind.SpreadElement);
+    }
+
+    rustMathFloatCall(node): string | undefined {
+        if (!this.rustMathFloatShape(node)) return undefined;
+        const name = String(node.expression.name.text);
+        const kinds = Array.from(node.arguments).map((a: any) => this.rustScalarNumericKind(a));
+        if (kinds.some((k) => k === undefined)) return undefined;
+        if (name === 'abs' && kinds[0] !== 'num' && kinds[0] !== 'onum') return undefined;
+        if (name === 'pow') return kinds.every((k) => k === 'int' || k === 'num') ? 'num' : undefined;
+        return kinds[0] === 'int' || kinds[0] === 'num' ? 'num' : 'onum';
+    }
+
+    rustMathFloatText(node): string {
+        const name = String(node.expression.name.text);
+        const args: any[] = Array.from(node.arguments);
+        // path calls (`f64::powf(a, b)`): a float literal receiver would be an ambiguous `{float}` for method syntax
+        if (name === 'pow') return `f64::powf(${this.rustScalarOperandText('num', args[0])}, ${this.rustScalarOperandText('num', args[1])})`;
+        const k = this.rustScalarNumericKind(args[0]);
+        if (k === 'int' || k === 'num') return `f64::${name}(${this.rustScalarOperandText('num', args[0])})`;
+        const opt = this.rustScalarOperandText(k, args[0]);
+        return `(if let Some(__x) = ${opt} { Some(f64::${name}(${k === 'oint' ? '__x as f64' : '__x'})) } else { None })`;
     }
 
     rustArithCallText(kind: string, expr): string | undefined {
@@ -6696,6 +6742,24 @@ export class RustTranspiler extends BaseTranspiler {
         if (own === undefined || (kind !== own && kind !== `o${own}` && !(kind === 'num' && own === 'int'))) return undefined;
         const name = String(node.expression.name.text);
         let text: string;
+        if (this.rustMathFloatShape(node)) {
+            const t = this.rustMathFloatText(node);
+            return kind === own ? t : (own === 'num' && kind === 'onum' ? `Some(${t})` : undefined);
+        }
+        if (own === 'oint' || own === 'onum') {
+            if (kind !== own) return undefined;
+            const base = own.slice(1);
+            const ty = base === 'int' ? 'i64' : 'f64';
+            const sides = Array.from(node.arguments).map((a: any, i: number) => {
+                const k = this.rustArithOperandKind(a);
+                if (k === 'oint' || k === 'onum') return { opt: this.rustScalarOperandText(k, a), bind: `__m${i}`, use: base === 'num' && k === 'oint' ? `(__m${i} as f64)` : `__m${i}` };
+                return { use: this.rustScalarOperandText(base, a) };
+            });
+            const opts = sides.filter((x: any) => x.opt !== undefined);
+            const pat = opts.length === 1 ? `Some(${opts[0].bind})` : `(${opts.map((x: any) => `Some(${x.bind})`).join(', ')})`;
+            const scrut = opts.length === 1 ? opts[0].opt : `(${opts.map((x: any) => x.opt).join(', ')})`;
+            return `(if let ${pat} = ${scrut} { Some(${ty}::${name}(${sides[0].use}, ${sides[1].use})) } else { None })`;
+        }
         if (this.rustBaseTypedReturnKind(node) === 'int') text = this.rustBaseTypedBareText(node);
         else if (RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name)) text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or_default()`;
         else if (RustTranspiler.RUST_SCALAR_INT_HELPERS[name] !== undefined) text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or(${this.rustScalarIntLiteral(node.arguments[node.arguments.length - 1])})`;
@@ -6817,7 +6881,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isCallExpression(call) || !this.rustArithCombinator(call) || call.arguments.length !== 2) return undefined;
         const callee: any = call.expression;
         const name = String(callee.name.text);
-        if (name === 'sum') return undefined;
+        if (name !== 'min' && name !== 'max') return undefined;
         const [ a, b ]: any[] = Array.from(call.arguments).map((x: any) => this.unwrapParens(x));
         const sameParam = (x: any) => isIdentifier(x) && this.rustDeclaredNode(x) === this.rustDeclaredNode(param);
         const cap: any = sameParam(a) ? b : (sameParam(b) ? a : undefined);
