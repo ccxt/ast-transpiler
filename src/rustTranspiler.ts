@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { NodeFlags, SyntaxKind, type Block, type CallExpression, type Declaration, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
-import { isArrayBindingPattern, isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration } from "typescript/unstable/ast/is";
+import { isArrayBindingPattern, isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 import * as fs from 'fs';
@@ -6049,7 +6049,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustScalarAliasScope === undefined || this.rustEnclosingFunction(node) !== this.rustScalarAliasScope) return this.rustScalarAliasPrinted.has(node);
         const source: any = this.rustDeclarationOfIdentifier(node);
         if (source === undefined || !isVariableDeclaration(source) || !isIdentifier(source.name) || source.name === node || source.initializer === undefined) return false;
-        if (this.literalKindOfNode(source.initializer) === 'null' || source.parent?.kind !== SyntaxKind.VariableDeclarationList || source.parent.declarations.length !== 1) return false;
+        if (this.literalKindOfNode(source.initializer) === 'null' || source.parent === undefined || !isVariableDeclarationList(source.parent) || source.parent.declarations.length !== 1) return false;
         if (this.rustEnclosingFunction(source) !== this.rustEnclosingFunction(node) || this.primitiveKindOfType(this.typeOfNodeIfAny(source.name)) !== 'string') return false;
         // the producer is proven string-or-undefined: a safeString-family reader, a string-kinded scalar source, or a string element
         const init: any = this.unwrapParens(source.initializer);
@@ -6066,6 +6066,7 @@ export class RustTranspiler extends BaseTranspiler {
         const target: any = isIdentifier(top.parent?.left) ? this.rustDeclaredNode(top.parent.left) : undefined;
         if (target === undefined || !isVariableDeclaration(target)) return false;
         let returned = false;
+        if (!isIdentifier(target.name)) return false;
         this.rustLocalUsesAll(target, String(target.name.text), false, (n: any) => { if (isReturnStatement(n.parent)) returned = true; return true; });
         if (target !== this.rustScalarAliasTarget || returned || !this.rustLocalLastUse(node, source)) return false;
         this.rustScalarAliasPrinted.add(node);
@@ -20636,7 +20637,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword && String(n.expression.name.text) === 'safeString'
                 && n.arguments.length >= 2 && n.arguments.length <= 3 && !isStringLiteralLikeNode(n.arguments[1]) && (n.arguments[2] === undefined || isStringLiteralLikeNode(n.arguments[2]))) {
                 const list = this.rustWsHashListPatterns(n.arguments[0], 1);
-                if (list !== undefined && list.length > 0) return n.arguments[2] === undefined ? list : [ ...list, [ String(n.arguments[2].text) ] ];
+                const dflt = n.arguments[2];
+                if (list !== undefined && list.length > 0) return dflt === undefined || !isStringLiteralLikeNode(dflt) ? list : [ ...list, [ String(dflt.text) ] ];
             }
             return this.rustWsReturnPatterns(n, depth, seen) ?? any;
         }
