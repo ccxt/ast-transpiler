@@ -14584,3 +14584,48 @@ describe('ral-zb lift 3: a sum local over a typed-signature Int parameter is Opt
         expect(out).not.toContain('let mut end: Option<i64>');
     });
 });
+
+describe('ral-zh: sign params of a venue whose every request-path caller hands a map', () => {
+    const write = (name: string, venue: string, caller: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    omit (x: any, ...args: any): any { return x; }\n    extend (...args: any): any { return {}; }\n    extractParams (s: string): string[] { return []; }\n    urlencode (o: any): string { return ''; }\n    json (o: any): string { return ''; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/' + name + '.ts'), "import _Exchange from '../base/Exchange.js';\nexport default abstract class Exchange extends _Exchange {\n    publicGetX (params = {}): Promise<any> {\n        return this.omit (params);\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/' + name + '.ts'), "import Exchange from './abstract/" + name + ".js';\nimport type { Dict } from './base/Exchange.js';\nexport default class " + name + " extends Exchange {\n" + caller + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/' + name + '.ts')).content;
+    };
+    const sign = "    sign (path: string, api = 'public', method = 'GET', params = {}, headers: any = undefined, body: any = undefined) {\n        let url = '/' + path;\n        const query = this.omit (params, this.extractParams (path));\n        if (Object.keys (query).length) {\n            url += '?' + this.urlencode (query);\n        }\n        body = this.json (query);\n        return [ url, body ];\n    }\n";
+    test('every implicit-endpoint caller passes a map: the omit of sign params holds the Dict', () => {
+        const out = write ('zhsignok', sign, "    async f (params: Dict = {}) {\n        const request: Dict = { 'a': 1 };\n        return await this.publicGetX (this.extend (request, params));\n    }\n");
+        expect(out).toContain('let mut query: crate::value::Dict = ');
+    });
+    test('negative: one caller passes a list body: the omit keeps its box', () => {
+        const out = write ('zhsignlist', sign, "    async f (params: Dict = {}) {\n        return await this.publicGetX ([ params ]);\n    }\n");
+        expect(out).not.toContain('let mut query: crate::value::Dict = ');
+    });
+    test('negative: a dynamic this[name] call keeps the box', () => {
+        const out = write ('zhsigndyn', sign, "    async f (name: string, params: Dict = {}) {\n        return await this[name] (params);\n    }\n");
+        expect(out).not.toContain('let mut query: crate::value::Dict = ');
+    });
+});
+
+describe('ral-zh: an Object.keys key list with a same-named twin in a sibling block holds the list', () => {
+    test('two throwing branches each list Object.keys (m): both lists are crate::value::List, joined natively', () => {
+        const dir = path.join (rustFixtureRoot, 'zhkeys');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeString (x: any, k: any, d: any = undefined): any { return x; }\n    safeDict (x: any, k: any, d: any = undefined): any { return x; }\n    options: any = {};\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (a: string, b: string) {\n        const accounts = this.safeDict (this.options, 'accountsByType', {});\n        const fromId = this.safeString (accounts, a);\n        if (fromId === undefined) {\n            const keys = Object.keys (accounts);\n            throw new Error ('from must be one of ' + keys.join (', '));\n        }\n        const toId = this.safeString (accounts, b);\n        if (toId === undefined) {\n            const keys = Object.keys (accounts);\n            throw new Error ('to must be one of ' + keys.join (', '));\n        }\n        return [ fromId, toId ];\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out.match(/let mut keys: crate::value::List = /g)?.length).toBe(2);
+        expect(out).not.toContain('let mut keys: Value = ');
+    });
+    test('negative: twin key lists of a this.<field> store (ws cache) keep their box', () => {
+        const dir = path.join (rustFixtureRoot, 'zhkeysn');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    tickers: any = {};\n    bidsasks: any = {};\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (t: boolean) {\n        const out = [];\n        if (t) {\n            const symbols = Object.keys (this.tickers);\n            for (let i = 0; i < symbols.length; i++) {\n                out.push (symbols[i]);\n            }\n        } else {\n            const symbols = Object.keys (this.bidsasks);\n            for (let i = 0; i < symbols.length; i++) {\n                out.push (symbols[i]);\n            }\n        }\n        return out;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).not.toContain('let mut symbols: crate::value::List = ');
+    });
+});

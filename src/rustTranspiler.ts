@@ -4,6 +4,7 @@ import { isArrayBindingPattern, isArrayLiteralExpression, isArrowFunction, isAsE
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 import * as fs from 'fs';
+import * as tsSync from "typescript/unstable/sync";
 
 // ── type-keyed native forms ──
 // A plain place path (`a`, `self.a.b`): side-effect-free, so it may be read twice or evaluated eagerly.
@@ -19400,7 +19401,169 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         const slot = typed?.params?.[at];
+        if (slot === undefined && String(fn.name?.text) === 'sign' && at === 3) return this.rustSignParamsProvenMap(fn) && !this.rustLocalIsReassigned(d, String(d.name.text));
         return slot !== undefined && String(slot.rustType).startsWith('impl Into<crate::Params>') && !this.rustLocalIsReassigned(d, String(d.name.text));
+    }
+
+    private static readonly RUST_SIGN_MAP_PROOF = new Map<string, boolean>();
+    private static rustSignProofApi: any;
+
+    /** A venue `sign (path, api, method, params)` whose `params` is a map on every path. `params` reaches `sign` only
+     *  through `fetch2` (from `request`, every implicit endpoint and the venue's own direct calls); the base declares
+     *  it `Dict`, but a list body passes through untouched (`omit` hands a list back, and `into_dict()` would empty
+     *  it). So the venue is proven when every request-path call in its own file, its pro file and each subclass file
+     *  that inherits this `sign` hands over a map: an object literal, a map builder (`extend`, `deepExtend`,
+     *  `keysort`, `ordered`, `omit` of a proven map), a `Dict` parameter, a `handle*AndParams` params slot, a method
+     *  declared `Dict`, or a local whose every write is one of these. Any list literal, any dynamic `this[name] (..)`
+     *  / `callDynamically` call, or anything else unproven fails the venue (fail closed). */
+    rustSignParamsProvenMap(fn: any): boolean {
+        const file = String(fn.getSourceFile().fileName).replace(/\\/g, '/');
+        const m = /^(.*ts\/src\/)((?:prediction\/)?[a-z0-9]+)\.ts$/.exec(file);
+        if (m === null || isClassExpression(fn.parent)) return false;
+        const key = m[1] + m[2];
+        const hit = RustTranspiler.RUST_SIGN_MAP_PROOF.get(key);
+        if (hit !== undefined) return hit;
+        RustTranspiler.RUST_SIGN_MAP_PROOF.set(key, false); // installed first: a throwing proof admits nothing
+        let ok = false;
+        try {
+            ok = this.rustSignParamsProofUncached(m[1], m[2]);
+        } catch (e) {
+            ok = false;
+        }
+        RustTranspiler.RUST_SIGN_MAP_PROOF.set(key, ok);
+        return ok;
+    }
+
+    rustSignParamsProofUncached(root: string, venue: string): boolean {
+        const api: any = (RustTranspiler.rustSignProofApi ??= new (tsSync as any).API({ cwd: process.cwd() }));
+        const dirs = venue.startsWith('prediction/') ? [ 'prediction/' ] : [ '', 'pro/' ];
+        const parsed = new Map<string, any>();
+        const parse = (rel: string): any => {
+            if (!parsed.has(rel)) parsed.set(rel, fs.existsSync(root + rel + '.ts') ? api.createSourceFile(root + rel + '.ts', fs.readFileSync(root + rel + '.ts', 'utf8')) : undefined);
+            return parsed.get(rel);
+        };
+        const classOf = (sf: any): any => sf?.statements?.find((s: any) => isClassDeclaration(s));
+        const ownMethod = (cls: any, name: string): any => cls?.members?.find((x: any) => isMethodDeclaration(x) && String((x.name as any)?.text) === name);
+        const parentOf = (rel: string): string | undefined => {
+            const sf = parse(rel);
+            const cls = classOf(sf);
+            const base = cls?.heritageClauses?.[0]?.types?.[0]?.expression;
+            if (base === undefined || !isIdentifier(base)) return undefined;
+            for (const st of sf.statements) {
+                if (st.kind !== SyntaxKind.ImportDeclaration || st.importClause?.name?.text !== base.text) continue;
+                const spec = String(st.moduleSpecifier.text).replace(/\.js$/, '');
+                if (!spec.startsWith('.') || spec.includes('abstract') || spec.includes('base/')) return undefined;
+                const parts = (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/') + 1) : '').split('/').filter((x) => x !== '');
+                for (const seg of spec.split('/')) {
+                    if (seg === '..') parts.pop(); else if (seg !== '.') parts.push(seg);
+                }
+                return parts.join('/');
+            }
+            return undefined;
+        };
+        const files: string[] = [];
+        for (const dir of dirs) {
+            if (!fs.existsSync(root + dir)) continue;
+            for (const f of fs.readdirSync(root + dir)) if (f.endsWith('.ts')) files.push(dir + f.slice(0, -3));
+        }
+        // the files whose `sign` is this venue's: the venue, and every descendant with no own `sign` below it
+        const owners = files.filter((rel) => {
+            let r: string | undefined = rel;
+            const seen = new Set<string>();
+            while (r !== undefined && !seen.has(r)) {
+                seen.add(r);
+                if (r === venue) return true;
+                if (!r.startsWith('pro/') && ownMethod(classOf(parse(r)), 'sign') !== undefined) return false;
+                r = parentOf(r);
+            }
+            return false;
+        });
+        if (!owners.includes(venue)) return false;
+        const names = new Set<string>([ 'request', 'fetch2' ]);
+        const abstractOf = (rel: string) => {
+            const a = root + 'abstract/' + rel.replace(/^pro\//, '') + '.ts';
+            if (!fs.existsSync(a)) return;
+            for (const mm of fs.readFileSync(a, 'utf8').matchAll(/^ {4}([A-Za-z0-9]+) \(params/gm)) names.add(mm[1]);
+        };
+        for (let r: string | undefined = venue; r !== undefined; r = parentOf(r)) abstractOf(r);
+        if (names.size === 2) return false; // no implicit-endpoint table found: the callers are unknown
+        const thisCall = (n: any) => n !== undefined && isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword;
+        const builders = new Set<string>([ 'extend', 'deepExtend', 'keysort', 'ordered' ]);
+        const declaredDict = (sf: any, rel: string, name: string): boolean => {
+            for (let r: string | undefined = rel; r !== undefined; r = parentOf(r)) {
+                const md = ownMethod(classOf(parse(r)), name);
+                if (md !== undefined) return md.type !== undefined && /^(?:Promise<)?Dict>?$/.test(String(md.type.getText()));
+            }
+            return false;
+        };
+        const enclosingFn = (n: any): any => {
+            let x = n.parent;
+            while (x !== undefined && !isFunctionLike(x)) x = x.parent;
+            return x;
+        };
+        const isMap = (sf: any, rel: string, arg: any, depth: number): boolean => {
+            if (arg === undefined) return true; // the `{}` default
+            if (depth > 6) return false;
+            while (isParenthesizedExpression(arg) || isAsExpression(arg) || arg.kind === SyntaxKind.AwaitExpression) arg = arg.expression;
+            if (isObjectLiteralExpression(arg)) return true;
+            if (isConditionalExpression(arg)) return isMap(sf, rel, arg.whenTrue, depth + 1) && isMap(sf, rel, arg.whenFalse, depth + 1);
+            if (thisCall(arg)) {
+                const callee = String(arg.expression.name.text);
+                if (builders.has(callee)) return true;
+                if (callee === 'omit') return isMap(sf, rel, arg.arguments[0], depth + 1);
+                return declaredDict(sf, rel, callee);
+            }
+            if (!isIdentifier(arg)) return false;
+            const fnNode = enclosingFn(arg);
+            if (fnNode === undefined) return false;
+            const p = Array.from(fnNode.parameters ?? []).find((x: any) => isIdentifier(x.name) && x.name.text === arg.text) as any;
+            if (p !== undefined) return p.type !== undefined && /^Dict\b/.test(String(p.type.getText())) || (p.type === undefined && p.initializer !== undefined && isObjectLiteralExpression(p.initializer));
+            let writes = 0;
+            let good = true;
+            const visit = (n: any) => {
+                if (!good) return;
+                if (isVariableDeclaration(n) && isIdentifier(n.name) && n.name.text === arg.text) {
+                    writes++;
+                    good = n.initializer !== undefined && isMap(sf, rel, n.initializer, depth + 1);
+                } else if (isBindingElement(n) && isIdentifier(n.name) && n.name.text === arg.text) {
+                    writes++;
+                    const init = (n.parent as any)?.parent?.initializer;
+                    good = (n.parent as any).elements.indexOf(n) >= 1 && thisCall(init) && /AndParams/.test(String(init.expression.name.text))
+                        && Array.from(init.arguments).some((x: any) => isMap(sf, rel, x, depth + 1));
+                } else if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken) {
+                    if (isIdentifier(n.left) && n.left.text === arg.text) {
+                        writes++;
+                        good = isMap(sf, rel, n.right, depth + 1);
+                    } else if (isArrayLiteralExpression(n.left) && n.left.elements.some((e: any) => isIdentifier(e) && e.text === arg.text)) {
+                        writes++;
+                        const at = n.left.elements.findIndex((e: any) => isIdentifier(e) && e.text === arg.text);
+                        const rhs: any = n.right;
+                        good = at >= 1 && thisCall(rhs) && /AndParams/.test(String(rhs.expression.name.text))
+                            && Array.from(rhs.arguments).some((x: any) => isMap(sf, rel, x, depth + 1));
+                    }
+                }
+                n.forEachChild?.(visit);
+            };
+            visit(fnNode.body);
+            return good && writes > 0;
+        };
+        for (const rel of owners) {
+            const sf = parse(rel);
+            let ok = true;
+            const visit = (n: any) => {
+                if (!ok) return;
+                if (isElementAccessExpression(n) && n.expression.kind === SyntaxKind.ThisKeyword && isCallExpression(n.parent) && n.parent.expression === n) ok = false;
+                else if (thisCall(n) && String(n.expression.name.text) === 'callDynamically') ok = false;
+                else if (thisCall(n) && names.has(String(n.expression.name.text))) {
+                    const callee = String(n.expression.name.text);
+                    if (!isMap(sf, rel, (callee === 'request' || callee === 'fetch2') ? n.arguments[3] : n.arguments[0], 0)) ok = false;
+                }
+                n.forEachChild?.(visit);
+            };
+            visit(sf);
+            if (!ok) return false;
+        }
+        return true;
     }
 
     /** The `params` slot of a typed unified call (`impl Into<crate::Params> + Send`): `From<Value> for Params` takes the
@@ -19733,7 +19896,12 @@ export class RustTranspiler extends BaseTranspiler {
         const boxes: [any, 'clone' | 'move'][] = [];
         let natives = 0;
         // a same-named `let`/`const` in a sibling block is another binding
-        const usesAll = (accept: (n: any) => boolean): boolean => (defaulted ? this.rustScalarUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept));
+        // a same-named `const` key list in a sibling block (`Object.keys (m)` in two throwing branches) is another binding
+        // (never a ws store / field key list: the receiver is a plain local or parameter)
+        const objectList = isCallExpression(init) && isPropertyAccessExpression(init.expression) && isIdentifier(init.expression.expression) && init.expression.expression.text === 'Object'
+            && init.arguments.length === 1 && isIdentifier(this.rustSkipWrappers(init.arguments[0]));
+        const usesAll = (accept: (n: any) => boolean): boolean => (defaulted ? this.rustScalarUsesAll(declaration, name, accept)
+            : (objectList ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept)));
         const safe = usesAll((n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
