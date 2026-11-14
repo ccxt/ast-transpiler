@@ -5737,7 +5737,7 @@ export class RustTranspiler extends BaseTranspiler {
             for (const r of files) {
                 if (!ok) break;
                 const text = fs.readFileSync(`${root}/${r}`, 'utf8');
-                if (/this\.options\s*=(?!=)/.test(text) || /this\.options\[\s*[^'"\s\]]/.test(text.replace(/this\.options\[\s*[^'"\s\]][^\]]*\]\s*(?![=\[])/g, ''))) { ok = false; break; }
+                if (/this\.options\s*=(?!=)/.test(text) || /this\.options\[\s*[^'"\s\]]/.test(text.replace(/this\.options\[\s*[^'"\s\]][^\]]*\]\s*(?![=[])/g, ''))) { ok = false; break; }
                 for (const m of text.matchAll(new RegExp(`(?:['"]${key}['"]\\s*:|options\\[['"]${key}['"]\\]\\s*=(?!=))\\s*([^,}\\n]*)`, 'g'))) {
                     writes++;
                     const v = m[1].trim().replace(/\s*\/\/.*$/, '').replace(/[;,]\s*$/, '');
@@ -5895,56 +5895,62 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustBlockLocalUsesAll(declaration, name, acceptUse, true);
     }
 
-    /** zi: `rustLocalUsesAll` for a `const [ .. ] = ..` slot: a same-named slot of another `let` / `const` destructure in a
-     *  disjoint sibling block (`if { const [ r, p ] = .. } else { const [ r, p ] = .. }`) is another symbol, printed as its
-     *  own block-scoped `let`, so its name and uses are skipped. Any other second binding of the name keeps the old walk. */
+    /** zi: a `const [ .. ] = ..` slot goes through the same per-binding walk (rustBlockLocalUsesAll). */
     rustSlotUsesAll(element: any, name: string, skipPropertyNames: boolean, acceptUse: (n: any) => boolean): boolean {
-        const statementOf = (b: any) => b?.parent?.parent?.parent?.parent;
-        const own: any = element?.kind === SyntaxKind.BindingElement ? this.rustSymbolOf(element.name) : undefined;
-        const scope: any = this.rustEnclosingFunction(element);
-        const blockScoped = (b: any) => b?.kind === SyntaxKind.BindingElement && b.parent?.kind === SyntaxKind.ArrayBindingPattern
-            && isVariableDeclaration(b.parent.parent) && (b.parent.parent.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) !== 0;
-        if (own === undefined || scope === undefined || !blockScoped(element)) return this.rustLocalUsesAll(element, name, skipPropertyNames, acceptUse);
-        const nodes = this.rustScopeNameNodes(scope, name) as any[];
-        const siblings = nodes.filter((n: any) => isIdentifier(n) && n !== element.name && n.parent?.kind === SyntaxKind.BindingElement && n.parent.name === n);
-        if (siblings.length === 0 || nodes.some((n: any) => n !== element && this.rustBindsName(n, name))) return this.rustLocalUsesAll(element, name, skipPropertyNames, acceptUse);
-        const mine = statementOf(element);
-        for (const s of siblings) {
-            const other = statementOf(s.parent);
-            if (!blockScoped(s.parent) || this.rustEnclosingFunction(s) !== scope || mine === undefined || other === undefined
-                || this.isNodeInsideNode(mine, other.parent) || this.isNodeInsideNode(other, mine.parent)) return this.rustLocalUsesAll(element, name, skipPropertyNames, acceptUse);
+        return this.rustBlockLocalUsesAll(element, name, acceptUse, false, skipPropertyNames);
+    }
+
+    /** The one "decide per binding when a same-named twin sits in a sibling block" walk (round 39 merged here: zg map rows,
+     *  zh Object.keys / values key lists, zi tuple slots; za's same-spelled method-name skip lives in its use callback).
+     *  A `let` / `const` declaration whose same-named twins are other `let` / `const` declarations outside it, or a
+     *  destructure slot whose twins are slots of destructures in disjoint sibling blocks, is its own Rust block-scoped
+     *  local: only uses bound to its own symbol are walked. Any other second binding keeps the plain walk. */
+    rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar = false, skipPropertyNames = false): boolean {
+        const plain = () => this.rustLocalUsesAll(declaration, name, skipPropertyNames, acceptUse, scalar);
+        const scope = this.rustEnclosingFunction(declaration);
+        const slot = declaration?.kind === SyntaxKind.BindingElement;
+        const own: any = slot || declaration?.name !== undefined ? this.rustSymbolOf(declaration.name) : undefined;
+        let skip: any[] = [];
+        let home: any;
+        if (slot) {
+            // zi: tuple slots
+            const statementOf = (b: any) => b?.parent?.parent?.parent?.parent;
+            const blockScoped = (b: any) => b?.kind === SyntaxKind.BindingElement && b.parent?.kind === SyntaxKind.ArrayBindingPattern
+                && isVariableDeclaration(b.parent.parent) && (b.parent.parent.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) !== 0;
+            if (own === undefined || scope === undefined || !blockScoped(declaration)) return plain();
+            const nodes = this.rustScopeNameNodes(scope, name) as any[];
+            skip = nodes.filter((n: any) => isIdentifier(n) && n !== declaration.name && isBindingElement(n.parent) && n.parent.name === n);
+            if (skip.length === 0 || nodes.some((n: any) => n !== declaration && this.rustBindsName(n, name))) return plain();
+            const mine = statementOf(declaration);
+            for (const s of skip) {
+                const other = statementOf(s.parent);
+                if (!blockScoped(s.parent) || this.rustEnclosingFunction(s) !== scope || mine === undefined || other === undefined
+                    || this.isNodeInsideNode(mine, other.parent) || this.isNodeInsideNode(other, mine.parent)) return plain();
+            }
+            home = mine.parent;
+            return this.rustBindingUsesWalk(declaration, nodes, own, home, skip, skipPropertyNames, acceptUse, false);
         }
+        if (own === undefined || scope === undefined || (declaration.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) === 0) return plain();
+        const nodes = this.rustScopeNameNodes(scope, name) as any[];
+        const siblings = nodes.filter((n) => n !== declaration && this.rustBindsName(n, name));
+        if (siblings.length === 0) return plain();
+        for (const n of siblings) {
+            if (!isVariableDeclaration(n) || (n.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) === 0 || this.rustEnclosingFunction(n) !== scope
+                || this.isNodeInsideNode(declaration, n.parent?.parent ?? n) || this.isNodeInsideNode(n, declaration.parent?.parent ?? declaration)) return false;
+        }
+        home = declaration.parent?.parent?.parent ?? declaration;
+        return this.rustBindingUsesWalk(declaration, nodes, own, home, skip, skipPropertyNames, acceptUse, scalar);
+    }
+
+    rustBindingUsesWalk(declaration: any, nodes: any[], own: any, home: any, skip: any[], skipPropertyNames: boolean, acceptUse: (n: any) => boolean, scalar: boolean): boolean {
         for (const n of nodes) {
-            if (n.kind !== SyntaxKind.Identifier || n === element.name || siblings.includes(n)) continue;
+            if (n.kind !== SyntaxKind.Identifier || n === declaration.name || skip.includes(n)) continue;
             if (skipPropertyNames && this.rustIdentifierIsPropertyName(n)) continue;
             if (n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment && !this.rustIdentifierIsPropertyName(n)) {
                 const symbol = this.rustSymbolOf(n);
                 if (symbol === undefined) return false;
                 if (symbol !== own) continue;
-            } else if (!this.isNodeInsideNode(n, mine.parent)) continue;
-            if (!acceptUse(n)) return false;
-        }
-        return true;
-    }
-
-    rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar = false): boolean {
-        const own: any = this.rustSymbolOf(declaration.name);
-        const scope = this.rustEnclosingFunction(declaration);
-        if (own === undefined || scope === undefined || (declaration.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) === 0) return this.rustLocalUsesAll(declaration, name, false, acceptUse, scalar);
-        const nodes = this.rustScopeNameNodes(scope, name) as any[];
-        const siblings = nodes.filter((n) => n !== declaration && this.rustBindsName(n, name));
-        if (siblings.length === 0) return this.rustLocalUsesAll(declaration, name, false, acceptUse, scalar);
-        for (const n of siblings) {
-            if (!isVariableDeclaration(n) || (n.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) === 0 || this.rustEnclosingFunction(n) !== scope
-                || this.isNodeInsideNode(declaration, n.parent?.parent ?? n) || this.isNodeInsideNode(n, declaration.parent?.parent ?? declaration)) return false;
-        }
-        for (const n of nodes) {
-            if (n.kind !== SyntaxKind.Identifier || n === declaration.name) continue;
-            if (n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment && !this.rustIdentifierIsPropertyName(n)) {
-                const symbol = this.rustSymbolOf(n);
-                if (symbol === undefined) return false;
-                if (symbol !== own) continue;
-            } else if (!this.isNodeInsideNode(n, declaration.parent?.parent?.parent ?? declaration)) continue;
+            } else if (!this.isNodeInsideNode(n, home)) continue;
             if (!acceptUse(n)) return false;
             if (!scalar) continue;
             // a string re-boxed at a by-value slot copies where the `Value` moved: keep those boxed

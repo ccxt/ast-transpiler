@@ -14227,7 +14227,7 @@ describe('ral-yb: counter-indexed bind not followed by a write-back mutation (ro
     const fn = (body: string) => transpiler.transpileRust("class X {\n    f (p: any) {\n        const r = [];\n        const xs = this.safeValue (p, 'x');\n        for (let i = 0; i < xs.length; i++) {\n" + body + "\n        }\n        return r;\n    }\n}").content;
     const cases: [ string, string, string[], string[] ][] = [
         [ 'next statement is an if reassigning the bind: the key boxes the i64 counter', "            let x = xs[i];\n            if (x['a'] === undefined) { x = this.safeDict (x, 'b'); }\n            r.push (x);", [ 'let mut i: i64 = 0;', 'get_value(&xs, &Value::Int(i))' ], [ 'let mut i: Value' ] ],
-        [ 'next statement writes into the bind: the counter stays Value for the write-back pass', "            const x = xs[i];\n            x['a'] = 1;\n            r.push (x);", [ 'let mut i: Value' ], [ 'let mut i: i64' ] ],
+        [ 'next statement writes into the bind: the i64 counter keys it as &Value::Int(i), which the write-back pass matches (ral-zf)', "            const x = xs[i];\n            x['a'] = 1;\n            r.push (x);", [ 'let mut i: i64', 'get_value(&xs, &Value::Int(i))' ], [ 'let mut i: Value' ] ],
     ];
     test.each(cases)('%s', (_name, body, has, hasNot) => {
         const out = fn(body);
