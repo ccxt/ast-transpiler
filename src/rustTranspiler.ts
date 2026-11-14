@@ -18277,6 +18277,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (String(init.getText()).split('\n')[0].length > 120 || !this.rustBuiltListWriteSource(init)) return false;
         const boxes: [any, 'clone' | 'move' | 'lend'][] = [];
         let natives = 0;
+        let handOffs = 0;
         // the boxed hand-off lengthens its statement
         const short = (n: any): boolean => { let st: any = n; while (st !== undefined && !isStatement(st)) st = st.parent; return st !== undefined && String(st.getText()).split('\n')[0].length <= 160; };
         const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
@@ -18312,6 +18313,19 @@ export class RustTranspiler extends BaseTranspiler {
                 boxes.push([n, hashSlot]);
                 return true;
             }
+            // ws `client.resolve|reject(value, hash)` takes `impl Into<Value>`: the list moves at its last use, else is lent
+            if (this.rustLentWsSettleSlot(up, n)) {
+                boxes.push([n, this.rustLocalLastUse(n, declaration) ? 'move' : 'lend']);
+                handOffs++;
+                return true;
+            }
+            // `Promise.all(x)` reads its operand once: the list moves into the box at its last use
+            if (this.rustBuiltListPromiseAllOperand(up, n)) {
+                if (!this.rustLocalLastUse(n, declaration) || !short(n)) return false;
+                boxes.push([n, 'move']);
+                handOffs++;
+                return true;
+            }
             if (isCallExpression(up) && up.expression !== n && up.arguments.some((a: any) => a === n)) {
                 const callee: any = up.expression;
                 if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || !short(n)
@@ -18322,11 +18336,18 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return false;
         });
-        // a list that is only built and boxed straight back keeps its box
-        if (!safe || natives === 0) return false;
+        // a list with no native use is typed only when every use is a ws settle / Promise.all hand-off that moves or lends it
+        if (!safe || (natives === 0 && (handOffs === 0 || handOffs !== boxes.length || boxes.some(([, form]) => form === 'clone')))) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         this.rustBuiltLists.add(declaration);
         return true;
+    }
+
+    /** `Promise.all(x)` with `x` its only argument (printed `promise_all(&x)`). */
+    rustBuiltListPromiseAllOperand(call: any, n: any): boolean {
+        if (!isCallExpression(call) || call.arguments.length !== 1 || call.arguments[0] !== n) return false;
+        const callee: any = call.expression;
+        return isPropertyAccessExpression(callee) && isIdentifier(callee.expression) && callee.expression.text === 'Promise' && String(callee.name.text) === 'all';
     }
 
     /** `x = this.m(.., x, ..)` naming `x` only there and on the left: the old list moves into the call before the write. */

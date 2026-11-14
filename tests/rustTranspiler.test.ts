@@ -11419,3 +11419,21 @@ describe('ral-ne: market flags, unified-row string fields and padded strings', (
         expect(out).not.toContain('let mut s: Value');
     });
 });
+
+describe('rust built lists handed to ws settle / Promise.all', () => {
+    const src = (body: string) => transpiler.transpileRust(`class T {\n    async g (x: any) { return x; }\n    async f (client: any, a: any, b: any) {\n${body}\n    }\n}`).content;
+    test('a pushed list resolved at its last use moves', () => {
+        const out = src("        const rows: any[] = [];\n        rows.push (a);\n        client.resolve (rows, 'h');");
+        expect(out).toMatch(/let mut rows: crate::value::List = /);
+        expect(out).toMatch(/client\.resolve\(Value::Arr\(rows\), "h"\)/);
+    });
+    test('a Promise.all operand list moves into the box', () => {
+        const out = src('        const ps = [ this.g (a), this.g (b) ];\n        const r = await Promise.all (ps);\n        return r;');
+        expect(out).toMatch(/let mut ps: crate::value::List = /);
+        expect(out).toMatch(/promise_all\(&Value::Arr\(ps\)\)/);
+    });
+    test('a list only boxed to an unproven slot keeps its box', () => {
+        const out = src('        const ps = [ a, b ];\n        a.consume (ps);');
+        expect(out).toMatch(/let mut ps: Value = /);
+    });
+});
