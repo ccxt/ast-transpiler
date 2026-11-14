@@ -22415,7 +22415,8 @@ export class RustTranspiler extends BaseTranspiler {
         const optional = param.initializer !== undefined || param.questionToken !== undefined;
         if (optional && !this.rustVenueOptionalSlotOpen(method, param)) return undefined;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
-        if (file.search(/(?:^|\/)ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) < 0) return undefined;
+        // a base method no venue redeclares and no trait slot dispatches has one declaration: its parameter types alone
+        if (file.search(/(?:^|\/)ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) < 0 && !this.rustBaseOnlyMethod(method, file)) return undefined;
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return undefined;
         // a ws core's sync by-name handler table takes only `Value` / `bool` slots
         if (/(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method)) return undefined;
@@ -22444,6 +22445,26 @@ export class RustTranspiler extends BaseTranspiler {
             if (!rustType.includes('str') && args.some((a: any) => this.rustVenueArithmeticArg(a))) return undefined;
         }
         return rustType;
+    }
+
+    // Base methods whose scalar parameters print typed (measured one by one: each frees more locals than it adds
+    // conversions at its callers); a method listed here must have no venue override and no hand-written body.
+    private static readonly RUST_BASE_SCALAR_PARAM_METHODS: string[] = [ 'convertExpireDate', 'convertExpireDateToMarketIdDate', 'convertMarketIdExpireDate' ];
+
+    /** A sync method of the base `Exchange` class with no override in any venue file, no trait slot and no typed
+     *  signature: every call resolves to this one body, so typing its parameter changes no other declaration. */
+    rustBaseOnlyMethod(method: any, file: string): boolean {
+        const at = file.search(/(?:^|\/)ts\/src\/base\/(?:Exchange|\.__ExchangeNoOverloads)\.ts$/);
+        if (at < 0 || this.isAsyncFunction(method)) return false;
+        const name = String(method.name.text);
+        if (!RustTranspiler.RUST_BASE_SCALAR_PARAM_METHODS.includes(name)) return false;
+        if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
+        const root = file.slice(0, file.indexOf('ts/src/', at)) + 'ts/src';
+        let predictionOverride = false;
+        try {
+            predictionOverride = new RegExp(`^\\s+(?:(?:override|async|public|protected)\\s+)*${name}\\s*\\(`, 'm').test(fs.readFileSync(root + '/base/PredictionExchange.ts', 'utf8'));
+        } catch (e) { /* no prediction tier */ }
+        return !predictionOverride && !this.rustVenueReturnTypes(root).has(name);
     }
 
     /** Rust type of a scalar TS parameter type: string -> `&str`, `number` / `Num` -> `f64`, `int` / `Int` -> `i64`,

@@ -9608,6 +9608,23 @@ describe('per-venue string parameters', () => {
     });
 });
 
+describe('ral-pa: scalar parameters of base-only methods', () => {
+    test('a listed base method with no override takes Option<&str>; a venue caller converts once', () => {
+        const dir = path.join (rustFixtureRoot, 'base-only-str-params');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    convertExpireDate (date: Str): Str {\n        const year = date.slice (0, 2);\n        const month = date.slice (2, 4);\n        return '20' + year + '-' + month;\n    }\n    otherHelper (date: Str): Str {\n        const year = date.slice (0, 2);\n        return year;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseX (o: any): any {\n        const expiry = this.safeString (o, 'e', '');\n        const datetime = this.convertExpireDate (expiry);\n        return datetime;\n    }\n}\n");
+        const base = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(base).toContain('pub fn convertExpireDate(&self, date: Option<&str>)');
+        expect(base).toContain('let mut year: Option<String> = ');
+        expect(base).not.toContain('let mut month: Value');
+        // an unlisted base method keeps its Value parameter
+        expect(base).toContain('pub fn otherHelper(&self, date: Value)');
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('self.convertExpireDate(Some(expiry.as_str()))');
+    });
+});
+
 describe('per-venue scalar parameters', () => {
     test('number / int / boolean parameters print f64 / i64 / bool, an optional one a positional Option', () => {
         const dir = path.join (rustFixtureRoot, 'venue-scalar-params');
