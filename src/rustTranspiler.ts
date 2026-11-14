@@ -5039,7 +5039,9 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             let top: any = n;
             while (isParenthesizedExpression(top.parent) || isConditionalExpression(top.parent)) top = top.parent;
-            if (isBinaryExpression(top.parent) && top.parent.right === top && top.parent.operatorToken.kind === SyntaxKind.EqualsToken) handed = true;
+            // an element / field write `m[k] = s` boxes into a Value slot: no other local's decision reads it
+            if (isBinaryExpression(top.parent) && top.parent.right === top && top.parent.operatorToken.kind === SyntaxKind.EqualsToken
+                && !isElementAccessExpression(this.unwrapParens(top.parent.left)) && !isPropertyAccessExpression(this.unwrapParens(top.parent.left))) handed = true;
             if (isVariableDeclaration(top.parent) && top.parent.initializer === top) handed = true;
             // a returned string decides the method's own `-> Option<String>` return (and its dispatch arm)
             if (isReturnStatement(top.parent)) handed = true;
@@ -5368,6 +5370,17 @@ export class RustTranspiler extends BaseTranspiler {
         return (kind === 'ostr' && (copied > 0 || this.rustVenueLocalHandedOn(declaration))) || this.rustReaderDeclTooLong(declaration, kind);
     }
 
+    /** A price / size argument of an order-book side's `x.store(price, size)`: the hand-written runtime
+     *  `Value::store` / `store_to_bids|asks` take `impl Into<Value>`, so a Copy number passes as-is
+     *  (`From<Option<f64>>` / `From<Option<i64>>` give the same `Value::Null` the box held). */
+    rustSideStoreArg(n): boolean {
+        const call: any = n.parent;
+        if (!isCallExpression(call) || call.expression === n || call.arguments.length !== 2 || !call.arguments.some((a: any) => a === n)) return false;
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || String(callee.name.text) !== 'store' || !isIdentifier(callee.expression)) return false;
+        return this.rustDeclaredNode(callee.expression) !== undefined && this.rustScalarLocalOf(callee.expression) === undefined;
+    }
+
     /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
     rustScalarFormatText(node): string | undefined {
         const text = this.stripOuterParens(this.printNode(node, 0).trim());
@@ -5418,6 +5431,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (isCallExpression(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== undefined) return 'native';
         if (this.rustVenueStrLocalArg(n)) return 'targ';
         if (this.rustLimitArgUse(n, kind)) return 'targ';
+        if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustSideStoreArg(n)) return 'targ';
         if (isCallExpression(parent) && parent.expression !== n && (({ 'Option<&str>': [ 'str', 'ostr' ], 'Option<i64>': [ 'int', 'oint' ] })[this.rustTypedFilterSlot(parent, parent.arguments.indexOf(n))] ?? []).includes(kind)) return 'targ';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
@@ -5433,7 +5447,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.PlusToken) {
             // a `String` is a `format!` operand as-is; other concats need the box
             if (kind !== 'str' && kind !== 'ostr') return this.rustScalarExpressionUseForm(n, kind);
-            return kind === 'str' && this.printNode(parent, 0).trim().startsWith('Value::Str(format!(') ? 'concat' : 'box';
+            // an `Option<String>` operand prints `x.as_deref().unwrap_or("null")`: `Value::Null` displays as `null`
+            return this.printNode(parent, 0).trim().startsWith('Value::Str(format!(') ? 'concat' : 'box';
         }
         if (isConditionalExpression(parent) && parent.condition !== n) return 'box';
         return this.rustScalarExpressionUseForm(n, kind);
@@ -6037,9 +6052,11 @@ export class RustTranspiler extends BaseTranspiler {
         const recv: any = this.rustStripWrappers(test.right);
         if (recv === undefined || !this.isShallowValueReceiver(recv)) return false;
         // an object-literal local may be a typed map whose own proof wants the `Value` key
+        // (it accepts an optional-string key local too, so both decisions print an exact test either way)
         const own: any = isIdentifier(recv) ? this.rustDeclarationOfIdentifier(recv) : undefined;
         if (own === undefined && isIdentifier(recv)) return false;
-        if (own !== undefined && (!isVariableDeclaration(own) || own.initializer === undefined || isObjectLiteralExpression(this.rustSkipWrappers(own.initializer)))) return false;
+        if (own !== undefined && (!isVariableDeclaration(own) || own.initializer === undefined)) return false;
+        if (own !== undefined && isObjectLiteralExpression(this.rustSkipWrappers(own.initializer))) return true;
         if (this.rustBorrowedDictName(recv) !== undefined || this.rustParamShadowOf(recv) !== undefined || this.rustFieldKeyReceiver(recv) !== undefined
             || this.rustClientHandleAccess(recv) !== undefined || (isPropertyAccessExpression(recv) && RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(recv.name.text)))) return false;
         return this.isDictShapedType(this.typeOfNodeIfAny(test.right)) || this.rustDictLocalProof(recv) === 'plain';
@@ -6073,7 +6090,10 @@ export class RustTranspiler extends BaseTranspiler {
     printElemKeyInOp(key: any, obj: any): string | undefined {
         const inner: any = this.rustStripWrappers(key);
         if (!isIdentifier(inner) || this.rustScalarUseForms.get(inner) !== 'kin' || this.rustScalarLocalOf(inner)?.kind !== 'ostr') return undefined;
-        const recv = this.printNode(this.rustStripWrappers(obj), 0).trim();
+        const recvNode: any = this.rustStripWrappers(obj);
+        const recv = this.printNode(recvNode, 0).trim();
+        // a typed map bearer looks the borrowed key up itself; a `None` key is never contained (the `Null` key was not)
+        if (this.rustDictBearerDeclaration(recvNode) !== undefined) return `Value::Bool(matches!(${super.printIdentifier(inner)}.as_deref(), Some(__k) if ${String(recvNode.text)}.contains_key(__k)))`;
         return `Value::Bool(matches!((&${recv}, ${super.printIdentifier(inner)}.as_deref()), (Value::Dict(__d), Some(__k)) if __d.contains_key(__k)))`;
     }
 
@@ -6090,8 +6110,24 @@ export class RustTranspiler extends BaseTranspiler {
         let current: any = n;
         while (current.parent !== undefined && !isStatement(current.parent)) current = current.parent;
         const write: any = isBinaryExpression(current) ? current : undefined;
-        return write !== undefined && write.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(write.left)
-            && (isElementAccessExpression(write.left.expression) || isPropertyAccessExpression(write.left.expression));
+        if (write === undefined || write.operatorToken.kind !== SyntaxKind.EqualsToken || !isElementAccessExpression(write.left)
+            || !(isElementAccessExpression(write.left.expression) || isPropertyAccessExpression(write.left.expression))) return false;
+        // a `this.f[k] = this.m(.., n, ..)` source: `n` is a call argument evaluated before the write, the
+        // text passes key on the target and the whole right-hand side, never on an argument inside it
+        return !(this.rustThisFieldTarget(write.left.expression) && this.rustInsideCallArgument(n, write.right));
+    }
+
+    /** `this.f` (one level, no element read in between). */
+    rustThisFieldTarget(node): boolean {
+        return isPropertyAccessExpression(node) && (node as any).expression.kind === SyntaxKind.ThisKeyword;
+    }
+
+    /** `n` is (inside) an argument of a call that lies within `root`, the call itself not being `n`. */
+    rustInsideCallArgument(n, root): boolean {
+        for (let child: any = n, up: any = n.parent; up !== undefined && child !== root; child = up, up = up.parent) {
+            if (isCallExpression(up) && up.expression !== child) return true;
+        }
+        return false;
     }
 
     /** A write source the local's type holds exactly: a same-kind value, a typed scalar local of the
@@ -13579,7 +13615,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             // `k in x` — the map's own lookup behind the helper's `Str` test.
             if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.InKeyword
-                && parent.right === n) return this.bearerInOpKeyText(parent.left) !== undefined || this.literalKeyWidened(this.rustLiteralBearerKeyArg(n, parent.left));
+                && parent.right === n) return this.bearerInOpKeyText(parent.left) !== undefined || this.literalKeyWidened(this.rustLiteralBearerKeyArg(n, parent.left)) || this.rustBearerOptKeyIn(n, parent.left);
             // A rebuilt plain literal keeps the bearer (write side).
             if (this.rustBearerRebuild(n)) return ++rebuilds > 0;
             // A rebuild from a fresh-map producer keeps the map type.
@@ -14183,6 +14219,19 @@ export class RustTranspiler extends BaseTranspiler {
         const text = this.bearerInOpKeyText(key) ?? (this.rustLiteralBearerKeyArg(recv, key) !== undefined ? this.printNode(key, 0).trim() : undefined);
         if (text === undefined) return undefined;
         return `Value::Bool(matches!(&${text}, Value::Str(__k) if ${String(recv.text)}.contains_key(__k.as_ref())))`;
+    }
+
+    /** `k in m` with `k` an optional-string scalar local keyed natively (`kin`): `printElemKeyInOp` prints the
+     *  bearer's own lookup; an open key decision leaves the bearer decision uncached, like a write key. */
+    rustBearerOptKeyIn(recv: any, keyNode: any): boolean {
+        const key: any = this.rustSkipWrappers(keyNode);
+        if (key === undefined || !isIdentifier(key)) return false;
+        // only an object-literal bearer: it took the `Value` key before, so its decision is the same either way
+        // (a call-initialised map would flip to a copied `.as_map().cloned()` bearer)
+        const own: any = isIdentifier(recv) ? this.rustDeclarationOfIdentifier(recv) : undefined;
+        if (own === undefined || !isVariableDeclaration(own) || own.initializer === undefined || !isObjectLiteralExpression(this.rustSkipWrappers(own.initializer))) return false;
+        if (this.rustKeyScalarDecisionOpen(key)) this.rustBearerSawOpenKey = true;
+        return this.rustScalarLocalOf(key)?.kind === 'ostr' && this.rustScalarUseForms.get(key) === 'kin';
     }
 
     /** The key half of `bearerInOp`, also used while the receiver's own bearer

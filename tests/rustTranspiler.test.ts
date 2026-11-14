@@ -10540,6 +10540,31 @@ describe('safe scalar locals, third pass: element-write sources, field writes, c
     });
 });
 
+describe('safe scalar locals, fourth pass: element-write hand-offs, null-printing concat, side store, this-field call args, in on literal maps', () => {
+    test('reader locals written to an element, concatenated, stored on a book side, passed inside a this-field write and tested with in are typed', () => {
+        const dir = path.join (rustFixtureRoot, 'scalar-mb');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    options: any = {};\n    balance: any = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    safeFloat (o: any, k: any, d: Num = undefined): Num { return o[k]; }\n    iso8601 (t: any): Str { return t; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue4.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue4 extends Exchange {\n    write (a: any, request: any) {\n        const id = this.safeString (a, 'id');\n        request['id'] = id;\n        return request;\n    }\n    sym (a: any) {\n        const base = this.safeString (a, 'base');\n        const quote = this.safeString (a, 'quote');\n        return { 'symbol': base + '/' + quote };\n    }\n    delta (bookside: any, delta: any) {\n        const price = this.safeFloat (delta, 0);\n        const amount = this.safeFloat (delta, 1);\n        bookside.store (price, amount);\n    }\n    bal (a: any) {\n        const ts = this.safeInteger (a, 'ts');\n        this.balance['timestamp'] = ts;\n        this.balance['info'] = { 'datetime': this.iso8601 (ts) };\n        this.balance['datetime'] = this.iso8601 (ts);\n    }\n    seenIn (rows: any[]) {\n        const seen: Dict = { 'a': true };\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const k = this.safeString (rows[i], 'k');\n            if (k in seen) {\n                out.push (rows[i]);\n            }\n        }\n        return out;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue4.ts')).content;
+        // `request['id'] = id` boxes into a Value slot: the reader string is no longer held as another local's source
+        expect(out).toContain('let mut id: Option<String> = ');
+        // an Option<String> concat operand prints the text `Value::Null` displays (`null`), no clone, no box
+        expect(out).toContain('base.as_deref().unwrap_or("null")');
+        expect(out).toContain('quote.as_deref().unwrap_or("null")');
+        expect(out).not.toContain('base.clone().map(Value::from)');
+        // `side.store(price, size)` takes `impl Into<Value>`: the Option<f64> passes as-is (None -> Value::Null)
+        expect(out).toContain('let mut price: Option<f64> = ');
+        expect(out).toContain('bookside.store(price, amount)');
+        // a this-field write whose source is a call keeps the call argument boxed with `Value::from`
+        expect(out).toContain('let mut ts: Option<i64> = ');
+        expect(out).toContain('self.iso8601(Value::from(ts))');
+        // `k in seen` on an object-literal map local: the bearer's own lookup of the borrowed key, None never contained
+        expect(out).toContain('let mut k: Option<String> = ');
+        expect(out).toContain('matches!(k.as_deref(), Some(__k) if seen.contains_key(__k))');
+    });
+});
+
 describe('typed market locals across sibling blocks, lookup keys and ws callers', () => {
     test('a safeMarket local next to a same-named sibling binding, read as a lookup key, lends to a REST helper the ws class calls too', () => {
         const dir = path.join (rustFixtureRoot, 'typed-market-ia');
