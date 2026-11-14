@@ -5712,7 +5712,9 @@ export class RustTranspiler extends BaseTranspiler {
      *  write (`x = Precise.stringDiv (Precise.stringMul (local, y), ..)`): the written text is a `Precise` call either
      *  way (the `&Value` operand takes the moved string), so the receiver's decision does not read this local's type. */
     rustScalarPreciseFeed(n: any, write: any, declaration: any): boolean {
-        if (this.rustScalarUseForms.get(n) !== 'box' || !this.rustPreciseStringCall(declaration.initializer) || !this.rustLocalLastUse(n, declaration)) return false;
+        const form = this.rustScalarUseForms.get(n);
+        // vd lends a typed operand of a lent entry point as is ('parg'); the written text is still the Precise call
+        if ((form !== 'box' && form !== 'parg') || !this.rustPreciseStringCall(declaration.initializer) || !this.rustLocalLastUse(n, declaration)) return false;
         let top: any = n;
         for (;;) {
             while (isParenthesizedExpression(top.parent)) top = top.parent;

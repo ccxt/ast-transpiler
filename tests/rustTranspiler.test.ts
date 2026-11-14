@@ -11308,7 +11308,8 @@ describe('literal and boxed-field locals typed at the declaration', () => {
         fs.writeFileSync (path.join (path.dirname (file), 'base/Precise.ts'), "export default class Precise {\n    static stringAdd (a: Str, b: Str): Str { return a; }\n    static stringMul (a: Str, b: Str): Str { return a; }\n    static stringDiv (a: Str, b: Str, p: any = undefined): Str { return a; }\n}\ntype Str = string | undefined;\n");
         const out = transpiler.transpileRustByPath (file).content;
         expect(out).toContain('let mut leftSide: Option<String> = crate::precise::Precise::stringAdd(');
-        expect(out).toContain('crate::precise::Precise::stringMul(&leftSide.map(Value::from).unwrap_or(Value::Null), ');
+        // vd lends it to the &impl PreciseArg operand as is
+        expect(out).toContain('crate::precise::Precise::stringMul(&leftSide, ');
         expect(out).toContain('let mut leftSide: Option<String> = crate::precise::Precise::stringMul(');
         // negative: read twice in its write (no last use) keeps its box
         expect(out).toContain('let mut twice: Value = ');
