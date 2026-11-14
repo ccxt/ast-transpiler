@@ -18460,6 +18460,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.PlusToken) return cross(this.rustWsHashPatterns(n.left, depth + 1, seen), this.rustWsHashPatterns(n.right, depth + 1, seen));
         if (isConditionalExpression(n)) return [ ...this.rustWsHashPatterns(n.whenTrue, depth + 1, seen), ...this.rustWsHashPatterns(n.whenFalse, depth + 1, seen) ].slice(0, 16);
+        if (isCallExpression(n)) return this.rustWsReturnPatterns(n, depth, seen) ?? any;
         if (!isIdentifier(n)) return any;
         const declaration: any = this.rustDeclarationOfIdentifier(n);
         const bound = declaration === undefined ? undefined : this.rustWsHashEnv?.get(declaration);
@@ -18657,7 +18658,25 @@ export class RustTranspiler extends BaseTranspiler {
         };
         // a resolve with no value (or `undefined`) settles the await with Null, which the Option conversion maps to None
         const nothing = (x: any) => x === undefined || this.rustStripWrappers(x)?.kind === SyntaxKind.UndefinedKeyword || (isIdentifier(this.rustStripWrappers(x)) && this.rustStripWrappers(x).text === 'undefined');
-        const add = (hash: any, x: any, kind?: string) => table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), kind: kind ?? (nothing(x) ? 'none' : (this.rustWsResolvedKind(x) ?? 'other')) });
+        const kindOf = (x: any) => (nothing(x) ? 'none' : (this.rustWsResolvedKind(x) ?? 'other'));
+        const add = (hash: any, x: any, kind?: string, site?: any) => {
+            const sites = kind === undefined && site !== undefined ? this.rustWsHelperCallSites(cls, site, [ hash, x ]) : undefined;
+            if (sites === undefined) {
+                table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), kind: kind ?? kindOf(x) });
+                return;
+            }
+            // a helper's parameter stands for each caller's argument: one entry per call site
+            for (const env of sites) {
+                const save = this.rustWsHashEnv;
+                this.rustWsHashEnv = env;
+                try {
+                    const bound = (e: any) => { const d: any = isIdentifier(this.rustStripWrappers(e)) ? this.rustDeclarationOfIdentifier(this.rustStripWrappers(e)) : undefined; return d !== undefined && env.has(d) ? env.get(d)!.arg : e; };
+                    table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), kind: kindOf(bound(x)) });
+                } finally {
+                    this.rustWsHashEnv = save;
+                }
+            }
+        };
         this.rustWalkScope(cls, (n: any) => {
             if (!isCallExpression(n) || !isPropertyAccessExpression(n.expression)) return;
             const name = String(n.expression.name.text);
@@ -18674,11 +18693,79 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (name !== 'resolve') return;
             const fh = futureHash(recv);
-            if (fh === undefined) add(n.arguments[1] ?? null, n.arguments[0]);
+            if (fh === undefined) add(n.arguments[1] ?? null, n.arguments[0], undefined, n);
             else add(fh, n.arguments[0]);
         });
         this.rustWsResolveTables.set(cls, table);
         return table;
+    }
+
+    /** When `site` sits in a method of `cls` with parameters: the parameter bindings of every call of that method
+     *  (`this.m (..)`, or `this.spawn (this.m, ..)`), so a hash or value built from a parameter reads each caller's
+     *  argument. Undefined when the method is referenced any other way (a handler table entry) or never called. */
+    rustWsHelperCallSites(cls: any, site: any, exprs: any[]): Array<Map<Node, { arg: any, env: Map<Node, any> | undefined }>> | undefined {
+        const method: any = findAncestor(site, isFunctionLike);
+        if (method === undefined || !isMethodDeclaration(method) || findAncestor(method, isClassDeclaration) !== cls || !isIdentifier(method.name)) return undefined;
+        const params: any[] = Array.from(method.parameters as any);
+        if (params.some((p) => p.dotDotDotToken !== undefined || !isIdentifier(p.name))) return undefined;
+        if (params.length === 0 || exprs.every((e) => e === null || e === undefined)) return undefined;
+        // a parameter written in the method no longer stands for the argument
+        for (const p of params) if (this.rustLocalReassigned(p)) return undefined;
+        const name = String(method.name.text);
+        const out: Array<Map<Node, { arg: any, env: Map<Node, any> | undefined }>> = [];
+        let other = false;
+        this.rustWalkScope(cls, (n: any) => {
+            if (!isPropertyAccessExpression(n) || n.expression.kind !== SyntaxKind.ThisKeyword || String(n.name.text) !== name) return;
+            const call: any = n.parent;
+            let args: any[] | undefined;
+            if (isCallExpression(call) && call.expression === n) args = Array.from(call.arguments);
+            else if (isCallExpression(call) && call.arguments[0] === n && isPropertyAccessExpression(call.expression) && call.expression.expression.kind === SyntaxKind.ThisKeyword && String(call.expression.name.text) === 'spawn') args = Array.from(call.arguments).slice(1);
+            if (args === undefined || args.length > params.length || args.some((a: any) => a.kind === SyntaxKind.SpreadElement)) {
+                other = true;
+                return RUST_WALK_STOP;
+            }
+            const env = new Map<Node, { arg: any, env: Map<Node, any> | undefined }>();
+            params.forEach((p, i) => env.set(p, { arg: args![i] ?? p.initializer, env: undefined }));
+            out.push(env);
+        });
+        return other || out.length === 0 ? undefined : out;
+    }
+
+    /** `this.m (..)` of a sync method of the same ws class whose every return is a hash expression: the patterns of
+     *  those returns with the method's parameters bound to this call's arguments (defaults when omitted). */
+    rustWsReturnPatterns(call: any, depth: number, seen: Set<Node>): Array<Array<string | null>> | undefined {
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const cls: any = findAncestor(call, isClassDeclaration);
+        const declaration: any = this.rustScalarCallee(call);
+        if (cls === undefined || declaration === undefined || !isMethodDeclaration(declaration) || declaration.body === undefined || findAncestor(declaration, isClassDeclaration) !== cls) return undefined;
+        if (seen.has(declaration) || (declaration.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.AsyncKeyword)) return undefined;
+        const params: any[] = Array.from(declaration.parameters as any);
+        if (call.arguments.length > params.length || params.some((p) => p.dotDotDotToken !== undefined || !isIdentifier(p.name) || this.rustLocalReassigned(p))) return undefined;
+        const returns: any[] = [];
+        let other = false;
+        this.rustWalkScope(declaration.body, (n: any) => {
+            if (n !== declaration.body && isFunctionLike(n)) return RUST_WALK_SKIP;
+            if (!isReturnStatement(n)) return;
+            if (n.expression === undefined) {
+                other = true;
+                return RUST_WALK_STOP;
+            }
+            returns.push(n.expression);
+        });
+        if (other || returns.length === 0) return undefined;
+        const env = new Map<Node, { arg: any, env: Map<Node, any> | undefined }>();
+        params.forEach((p, i) => env.set(p, { arg: call.arguments[i] ?? p.initializer, env: this.rustWsHashEnv }));
+        const save = this.rustWsHashEnv;
+        this.rustWsHashEnv = env;
+        seen.add(declaration);
+        try {
+            const out: Array<Array<string | null>> = [];
+            for (const r of returns) out.push(...this.rustWsHashPatterns(r, depth + 1, seen));
+            return out.length > 16 ? undefined : out;
+        } finally {
+            seen.delete(declaration);
+            this.rustWsHashEnv = save;
+        }
     }
 
     private rustWsWsParents = new Map<string, Map<string, string | undefined>>();
@@ -18716,8 +18803,21 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const id = file.slice(file.lastIndexOf('/') + 1, -3);
         if (!parents.has(id) || parents.get(id) !== undefined) return true;
-        for (const p of parents.values()) if (p === id) return true;
+        for (const [child, p] of parents) if (p === id && !this.rustWsDescribeOnly(`${root}/pro/${child}.ts`)) return true;
         return false;
+    }
+
+    /** A ws subclass whose only methods are `describe` / `describeData` adds no handler and no resolve. */
+    rustWsDescribeOnly(path: string): boolean {
+        let text: string;
+        try {
+            text = fs.readFileSync(path, 'utf8');
+        } catch (e) {
+            return false;
+        }
+        const body = text.slice(text.indexOf('export default class'));
+        const methods = [ ...body.matchAll(/^ {4}(?:(?:public|private|protected|static|override|async|get|set) +)*([A-Za-z_$][\w$]*) *[(<]/gm) ].map((m) => m[1]);
+        return methods.length > 0 && methods.every((m) => m === 'describe' || m === 'describeData') && !/^ {4}(?:(?:public|private|protected|static|override|readonly) +)*[A-Za-z_$][\w$]* *[:=]/m.test(body);
     }
 
     /** The proven kind of an `await this.watch|watchMultiple (..)` initializer, else undefined. */
