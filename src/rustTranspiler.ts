@@ -19599,7 +19599,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isVariableDeclaration(declaration) && (this.rustLentListLocal(declaration) || this.rustBorrowedLocalKind(declaration) !== undefined
             || this.rustScalarLocalKind(declaration) !== undefined || this.rustNilLocalKind(declaration) !== undefined)) return false;
         // the printer may mark the bare move owned (`\u0004`): still the plain `Value` binding
-        if (this.printNode(y, 0).trim().replace(/^\u0004/, '') !== String(y.text)) return false;
+        const printedY = this.printNode(y, 0).trim();
+        if ((printedY.startsWith('\u0004') ? printedY.slice(1) : printedY) !== String(y.text)) return false;
         return this.rustLocalLastUse(y, declaration);
     }
 
