@@ -4326,7 +4326,7 @@ export class RustTranspiler extends BaseTranspiler {
         const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
         const expected = kind === 'ostr' || kind === 'str' ? 'string' : (kind === 'bool' || kind === 'obool' ? 'boolean' : 'number');
         // an all-`i64` base `sum` is an `Int` whatever its `any` checker type says
-        if (checked !== expected && !boolTested && !(kind === 'int' && this.rustArithCombinator(this.unwrapParens(declaration.initializer)) && this.rustArithCallKind(declaration.initializer) === 'int')) return undefined;
+        if (checked !== expected && !boolTested && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(kind === 'int' && this.rustArithCombinator(this.unwrapParens(declaration.initializer)) && this.rustArithCallKind(declaration.initializer) === 'int')) return undefined;
         const seeded = kind;
         kind = this.rustScalarWidenedKind(declaration, kind);
         const widened = kind !== seeded || this.rustScalarExpressionKind(declaration.initializer) !== undefined;
@@ -5432,7 +5432,55 @@ export class RustTranspiler extends BaseTranspiler {
         const tupleBool = this.rustExactBoolTupleRead(node, owner); if (tupleBool !== undefined) return tupleBool;
         const listType: any = this.typeOfNodeIfAny(node.expression);
         if (listType === undefined || !this.getChecker().isArrayType(listType)) return undefined;
-        return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'string' ? 'ostr' : undefined;
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'string') return 'ostr';
+        // xg: a declaration's `xs[i]` off an untyped / `any[]` local list whose every write is a push of a string proves a string
+        return this.rustAnyStrPushElem(node) ? 'ostr' : undefined;
+    }
+
+    /** xg: the element read prints straight off the list place (`xs.get(..).and_then(Value::as_str)..`), never a helper read
+     *  that would leave the declaration `Value` while its uses read a string (the paradex E0599 trap). */
+    rustAnyStrPlaceRead(declaration: any): boolean {
+        const init = this.rustScalarNativeText('ostr', declaration.initializer);
+        const node: any = this.unwrapParens(declaration.initializer);
+        const recvName = super.printIdentifier(node.expression);
+        return init !== undefined && init.endsWith('.and_then(Value::as_str).map(str::to_owned)') && init.startsWith(`${recvName}.get(`);
+    }
+
+    /** xg: `const k = xs[i]` where `xs` is a local `[]` (declared `any[]` / `List` / unannotated) whose only writes are
+     *  `.push (v)` of one string-typed value: never rebound, element-written, spliced or handed on whole. Every element
+     *  the list can hold is a `Str`, so the read is the string or (out of range) undefined. */
+    rustAnyStrPushElem(node: any): boolean {
+        if (!isElementAccessExpression(node) || !isIdentifier(node.expression) || this.rustTestTierSource(node)) return false;
+        let top: any = node;
+        while (top.parent !== undefined && (isParenthesizedExpression(top.parent) || top.parent.kind === SyntaxKind.AsExpression)) top = top.parent;
+        if (!isVariableDeclaration(top.parent) || top.parent.initializer !== top) return false;
+        const owner: any = this.rustDeclaredNode(node.expression);
+        if (owner === undefined || !isVariableDeclaration(owner) || !isIdentifier(owner.name)) return false;
+        if (this.rustEnclosingFunction(owner) !== this.rustEnclosingFunction(node)) return false;
+        const element: any = this.typeOfNodeIfAny(node);
+        if (element === undefined || (element.flags & TypeFlags.Any) === 0) return false;
+        const init: any = this.unwrapParens(owner.initializer);
+        if (init === undefined || !isArrayLiteralExpression(init) || init.elements.length !== 0) return false;
+        let pushes = 0;
+        const ok = this.rustLocalUsesAll(owner, String(owner.name.text), true, (n: any) => {
+            const up: any = n.parent;
+            if (up === undefined) return false;
+            if (isPropertyAccessExpression(up) && up.expression === n) {
+                const name = String(up.name.text);
+                if (name === 'length') return !(isBinaryExpression(up.parent) && up.parent.left === up);
+                if (name !== 'push' || !isCallExpression(up.parent) || up.parent.expression !== up || up.parent.arguments.length !== 1) return false;
+                const arg: any = up.parent.arguments[0];
+                pushes++;
+                return this.literalKindOfNode(arg) === 'string' || this.primitiveKindOfType(this.typeOfNodeIfAny(arg)) === 'string';
+            }
+            if (isElementAccessExpression(up) && up.expression === n) {
+                const use: any = up.parent;
+                return !(use !== undefined && ((isBinaryExpression(use) && use.left === up && this.rustAssignmentOpKind(use.operatorToken.kind))
+                    || use.kind === SyntaxKind.DeleteExpression || use.kind === SyntaxKind.PrefixUnaryExpression || use.kind === SyntaxKind.PostfixUnaryExpression));
+            }
+            return false;
+        });
+        return ok && pushes > 0;
     }
 
     /** ral-ug: `t[i]` (a literal index) of a never-written `const t = this.m (..)` whose every return puts an exact

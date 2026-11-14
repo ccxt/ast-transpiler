@@ -13992,3 +13992,25 @@ describe('xe: a handler local printed as the shared map resolves a Dict for the 
         expect(out).toMatch(/let mut ticker: Value = self\.watch\(/);
     });
 });
+
+describe('ral-xg: an element of an untyped local list filled only by string pushes reads as Option<String>', () => {
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-xg-anypush-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    const body = (push: string) => "    pick (rows: Dict[], byId: Dict) {\n        const slugs: any[] = [];\n        for (let i = 0; i < rows.length; i++) {\n            const slug = this.safeString (rows[i], 'slug');\n            slugs.push (" + push + ");\n        }\n        const r = [];\n        for (let i = 0; i < slugs.length; i++) {\n            const slug = slugs[i];\n            const row = this.safeDict (byId, slug, {});\n            r.push (row);\n        }\n        return r;\n    }";
+    test('every push is a string: the element reads off the list place as Option<String>', () => {
+        const out = mk(body('slug'));
+        expect(out).toMatch(/let mut slug: Option<String> = slugs\.get\(i as usize\)\.and_then\(Value::as_str\)\.map\(str::to_owned\);/);
+    });
+    test('negative: a push of a non-string (a Dict) keeps the element Value', () => {
+        const out = mk(body('rows[i]'));
+        expect(out).toMatch(/let mut slug: Value = slugs\.get\(i as usize\)/);
+    });
+});
