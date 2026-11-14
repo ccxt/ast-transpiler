@@ -6433,6 +6433,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustScalarOptKeyUse(n)) return 'key';
         // an optional-string local keys a proven map read or an `in` test natively (a `None` key misses, as the `Null` did)
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
+        // ral-yg: an element key into the base-declared `this.urls['<lit>']` map reads it by the borrowed key
+        if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustUrlsKeyReadUse(n)) return 'okey';
         // uh: a ternary of two string literals keys a proven map read natively (`m.get(k)` is the entry `get_value` reads)
         if (kind === 'str' && this.rustStrLiteralTernaryLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
@@ -8996,11 +8998,16 @@ export class RustTranspiler extends BaseTranspiler {
             // the map's own key iterators print a closure; keep those bearers on their `Value` key
             const name = String(access.expression.text);
             let enumerated = false;
+            let keyRead = false;
             this.rustLocalUsesAll(declaration, name, false, (u) => {
                 if (this.bearerEnumArg(u.parent) === u || this.bearerEnumArg(u.parent?.parent) === u) enumerated = true;
+                else if (isElementAccessExpression(u.parent) && u.parent.expression === u && !(isBinaryExpression(u.parent.parent) && u.parent.parent.left === u.parent)) keyRead = true;
                 return true;
             });
-            if (enumerated) return false;
+            // ral-yg: an element-read key (`const k = parsed['symbol']`, S73) inserted into a plain literal map that is only
+            // enumerated afterwards: the insert takes the key text (`None` keys as "null", exactly `stringify_param(&Null)`)
+            // and the map's own key iterator reads the same keys (a map also read by key keeps the boxed key: its bearer rule leans on it)
+            if (enumerated) return !keyRead && isElementAccessExpression(this.rustSkipWrappers(local.initializer)) && this.rustScalarInsertKeyUse(n);
             return this.rustBearerWriteKeyOk(n, name) || this.rustScalarInsertKeyUse(n);
         }
         return this.rustScalarInsertKeyUse(n);
@@ -9096,6 +9103,19 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.isNativeAccessPositionSafe(read) || this.isNativeWriteTargetBase(read)) return false;
         const kind = this.rustOkeyKind(read.expression, read);
         return kind === 'map' || (kind === 'value' && RUST_PLAIN_PLACE.test(this.printNode(read.expression, 0).trim()));
+    }
+
+    /** ral-yg: `this.urls['<lit>'][k]` read only (no write, chain link, delete or update) where `this.urls['<lit>']` is the
+     *  base-declared string-keyed map (`rustUrlsMapEntry`): the native read takes the borrowed key off the map the boxed
+     *  read reached (a non-map entry or a `None` key reads Null, as `get_value` did on a non-map or a `Null` key). */
+    rustUrlsKeyReadUse(n: any): boolean {
+        const read: any = n.parent;
+        if (!isElementAccessExpression(read) || read.argumentExpression !== n || !this.rustUrlsMapEntry(read.expression)) return false;
+        const up: any = read.parent;
+        if (up === undefined || (isElementAccessExpression(up) && up.expression === read) || up.kind === SyntaxKind.DeleteExpression
+            || isPrefixUnaryExpression(up) || up.kind === SyntaxKind.PostfixUnaryExpression) return false;
+        if (isBinaryExpression(up) && up.left === read && rustIsAssignmentOperator(up.operatorToken.kind)) return false;
+        return this.isNativeAccessPositionSafe(read) && !this.isNativeWriteTargetBase(read);
     }
 
     /** uh: the use's local is initialised by `c ? 'a' : 'b'` (both arms string literals). */
