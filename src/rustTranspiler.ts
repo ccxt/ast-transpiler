@@ -6703,6 +6703,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustUrlsKeyReadUse(n)) return 'okey';
         // uh: a ternary of two string literals keys a proven map read natively (`m.get(k)` is the entry `get_value` reads)
         if (kind === 'str' && this.rustStrLiteralTernaryLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
+        // 40b: any initialised `String` local keys a proven map read by borrowing it (`m.get(k.as_str())` is the entry
+        // `get_value` reads for its `Str` box); ws cache / subscription keys never reach here (rustWsCacheMapKeyUse above)
+        if (kind === 'str' && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && !this.rust40bProTier(n) && this.rust40bFieldKeyRead(n)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
         // qf: the key of any other `k in obj` test boxes once (`in_op` reads a `Str` key or misses on `Null`, as the `Value` local did)
         // td: also through a `(k as string)` cast of the key (the cast prints nothing)
@@ -7570,6 +7573,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarWriteOk(kind: string, rhs, depth: number): boolean {
         const node: any = this.unwrapParens(rhs);
         if (node === undefined || depth > 3) return false;
+        // 40b: `x = <expr> as T` writes the operand itself (the assertion prints nothing and converts nothing)
+        if (depth === 0 && this.rustScalarAsWrite(node) !== undefined) return this.rustScalarWriteOk(kind, this.rustScalarAsWrite(node), 0);
         if (this.rustOptParamWriteOk(kind, node)) return true;
         if (kind === 'oint' && this.rustLimitCall(node)) return true;
         if (isConditionalExpression(node)) return this.rustScalarWriteOk(kind, node.whenTrue, depth + 1) && this.rustScalarWriteOk(kind, node.whenFalse, depth + 1);
@@ -7997,9 +8002,36 @@ export class RustTranspiler extends BaseTranspiler {
         return init === undefined ? undefined : `${indent}let mut ${varName}: ${RustTranspiler.RUST_SCALAR_TYPES[kind]} = ${init}`;
     }
 
+    /** 40b: `n` keys a one-level native read of a base-declared `this.<dict field>` (`this.markets[k]`, `this.urls[k]`). */
+    rust40bFieldKeyRead(n: any): boolean {
+        const read: any = n.parent;
+        return isElementAccessExpression(read) && read.argumentExpression === n && this.rustDictField(read.expression) !== undefined && this.rustOkeyReadUse(n);
+    }
+
+    /** 40b: a node of the ws tier (`ts/src/pro/`): its subscription / cache keys stay boxed (in_op and ws cache locals must not move). */
+    rust40bProTier(n: any): boolean {
+        return /ts[\\/]src[\\/]pro[\\/]/.test(String(n.getSourceFile?.()?.fileName ?? ''));
+    }
+
+    /** 40b: the operand of a top-level `<expr> as T` write source (parens only around it), else undefined. */
+    rustScalarAsWrite(rhs): any {
+        const node: any = this.unwrapParens(rhs);
+        if (node === undefined || !isAsExpression(node)) return undefined;
+        const inner: any = this.unwrapParens(node.expression);
+        // an identifier operand is an alias write: the alias rules decide it with its source (a source must not flip)
+        return inner === undefined || isAsExpression(inner) || isIdentifier(inner) || this.literalKindOfNode(inner) === 'null' ? undefined : inner;
+    }
+
     /** Assignment hook: `x = <rhs>` in the local's native type. */
     printRustScalarLocalWrite(left, right): string | undefined {
         const local = this.rustScalarLocalOf(left);
+        // 40b: the operand of an `as T` write prints as the write source (the assertion is no runtime op)
+        // (only where the declaration itself prints in that type: a decided local whose initializer has no native text stays `Value`)
+        if (local !== undefined && this.rustScalarAsWrite(right) !== undefined) {
+            const decl: any = local.declaration;
+            const typedDecl = isVariableDeclaration(decl) && decl.initializer !== undefined && this.rustScalarNativeText(local.kind, decl.initializer) !== undefined;
+            return typedDecl ? this.printRustScalarLocalWrite(left, this.rustScalarAsWrite(right)) : undefined;
+        }
         const alias: any = this.unwrapParens(right);
         // za: `x = undefined` (an Identifier node) on an optional scalar local writes `None`: nothing to copy
         if (local !== undefined && local.kind.startsWith('o') && isIdentifier(alias) && this.literalKindOfNode(alias) === 'null') return `${super.printIdentifier(left)} = \u0004None`;
@@ -8007,8 +8039,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (local?.kind === 'ostr' && isIdentifier(alias) && this.rustScalarIdentifierKind(alias) === undefined && this.rustNilValueStrAlias(alias)) return `${super.printIdentifier(left)} = ${super.printIdentifier(alias)}.into_opt_string()`;
         const text = local === undefined ? undefined : this.rustScalarNativeText(local.kind, right);
         // nc: a bare `Copy` source (`i64` / `f64` / `bool` or its `Option`) is owned: the alias-source pass must not clone it
-        const owned = text !== undefined && isIdentifier(alias) && text === super.printIdentifier(alias) && RustTranspiler.RUST_COPY_SCALAR_KINDS.has(local.kind);
-        return text === undefined ? undefined : `${super.printIdentifier(left)} = ${owned ? '\u0004' : ''}${text}`;
+        const owned = text !== undefined && isIdentifier(alias) && text === super.printIdentifier(alias) && RustTranspiler.RUST_COPY_SCALAR_KINDS.has(local.kind)
+            // 40b: the `None` of an `obool` local's `= undefined` write (lift C) is a value, never cloned
+            && !(local.kind === 'obool' && text === 'None');
+        const ownedNone = local?.kind === 'obool' && text === 'None';
+        return text === undefined ? undefined : `${super.printIdentifier(left)} = ${owned || ownedNone ? '\u0004' : ''}${text}`;
     }
 
     // Expression-shaped scalar locals: aliases, ternaries, arithmetic/comparisons over typed operands,
@@ -8485,9 +8520,11 @@ export class RustTranspiler extends BaseTranspiler {
         for (const n of this.rustScopeNameNodes(this.rustEnclosingFunction(declaration), String(declaration.name.text)) as any[]) {
             const parent: any = n.parent;
             if (!isIdentifier(n) || !isBinaryExpression(parent) || parent.left !== n || parent.operatorToken.kind !== SyntaxKind.EqualsToken) continue;
-            const write = isIdentifier(this.unwrapParens(parent.right)) && this.literalKindOfNode(this.unwrapParens(parent.right)) !== 'null'
-                ? this.rustScalarIdentifierKind(this.unwrapParens(parent.right)) ?? this.rustOptParamKind(parent.right) : this.rustScalarValueKind(parent.right, true);
-            const next = write === undefined ? undefined : this.rustScalarJoinKinds(joined, write);
+            const src: any = this.rustScalarAsWrite(parent.right) ?? parent.right;
+            const write = isIdentifier(this.unwrapParens(src)) && this.literalKindOfNode(this.unwrapParens(src)) !== 'null'
+                ? this.rustScalarIdentifierKind(this.unwrapParens(src)) ?? this.rustOptParamKind(src) : this.rustScalarValueKind(src, true);
+            // 40b: a `bool` local with a later `x = undefined` write is an `Option<bool>` (`None` is the `Null` it held)
+            const next = write === undefined ? undefined : this.rustScalarJoinKinds(joined, write, joined === 'bool' && write === 'null');
             if (next !== undefined && (next === joined || next === `o${joined}`)) joined = next;
         }
         return joined;
