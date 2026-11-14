@@ -552,6 +552,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarKeyedLocal(declaration: any): boolean;
     /** A local some `return` of a method with a declared string return hands back as-is. */
     rustStrReturnedLocal(declaration: any, scope: any): boolean;
+    private static readonly RUST_COPY_SCALAR_KINDS;
     rustParamAliasSeedKind(declaration: any): string | undefined;
     rustLimitCall(expr: any): boolean;
     rustLimitArgUse(n: any, kind: string): boolean;
@@ -608,6 +609,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustMethodTypedReturnKind(node: any): string | undefined;
     /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
     rustBaseTypedReturnKind(expr: any): string | undefined;
+    /** pg: a call of a precision formatter of the typed-return table (`-> Option<String>`); its locals carry the venue copy veto. */
+    rustPrecisionCall(expr: any): boolean;
+    /** pg: the local is written from a precision formatter, or returned by one of the typed precision methods. */
+    rustPrecisionTouched(declaration: any, scope: any): boolean;
+    /** pg: a later whole write of the local is a precision-formatter call (the 400-char guard watches such locals). */
+    rustPrecisionWritten(declaration: any): boolean;
+    /** pg: some use of the local is an argument of a `Precise.<op>(..)` call. */
+    rustPreciseOperandLocal(declaration: any): boolean;
     /** The unboxed call text. */
     rustBaseTypedBareText(node: any): string;
     /** The call as a `kind` value: the bare text, or `Some(..)` of a non-optional one. */
@@ -851,6 +860,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     printElemKeyInOp(key: any, obj: any): string | undefined;
     rustThisFieldLiteralWrite(n: any): boolean;
     rustScalarInNestedWrite(n: any): boolean;
+    /** `this.balance|options[..][..]` with at least one hop below the field (the r05 receiver chain). */
+    rustNestedFieldChain(access: any): boolean;
+    /** The statement write `this.F[..][n] = v` whose last key is `n` and whose other operands never name `n` or `this`
+     *  (the r05 insert keeps the helper for a value reading `self`). */
+    rustNestedFieldKeyUse(n: any): boolean;
+    /** `this.F[..]['lit'] = n` (statement): the value slot of a nested plain-field insert. */
+    rustNestedFieldValueUse(n: any): boolean;
+    /** Assignment hook: the r05 insert of a nested plain-field write keyed by a typed string local. */
+    printNestedFieldKeyWrite(left: any, acc: string, value: string): string | undefined;
     /** `this.f` (one level, no element read in between). */
     rustThisFieldTarget(node: any): boolean;
     /** `n` is (inside) an argument of a call that lies within `root`, the call itself not being `n`. */
@@ -2066,6 +2084,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `n` is the target of a statement `n = this.extend (n, y)` (base `extend`, two operands, `y` not naming `n`). */
     rustSelfExtendWrite(n: any, declaration: any): boolean;
     private static readonly RUST_SELF_EXTEND;
+    /** pb: the base `handleUntilOption (k, x, p)` of a statement `[ x, q ] = ..` writing slot 0 back into `x` (base
+     *  `handleUntilOption` returns its own `request` argument as slot 0, so the map moves through it). */
+    rustUntilSelfCall(n: any, declaration: any): any;
+    rustUntilSelfWrite(n: any, declaration: any): boolean;
+    /** pb: `x` as the `request` operand of such a write-back call. */
+    rustUntilSelfArg(n: any, declaration: any): boolean;
+    /** pb: `Value::Dict(x)` for the moved request operand of a write-back `handleUntilOption`. */
+    printUntilSelfArg(node: any, text: string): string | undefined;
     /** `n` is the request (first) operand of the runtime free function `jwt (request, secret, ..)`. */
     rustJwtRequestSlot(call: any, n: any): boolean;
     /** `&x` for a shared map local lent to the `jwt` request slot. */
@@ -2128,7 +2154,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The source statement of a box (`Value::Dict(x)`, +13 chars) leaves the printed line within 400 chars. */
     rustBoxLineOk(n: any): boolean;
     /** The copy-on-write insert line (indent + `Arc::make_mut(&mut x).insert(..)`) stays within the 400-char budget. */
-    rustBuiltKeyWriteLineOk(n: any): boolean;
+    /** pb: `x['k'] = v` (statement, literal non-meta key) on a local initialised from a base `safeDict*` read of a REST-tier
+     *  (`ts/src/<venue>.ts`) local or response: no ws subscription, cache or book store, so the map carries no runtime tag. */
+    rustSafeDictKeyWriteOk(n: any, init: any): boolean;
+    rustBuiltKeyWriteLineOk(n: any, extra?: number): boolean;
     rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean;
     rustDictElementSource(init: any): boolean;
     /** lf: a local spelled `Dictionary<Dict>` (`const d: Dictionary<Dict> = …`): its string-keyed values are maps. */
@@ -2513,6 +2542,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsSubscriptionWriteValue(n: any): boolean;
     private rustBuiltLists;
     rustBuiltListLocal(declaration: any): boolean;
+    /** `this.inArray (needle, x)` (haystack), `this.arrayConcat (a, b)` (either operand) on the base helpers, or the row of a
+     *  `stored.append (x)` statement on a ws cache local: hand-written slots taking `impl Into<Value>`. */
+    rustBuiltListLentHelperSlot(call: any, n: any): 'inArray' | 'arrayConcat' | 'append' | undefined;
     /** `Promise.all(x)` with `x` its only argument (printed `promise_all(&x)`). */
     rustBuiltListPromiseAllOperand(call: any, n: any): boolean;
     /** `x = this.m(.., x, ..)` naming `x` only there and on the left: the old list moves into the call before the write. */
@@ -2733,6 +2765,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `ostr` for a string slot read through the scalar forms: tests, `format!` concats, string methods, typed
      *  writes, and boxes (alias, ternary arm, `Value` slots) that re-box through `From`; needs one native use. */
     rustStrSlotKind(element: any, scope: any): string | undefined;
+    /** pb: a checker-string slot of a native tuple in a method, read whole as the initializer or the statement write of
+     *  another local of the same function: the slot and that local are decided together by `rustScalarSolveScope`. */
+    rustSlotJoinsSolve(element: any): boolean;
     rustDeclaredDictSlot(element: any): boolean;
     /** One element read rooted at the bearer: a plain read the native op serves. */
     rustReadBearerElementUse(access: any, kind: 'list' | 'map'): boolean;
@@ -3000,6 +3035,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueStrCallers;
     rustVenueStrParamType(param: any): string | undefined;
     rustVenueStrParamTypeUncached(param: any): string | undefined;
+    private static readonly RUST_BASE_SCALAR_PARAM_METHODS;
+    /** A sync method of the base `Exchange` class with no override in any venue file, no trait slot and no typed
+     *  signature: every call resolves to this one body, so typing its parameter changes no other declaration. */
+    rustBaseOnlyMethod(method: any, file: string): boolean;
     /** Rust type of a scalar TS parameter type: string -> `&str`, `number` / `Num` -> `f64`, `int` / `Int` -> `i64`,
      *  boolean -> `bool`; a nullable part makes it an `Option` (never for `bool`). */
     rustVenueScalarTypeOf(type: any, typeNode: any): string | undefined;
