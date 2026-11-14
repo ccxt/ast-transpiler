@@ -8728,6 +8728,78 @@ describe('ral-qc: an omit of a proven map holds the shared map', () => {
     });
 });
 
+describe('ral-ra: omit / extend remainder', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export default class Exchange {\n' +
+            '    extend (a: any, b: any = undefined): any { return a; }\n    omit (o: any, k: any): any { return o; }\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any): any { return o; }\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n}\n',
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    rewritten (params: any, flag: boolean) {\n        let rest = this.omit ({ 'a': 1, 'b': 2 }, 'a');\n        const s = this.safeString (rest, 'b');\n        if (flag) {\n            rest = this.omit (rest, [ 'b', 'c' ]);\n        }\n        return this.hold (this.extend ({ 's': s }, rest));\n    }\n" +
+            "    opaqueRewritten (params: any, flag: boolean) {\n        let rest = this.omit (params, 'a');\n        if (flag) {\n            rest = this.omit (rest, 'b');\n        }\n        return this.hold (rest);\n    }\n" +
+            "    keys (params: any) {\n        const rest = this.omit (params, [ 'a', 'b' ]);\n        return this.hold (rest);\n    }\n" +
+            "    lists (data: any, flag: boolean) {\n        let rows = this.safeList (data, 'a', []);\n        if (flag) {\n            rows = this.safeList (data, 'b', []);\n        }\n        return this.hold (rows.length);\n    }\n" +
+            "    stored (result: any) {\n        const order: any = { 'a': 1 };\n        const trades = this.safeList (result, 'trades', []);\n        order['trades'] = trades;\n        return this.hold (order);\n    }\n" +
+            "    nullable (params: any, request: any) {\n        const ids = this.safeList (params, 'ids');\n        if (ids !== undefined) {\n            request['ids'] = ids;\n        }\n        return this.hold (request);\n    }\n" +
+            "    aliased (response: any) {\n        let rows = undefined;\n        const data = this.safeList (response, 'data');\n        if (data !== undefined) {\n            rows = data;\n        }\n        return this.hold (rows);\n    }\n" +
+            "    head (params: any) {\n        const merged = this.extend ({ 'a': 1 }, params);\n        const s = this.safeString (merged, 'a');\n        return this.hold (this.extend (merged, { 's': s }));\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-ra-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    const body = (name: string) => { const at = out.indexOf(`fn ${name}(`); const next = out.indexOf(' fn ', at + 4); return out.slice(at, next < 0 ? undefined : next); };
+    test('a reassigned omit of a proven map stays crate::value::Dict; its self-omit moves the map through the call', () => {
+        const b = body('rewritten');
+        expect(b).toMatch(/let mut rest: crate::value::Dict = self\.omit\(/);
+        expect(b).toContain('rest = self.omit(Value::Dict(rest), &["b", "c"], &[]).into_dict();');
+    });
+    test('a reassigned omit of an unproven params value keeps the box', () => {
+        expect(body('opaqueRewritten')).toMatch(/let mut rest: Value = self\.omit\(params/);
+    });
+    test('a literal omit key list prints the &[&str; N] key slot', () => {
+        expect(body('keys')).toContain('self.omit(params, &["a", "b"]');
+        expect(body('keys')).not.toContain('Value::Str("a"');
+    });
+    test('a base-tier literal omit keeps its optional-args slice after the key slot', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-ra-base-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), 'export default class Exchange {\n    omit (o: any, k: any): any { return o; }\n    hold (x: any): any { return x; }\n' +
+            "    strip (balance: any) {\n        const rest = this.omit (balance, [ 'info', 'free' ]);\n        return this.hold (rest);\n    }\n}\n");
+        const base = transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+        expect(base).toContain('self.omit(balance, &["info", "free"], &[])');
+    });
+    test('a reassigned []-defaulted safeList local written only from list producers is crate::value::List', () => {
+        const b = body('lists');
+        expect(b).toMatch(/let mut rows: crate::value::List = self\.safeList\(.*\)\.into_list\(\);/);
+        expect(b).toMatch(/\n\s*rows = self\.safeList\(.*\)\.into_list\(\);/);
+    });
+    test('a never-null safeList stored at a key of a local map holds the list and moves into the store', () => {
+        const b = body('stored');
+        expect(b).toMatch(/let mut trades: crate::value::List = /);
+        expect(b).toMatch(/insert\("trades"[^;]*Value::Arr\(trades\)\)/);
+    });
+    test('a no-default safeList stored at a key or aliased is Option<List>, None boxing to Value::Null', () => {
+        const a = body('nullable');
+        expect(a).toMatch(/let mut ids: Option<crate::value::List> = .*\.into_opt_list\(\);/);
+        expect(a).toContain('ids.is_some()');
+        expect(a).toMatch(/"ids"[^;]*ids\.map_or\(Value::Null, Value::Arr\)\)/);
+        const b = body('aliased');
+        expect(b).toMatch(/let mut data: Option<crate::value::List> = /);
+        expect(b).toContain('rows = data.map_or(Value::Null, Value::Arr);');
+    });
+    test('a shared-map extend head at its last use moves without a clone', () => {
+        const b = body('head');
+        expect(b).toMatch(/self\.extend\(merged, /);
+        expect(b).not.toContain('merged.clone()');
+    });
+});
+
 describe('rust base list filters answer a fresh container', () => {
     const files: Record<string, string> = {
         'ts/src/base/Exchange.ts': 'export type Int = number | undefined;\nexport default class Exchange {\n' +
