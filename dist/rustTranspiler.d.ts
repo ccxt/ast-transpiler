@@ -368,6 +368,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `Precise`, `Math` or `new` operand, which read `&Value` and would take a copy only because of the lending. */
     rustNilStrLendSites(declaration: any): boolean;
     rustNilOptStrConcatUse(n: any): boolean;
+    /** The `as_deref().unwrap_or("null")` read of a concat operand keeps its statement within the 400-char line budget. */
+    rustOptStrConcatFits(n: any): boolean;
     /** A write that decodes a `Value` result (a call, or a ternary over one). */
     rustNilDecodedWrite(rhs: any): boolean;
     /** `[ x, .. ] = <list>` as its own statement: `x` is written from a tuple slot. */

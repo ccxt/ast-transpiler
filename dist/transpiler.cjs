@@ -53969,6 +53969,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     if (!this.isNativeStringConcatPair(this.typeOfNodeIfAny(parent.left), this.typeOfNodeIfAny(parent.right)))
       return false;
+    return this.rustOptStrConcatFits(n);
+  }
+  /** The `as_deref().unwrap_or("null")` read of a concat operand keeps its statement within the 400-char line budget. */
+  rustOptStrConcatFits(n) {
+    const parent = n.parent;
     const statement = _chunkQYYT7MP4cjs.findAncestor.call(void 0, parent, (a) => _is.isStatement.call(void 0, a));
     if (statement === void 0 || _is.isBlock.call(void 0, statement))
       return false;
@@ -56657,8 +56662,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (_is.isBinaryExpression.call(void 0, parent) && parent.operatorToken.kind === _ast.SyntaxKind.PlusToken) {
       if (kind !== "str" && kind !== "ostr")
         return this.rustScalarExpressionUseForm(n, kind);
-      if (kind === "ostr" && this.rustNilOptStrConcatUse(n) && this.printNode(parent, 0).trim().startsWith("Value::Str(format!("))
-        return "concat";
+      if (kind === "ostr")
+        return this.printNode(parent, 0).trim().startsWith("Value::Str(format!(") && this.rustOptStrConcatFits(n) ? "concat" : "box";
       return kind === "str" && this.printNode(parent, 0).trim().startsWith("Value::Str(format!(") ? "concat" : "box";
     }
     if (_is.isConditionalExpression.call(void 0, parent) && parent.condition !== n)
@@ -58587,6 +58592,16 @@ ${binding(plan.indent)}` : ""), head: "" };
       this.forLoopCounter = loops;
       return print();
     };
+    const lent = held.filter((n) => this.rustMarketLentLocals.has(n));
+    if (lent.length > 0 && lent.length < held.length) {
+      for (const n of lent)
+        this.rustScalarVetoed.add(n);
+      const lentBoxed = redo();
+      if (long(lentBoxed).length < lines.length)
+        return lentBoxed;
+      for (const n of lent)
+        this.rustScalarVetoed.delete(n);
+    }
     for (const n of held)
       this.rustScalarVetoed.add(n);
     const boxed = redo();
