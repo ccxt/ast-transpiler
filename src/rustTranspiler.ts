@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { NodeFlags, SyntaxKind, type Block, type CallExpression, type Declaration, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
-import { isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration } from "typescript/unstable/ast/is";
+import { isArrayBindingPattern, isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 import * as fs from 'fs';
@@ -7340,7 +7340,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (hidden !== undefined) return baseFile.test(hidden.getSourceFile().fileName) && hidden.parameters?.[Array.from(method.parameters).indexOf(param)] !== undefined
             && this.rustStrArrayDeclared(hidden.parameters[Array.from(method.parameters).indexOf(param)].name);
         if (depth > 2 || this.rustMethodReferencedAsValue(method) || (method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
-        const name = String(method.name?.text ?? '');
+        const name = isIdentifier(method.name) || isStringLiteral(method.name) ? String(method.name.text) : '';
         const index = Array.from(method.parameters as any).indexOf(param);
         const key = this.rustDeclarationKey(method);
         let sites = 0;
@@ -9054,10 +9054,12 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** wi: a tuple slot whose producer builds an exact Int-or-null on every return (`checkOptionInteger`): an `i64` bound too. */
     rustTbExactIntSlot(declaration: any): boolean {
-        if (declaration === undefined || !isBindingElement(declaration) || declaration.parent?.kind !== SyntaxKind.ArrayBindingPattern) return false;
-        const owner: any = declaration.parent.parent;
+        if (declaration === undefined || !isBindingElement(declaration)) return false;
+        const pattern = declaration.parent;
+        if (pattern === undefined || !isArrayBindingPattern(pattern)) return false;
+        const owner: any = pattern.parent;
         return owner !== undefined && isVariableDeclaration(owner) && owner.initializer !== undefined
-            && this.rustExactSlotCallee(owner.initializer, declaration.parent.elements.indexOf(declaration), 'int');
+            && this.rustExactSlotCallee(owner.initializer, pattern.elements.indexOf(declaration), 'int');
     }
 
     /** ub: a `this.parseToInt(..)` call printed as its boxed `Int` / `Null` (`Value::from(self.parse_to_int(..))`). */
