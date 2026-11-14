@@ -4227,6 +4227,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (strKind && this.rustScalarHasPairEquality(declaration) && this.rustScalarBorrowedBox(declaration)) return undefined;
         // a hand-off ternary whose arms print only as a `Value` keeps the box its uses would read
         if (handOff && isConditionalExpression(this.unwrapParens(declaration.initializer)) && this.rustScalarNativeText(kind, declaration.initializer) === undefined) return undefined;
+        // pg: a string the precision formatters write (or a precision override returns) stays boxed where it is a `Precise.*` operand
+        if (strKind && copied > 0 && this.rustPrecisionTouched(declaration, scope) && this.rustPreciseOperandLocal(declaration)) return undefined;
         if (this.rustVenueScalarSource(declaration.initializer) && ((boxed > 0 && !handOff) || this.rustVenueLocalHandedOn(declaration))) {
             // od: unless every copying box sits at a lending slot (`Value::from(x.as_deref())`: the copy the `Value` clone made)
             if (!strKind || this.rustStrNoLend || this.rustOdExcludedCallee(declaration.initializer) || this.rustStrReturnedLocal(declaration, scope) || this.rustVenueLocalHandedOn(declaration) || this.rustReaderDeclTooLong(declaration, kind) || !this.rustReaderLendBoxes(declaration)) return undefined;
@@ -4283,7 +4285,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (copied > 0 && kind === 'ostr' && !this.rustElementReadScalarKind(this.unwrapParens(declaration.initializer)) && this.rustScalarKeyedLocal(declaration)) return undefined;
         // a key-admitted local converts once at its declaration: that line keeps the 400-char budget
         if (this.rustScalarOptKeyCostly(declaration, kind) === false && kind === 'ostr' && this.rustScalarOptKeyCount(declaration) > 0) this.rustScalarGuarded.add(declaration);
-        if (guarded || handOff || this.rustStrMethodRecvLocal(declaration)) this.rustScalarGuarded.add(declaration);
+        if (guarded || handOff || this.rustStrMethodRecvLocal(declaration) || (strKind && this.rustPrecisionWritten(declaration))) this.rustScalarGuarded.add(declaration);
         // only a local the lending admits lends (a string typed by another rule keeps its boxes)
         if (handOff && copied > 0 && strKind && this.rustStrLendOnly(declaration)) this.rustStrLentLocals.add(declaration);
         return kind;
@@ -4745,6 +4747,9 @@ export class RustTranspiler extends BaseTranspiler {
         parseToInt: [ 'number', 'oint' ], incrementingNonce: [ 'int', 'int' ], symbol: [ 'string', 'str' ],
         findTimeframe: [ 'Str', 'ostr' ], networkIdToCode: [ 'Str', 'ostr' ], requestId: [ 'int', 'int' ],
         isPostOnly: [ 'boolean', 'bool' ],
+        // pg: the precision formatters answer `Str` (overrides may spell `string`); every return is a string or undefined
+        amountToPrecision: [ 'Str|string', 'ostr' ], priceToPrecision: [ 'Str|string', 'ostr' ], costToPrecision: [ 'Str|string', 'ostr' ],
+        feeToPrecision: [ 'Str|string', 'ostr' ], currencyToPrecision: [ 'Str|string', 'ostr' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
@@ -4761,7 +4766,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustMethodTypedReturnKind(node): string | undefined {
         if (node?.kind !== SyntaxKind.MethodDeclaration || node.body === undefined || this.isAsyncFunction(node) || !isIdentifier(node.name)) return undefined;
         const entry = RustTranspiler.RUST_BASE_TYPED_METHODS[String(node.name.text)];
-        if (entry === undefined || String(node.type?.getText?.() ?? '').trim() !== entry[0]) return undefined;
+        if (!Array.isArray(entry) || !entry[0].split('|').includes(String(node.type?.getText?.() ?? '').trim())) return undefined;
         return /ts[\\/]src[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? '')) ? entry[1] : undefined;
     }
 
@@ -4783,6 +4788,46 @@ export class RustTranspiler extends BaseTranspiler {
         // a base method the runtime implements by hand (no venue redeclares it, or the member would resolve there)
         if (member.kind === SyntaxKind.MethodDeclaration) return this.rustMethodTypedReturnKind(member) ?? (base && RustTranspiler.RUST_BASE_TYPED_HAND_METHODS.has(name) ? RustTranspiler.RUST_BASE_TYPED_RUNTIME[name] : undefined);
         return base && member.kind === SyntaxKind.PropertyDeclaration ? RustTranspiler.RUST_BASE_TYPED_RUNTIME[name] : undefined;
+    }
+
+    /** pg: a call of a precision formatter of the typed-return table (`-> Option<String>`); its locals carry the venue copy veto. */
+    rustPrecisionCall(expr): boolean {
+        const node: any = this.unwrapParens(expr);
+        return node !== undefined && isCallExpression(node) && isPropertyAccessExpression(node.expression)
+            && /^(amount|price|cost|fee|currency)ToPrecision$/.test(String(node.expression.name.text)) && this.rustBaseTypedReturnKind(node) === 'ostr';
+    }
+
+    /** pg: the local is written from a precision formatter, or returned by one of the typed precision methods. */
+    rustPrecisionTouched(declaration, scope): boolean {
+        if (this.rustPrecisionCall(declaration.initializer)) return true;
+        if (isMethodDeclaration(scope) && isIdentifier(scope.name) && /^(amount|price|cost|fee|currency)ToPrecision$/.test(String(scope.name.text))
+            && this.rustMethodTypedReturnKind(scope) !== undefined && this.rustStrReturnedLocal(declaration, scope)) return true;
+        return false;
+    }
+
+    /** pg: a later whole write of the local is a precision-formatter call (the 400-char guard watches such locals). */
+    rustPrecisionWritten(declaration): boolean {
+        let written = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const parent: any = n.parent;
+            if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken && this.rustPrecisionCall(parent.right)) written = true;
+            return true;
+        });
+        return written;
+    }
+
+    /** pg: some use of the local is an argument of a `Precise.<op>(..)` call. */
+    rustPreciseOperandLocal(declaration): boolean {
+        let found = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            let top: any = n;
+            while (isParenthesizedExpression(top.parent) || top.parent?.kind === SyntaxKind.AsExpression) top = top.parent;
+            const call: any = top.parent;
+            if (isCallExpression(call) && call.expression !== top && isPropertyAccessExpression(call.expression)
+                && isIdentifier(call.expression.expression) && String(call.expression.expression.text) === 'Precise' && !this.rustLocalLastUse(n, declaration)) found = true;
+            return true;
+        });
+        return found;
     }
 
     /** The unboxed call text. */
@@ -5617,6 +5662,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A venue typed string is copied out of the `Value` once: a box short of a moving last use, or a hand-on, would copy it again. */
     rustVenueTypedCostly(declaration, kind: string, copied: number): boolean {
+        // pg: a precision-formatter string read as a `Precise.*` operand (a `&Value` reader) would be boxed by copy there
+        if (kind === 'ostr' && copied > 0 && this.rustPrecisionCall(declaration.initializer) && this.rustPreciseOperandLocal(declaration)) return true;
         if (this.rustVenueTypedCall(declaration.initializer) === undefined) return false;
         return (kind === 'ostr' && (copied > 0 || this.rustVenueLocalHandedOn(declaration))) || this.rustReaderDeclTooLong(declaration, kind);
     }
