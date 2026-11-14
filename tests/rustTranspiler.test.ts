@@ -591,8 +591,8 @@ describe('rust transpiling tests', () => {
         "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('while');
-        // Both operands are checker-typed numbers — native f64 comparison.
-        expect(output).toContain('i.as_f64().unwrap_or(f64::NAN) < Value::Int(10).as_f64().unwrap_or(f64::NAN)');
+        // wb: the body never reads the counter, so it is an i64 compared natively
+        expect(output).toContain('(i as f64) < Value::Int(10).as_f64().unwrap_or(f64::NAN)');
     });
 
     // Numeric comparisons: numbers go native, everything else keeps the helper
@@ -7257,7 +7257,7 @@ describe('FM-RS1 L2 integer for-loop counters', () => {
     const matchStep = (v: string, k = 1) => `${v} = (match (&(${v}), &(Value::Int(${k})))`;
 
     test('i++ / i-- on an int-literal counter bumps the Int payload in place', () => {
-        const o = body("        for (let i = 0; i < lim; i++) { this.bar (lim); }\n        for (let j = 5; j > 0; j--) { this.bar (lim); }");
+        const o = body("        for (let i = 0; i < lim; i++) { this.bar (lim - i); }\n        for (let j = 5; j > 0; j--) { this.bar (lim); }");
         expect(o).toMatch(step('i'));
         expect(o).toMatch(step('j', '-'));
         expect(o).not.toContain(matchStep('i'));
@@ -7293,7 +7293,7 @@ describe('FM-RS1 L2 integer for-loop counters', () => {
     });
 
     test('the step binds __n when the function already uses the name n', () => {
-        const o = body("        for (let i = 0; i < n; i++) { this.bar (n); }", 'n: number');
+        const o = body("        for (let i = 0; i < n; i++) { this.bar (n - i); }", 'n: number');
         expect(o).toContain('if let Value::Int(__n) = &mut i { *__n += 1; }');
     });
 
@@ -12697,7 +12697,7 @@ describe('ral-tb: boxed typed values remainder', () => {
     test('a parseToInt for-bound is an Option<i64> compared with the Int counter inline (Some orders as f64, None is false)', () => {
         const out = write ('tb-ptibound', "    parseToInt (n: any): number { return n; }\n    m (n: any) {\n        let s = '1';\n        const decimalsCount = this.parseToInt (n);\n        for (let i = 0; i < decimalsCount; i++) {\n            s = s + '0';\n        }\n        return this.hold (s);\n    }\n");
         expect(out).toContain('let mut decimalsCount: Option<i64> = ');
-        expect(out).toContain('matches!(decimalsCount, Some(__b) if i.as_f64().unwrap_or(f64::NAN) < (__b as f64))');
+        expect(out).toContain('matches!(decimalsCount, Some(__b) if (i as f64) < (__b as f64))');
         expect(out).not.toContain('is_less_than(');
     });
     test('negative: a parseToInt for-bound that also meets another local elsewhere stays a Value', () => {
@@ -13363,5 +13363,20 @@ describe('ral-wf: a reuse literal rebuilt by mergeBalanceAccount and written at 
     test('negative: a deepExtend rebuild (may answer the non-map operand) keeps the box', () => {
         const body = out.slice (out.indexOf ('fn deepRows'));
         expect(body).toMatch(/let mut request: Value = /);
+    });
+});
+
+describe('ral-wb: scalar literals, loop counters, aliases (round 36)', () => {
+    test('a for counter the body never reads is an i64 stepped and compared natively', () => {
+        const ts = "class X {\n    f (r: string[], c: number) {\n        for (let i = 0; i < c; i++) {\n            r.push ('x');\n        }\n        return r;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut i: i64 = 0;');
+        expect(output).toContain('i += 1;');
+        expect(output).not.toContain('let mut i: Value');
+    });
+    test('negative: a counter the body reads in arithmetic stays a Value', () => {
+        const ts = "class X {\n    f (r: any[], c: number) {\n        for (let i = 0; i < c; i++) {\n            r.push (c - i);\n        }\n        return r;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut i: Value = Value::Int(0);');
     });
 });

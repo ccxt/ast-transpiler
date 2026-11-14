@@ -14233,15 +14233,14 @@ export class RustTranspiler extends BaseTranspiler {
         return true;
     }
 
-    /** True when every occurrence of `name` in the body printed as a `.get(name as usize)` read or a `Value::Int(name)` box. */
+    /** True when every occurrence of `name` in the body printed as a `.get(name as usize)` read or a `Value::Int(name)` box.
+     *  wb: a body that never reads the counter is closed too (only the step and the bound see it). */
     rustI64BodyIsClosed(body: any, name: string): boolean {
-        let closed = 0;
         for (const n of this.rustScopeNameNodes(body, name)) {
             if (isIdentifier(n) && this.rustIdentifierIsPropertyName(n) && n.parent.kind !== SyntaxKind.ShorthandPropertyAssignment) continue;
             if (!isIdentifier(n) || !this.rustI64ClosedUses.has(n)) return false;
-            closed++;
         }
-        return closed > 0;
+        return true;
     }
 
     /** `i < X.length` whose condition printed as a native compare over a native `len()`: the place `X`. */
