@@ -2555,6 +2555,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustNilIntLiteral(node) !== undefined) return 'int';
         if (isIdentifier(node)) {
             if (this.rustStringLocalIdentifierIsTyped(node)) return 'str';
+            if (this.rustNilValueStrAlias(node)) return 'str';
             return this.rustNilLocalOfIdentifier(node)?.kind;
         }
         if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.PlusToken) {
@@ -2760,7 +2761,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustDeclaredNode(n) !== declaration) continue;
             const rhs: any = this.unwrapParens(parent.right);
             if (!this.rustNilDecodedWrite(rhs)) writes++;
-            const write = isIdentifier(rhs) && this.literalKindOfNode(rhs) !== 'null' ? this.rustScalarIdentifierKind(rhs) : this.rustScalarValueKind(rhs, true);
+            const write = isIdentifier(rhs) && this.literalKindOfNode(rhs) !== 'null' ? (this.rustScalarIdentifierKind(rhs) ?? (this.rustNilValueStrAlias(rhs) ? 'ostr' : undefined)) : this.rustScalarValueKind(rhs, true);
             joined = this.rustScalarJoinKinds(joined, write);
             if (joined === undefined) return undefined;
         }
@@ -2811,7 +2812,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const rhs: any = this.unwrapParens(parent.right);
                 // nc: a typed source of the same kind still read later copies once where its `Value` box was cloned
                 // (`Option<String>`), or is `Copy` (`Option<i64|f64>`, printed owned: the printer adds no alias clone)
-                if (isIdentifier(rhs) && !this.rustNilAliasMove(rhs, kind) && !this.rustNilLiveAliasCopy(rhs, kind)) ok = false;
+                if (isIdentifier(rhs) && !this.rustNilAliasMove(rhs, kind) && !this.rustNilLiveAliasCopy(rhs, kind) && !(kind === 'ostr' && this.rustNilValueStrAlias(rhs))) ok = false;
                 return true;
             }
             if (kind !== 'ostr') return true;
@@ -3045,6 +3046,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (literal === 'boolean') return `${name} = Some(${node.kind === SyntaxKind.TrueKeyword ? 'true' : 'false'})`;
         const int = this.rustNilIntLiteral(node);
         if (int !== undefined) return `${name} = Some(${int})`;
+        if (isIdentifier(node) && local.kind === 'str' && this.rustNilValueStrAlias(node)) return `${name} = ${super.printIdentifier(node)}.into_opt_string()`;
         if (isIdentifier(node)) return `${name} = ${super.printIdentifier(node)}.clone()`;
         const text = this.printNode(node, 0).trim();
         if (local.kind === 'str') {
@@ -4227,13 +4229,61 @@ export class RustTranspiler extends BaseTranspiler {
                     }
                     this.rustScalarDecisions.set(n, unstable.has(n) ? null : kind);
                 }
-                if (!changed) return;
+                if (!changed) { this.rustScalarAliasPhase(scope, candidates); return; }
             }
             for (const n of candidates) this.rustScalarDecisions.set(n, null);
         } finally {
             this.rustScalarSolving.delete(scope);
             this.rustScalarSolved.add(scope);
         }
+    }
+
+    /** ya: the scope whose settled decisions an alias write may read (phase 2 of `rustScalarSolveScope`). */
+    private rustScalarAliasScope: any = undefined;
+    private rustScalarAliasTarget: any = undefined;
+    private rustScalarAliasJournal: any[] = [];
+
+    /** ya: phase 2. Once every scalar decision of the function has settled, a nil local still `Value` may take
+     *  `x = y.into_opt_string()` from a `Value` string local `y` at its last use. The alias never feeds back into
+     *  `y`'s own rule: it is admitted only when re-deciding every other candidate with it gives the same answers. */
+    rustScalarAliasPhase(scope, candidates: any[]): void {
+        const targets = candidates.filter((n) => isVariableDeclaration(n) && this.rustScalarDecisions.get(n) === null
+            && (n.initializer === undefined || this.literalKindOfNode(n.initializer) === 'null') && this.rustScalarAliasCandidate(n));
+        if (targets.length === 0) return;
+        this.rustScalarAliasScope = scope;
+        try {
+            for (const target of targets) {
+                const before = new Map<any, string | null>(candidates.map((n) => [ n, this.rustScalarDecisions.get(n) ?? null ]));
+                this.rustScalarAliasTarget = target;
+                this.rustScalarAliasJournal = [];
+                const kind = this.rustScalarTry(target);
+                this.rustScalarAliasTarget = undefined;
+                let keep = kind === 'ostr' && this.rustScalarAliasJournal.length > 0;
+                if (keep) {
+                    this.rustScalarDecisions.set(target, kind);
+                    // every other candidate re-decided against the new write must answer exactly as before (no source flips)
+                    keep = candidates.every((n) => n === target || this.rustScalarTry(n) === before.get(n));
+                }
+                if (!keep) {
+                    this.rustScalarDecisions.set(target, null);
+                    for (const n of this.rustScalarAliasJournal) this.rustScalarAliasPrinted.delete(n);
+                }
+            }
+        } finally {
+            this.rustScalarAliasScope = undefined;
+            this.rustScalarAliasTarget = undefined;
+        }
+    }
+
+    /** ya: a nil local with at least one `x = y;` write whose `y` is an initialised local (cheap pre-filter). */
+    rustScalarAliasCandidate(declaration): boolean {
+        const scope: any = this.rustEnclosingFunction(declaration);
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text)) as any[]) {
+            const parent: any = n.parent;
+            if (!isIdentifier(n) || !isBinaryExpression(parent) || parent.left !== n || parent.operatorToken.kind !== SyntaxKind.EqualsToken) continue;
+            if (isIdentifier(this.unwrapParens(parent.right)) && this.rustDeclaredNode(n) === declaration) return true;
+        }
+        return false;
     }
 
     rustScalarTry(declaration): string | null {
@@ -5985,6 +6035,47 @@ export class RustTranspiler extends BaseTranspiler {
         return `${read}.into_opt_string()`;
     }
 
+    /** ral-xa: `x = y;` into a nil-declared local, `y` a `Value` local of the same function the checker types string
+     *  (initialised, typed by no scalar / nil / reader rule) at its last use: `y.into_opt_string()` moves the string out. */
+    /** ya: argument count of a safeString-family reader before its default (`safeString2(o, a, b, d)`: 3). */
+    private static readonly RUST_SAFE_STRING_KEY_ARGS: { [name: string]: number } = {
+        safeString: 2, safeString2: 3, safeStringN: 2, safeStringLower: 2, safeStringLower2: 3, safeStringLowerN: 2, safeStringUpper: 2, safeStringUpper2: 3, safeStringUpperN: 2,
+    };
+
+    rustNilValueStrAlias(rhs: any): boolean {
+        const node: any = this.unwrapParens(rhs);
+        if (node === undefined || !isIdentifier(node) || node.text === 'undefined' || this.checkerOrUndefined() === undefined || !this.rustNilVenueWrite(node)) return false;
+        // ya: only in phase 2 of the function's scalar solve, over settled decisions (never while they are seeded or iterated)
+        if (this.rustScalarAliasScope === undefined || this.rustEnclosingFunction(node) !== this.rustScalarAliasScope) return this.rustScalarAliasPrinted.has(node);
+        const source: any = this.rustDeclarationOfIdentifier(node);
+        if (source === undefined || !isVariableDeclaration(source) || !isIdentifier(source.name) || source.name === node || source.initializer === undefined) return false;
+        if (this.literalKindOfNode(source.initializer) === 'null' || source.parent?.kind !== SyntaxKind.VariableDeclarationList || source.parent.declarations.length !== 1) return false;
+        if (this.rustEnclosingFunction(source) !== this.rustEnclosingFunction(node) || this.primitiveKindOfType(this.typeOfNodeIfAny(source.name)) !== 'string') return false;
+        // the producer is proven string-or-undefined: a safeString-family reader, a string-kinded scalar source, or a string element
+        const init: any = this.unwrapParens(source.initializer);
+        const reader = isCallExpression(init) && this.rustNilSelfHelperName(init) !== undefined && RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(this.rustNilSelfHelperName(init));
+        const kind = reader ? 'ostr' : this.rustScalarValueKind(init, true);
+        if (kind !== 'str' && kind !== 'ostr') return false;
+        // ya: a reader with no default is retyped after printing by the ccxt `_opt` reader pass (`safe_string_k_opt`):
+        // the printer cannot see that source settle, so it never takes it (gate 13941 sent two such sources back to Value)
+        if (reader && init.arguments.length <= (RustTranspiler.RUST_SAFE_STRING_KEY_ARGS[this.rustNilSelfHelperName(init)] ?? 2)) return false;
+        if (this.rustScalarLocalOf(node) !== undefined || this.rustNilLocalOfIdentifier(node) !== undefined || this.rustStringLocalIdentifierIsTyped(node)) return false;
+        // a target handed back by `return` keeps its rule (the method's printed return may be retyped after printing)
+        let top: any = node;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const target: any = isIdentifier(top.parent?.left) ? this.rustDeclaredNode(top.parent.left) : undefined;
+        if (target === undefined || !isVariableDeclaration(target)) return false;
+        let returned = false;
+        this.rustLocalUsesAll(target, String(target.name.text), false, (n: any) => { if (isReturnStatement(n.parent)) returned = true; return true; });
+        if (target !== this.rustScalarAliasTarget || returned || !this.rustLocalLastUse(node, source)) return false;
+        this.rustScalarAliasPrinted.add(node);
+        this.rustScalarAliasJournal.push(node);
+        return true;
+    }
+
+    /** ya: alias reads phase 2 admitted (the printer asks again after the solve; the answer must not change). */
+    private rustScalarAliasPrinted = new WeakSet<any>();
+
     /** The whole initializer of a `let`/`const` (writes and ternary arms keep their `Value`). */
     rustVenueInitializer(node): boolean {
         let current: any = node;
@@ -7300,7 +7391,8 @@ export class RustTranspiler extends BaseTranspiler {
         const optional = kind.startsWith('o');
         if (isIdentifier(node) && node.text !== 'undefined') {
             const source = this.rustScalarLocalOf(node)?.kind;
-            return source === kind || (optional && source === kind.slice(1));
+            // ya: phase 2 of the solve, a `Value` string local at its last use moves out (`into_opt_string`)
+            return source === kind || (optional && source === kind.slice(1)) || (kind === 'ostr' && source === undefined && depth === 0 && this.rustNilValueStrAlias(node));
         }
         const value = this.rustScalarValueKind(node, true);
         if (value === kind || (optional && (value === 'null' || value === kind.slice(1)))) return true;
@@ -7723,6 +7815,7 @@ export class RustTranspiler extends BaseTranspiler {
         const local = this.rustScalarLocalOf(left);
         const alias: any = this.unwrapParens(right);
         if (local !== undefined && isIdentifier(alias) && this.rustNilAliasMoves.has(alias) && this.rustScalarIdentifierKind(alias) === local.kind) return `${super.printIdentifier(left)} = ${super.printIdentifier(alias)}.take()`;
+        if (local?.kind === 'ostr' && isIdentifier(alias) && this.rustScalarIdentifierKind(alias) === undefined && this.rustNilValueStrAlias(alias)) return `${super.printIdentifier(left)} = ${super.printIdentifier(alias)}.into_opt_string()`;
         const text = local === undefined ? undefined : this.rustScalarNativeText(local.kind, right);
         // nc: a bare `Copy` source (`i64` / `f64` / `bool` or its `Option`) is owned: the alias-source pass must not clone it
         const owned = text !== undefined && isIdentifier(alias) && text === super.printIdentifier(alias) && RustTranspiler.RUST_COPY_SCALAR_KINDS.has(local.kind);
