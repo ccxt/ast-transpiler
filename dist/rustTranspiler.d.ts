@@ -670,6 +670,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustEcdsaCall(node: any, identation: any): string | undefined;
     rustClockCall(node: any): boolean;
     rustVenueReturnTypesHas(node: any, name: string): boolean;
+    /** tc: `this.randomBytes(n)` resolved to the hand-written `-> String` runtime method */
+    rustRandomBytesCall(node: any): boolean;
     /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
     rustClockString(node: any): boolean;
     /** `this.nonce()` where every declaration of the name (base and each override) declares `int`: the trait slot
@@ -1065,6 +1067,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** qf: the `Option<&str>` text of a typed string local keying an `in` test (`inbox` use), else undefined:
      *  `Some(k.as_str())` / `k.as_deref()`, so a native `contains_key` reads it without the box (`None` misses like `Null`). */
     rustInKeyTypedText(key: any): string | undefined;
+    /** td: the left operand of a `k in obj` test that is `k` itself or `k` under parens / `as` casts, else undefined. */
+    rustInKeyTop(n: any): any;
     /** The key local of an `in` test has a non-null initializer (nil-declared locals are left to their own rule). */
     rustInKeyInitialised(n: any): boolean;
     /** qf: a typed local against an untyped `Value` partner (a local or parameter) that the checker types like the local:
@@ -1117,6 +1121,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustScalarGuardedBody(method: any, print: () => string): string;
     /** `m[k] = v` with `k` a `String` local whose single-key write prints a native insert. */
     rustScalarInsertKeyUse(n: any): boolean;
+    /** tb: a `networkIdToCode` result keyed into a map whose written value only READS it (`networks[k] = { 'network': k }`):
+     *  JS evaluates the key before the value, and so does the printed `insert(key, value)`, so the key text is taken before
+     *  any box in the value. Scoped to that initialiser (other key locals keep their own rules). */
+    rustTbKeyReadOnlyInValue(n: any, value: any): boolean;
+    /** tb: `this.networkIdToCode (..)` (the base typed `Str` reader of a network id). */
+    rustTbNetworkCodeInit(init: any): boolean;
     /** A key written `m[k as string]` / `m[(k)]`: the cast and parens print nothing, so the key is `k` itself. */
     rustKeyWrapped(n: any): any;
     /** The insert key of a `String` scalar local, else undefined. */
@@ -1145,6 +1155,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustConcatWithNilLocal(declaration: any): boolean;
     /** rd: a `for (let i = <int>; ..; i++)` counter read in its own loop whose only write is the step: always an `Int`. */
     rustValueIntCounter(node: any): boolean;
+    /** tb: `const b = this.parseToInt (..)` (an `Int`-or-`Null` producer, `i64` / `Option<i64>`). */
+    rustTbParseToIntInit(declaration: any): boolean;
+    /** tb: `i OP b` as the condition of `for (let i = <int>; ..; i++)` (the step is the counter's only write, so it is always
+     *  an `Int`), `b` a parseToInt `i64` / `Option<i64>` local: the counter operand, else undefined. */
+    rustTbCounterBound(cond: any, n: any, kind: string): any;
+    /** tb: a use of the bound outside that for-condition meets another local (an operand, a write, another local's initializer or
+     *  assignment source): those partners are other groups' decisions, so the bound keeps its `Value`. */
+    rustTbBoundHasPartner(declaration: any, cond: any): boolean;
+    /** tb: the for-condition of a `Value` `Int` counter (its i64 plan declined) against a typed parseToInt bound. */
+    printTbCounterBound(node: any): string | undefined;
     rustScalarExprHasForCounter(node: any): boolean;
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
@@ -1339,6 +1359,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTypedResultElemUse(n: any, elem: 'vec' | 'map'): boolean;
     /** Element-access hook: the native read of a typed result element, boxed through its shared record handle. */
     printTypedResultElemRead(node: any): string | undefined;
+    printTypedResultIndex(key: any): string;
+    private rustRecordElemDecisions;
+    rustRecordElemLocal(declaration: any): string | undefined;
+    rustRecordElemLocalUncached(declaration: any): string | undefined;
+    rustRecordElemLocalOf(node: any): any;
+    /** `let mut r: Option<&crate::types::T> = rows.get(i)` for a record element handle. */
+    printRecordElemLocal(declaration: any, indent: string, varName: string): string | undefined;
     rustCallLocalOf(node: any): any;
     rustOptMarketLocalOf(node: any): any;
     /** The typed `this.market (x)` call, unboxed; its `Err` re-raises as the untyped call did. */
@@ -1995,6 +2022,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  value of a ws `client.resolve|reject|send (m, ..)`: each takes the boxed `Value` by value, so the map's last
      *  use moves into `Value::Map(m)`, exactly the shared map the boxed local handed over. */
     rustLiteralMoveSlot(n: any): boolean;
+    /** `client.resolve|reject (x, ..)` on a ws handle, x the settled value. */
+    rustWsSettleMove(n: any): boolean;
     /** A prediction venue: `ts/src/prediction/<id>.ts` builds nested request maps in one method. */
     private static readonly RUST_PREDICTION_VENUE_FILE;
     /** The declaration behind `node` when it is a local typed as a dict bearer. */
@@ -2258,6 +2287,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBuiltKeyWriteLineOk(n: any, extra?: number): boolean;
     rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean;
     rustDictElementSource(init: any): boolean;
+    /** te: `this.urls['<lit>']` where the base `Exchange` declaration types that entry as a string-keyed map
+     *  (`urls!: { api: Dict, .. }`). The read leaves its box as the shared map (the same Arc bump the copy paid);
+     *  a missing or non-map entry reads Null at every string key, exactly as the empty map `into_dict()` leaves. */
+    rustUrlsMapEntry(init: any): boolean;
     /** lf: a local spelled `Dictionary<Dict>` (`const d: Dictionary<Dict> = …`): its string-keyed values are maps. */
     rustDictOfDictsLocal(node: any): boolean;
     rustListElementSource(init: any): boolean;
@@ -2679,6 +2712,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsSubscriptionWriteValue(n: any): boolean;
     private rustBuiltLists;
     rustBuiltListLocal(declaration: any): boolean;
+    /** ral-tf: no later statement of the function pushes to or writes the list, and the use is in no loop or closure. */
+    rustBuiltListFrozenAfter(node: any, declaration: any, name: string): boolean;
     /** `this.inArray (needle, x)` (haystack), `this.arrayConcat (a, b)` (either operand) on the base helpers, or the row of a
      *  `stored.append (x)` statement on a ws cache local: hand-written slots taking `impl Into<Value>`. */
     rustBuiltListLentHelperSlot(call: any, n: any): 'inArray' | 'arrayConcat' | 'append' | undefined;
@@ -2693,8 +2728,15 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `y.into_list()` moves exactly that list (no copy, no other variant to lose). */
     rustArrayGuardedMove(write: any): boolean;
     rustBuiltListOf(node: any): any;
+    /** ral-tf: a bare element local read nowhere after the literal (no loop or closure between): it moves into the element slot. */
+    rustBuiltListMovedElement(e: any): boolean;
+    /** ral-tf: the element list of a literal with moved bare elements, exactly as its `Value` box printed it (no added copy). */
+    rustBuiltListMovedLiteral(node: any): string | undefined;
     printBuiltListLiteral(node: any): string;
     printBuiltListDeclaration(declaration: any, indent: string, varName: string): string | undefined;
+    rustOptListGuardedMove(write: any): any;
+    /** A never-reassigned local initialised by a `[]`-defaulted base `safeList*` that still prints as the plain `Value` binding. */
+    rustDefaultedListValue(declaration: any, y: any): boolean;
     printBuiltListWrite(left: any, right: any): string | undefined;
     printBuiltListPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined;
     private static readonly RUST_OPT_LIST_SOURCES;
@@ -2749,6 +2791,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustDictSlotOfWrite(n: any): boolean;
     rustNilSlotDictCandidateUncached(declaration: any): boolean;
     rustNilSlotLineOk(n: any): boolean;
+    rustShortDestrHeads: WeakSet<any>;
     /** A nil-declared slot local typed as the map. */
     rustNilSlotDictLocal(declaration: any): boolean;
     rustNilSlotDictOf(node: any): any;
@@ -2790,6 +2833,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentRecordTypeNode(type: any): boolean;
     /** `Dict[]` / `object[]`, optionally `| undefined`: a list of rows, the same Value list a `List` holds. */
     rustRowListTypeNode(type: any): boolean;
+    /** ral-tf: per-venue ws helpers whose hash / topic / channel lists callers build and hand on whole. */
+    private static readonly RUST_LENT_HASH_LIST_METHODS;
+    /** ral-tf: `string[]` / `Str[]` / `any[]` (a hash, topic or channel list): a required per-venue list slot like `Dict[]`. */
+    rustScalarListTypeNode(type: any): boolean;
     /** A call argument landing in a lent list parameter of the callee. */
     rustLentListSlot(call: any, arg: any): boolean;
     /** `&x` for a shared list local lent to a lent list parameter. */
