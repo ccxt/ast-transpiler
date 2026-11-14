@@ -2432,7 +2432,8 @@ describe('rust checker-typed native container access', () => {
         '    run(): string { return this.id + "x"; }\n' +
         '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::Str(format!("{}{}", self.id, "x").into())');
+        // xc: a `string` method returns the `format!` String itself (no box unwrapped back)
+        expect(output).toContain('return Some(format!("{}{}", self.id, "x"));');
     });
 
     // Dictionary reads with a string-literal key skip the `Value::Str`
@@ -11811,6 +11812,62 @@ describe('ral-vc: venue hash helpers whose `: string` return is spelled keep the
             + '}\n');
         const r = transpiler.transpileRustByPath (path.join (dir, 'ts/src/prediction/polymarket.ts'));
         expect((r.rustSignatures ?? []).find((s: any) => s.name === 'hash_message')?.ret).toBe('ostr');
+    });
+});
+
+describe('ral-xc: awaited / plain venue results declared Dict, NullableDict, a list or a unified record', () => {
+    const write = (dir: string, files: Record<string, string>) => {
+        for (const [ rel, text ] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+    };
+    const base = 'export interface Dict { [key: string]: any }\n'
+        + 'export type NullableDict = Dict | undefined;\n'
+        + 'export type List = any[];\n'
+        + 'export interface Ticker { symbol: string; [key: string]: any }\n'
+        + 'export default class Exchange {\n'
+        + '    options: Dict = {};\n'
+        + '    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n'
+        + '    safeDict (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n'
+        + '    safeList (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n'
+        + '    hold (x: any): any { return x; }\n'
+        + '}\n';
+    const venue = (decl: string, use: string) => "import Exchange from './base/Exchange.js';\n"
+        + "import type { Dict, NullableDict, List, Ticker } from './base/Exchange.js';\n"
+        + 'export default class venue extends Exchange {\n'
+        + decl
+        + '    async run (p: Dict = {}): Promise<any> {\n' + use + '    }\n'
+        + '}\n';
+    const run = (key: string, decl: string, use: string) => {
+        const dir = path.join (rustFixtureRoot, 'ral-xc-' + key);
+        write (dir, { 'ts/src/base/Exchange.ts': base, 'ts/src/venue.ts': venue (decl, use) });
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('Dict: an awaited venue Dict result read by key is a shared map', () => {
+        const out = run ('dict', "    async wallet (m: string): Promise<Dict> {\n        return this.hold (this.options);\n    }\n",
+            "        const wallet = await this.wallet ('x');\n        return this.safeString (wallet, 'walletAddress');\n");
+        expect(out).toMatch(/let mut wallet: crate::value::Dict = self\.wallet\("x"\)\.await\.into_dict\(\);/);
+    });
+    test('NullableDict: a null-tested result holds Option<Dict> (Null boxes back as None)', () => {
+        const out = run ('optdict', "    findrow (m: string): NullableDict {\n        return this.safeDict (this.options, m);\n    }\n",
+            "        const row = this.findrow ('x');\n        if (row === undefined) {\n            return undefined;\n        }\n        return this.safeString (row, 'id');\n");
+        expect(out).toMatch(/let mut row: Option<crate::value::Dict> = self\.findrow\("x"\)\.into_opt_dict\(\);/);
+    });
+    test('a list: an awaited List result read by index and length is a shared list', () => {
+        const out = run ('list', "    async rowsof (m: string): Promise<List> {\n        return this.hold (m);\n    }\n",
+            "        const rows = await this.rowsof ('x');\n        const first = this.safeString (rows, 0);\n        return this.hold ([ first, rows.length ]);\n");
+        expect(out).toMatch(/let mut rows: crate::value::List = self\.rowsof\("x"\)\.await\.into_list\(\);/);
+    });
+    test('a unified record: an awaited Ticker result read by key is a shared map', () => {
+        const out = run ('record', "    async one (m: string): Promise<Ticker> {\n        return this.safeDict (this.options, m, {}) as Ticker;\n    }\n",
+            "        const ticker = await this.one ('x');\n        return this.safeString (ticker, 'symbol');\n");
+        expect(out).toMatch(/let mut ticker: crate::value::Dict = self\.one\("x"\)\.await\.into_dict\(\);/);
+    });
+    test('a string method returning a concat prints Some(format!(..)), not a box unwrapped back', () => {
+        const out = run ('fmt', "    signIt (a: any): string {\n        const s = this.safeString (a, 's');\n        return '0x' + s;\n    }\n", '        return this.signIt (p);\n');
+        expect(out).toMatch(/return Some\(format!\(/);
+        expect(out).not.toMatch(/\.into\(\)\)\.as_str\(\)\.map\(str::to_owned\);/);
     });
 });
 

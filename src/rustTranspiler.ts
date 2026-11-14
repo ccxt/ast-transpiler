@@ -5124,6 +5124,29 @@ export class RustTranspiler extends BaseTranspiler {
         return `${text}.as_str().unwrap_or_default().to_owned()`;
     }
 
+    /** `format!(..)` of a whole `Value::Str(format!(..).into())` print (balanced, nothing after), else undefined. */
+    rustBoxedFormatInner(text: string): string | undefined {
+        const head = 'Value::Str(format!(';
+        const tail = '.into())';
+        if (!text.startsWith(head) || !text.endsWith(tail)) return undefined;
+        const inner = text.slice('Value::Str('.length, -tail.length);
+        // the inner text must be exactly one balanced `format!(..)` call (string literals skipped)
+        let depth = 0;
+        let quoted = false;
+        for (let i = 'format!'.length; i < inner.length; i++) {
+            const c = inner[i];
+            if (quoted) {
+                if (c === '\\') i++;
+                else if (c === '"') quoted = false;
+                continue;
+            }
+            if (c === '"') quoted = true;
+            else if (c === '(') depth++;
+            else if (c === ')' && --depth === 0 && i !== inner.length - 1) return undefined;
+        }
+        return depth === 0 && !quoted ? inner : undefined;
+    }
+
     // ── byte buffers (rustBytesProducer / rustBytesSlot / rustBytesLocal) ──
     // The hand-written producers of a TS `Uint8Array` return `crate::value::Bytes` (the `Value::Arr` of byte
     // ints behind a typed handle) and the byte parameters of the hand-written consumers take `impl Into<Value>`.
@@ -9398,7 +9421,7 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_VENUE_KEPT_STR_ARMS: Record<string, string[]> = {
         'coinbaseinternational.ts#coinbaseinternational': [ 'parseTimeInForce' ], 'bitfinex.ts#bitfinex': [ 'convertDerivativesId' ],
         'blofin.ts#blofin': [ 'networkCodeToChainId' ], 'dydx.ts#dydx': [ 'hashMessage' ], 'modetrade.ts#modetrade': [ 'hashMessage' ],
-        'polymarket.ts#polymarket': [ 'hashMessage', 'signMessage' ],
+        'polymarket.ts#polymarket': [ 'hashMessage', 'signMessage', 'signHash' ],
     };
 
     rustVenueKeptStrArm(node: any): boolean {
@@ -15149,8 +15172,14 @@ export class RustTranspiler extends BaseTranspiler {
             const local = this.rustVenueStrReturnLocal(this.unwrapParensNode(exp));
             if (local !== undefined) return `${idn}return ${local};`;
             if (this.rustStrRuntimeCall(this.unwrapParens(exp))) return `${idn}return Some(${this.rustStrRuntimeBareText(this.unwrapParens(exp))});`;
+            const printed = this.printNode(exp, 0).trim();
+            // xc: a boxed `format!` string is the `String` itself: `Some(format!(..))`, not box-then-unwrap (the 28-char
+            // `.as_str().map(str::to_owned)` tail took polymarket signHash's return past 400 chars, and the long-line guard
+            // then sent its `sVal` local back to `Value`)
+            const formatted = this.rustStrNativeExpression(exp) ? undefined : this.rustBoxedFormatInner(printed);
+            if (formatted !== undefined) return `${idn}return Some(${formatted});`;
             const suffix = this.rustStrNativeExpression(exp) ? '' : '.as_str().map(str::to_owned)';
-            return `${idn}return ${this.printNode(exp, 0).trim()}${suffix};`;
+            return `${idn}return ${printed}${suffix};`;
         }
         return `${idn}return ${this.printNode(exp, 0).trim()};`;
     }
@@ -16929,7 +16958,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A `let` declared empty is filled later by container writes only (the optional form).
         const nilDeclared = (init === undefined || this.literalKindOfNode(init) === 'null') && (list.flags & NodeFlags.Const) === 0
             && list.parent?.kind === SyntaxKind.VariableStatement;
-        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? (this.rustEcdsaCall(init) ? 'dict' : this.rustBorrowedSourceKind(init) ?? this.rustBuiltReturnSourceKind(init)) : (this.rustDictElementSource(init) ? 'dict' : (this.rustListElementSource(init) ? 'list' : undefined));
+        let from: 'dict' | 'list' | 'api' | undefined = init !== undefined && isCallExpression(init) ? (this.rustEcdsaCall(init) ? 'dict' : this.rustBorrowedSourceKind(init) ?? this.rustBuiltReturnSourceKind(init) ?? this.rustVenueContainerReturnKind(init)?.kind) : (this.rustDictElementSource(init) ? 'dict' : (this.rustListElementSource(init) ? 'list' : undefined));
         const endpoint = from === 'api';
         if (endpoint) from = this.rustDeclaredEndpointKind(init) ?? 'api';
         // ral-oc: a plain map literal rebuilt only as `x = this.extend (x, y)` holds a map on every path (`extend` answers
@@ -18321,6 +18350,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
     rustOptContainerSourceOk(call: any, kind: 'dict' | 'list' | 'api'): boolean {
         if (kind === 'api' || !isCallExpression(call)) return false;
+        // xc: a venue method declared `Dict` / `NullableDict` / a list answers its container or Null (`into_opt_*` keeps Null as None)
+        if (this.rustVenueContainerReturnKind(call)?.kind === kind && this.rustBuiltReturnSourceKind(call) === undefined) return true;
         const name = String((call.expression as any)?.name?.text ?? '');
         if (!/^safe(?:Dict|List)(?:2|N)?$/.test(name)) return RustTranspiler.RUST_BORROWED_DICT_SOURCES.has(name);
         const at = name.endsWith('2') ? 3 : 2;
@@ -18759,6 +18790,63 @@ export class RustTranspiler extends BaseTranspiler {
         const up: any = n.parent;
         if (!isCallExpression(up) || up.arguments[0] !== n || this.rustScalarInNestedWrite(n)) return false;
         return this.rustBorrowedDictReader(up) !== undefined && !/^\d+$/.test(String(this.rustSkipWrappers(up.arguments[1]).text));
+    }
+
+    // ── xc: rustVenueContainerReturnKind: results of venue-private methods declared as a container or unified record ──
+    // `[await] this.m (..)` of a venue method (not base, not an override, still printed `-> Value`) whose declared return
+    // (the `Promise` argument when awaited) is `Dict`, `NullableDict`, `List`, `Dict[]` / `any[]`, a unified record already in
+    // the typed signature table (`Ticker`, `Order`, ..: a map at runtime) or a list of one, and every declaration of the name
+    // in its venue family spells the same type. The local is then decided by the existing container-local rules.
+    private rustVenueContainerDecisions = new WeakMap<any, { kind: 'dict' | 'list', nullable: boolean } | null>();
+
+    private static readonly RUST_VENUE_RECORD_NAMES: Set<string> = new Set([
+        'Ticker', 'Tickers', 'Order', 'Trade', 'OrderBook', 'Position', 'Balances', 'Transaction', 'Transfer', 'FundingRate', 'FundingRates',
+        'Leverage', 'Leverages', 'MarginMode', 'MarginModes', 'MarginModification', 'OpenInterest', 'TradingFeeInterface', 'TradingFees',
+        'DepositAddress', 'LedgerEntry', 'OHLCV', 'Liquidation', 'FundingHistory', 'FundingRateHistory', 'Greeks', 'Currencies',
+    ]);
+
+    rustVenueContainerReturnKind(call: any): { kind: 'dict' | 'list', nullable: boolean } | undefined {
+        const callee: any = call?.expression;
+        if (!isCallExpression(call) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(callee.name)) return undefined;
+        const declaration: any = this.rustScalarCallee(call);
+        if (declaration === undefined || !isMethodDeclaration(declaration) || declaration.body === undefined) return undefined;
+        // an async callee must be awaited right here (a bare future is no container)
+        let up: any = call;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        if (this.isAsyncFunction(declaration) !== (up.parent?.kind === SyntaxKind.AwaitExpression)) return undefined;
+        let decision = this.rustVenueContainerDecisions.get(declaration);
+        if (decision === undefined) {
+            try {
+                decision = this.rustVenueContainerReturnKindUncached(declaration) ?? null;
+            } catch (e) {
+                decision = null;
+            }
+            this.rustVenueContainerDecisions.set(declaration, decision);
+        }
+        return decision ?? undefined;
+    }
+
+    rustVenueContainerReturnKindUncached(declaration: any): { kind: 'dict' | 'list', nullable: boolean } | undefined {
+        if (!isIdentifier(declaration.name) || declaration.type === undefined) return undefined;
+        const file = String(declaration.getSourceFile?.()?.fileName ?? '');
+        const at = file.search(/[/\\]ts[/\\]src[/\\]/);
+        if (at < 0 || RustTranspiler.RUST_BASE_TIER_FILE.test(file) || /ts[\\/]src[\\/](?:test|abstract)[\\/]/.test(file) || this.getMethodOverride(declaration) !== undefined) return undefined;
+        const name = String(declaration.name.text);
+        if (this.rustTypedUnified.has(name) || this.rustTypedSignature(declaration) !== undefined) return undefined;
+        const own = String(declaration.type.getText()).replace(/\s+/g, '');
+        const types = this.rustVenueFamilyReturnTypes(file, at, name);
+        if (types === undefined || ![ ...types ].every((t) => t.replace(/\s+/g, '') === own)) return undefined;
+        const async = this.isAsyncFunction(declaration);
+        const m = (async ? /^Promise<(.+)>$/ : /^(.+)$/).exec(own);
+        if (m === null) return undefined;
+        const inner = m[1];
+        if (inner === 'Dict') return { kind: 'dict', nullable: false };
+        if (inner === 'NullableDict') return { kind: 'dict', nullable: true };
+        if (inner === 'List' || inner === 'Dict[]' || inner === 'any[]') return { kind: 'list', nullable: false };
+        if (RustTranspiler.RUST_VENUE_RECORD_NAMES.has(inner)) return { kind: 'dict', nullable: false };
+        const elem = /^(\w+)\[\]$/.exec(inner);
+        if (elem !== null && RustTranspiler.RUST_VENUE_RECORD_NAMES.has(elem[1])) return { kind: 'list', nullable: false };
+        return undefined;
     }
 
     /** `this.m(..)` of a venue method (no override, every venue declaration of the name returning `Dict`) whose every
