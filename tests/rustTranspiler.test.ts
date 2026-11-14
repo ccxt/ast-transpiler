@@ -10746,8 +10746,9 @@ describe('literal and boxed-field locals typed at the declaration', () => {
         expect(out).toContain('let mut symbolValue: String = (market).symbol.clone();');
         expect(out).toContain('let mut marketId: Option<String> = (market).id.as_deref().map(str::to_owned);');
         expect(out).toContain('marketId.is_none()');
-        // negative: a field string boxed before its last use would copy where the `Value` was shared
-        expect(out).toContain('let mut copied: Value = Value::from((market).symbol.clone());');
+        // md: a field string boxed before its last use at a self-call slot is lent there (the copy the `Value` clone made)
+        expect(out).toContain('let mut copied: String = (market).symbol.clone();');
+        expect(out).toContain('self.hold(Value::from(copied.as_str()), Value::Int(1));');
     });
     test('a comparison initialiser that prints a native bool is a bool local', () => {
         const file = fx ('ig-bool-compare',
@@ -11172,5 +11173,18 @@ describe('mh1: safeSymbol concat operands, venue kept-str arms', () => {
         expect(out).toContain('-> Option<String>');
         expect(sigs.find((s) => s.name === 'parse_time_in_force')?.ret).toBe('keptostr');
         expect(out).toMatch(/let mut tif: Option<String> = /);
+    });
+});
+
+describe('ral-md: market-field strings boxed before their last use', () => {
+    test('a market-field string handed to a self call before its last box is lent there, not copied', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-md-market-lent');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport interface CurrencyInterface { id: string; code: string; [key: string]: any }\nexport type Currency = CurrencyInterface | undefined;\nexport default class Exchange {\n    markets_by_id: Dict = undefined;\n    currencies: Dict = {};\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeBool (o: any, k: any, d: boolean = undefined): boolean { return o; }\n    safeMarketStructure (m: Dict = undefined): MarketInterface { return m as any; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeMarket (marketId: Str = undefined, market: Market = undefined, delimiter: Str = undefined, marketType: Str = undefined): MarketInterface {\n        if (marketId !== undefined) {\n            if ((this.markets_by_id !== undefined) && (marketId in this.markets_by_id)) {\n                const markets = this.safeList (this.markets_by_id, marketId, []);\n                return markets[0];\n            }\n        }\n        if (market !== undefined) {\n            return market;\n        }\n        return this.safeMarketStructure ({ 'symbol': marketId });\n    }\n    currency (code: Str): CurrencyInterface {\n        const currencies = this.currencies;\n        if (code in currencies) {\n            return currencies[code];\n        }\n        throw new Error ('no currency');\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Market } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTicker (ticker: Dict, market: Market = undefined): Dict {\n        const marketId = this.safeString (ticker, 'instId');\n        const resolved = this.safeMarket (marketId, market, '-');\n        const symbol = resolved['symbol'];\n        const held = this.hold (symbol);\n        return { 'symbol': symbol, 'info': held };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut symbol: Option<String> = crate::value::KeyRead::key_read(&&resolved, "symbol").as_str().map(str::to_owned);');
+        expect(out).toContain('self.hold(Value::from(symbol.as_deref()))');
+        expect(out).not.toContain('let mut symbol: Value');
     });
 });

@@ -4050,6 +4050,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** String hand-off locals boxed more than once: each box before the last lends the string. */
     private rustStrLentLocals = new WeakSet<any>();
+    /** md: market-field strings lent at their boxes (guarded by their printed name: `type` prints `type_var`). */
+    private rustMarketLentLocals = new WeakSet<any>();
 
     rustScalarLocalKindUncached(declaration): string | undefined {
         if (this.rustScalarVetoed.has(declaration)) return undefined;
@@ -4135,7 +4137,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustScalarOptKeyCostly(declaration, kind) && !keyLent) return undefined;
         if (keyLent) this.rustStrLentLocals.add(declaration);
         // a market-field string boxed before its last use copies the field where the `Value` was shared
-        if (strKind && copied > 0 && this.rustMarketFieldScalar(this.unwrapParens(declaration.initializer)) !== undefined) return undefined;
+        // md: unless every such box sits at a lending slot (`Value::from(x.as_deref())`: the one copy the shared `Value` clone made)
+        const marketField = strKind && copied > 0 && this.rustMarketFieldScalar(this.unwrapParens(declaration.initializer)) !== undefined;
+        const marketLent = marketField && !this.rustStrNoLend && this.rustReaderLendBoxes(declaration);
+        if (marketField && !marketLent) return undefined;
+        if (marketLent) { this.rustStrLentLocals.add(declaration); this.rustScalarGuarded.add(declaration); this.rustMarketLentLocals.add(declaration); }
         // D11: a proven integer / number `sum` handed on boxes a Copy scalar (`Value::from`), no copy to earn back
         const numericSum = (kind === 'int' || kind === 'num') && this.rustSumShape(this.unwrapParens(declaration.initializer));
         if (!numericSum && this.rustNewShapeCostly(declaration.initializer, typedUses, kind === 'str' || kind === 'ostr' ? copied : 0)) return undefined;
@@ -7180,7 +7186,8 @@ export class RustTranspiler extends BaseTranspiler {
         const held: any[] = [];
         for (const n of this.rustScopeIndex(method.getSourceFile()).nodes as any[]) {
             if (!isVariableDeclaration(n) || !this.rustScalarGuarded.has(n) || this.rustEnclosingFunction(n) !== method) continue;
-            if (this.rustScalarDecisions.get(n) && lines.some((l) => new RegExp(`\\b${(n.name as any).text}\\b`).test(l))) held.push(n);
+            const shown = this.rustMarketLentLocals.has(n) ? this.printNode(n.name, 0) : (n.name as any).text;
+            if (this.rustScalarDecisions.get(n) && lines.some((l) => new RegExp(`\\b${shown}\\b`).test(l))) held.push(n);
         }
         if (held.length === 0) return typed;
         // every decision of the method is re-taken, so use forms always match their decision
