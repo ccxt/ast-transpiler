@@ -2981,6 +2981,26 @@ export class RustTranspiler extends BaseTranspiler {
         return whole && this.rustEnclosingFunction(declaration) === this.rustEnclosingFunction(n) && this.rustLocalLastUse(n, declaration);
     }
 
+    /** 40i: an arm of `c ? n : z` that is the whole initializer of another local, at the source's last use outside a
+     *  loop (bybit withdraw `defaultAccountType`): only one arm runs and the source is never read again, so it moves. */
+    rustScalarTernaryArmMoveSite(n: any, declaration: any): boolean {
+        let top: any = n;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const ternary: any = top.parent;
+        if (!isConditionalExpression(ternary) || ternary.condition === top) return false;
+        let up: any = ternary;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        const target: any = up.parent;
+        if (!isVariableDeclaration(target) || target.initializer !== up || !isIdentifier(target.name) || target === declaration) return false;
+        if (!isVariableDeclaration(declaration) || this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(n)) return false;
+        for (let a: any = n.parent; a !== undefined && a !== declaration.parent; a = a.parent) {
+            if (isFunctionLike(a) || a.kind === SyntaxKind.ForStatement || a.kind === SyntaxKind.ForOfStatement || a.kind === SyntaxKind.ForInStatement
+                || a.kind === SyntaxKind.WhileStatement || a.kind === SyntaxKind.DoStatement) return false;
+            if (isBlock(a) && a.parent === this.rustEnclosingFunction(declaration)) break;
+        }
+        return this.rustLocalLastUse(n, declaration);
+    }
+
     /** nc: `x = y` from a typed `Option<String|i64|f64>` local of the same kind that is read again later (one function,
      *  no closure between). A string clones `y` where the boxed write cloned it (`y.clone().map(Value::from)..`); a
      *  number is `Copy` and its write prints `y` owned, so neither adds a copy. */
@@ -9061,7 +9081,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (kind === 'num' && own === 'int') return `(${name} as f64)`;
             // nc: a string alias at its source's last use moves (`Some(x)`: no copy)
             const source = this.rustScalarLocalOf(node)?.declaration;
-            const moved = (own === 'str' || own === 'ostr') && source !== undefined && this.rustScalarAliasMoveSite(node, source);
+            const moved = (own === 'str' || own === 'ostr') && source !== undefined && (this.rustScalarAliasMoveSite(node, source) || this.rustScalarTernaryArmMoveSite(node, source));
             return wrap(own === 'str' || own === 'ostr' ? (moved ? name : `${name}.clone()`) : name);
         }
         if (isBinaryExpression(node)) {
@@ -24669,8 +24689,19 @@ export class RustTranspiler extends BaseTranspiler {
         // the other arm is a string literal or null: an identifier arm prints `x.clone()` where its `Value` box moved
         const other: any = this.unwrapParens(ternary.whenTrue === top ? ternary.whenFalse : ternary.whenTrue);
         const lit = this.literalKindOfNode(other);
-        if (lit !== 'string' && lit !== 'null') return false;
+        if (lit !== 'string' && lit !== 'null' && !this.rustStrTernaryOtherArmMoves(other, ternary)) return false;
         return this.rustLocalLastUse(n, element) || this.rustSlotUseOutsideLoop(n, element);
+    }
+
+    /** 40i: the other arm is a typed string local of the same function read here for the last time (bybit withdraw
+     *  `defaultAccountType`): the arm moves it into the target, so typing the target adds no copy. */
+    rustStrTernaryOtherArmMoves(other: any, ternary: any): boolean {
+        if (other === undefined || !isIdentifier(other)) return false;
+        const declaration: any = this.rustDeclaredNode(other);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.initializer === undefined) return false;
+        if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(ternary)) return false;
+        const kind = this.rustScalarDecisions.get(declaration);
+        return (kind === 'str' || kind === 'ostr') && this.rustLocalLastUse(other, declaration) && this.rustSlotUseOutsideLoop(other, declaration);
     }
 
     /** pb: a checker-string slot of a native tuple in a method, read whole as the initializer or the statement write of

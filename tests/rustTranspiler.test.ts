@@ -15287,3 +15287,27 @@ describe('ral-40g: a Dict[] row written at a literal key takes Option<Dict> with
         expect(out).toMatch(/let mut row: Value = /);
     });
 });
+
+describe('40i: tuple slots sixth pass', () => {
+    const fx = (name: string, base: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const b2 = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionStringAndParams (params: object, methodName: string, optionName: string, defaultValue: Str = undefined): [Str, Dict] {\n        const value = this.safeString (params, optionName, defaultValue);\n        return [ value, params as Dict ];\n    }\n}\n";
+    test('40i: a ternary arm whose other arm is a typed string local read there for the last time moves it (no clone)', () => {
+        const file = fx ('40i-ternary-move', b2, "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    withdrawThing (uta: boolean, params: Dict = {}) {\n        const [ accountTypeOption, rest ] = this.handleOptionStringAndParams (params, 'withdraw', 'accountType');\n        const defaultAccountType = (uta === true) ? 'UTA' : 'SPOT';\n        const accountType = (accountTypeOption === undefined) ? defaultAccountType : accountTypeOption;\n        return this.hold ({ 'accountType': accountType, 'r': rest });\n    }\n    withdrawLive (uta: boolean, params: Dict = {}) {\n        const [ liveOption, rest ] = this.handleOptionStringAndParams (params, 'withdraw', 'accountType');\n        const liveDefault = (uta === true) ? 'UTA' : 'SPOT';\n        const live = (liveOption === undefined) ? liveDefault : liveOption;\n        return this.hold ({ 'a': live, 'r': rest, 'd': liveDefault });\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        const thing = out.slice (out.indexOf ('fn withdrawThing'), out.indexOf ('fn withdrawLive'));
+        expect(thing).toContain('let mut accountTypeOption: Option<String> = ');
+        expect(thing).toContain('let mut accountType: Option<String> = ');
+        expect(thing).toContain('Some(defaultAccountType)');
+        expect(thing).not.toContain('defaultAccountType.clone()');
+        // negative: the other arm's local is read again after the ternary (a copy): the slot stays Value
+        const live = out.slice (out.indexOf ('fn withdrawLive'));
+        expect(live).toContain('let mut liveOption: Value = ');
+    });
+});
+
