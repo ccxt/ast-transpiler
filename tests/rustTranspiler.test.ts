@@ -13204,3 +13204,27 @@ describe('ral-vg: a string element of a never-written all-string list borrows as
         expect(out).not.toContain('Option<&str>');
     });
 });
+
+describe('ral-wh: index and variable-key reads on a held safeList / safeDict local', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeList (o: any, k: any, d: any = undefined): any[] { return o[k]; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o[k]; }\n    toArray (rows: any): any[] { return rows; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a defaulted safeList read by a counter index holds the List and reads by reference', () => {
+        const out = write ('wh-list', "    m (message: Dict) {\n        const data = this.safeList (message, 'data', []);\n        const n = data.length;\n        for (let i = 0; i < n; i++) {\n            const index = n - i - 1;\n            this.hold (data[index]);\n        }\n        return n;\n    }\n");
+        expect(out).toContain('let mut data: crate::value::List = ');
+        expect(out).toContain('crate::value::KeyRead::read(&&data, &index)');
+    });
+    test('a list built by base toArray read at a computed Value index holds the List and reads by reference', () => {
+        const out = write ('wh-filt', "    m (rows: any[], symbol: string) {\n        const reversed = [];\n        const raw = this.toArray (rows);\n        const n = raw.length;\n        for (let i = 0; i < n; i++) {\n            const index = n - i - 1;\n            const v = raw[index];\n            reversed.push (v);\n        }\n        return reversed;\n    }\n");
+        expect(out).toContain('let mut raw: crate::value::List = ');
+        expect(out).toContain('crate::value::KeyRead::read(&&raw, &index)');
+    });
+    test('negative: a nullable safeDict (no default) read by index stays a Value', () => {
+        const out = write ('wh-nul', "    m (response: Dict, k: string) {\n        const byId = this.safeDict (response, 'data');\n        const kk = k + '';\n        if (byId === undefined) {\n            return undefined;\n        }\n        return byId[kk];\n    }\n");
+        expect(out).toContain('let mut byId: Value = ');
+    });
+});

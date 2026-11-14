@@ -13975,7 +13975,13 @@ export class RustTranspiler extends BaseTranspiler {
             if (nested !== undefined) return nested;
         }
         let acc = this.printNode(current, 0);
-        for (const { expression: receiver, argumentExpression: key } of chain) {
+        for (const link of chain) {
+            const { expression: receiver, argumentExpression: key } = link;
+            // ral-wh: an index / variable-key read on a held Dict / List local: the arm `get_value` takes, by reference
+            if (link === chain[0] && this.rustBorrowedIndexReads.has(link) && isIdentifier(receiver)) {
+                acc = `crate::value::KeyRead::read(&&${super.printIdentifier(receiver)}, &${this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0)})`;
+                continue;
+            }
             const native = nativeAllowed ? this.printNativeContainerAccess(acc, receiver, key)
                 : (this.rustDictReadInNativeInsert(acc, receiver, key, node) ?? this.rustFieldLengthRead(acc, receiver, key, node));
             const staticKey = native === undefined && !keepGetValue ? this.staticKeyLookup(key, receiver) : undefined;
@@ -16626,6 +16632,7 @@ export class RustTranspiler extends BaseTranspiler {
         let endpointBoxes = 0;
         let plainReads = 0;
         const boxedElementUses: any[] = [];
+        const indexReadUses: any[] = [];
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
@@ -16680,6 +16687,8 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             if (keyReadOnly) return this.rustSafeValueKeyReaderUse(n) && ++plainReads > 0 && ++reads > 0;
+            // ral-wh: `x[k]` (index or variable key) on the held container reads the arm `get_value` dispatches to
+            if ((from === 'dict' || from === 'list') && !extendReuse && !sbAlias && init !== undefined && isCallExpression(init) && this.rustBorrowedIndexReadUse(n)) return indexReadUses.push(n) > 0 && ++reads > 0;
             if (this.rustBorrowedKeySetUse(n)) {
                 keyReads++;
                 keySets++;
@@ -16798,6 +16807,9 @@ export class RustTranspiler extends BaseTranspiler {
         const declaredListOnly = nilDeclared && from === 'list' && !mixed && nullTests === 0 && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes;
         if (castLengths > 0 && !declaredListOnly) return undefined;
         if (lengths > 0 && (from !== 'list' || (optional && !declaredListOnly))) return undefined;
+        // ral-wh: index reads lend the plain container only (the optional form keeps Null apart); each line stays within 400
+        if (indexReadUses.length > 0 && (optional || from === 'api' || indexReadUses.some((n: any) => !this.rustBoxLineOk(n.parent)))) return undefined;
+        for (const n of indexReadUses) this.rustBorrowedIndexReads.add(n.parent);
         if (optional) {
             // Null stays distinct from an empty container: the local holds `Option<Dict>` / `Option<List>`.
             if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !this.rustOptContainerSourceOk(init, from))) return undefined;
@@ -16810,6 +16822,35 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustOptContainerLocals = new WeakSet<any>();
+
+    // ── ral-wh: index / variable-key reads on held Dict / List locals (rustBorrowedIndexReadUse) ──
+    // `KeyRead::read(&&x, &k)` is `get_map_value` / `get_list_value`, the arm `get_value` takes for that variant.
+    private rustBorrowedIndexReads = new WeakSet<any>();
+
+    /** `x[k]`, read only (no write, call, property or nested element target), with a numeric literal key or a key local
+     *  that prints as a `Value` (a literal-initialised counter, or an untyped `let`/`const` of number / string type). */
+    rustBorrowedIndexReadUse(n: any): boolean {
+        const up: any = n.parent;
+        if (!isElementAccessExpression(up) || up.expression !== n) return false;
+        const use: any = up.parent;
+        if (use === undefined || isDeleteExpression(use) || ((isPropertyAccessExpression(use) || isCallExpression(use) || isElementAccessExpression(use)) && use.expression === up)) return false;
+        if ((isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind)) || use.kind === SyntaxKind.PrefixUnaryExpression || use.kind === SyntaxKind.PostfixUnaryExpression) return false;
+        if (isElementAccessExpression(use) && use.argumentExpression === up) return false;
+        // a primitive local initialised from the element keeps its element-read scalar rule (reads the boxed receiver)
+        if (isVariableDeclaration(use) && use.initializer === up && this.primitiveKindOfType(this.typeOfNodeIfAny(use.name)) !== undefined) return false;
+        if (this.isWriteBackBindRead(up) || !this.isNativeAccessPositionSafe(up)) return false;
+        const key: any = this.rustSkipWrappers(up.argumentExpression);
+        if (key === undefined || isStringLiteralLikeNode(key)) return false;
+        if (isNumericLiteral(key)) return Number.isInteger(Number(key.text)) && Number(key.text) >= 0;
+        if (!isIdentifier(key)) return false;
+        if (this.isRustValueIndexKey(key)) return true;
+        const keyDecl: any = this.rustDeclarationOfIdentifier(key);
+        if (keyDecl === undefined || !isVariableDeclaration(keyDecl) || !isIdentifier(keyDecl.name) || keyDecl.name === key) return false;
+        const prim = this.primitiveKindOfType(this.typeOfNodeIfAny(key));
+        if (prim !== 'number' && prim !== 'string') return false;
+        return this.rustScalarLocalOf(key) === undefined && this.rustNilLocalKind(keyDecl) === undefined && !this.rustWsUrlLocal(keyDecl)
+            && this.rustBorrowedLocalKind(keyDecl) === undefined && !this.rustLentListLocal(keyDecl);
+    }
 
     // ── ral-oc: map literals rebuilt by `x = this.extend (x, y)` (rustExtendReuseLiteral / printExtendReuseWrite) ──
     private rustExtendReuseLocals = new WeakSet<any>();
