@@ -3255,7 +3255,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustParamPrintsMap(param)) return '&mut indexmap::IndexMap<String, Value>';
         if (this.rustParamPrintsStrVec(param)) return 'Vec<String>';
         if (this.rustParamReadsByReference(param)) return 'impl KeyRead';
-        if (this.rustParamIsLentResponse(param)) return 'impl Into<crate::Value>';
+        if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param)) return 'impl Into<crate::Value>';
         return this.rustVenueStrParamType(param) ?? 'Value';
     }
 
@@ -13813,7 +13813,7 @@ export class RustTranspiler extends BaseTranspiler {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text) ?? this.printNilMapBox(node, text); if (optList !== undefined) return optList;
         const asLent = this.printLentAsArg(node, text); if (asLent !== undefined) return asLent;
-        const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printJwtLentArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printJwtLentArg(node, text) ?? this.printLentVenueArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -15141,6 +15141,8 @@ export class RustTranspiler extends BaseTranspiler {
                 || nilDeclared && this.rustDeclaredEndpointBoxUse(n) && ++endpointBoxes > 0) && boxedElementUses.push(n) > 0;
             const asArg: any = isAsExpression(up) && up.expression === n && isCallExpression(up.parent) && Array.from(up.parent.arguments).includes(up) ? up : undefined;
             if (asArg !== undefined && this.rustLentAsHandOff(asArg, init, from, endpoint, nilDeclared)) return ++lentResponses > 0 && ++reads > 0 && (this.rustLentAsNullable(init, nilDeclared, endpoint) ? ++lentNullable > 0 : true);
+            // a per-venue lent slot takes any typed container local by reference (the optional form arrives as Null for None)
+            if ((from === 'dict' || from === 'list') && this.rustLentVenueSlot(up, n) !== undefined) return ++reads > 0;
             if (this.rustLentResponseSlot(up, n) && (extendReuse || this.rustLentResponseSource(init))) return ++lentResponses > 0 && ++reads > 0;
             if ((endpoint || this.rustLentContainerSource(init)) && this.rustLentEndpointSlot(up, n, from)) return ++lentResponses > 0 && ++reads > 0;
             // `json` tells Null from an empty container: only a never-null source lends there as the plain container
@@ -16761,7 +16763,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxes.push([n, 'move']);
                 return true;
             }
-            if (at === n && this.rustLentListSlot(up, n)) {
+            if (at === n && (this.rustLentListSlot(up, n) || this.rustLentVenueSlot(up, n) !== undefined)) {
                 natives++;
                 return true;
             }
@@ -19296,9 +19298,134 @@ export class RustTranspiler extends BaseTranspiler {
             && !this.rustParamPrintsMap(param) && !this.rustParamPrintsStrVec(param) && !this.rustParamReadsByReference(param);
     }
 
+    // ── lent per-venue container parameters (rustParamIsLentVenue / rustVenueLentKind) ──
+    // A required parameter of a per-venue method (declared in one venue source only, never an override) declared
+    // `Dict` / `NullableDict` / `object` / `any` (a map slot) or `List` / `NullableList` / `Dict[]` / `object[]`
+    // (a list slot) takes `impl Into<crate::Value>`: a `Value` still passes (dispatch arms, forwarders), a shared
+    // container local is lent as `&x` (an optional one as `&Option<..>`, Null for None). The body binds it once.
+
+    private rustLentVenueDecisions = new WeakMap<any, 'dict' | 'list' | null>();
+
+    rustParamIsLentVenue(param: any): boolean {
+        return this.rustVenueLentKind(param) !== undefined;
+    }
+
+    rustVenueLentKind(param: any): 'dict' | 'list' | undefined {
+        if (param?.kind !== SyntaxKind.Parameter) return undefined;
+        let decision = this.rustLentVenueDecisions.get(param);
+        if (decision === undefined) {
+            this.rustLentVenueDecisions.set(param, null); // re-entrancy guard
+            try {
+                decision = this.rustVenueLentKindUncached(param) ?? null;
+            } catch (e) {
+                decision = null;
+            }
+            this.rustLentVenueDecisions.set(param, decision);
+        }
+        return decision ?? undefined;
+    }
+
+    rustVenueLentKindUncached(param: any): 'dict' | 'list' | undefined {
+        const method: any = param.parent;
+        if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return undefined;
+        if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined || param.type === undefined) return undefined;
+        if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return undefined;
+        const name = String(method.name.text);
+        if (!this.rustVenueOnlyMethod(method, name)) return undefined;
+        if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return undefined;
+        // positional: every parameter before it is required too
+        const params: any[] = Array.from(method.parameters);
+        if (params.slice(0, params.indexOf(param)).some((p: any) => p.initializer !== undefined || p.questionToken !== undefined || p.dotDotDotToken !== undefined)) return undefined;
+        if (this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param) || this.rustParamPrintsBool(param) || this.rustParamIsLentDict(param) || this.rustParamIsLentList(param)
+            || this.rustParamIsLentResponse(param) || this.rustParamPrintsMap(param) || this.rustParamPrintsStrVec(param) || this.rustParamReadsByReference(param)) return undefined;
+        const type: any = param.type;
+        const typeName = type?.kind === SyntaxKind.TypeReference && isIdentifier(type.typeName) && type.typeArguments === undefined ? String(type.typeName.text) : '';
+        const kind: 'dict' | 'list' | undefined = RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName) || this.rustRowListTypeNode(type) ? 'list' : (this.rustLentRecordTypeNode(type) ? 'dict' : undefined);
+        if (kind === undefined) return undefined;
+        // read-only in the body: a written / re-bound parameter belongs to the owned-map rules
+        const pname = String(param.name.text);
+        if (this.rustLocalIsReassigned(param, pname)) return undefined;
+        const written = !this.rustLocalUsesAll(param, pname, true, (n: any) => {
+            if (this.rustDeclaredNode(n) !== param) return true;
+            let top: any = n;
+            while ((isElementAccessExpression(top.parent) || isPropertyAccessExpression(top.parent)) && top.parent.expression === top) top = top.parent;
+            if (top === n) return true;
+            const up: any = top.parent;
+            if (isDeleteExpression(up)) return false;
+            if (up?.kind === SyntaxKind.PrefixUnaryExpression || up?.kind === SyntaxKind.PostfixUnaryExpression) return false;
+            return !(isBinaryExpression(up) && up.left === top && rustIsAssignmentOperator(up.operatorToken.kind));
+        });
+        if (written) return undefined;
+        // only where a caller hands a local container whole: elsewhere the binding would only add a line
+        const at = params.indexOf(param);
+        const lendable = (arg: any): boolean => {
+            if (arg === undefined || !isIdentifier(arg)) return false;
+            const decl: any = this.rustDeclaredNode(arg);
+            if (decl === undefined || !isVariableDeclaration(decl) || !isIdentifier(decl.name)) return false;
+            const init: any = decl.initializer === undefined ? undefined : this.rustSkipWrappers(decl.initializer);
+            return init === undefined || isCallExpression(init) || isArrayLiteralExpression(init) || isObjectLiteralExpression(init) || this.literalKindOfNode(init) === 'null';
+        };
+        return this.rustVenueStrCallSites(method).some((call: any) => lendable(call.arguments?.[at])) ? kind : undefined;
+    }
+
+    /** A method of a venue source (REST, pro or prediction) whose name the base tier never declares: each venue's
+     *  Rust method is an inherent one, so its signature is its own (a same-named method elsewhere is independent,
+     *  and the checker resolves a `this.` call to the declaration Rust picks); by-name arms pass a `Value`. */
+    rustVenueOnlyMethod(method: any, name: string): boolean {
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const at = file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/);
+        if (at < 0 || !isClassDeclaration(method.parent)) return false;
+        if (this.rustBaseTierMethodNames(file.slice(0, at) + '/ts/src').has(name)) return false;
+        for (let base: any = this.getMethodOverride(method), hops = 0; base !== undefined && hops < 8; base = this.getMethodOverride(base), hops++) {
+            if (RustTranspiler.RUST_BASE_TIER_FILE.test(String(base.getSourceFile().fileName))) return false;
+        }
+        return true;
+    }
+
+    private rustBaseTierMethodNamesByRoot = new Map<string, Set<string>>();
+
+    rustBaseTierMethodNames(srcRoot: string): Set<string> {
+        let names = this.rustBaseTierMethodNamesByRoot.get(srcRoot);
+        if (names !== undefined) return names;
+        names = new Set<string>();
+        const declared = /^ {4}(?:(?:override|async|public|protected|private|static)\s+)*([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(/gm;
+        let entries: string[] = [];
+        try {
+            entries = fs.readdirSync(srcRoot + '/base').filter((f) => f.endsWith('.ts'));
+        } catch (e) {
+            entries = [];
+        }
+        for (const f of entries) {
+            for (const m of fs.readFileSync(`${srcRoot}/base/${f}`, 'utf8').matchAll(declared)) names.add(m[1]);
+        }
+        this.rustBaseTierMethodNamesByRoot.set(srcRoot, names);
+        return names;
+    }
+
+    /** The lent per-venue slot kind a call argument lands in (`this.m(.., x, ..)`). */
+    rustLentVenueSlot(call: any, arg: any): 'dict' | 'list' | undefined {
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const at = Array.from(call.arguments ?? []).indexOf(arg);
+        if (at < 0) return undefined;
+        const param: any = this.rustTranspiledCalleeParams(call, String(call.expression.name.text))?.[at];
+        return param === undefined ? undefined : this.rustVenueLentKind(param);
+    }
+
+    /** `&x` for a typed container local (plain or optional form) lent to a per-venue lent slot. */
+    printLentVenueArg(node: any, text: string): string | undefined {
+        if (!isIdentifier(node) || this.rustLentVenueSlot(node.parent, node) === undefined) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
+        if (this.rustLentListLocal(declaration)) return `&${text}`;
+        if (this.rustBorrowedLocalKind(declaration) === undefined) return undefined;
+        const printed = this.rustOptContainerLocals.has(declaration) ? this.rustPrintedOptional.has(declaration) : this.rustPrintedBorrowed.has(declaration);
+        return printed ? `&${text}` : undefined;
+    }
+
     /** The response argument of a call to the class's own lent override (an inherited one is the `Value` trait method). */
     rustLentResponseSlot(call: any, arg: any): boolean {
-        if (!isCallExpression(call) || call.arguments?.[0] !== arg || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (call.arguments?.[0] !== arg) return false;
         const param: any = this.rustTranspiledCalleeParams(call, String(call.expression.name.text))?.[0];
         if (param === undefined || !this.rustParamIsLentResponse(param)) return false;
         let owner: any = call.parent;
@@ -19822,7 +19949,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string {
-        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustVenueStrParamType(p) !== undefined);
+        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p) || this.rustVenueStrParamType(p) !== undefined);
         return lent.map((p: any) => {
             const name = this.printNode(p.name, 0);
             return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();\n`;
