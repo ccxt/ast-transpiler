@@ -15965,10 +15965,11 @@ export class RustTranspiler extends BaseTranspiler {
         const method = String(callee.name.text);
         const helper = RustTranspiler.RUST_BUILT_HELPER_RETURNS[method];
         if (helper !== undefined) return this.rustCalleeIsRuntimeBase(call) && !this.rustTestTierSource(call) ? helper : undefined;
+        const filtered = this.rustBaseFilterReturnKind(call, method); if (filtered !== null) return filtered;
         // `deepExtend` answers its last non-map operand as it came: a map only when every operand is a proven map
         if (method === 'deepExtend') return this.rustDeepExtendOfMaps(call) ? 'dict' : undefined;
         // `sortBy*` hands a non-list input back as it came: a list only when its input is one (the Arr-only proof)
-        if (method === 'sortBy' || method === 'sortBy2') return !this.rustTestTierSource(call) && this.extraArrSource(call) ? 'list' : undefined;
+        if (method === 'sortBy' || method === 'sortBy2') return !this.rustTestTierSource(call) && (this.extraArrSource(call) || this.rustSortOfTypedList(call)) ? 'list' : undefined;
         if (/^(?:safe|extend$|deepExtend$|omit$|keysort$|parseJson$|watch|subscribe|unsubscribe|market$|currency$)/.test(method)) return undefined;
         if (this.rustTestTierSource(call) || this.rustTypedUnified.has(method)) return undefined;
         // base `handle*` tuples have their own slot rules; a venue `handle*` whose body builds its tuple list is a fresh list
@@ -15998,6 +15999,42 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BUILT_HELPER_RETURNS: Record<string, 'dict' | 'list'> = {
         extend: 'dict', indexBy: 'dict', groupBy: 'dict', toArray: 'list', arrayConcat: 'list', filterBy: 'list',
     };
+
+    // Generated base list filters that answer a fresh list on every path: a missing input is `[]`, every other one goes
+    // through `toArray` (a ws cache is snapshotted) and then `arraySlice` / `filterByLimit` of that list, both of which
+    // answer `Value::Arr`. `filterByArray` builds its result list, then hands it to `indexBy` unless `indexed` is false.
+    // `filterByLimit` hands its input back unchanged, so it stays out. No venue redeclares any of them.
+    private static readonly RUST_BASE_FILTER_LISTS = new Set([ 'filterBySinceLimit', 'filterByValueSinceLimit', 'filterBySymbolSinceLimit',
+        'filterByCurrencySinceLimit', 'filterBySymbolsSinceLimit' ]);
+
+    /** The container a base list filter answers, `undefined` when it is unproven, `null` when `method` is none of them. */
+    rustBaseFilterReturnKind(call: any, method: string): 'dict' | 'list' | undefined | null {
+        if (!RustTranspiler.RUST_BASE_FILTER_LISTS.has(method) && method !== 'filterByArray') return null;
+        if (this.rustTestTierSource(call) || !this.rustListPassthroughCallee(call, method)) return undefined;
+        if (method !== 'filterByArray') return 'list';
+        const indexed: any = call.arguments.length > 3 ? this.unwrapParens(call.arguments[3]) : undefined;
+        if (indexed === undefined || indexed.kind === SyntaxKind.TrueKeyword) return 'dict';
+        return indexed.kind === SyntaxKind.FalseKeyword ? 'list' : undefined;
+    }
+
+    /** A base `sortBy*` over a local that already holds a list (`crate::value::List` / `Vec<Value>`): the runtime sorts
+     *  the items of a `Value::Arr` and answers a new `Value::Arr`, so the result is a list exactly. */
+    rustSortOfTypedList(call: any): boolean {
+        const first: any = this.rustStripWrappers(call.arguments?.[0]);
+        if (first === undefined || !isIdentifier(first) || !this.rustListPassthroughCallee(call, String(call.expression.name.text))) return false;
+        const d: any = this.rustDeclarationOfIdentifier(first);
+        if (d === undefined || !isVariableDeclaration(d) || d.name === first) return false;
+        // a `const` written once from a fresh list (the decision of that local itself may still be pending here)
+        const init: any = this.rustSkipWrappers(d.initializer);
+        if ((d.parent?.flags & NodeFlags.Const) !== 0 && init !== undefined && (isArrayLiteralExpression(init) || (isCallExpression(init) && this.rustBuiltReturnSourceKind(init) === 'list'))) return true;
+        return !this.rustBorrowedPending.has(d) && this.rustBorrowedLocalKind(d) === 'list' && !this.rustOptContainerLocals.has(d);
+    }
+
+    /** `this.m (..)` resolves to the base declaration and no venue redeclares `m`. */
+    rustListPassthroughCallee(call: any, method: string): boolean {
+        const member: any = this.rustScalarCallee(call);
+        return member !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(member.getSourceFile?.()?.fileName ?? '')) && !this.rustVenueReturnTypesHas(call, method);
+    }
 
     // ── rustDeclaredEndpointBoxUse (ral-ld): a declared-endpoint optional container handed on whole ──
     // `{ 'info': response }` / `return response`: the box `x.map_or(Value::Null, Value::Dict|Arr)` gives back the

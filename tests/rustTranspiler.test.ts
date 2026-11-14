@@ -8589,6 +8589,38 @@ describe('rust list reads with an empty list default', () => {
     });
 });
 
+describe('rust base list filters answer a fresh container', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export type Int = number | undefined;\nexport default class Exchange {\n' +
+            '    toArray (o: any): any[] { return o; }\n    indexBy (a: any, k: any): any { return a; }\n    hold (x: any): any { return x; }\n' +
+            '    filterBySinceLimit (array: object[] | undefined, since: Int = undefined, limit: Int = undefined, key: any = \'timestamp\', tail = false): any[] { if (array === undefined) { return []; } return this.toArray (array); }\n' +
+            '    filterByArray (objects: any, key: any, values: any = undefined, indexed = true) { const v: any = this.toArray (objects); if (indexed) { return this.indexBy (v, key); } return v; }\n}\n',
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    candles (rows: any, since: Int) {\n        const filtered = this.filterBySinceLimit (rows, since, 10, 0, true);\n        return this.hold (filtered);\n    }\n" +
+            "    closed (orders: any, flag: boolean) {\n        const closedOrders = this.filterByArray (orders, 'status', [ 'closed' ], false);\n        return this.hold (closedOrders);\n    }\n" +
+            "    indexed (orders: any) {\n        const byId = this.filterByArray (orders, 'id', [ 'a' ]);\n        return this.hold (byId);\n    }\n" +
+            "    unknown (orders: any, flag: boolean) {\n        const rows = this.filterByArray (orders, 'id', [ 'a' ], flag);\n        return this.hold (rows);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-filters-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('filterBySinceLimit and a non-indexed filterByArray hold the shared list', () => {
+        expect(out).toMatch(/let mut filtered: crate::value::List = self\.filterBySinceLimit\(.*\)\.into_list\(\);/);
+        expect(out).toMatch(/let mut closedOrders: crate::value::List = self\.filterByArray\(.*\)\.into_list\(\);/);
+    });
+    test('an indexed filterByArray holds the map; an unknown indexed flag keeps the box', () => {
+        expect(out).toMatch(/let mut byId: crate::value::Dict = self\.filterByArray\(.*\)\.into_dict\(\);/);
+        expect(out).toMatch(/let mut rows: Value = self\.filterByArray\(/);
+    });
+});
+
 describe('rust lists built by pushes and reassigned from list producers', () => {
     const files: Record<string, string> = {
         'ts/src/base/Exchange.ts': 'export default class Exchange {\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    arrayConcat (a: any[], b: any[]): any[] { return a; }\n    hold (x: any): any { return x; }\n}\n',
