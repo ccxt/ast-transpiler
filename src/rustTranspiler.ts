@@ -15022,7 +15022,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printDeleteExpression(node, identation) {
-        return this.printWsBookMapDelete(node) ?? this.printWsCacheMapDelete(node) ?? this.printClientHandleDelete(node) ?? this.provenDictFieldDelete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
+        return this.printBearerDelete(node) ?? this.printWsBookMapDelete(node) ?? this.printWsCacheMapDelete(node) ?? this.printClientHandleDelete(node) ?? this.provenDictFieldDelete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
     }
 
     printInstanceOfExpression(node, identation) {
@@ -16558,6 +16558,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // ral-xf: `m[k].push (v)` on a map whose stored values are never maps (rustBearerElementPushText)
         if (up !== undefined && root === access && this.rustBearerElementPushCall(up.parent) !== undefined) return this.rustBearerElementPushText(up.parent, 'v') !== undefined;
+        // ral-yf: `delete m[k]` (statement) on a map-literal local at a literal / proven-string key: the IndexMap's own
+        // shift_remove (rustBearerDeleteText)
+        if (up !== undefined && isDeleteExpression(up) && root === access) return this.rustBearerDeleteKey(up) !== undefined;
         if (up !== undefined && (isDeleteExpression(up) || (isCallExpression(up) && up.expression === root)
             || up.kind === SyntaxKind.PrefixUnaryExpression || up.kind === SyntaxKind.PostfixUnaryExpression)) return false;
         // The printer proves the position on the outermost chain node.
@@ -16602,6 +16605,29 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(access.expression);
         if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined) return false;
         return isObjectLiteralExpression(this.rustSkipWrappers(declaration.initializer));
+    }
+
+    /** ral-yf: the key text of `delete m[k]` as an expression statement on a map-literal local `m`, `k` a literal bearer key
+     *  or a proven-string key place, else undefined. runtime `remove` on (Dict, Str) is `try_ws_subs_remove` (a literal
+     *  holds no ws marker, so it is dead) then `shift_remove`; a missing key is a no-op in both. */
+    rustBearerDeleteKey(del: any): string | undefined {
+        const target: any = del?.expression;
+        if (target === undefined || !isElementAccessExpression(target) || !isIdentifier(target.expression) || del.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(target.expression);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined || !isObjectLiteralExpression(this.rustSkipWrappers(declaration.initializer))) return undefined;
+        const key: any = this.rustSkipWrappers(target.argumentExpression);
+        if (key === undefined || !isStringLiteralLikeNode(key) || !this.rustDictBearerKeyOk(key)) return undefined;
+        return JSON.stringify(String((key as any).text));
+    }
+
+    /** ral-yf: `delete m[k]` on a typed map-literal local. */
+    printBearerDelete(node: any): string | undefined {
+        const target: any = node?.expression;
+        if (target === undefined || !isElementAccessExpression(target) || !isIdentifier(target.expression)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(target.expression);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !this.rustDictLocalIsTyped(declaration)) return undefined;
+        const key = this.rustBearerDeleteKey(node);
+        return key === undefined ? undefined : `${String(target.expression.text)}.shift_remove(${key})`;
     }
 
     /** ral-xf: the `m[k]` receiver of a statement `m[k].push (v)` (one argument, no spread), else undefined. */
@@ -21565,8 +21591,27 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(rhs)) return (!rhs.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement || (isIdentifier(this.rustSkipWrappers(e)) && !this.rustBuiltListMovedElement(e)))
             && (!rhs.elements.some((e: any) => isIdentifier(this.rustSkipWrappers(e))) || this.rustBuiltListMovedLiteral(rhs) !== undefined))
             || this.rustBuiltListBoxedLiteral(rhs) !== undefined;
-        return this.rustAlwaysListProducer(rhs) || this.rustDefaultedListRead(rhs);
+        return this.rustAlwaysListProducer(rhs) || this.rustDefaultedListRead(rhs) || this.rustDeclaredListProducer(rhs);
     }
+
+    /** ral-yf: `await this.<endpoint> (..)` whose abstract declaration spells `Promise<List>` (a non-list answer reads as the
+     *  empty list, the landed ral-kc `into_list()` behaviour), or `this.parse<X> (..)` whose declaration returns `T[]`
+     *  (every override must return a list too): `.into_list()` moves exactly the list out of the box. */
+    rustDeclaredListProducer(rhs: any): boolean {
+        if (rhs?.kind === SyntaxKind.AwaitExpression) {
+            const call: any = this.rustSkipWrappers(rhs.expression);
+            return call !== undefined && isCallExpression(call) && !this.rustTestTierSource(call) && this.rustDeclaredEndpointKind(call) === 'list';
+        }
+        if (!isCallExpression(rhs) || !isPropertyAccessExpression(rhs.expression) || rhs.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const method = String(rhs.expression.name.text);
+        if (!RustTranspiler.RUST_LIST_PARSERS.has(method) || this.rustTestTierSource(rhs) || this.rustVirtualDispatch[this.toSnakeCaseName(method)] !== undefined) return false;
+        const declaration: any = this.rustScalarCallee(rhs);
+        return declaration?.kind === SyntaxKind.MethodDeclaration && declaration.type?.kind === SyntaxKind.ArrayType && this.rustListPassthroughCallee(rhs, method);
+    }
+
+    // Base plural parsers (no venue redeclares them) whose every return is `[]`, a self call, or a base
+    // `filterBy*SinceLimit` list: the runtime answers a `Value::Arr` on every path.
+    private static readonly RUST_LIST_PARSERS = new Set([ 'parseTrades', 'parseWsTrades', 'parseTradesHelper', 'parseOrders' ]);
 
     /** ral-sf: `x = y` as the only statement under `if (Array.isArray (y))` (the then-branch, `y` a plain `Value` local or
      *  parameter never written after its declaration), at `y`'s last use: `y` holds a `Value::Arr` there, so

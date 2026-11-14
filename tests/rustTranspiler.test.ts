@@ -5020,8 +5020,9 @@ describe('native IndexMap ops on proven dict receivers', () => {
 
     test('delete on a dict field / literal-built local is shift_remove', () => {
         expect(rest).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut self.balance, &code) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
-        expect(rest).toContain('if let Value::Dict(__d) = &mut request { std::sync::Arc::make_mut(__d).shift_remove("a"); }');
-        expect(ws).toContain('if let Value::Dict(__d) = &mut plain { std::sync::Arc::make_mut(__d).shift_remove("k"); }');
+        // ral-yf: the literal-built local is a typed IndexMap now, so the delete is its own shift_remove
+        expect(rest).toContain('request.shift_remove("a");');
+        expect(ws).toContain('plain.shift_remove("k");');
     });
 
     test('Object.keys / Object.values on REST dicts and untagged fields are native', () => {
@@ -14163,5 +14164,60 @@ describe('ral-yb: !x of a bool local in a value slot (round 38)', () => {
         expect(out).toContain('let mut swap: bool = false;');
         expect(out).toContain('m.insert("contract".to_string(), Value::Bool(!swap));');
         expect(out).not.toContain('!is_true(&swap)');
+    });
+});
+
+describe('ral-yf: a built list reassigned from a Promise<List> endpoint or a base list parser stays a native list', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-yf-endpointlist');
+        const files: Record<string, string> = {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    parseOrder (o: Dict): Dict { return o; }\n    parseOrders (orders: List, market: any = undefined): Dict[] {\n        if (orders === undefined) {\n            return [];\n        }\n        const out: Dict[] = [];\n        for (let i = 0; i < orders.length; i++) {\n            out.push (this.parseOrder (orders[i]));\n        }\n        return out;\n    }\n}\n", "ts/src/abstract/venue.ts": "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    privateGetOpen (params = {}): Promise<List> { return this.hold (params); }\n    privateGetHistory (params = {}): Promise<List> { return this.hold (params); }\n    privateGetEither (params = {}): Promise<Dict | List> { return this.hold (params); }\n}\n", "ts/src/venue.ts": "import venueApi from './abstract/venue.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends venueApi {\n    async fetchRows (method: string, params: Dict = {}) {\n        let response: List = [];\n        if (method === 'open') {\n            response = await this.privateGetOpen (params);\n        } else {\n            response = await this.privateGetHistory (params);\n        }\n        const first = response[0];\n        return this.hold ([ response.length, first ]);\n    }\n    async fetchUntyped (method: string, params: Dict = {}) {\n        let response: List = [];\n        if (method === 'open') {\n            response = (await this.privateGetEither (params)) as List;\n        }\n        const first = response[0];\n        return this.hold ([ response.length, first ]);\n    }\n    handleRows (data: List) {\n        let orders: Dict[] = [];\n        if (data.length > 0) {\n            orders = this.parseOrders (data);\n        }\n        return this.hold ([ orders.length, orders[0] ]);\n    }\n}\n"};
+        for (const [ rel, text ] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('x = await this.<Promise<List> endpoint> (..): .into_list() on the awaited answer', () => {
+        const body = out.slice (out.indexOf ('fn fetchRows'), out.indexOf ('fn fetchUntyped'));
+        expect(body).toMatch(/let mut response: crate::value::List = /);
+        expect(body).toMatch(/response = self\.private_get_open\(&\[[^\n]*\]\)\.await\.into_list\(\);/);
+        expect(body).not.toContain('response.clone()');
+    });
+    test('x = this.parseOrders (..) (base list parser, no override): .into_list()', () => {
+        const body = out.slice (out.indexOf ('fn handleRows'));
+        expect(body).toMatch(/let mut orders: crate::value::List = /);
+        expect(body).toMatch(/orders = self\.parseOrders\([^\n]*\)\.into_list\(\);/);
+    });
+    test('negative: an endpoint that does not declare Promise<List> keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn fetchUntyped'), out.indexOf ('fn handleRows'));
+        expect(body).toMatch(/let mut response: Value = /);
+    });
+});
+
+describe('ral-yf: delete m[k] on a map literal is the IndexMap shift_remove (runtime remove: missing key a no-op)', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-yf-delete');
+        const files: Record<string, string> = {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    extend (...args: any[]): Dict { return args[0]; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    trades (id: string, old: boolean, params: Dict = {}) {\n        const request: Dict = {\n            'instrument_name': id,\n            'include_old': true,\n        };\n        if (old) {\n            delete request['include_old'];\n        }\n        return this.hold (this.extend (request, params));\n    }\n    dropKey (row: Dict, params: Dict = {}) {\n        const key = this.safeString (row, 'k');\n        const request: Dict = {\n            'a': 1,\n        };\n        delete request[key];\n        return this.hold (this.extend (request, params));\n    }\n    producedDelete (params: Dict = {}) {\n        const request: Dict = this.hold ({});\n        delete request['include_old'];\n        return this.hold (request);\n    }\n}\n"};
+        for (const [ rel, text ] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('literal key: request.shift_remove("k")', () => {
+        const body = out.slice (out.indexOf ('fn trades'), out.indexOf ('fn dropKey'));
+        expect(body).toMatch(/let mut request: indexmap::IndexMap<String, Value> = /);
+        expect(body).toContain('request.shift_remove("include_old");');
+        expect(body).not.toContain('remove(&mut request');
+    });
+    test('negative: a non-literal key keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn dropKey'), out.indexOf ('fn producedDelete'));
+        expect(body).toMatch(/let mut request: Value = /);
+    });
+    test('negative: a produced map keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn producedDelete'));
+        expect(body).toMatch(/let mut request: Value = /);
     });
 });
