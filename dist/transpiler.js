@@ -69828,6 +69828,9 @@ ${iden}}`;
       for (const el of write.left.elements) {
         if (el === n || !isIdentifier3(el) || !this.rustNilSlotWrite(el))
           continue;
+        const sibling = this.rustDeclaredNode(el);
+        if (sibling === void 0 || !isVariableDeclaration3(sibling) || sibling.initializer === void 0 || this.literalKindOfNode(sibling.initializer) !== "null")
+          continue;
         if (this.primitiveKindOfType(this.typeOfNodeIfAny(el)) === "string")
           reserve += ".as_str().map(str::to_owned)".length;
       }
