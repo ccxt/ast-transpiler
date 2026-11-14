@@ -6543,6 +6543,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustLimitArgUse(n, kind)) return 'targ';
         if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustSideStoreArg(n)) return 'targ';
         if (isCallExpression(parent) && parent.expression !== n && (({ 'Option<&str>': [ 'str', 'ostr' ], 'Option<i64>': [ 'int', 'oint' ] })[this.rustTypedFilterSlot(parent, parent.arguments.indexOf(n))] ?? []).includes(kind)) return 'targ';
+        // yi: a Copy number argument of `this[name](..)` boxes into its `vec![..]` slot (`Value::from`: the Int / Null the `Value` held)
+        if ((kind === 'int' || kind === 'oint') && isCallExpression(parent) && parent.expression !== n && isElementAccessExpression(parent.expression)
+            && parent.expression.expression.kind === SyntaxKind.ThisKeyword && isIdentifier(parent.expression.argumentExpression)) return 'box';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
         }
@@ -13086,14 +13089,20 @@ export class RustTranspiler extends BaseTranspiler {
     /** An expression that is exactly Int-or-null / Bool-or-null in the `Value` form. */
     rustExactScalarExpr(expr: any, want: string, method: any, depth: number): boolean {
         const node: any = this.unwrapParens(expr);
-        if (node === undefined || depth > 4) return false;
+        if (node === undefined) return false;
         const literal = this.literalKindOfNode(node);
+        // yi: a null literal is exact at any depth (a defaulted `Int = undefined` parameter one ternary down)
         if (literal === 'null') return true;
+        if (depth > 4) return false;
         if (want === 'bool') {
             if (literal === 'boolean') return true;
             if (isBinaryExpression(node) && this.isEqualityOp(node.operatorToken.kind)) return true;
             if (isPrefixUnaryExpression(node) && node.operator === SyntaxKind.ExclamationToken) return true;
         } else if (this.rustScalarIntLiteral(node) !== undefined) return true;
+        // yi: `c ? a : b` is exact when both arms are (`handleMaxEntriesPerRequestAndParams` slot 0)
+        if (node.kind === SyntaxKind.ConditionalExpression) {
+            return this.rustExactScalarExpr(node.whenTrue, want, method, depth + 1) && this.rustExactScalarExpr(node.whenFalse, want, method, depth + 1);
+        }
         if (want === 'num' && isIdentifier(node) && isParameterDeclaration(this.rustDeclaredNode(node)) && this.rustEnclosingFunction(this.rustDeclaredNode(node)) === method) return true;
         if (isCallExpression(node) && isPropertyAccessExpression(node.expression) && node.expression.expression.kind === SyntaxKind.ThisKeyword) {
             const name = String(node.expression.name.text);

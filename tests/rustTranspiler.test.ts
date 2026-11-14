@@ -14394,3 +14394,22 @@ describe('yd: filterByValueSinceLimit joins the typed filter group (rows borrowe
         expect(out).toMatch(/let mut entryKeyValue: Option<i64> = /);
     });
 });
+
+describe('yi: option-helper tuple slots', () => {
+    const fx = (name: string, base: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    checkOptionInteger (m: string, k: string, v: any): Int { return v; }\n    handleOptionIntegerAndParams (params: Dict, m: string, k: string, d: Int = undefined): [Int, Dict] {\n        const value = this.safeValue (params, k, d);\n        return [ this.checkOptionInteger (m, k, value), params ];\n    }\n    handleMaxEntriesPerRequestAndParams (method: string, maxEntriesPerRequest: Int = undefined, params: Dict = {}): [Int, any] {\n        const [ newMax, rest ] = this.handleOptionIntegerAndParams (params, method, 'maxEntriesPerRequest');\n        const option = (newMax !== undefined) ? newMax : maxEntriesPerRequest;\n        const resolved = (option === undefined) ? 1000 : option;\n        return [ resolved, rest ];\n    }\n    hold (x: any, y: any = undefined): any { return x; }\n}\n";
+    test('yi: handleMaxEntriesPerRequestAndParams slot 0 (ternaries of exact ints over a defaulted Int parameter) is Option<i64>, boxed into this[name](..)', () => {
+        const file = fx ('yi-max-entries', base, "import Exchange from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async m (method: string, params: Dict = {}, maxEntriesPerRequest: Int = undefined) {\n        const [ perRequest, rest ] = this.handleMaxEntriesPerRequestAndParams (method, maxEntriesPerRequest, params);\n        return await this[method] (undefined, perRequest, rest);\n    }\n    n (method: string, params: Dict, other: any) {\n        const [ perRequest, rest ] = this.handleMaxEntriesPerRequestAndParams (method, undefined, params);\n        return this.hold (perRequest - other, rest);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        expect(out).toContain('let mut perRequest: Option<i64> = ');
+        expect(out).toContain('Value::from(perRequest)');
+        // negative: an arithmetic operand against an any value keeps the box
+        expect(out).toContain('let mut perRequest: Value = ');
+    });
+});
