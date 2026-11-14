@@ -18673,6 +18673,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (write !== undefined && isBinaryExpression(write) && isArrayLiteralExpression(write.left)) {
             for (const el of write.left.elements as any) {
                 if (el === n || !isIdentifier(el) || !this.rustNilSlotWrite(el)) continue;
+                // only a nil-declared string local (`let x: Str = undefined`, nc's slot rule) holds that room
+                const sibling: any = this.rustDeclaredNode(el);
+                if (sibling === undefined || !isVariableDeclaration(sibling) || sibling.initializer === undefined || this.literalKindOfNode(sibling.initializer) !== 'null') continue;
                 if (this.primitiveKindOfType(this.typeOfNodeIfAny(el)) === 'string') reserve += '.as_str().map(str::to_owned)'.length;
             }
         }
