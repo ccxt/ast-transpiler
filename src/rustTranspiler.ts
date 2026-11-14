@@ -8067,11 +8067,25 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** 40b: the operand of a top-level `<expr> as T` write source (parens only around it), else undefined. */
     rustScalarAsWrite(rhs): any {
-        const node: any = this.unwrapParens(rhs);
-        if (node === undefined || !isAsExpression(node)) return undefined;
-        const inner: any = this.unwrapParens(node.expression);
-        // an identifier operand is an alias write: the alias rules decide it with its source (a source must not flip)
-        return inner === undefined || isAsExpression(inner) || isIdentifier(inner) || this.literalKindOfNode(inner) === 'null' ? undefined : inner;
+        const peeled = this.rustAsOperand(rhs, false);
+        if (peeled.casts !== 1) return undefined;
+        const inner: any = peeled.operand;
+        // an identifier operand is an alias write: the alias rules (ral-40h two-phase container aliases, ral-40a
+        // `(x as string)` read-through) decide it with its source (a source must not flip)
+        return inner === undefined || isIdentifier(inner) || this.literalKindOfNode(inner) === 'null' ? undefined : inner;
+    }
+
+    /** INT-48: the one `as T` decision shared by ral-40a (`(x as string)` read-through), ral-40b (`as T` write operand)
+     *  and the ral-40h alias rules: peel parens and `as` assertions (only `as string` when `stringOnly`), counting the
+     *  assertions; the assertion prints nothing, so the operand is what every rule decides on. */
+    rustAsOperand(node: any, stringOnly: boolean): { operand: any, casts: number } {
+        let inner: any = node;
+        let casts = 0;
+        while (inner !== undefined && (isParenthesizedExpression(inner) || (isAsExpression(inner) && (!stringOnly || inner.type?.kind === SyntaxKind.StringKeyword)))) {
+            if (isAsExpression(inner)) casts++;
+            inner = inner.expression;
+        }
+        return { 'operand': inner, 'casts': casts };
     }
 
     /** Assignment hook: `x = <rhs>` in the local's native type. */
@@ -9801,19 +9815,14 @@ export class RustTranspiler extends BaseTranspiler {
         return isBinaryExpression(inner) && (this.rustScalarExprHasForCounter(inner.left) || this.rustScalarExprHasForCounter(inner.right));
     }
 
-    /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
-     *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
-    /** ral-40a: the identifier under `(x as string)` (parens and a `string` assertion only), else undefined. */
+    /** ral-40a: the identifier under `(x as string)` (parens and a `string` assertion only), else undefined (rustAsOperand). */
     rustStrCastLocal(node: any): any {
-        let inner: any = node;
-        let cast = false;
-        while (inner !== undefined && (isParenthesizedExpression(inner) || (isAsExpression(inner) && inner.type?.kind === SyntaxKind.StringKeyword))) {
-            if (isAsExpression(inner)) cast = true;
-            inner = inner.expression;
-        }
-        return cast && isIdentifier(inner) ? inner : undefined;
+        const peeled = this.rustAsOperand(node, true);
+        return peeled.casts > 0 && isIdentifier(peeled.operand) ? peeled.operand : undefined;
     }
 
+    /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
+     *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
     rustScalarExpressionUseForm(n, kind: string): string | undefined {
         const parent: any = n.parent;
         // ral-40a: `(x as string)` as a ws `watch` url / hash slot: the slot reads the string local through the cast
