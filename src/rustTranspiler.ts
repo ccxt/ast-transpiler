@@ -10928,7 +10928,7 @@ export class RustTranspiler extends BaseTranspiler {
         let copies = 0;
         const safe = this.rustLocalUsesAll(element, name, true, (n: any) => {
             if (this.rustDeclaredNode(n) !== element || this.rustEnclosingFunction(n) !== fn) return false;
-            const ok = kind === 'string' ? this.rustStringLocalUseIsNative(n) || this.rustVenueStrArgSlot(n) : this.rustIdentifierUseIsCondition(n);
+            const ok = kind === 'string' ? this.rustStringLocalUseIsNative(n) || this.rustVenueStrArgSlot(n) : this.rustIdentifierUseIsCondition(n) || this.rustBoolSlotTrueTest(n);
             if (ok) nativeUses++;
             const box = !ok && kind === 'string' && this.rustStrSlotBoxUse(n) && (isCallExpression(n.parent) || isReturnStatement(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustSlotUseOutsideLoop(n, element));
             if (box && !(isReturnStatement(n.parent) || this.rustStrSlotThrownConcat(n) || this.rustStrSlotLastUse(n, element))) copies++;
@@ -10936,6 +10936,15 @@ export class RustTranspiler extends BaseTranspiler {
         });
         // a string slot only handed back to `Value` slots is typed when each box moves it (no copy of the string)
         return safe && (nativeUses > 0 || (kind === 'string' && copies === 0)) ? (kind === 'string' ? 'str' : 'bool') : undefined;
+    }
+
+    /** qe: `x === true` / `x !== true` on a bool tuple slot: the slot reads `as_bool() == Some(true)`, so the native
+     *  bool answers the strict test exactly (Null and a non-bool are `false` on both sides). Never `=== false`. */
+    rustBoolSlotTrueTest(n: any): boolean {
+        const up: any = n.parent;
+        if (!isBinaryExpression(up) || (up.operatorToken.kind !== SyntaxKind.EqualsEqualsEqualsToken && up.operatorToken.kind !== SyntaxKind.ExclamationEqualsEqualsToken)) return false;
+        const other: any = this.unwrapParens(up.left === n ? up.right : up.left);
+        return other?.kind === SyntaxKind.TrueKeyword;
     }
 
     // ── optional params slots ────────────────────────────────────────────────
@@ -14518,6 +14527,24 @@ export class RustTranspiler extends BaseTranspiler {
         });
     }
 
+    /** qe: `rows.push (x)` into another local list, or `m[k] = x` into a local container that is not a tagged store
+     *  (never `this.*`, `client.subscriptions` or a cache `hashmap()` read): the map enters the store whole, once. */
+    rustLocalStoreHandOff(n: any): boolean {
+        const up: any = n.parent;
+        const own: any = this.rustDeclarationOfIdentifier(n);
+        const untaggedLocal = (root: any): boolean => {
+            if (!isIdentifier(root) || this.rustIdentifierRefersToDeclaration(root, own)) return false;
+            const d: any = this.rustDeclarationOfIdentifier(root);
+            if (d === undefined || !isVariableDeclaration(d) || d.name === root) return false;
+            return d.initializer === undefined || !this.rustInitReadsTaggedStore(d.initializer) && !this.rustContainerInitReadsStore(this.rustSkipWrappers(d.initializer));
+        };
+        if (isCallExpression(up) && isPropertyAccessExpression(up.expression) && up.arguments.length === 1 && up.arguments[0] === n
+            && String(up.expression.name.text) === 'push') return untaggedLocal(up.expression.expression);
+        if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(up.left)
+            && up.parent?.kind === SyntaxKind.ExpressionStatement) return untaggedLocal(this.rustSkipWrappers(up.left.expression));
+        return false;
+    }
+
     /** `this.<field>` or `this.<field>[…]` — a store the runtime may tag. */
     rustThisRootedPlace(node: any): boolean {
         if (isPropertyAccessExpression(node)) return node.expression.kind === SyntaxKind.ThisKeyword;
@@ -16031,6 +16058,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (up.kind === SyntaxKind.ArrayLiteralExpression) return !this.rustInDestructureWrite(n);
         if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
             && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left)) && this.rustThisRootedPlace(up.left)) return true;
+        if (this.rustLocalStoreHandOff(n)) return true;
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
@@ -16051,6 +16079,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isReturnStatement(up)) return up.expression === n;
         // `return x as T`: the assertion only retypes the TS side
         if (isAsExpression(up) && up.expression === n && isReturnStatement(up.parent)) return true;
+        // qe: pushed / stored whole into a local container: `None` boxes to exactly the `Null` the reader answered
+        if (this.rustLocalStoreHandOff(n)) return true;
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
@@ -19079,12 +19109,13 @@ export class RustTranspiler extends BaseTranspiler {
                 || (owner.parent as any)?.declarations?.length !== 1) return false;
             // slot 1 is the params dict; any other slot only where the callee's own tuple type declares it `Dict`
             const at = pattern.elements.indexOf(declaration);
-            if (at !== 1 && !(at >= 0 && this.rustDeclaredDictSlot(declaration))) return false;
+            const allSlot = at >= 0 && (this.rustPromiseAllDictSlot(declaration) || at === 0 && this.rustUntilRequestSlot(declaration));
+            if (at !== 1 && !allSlot && !(at >= 0 && this.rustDeclaredDictSlot(declaration))) return false;
             if (declaration.dotDotDotToken !== undefined || declaration.initializer !== undefined || this.rustTupleSlotKind(declaration) !== undefined) return false;
             const init: any = this.rustAwaitedCall(owner.initializer);
             const callee: any = init?.expression;
-            if (!isCallExpression(init) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
-                || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) && !this.rustLentSlotSource(init, declaration) && !this.rustDeclaredDictSlot(declaration)) return false;
+            if (!allSlot && (!isCallExpression(init) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
+                || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) && !this.rustLentSlotSource(init, declaration) && !this.rustDeclaredDictSlot(declaration))) return false;
         } else {
             const list: any = declaration.parent;
             if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1) return false;
@@ -19318,6 +19349,21 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_EXTEND_HEAD_CALLS = new Set([ 'extend', 'deepExtend' ]);
 
     private rustUntilHeadDecisions = new WeakMap<any, boolean>();
+
+    /** qe: slot 0 of `const [ x, p ] = this.handleUntilOption (k, r, ..)` with `r` a map literal or a typed map local:
+     *  the base helper hands `r` back (inserting the until key), so the slot is that map on every path. */
+    rustUntilRequestSlot(element: any): boolean {
+        const owner: any = element?.parent?.parent;
+        if (element?.parent?.kind !== SyntaxKind.ArrayBindingPattern || !isVariableDeclaration(owner) || owner.name !== element.parent) return false;
+        const init: any = this.rustSkipWrappers(owner.initializer);
+        if (!this.rustBaseCallNamed(init, RustTranspiler.RUST_REQUEST_TUPLE_HELPERS) || !this.rustNativeListSource(init)) return false;
+        const request: any = this.rustSkipWrappers(init.arguments[1]);
+        if (request === undefined || !(isObjectLiteralExpression(request) || this.rustDictBearerDeclaration(request) !== undefined)) return false;
+        // an extend head belongs to the until-head rule (a whole hand-off beside it keeps the box there)
+        let head = false;
+        this.rustLocalUsesAll(element, String(element.name.text), false, (n: any) => { if (this.rustExtendHeadUse(n)) head = true; return true; });
+        return !head;
+    }
 
     rustUntilHeadSlot(element: any): boolean {
         if (element?.kind !== SyntaxKind.BindingElement) return false;
@@ -20361,6 +20407,24 @@ export class RustTranspiler extends BaseTranspiler {
     // A transpiled venue method declaring a `[.., Dict, ..]` (or `Promise<[..]>`) return builds that tuple on every
     // path (`rustNativeListSource`): the `Dict` slot holds the params map, handed on like a `handle*AndParams` one.
 
+    /** qe: slot `i` of `await Promise.all ([ .., x, .. ])` whose operand `x` is a local printed `crate::value::Dict`
+     *  (never the optional form): `promise_all` hands each operand back as it came, so the slot is that map. */
+    rustPromiseAllDictSlot(element: any): boolean {
+        const owner: any = element?.parent?.parent;
+        const awaited: any = this.rustSkipWrappers(owner?.initializer);
+        if (awaited?.kind !== SyntaxKind.AwaitExpression) return false;
+        const call: any = this.rustSkipWrappers(awaited.expression);
+        if (!isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
+            || !isIdentifier(call.expression.expression) || call.expression.expression.text !== 'Promise' || String(call.expression.name.text) !== 'all') return false;
+        const list: any = this.rustSkipWrappers(call.arguments[0]);
+        if (!isArrayLiteralExpression(list)) return false;
+        const operand: any = this.rustSkipWrappers(list.elements[element.parent.elements.indexOf(element)]);
+        if (operand === undefined || !isIdentifier(operand)) return false;
+        const d: any = this.rustDeclarationOfIdentifier(operand);
+        if (d === undefined || !isVariableDeclaration(d) || d.name === operand) return false;
+        return this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d);
+    }
+
     rustDeclaredDictSlot(element: any): boolean {
         const owner: any = element?.parent?.parent;
         let init: any = this.rustSkipWrappers(owner?.initializer);
@@ -20371,9 +20435,39 @@ export class RustTranspiler extends BaseTranspiler {
         let type: any = declaration.type;
         const named = (t: any, name: string): boolean => t?.kind === SyntaxKind.TypeReference && isIdentifier(t.typeName) && t.typeName.text === name;
         if (named(type, 'Promise') && type.typeArguments?.length === 1) type = type.typeArguments[0];
+        // qe: an `any` return proves the slot by its own returns: each builds slot `i` from a map literal
+        if (type === undefined || type.kind === SyntaxKind.AnyKeyword) return this.rustReturnsBuildMapSlot(declaration, element.parent.elements.indexOf(element));
         if (type?.kind !== SyntaxKind.TupleType) return false;
         const slot: any = type.elements?.[element.parent.elements.indexOf(element)];
         return named(slot, 'Dict') && slot.typeArguments === undefined;
+    }
+
+    /** Every `return` of the callee's own body is an array literal whose element `at` is a map literal or a `const`
+     *  local initialised with one (a map on every path, whatever keys are written into it). */
+    rustReturnsBuildMapSlot(declaration: any, at: number): boolean {
+        let returns = 0;
+        let all = true;
+        const mapElement = (n: any): boolean => {
+            const e: any = this.rustSkipWrappers(n);
+            if (e !== undefined && isObjectLiteralExpression(e)) return true;
+            if (e === undefined || !isIdentifier(e)) return false;
+            const d: any = this.rustDeclarationOfIdentifier(e);
+            if (d === undefined || !isVariableDeclaration(d) || d.name === e || this.rustEnclosingFunction(d) !== declaration) return false;
+            const list: any = d.parent;
+            return list?.kind === SyntaxKind.VariableDeclarationList && (list.flags & NodeFlags.Const) !== 0 && isObjectLiteralExpression(this.rustSkipWrappers(d.initializer));
+        };
+        const visit = (node: any) => {
+            if (!all || (node !== declaration.body && isFunctionLike(node))) return;
+            if (isReturnStatement(node)) {
+                returns++;
+                const list: any = this.rustSkipWrappers(node.expression);
+                all = list !== undefined && isArrayLiteralExpression(list) && list.elements.length > at && mapElement(list.elements[at]);
+                return;
+            }
+            node.forEachChild(visit);
+        };
+        declaration.body.forEachChild(visit);
+        return all && returns > 0;
     }
 
     /** One element read rooted at the bearer: a plain read the native op serves. */
@@ -21492,6 +21586,14 @@ export class RustTranspiler extends BaseTranspiler {
         if (leftLiteral === rightLiteral) return undefined;
         const [ literal, other ] = leftLiteral ? [ left, right ] : [ right, left ];
         const inner: any = this.unwrapParens(other);
+        // qe: a native `bool` tuple slot against `true` (the slot reads `as_bool() == Some(true)`): the bool itself
+        if (literal.kind === SyntaxKind.TrueKeyword && isIdentifier(inner) && this.rustBoolSlotTrueTest(inner)) {
+            const slot: any = this.rustDeclaredNode(inner);
+            if (slot?.kind === SyntaxKind.BindingElement && slot.name !== inner && this.rustTupleSlotKind(slot) === 'bool') {
+                const name = this.printNode(inner, 0).trim();
+                return (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) ? name : `!${name}`;
+            }
+        }
         if (inner === undefined || (!isIdentifier(inner) && !isCallExpression(inner)) || !this.printsValueExpression(inner)
             || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || this.rustBoolMemberLocal(inner) || this.rustNativeBoolLocal(inner) || !this.rustBoolValue(inner)) {
             return undefined;
