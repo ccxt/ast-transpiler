@@ -11004,6 +11004,22 @@ describe('rust ternary-initialised scalar locals', () => {
         expect(out).toContain('let mut count: i64 = i64::min(limit.as_i64().unwrap_or(100), 1000);');
     });
 
+    test('qb: an Int ternary capping a Value through Math.min is an i64 boxed once at the operand, no clone', () => {
+        const out = run ("        const request = {};\n        const maxLimit = (symbol === 'BTC') ? 1000 : 1500;\n" +
+            "        request['limit'] = Math.min (limit, maxLimit);\n        const capped = (limit === undefined) ? maxLimit : Math.min (limit, maxLimit);\n" +
+            "        return [ request, capped ];\n");
+        expect(out).toContain('let mut maxLimit: i64 = (if ');
+        expect(out).toContain('crate::runtime::Math::min(&limit, &Value::from(maxLimit))');
+        expect(out).not.toContain('maxLimit.clone()');
+        expect(out).not.toContain('let mut maxLimit: Value');
+    });
+
+    test('qb negative: a reader local capping through Math.min stays in its own family (Value)', () => {
+        const out = run ("        const request = {};\n        const until = this.hold (params)['until'];\n" +
+            "        request['limit'] = Math.min (limit, until);\n        return [ request ];\n");
+        expect(out).not.toContain('Value::from(until)');
+    });
+
     test('negative: a default above the Math.min cap keeps the box', () => {
         const out = run ("        const count = (limit === undefined) ? 5000 : Math.min (limit, 1000);\n" +
             "        return [ { 'limit': count } ];\n");

@@ -5749,6 +5749,9 @@ export class RustTranspiler extends BaseTranspiler {
         if ((kind === 'str' || kind === 'ostr') && isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.InKeyword && !this.rustTestTierSource(n)
             && this.rustInKeyInitialised(n)) return 'inbox';
         if (isCallExpression(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== undefined) return 'native';
+        // qb: a numeric local as an operand of `Math.min|max` over a `Value` operand boxes once (`&Value::from(x)`:
+        // the Int / Float / Null the `Value` local held; `Copy`, so no clone)
+        if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustMathMinMaxValueOperand(n) && this.rustInlineIfMatchInit(this.rustDeclaredNode(n))) return 'box';
         if (this.rustVenueStrLocalArg(n)) return 'targ';
         if (this.rustLimitArgUse(n, kind)) return 'targ';
         if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustSideStoreArg(n)) return 'targ';
@@ -7050,6 +7053,24 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = this.rustArithCallKind(node);
         const text = kind === undefined ? undefined : this.rustArithCallText(kind, node);
         return text === undefined ? undefined : this.rustScalarBoxText(kind, text, node);
+    }
+
+    /** qb: a local whose initializer prints as an inline `if` / `match` (a ternary, or runtime arithmetic): the
+     *  ternary / match result family. Reader, self-call, nil-declared and element-read locals belong to other families. */
+    rustInlineIfMatchInit(declaration): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined) return false;
+        const init: any = this.unwrapParens(declaration.initializer);
+        return isConditionalExpression(init) || (isBinaryExpression(init) && RustTranspiler.RUST_SCALAR_ARITH_OPS.has(init.operatorToken.kind));
+    }
+
+    /** qb: `n` is an argument of a two-operand `Math.min|max` the printer keeps as the runtime helper (no native kind). */
+    rustMathMinMaxValueOperand(n): boolean {
+        const call: any = n.parent;
+        if (call === undefined || !isCallExpression(call) || call.expression === n || call.arguments.length !== 2 || !call.arguments.some((a) => a === n)) return false;
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || !isIdentifier(callee.expression) || callee.expression.text !== 'Math') return false;
+        const name = String(callee.name.text);
+        return (name === 'min' || name === 'max') && this.rustArithCallKind(call) === undefined;
     }
 
     /** `this.sum(..)` / `Math.min|max(a, b)`: a call whose own kind comes from its operands. */
