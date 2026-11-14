@@ -12399,3 +12399,32 @@ describe('se: ws watch results through hash helpers, helper-parameter resolves a
         expect(out).toMatch(/let mut ticker: Value = self\.watch\(/);
     });
 });
+describe('ral-tb: boxed typed values remainder', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): Str { return networkId; }\n    safeString (o: any, k: any): Str { return o[k]; }\n    safeList (o: any, k: any): any[] { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a networkIdToCode key whose inserted value only reads it is an Option<String> borrowed for the key (no copy)', () => {
+        const out = write ('tb-netkey', "    m (chains: any[], code: Str) {\n        const networks: Dict = {};\n        for (let j = 0; j < chains.length; j++) {\n            const chain = chains[j];\n            const networkId = this.safeString (chain, 'name');\n            const networkCode = this.networkIdToCode (networkId, code);\n            if (networkCode !== undefined) {\n                networks[networkCode] = {\n                    'id': networkId,\n                    'network': networkCode,\n                };\n            }\n        }\n        return this.hold (networks);\n    }\n");
+        expect(out).toContain('let mut networkCode: Option<String> = ');
+        expect(out).toContain('networks.insert(networkCode.as_deref().unwrap_or("null").to_string(), ');
+        expect(out).not.toContain('networkCode.clone()');
+    });
+    test('a parseToInt for-bound is an Option<i64> compared with the Int counter inline (Some orders as f64, None is false)', () => {
+        const out = write ('tb-ptibound', "    parseToInt (n: any): number { return n; }\n    m (n: any) {\n        let s = '1';\n        const decimalsCount = this.parseToInt (n);\n        for (let i = 0; i < decimalsCount; i++) {\n            s = s + '0';\n        }\n        return this.hold (s);\n    }\n");
+        expect(out).toContain('let mut decimalsCount: Option<i64> = ');
+        expect(out).toContain('matches!(decimalsCount, Some(__b) if i.as_f64().unwrap_or(f64::NAN) < (__b as f64))');
+        expect(out).not.toContain('is_less_than(');
+    });
+    test('negative: a parseToInt for-bound that also meets another local elsewhere stays a Value', () => {
+        const out = write ('tb-ptiboundp', "    parseToInt (n: any): number { return n; }\n    m (n: any, k: any) {\n        let s = '1';\n        const pages = this.parseToInt (n);\n        for (let i = 0; i < pages; i++) {\n            s = s + '0';\n        }\n        if (k < pages) {\n            return this.hold (k);\n        }\n        return this.hold (s);\n    }\n");
+        expect(out).toContain('let mut pages: Value = ');
+    });
+    test('negative: a networkIdToCode key written inside its own inserted value stays a Value', () => {
+        const out = write ('tb-netkeyw', "    m (chains: any[], code: Str) {\n        const networks: Dict = {};\n        for (let j = 0; j < chains.length; j++) {\n            let networkCode = this.networkIdToCode (this.safeString (chains[j], 'name'), code);\n            networks[networkCode] = { 'network': (networkCode = 'x') };\n            this.hold (networkCode);\n        }\n        return this.hold (networks);\n    }\n");
+        expect(out).toContain('let mut networkCode: Value = ');
+    });
+});
