@@ -64,7 +64,7 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'other';
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
 export interface RustMethodSignature {
     file: any;
@@ -393,6 +393,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Every box before the last sits at a `this.` / `super.` argument (where the `Value` form was cloned); no free-function,
      *  `Precise`, `Math` or `new` operand, which read `&Value` and would take a copy only because of the lending. */
     rustNilStrLendSites(declaration: any): boolean;
+    /** ral-va: an identifier partner of an optional-string `+` operand whose checker type is string-or-nullish: the
+     *  pair prints the `format!` arm whatever its Rust form (`Value`, `String`, `Option<String>` read), and each of
+     *  those displays as the JS concat does (Str text, Null `null`). */
+    rustNilConcatPartner(other: any): boolean;
     rustNilOptStrConcatUse(n: any): boolean;
     /** The `as_deref().unwrap_or("null")` read of a concat operand keeps its statement within the 400-char line budget. */
     rustOptStrConcatFits(n: any): boolean;
@@ -635,6 +639,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustPrecisionTouched(declaration: any, scope: any): boolean;
     /** pg: a later whole write of the local is a precision-formatter call (the 400-char guard watches such locals). */
     rustPrecisionWritten(declaration: any): boolean;
+    /** Runtime `Precise::string*` entry points whose string operands take `&impl PreciseArg` (precise.rs). The
+     *  comparators keep `&Value` (a ccxt build/ pass reads their exact signature text). */
+    private static readonly RUST_PRECISE_LENT;
+    /** vd: only a local declared with a value (nil-declared locals keep their own box rules). */
+    rustPreciseLendLocal(n: any): boolean;
+    /** vd: `n` is a direct string operand (one of the first two, the third of `stringDiv` is the precision) of a lent
+     *  `Precise.<op>(..)` call. */
+    rustPreciseLentOperand(n: any): boolean;
+    private rustDeepPreciseChainMemo;
+    rustDeepPreciseChainIn(scope: any): boolean;
     /** pg: some use of the local is an argument of a `Precise.<op>(..)` call. */
     rustPreciseOperandLocal(declaration: any): boolean;
     /** The unboxed call text. */
@@ -745,6 +759,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustReaderIntDefaultNum(init: any): boolean;
     rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
     rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar?: boolean): boolean;
+    /** vi: a `Precise.string*` result moved at its last use into an operand of a `Precise.*` chain that is the whole
+     *  write (`x = Precise.stringDiv (Precise.stringMul (local, y), ..)`): the written text is a `Precise` call either
+     *  way (the `&Value` operand takes the moved string), so the receiver's decision does not read this local's type. */
+    rustScalarPreciseFeed(n: any, write: any, declaration: any): boolean;
+    /** `Precise.<op> (..)`: the hand-written `crate::precise::Precise` string math (a string or undefined). */
+    rustPreciseStringCall(node: any): boolean;
     /** A String-helper result boxed as an object-literal value or as a one-level element write: the written
      *  place is a `Value` either way, so no other local's decision reads this one's type. */
     rustScalarBoxedField(n: any, write: any, declaration: any): boolean;
@@ -829,6 +849,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSbDictAliasDecl(declaration: any): boolean;
     private rustSbAliasDeferred;
     rustAssignmentOpKind(op: any): boolean;
+    /** ral-ua: `acc += x` (statement) with `acc` a checker-string local the solve leaves boxed (its decision is not taken
+     *  during seeding: the join is assumed, then re-checked) and `x` a `string | undefined`, within the 400-char line. */
+    rustPlusEqualsJoinOperand(n: any): boolean;
     rustScalarUseFormOwn(n: any, kind: string): string | undefined;
     private static readonly RUST_WS_CLIENT_VALUE_METHODS;
     rustWsClientCallArg(call: any, kind: string): boolean;
@@ -975,6 +998,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustScalarLocalCondition(node: any): string | undefined;
     /** The needle of a base `inArray` call outside the test crate: the hand-written `in_array(needle: impl Into<Value>, ..)`
      *  takes an optional string lent as `&x` (`From<&Option<String>>`: `None` is Null, `Some(s)` a `Str`, as the box gave). */
+    /** vg: element locals printed as a borrowed `Option<&str>` off their list (`recv.get(i).and_then(Value::as_str)`). */
+    private rustBorrowedStrElems;
+    /** vg: `const k = recv[i]` where `recv` is a local list every element of which is a string (`Object.keys (..)`, a literal of
+     *  string literals) and every use of `recv` is an element read or `.length` (never written, pushed, moved or handed on, so the
+     *  borrow stays valid while `k` lives and no non-string can reach `k`: out of range reads `None`, the `Null` the box held).
+     *  Every use of `k` reads the borrow: literal tests, `format!` operands, map-key reads / `in` tests, and boxes at a call
+     *  argument, object-literal value, array element, dict write or `+` operand (`Value::from(k.as_deref())`: the copy the `Value`
+     *  clone made, never more). */
+    rustBorrowStrElem(declaration: any): boolean;
+    /** vg: `Object.keys (x)` (never a ws client handle's key list) or a non-empty literal of string literals: only strings. */
+    rustExactStrListInit(init: any): boolean;
     rustInArrayNeedle(node: any): boolean;
     /** Identifier hook: a `box` use converts with the standard `From` impls (scalars are `Copy`). */
     printRustScalarLocalRead(node: any): string | undefined;
@@ -1408,6 +1442,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBookSideLocal(declaration: any): boolean;
     rustBookSideLocalUncached(declaration: any): boolean;
     rustBookSideLocalOf(node: any): boolean;
+    private rustBookSideParams;
+    rustBookSideParam(param: any): boolean;
+    rustBookSideParamUncached(param: any): boolean;
+    /** The argument lands in a side parameter slot of a `this.<m>(..)` call. */
+    rustBookSideArgSlot(n: any): boolean;
+    /** Argument text for a side slot: a side handle passes whole, anything else is wrapped once. */
+    printBookSideArg(arg: any, identation: number): string;
     printBookSideLocal(declaration: any, indent: string, varName: string): string | undefined;
     /** `s.length` / `s[i]` on a side handle: the marker's own length and level reads. */
     printBookSideRead(node: any): string | undefined;
@@ -1737,6 +1778,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A miss-arm default the match can hold: absent (`Value::Null`) or a
      *  literal; a computed default keeps the helper (its Value is not
      *  re-printable inside an arm without re-evaluating it twice). */
+    /** vd: a no-default `safeInteger` / `safeString` / `safeNumber` read of the WS-handler shadow, printed
+     *  straight into an `Option<i64>` / `Option<String>` / `Option<f64>` local. Same arms as
+     *  `rustProHandlerShadowReadText` (so the same Null / wrong-kind answers as the `_k` runtime helper:
+     *  a missing key, `Null`, an empty string, an unparsable string or any other kind is `None`), without the
+     *  `Value` round trip and its `.cloned()` (the old line exceeded 400 chars and vetoed the typed local). */
+    rustProShadowScalarText(kind: string, node: Node): string | undefined;
     rustProHandlerShadowDefaultShape(node: Node): boolean;
     rustProHandlerShadowDefault(node: Node): string | undefined;
     /** Exact native form of the runtime `_k` helper: same value kinds, same
@@ -2257,6 +2304,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `n` is the target of a statement `n = this.extend (n, y)` (base `extend`, two operands, `y` not naming `n`). */
     rustSelfExtendWrite(n: any, declaration: any): boolean;
     private static readonly RUST_SELF_EXTEND;
+    private rustReuseProducerWrites;
+    /** A statement `n = <map producer>` whose right side does not name `n`. */
+    rustReuseMapProducerWrite(n: any): boolean;
+    private static readonly RUST_REUSE_SAFE_DICT;
+    /** The producer of a reuse write builds from untagged operands only: `extend` / `omit` operands proven plain
+     *  (`rustUntaggedMapOperand`), `indexBy` / `groupBy` fresh maps, a REST `safeDict` read off a local (parsed JSON). */
+    rustReuseProducerUntagged(n: any, rhs: any): boolean;
     /** pb: the base `handleUntilOption (k, x, p)` of a statement `[ x, q ] = ..` writing slot 0 back into `x` (base
      *  `handleUntilOption` returns its own `request` argument as slot 0, so the map moves through it). */
     rustUntilSelfCall(n: any, declaration: any): any;
@@ -2531,6 +2585,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustWsUrlLocals;
     rustWsUrlLocal(declaration: any): boolean;
     rustWsUrlLocalUncached(declaration: any): boolean;
+    /** ral-ve: the url local lands in a per-venue string slot (`&str` / `Option<&str>`). */
+    rustWsUrlVenueSlot(n: any): boolean;
     /** `this.urls[k1][k2]..` (through parens / `as` casts) with literal keys: a url string, or Null when absent. */
     rustWsUrlRead(init: any): boolean;
     rustWsUrlDeclTooLong(declaration: any): boolean;
@@ -3320,6 +3376,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueScalarArgExact(arg: any, rustType: string): boolean;
     /** `this.<m>(..)` / `super.<m>(..)` calls in the method's own file that resolve to it. */
     rustVenueStrCallSites(method: any): any[];
+    /** ral-ve: an identifier bound once (`const`) to a `this.urls[..]` literal-key read: a url string or Null. */
+    rustWsUrlReadIdent(arg: any): boolean;
+    /** ral-ve: a required `string` parameter of a per-venue ws method that every caller in its file fills with a
+     *  `this.urls[..]` read: the url of a ws client (requestId / subscriptionExistsForHash / waitForPendingUnsubscribe). */
+    rustVenueUrlParam(method: any, param: any): boolean;
     /** Scalar-local kind of a per-venue string parameter read through its `Value` binding. */
     rustVenueStrParamKind(param: any): string | undefined;
     /** The per-venue string type of the callee parameter at `at`. */
@@ -3332,6 +3393,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueStrReturnLocal(node: any): string | undefined;
     /** Another read of the same local inside the call the argument belongs to, not itself a borrowing slot. */
     rustVenueStrMovedInCall(arg: any): boolean;
+    /** ral-va: a typed string read in a by-value list element whose box copies (`Value::from(x.clone())`, not its last use):
+     *  it leaves the local in place, so a borrow of the same local in that call needs no copy of its own. */
+    rustScalarBoxCopies(u: any): boolean;
     /** A literal, an identifier, a field read, or a call: the converted argument stays short. */
     rustVenueStrSimpleArg(arg: any): boolean;
     /** The argument node lands in a per-venue string slot of its call. */
