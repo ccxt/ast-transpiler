@@ -2921,14 +2921,35 @@ export class RustTranspiler extends BaseTranspiler {
         return ok;
     }
 
+    /** ral-va: an identifier partner of an optional-string `+` operand whose checker type is string-or-nullish: the
+     *  pair prints the `format!` arm whatever its Rust form (`Value`, `String`, `Option<String>` read), and each of
+     *  those displays as the JS concat does (Str text, Null `null`). */
+    rustNilConcatPartner(other): boolean {
+        const inner: any = this.unwrapParensNode(other);
+        if (inner === undefined) return false;
+        // ral-va: a `const` local with an initializer or a `this.` field (never another nil-declared local or a parameter,
+        // whose own decisions the existing negatives keep boxed)
+        let place = isPropertyAccessExpression(inner) && inner.expression.kind === SyntaxKind.ThisKeyword;
+        if (isIdentifier(inner)) {
+            const decl: any = this.rustDeclaredNode(inner);
+            place = decl !== undefined && isVariableDeclaration(decl) && decl.initializer !== undefined && this.literalKindOfNode(decl.initializer) !== 'null'
+                && (decl.parent?.flags & NodeFlags.Const) !== 0;
+        }
+        return place && this.literalKindOfNode(inner) !== 'null'
+            && this.isStringOrNullishType(this.typeOfNodeIfAny(inner)) && this.isStringLikeType(this.typeOfNodeIfAny(inner));
+    }
+
     // An optional string joins a `format!` concat whose other operand is always a string: the
     // operand prints as `as_deref().unwrap_or("null")`, the text `Display` gives the boxed form.
     rustNilOptStrConcatUse(n): boolean {
         const parent: any = n.parent;
         if (!isBinaryExpression(parent) || parent.operatorToken.kind !== SyntaxKind.PlusToken) return false;
         const other: any = parent.left === n ? parent.right : parent.left;
-        if (!this.alwaysStr(other) || this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== 'string') return false;
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== 'string') return false;
         if (!this.isNativeStringConcatPair(this.typeOfNodeIfAny(parent.left), this.typeOfNodeIfAny(parent.right))) return false;
+        // ral-va: a checker-string partner that is not always a Str (a `Value` / optional local) still takes the
+        // `format!` arm (the pair test above), where `Display` of the `Value` it replaces printed `null` / the text
+        if (!this.alwaysStr(other) && !this.rustNilConcatPartner(other)) return false;
         return this.rustOptStrConcatFits(n);
     }
 
@@ -6157,6 +6178,20 @@ export class RustTranspiler extends BaseTranspiler {
         return op >= SyntaxKind.FirstAssignment && op <= SyntaxKind.LastAssignment;
     }
 
+    /** ral-ua: `acc += x` (statement) with `acc` a checker-string local the solve leaves boxed (its decision is not taken
+     *  during seeding: the join is assumed, then re-checked) and `x` a `string | undefined`, within the 400-char line. */
+    rustPlusEqualsJoinOperand(n): boolean {
+        const parent: any = n.parent;
+        if (!isBinaryExpression(parent) || parent.operatorToken.kind !== SyntaxKind.PlusEqualsToken || parent.right !== n || !isIdentifier(parent.left)) return false;
+        if (parent.parent?.kind !== SyntaxKind.ExpressionStatement || !this.isStringLikeType(this.typeOfNodeIfAny(parent.left))) return false;
+        if (!this.isStringOrNullishType(this.typeOfNodeIfAny(n))) return false;
+        const accDecl: any = this.rustDeclaredNode(parent.left);
+        if (accDecl === undefined || !isVariableDeclaration(accDecl)) return false;
+        if (!this.rustScalarSeeding && (this.rustScalarDecisions.get(accDecl) ?? undefined) !== undefined) return false;
+        const column = parent.getStart() - String(parent.getSourceFile().text).lastIndexOf('\n', parent.getStart()) - 1;
+        return column + 2 * String(parent.left.getText()).length + String(n.getText()).length + 72 <= 400;
+    }
+
     rustScalarUseFormOwn(n, kind: string): string | undefined {
         const parent: any = n.parent;
         if (parent === undefined) return undefined;
@@ -6224,6 +6259,9 @@ export class RustTranspiler extends BaseTranspiler {
             const typedReturn = this.rustMethodTypedReturnKind(fn); if (typedReturn !== undefined) return typedReturn === kind || typedReturn === `o${kind}` ? 'native' : undefined;
             return this.rustNativeStrReturnKind(fn) === 'str' || this.rustStrReturnSignature(fn, n) ? undefined : 'box';
         }
+        // ral-ua: the right operand of `acc += x` onto a `Value` string accumulator joins with `format!` like a `+` operand
+        // (`Value::Null` displays `null`, which `as_deref().unwrap_or("null")` prints); any other pair keeps the old path
+        if ((kind === 'str' || kind === 'ostr') && this.rustPlusEqualsJoinOperand(n)) return 'concat';
         if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.PlusToken) {
             // a `String` is a `format!` operand as-is; other concats need the box
             if (kind !== 'str' && kind !== 'ostr') return this.rustScalarExpressionUseForm(n, kind);
@@ -8304,6 +8342,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'str' && node.operatorToken.kind === SyntaxKind.PlusEqualsToken) {
             if (this.literalKindOfNode(right) === 'string' && !(right.text in this.StringLiteralReplacements)) return dry ? '_' : `${name}.push_str(${this.quotedStringLiteral(right.text)})`;
             if (isIdentifier(right) && this.rustScalarLocalOf(right)?.kind === 'str') return dry ? '_' : `${name}.push_str(&${super.printIdentifier(right)})`;
+            // ral-va: an `Option<String>` operand appends what `Value` Display gave for Str / Null (`null`)
+            if (isIdentifier(right) && this.rustScalarLocalOf(right)?.kind === 'ostr') return dry ? '_' : `${name}.push_str(${super.printIdentifier(right)}.as_deref().unwrap_or("null"))`;
             const joined = this.rustStrPushValueText(node.left, right, dry);
             if (joined !== undefined) return dry ? '_' : `${name}.push_str(&${joined})`;
             if (!isBinaryExpression(right) || right.operatorToken.kind !== SyntaxKind.PlusToken) return undefined;
@@ -16469,6 +16509,9 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-ua: every non-null write is a declared `Promise<Dict>` endpoint: a null test reads the optional map (`is_none()`)
         const declaredDictOnly = nilDeclared && from === 'dict' && !mixed && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes
             && !this.rustNilResponseLocals.has(declaration);
+        // ral-va: the same for an all-declared `Promise<List>` endpoint local: a null test reads the optional list (`is_none()`)
+        const declaredListTested = nilDeclared && from === 'list' && !mixed && nullTests > 0 && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes
+            && !this.rustNilResponseLocals.has(declaration) && lengths === 0 && castLengths === 0;
         const endpointBoxOnly = endpointBoxes > 0 && (nullTests === 0 || declaredDictOnly) && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes
             && !this.rustNilResponseLocals.has(declaration) && boxedElementUses.every((u: any) => this.rustBoxLineOk(u));
         if (endpointBoxes > 0 && !endpointBoxOnly) return undefined;
@@ -16478,7 +16521,7 @@ export class RustTranspiler extends BaseTranspiler {
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || (indexLikeReads > 0 && !this.rustUrlsMapEntry(init))))
             || (this.rustListElementSource(init) && (nullTests > 0 || lengths > 0))) return undefined;
         // ral-kc: a declared endpoint answering off its declared shape is `None` in the optional form: a null test would tell it apart
-        if (declaredEndpointWrites > 0 && nullTests > 0 && !declaredDictOnly) return undefined;
+        if (declaredEndpointWrites > 0 && nullTests > 0 && !declaredDictOnly && !declaredListTested) return undefined;
         // an endpoint written into an empty `let` may answer a list: `into_opt_dict` keeps only maps, so it is never lent whole
         if (this.rustNilResponseLocals.has(declaration) && (lentResponses > 0 || lentNullable > 0)) return undefined;
         // the `ecdsa(..)` declaration adds no `.into_dict()` suffix: its line keeps the boxed length plus the type name
@@ -24591,7 +24634,18 @@ export class RustTranspiler extends BaseTranspiler {
         const scope: any = declaration === undefined ? undefined : this.rustEnclosingFunction(declaration);
         if (scope === undefined) return false;
         const inCall = (m: any) => { for (let up = m.parent; up !== undefined; up = up.parent) { if (up === call) return true; if (isStatement(up)) return false; } return false; };
-        return this.rustScopeNameNodes(scope, String(node.text)).some((u: any) => u !== node && isIdentifier(u) && inCall(u) && this.rustDeclaredNode(u) === declaration && !this.rustVenueStrArgSlot(u));
+        return this.rustScopeNameNodes(scope, String(node.text)).some((u: any) => u !== node && isIdentifier(u) && inCall(u) && this.rustDeclaredNode(u) === declaration && !this.rustVenueStrArgSlot(u) && !this.rustScalarBoxCopies(u));
+    }
+
+    /** ral-va: a typed string read in a by-value list element whose box copies (`Value::from(x.clone())`, not its last use):
+     *  it leaves the local in place, so a borrow of the same local in that call needs no copy of its own. */
+    rustScalarBoxCopies(u: any): boolean {
+        const local = this.rustScalarLocalOf(u);
+        if (local === undefined || (local.kind !== 'str' && local.kind !== 'ostr') || !isArrayLiteralExpression(u.parent)) return false;
+        const form = this.rustScalarUseForms.get(u);
+        if (form !== 'box') return false;
+        return !(isReturnStatement(u.parent) || this.rustWsClientLastUse(u, local.declaration) || this.rustLocalLastUse(u, local.declaration)
+            || (this.rustOwnedHandOff(u) && this.rustOwnedLastUse(u, local.declaration)));
     }
 
     /** A literal, an identifier, a field read, or a call: the converted argument stays short. */
