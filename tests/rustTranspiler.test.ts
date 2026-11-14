@@ -10840,3 +10840,36 @@ describe('ral-kf: rows of a list declared as a list of lists', () => {
         expect(out).toContain('kept.push(Value::Arr(level))');
     });
 });
+
+describe('ral-lf: market / currency field locals, sibling element bindings, Dictionary<Dict> rows', () => {
+    test('a symbol read off a safeMarket record and a code read off a currency record are Option<String> locals', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-lf-record-fields');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport interface CurrencyInterface { id: string; code: string; [key: string]: any }\nexport type Currency = CurrencyInterface | undefined;\nexport default class Exchange {\n    markets_by_id: Dict = undefined;\n    currencies: Dict = {};\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeBool (o: any, k: any, d: boolean = undefined): boolean { return o; }\n    safeMarketStructure (m: Dict = undefined): MarketInterface { return m as any; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeMarket (marketId: Str = undefined, market: Market = undefined, delimiter: Str = undefined, marketType: Str = undefined): MarketInterface {\n        if (marketId !== undefined) {\n            if ((this.markets_by_id !== undefined) && (marketId in this.markets_by_id)) {\n                const markets = this.safeList (this.markets_by_id, marketId, []);\n                return markets[0];\n            }\n        }\n        if (market !== undefined) {\n            return market;\n        }\n        return this.safeMarketStructure ({ 'symbol': marketId });\n    }\n    currency (code: Str): CurrencyInterface {\n        const currencies = this.currencies;\n        if (code in currencies) {\n            return currencies[code];\n        }\n        throw new Error ('no currency');\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Market } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTicker (ticker: Dict, market: Market = undefined): Dict {\n        const marketId = this.safeString (ticker, 'instId');\n        const resolved = this.safeMarket (marketId, market, '-');\n        const symbol = resolved['symbol'];\n        return { 'symbol': symbol, 'info': ticker };\n    }\n    feeCode (code: Str): Dict {\n        const currency = this.currency (code);\n        const currencyCode = currency['code'];\n        return { 'currency': currencyCode, 'id': currency['id'] };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut symbol: Option<String> = crate::value::KeyRead::key_read(&&resolved, "symbol").as_str().map(str::to_owned);');
+        expect(out).toContain('symbol.map(Value::from).unwrap_or(Value::Null)');
+        expect(out).toContain('let mut currencyCode: Option<String> = crate::value::KeyRead::key_read(&&currency, "code").as_str().map(str::to_owned);');
+        expect(out).not.toContain('let mut symbol: Value');
+    });
+    test('elements of typed Dict[] lists bound under one name in sibling blocks are each a crate::value::Dict', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-lf-sibling-elems');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Dict = { [key: string]: any };\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): string { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseRows (spot: Dict[], swap: Dict[]) {\n        const ids = [];\n        for (let i = 0; i < spot.length; i++) {\n            const market = spot[i];\n            ids.push (this.safeString (market, 'id'));\n        }\n        for (let i = 0; i < swap.length; i++) {\n            const market = swap[i];\n            ids.push (this.safeString (market, 'symbol'));\n        }\n        return ids;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut market: crate::value::Dict = spot.get(i as usize).cloned().unwrap_or(Value::Null).into_dict();');
+        expect(out).toContain('let mut market: crate::value::Dict = swap.get(i as usize).cloned().unwrap_or(Value::Null).into_dict();');
+        expect(out).not.toContain('let mut market: Value');
+    });
+    test('a string-keyed read of a local declared Dictionary<Dict> is a crate::value::Dict row', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-lf-dict-of-dicts');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Dict = { [key: string]: any };\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    parseTicker (t: Dict): Dict { return t; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Dictionary } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTickers (response: Dict) {\n        const tickers: Dictionary<Dict> = this.safeDict (response, 'result', {});\n        const ids = Object.keys (tickers);\n        const result: Dict = {};\n        for (let i = 0; i < ids.length; i++) {\n            const id = ids[i];\n            const ticker = tickers[id];\n            result[id] = this.parseTicker (ticker);\n        }\n        return result;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut ticker: crate::value::Dict = [^;]*\.into_dict\(\);/);
+        expect(out).not.toContain('let mut ticker: Value');
+    });
+});

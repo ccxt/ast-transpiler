@@ -9010,10 +9010,24 @@ export class RustTranspiler extends BaseTranspiler {
         let top: any = node;
         while (top.parent !== undefined && (isParenthesizedExpression(top.parent) || top.parent.kind === SyntaxKind.AsExpression)) top = top.parent;
         if (!isVariableDeclaration(top.parent) || top.parent.initializer !== top) return undefined;
+        const currency = this.rustCurrencyLocalOf(node.expression);
+        if (currency !== undefined) {
+            // lf: `c['code']` off a `crate::types::Currency` record read off its own map as the optional string the box held
+            if (this.rustCurrencyLocalKind(currency) !== 'cstruct' || this.rustCurrencyKeyReadKey(node.expression) !== 'code') return undefined;
+            return { kind: 'ostr', text: `crate::value::KeyRead::key_read(&&${this.printNode(currency.name, 0)}, "code").as_str().map(str::to_owned)` };
+        }
         const declaration = this.rustTypedMarketLocalOf(node.expression);
-        if (declaration === undefined || this.rustMarketLocalKind(declaration) !== 'struct') return undefined;
+        const localKind = declaration === undefined ? false : this.rustMarketLocalKind(declaration);
+        if (localKind !== 'struct' && localKind !== 'smkt') return undefined;
         const key = this.rustMarketReadKey(node.expression);
         if (key === undefined) return undefined;
+        if (localKind === 'smkt') {
+            // lf: a `safeMarket` record may be a built structure whose string key is null: the key is read off its own map
+            // as the optional string the boxed read held (a string or Null), never the struct's defaulted field
+            // (unified string keys only: an exchange id key may hold a number, which `as_str` would drop)
+            if (RustTranspiler.RUST_MARKET_STR_FIELDS[key] === undefined && key !== 'settle') return undefined;
+            return { kind: 'ostr', text: `crate::value::KeyRead::key_read(&&${this.printNode(declaration.name, 0)}, ${JSON.stringify(key)}).as_str().map(str::to_owned)` };
+        }
         const recv = `(${this.printNode(declaration.name, 0)})`;
         const field = RustTranspiler.RUST_MARKET_STR_FIELDS[key];
         if (field !== undefined) return { kind: 'str', text: `${recv}.${field}.clone()` };
@@ -14422,7 +14436,9 @@ export class RustTranspiler extends BaseTranspiler {
         //  market / currency record lookup, whose lane keeps the single-binding rule)
         const recordLookup = init !== undefined && isCallExpression(init) && this.rustRecordLookupSource(init);
         const blockScoped = !nilDeclared && ((endpoint || (init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) !== undefined))
-            || (!recordLookup && this.rustSiblingBindingsAlike(declaration, name, init)));
+            || (!recordLookup && this.rustSiblingBindingsAlike(declaration, name, init))
+            // lf: an element of a typed `Dict[]` / list-of-lists (`rows[i]`) in a sibling block of a same-named element local
+            || (!recordLookup && this.rustElementSiblingsAlike(declaration, name, init)));
         const safe = blockScoped ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
         // a fresh built container handed on whole (D11): every use is a box, the declaration converts once
         const builtBoxOnly = reads === 0 && boxedElementUses.length > 0 && nullTests === 0 && writes === 0 && init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) !== undefined
@@ -14812,13 +14828,29 @@ export class RustTranspiler extends BaseTranspiler {
     rustDictElementSource(init: any): boolean {
         if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression) || this.checkerOrUndefined() === undefined) return false;
         const key: any = this.rustSkipWrappers(init.argumentExpression);
-        if (key === undefined || (!isNumericLiteral(key) && this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== 'number')) return false;
+        if (key === undefined) return false;
         const listType: any = this.typeOfNodeIfAny(init.expression);
-        if (listType === undefined || !this.getChecker().isArrayType(listType)) return false;
+        if (listType === undefined) return false;
+        if (!isNumericLiteral(key) && this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== 'number') {
+            // lf: `d[k]` on a local declared `Dictionary<Dict>` (a string key, a proven map value type) reads a map row
+            if (!isIdentifier(key) || this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== 'string' || !this.rustDictOfDictsLocal(init.expression)) return false;
+        } else if (!this.getChecker().isArrayType(listType)) return false;
         const element: any = this.typeOfNodeIfAny(init);
         if (element === undefined || (element.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Union)) !== 0) return false;
         return this.primitiveKindOfType(element) === undefined && this.getChecker().getIndexTypeOfType(element, IndexKind.String) !== undefined
             && !this.getChecker().isArrayType(element);
+    }
+
+    /** lf: a local spelled `Dictionary<Dict>` (`const d: Dictionary<Dict> = …`): its string-keyed values are maps. */
+    rustDictOfDictsLocal(node: any): boolean {
+        const owner: any = this.rustDeclaredNode(node);
+        if (owner === undefined || !isVariableDeclaration(owner) || owner.type === undefined) return false;
+        const t: any = this.typeOfNodeIfAny(node);
+        if (t === undefined || this.getChecker().isArrayType(t)) return false;
+        const value: any = this.getChecker().getIndexTypeOfType(t, IndexKind.String);
+        if (value === undefined || (value.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Union)) !== 0) return false;
+        return this.primitiveKindOfType(value) === undefined && this.getChecker().getIndexTypeOfType(value, IndexKind.String) !== undefined
+            && !this.getChecker().isArrayType(value);
     }
 
     // ── rustListElementSource: `rows[i]` over a list declared as a list of lists (`string[][]`, `any[][]`) ──
@@ -15450,6 +15482,22 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** Every other `let`/`const` of `name` in the enclosing function is initialised by a call of the same `this.` method. */
+    /** lf: every same-named binding in the function is itself a `const`/`let` element read of a typed `Dict[]` (or
+     *  list-of-lists) local: each block-scoped binding converts to the same Rust type (`Dict` / `List`), so ccxt
+     *  passes that key on the name read the same declared type for every sibling. */
+    rustElementSiblingsAlike(declaration: any, name: string, init: any): boolean {
+        const scope: any = this.rustEnclosingFunction(declaration);
+        if (scope === undefined || init === undefined) return false;
+        const dict = this.rustDictElementSource(init);
+        if (!dict && !this.rustListElementSource(init)) return false;
+        return (this.rustScopeNameNodes(scope, name) as any[]).every((n: any) => {
+            if (n === declaration || !this.rustBindsName(n, name)) return true;
+            if (!isVariableDeclaration(n)) return false;
+            const other: any = this.unwrapParens(n.initializer);
+            return dict ? this.rustDictElementSource(other) : this.rustListElementSource(other);
+        });
+    }
+
     rustSiblingBindingsAlike(declaration: any, name: string, init: any): boolean {
         const scope: any = this.rustEnclosingFunction(declaration);
         if (scope === undefined || init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression)) return false;
