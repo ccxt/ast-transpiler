@@ -13535,3 +13535,70 @@ describe('ral-wg: an element of a string list filled by pushes that end before t
         expect(out).not.toMatch(/let mut fixtureId: Option<&str>/);
     });
 });
+
+describe('we: a watch result whose every matching resolve passes a safeTicker map holds the map', () => {
+    // every `client.resolve (x, h)` that can meet the awaited hash passes a map record: the local is a Dict;
+    // one matching resolve of another kind keeps the Value
+    const mk = (extra: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-we-dict-'));
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    tickers: any = {};\n    safeString (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeTicker (t: Dict, m: any = undefined): any { return this.extend (t, {}); }\n    extend (...a: any[]): any { return Object.assign ({}, ...a); }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    async watchT (symbol: string) {\n        const ticker = await this.watch ('u', 'ticker:' + symbol);\n        const result: any = {};\n        result[this.safeString (ticker, 'symbol')] = this.safeString (ticker, 'last');\n        return result;\n    }\n    handleTicker (client: any, message: any) {\n        const symbol = this.safeString (message, 's');\n        const t = this.safeTicker ({ 'symbol': symbol });\n        client.resolve (t, 'ticker:' + symbol);\n    }\n" + extra + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
+    };
+    test('every matching resolve passes a map: the local is a Dict', () => {
+        expect(mk('')).toMatch(/let mut ticker: crate::value::Dict = self\.watch\([^\n]*\.await\.into_dict\(\)/);
+    });
+    test('negative: another matching resolve passes a raw message', () => {
+        const out = mk("    handleRaw (client: any, message: any) {\n        client.resolve (message, 'ticker:' + this.safeString (message, 's'));\n    }\n");
+        expect(out).toMatch(/let mut ticker: Value = self\.watch\(/);
+    });
+});
+
+describe('we: the handleDelta / handleDeltas group types the side parameter as Side across base and overrides', () => {
+    // the base declaration and every ts/src/pro override print `Side` at slot 0; a caller's book read wraps once
+    const mk = (override: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-we-side-'));
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export default class Exchange {\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    handleDeltas (bookside: any, deltas: any[]) {\n        for (let i = 0; i < deltas.length; i++) {\n            this.handleDelta (bookside, this.safeValue (deltas, i));\n        }\n    }\n    handleDelta (bookside: any, delta: any) {\n        throw new Error ('not supported');\n    }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    handleBook (orderbook: any, asks: any[]) {\n        this.handleDeltas (orderbook['asks'], asks);\n    }\n" + override + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return { venue: t.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content, base: t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts')).content };
+    };
+    test('base, override and caller agree on Side', () => {
+        const out = mk("    override handleDelta (bookside: any, delta: any) {\n        bookside.storeArray (delta);\n    }\n");
+        expect(out.venue).toMatch(/fn handleDelta\(&self, mut bookside: crate::pro::order_book::Side, /);
+        expect(out.venue).toContain('self.handleDeltas(crate::pro::order_book::Side::of(');
+        expect(out.base).toMatch(/fn handleDeltas\(&self, mut bookside: crate::pro::order_book::Side, /);
+        expect(out.base).toMatch(/fn handleDelta\(&self, mut bookside: crate::pro::order_book::Side, /);
+    });
+    test('negative: an override using the side as anything else fails loudly', () => {
+        expect(() => mk("    override handleDelta (bookside: any, delta: any) {\n        bookside['x'] = delta;\n    }\n")).toThrow(/side group handleDelta/);
+    });
+});
+
+describe('we: a side read off a proven book local and used only as a side holds Side', () => {
+    // the book local is proven a book (a cache-map read); its `['bids']` read types `any` to the checker
+    const mk = (use: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-we-offbook-'));
+        const files: Record<string, string> = {
+            'ts/src/base/ws/OrderBook.ts': "export class WsOrderBook {\n    [key: string]: any;\n    cache: any[] = [];\n    constructor (snapshot: any = {}, depth: any = undefined) {}\n}\n",
+            'ts/src/base/Exchange.ts': "import { WsOrderBook } from './ws/OrderBook.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    orderbooks: Dictionary<WsOrderBook> = {};\n    safeList (o: any, k: any, d: any = undefined): any { return o; }\n}\n",
+            'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    handleLevels (symbol: string, price: any) {\n        const orderbook = this.orderbooks[symbol];\n        const bookSide = orderbook['bids'];\n" + use + "    }\n}\n",
+        };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        return new Transpiler({ 'verbose': false }).transpileRustByPath (path.join (root, 'ts/src/pro/venue.ts')).content;
+    };
+    test('store only: the local is a Side', () => {
+        expect(mk("        bookSide.store (price, 1);\n")).toContain('let mut bookSide: crate::pro::order_book::Side = crate::pro::order_book::Side::of(');
+    });
+    test('negative: read by safeList keeps Value', () => {
+        expect(mk("        const first = this.safeList (bookSide, 0);\n        bookSide.store (price, first);\n")).not.toContain('let mut bookSide: crate::pro::order_book::Side');
+    });
+});
