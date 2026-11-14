@@ -13240,6 +13240,7 @@ export class RustTranspiler extends BaseTranspiler {
         // declaration proof admitted (`return x` / an argument of a `this.` call /
         // the value of a parent object literal).
         const bearer = this.rustDictBearerDeclaration(node);
+        if (bearer !== undefined && this.rustLiteralMoves.has(node)) return `Value::Map(${text})`;
         if (bearer !== undefined && parent !== undefined
             && ((isReturnStatement(parent) && parent.expression === node) || this.rustCastReturnOperand(node)
                 || (isCallExpression(parent) && parent.arguments.some((a) => a === node))
@@ -13361,6 +13362,29 @@ export class RustTranspiler extends BaseTranspiler {
     /** Bearers whose escapes all box a clone (the prediction-tier multi-escape rule). */
     private rustDictBearerCloned = new WeakSet<any>();
 
+    /** The single move of a literal bearer into a list element / a ws settle or send value (`rustLiteralMoveSlot`). */
+    private rustLiteralMoves = new WeakSet<any>();
+
+    /** `xs.push (m)` on an array-typed local, an element of an array literal (not a destructure target), or the
+     *  value of a ws `client.resolve|reject|send (m, ..)`: each takes the boxed `Value` by value, so the map's last
+     *  use moves into `Value::Map(m)`, exactly the shared map the boxed local handed over. */
+    rustLiteralMoveSlot(n: any): boolean {
+        const up: any = n.parent;
+        if (up === undefined) return false;
+        if (isArrayLiteralExpression(up)) return !this.rustInDestructureWrite(n) && !(isBinaryExpression(up.parent) && up.parent.left === up);
+        if (!isCallExpression(up) || up.arguments.length === 0 || up.arguments[0] !== n || !isPropertyAccessExpression(up.expression)) return false;
+        const recv: any = up.expression.expression;
+        const method = String(up.expression.name.text);
+        if (method === 'push') {
+            if (up.arguments.length !== 1 || !isIdentifier(recv)) return false;
+            const type: any = this.typeOfNodeIfAny(recv);
+            return type !== undefined && this.getChecker().isArrayType(type);
+        }
+        if (!isIdentifier(recv)) return false;
+        if (method === 'send') return up.arguments.length === 1 && this.rustCallsRuntimeHandle(up);
+        return (method === 'resolve' || method === 'reject') && this.rustWsSettleCall(up);
+    }
+
     /** A prediction venue: `ts/src/prediction/<id>.ts` builds nested request maps in one method. */
     // eslint-disable-next-line no-useless-escape
     private static readonly RUST_PREDICTION_VENUE_FILE = /ts[\/]src[\/]prediction[\/][^/]+\.ts$/;
@@ -13419,6 +13443,8 @@ export class RustTranspiler extends BaseTranspiler {
         const prediction = typeof source === 'string'
             && RustTranspiler.RUST_PREDICTION_VENUE_FILE.test(source.replace(/\\/g, '/'));
         const escapes: any[] = [];
+        const moveEscapes: any[] = [];
+        let rebuilds = 0;
         let elementUses = 0;
         let enumUses = 0;
         const outerWidened = this.literalKeyHits;
@@ -13472,10 +13498,15 @@ export class RustTranspiler extends BaseTranspiler {
             if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.InKeyword
                 && parent.right === n) return this.bearerInOpKeyText(parent.left) !== undefined || this.literalKeyWidened(this.rustLiteralBearerKeyArg(n, parent.left));
             // A rebuilt plain literal keeps the bearer (write side).
-            if (this.rustBearerRebuild(n)) return true;
+            if (this.rustBearerRebuild(n)) return ++rebuilds > 0;
             // A rebuild from a fresh-map producer keeps the map type.
             const reuse = this.rustProducerReuse(n);
-            if (reuse) return true;
+            if (reuse) return ++rebuilds > 0;
+            // handed whole into a `Value` list element / a ws settle or send value: boxed as a move at its last use
+            if (!produced && this.rustLiteralMoveSlot(n)) {
+                moveEscapes.push(n);
+                return true;
+            }
             return false;
         });
         const siblings = this.literalSiblingBindings;
@@ -13485,6 +13516,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (!safe) return false;
         // Built once and handed straight back stays boxed.
         if (siblings > 0 && elementUses === 0) return false;
+        // a list-element / settle hand-off moves the map: only its single last use, with no other escape, may take it
+        if (moveEscapes.length > 0) {
+            if (moveEscapes.length > 1 || escapes.length > 0 || rebuilds > 0 || widened || enumUses > 0 || prediction
+                || !this.rustLocalLastUse(moveEscapes[0], declaration) || !this.rustBoxLineOk(moveEscapes[0])) return false;
+            this.rustLiteralMoves.add(moveEscapes[0]);
+        }
         // Admitted by the literal hand-off shapes: every escape must be a move.
         if (widened && (enumUses > 0 || !escapes.every((e: any) => this.rustReturnOperand(e) || (this.rustVecIsFinalUse(e, name) && !this.loopBetween(e))))) return false;
         // A produced map that also escapes re-boxes as `Value::Map(x.clone())`

@@ -5771,8 +5771,8 @@ describe('scalar locals from base safe readers and literals', () => {
         expect(out).toMatch(/let mut ts: Option<i64> = .*\.as_i64\(\);/);
         expect(out).toMatch(/let mut price: Option<f64> = .*\.as_f64\(\);/);
         expect(out).toContain('if (id.is_none()) {');
-        expect(out).toContain('.insert("ts".into(), Value::from(ts)); }');
-        expect(out).toContain('.insert("id".into(), id.map(Value::from).unwrap_or(Value::Null)); }');
+        expect(out).toContain('req.insert("ts".into(), Value::from(ts));');
+        expect(out).toContain('req.insert("id".into(), id.map(Value::from).unwrap_or(Value::Null));');
     });
     test('a literal default makes the reader a bare String / i64 / bool', () => {
         expect(out).toMatch(/let mut lim: i64 = .*\.as_i64\(\)\.unwrap_or\(100\);/);
@@ -5789,7 +5789,7 @@ describe('scalar locals from base safe readers and literals', () => {
         expect(out).toContain('name = "y".to_string();');
         expect(out).toContain('page = 2;');
         expect(out).toContain('spot = false;');
-        expect(out).toContain('.insert("spot".into(), Value::Bool(spot)); }');
+        expect(out).toContain('req.insert("spot".into(), Value::Bool(spot));');
     });
     test('a local with another use stays Value', () => {
         expect(out).toMatch(/let mut kept: Value = /);
@@ -5935,6 +5935,24 @@ describe('native `bool` parameters', () => {
 
 describe('typed dict bearers', () => {
     const rs = rustInParseXClass;
+
+    test('a literal map moved into a list push / an array literal element at its last use', () => {
+        const push = rs("        const out = [];\n        const item = { 'id': v };\n        item['k'] = 1;\n        out.push (item);\n        return out;");
+        expect(push).toContain('let mut item: indexmap::IndexMap<String, Value> = ({');
+        expect(push).toContain('item.insert("k".into(), Value::Int(1))');
+        expect(push).toContain('Value::Map(item)');
+        expect(push).not.toContain('item.clone()');
+        const arr = rs("        const req = { 'id': v };\n        req['k'] = 1;\n        return [ req, v ];");
+        expect(arr).toContain('let mut req: indexmap::IndexMap<String, Value> = ({');
+        expect(arr).toContain('Value::Map(req)');
+    });
+
+    test('negative: a literal map pushed before a later use, or pushed twice, keeps the box', () => {
+        const later = rs("        const out = [];\n        const item = { 'id': v };\n        out.push (item);\n        item['k'] = 1;\n        return out;");
+        expect(later).toContain('let mut item: Value = Value::Map({');
+        const twice = rs("        const out = [];\n        const item = { 'id': v };\n        out.push (item);\n        out.push (item);\n        return out;");
+        expect(twice).toContain('let mut item: Value = Value::Map({');
+    });
 
     test('a literal-only dict local is a bare IndexMap with native reads and inserts', () => {
         const out = rs("        const request = { 'type': 'limit' };\n        request['symbol'] = v;\n        const sym = request['symbol'];\n        return sym;");
@@ -7555,7 +7573,8 @@ describe ('rustNestedDictParamWrites', () => {
         });
 
         test('locals are left to the final-text pass (no churn on its output)', () => {
-            expect(out).toContain('add_element_to_object(get_value_mut(&mut request, &Value::Str("a".into())), &Value::Str("b".into()), Value::Int(2));');
+            // the literal local moves into the returned list: a bearer, whose nested write is the map's own entry
+            expect(out).toContain('if let Value::Dict(__d) = request.entry("a".into()).or_default() { std::sync::Arc::make_mut(__d).insert("b".into(), Value::Int(2)); };');
         });
 
         test('unproven receivers keep the helpers', () => {
