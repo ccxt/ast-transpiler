@@ -44,6 +44,17 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; type: string; settle: Str; linear: boolean | undefined; info: any }\nexport interface Order { id: string; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    async loadMarkets (reload = false, params: Dict = {}): Promise<Dict> {\n        return this.markets;\n    }\n    async fetchOrders (symbol: Str = undefined, params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n",
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchA (symbol: Str = undefined, params: Dict = {}) {\n        await this.loadMarkets ();\n        let market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n        }\n        return this.hold (params, market);\n    }\n    async fetchB (symbol: string, params: Dict = {}) {\n        let market = this.market (symbol);\n        if (market['type'] === 'swap') {\n            market = this.market ('x');\n        }\n        return this.hold ({ 'k': market['settle'], 'l': market['linear'], 'b': market['baseId'] }, market);\n    }\n    async fetchC (symbol: string, params: Dict = {}) {\n        const orders = await this.fetchOrders (symbol, params);\n        return this.hold (orders);\n    }\n}\n"
  },
+ "base-helper-returns": {
+  "ts/src/base/functions/generic.ts": "// @ts-nocheck\nconst inArray = (needle: any, haystack: any[]): boolean => haystack.includes (needle);\nexport { inArray };\n",
+  "ts/src/base/functions/number.ts": "// @ts-nocheck\nfunction precisionFromString (str: string | undefined): number { return 0; }\nexport { precisionFromString };\n",
+  "ts/src/base/functions/time.ts": "// @ts-nocheck\nconst now = Date.now;\nconst seconds = () => Math.floor (now () / 1000);\nexport { seconds };\n",
+  "ts/src/base/Exchange.ts": "import { inArray } from './functions/generic.js';\nimport { precisionFromString } from './functions/number.js';\nimport { seconds } from './functions/time.js';\nexport interface Dict { [key: string]: any }\nconst sum = (...xs: any[]) => xs[0];\nexport default class Exchange {\n    inArray = inArray;\n    precisionFromString = precisionFromString;\n    seconds = seconds;\n    sum = sum;\n    options: Dict = {};\n    hold (x: any): any { return x; }\n    safeInteger (o: any, k: string, d: number = undefined): number { return o[k] ?? d; }\n    valueIsDefined<T> (value: T): value is NonNullable<T> {\n        return value !== undefined && value !== null;\n    }\n    randNumber (size: number): number {\n        return size;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseFlags (id: string, entry: Dict) {\n        const isFiat = this.inArray (id, [ 'USD', 'EUR' ]);\n        const defined = this.valueIsDefined (entry['x']);\n        const digits = this.precisionFromString (entry['p']);\n        const salt = this.randNumber (9);\n        const now = this.seconds ();\n        if (this.inArray (id, [ 'BTC' ])) {\n            return this.hold ({ 'f': isFiat, 'd': defined, 'p': digits + 1, 's': salt, 'n': now });\n        }\n        return undefined;\n    }\n    notIn (a: string, n: number) {\n        if ((n > 0) && (!(this.inArray (a, [ 'z' ])))) {\n            return 1;\n        }\n        return 0;\n    }\n    isEither (a: string, b: string) {\n        return this.inArray (a, [ 'x' ]) || this.inArray (b, [ 'y' ]);\n    }\n    requestId (): number {\n        const requestId = this.sum (this.safeInteger (this.options, 'requestId', 0), 1);\n        this.options['requestId'] = requestId;\n        return requestId;\n    }\n}\n"
+ },
+ "override-and-store-returns": {
+  "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    hold (x: any): any { return x; }\n    safeBool (o: any, k: string, d: boolean = undefined): boolean { return o[k] ?? d; }\n    safeDict (o: any, k: string, d: Dict = undefined): Dict { return o[k] ?? d; }\n    safeString (o: any, k: string, d: string = undefined): string { return o[k] ?? d; }\n    async isUTAEnabled (params: Dict = {}): Promise<boolean> {\n        return false;\n    }\n}\n",
+  "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    override async isUTAEnabled (params: Dict = {}): Promise<boolean> {\n        const uta = this.safeBool (this.options, 'uta') === true;\n        return uta;\n    }\n    async queryContracts (params: Dict = {}): Promise<Dict> {\n        if (this.safeDict (this.options, 'contracts') === undefined) {\n            this.options['contracts'] = params;\n        }\n        return this.safeDict (this.options, 'contracts', {});\n    }\n    async createOrder (symbol: string) {\n        const uta = await this.isUTAEnabled ();\n        const contracts = await this.queryContracts ();\n        const chainId = this.safeString (contracts, 'chain_id');\n        if (uta) {\n            return this.hold ({ 'c': chainId });\n        }\n        return undefined;\n    }\n}\n"
+ },
  "base-typed-returns": {
   "ts/src/base/functions/time.ts": "// @ts-nocheck\nconst now = Date.now;\nconst milliseconds = now;\nconst parse8601 = (x): number => undefined;\nexport { milliseconds, parse8601 };\n",
   "ts/src/base/functions/number.ts": "// @ts-nocheck\nfunction numberToString (x: any): string | undefined { return x; }\nfunction omitZero (s: string | undefined) { return s; }\nconst parseTimeframe = (timeframe: string | undefined): number => 60;\nexport { numberToString, omitZero, parseTimeframe };\n",
@@ -5453,6 +5464,49 @@ describe('rust typed tuple-destructure slots', () => {
     });
 });
 
+describe('override typed calls and store-backed dict returns', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'override-and-store-returns', 'ts/src/venue.ts')).content;
+    });
+    test('an override declaring the same scalar as the base method it hides types its call locals; the signature stays Value', () => {
+        expect(out).toMatch(/let mut uta: bool = self\.isUTAEnabled\([^;]*\)\.await\.as_bool\(\)\.unwrap_or_default\(\);/);
+        expect(out).toMatch(/fn isUTAEnabled\([^)]*\) -> Value/);
+    });
+    test('a venue method returning a typed store entry by safeDict is held as a Dict', () => {
+        expect(out).toMatch(/let mut contracts: crate::value::Dict = self\.queryContracts\([^;]*\)\.await\.into_dict\(\);/);
+        expect(out).not.toMatch(/let mut (uta|contracts): Value/);
+    });
+});
+
+describe('typed returns of hand-written base helpers', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'base-helper-returns', 'ts/src/venue.ts')).content;
+    });
+    test('predicates are bool and int helpers are i64, boxed once at Value slots', () => {
+        expect(out).toMatch(/let mut isFiat: bool = self\.inArray\(/);
+        expect(out).toMatch(/let mut defined: bool = self\.valueIsDefined\(/);
+        expect(out).toMatch(/let mut digits: i64 = self\.precisionFromString\(/);
+        expect(out).toMatch(/let mut salt: i64 = self\.randNumber\(/);
+        expect(out).toMatch(/let mut now: i64 = self\.seconds\(\);/);
+        expect(out).toContain('Value::Bool(isFiat)');
+        expect(out).toMatch(/if self\.inArray\(/);
+        expect(out).not.toMatch(/if !?is_true\(&self\.inArray/);
+    });
+    test('a negated bool helper in a logical condition operand prints bare', () => {
+        expect(out).toMatch(/&& \(!\(self\.inArray\(a, /);
+        expect(out).not.toMatch(/is_true\(&\(!\(?self\.inArray/);
+    });
+    test('a bool helper inside a logical value returned from a Value method keeps its is_true operand', () => {
+        expect(out).toMatch(/return is_true\(&self\.inArray\([^;]*\|\| is_true\(&self\.inArray\(/);
+    });
+    test('a scalar local named like its method is typed (the method name is no use of it)', () => {
+        expect(out).toMatch(/let mut requestId: i64 = /);
+        expect(out).not.toMatch(/let mut requestId: Value/);
+    });
+});
+
 describe('typed returns of base methods', () => {
     let out: string;
     let base: string;
@@ -5488,7 +5542,9 @@ describe('request id locals from a venue int method', () => {
     });
     test('a requestId override returns i64 and its locals take it as-is', () => {
         expect(out).toMatch(/pub fn requestId\(&self\) -> i64 \{/);
-        expect(out).toContain('return requestId.as_i64().unwrap_or_default();');
+        // the local named like its method is an i64 too (ral-le), so the return needs no conversion
+        expect(out).toContain('let mut requestId: i64 = ((self.safeInteger(');
+        expect(out).toContain('return requestId;');
         expect(out).toContain('let mut requestId: i64 = self.requestId();');
         expect(out).toContain('Value::from(requestId)');
     });
@@ -5559,7 +5615,8 @@ describe('clock locals bound to the base time functions', () => {
     test('a base property bound to Date.now is still an i64 clock', () => {
         expect(out).toContain('let mut now: i64 = self.milliseconds();');
         expect(out).toContain('(now - 1000)');
-        expect(out).toContain('let mut stamp: String = format!("{}", self.seconds().as_i64().unwrap_or_default());');
+        // the hand-written `seconds()` returns i64 (ral-le)
+        expect(out).toContain('let mut stamp: String = format!("{}", self.seconds());');
     });
 });
 
