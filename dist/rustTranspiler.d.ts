@@ -65,7 +65,7 @@ interface RustScopeIndex {
     byName: Map<string, number[]> | undefined;
 }
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'other';
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -331,6 +331,9 @@ export declare class RustTranspiler extends BaseTranspiler {
         kind: string;
     } | undefined;
     rustNilLocalKindUncached(declaration: any): string | undefined;
+    /** og: past a same-named sibling binding, a string local is typed only when each of its boxed hand-offs (a literal
+     *  value / element, a return) is its last use: the box moves it where the `Value` moved, so no copy is added. */
+    rustSiblingStrBoxesMove(declaration: any, scope: any): boolean;
     /** Static kind of a write's right-hand side: `null`, or the `Option` payload it yields exactly. */
     rustNilWriteKind(rhs: any): string | undefined;
     /** A boolean that is never undefined: `!x`, a ternary of boolean literals, or `&&` / `||` / parens over such operands. */
@@ -729,6 +732,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueTypedDecisions;
     rustVenueTypedCall(expr: any): string | undefined;
     rustVenueTypedKindUncached(declaration: any): string | undefined;
+    /** od: `parse*` / `handle*` results are their own groups' producers; the lending rules leave them alone. */
+    rustOdExcludedCallee(init: any): boolean;
     /** `x = E; return x;`: the returned local holds what the statement right before the return wrote. */
     rustVenueReturnSource(ret: any): any;
     /** An override whose hidden base method and every venue declaration of the name declare its own return type. */
@@ -971,6 +976,21 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBoolNativeText(expr: any): string | undefined;
     /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */
     rustScalarCompareText(node: any, dry: boolean, literalKind?: string): string | undefined;
+    /** `x == p` of a typed scalar local `x` and a `Value` local `p` whose initializer and every write print
+     *  one scalar family or `Null` (`Str|Null` / `Int|Null`): `is_equal` on those operands is exactly the
+     *  variant compare (`Null == Null`, `Str == Str` by text, `Int == Int`, else false), so the typed side
+     *  compares its own `Option` against `p.as_str()` / `p.as_i64()`. Both read in place, no copy. */
+    /** A use that boxes the local as the key of an `in` test before its last use (read there by reference, so the box copies). */
+    rustScalarBorrowedBox(declaration: any): boolean;
+    /** The local is one side of `x === y` / `x !== y` against a `Value` partner (`rustScalarValuePartnerTest`). */
+    rustScalarHasPairEquality(declaration: any): boolean;
+    rustScalarValuePartnerTest(typed: any, other: any, kind: string, sign: string, dry: boolean): string | undefined;
+    /** `'str'` / `'int'` when `p` is a plain `Value` local (no typed-local rule claims it) whose initializer and every
+     *  write is a fresh `str|ostr|null` (`int|oint|null`) producer, written only by whole `p = ..` statements. */
+    rustScalarValuePartnerKind(partner: any): string | undefined;
+    private rustScalarPending;
+    /** The partner is a local whose checker type is a string / number and whose initializer is a scalar reader shape. */
+    rustScalarValuePartnerShape(partner: any): boolean;
     rustScalarCompareKind(node: any): string | undefined;
     /** `s.indexOf("lit") >= 0` / `> -1` / `!== -1` (contains) and `< 0` / `=== -1` (absent) on a typed string. */
     rustScalarContainsTest(node: any, dry: boolean): string | undefined;
@@ -2039,6 +2059,27 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    private rustExtendReuseLocals;
+    /** A plain map literal (outside the test tier): every `x = ..` write must be `x = this.extend (x, y)`; the
+     *  existing borrowed-dict use rules decide the rest. The `IndexMap` bearer rule claims its locals first. */
+    rustExtendReuseLiteral(declaration: any, init: any): boolean;
+    /** `n` is the target of a statement `n = this.extend (n, y)` (base `extend`, two operands, `y` not naming `n`). */
+    rustSelfExtendWrite(n: any, declaration: any): boolean;
+    private static readonly RUST_SELF_EXTEND;
+    /** `n` is the request (first) operand of the runtime free function `jwt (request, secret, ..)`. */
+    rustJwtRequestSlot(call: any, n: any): boolean;
+    /** `&x` for a shared map local lent to the `jwt` request slot. */
+    printJwtLentArg(node: any, text: string): string | undefined;
+    /** An untagged map operand, or a `const y = this.omit (p, keys)` of one (omit only drops keys; a list passes
+     *  unchanged and `extend` merges maps only, so no tag can reach the merged map either way). */
+    rustExtendReuseOperandUntagged(arg: any): boolean;
+    /** A literal-key write on a reuse local: the map is the plain literal merged with untagged operands only, so the
+     *  copy-on-write insert equals `add_element_to_object` (which differs only on a tagged map). */
+    rustExtendReuseKeyWriteOk(n: any, declaration: any): boolean;
+    /** The head of `x = this.extend (x, y)` on a reuse local: moved (the statement writes `x` back). */
+    rustSelfExtendHead(node: any, declaration: any): boolean;
+    /** `x = self.extend(x, ..).into_dict()` for a reuse local (`extend` answers `Value::Map`: the Arc moves back). */
+    printExtendReuseWrite(left: any, right: any): string | undefined;
     rustBuiltMapKeyWriteOk(n: any, init: any): boolean;
     rustUntaggedMapOperand(arg: any): boolean;
     /** A whole hand-off of a nullable container local (a base `safeDict*` / `safeList*` with no or a nullish default,
@@ -2062,6 +2103,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNilMapLocal(declaration: any): boolean;
     rustNilMapLocalUncached(declaration: any): boolean;
     private rustNilListLocals;
+    /** og: the nil-declared map local a declaration aliases whole (`const x = y`, same function, no closure between). */
+    rustNilMapAliasSource(declaration: any): any;
+    /** og: `y` as the whole initializer of a nil-map alias: the handle moves at y's last use, else an Arc bump. */
+    rustNilMapAliasInit(n: any): any;
     /** A list literal with no spread or bare-local element whose elements print natively (`vec![..]`). */
     rustNilListLiteralOk(rhs: any): boolean;
     /** Hand-offs past the object-literal value and return: another (untyped) local's initializer, or an argument of
@@ -2188,7 +2233,7 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  (`printNativeDictInsert`: `rustFieldStaysDict`). The insert stores whatever handle it is given, so a built map
      *  boxes there as the field-key rule's plain fields do. */
     rustDictShapedFieldInsert(expr: any): boolean;
-    rustBuiltReturnBoxUse(n: any, init: any): boolean;
+    rustBuiltReturnBoxUse(n: any, init: any, literalDict?: boolean): boolean;
     /** A base `this.omit (x, keys)` whose head always holds a map: a literal, a built map (`extend`, ..) or a local that
      *  prints the shared map. A `Dict`-typed parameter is not enough: a list body (`Array.isArray (params)` in `sign`)
      *  passes `omit` unchanged, and `into_dict()` would turn it into an empty map. */
@@ -2201,6 +2246,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  list-of-lists) local: each block-scoped binding converts to the same Rust type (`Dict` / `List`), so ccxt
      *  passes that key on the name read the same declared type for every sibling. */
     rustElementSiblingsAlike(declaration: any, name: string, init: any): boolean;
+    /** Every other binding of `name` in the function is a `const` plain map literal declaration (ral-oc). */
+    rustLiteralSiblingsAlike(declaration: any, name: string): boolean;
     rustSiblingBindingsAlike(declaration: any, name: string, init: any): boolean;
     /** The `params` of a typed unified method, never reassigned: it arrives through `impl Into<crate::Params>` and is
      *  rebound by `get_arg(.., Value::Map({}))`, so it is always a map (`From<Value> for Params` drops a non-map, and
@@ -2466,6 +2513,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsSubscriptionWriteValue(n: any): boolean;
     private rustBuiltLists;
     rustBuiltListLocal(declaration: any): boolean;
+    /** `Promise.all(x)` with `x` its only argument (printed `promise_all(&x)`). */
+    rustBuiltListPromiseAllOperand(call: any, n: any): boolean;
     /** `x = this.m(.., x, ..)` naming `x` only there and on the left: the old list moves into the call before the write. */
     rustBuiltListSelfWriteArg(n: any, name: string): boolean;
     /** A right-hand side that answers a `Value::Arr` on every path. */
@@ -2560,6 +2609,20 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustParamIsLentResponse(param: any): boolean;
     private static readonly RUST_LENT_RESPONSE_TYPES;
     rustParamIsLentResponseUncached(param: any): boolean;
+    private rustLentVenueDecisions;
+    rustParamIsLentVenue(param: any): boolean;
+    rustVenueLentKind(param: any): 'dict' | 'list' | undefined;
+    rustVenueLentKindUncached(param: any): 'dict' | 'list' | undefined;
+    /** A method of a venue source (REST, pro or prediction) whose name the base tier never declares: each venue's
+     *  Rust method is an inherent one, so its signature is its own (a same-named method elsewhere is independent,
+     *  and the checker resolves a `this.` call to the declaration Rust picks); by-name arms pass a `Value`. */
+    rustVenueOnlyMethod(method: any, name: string): boolean;
+    private rustBaseTierMethodNamesByRoot;
+    rustBaseTierMethodNames(srcRoot: string): Set<string>;
+    /** The lent per-venue slot kind a call argument lands in (`this.m(.., x, ..)`). */
+    rustLentVenueSlot(call: any, arg: any): 'dict' | 'list' | undefined;
+    /** `&x` for a typed container local (plain or optional form) lent to a per-venue lent slot. */
+    printLentVenueArg(node: any, text: string): string | undefined;
     /** The response argument of a call to the class's own lent override (an inherited one is the `Value` trait method). */
     rustLentResponseSlot(call: any, arg: any): boolean;
     /** A base `extend` / `deepExtend`, or a `safeDict*` with an empty-map default: the local always holds a map. */
