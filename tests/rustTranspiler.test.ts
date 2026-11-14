@@ -10768,6 +10768,32 @@ describe('safe scalar locals, fifth pass: literal concat operands, in-tested ins
     });
 });
 
+describe('safe scalar locals, sixth pass: equality partners held as Value', () => {
+    test('a typed reader local compares in place against a Str|Null or Int|Null Value partner', () => {
+        const dir = path.join (rustFixtureRoot, 'scalar-of');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    safeCurrencyCode (c: Str, x: any = undefined): string { return c; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue6.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue6 extends Exchange {\n    bal (rows: any[]) {\n        const result: any = {};\n        for (let i = 0; i < rows.length; i++) {\n            const raw = rows[i];\n            const currencyId = this.safeString (raw, 'product_id');\n            let code = this.safeCurrencyCode (currencyId);\n            if (code === '0') {\n                code = 'USDT0';\n            } else if (code === currencyId) {\n                code = this.safeString (raw, 'base', code);\n            }\n            if (code !== undefined) {\n                result[code] = raw;\n            }\n        }\n        return result;\n    }\n    seq (msg: any, prev: any) {\n        let nonce = this.safeInteger (prev, 'u');\n        nonce = this.safeInteger (prev, 'U');\n        prev['n'] = parseInt (nonce);\n        const pu = this.safeInteger (msg, 'pu');\n        if (pu === undefined) { return false; }\n        return pu === nonce;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue6.ts')).content;
+        // is_equal over Str|Null operands is the variant compare: Option<&str> == Value::as_str (Null == None)
+        expect(out).toContain('let mut currencyId: Option<String> = ');
+        expect(out).toContain('(currencyId.as_deref() == code.as_str())');
+        // Int|Null partner: Option<i64> == Value::as_i64
+        expect(out).toContain('let mut pu: Option<i64> = ');
+        expect(out).toContain('(pu == nonce.as_i64())');
+        expect(out).not.toContain('is_equal(&pu');
+    });
+    test('an equality partner also tested `in` a this-field map stays Value (its typed key would copy at that box)', () => {
+        const dir = path.join (rustFixtureRoot, 'scalar-of2');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    markets_by_id: any = undefined;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue7.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue7 extends Exchange {\n    fees (rows: any[]) {\n        const out: any = {};\n        for (let i = 0; i < rows.length; i++) {\n            const entry = rows[i];\n            const marketId = this.safeString (entry, 'symbol');\n            if ((marketId === undefined) || !(marketId in this.markets_by_id)) {\n                continue;\n            }\n            const sym = this.safeString (entry, 'sym');\n            if ((sym === undefined) || (sym === marketId)) {\n                continue;\n            }\n            out[sym] = entry;\n        }\n        return out;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue7.ts')).content;
+        expect(out).toContain('let mut marketId: Value = ');
+        expect(out).not.toContain('marketId.clone().map(Value::from)');
+    });
+});
+
 describe('typed market locals across sibling blocks, lookup keys and ws callers', () => {
     test('a safeMarket local next to a same-named sibling binding, read as a lookup key, lends to a REST helper the ws class calls too', () => {
         const dir = path.join (rustFixtureRoot, 'typed-market-ia');
