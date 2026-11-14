@@ -4727,7 +4727,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (baseReturn !== undefined) return baseReturn;
         if (this.rustParseNumberStrCall(node)) return 'onum';
         if (this.rustVenueParseToInt(node)) return 'int';
-        if (this.rustVenueInitializer(node) && this.rustVenueStrCall(node)) return 'ostr';
+        if ((this.rustVenueInitializer(node) || this.rustNilVenueWrite(node)) && this.rustVenueStrCall(node)) return 'ostr';
         if (fresh && this.rustVenueInitializer(node) && this.rustVenueIntCall(node)) return 'int';
         if (fresh && this.rustVenueInitializer(node) && this.rustVenueTypedCall(node) !== undefined) return this.rustVenueTypedCall(node);
         const declaration: any = this.rustScalarCallee(node);
@@ -5877,6 +5877,17 @@ export class RustTranspiler extends BaseTranspiler {
             return true;
         });
         return handed;
+    }
+
+    /** ral-wa: the whole right side of an `x = <call>;` statement writing a nil-declared (`let x;`) local: the
+     *  venue result moves into the `Option<String>` local as printed (no box, no copy). */
+    rustNilVenueWrite(node): boolean {
+        let current: any = node;
+        while (isParenthesizedExpression(current.parent)) current = current.parent;
+        const up: any = current.parent;
+        if (!isBinaryExpression(up) || up.right !== current || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const declaration: any = isIdentifier(up.left) ? this.rustDeclaredNode(up.left) : undefined;
+        return declaration !== undefined && isVariableDeclaration(declaration) && (declaration.initializer === undefined || this.literalKindOfNode(declaration.initializer) === 'null');
     }
 
     /** The whole initializer of a `let`/`const` (writes and ternary arms keep their `Value`). */
