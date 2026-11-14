@@ -11604,6 +11604,59 @@ describe('ral-oe: ecdsa r / s and row string fields of plain Value rows', () => 
     });
 });
 
+describe('ral-qf: the sign override group types its path parameter together', () => {
+    const mk = (tag: string, venueHead: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), `astfx-qf-${tag}-`));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    sign (path: string, api: string[] = [ 'public' ], method: string = 'GET', params: Dict = {}): Dict {\n        return { 'url': path };\n    }\n    u (p: Dict): string { return ''; }\n    fetch2 (path: string, api: string[] = [ 'public' ], method: string = 'GET', params: Dict = {}): any {\n        const request = this.sign (path, api, method, params);\n        return request;\n    }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueHead + " {\n        let requestPath: string = path;\n        if (method === 'GET') {\n            const q: string = this.u (params);\n            requestPath = path + '?' + q;\n        }\n        const url: string = 'https://x/' + requestPath;\n        return { 'url': url };\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'virtualDispatch': { sign: [ 'path', 'api', 'method', 'params', 'headers', 'body' ] }, 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return { base: t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts')).content, venue: t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content };
+    };
+    test('every declaration spells path: string: base, override and the trait slot take &str; a copy of path is a String', () => {
+        const { base, venue } = mk('ok', "    sign (path: string, api: string[] = [ 'public' ], method: string = 'GET', params: Dict = {}): Dict");
+        expect(base).toMatch(/pub fn sign\(&self, path: &str, optional_args: &\[Value\]\) -> Value \{/);
+        // the slot argument is the lent &str itself (no box)
+        expect(base).toContain('crate::exchange::DerivedExchange::sign(self, path, crate::runtime::get_arg(optional_args, 0, crate::Value::Null)');
+        expect(base).toContain('self.sign(path');
+        expect(venue).toMatch(/pub fn sign\(&self, path: &str, optional_args: &\[Value\]\) -> Value \{/);
+        expect(venue).toMatch(/let mut requestPath: String = /);
+        expect(rustDispatch.slotParams([ 'path', 'api' ])).toBe('path: &str, api: crate::Value');
+        expect(rustDispatch.slotArg('str', 'path', 0)).toBe('path');
+        expect(rustDispatch.slotValue('path', 0)).toBe('crate::Value::from(path)');
+    });
+    test('negative: one declaration spelling path differently keeps the whole group Value', () => {
+        const { base, venue } = mk('no', "    sign (path, api: string[] = [ 'public' ], method: string = 'GET', params: Dict = {}): Dict");
+        expect(base).toMatch(/pub fn sign\(&self, (mut )?path: Value, optional_args/);
+        expect(venue).toMatch(/pub fn sign\(&self, (mut )?path: Value, optional_args/);
+        expect(venue).toMatch(/let mut requestPath: Value = /);
+    });
+});
+
+describe('ral-qf: safe-scalar equality partners and `in` keys', () => {
+    const out = (() => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-qfe-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    markets_by_id: Dict = undefined;\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeBool (o: any, k: any, d: any = undefined): boolean { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    find (rows: any[], name: string) {\n        for (let i = 0; i < rows.length; i++) {\n            const subscriptionName = this.safeString (rows[i], 'name');\n            if (subscriptionName === name) {\n                return rows[i];\n            }\n        }\n        return undefined;\n    }\n    flip (enable: boolean) {\n        const wasSandbox = this.safeBool (this.options, 'sandboxMode', false);\n        if (wasSandbox !== enable) {\n            this.options['x'] = 1;\n        }\n    }\n    known (a: string, b: string) {\n        const marketId = a + b;\n        if ((this.markets_by_id !== undefined) && (marketId in this.markets_by_id)) {\n            return true;\n        }\n        return false;\n    }\n    seenOnce (rows: any[]) {\n        const seen: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const key = this.safeString (rows[i], 'id', '') + ':';\n            if (!(key in seen)) {\n                seen[key] = true;\n            }\n        }\n        return seen;\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
+    })();
+    test('a reader local compared with an untyped Value partner is typed; the compare reads the partner payload (None == Null as before)', () => {
+        expect(out).toContain('let mut subscriptionName: Option<String> = ');
+        expect(out).toContain('if ((subscriptionName.as_deref() == name.as_str())) {');
+        expect(out).toContain('let mut wasSandbox: bool = ');
+        expect(out).toContain('if ((Some(wasSandbox) != enable.as_bool())) {');
+    });
+    test('a string key of an `in` test is typed; the native dict test reads it as Option<&str> (None misses like Null)', () => {
+        expect(out).toContain('let mut marketId: String = format!(');
+        expect(out).toContain('matches!((&self.markets_by_id, Some(marketId.as_str())), (Value::Dict(__d), Some(__k)) if __d.contains_key(__k))');
+        expect(out).toContain('let mut key: String = format!(');
+        expect(out).toContain('if !(seen.contains_key(key.as_str())) {');
+    });
+});
+
 describe('ral-qd: venue parse* string results lend like other venue strings', () => {
     test('a venue parseOrderStatus result is Option<String>: compared natively, boxed once into the order map', () => {
         const dir = path.join (rustFixtureRoot, 'ral-qd-parse-str');

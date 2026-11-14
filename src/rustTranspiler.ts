@@ -283,11 +283,15 @@ export const rustDispatch = {
         }
     },
     /** Parameter list of a `DerivedExchange` slot: its `market` and currency arguments (never the first) are lent structs. */
-    slotParams: (args: string[]): string => args.map((a, i) => `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : 'crate::Value'}`).join(', '),
+    slotParams: (args: string[]): string => args.map((a, i) => `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : rustDispatch.isSlotStr(a, i) ? '&str' : 'crate::Value'}`).join(', '),
+    /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
+    isSlotStr: (arg: string, i: number): boolean => arg === 'path' && i === 0,
+    /** A forwarder's argument for an inherent parameter of `kind`: a slot already of that type passes by name. */
+    slotArg: (kind: string, arg: string, i: number): string => (kind === 'str' && rustDispatch.isSlotStr(arg, i) ? arg : rustDispatch.fromValue(kind, arg)),
     isSlotMarket: (arg: string, i: number): boolean => arg === 'market' && i > 0,
     isSlotCurrency: (arg: string, i: number): boolean => i > 0 && /^(?:currency|from_currency|to_currency)$/.test(arg),
     /** A `DerivedExchange` slot argument handed on in a `&[Value]` tail. */
-    slotValue: (arg: string, i: number): string => (rustDispatch.isSlotMarket(arg, i) || rustDispatch.isSlotCurrency(arg, i) ? `crate::Value::from(${arg})` : `${arg}.clone()`),
+    slotValue: (arg: string, i: number): string => (rustDispatch.isSlotMarket(arg, i) || rustDispatch.isSlotCurrency(arg, i) || rustDispatch.isSlotStr(arg, i) ? `crate::Value::from(${arg})` : `${arg}.clone()`),
     /** A sync method with a native return still gets a by-name arm (it boxes back inside the arm). */
     isNativeReturn: (ret: string): boolean => RUST_DISPATCH_NATIVE_RETURNS.has(ret),
     /** A typed-return base method (or override): it keeps every arm it had as `-> Value`, sync ws handler arms too. */
@@ -5741,6 +5745,9 @@ export class RustTranspiler extends BaseTranspiler {
         // an optional-string local keys a proven map read or an `in` test natively (a `None` key misses, as the `Null` did)
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
+        // qf: the key of any other `k in obj` test boxes once (`in_op` reads a `Str` key or misses on `Null`, as the `Value` local did)
+        if ((kind === 'str' || kind === 'ostr') && isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.InKeyword && !this.rustTestTierSource(n)
+            && this.rustInKeyInitialised(n)) return 'inbox';
         if (isCallExpression(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== undefined) return 'native';
         if (this.rustVenueStrLocalArg(n)) return 'targ';
         if (this.rustLimitArgUse(n, kind)) return 'targ';
@@ -6615,6 +6622,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'targ' && (local.kind === 'str' || local.kind === 'ostr') && this.rustWsKeyUse(node)) return this.rustWsKeyText(node);
         if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
+        if (form === 'inbox') return local.kind === 'ostr' ? `Value::from(&${super.printIdentifier(node)})` : `Value::from(${super.printIdentifier(node)}.as_str())`;
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
         const last = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration)
@@ -7405,11 +7413,53 @@ export class RustTranspiler extends BaseTranspiler {
         const partner: any = this.unwrapParens(other);
         if (!isIdentifier(self) || !isIdentifier(partner) || this.rustScalarIdentifierKind(self) === undefined) return undefined;
         const base = kind.startsWith('o') ? kind.slice(1) : kind;
-        if ((base !== 'str' && base !== 'int') || this.rustScalarValuePartnerKind(partner) !== base) return undefined;
+        if ((base !== 'str' && base !== 'int') || this.rustScalarValuePartnerKind(partner) !== base) return this.rustScalarPayloadPartnerTest(self, partner, kind, sign, dry);
         if (dry) return '_';
         const name = super.printIdentifier(self);
         const own = base === 'str' ? (kind === 'str' ? `Some(${name}.as_str())` : `${name}.as_deref()`) : (kind === 'int' ? `Some(${name})` : name);
         return `(${own} ${sign} ${super.printIdentifier(partner)}.${base === 'str' ? 'as_str' : 'as_i64'}())`;
+    }
+
+    /** qf: the `Option<&str>` text of a typed string local keying an `in` test (`inbox` use), else undefined:
+     *  `Some(k.as_str())` / `k.as_deref()`, so a native `contains_key` reads it without the box (`None` misses like `Null`). */
+    rustInKeyTypedText(key): string | undefined {
+        const inner: any = this.unwrapParens(key);
+        if (!isIdentifier(inner) || this.rustScalarUseForms.get(inner) !== 'inbox') return undefined;
+        const kind = this.rustScalarLocalOf(inner)?.kind;
+        const name = super.printIdentifier(inner);
+        return kind === 'str' ? `Some(${name}.as_str())` : (kind === 'ostr' ? `${name}.as_deref()` : undefined);
+    }
+
+    /** The key local of an `in` test has a non-null initializer (nil-declared locals are left to their own rule). */
+    rustInKeyInitialised(n): boolean {
+        // a ws `client.subscriptions|futures` receiver is rewritten by ccxt's container-op pass from a `Value` key: leave it
+        const recv: any = this.unwrapParens(n.parent.right);
+        if (isPropertyAccessExpression(recv) && /^(?:subscriptions|futures)$/.test(String(recv.name.text)) && this.rustIsWsClientType(this.typeOfNodeIfAny(recv.expression))) return false;
+        const declaration: any = this.rustDeclaredNode(n);
+        return declaration !== undefined && isVariableDeclaration(declaration) && declaration.initializer !== undefined
+            && this.literalKindOfNode(this.unwrapParens(declaration.initializer)) !== 'null';
+    }
+
+    /** qf: a typed local against an untyped `Value` partner (a local or parameter) that the checker types like the local:
+     *  the `Value` pair printed `a.<payload>() == p.<payload>()` (PAYLOAD_ACCESSORS by checker kind), and the typed local
+     *  is exactly `a.<payload>()` (`None` where the `Value` was `Null`), so the same compare reads `own == p.<payload>()`.
+     *  `Option<i64>` is left out (its payload is an `f64`, which needs a closure). */
+    rustScalarPayloadPartnerTest(self, partner, kind: string, sign: string, dry: boolean): string | undefined {
+        const forms: Record<string, [ string, (n: string) => string ]> = {
+            str: [ 'string', (n) => `Some(${n}.as_str())` ], ostr: [ 'string', (n) => `${n}.as_deref()` ],
+            bool: [ 'boolean', (n) => `Some(${n})` ], obool: [ 'boolean', (n) => n ],
+            int: [ 'number', (n) => `Some(${n} as f64)` ], num: [ 'number', (n) => `Some(${n})` ], onum: [ 'number', (n) => n ],
+        };
+        const form = forms[kind];
+        if (form === undefined || this.rustTestTierSource(partner)) return undefined;
+        if (this.rustScalarIdentifierKind(partner) !== undefined || this.rustScalarParamRead(partner) !== undefined || !this.printsValueExpression(partner)) return undefined;
+        const declaration: any = this.rustDeclaredNode(partner);
+        if (declaration === undefined || (!isVariableDeclaration(declaration) && declaration.kind !== SyntaxKind.Parameter)) return undefined;
+        // a nil-declared partner may be typed by its own rule later: leave it to that rule
+        if (isVariableDeclaration(declaration) && (declaration.initializer === undefined || this.literalKindOfNode(this.unwrapParens(declaration.initializer)) === 'null')) return undefined;
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(partner)) !== form[0] || this.primitiveKindOfType(this.typeOfNodeIfAny(self)) !== form[0]) return undefined;
+        if (dry) return '_';
+        return `(${form[1](super.printIdentifier(self))} ${sign} ${super.printIdentifier(partner)}.${RustTranspiler.PAYLOAD_ACCESSORS[form[0]]}())`;
     }
 
     /** `'str'` / `'int'` when `p` is a plain `Value` local (no typed-local rule claims it) whose initializer and every
@@ -8690,7 +8740,7 @@ export class RustTranspiler extends BaseTranspiler {
         const callArgs = slots.map((_slot, i) => {
             const p = sig.params[i];
             if (p !== undefined && (/^Value\b/.test(p.type) || p.type === 'impl Into<crate::Value>')) return `${p.name}.clone()`;
-            if (p !== undefined && p.type === '&str') return `crate::Value::from(${p.name})`;
+            if (p !== undefined && p.type === '&str') return rustDispatch.isSlotStr(_slot, i) ? p.name : `crate::Value::from(${p.name})`;
             if (p !== undefined && p.type === 'Option<&crate::types::Market>') return p.name;
             if (p !== undefined && p.type === 'Option<&crate::types::Currency>') return p.name;
             if (sliceAt >= 0 && i >= sliceAt) return `crate::runtime::get_arg(${sig.params[sliceAt].name}, ${i - sliceAt}, crate::Value::Null)`;
@@ -12145,6 +12195,13 @@ export class RustTranspiler extends BaseTranspiler {
                 closure: `${recvText}.as_map().is_some_and(|__m| __m.contains_key(${literal}))`,
             })})`;
         }
+        const typedKey = this.rustInKeyTypedText(key);
+        if (typedKey !== undefined) {
+            return `Value::Bool(${this.rustDictSite({
+                guarded, helper: `in_op(&${recvText}, &${this.printNode(key, 0).trim()})`,
+                closure: `matches!((${recvText}.as_map(), ${typedKey}), (Some(__m), Some(__k)) if __m.contains_key(__k))`,
+            })})`;
+        }
         const printed = this.rustDictKeyText(key);
         if (printed === undefined) return undefined;
         // eslint-disable-next-line prefer-const
@@ -14886,6 +14943,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const text = this.bearerInOpKeyText(key) ?? (this.rustLiteralBearerKeyArg(recv, key) !== undefined ? this.printNode(key, 0).trim() : undefined);
         if (text === undefined) return undefined;
+        const typedKey = this.rustInKeyTypedText(key);
+        if (typedKey !== undefined) return `Value::Bool(${typedKey.startsWith('Some(') ? `${String(recv.text)}.contains_key(${typedKey.slice(5, -1)})` : `matches!(${typedKey}, Some(__k) if ${String(recv.text)}.contains_key(__k))`})`;
         return `Value::Bool(matches!(&${text}, Value::Str(__k) if ${String(recv.text)}.contains_key(__k.as_ref())))`;
     }
 
@@ -20839,6 +20898,8 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         const objExpr = this.printNode(obj, 0).trim();
+        const typedKey = this.rustInKeyTypedText(key);
+        if (typedKey !== undefined) return `Value::Bool(matches!((&${objExpr}, ${typedKey}), (Value::Dict(__d), Some(__k)) if __d.contains_key(__k)))`;
         const keyExpr = this.printNode(key, 0).trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyExpr) || keyExpr === 'self') {
             return undefined; // the key is borrowed beside the receiver: plain locals only
@@ -22677,12 +22738,14 @@ export class RustTranspiler extends BaseTranspiler {
         if (optional && !this.rustVenueOptionalSlotOpen(method, param)) return undefined;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         // a base method no venue redeclares and no trait slot dispatches has one declaration: its parameter types alone
-        if (file.search(/(?:^|\/)ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) < 0 && !this.rustBaseOnlyMethod(method, file)) return undefined;
+        // a trait-slot override group whose every declaration spells the parameter alike types together (slot + forwarders)
+        const group = this.rustOverrideGroupParam(method, param, file);
+        if (!group && file.search(/(?:^|\/)ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) < 0 && !this.rustBaseOnlyMethod(method, file)) return undefined;
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return undefined;
         // a ws core's sync by-name handler table takes only `Value` / `bool` slots
-        if (/(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method)) return undefined;
+        if (!group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method)) return undefined;
         const hidden: any = this.getMethodOverride(method);
-        if (hidden !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(hidden.getSourceFile().fileName))) return undefined;
+        if (!group && hidden !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(hidden.getSourceFile().fileName))) return undefined;
         if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return undefined;
         if (this.rustParamPrintsBool(param) || this.rustParamIsLentDict(param) || this.rustParamIsLentList(param) || this.rustParamPrintsMap(param)
             || this.rustParamPrintsStrVec(param) || this.rustParamReadsByReference(param)) return undefined;
@@ -22711,6 +22774,47 @@ export class RustTranspiler extends BaseTranspiler {
     // Base methods whose scalar parameters print typed (measured one by one: each frees more locals than it adds
     // conversions at its callers); a method listed here must have no venue override and no hand-written body.
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS: string[] = [ 'convertExpireDate', 'convertExpireDateToMarketIdDate', 'convertMarketIdExpireDate' ];
+
+    // Trait-slot override groups typed together: method -> its first parameter, printed `&str` by the base, every
+    // override, the `DerivedExchange` slot (rustDispatch.isSlotStr) and every forwarder.
+    private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS: Record<string, string> = { 'sign': 'path' };
+
+    private rustOverrideGroupAgreeByRoot = new Map<string, boolean>();
+
+    /** The first parameter of a listed override group when ALL declarations (base, prediction base, every venue,
+     *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
+    rustOverrideGroupParam(method: any, param: any, file: string): boolean {
+        const name = String(method.name.text);
+        const pname = RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name];
+        if (pname === undefined || Array.from(method.parameters).indexOf(param) !== 0 || String(param.name.text) !== pname) return false;
+        if (!(this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {})) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
+        const at = file.indexOf('ts/src/');
+        if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file)) return false;
+        const root = file.slice(0, at) + 'ts/src';
+        let agree = this.rustOverrideGroupAgreeByRoot.get(root + '#' + name);
+        if (agree === undefined) {
+            agree = true;
+            let seen = 0;
+            const header = new RegExp(`^\\s+(?:(?:override|async|public|protected)\\s+)*${name}\\s*\\(\\s*([^,)]*)`, 'gm');
+            for (const dir of [ '', '/pro', '/prediction', '/base' ]) {
+                let entries: string[] = [];
+                try {
+                    entries = fs.readdirSync(root + dir).filter((f) => f.endsWith('.ts') && (dir !== '/base' || f === 'Exchange.ts' || f === 'PredictionExchange.ts'));
+                } catch (e) {
+                    continue;
+                }
+                for (const f of entries) {
+                    for (const m of fs.readFileSync(`${root}${dir}/${f}`, 'utf8').matchAll(header)) {
+                        seen++;
+                        if (m[1].replace(/\s+/g, '') !== `${pname}:string`) agree = false;
+                    }
+                }
+            }
+            agree = agree && seen > 0;
+            this.rustOverrideGroupAgreeByRoot.set(root + '#' + name, agree);
+        }
+        return agree;
+    }
 
     /** A sync method of the base `Exchange` class with no override in any venue file, no trait slot and no typed
      *  signature: every call resolves to this one body, so typing its parameter changes no other declaration. */
