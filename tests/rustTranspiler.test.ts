@@ -10990,7 +10990,7 @@ describe('safe scalar locals, sixth pass: equality partners held as Value', () =
         const dir = path.join (rustFixtureRoot, 'scalar-of2');
         fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
         fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    markets_by_id: any = undefined;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n}\n");
-        fs.writeFileSync (path.join (dir, 'ts/src/venue7.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue7 extends Exchange {\n    fees (rows: any[]) {\n        const out: any = {};\n        for (let i = 0; i < rows.length; i++) {\n            const entry = rows[i];\n            const marketId = this.safeString (entry, 'symbol');\n            if ((marketId === undefined) || !(marketId in this.markets_by_id)) {\n                continue;\n            }\n            const sym = this.safeString (entry, 'sym');\n            if ((sym === undefined) || (sym === marketId)) {\n                continue;\n            }\n            out[sym] = entry;\n        }\n        return out;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue7.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue7 extends Exchange {\n    fees (rows: any) {\n        const out: any = {};\n        for (let i = 0; i < rows.length; i++) {\n            const entry = rows[i];\n            const marketId = this.safeString (entry, 'symbol');\n            if ((marketId === undefined) || !(marketId in this.markets_by_id)) {\n                continue;\n            }\n            const sym = this.safeString (entry, 'sym');\n            if ((sym === undefined) || (sym === marketId)) {\n                continue;\n            }\n            out[sym] = entry;\n        }\n        return out;\n    }\n}\n");
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue7.ts')).content;
         expect(out).toContain('let mut marketId: Value = ');
         expect(out).not.toContain('marketId.clone().map(Value::from)');
@@ -11802,6 +11802,45 @@ describe('ral-qf: safe-scalar equality partners and `in` keys', () => {
         expect(out).toContain('matches!((&self.markets_by_id, Some(marketId.as_str())), (Value::Dict(__d), Some(__k)) if __d.contains_key(__k))');
         expect(out).toContain('let mut key: String = format!(');
         expect(out).toContain('if !(seen.contains_key(key.as_str())) {');
+    });
+});
+
+describe('ral-sd: reader strings decided with their receiving local; keys whose value reads the key', () => {
+    const out = (() => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-sd-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeNumber (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/bitfinex.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    pick (raw: any) {\n        const ticker = this.safeString (raw, 'ticker');\n        const subtitle = this.safeString (raw, 'subtitle', this.safeString (raw, 'title'));\n        let label: Str = ticker;\n        if (subtitle !== undefined) {\n            label = subtitle;\n        }\n        return { 'label': label, 'subtitle': subtitle };\n    }\n    convertId (raw: any, type: string): Str {\n        if (type === 'derivatives') {\n            const derivativesId: string = this.safeString (raw, 'id', this.safeString (raw, 'code', ''));\n            if (!derivativesId.endsWith ('F0')) {\n                return derivativesId + 'F0';\n            }\n            return derivativesId;\n        }\n        return this.safeString (raw, 'other');\n    }\n    fees (rows: any) {\n        const result: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const symbol = this.safeString (rows[i], 'symbol', '');\n            result[symbol] = { 'symbol': symbol, 'maker': this.safeNumber (rows[i], 'maker') };\n        }\n        return result;\n    }\n}\n".replace('class venue', 'class bitfinex').replace('convertId', 'convertDerivativesId'));
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileRustByPath(path.join(root, 'ts/src/bitfinex.ts')).content;
+    })();
+    test('a reader string handed to another initialised local is decided with it (both Option<String>, no Value)', () => {
+        expect(out).toMatch(/let mut subtitle: Option<String> = /);
+        expect(out).toMatch(/let mut label: Option<String> = /);
+        expect(out).not.toContain('let mut subtitle: Value');
+    });
+    test('a kept-arm venue `: Str` method returns its reader string boxed once (the method stays -> Value)', () => {
+        expect(out).toMatch(/let mut derivativesId: Option<String> = /);
+        expect(out).toContain('return derivativesId.map(Value::from).unwrap_or(Value::Null);');
+        expect(out).toMatch(/pub fn convertDerivativesId\([^)]*\) -> Value/);
+    });
+    test('a map key whose written value reads the key is typed: the key is evaluated before the value', () => {
+        expect(out).toMatch(/let mut symbol: String = /);
+        expect(out).toContain('result.insert(symbol.clone(), Value::Map(');
+        expect(out).not.toContain('stringify_param(&symbol)');
+    });
+});
+
+describe('ral-sd: an optional integer expression ordered against an optional reader local', () => {
+    test('both readers are Option<i64>; `(U - 1) <= nonce` is a both-present f64 order (the helper orders as_f64, Null is false)', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-sdo-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export type Int = number | undefined;\nexport default class Exchange {\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    sync (book: any, msg: any) {\n        const U = this.safeInteger (msg, 'U');\n        const nonce = this.safeInteger (book, 'nonce');\n        if ((U - 1) <= nonce) {\n            return 1;\n        }\n        return 0;\n    }\n}\n");
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut U: Option<i64> = ');
+        expect(out).toContain('let mut nonce: Option<i64> = ');
+        expect(out).toContain('matches!((((if let Some(__l) = U { Some(__l - 1) } else { None })), nonce), (Some(__l), Some(__r)) if (__l as f64) <= (__r as f64))');
     });
 });
 

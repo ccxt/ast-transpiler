@@ -5369,12 +5369,19 @@ export class RustTranspiler extends BaseTranspiler {
             const target: any = isVariableDeclaration(top.parent) ? top.parent : isBinaryExpression(top.parent) && isIdentifier(top.parent.left) ? this.rustDeclaredNode(top.parent.left) : undefined;
             const moved = top === n && this.rustLocalLastUse(n, declaration) && target !== undefined && isVariableDeclaration(target)
                 && target.initializer !== undefined && this.literalKindOfNode(target.initializer) !== 'null';
+            // sd: a receiver initialised in the same function from a scalar shape is a candidate of rustScalarSolveScope,
+            // so both locals are decided together there (a copy where both are typed is the copy the `Value` clone made)
+            const solved = !moved && top === n && target !== undefined && isVariableDeclaration(target) && target !== declaration
+                && target.initializer !== undefined && this.literalKindOfNode(target.initializer) !== 'null'
+                && this.rustScalarInitShape(target.initializer) && this.rustEnclosingFunction(target) === this.rustEnclosingFunction(declaration);
             if (isBinaryExpression(top.parent) && top.parent.right === top && top.parent.operatorToken.kind === SyntaxKind.EqualsToken
-                && !isElementAccessExpression(this.unwrapParens(top.parent.left)) && !isPropertyAccessExpression(this.unwrapParens(top.parent.left)) && !moved) handed = true;
-            if (isVariableDeclaration(top.parent) && top.parent.initializer === top && !moved) handed = true;
+                && !isElementAccessExpression(this.unwrapParens(top.parent.left)) && !isPropertyAccessExpression(this.unwrapParens(top.parent.left)) && !moved && !solved) handed = true;
+            if (isVariableDeclaration(top.parent) && top.parent.initializer === top && !moved && !solved) handed = true;
             // a returned string decides the method's own `-> Option<String>` return (and its dispatch arm); a method whose
             // return the signature table already keeps typed reads the local natively
-            if (isReturnStatement(top.parent) && !(top === n && this.rustMethodTypedReturnKind(findAncestor(top.parent.parent, isFunctionLike)) !== undefined)) handed = true;
+            // sd: a venue `: Str` method of the kept-arm table keeps its by-name arm whichever return it prints
+            if (isReturnStatement(top.parent) && !(top === n && (this.rustMethodTypedReturnKind(findAncestor(top.parent.parent, isFunctionLike)) !== undefined
+                || this.rustVenueKeptStrArm(findAncestor(top.parent.parent, isFunctionLike))))) handed = true;
             return true;
         });
         return handed;
@@ -7478,7 +7485,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (lo && ro) {
             // two optional numbers of one kind: JS orders only two numbers (`undefined` compares false), and
             // `Option` orders `Some` by its value once both are present (locals only: each is read twice)
-            if (equality || base(lk) !== base(rk) || !isIdentifier(left) || !isIdentifier(right)) return undefined;
+            if (equality || base(lk) !== base(rk)) return undefined;
+            // sd: an optional operand that is not a bare local (`(U - 1) <= nonce`) is evaluated once: both present, then ordered
+            // (ordered as `f64`, like the helper's `as_f64` of each `Int` / `Float`)
+            if (!isIdentifier(left) || !isIdentifier(right)) return `matches!((${text(lk, left)}, ${text(rk, right)}), (Some(__l), Some(__r)) if (__l as f64) ${sign} (__r as f64))`;
             // base tier: the moved `Value` at a bare last-use write `y = x;` becomes a ccxt-added clone of the typed local
             if (/ts[\\/]src[\\/]base[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? '')) && (this.rustScalarBareLastWrite(left) || this.rustScalarBareLastWrite(right))) return undefined;
             return `(${text(lk, left)}.is_some() && ${text(rk, right)}.is_some() && ${text(lk, left)} ${sign} ${text(rk, right)})`;
@@ -7968,7 +7978,19 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         const base: any = access.expression;
         const key = String(n.text);
-        if (new RegExp(`\\b${key}\\b`).test(String(write.right.getText()))) return false;
+        // sd: the key is evaluated before the value (JS and Rust alike), so a value that only reads the key is fine;
+        // one that writes it (`m[k] = (k = ..)`, `k++`) keeps the helper
+        let rewrites = false;
+        const visit = (m: any) => {
+            if (rewrites) return;
+            if (isIdentifier(m) && String(m.text) === key && ((isBinaryExpression(m.parent) && m.parent.left === m
+                && m.parent.operatorToken.kind >= SyntaxKind.FirstAssignment && m.parent.operatorToken.kind <= SyntaxKind.LastAssignment)
+                || ((isPrefixUnaryExpression(m.parent) || m.parent?.kind === SyntaxKind.PostfixUnaryExpression)
+                    && (m.parent.operator === SyntaxKind.PlusPlusToken || m.parent.operator === SyntaxKind.MinusMinusToken)))) rewrites = true;
+            m.forEachChild?.(visit);
+        };
+        visit(write.right);
+        if (rewrites) return false;
         return (this.rustBearerDictInsert(base, n, key, 'x') ?? this.rustMapParamDictInsert(base, n, key, 'x')
             ?? this.printNativeDictInsert(base, n, key, 'x') ?? this.rustNativeDictInsert(base, n, key, 'x')) !== undefined;
     }
@@ -8421,7 +8443,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Venue methods (class -> method names) whose `: Str` return was spelled after their by-name arm existed: the arm
     // stays (it boxes the `Option<String>` once), so the dispatch-arm name set is unchanged.
-    private static readonly RUST_VENUE_KEPT_STR_ARMS: Record<string, string[]> = { coinbaseinternational: [ 'parseTimeInForce' ] };
+    private static readonly RUST_VENUE_KEPT_STR_ARMS: Record<string, string[]> = { coinbaseinternational: [ 'parseTimeInForce' ], bitfinex: [ 'convertDerivativesId' ], blofin: [ 'networkCodeToChainId' ] };
 
     rustVenueKeptStrArm(node: any): boolean {
         if (node?.kind !== SyntaxKind.MethodDeclaration || !isIdentifier(node.name)) return false;
