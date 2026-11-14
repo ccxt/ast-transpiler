@@ -8436,7 +8436,8 @@ describe('rust list reads with an empty list default', () => {
     });
     test('a list only handed on (never null) is the shared list, moved into the slot; one that may be undefined keeps its box', () => {
         expect(out).toContain('return self.hold(Value::Arr(rows));');
-        expect(out).toContain('let mut rows: crate::value::List = self.safeList(response.clone(), Value::Str("data".into()), &[Value::from(vec![])]).into_list();');
+        // ral-la: `response` is at its last use, so the hand-off moves it (no clone)
+        expect(out).toContain('let mut rows: crate::value::List = self.safeList(response, Value::Str("data".into()), &[Value::from(vec![])]).into_list();');
         expect(out).not.toContain('&[]).into_list()');
     });
 });
@@ -10463,7 +10464,8 @@ describe('safe scalar locals, third pass: element-write sources, field writes, c
         expect(out).toContain('Value::from(raw.chars().skip(2).take(2).collect::<String>())');
         expect(out).toContain('Value::from(raw.chars().skip(3).collect::<String>())');
         expect(out).toContain('Value::from(raw.chars().skip(raw.chars().count().saturating_sub(2)).collect::<String>())');
-        expect(out).toContain('(if let Some(__s) = d.as_deref() { Value::from(__s.chars().skip(0).take(13).collect::<String>()) } else { Value::Null })');
+        // ral-lc: a slice of a typed Option<String> receiver keeps its receiver type and boxes once at the use
+        expect(out).toContain('(if let Some(__s) = d.as_deref() { Some(__s.chars().skip(0).take(13).collect::<String>()) } else { None }).map(Value::from).unwrap_or(Value::Null)');
         expect(out).not.toContain('|__s|');
     });
 });
@@ -10997,5 +10999,8 @@ describe('rust base predicate flags', () => {
         expect(out).toMatch(/let mut isHttp: bool = /);
         expect(out).toMatch(/let mut isSocks: bool = /);
         expect(out).not.toMatch(/let mut isHttp: Value/);
+        // RAL-INT-33: a typed base helper's bool local reads as itself (no `Value` truthiness on a `bool`)
+        expect(out).not.toContain('isHttp.as_bool()');
+        expect(out).toContain('if isHttp || isSocks {');
     });
 });

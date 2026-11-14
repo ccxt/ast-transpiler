@@ -3872,10 +3872,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_SCALAR_BOOL_HELPERS[name] !== undefined || RustTranspiler.RUST_BOOL_READERS[name] !== undefined) return false;
         const declarations: any[] = symbolDeclarations(this.checkerOrUndefined()?.getSymbolAtLocation(access.name));
         const wanted = isCallExpression(node) ? SyntaxKind.MethodDeclaration : SyntaxKind.PropertyDeclaration;
-        // a base-tier `v is T` predicate method answers a boolean like a `: boolean` one
-        const predicate = (d: any): boolean => d.type?.kind === SyntaxKind.TypePredicate && d.type.assertsModifier === undefined
-            && RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile?.()?.fileName ?? ''));
-        if (declarations.length === 0 || !declarations.every((d: any) => d.kind === wanted && (d.type?.kind === SyntaxKind.BooleanKeyword || predicate(d)))) return false;
+        if (declarations.length === 0 || !declarations.every((d: any) => d.kind === wanted && d.type?.kind === SyntaxKind.BooleanKeyword)) return false;
         // a method also proves every `return` is a bool value (the use sites' own truthiness proof)
         return !isCallExpression(node) || this.rustBoolValue(node);
     }
@@ -12205,6 +12202,12 @@ export class RustTranspiler extends BaseTranspiler {
         // A bare identifier of native-`bool` type: `is_true(&x)` is the identity.
         const nativeBoolParam = this.printNativeBoolParamCondition(node);
         if (nativeBoolParam !== undefined) return idn + nativeBoolParam;
+        // a `bool` local holding a typed base helper's bool (`valueIsDefined`, ral-le) reads as itself (RAL-INT-33)
+        const baseBoolLocal: any = this.unwrapParens(node) ?? node;
+        if (this.rustNativeBoolLocal(baseBoolLocal)) {
+            const declaration: any = this.rustDeclaredNode(baseBoolLocal);
+            if (this.rustBaseTypedReturnKind(this.unwrapParens(declaration.initializer)) === 'bool') return idn + this.printNode(baseBoolLocal, 0).trim();
+        }
         const marketFlag = this.printTypedMarketRead(this.unwrapParens(node), true);
         if (marketFlag !== undefined) return idn + marketFlag;
         const marketNot: any = this.unwrapParens(node);
@@ -20077,13 +20080,22 @@ export class RustTranspiler extends BaseTranspiler {
         return true;
     }
 
+    /** A local whose declaration already prints `let mut x: bool` (e.g. from a typed base helper such as `valueIsDefined`,
+     *  ral-le): its reads are native bools, never the `Value` truthiness form (RAL-INT-33: lh's base-only return proof
+     *  made `rustBoolValue` answer true for such locals too). */
+    rustNativeBoolLocal(inner: any): boolean {
+        if (!isIdentifier(inner)) return false;
+        const declaration: any = this.rustDeclaredNode(inner);
+        return declaration !== undefined && declaration.name !== inner && this.rustDeclarationPrintsNativeBool(declaration);
+    }
+
     /** `if (x)` on a local or `this.m (…)` proven a bool value: `x.as_bool() == Some(true)`
      *  is `is_true` on `Value::Bool`/`Value::Null`; bool slots only (leading-token boxing). */
     rustNativeTruthiness(node: any): string | undefined {
         const inner: any = this.unwrapParens(node);
         if (inner === undefined || (!isIdentifier(inner) && !isCallExpression(inner))
             || !this.printsValueExpression(inner) || !this.isBareBoolEmissionSafe(node)
-            || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || this.rustBoolMemberLocal(inner) || !this.rustBoolValue(inner)) {
+            || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || this.rustBoolMemberLocal(inner) || this.rustNativeBoolLocal(inner) || !this.rustBoolValue(inner)) {
             return undefined;
         }
         // the text ccxt's is_true post-pass prints for the same proof; `!` needs the parens
@@ -20103,7 +20115,7 @@ export class RustTranspiler extends BaseTranspiler {
         const [ literal, other ] = leftLiteral ? [ left, right ] : [ right, left ];
         const inner: any = this.unwrapParens(other);
         if (inner === undefined || (!isIdentifier(inner) && !isCallExpression(inner)) || !this.printsValueExpression(inner)
-            || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || this.rustBoolMemberLocal(inner) || !this.rustBoolValue(inner)) {
+            || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || this.rustBoolMemberLocal(inner) || this.rustNativeBoolLocal(inner) || !this.rustBoolValue(inner)) {
             return undefined;
         }
         const operator = (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) ? '==' : '!=';
