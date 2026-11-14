@@ -14522,6 +14522,84 @@ describe('ye: resolve proof for literal-map, cache-field and wildcard-hash resol
     }
 });
 
+describe('ral-40a: nil-declared Dict locals lent to extend', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type NullableDict = Dict | undefined;\nexport default class Exchange {\n    omit (o: any, ...keys: any[]): any { return o; }\n    extend (...args: any[]): any { return Object.assign ({}, ...args); }\n    deepExtend (...args: any[]): any { return Object.assign ({}, ...args); }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, NullableDict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    createOrderRequest (params: Dict = {}, tif: boolean = false) {\n        const request: Dict = { 'a': 1 };\n        let requestParams: NullableDict = undefined;\n        if (tif) {\n            requestParams = this.omit (params, [ 'tif' ]);\n        } else {\n            requestParams = this.omit (params, 'x');\n        }\n        return this.extend (request, requestParams);\n    }\n    deepRequest (params: Dict = {}, tif: boolean = false) {\n        const request: Dict = { 'a': 1 };\n        let deepParams = undefined;\n        if (tif) {\n            deepParams = this.omit (params, [ 'tif' ]);\n        }\n        return this.deepExtend (request, deepParams);\n    }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-40a-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('an omit-only nil local whose one use is the extra operand of extend is Option<Dict> lent as &[&x]', () => {
+        const text = out();
+        const co = text.slice(text.indexOf('fn createOrderRequest'), text.indexOf('fn deepRequest'));
+        expect(co).toContain('let mut requestParams: Option<crate::value::Dict> = None');
+        expect(co).toContain('.into_opt_dict();');
+        expect(co).toContain('&[&requestParams]');
+        expect(co).not.toContain('requestParams.clone()');
+        // negative: deepExtend merges a list operand too, so its operand keeps the box
+        const de = text.slice(text.indexOf('fn deepRequest'));
+        expect(de).toContain('let mut deepParams: Value = Value::Null');
+    });
+});
+
+describe('ral-40a: bool nil locals written through `!` cycles and bool locals', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, Bool } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseKind (row: Dict, kind: string) {\n        let linear: Bool = undefined;\n        let inverse: Bool = undefined;\n        if (kind === 'a') {\n            linear = (kind.indexOf ('_v') >= 0);\n            inverse = !linear;\n        } else {\n            if (kind === 'b') {\n                inverse = true;\n            } else {\n                inverse = false;\n            }\n            linear = !inverse;\n        }\n        return { 'linear': linear, 'inverse': inverse };\n    }\n    parseAny (rows: Dict[], wanted: boolean) {\n        let anyActive = false;\n        for (let i = 0; i < rows.length; i++) {\n            if (this.safeString (rows[i], 's') === 'active') {\n                anyActive = true;\n            }\n        }\n        let active: Bool = undefined;\n        if (wanted) {\n            active = anyActive;\n        }\n        return { 'active': active };\n    }\n    parseMixed (row: Dict, kind: string) {\n        let spot = undefined;\n        let other = undefined;\n        if (kind === 'a') {\n            spot = row['x'];\n            other = !spot;\n        } else {\n            other = true;\n            spot = !other;\n        }\n        return { 'spot': spot, 'other': other };\n    }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-40a-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('a `!x` cycle between two nil locals settles both as Option<bool>', () => {
+        const text = out();
+        const k = text.slice(text.indexOf('fn parseKind'), text.indexOf('fn parseAny'));
+        expect(k).toContain('let mut linear: Option<bool> = None');
+        expect(k).toContain('let mut inverse: Option<bool> = None');
+        expect(k).toContain('inverse = Some(!(linear == Some(true)));');
+        expect(k).toContain('linear = Some(!(inverse == Some(true)));');
+        expect(k).not.toContain('.clone()');
+    });
+    test('a native bool local written into a nil local is `Some(x)` and keeps its own rule', () => {
+        const text = out();
+        const a = text.slice(text.indexOf('fn parseAny'), text.indexOf('fn parseMixed'));
+        expect(a).toContain('let mut anyActive: bool = false');
+        expect(a).toContain('let mut active: Option<bool> = None');
+        expect(a).toContain('active = Some(anyActive);');
+        expect(a).not.toContain('.clone()');
+    });
+    test('negative: a cycle whose other local has a Value write stays mixed (both boxed)', () => {
+        const text = out();
+        const m = text.slice(text.indexOf('fn parseMixed'));
+        expect(m).toContain('let mut spot: Value = Value::Null');
+        expect(m).not.toContain('Option<bool>');
+    });
+});
+
+describe('ral-40a: `(x as string)` in a ws watch url slot', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    urls: any = {};\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o[k]; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n";
+    const venue = "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    async watchT (symbol: string, spot: boolean) {\n        let url = undefined;\n        if (spot) {\n            url = this.safeString (this.urls['api'], 'spot');\n        } else {\n            url = this.safeString (this.urls['api'], 'swap');\n        }\n        return await this.watch ((url as string), 'ticker:' + symbol);\n    }\n}\n";
+    test('the nil string local is Option<String> and the slot reads `url.as_deref()` through the cast', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-40a-'));
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toContain('let mut url: Option<String> = None');
+        expect(out).toContain('self.watch(url.as_deref(), ');
+        expect(out).not.toContain('url.clone()');
+    });
+});
+
 describe('ral-zf: a counter-indexed bind the ccxt write-back pass rewrites keeps the i64 counter', () => {
     test('const e = xs[i]; e[k] = v: the counter is i64 and the bind keys the helper with Value::Int(i)', () => {
         const out = transpiler.transpileRust ("class T {\n    m (data: any[]) {\n        for (let i = 0; i < data.length; i++) {\n            const entry = data[i];\n            entry['page'] = 1;\n        }\n        return data;\n    }\n}").content;

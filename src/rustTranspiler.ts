@@ -2437,17 +2437,44 @@ export class RustTranspiler extends BaseTranspiler {
         let kind = this.rustNilLocalDecisions.get(declaration);
         if (kind === undefined) {
             this.rustNilLocalDecisions.set(declaration, null); // re-entrancy guard
+            this.rustNilDeciding.push(declaration);
             try {
                 kind = this.rustNilLocalKindUncached(declaration) ?? null;
             } catch (e) {
                 kind = null;
+            } finally {
+                this.rustNilDeciding.pop();
             }
             this.rustNilLocalDecisions.set(declaration, kind);
+            // ral-40a: locals decided while assuming this one `bool` (a `!x` cycle) are asked again when it is not
+            const assumed = this.rustNilBoolAssumed.get(declaration);
+            if (assumed !== undefined) {
+                this.rustNilBoolAssumed.delete(declaration);
+                if (kind !== 'bool') for (const d of assumed) this.rustNilLocalDecisions.delete(d);
+            }
         }
         return kind ?? undefined;
     }
 
     private rustNilCandidateNames = new WeakMap<Node, Set<string>>();
+
+    // ral-40a: the nil locals being decided (innermost last) and, per local, those decided while assuming it `bool`
+    private rustNilDeciding: any[] = [];
+    private rustNilBoolAssumed = new Map<any, any[]>();
+
+    /** ral-40a: `y` of `y = !x` is a nil local typed `Option<bool>`, or one still being decided (a `!x` cycle such as
+     *  `inverse = !linear; .. linear = !inverse`): assumed `bool`, and every local decided under that assumption is
+     *  asked again if `y` settles otherwise, so the cycle settles by fixed point. */
+    rustNilBoolTarget(target: any): boolean {
+        if (this.rustNilLocalOfIdentifier(target)?.kind === 'bool') return true;
+        const declaration: any = this.rustDeclaredNode(target);
+        const at = declaration === undefined ? -1 : this.rustNilDeciding.indexOf(declaration);
+        if (at < 0 || at === this.rustNilDeciding.length - 1 || this.rustNilLocalDecisions.get(declaration) !== null) return false;
+        const assumed = this.rustNilBoolAssumed.get(declaration) ?? [];
+        assumed.push(...this.rustNilDeciding.slice(at + 1));
+        this.rustNilBoolAssumed.set(declaration, assumed);
+        return true;
+    }
 
     rustNilLocalOfIdentifier(node): { declaration: any, kind: string } | undefined {
         if (node === undefined || !isIdentifier(node) || this.checkerOrUndefined() === undefined) return undefined;
@@ -2559,6 +2586,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isIdentifier(node)) {
             if (this.rustStringLocalIdentifierIsTyped(node)) return 'str';
             if (this.rustNilValueStrAlias(node)) return 'str';
+            // ral-40a: a native `bool` scalar local (never undefined) is a bool write, printed `Some(x)`
+            if (this.rustScalarLocalOf(node)?.kind === 'bool') return 'bool';
             return this.rustNilLocalOfIdentifier(node)?.kind;
         }
         // za: `c ? undefined : false` (arms each undefined or a boolean literal, one of each): `None` / `Some(lit)` per arm
@@ -2608,6 +2637,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.literalKindOfNode(node) === 'boolean') return true;
         if (isBinaryExpression(node) && RustTranspiler.COMPARISON_OPS.has(node.operatorToken.kind)) return true;
         if (isPrefixUnaryExpression(node) && node.operator === SyntaxKind.ExclamationToken) return true;
+        // ral-40a: a native `bool` scalar local is a leaf of the join (`a && b` over such leaves is never undefined)
+        if (isIdentifier(node) && this.rustScalarLocalOf(node)?.kind === 'bool') return true;
         if (isConditionalExpression(node)) return this.literalKindOfNode(this.unwrapParens(node.whenTrue)) === 'boolean' && this.literalKindOfNode(this.unwrapParens(node.whenFalse)) === 'boolean';
         if (isBinaryExpression(node) && (node.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken || node.operatorToken.kind === SyntaxKind.BarBarToken)) {
             return this.rustNilDefiniteBool(node.left) && this.rustNilDefiniteBool(node.right);
@@ -2675,7 +2706,7 @@ export class RustTranspiler extends BaseTranspiler {
         while (up?.kind === SyntaxKind.ParenthesizedExpression) up = up.parent;
         if (!isBinaryExpression(up) || up.operatorToken.kind !== SyntaxKind.EqualsToken || !isIdentifier(up.left) || this.unwrapParens(up.right) !== not
             || up.parent?.kind !== SyntaxKind.ExpressionStatement || up.left.text === n.text) return false;
-        return this.rustNilLocalOfIdentifier(up.left)?.kind === 'bool';
+        return this.rustNilBoolTarget(up.left);
     }
 
     /** Box reads go only into plain `Value` slots: no `&mut` receivers, no native-typed callee slots. */
@@ -3090,6 +3121,7 @@ export class RustTranspiler extends BaseTranspiler {
             const arm = (a) => (this.literalKindOfNode(this.unwrapParens(a)) === 'null' ? 'None' : `Some(${this.unwrapParens(a).kind === SyntaxKind.TrueKeyword ? 'true' : 'false'})`);
             return `${name} = (if ${this.printCondition(node.condition, 0)} { ${arm(node.whenTrue)} } else { ${arm(node.whenFalse)} })`;
         }
+        if (local.kind === 'bool' && isIdentifier(node) && this.rustScalarLocalOf(node)?.kind === 'bool') return `${name} = Some(${super.printIdentifier(node)})`;
         if (isIdentifier(node)) return `${name} = ${super.printIdentifier(node)}.clone()`;
         const text = this.printNode(node, 0).trim();
         if (local.kind === 'str') {
@@ -9751,8 +9783,26 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
+    /** ral-40a: the identifier under `(x as string)` (parens and a `string` assertion only), else undefined. */
+    rustStrCastLocal(node: any): any {
+        let inner: any = node;
+        let cast = false;
+        while (inner !== undefined && (isParenthesizedExpression(inner) || (isAsExpression(inner) && inner.type?.kind === SyntaxKind.StringKeyword))) {
+            if (isAsExpression(inner)) cast = true;
+            inner = inner.expression;
+        }
+        return cast && isIdentifier(inner) ? inner : undefined;
+    }
+
     rustScalarExpressionUseForm(n, kind: string): string | undefined {
         const parent: any = n.parent;
+        // ral-40a: `(x as string)` as a ws `watch` url / hash slot: the slot reads the string local through the cast
+        if ((kind === 'str' || kind === 'ostr') && isAsExpression(parent) && this.rustStrCastLocal(parent) === n) {
+            let top: any = parent;
+            while (isParenthesizedExpression(top.parent)) top = top.parent;
+            const call: any = top.parent;
+            if (isCallExpression(call) && call.expression !== top && this.rustWsWatchSlot(call, call.arguments.indexOf(top))) return 'targ';
+        }
         if (isParenthesizedExpression(parent) || parent.kind === SyntaxKind.AsExpression) {
             const outer = this.rustScalarUseForm(parent, kind);
             return outer === 'box' || outer === 'xbox' || (outer === 'native' && (isParenthesizedExpression(parent) || this.rustCastSplitRecv(parent))) ? outer : undefined;
@@ -9764,6 +9814,8 @@ export class RustTranspiler extends BaseTranspiler {
                 // a typed target prints the write itself, from this local's native value
                 const target = isIdentifier(parent.left) ? this.rustScalarLocalOf(parent.left)?.kind : undefined;
                 if (target !== undefined) return target === kind || target === `o${kind}` ? 'native' : undefined;
+                // ral-40a: a bool local written into a nil local typed `Option<bool>` prints `y = Some(x)` (no box)
+                if (kind === 'bool' && isIdentifier(parent.left) && this.rustNilLocalOfIdentifier(parent.left)?.kind === 'bool') return 'native';
                 return this.rustScalarPlainValueTarget(parent.left) ? 'xbox' : undefined;
             }
             if ((RustTranspiler.RUST_SCALAR_ARITH_OPS.has(op) || op === SyntaxKind.PercentToken) && this.rustScalarExpressionKind(parent) !== undefined) return 'native';
@@ -17925,6 +17977,9 @@ export class RustTranspiler extends BaseTranspiler {
                 || nilDeclared && this.rustDeclaredEndpointBoxUse(n) && ++endpointBoxes > 0) && boxedElementUses.push(n) > 0;
             const asArg: any = isAsExpression(up) && up.expression === n && isCallExpression(up.parent) && Array.from(up.parent.arguments).includes(up) ? up : undefined;
             if (asArg !== undefined && this.rustLentAsHandOff(asArg, init, from, endpoint, nilDeclared)) return ++lentResponses > 0 && ++reads > 0 && (this.rustLentAsNullable(init, nilDeclared, endpoint) ? ++lentNullable > 0 : true);
+            // ral-40a: the sole extra operand of a base `extend` takes the optional map lent (`&[&x]`, MergeOperands for
+            // `&[&Option<Dict>; 1]`): `None` merges nothing, exactly as the boxed Null (or any non-map) merged nothing
+            if (nilDeclared && from === 'dict' && this.rustOptExtendOperandUse(n)) return ++lentNullable > 0 && ++reads > 0;
             // a per-venue lent slot takes any typed container local by reference (the optional form arrives as Null for None)
             if ((from === 'dict' || from === 'list') && this.rustLentVenueSlot(up, n) !== undefined) return ++reads > 0;
             if (this.rustLentResponseSlot(up, n) && (extendReuse || this.rustLentResponseSource(init))) return ++lentResponses > 0 && ++reads > 0;
@@ -20623,7 +20678,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A `watch` url / hash slot takes `impl Into<Option<&str>>`: a string local or literal as `&str`, anything else lent as `&Value`. */
     rustWsWatchSlotText(arg: any, printed: string): string {
-        const inner: any = this.unwrapParens(arg);
+        // ral-40a: `(url as string)` prints as `url` (the cast is a no-op): the slot reads the local itself
+        const inner: any = this.rustStrCastLocal(arg) ?? this.unwrapParens(arg);
         // ral-yc: an unbound `&str` venue parameter is handed to the slot as the borrow it is
         if (isIdentifier(inner) && this.rustVenueStrParamUnboundRead(inner)) return RustTranspiler.rustLentMark(super.printIdentifier(inner));
         if (this.rustWsStrKey(inner) || (isStringLiteral(inner) && !(inner.text in this.StringLiteralReplacements))) return this.rustWsKeyText(inner);
@@ -23391,6 +23447,14 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_EXTEND) ? call.arguments[1] : undefined;
     }
 
+    private static readonly RUST_OPT_EXTEND = new Set([ 'extend' ]);
+
+    /** ral-40a: `n` is the sole extra operand of a base `this.extend (a, n)` (not `deepExtend`, which merges a list too). */
+    rustOptExtendOperandUse(n: any): boolean {
+        const call: any = n?.parent;
+        return isCallExpression(call) && this.rustHandedDictExtendOperand(call) === n && this.rustBaseCallNamed(call, RustTranspiler.RUST_OPT_EXTEND);
+    }
+
     /** `self.extend(a, &[&x])` / `self.omit(&x, keys, &[])` lending a handed dict local. */
     printHandedDictExtend(node: any, identation: number): string | undefined {
         if (!isCallExpression(node)) return undefined;
@@ -23408,7 +23472,12 @@ export class RustTranspiler extends BaseTranspiler {
             return `self.omit(${lent(first)}, ${this.printNode(node.arguments[1], identation).trim()}, &[])`;
         }
         const operand: any = this.rustHandedDictExtendOperand(node);
-        if (operand === undefined || !lentDict(operand)) return undefined;
+        // ral-40a: an `Option<Dict>` local lent to `extend` (MergeOperands for `&[&Option<Dict>; 1]`)
+        const optOperand = (n: any) => {
+            const d: any = this.rustDeclarationOfIdentifier(n);
+            return d !== undefined && d.name !== n && this.rustOptExtendOperandUse(n) && this.rustBorrowedLocalKind(d) === 'dict' && this.rustOptContainerLocals.has(d) && this.rustPrintedOptional.has(d);
+        };
+        if (operand === undefined || !(lentDict(operand) || optOperand(operand))) return undefined;
         const head = this.printNode(first, identation).trim();
         const method = this.toSnakeCaseName(String((node.expression as any).name.text));
         return `self.${method}(${isIdentifier(first) && this.printExtendHeadArg(first, head) !== undefined ? head : RustTranspiler.cloneIfBareLocal(head)}, &[${lent(operand)}])`;
