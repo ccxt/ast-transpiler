@@ -885,8 +885,38 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         return this.rustNodeIsBoolExpression(declaration.initializer) &&
-            this.rustTypeIsBoolean(declaration.initializer) &&
-            this.rustLocalUsesAcceptBool(declaration, String(declaration.name.text));
+            (this.rustTypeIsBoolean(declaration.initializer) && this.rustLocalUsesAcceptBool(declaration, String(declaration.name.text)) || this.rustOptBoolChainLocal(declaration));
+    }
+
+    private rustOptBoolChainPending = new Set<any>();
+
+    /** ral-ua: a local initialised by an optional-bool chain whose every read is a condition / bool-printed slot is `bool`. */
+    rustOptBoolChainLocal(declaration): boolean {
+        const init: any = declaration?.initializer;
+        return init !== undefined && isIdentifier(declaration.name) && this.rustNodeIsBoolExpression(init) && isBinaryExpression(this.unwrapParens(init))
+            && this.isLogicalOp(this.unwrapParens(init).operatorToken.kind) && this.rustOptBoolChain(init) && this.rustOptBoolChainUsesOk(declaration);
+    }
+
+    /** ral-ua: every read of an optional-bool chain local is a condition or sits in another bool-printed slot. */
+    rustOptBoolChainUsesOk(declaration): boolean {
+        if (this.rustOptBoolChainPending.has(declaration)) return false;
+        this.rustOptBoolChainPending.add(declaration);
+        try {
+            return this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) =>
+                this.rustIdentifierUseIsCondition(n) || (this.rustClimbLogicalWrappers(n) !== n && this.rustConditionBoolSlot(n)));
+        } finally {
+            this.rustOptBoolChainPending.delete(declaration);
+        }
+    }
+
+    /** ral-ua: `a && b` / `a || b` (parens, `!`) whose leaves are each checker `boolean | undefined`: as a condition every
+     *  leaf prints its truthiness, and a local read only as a condition never boxes the undefined arm. */
+    rustOptBoolChain(node): boolean {
+        const inner: any = this.unwrapParens(node);
+        if (inner === undefined) return false;
+        if (isPrefixUnaryExpression(inner) && inner.operator === SyntaxKind.ExclamationToken) return this.rustOptBoolChain(inner.operand);
+        if (isBinaryExpression(inner) && this.isLogicalOp(inner.operatorToken.kind)) return this.rustOptBoolChain(inner.left) && this.rustOptBoolChain(inner.right);
+        return (isIdentifier(inner) || isCallExpression(inner)) && this.isBooleanOrUndefinedType(this.typeOfNodeIfAny(inner));
     }
 
     /** Native truthiness text of the operand, or undefined to keep `is_true`. */
@@ -4041,7 +4071,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (member && !this.rustBoolMemberSource(initializer)) {
             return undefined;
         }
-        if (!this.rustTypeIsBoolean(initializer) || !this.rustLocalUsesAcceptBool(declaration, declaration.name.text)) {
+        if (!(this.rustTypeIsBoolean(initializer) && (this.rustLocalUsesAcceptBool(declaration, declaration.name.text) || member && this.rustOptBoolChainUsesOk(declaration))
+            || !member && this.rustOptBoolChainLocal(declaration))) {
             return undefined;
         }
         return member ? this.rustBoolMemberText(inner) : (peeled ?? inner);
@@ -16022,6 +16053,7 @@ export class RustTranspiler extends BaseTranspiler {
         let optionalBoxes = 0;
         let paramsBoxes = 0;
         let declaredEndpointWrites = 0;
+        let castLengths = 0;
         let nullWrites = 0;
         let endpointBoxes = 0;
         let plainReads = 0;
@@ -16050,6 +16082,16 @@ export class RustTranspiler extends BaseTranspiler {
                 if (from !== undefined && from !== kind) mixed = true;
                 from = from ?? kind;
                 return String(rhs.getText()).split('\n')[0].length <= 240;
+            }
+            // ral-ua: `(x as List).length` reads the same list as `x.length`
+            let lenAt: any = n;
+            while ((isAsExpression(lenAt.parent) || isParenthesizedExpression(lenAt.parent)) && lenAt.parent.expression === lenAt) lenAt = lenAt.parent;
+            if (lenAt !== n && isPropertyAccessExpression(lenAt.parent) && lenAt.parent.expression === lenAt && String(lenAt.parent.name.text) === 'length') {
+                lengths++;
+                castLengths++;
+                const use: any = lenAt.parent.parent;
+                return use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
+                    && !(isBinaryExpression(use) && use.left === lenAt.parent && rustIsAssignmentOperator(use.operatorToken.kind));
             }
             if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length') {
                 lengths++;
@@ -16139,7 +16181,10 @@ export class RustTranspiler extends BaseTranspiler {
         // is a box of the shared container; the element converts once at the declaration (D11)
         const boxOnly = reads === 0 && boxedElementUses.length > 0 && (this.rustDictElementSource(init) || this.rustListElementSource(init)) && nullTests === 0 && writes === 0;
         // ral-ld: an empty `let` filled only by declared endpoints and stored into a literal / returned (D11)
-        const endpointBoxOnly = endpointBoxes > 0 && nullTests === 0 && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes
+        // ral-ua: every non-null write is a declared `Promise<Dict>` endpoint: a null test reads the optional map (`is_none()`)
+        const declaredDictOnly = nilDeclared && from === 'dict' && !mixed && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes
+            && !this.rustNilResponseLocals.has(declaration);
+        const endpointBoxOnly = endpointBoxes > 0 && (nullTests === 0 || declaredDictOnly) && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes
             && !this.rustNilResponseLocals.has(declaration) && boxedElementUses.every((u: any) => this.rustBoxLineOk(u));
         if (endpointBoxes > 0 && !endpointBoxOnly) return undefined;
         // ral-qa: only string-key reads (no null test, write, length, box or lend could tell a non-map from the empty map)
@@ -16148,7 +16193,7 @@ export class RustTranspiler extends BaseTranspiler {
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || (indexLikeReads > 0 && !this.rustUrlsMapEntry(init))))
             || (this.rustListElementSource(init) && (nullTests > 0 || lengths > 0))) return undefined;
         // ral-kc: a declared endpoint answering off its declared shape is `None` in the optional form: a null test would tell it apart
-        if (declaredEndpointWrites > 0 && nullTests > 0) return undefined;
+        if (declaredEndpointWrites > 0 && nullTests > 0 && !declaredDictOnly) return undefined;
         // an endpoint written into an empty `let` may answer a list: `into_opt_dict` keeps only maps, so it is never lent whole
         if (this.rustNilResponseLocals.has(declaration) && (lentResponses > 0 || lentNullable > 0)) return undefined;
         // the `ecdsa(..)` declaration adds no `.into_dict()` suffix: its line keeps the boxed length plus the type name
@@ -16170,13 +16215,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (extendReuse && (keySets > 0 || boxedElementUses.some((n: any) => !this.rustBoxLineOk(n)))) return undefined;
         if (init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) !== undefined && boxedElementUses.some((n: any) => !this.rustBoxLineOk(n))) return undefined;
         if (keyWrites > 0) this.rustMutableBuiltLocals.add(declaration);
-        if (lengths > 0 && (from !== 'list' || optional)) return undefined;
+        // ral-ua: an all-declared `Promise<List>` optional list (never null-tested) reads its length through the slice (0 for `None`)
+        const declaredListOnly = nilDeclared && from === 'list' && !mixed && nullTests === 0 && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes;
+        if (castLengths > 0 && !declaredListOnly) return undefined;
+        if (lengths > 0 && (from !== 'list' || (optional && !declaredListOnly))) return undefined;
         if (optional) {
             // Null stays distinct from an empty container: the local holds `Option<Dict>` / `Option<List>`.
             if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !this.rustOptContainerSourceOk(init, from))) return undefined;
             this.rustOptContainerLocals.add(declaration);
         }
-        for (const n of boxedElementUses) this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) ? 'move' : 'share');
+        for (const n of boxedElementUses) this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) || (n.parent?.kind === SyntaxKind.ConditionalExpression && this.rustOwnedLastUse(n, declaration)) ? 'move' : 'share');
         if (extendReuse) this.rustExtendReuseLocals.add(declaration);
         return from === 'list' ? 'list' : 'dict';
     }
@@ -17421,6 +17469,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (up === undefined || this.rustScalarInNestedWrite(n)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n && isObjectLiteralExpression(up.parent) && !this.rustInDestructureWrite(n);
         if (isReturnStatement(up)) return up.expression === n;
+        // ral-ua: an arm of a ternary whose other arm is a literal boxes like a return (the arm value is the box)
+        if (up.kind === SyntaxKind.ConditionalExpression && up.condition !== n) {
+            const other: any = this.unwrapParens(up.whenTrue === n ? up.whenFalse : up.whenTrue);
+            return isObjectLiteralExpression(other) || this.literalKindOfNode(other) !== undefined;
+        }
         return isAsExpression(up) && up.expression === n && isReturnStatement(up.parent);
     }
 
@@ -20234,6 +20287,9 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printOptListLength(node: any): string | undefined {
+        const held = this.rustSkipWrappers(node.expression);
+        const opt = this.rustOptContainerOf(held);
+        if (opt !== undefined && opt.kind === 'list' && this.rustPrintedOptional.has(opt.declaration)) return this.printNativeLength(node, this.rustOptListSlice(held));
         if (this.rustOptListOf(node.expression) === undefined) return undefined;
         return this.printNativeLength(node, this.rustOptListSlice(node.expression));
     }
