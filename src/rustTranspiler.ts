@@ -4839,6 +4839,8 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
         milliseconds: 'int', parse8601: 'oint', numberToString: 'ostr', omitZero: 'ostr', parseTimeframe: 'int',
         inArray: 'bool', valueIsDefined: 'bool', isJsonEncodedObject: 'bool', seconds: 'int', randNumber: 'int', precisionFromString: 'int', binaryLength: 'int',
+        // td: the hand-written `crc32` stub always answers an integer (`Value::Int` before; `-> i64` now)
+        crc32: 'int',
     };
 
     // base methods with a TS body that the runtime implements by hand (`exchange_stubs.rs`), typed like the runtime table
@@ -5963,7 +5965,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
         // qf: the key of any other `k in obj` test boxes once (`in_op` reads a `Str` key or misses on `Null`, as the `Value` local did)
-        if ((kind === 'str' || kind === 'ostr') && isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.InKeyword && !this.rustTestTierSource(n)
+        // td: also through a `(k as string)` cast of the key (the cast prints nothing)
+        if ((kind === 'str' || kind === 'ostr') && this.rustInKeyTop(n) !== undefined && !this.rustTestTierSource(n)
             && this.rustInKeyInitialised(n)) return 'inbox';
         if (isCallExpression(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== undefined) return 'native';
         // qb: a numeric local as an operand of `Math.min|max` over a `Value` operand boxes once (`&Value::from(x)`:
@@ -7728,17 +7731,26 @@ export class RustTranspiler extends BaseTranspiler {
     /** qf: the `Option<&str>` text of a typed string local keying an `in` test (`inbox` use), else undefined:
      *  `Some(k.as_str())` / `k.as_deref()`, so a native `contains_key` reads it without the box (`None` misses like `Null`). */
     rustInKeyTypedText(key): string | undefined {
-        const inner: any = this.unwrapParens(key);
+        let inner: any = this.unwrapParens(key);
+        while (inner?.kind === SyntaxKind.AsExpression || inner?.kind === SyntaxKind.ParenthesizedExpression) inner = inner.expression;
         if (!isIdentifier(inner) || this.rustScalarUseForms.get(inner) !== 'inbox') return undefined;
         const kind = this.rustScalarLocalOf(inner)?.kind;
         const name = super.printIdentifier(inner);
         return kind === 'str' ? `Some(${name}.as_str())` : (kind === 'ostr' ? `${name}.as_deref()` : undefined);
     }
 
+    /** td: the left operand of a `k in obj` test that is `k` itself or `k` under parens / `as` casts, else undefined. */
+    rustInKeyTop(n): any {
+        let top: any = n;
+        while (top.parent?.kind === SyntaxKind.ParenthesizedExpression || top.parent?.kind === SyntaxKind.AsExpression) top = top.parent;
+        const up: any = top.parent;
+        return isBinaryExpression(up) && up.left === top && up.operatorToken.kind === SyntaxKind.InKeyword ? top : undefined;
+    }
+
     /** The key local of an `in` test has a non-null initializer (nil-declared locals are left to their own rule). */
     rustInKeyInitialised(n): boolean {
         // a ws `client.subscriptions|futures` receiver is rewritten by ccxt's container-op pass from a `Value` key: leave it
-        const recv: any = this.unwrapParens(n.parent.right);
+        const recv: any = this.unwrapParens(this.rustInKeyTop(n).parent.right);
         if (isPropertyAccessExpression(recv) && /^(?:subscriptions|futures)$/.test(String(recv.name.text)) && this.rustIsWsClientType(this.typeOfNodeIfAny(recv.expression))) return false;
         const declaration: any = this.rustDeclaredNode(n);
         return declaration !== undefined && isVariableDeclaration(declaration) && declaration.initializer !== undefined
@@ -16843,6 +16855,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (k.literal) return `Value::Bool(${name}.contains_key(${k.text}))`;
         const inner: any = this.rustSkipWrappers(key);
         if (this.bearerInOpKeyText(key) === undefined && isIdentifier(inner)) return `Value::Bool(${this.rustBorrowedStrKeyTest(name, inner)})`;
+        // td: a typed string key under an `as string` cast reads its own decision (no box)
+        if (isIdentifier(inner) && this.rustInKeyTypedText(key) !== undefined) return `Value::Bool(${this.rustBorrowedStrKeyTest(name, inner)})`;
         return `Value::Bool(matches!(&${k.text}, Value::Str(__k) if ${name}.contains_key(__k.as_ref())))`;
     }
 
