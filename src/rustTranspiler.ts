@@ -18890,7 +18890,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustBuiltReturnBoxUse(n: any, init: any, literalDict = false): boolean {
         const up: any = n.parent;
-        if (up === undefined || !literalDict && (init === undefined || !isCallExpression(init) || this.rustBuiltReturnSourceKind(init) === undefined)) return false;
+        // ral-yc: a never-null venue container result (rustVenueContainerReturnKind) is a built container too
+        if (up === undefined || !literalDict && (init === undefined || !isCallExpression(init) || (this.rustBuiltReturnSourceKind(init) === undefined
+            && !(this.rustVenueContainerReturnKind(init) !== undefined && this.rustVenueContainerReturnKind(init)?.nullable === false)))) return false;
         // `this.tickers[k] = x` (a plain base cache field, one key, statement): the field insert stores the handle
         if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(up.left)
             && up.parent?.kind === SyntaxKind.ExpressionStatement && (this.rustFieldKeyReceiver(up.left.expression) !== undefined || this.rustDictShapedFieldInsert(up.left.expression))) {
@@ -19660,6 +19662,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** A `watch` url / hash slot takes `impl Into<Option<&str>>`: a string local or literal as `&str`, anything else lent as `&Value`. */
     rustWsWatchSlotText(arg: any, printed: string): string {
         const inner: any = this.unwrapParens(arg);
+        // ral-yc: an unbound `&str` venue parameter is handed to the slot as the borrow it is
+        if (isIdentifier(inner) && this.rustVenueStrParamUnboundRead(inner)) return RustTranspiler.rustLentMark(super.printIdentifier(inner));
         if (this.rustWsStrKey(inner) || (isStringLiteral(inner) && !(inner.text in this.StringLiteralReplacements))) return this.rustWsKeyText(inner);
         const kind = isIdentifier(inner) ? this.rustScalarIdentifierKind(inner) : undefined;
         if (kind === 'ostr') return `${super.printIdentifier(inner)}.as_deref()`;
@@ -22671,7 +22675,9 @@ export class RustTranspiler extends BaseTranspiler {
             const decl: any = this.rustDeclaredNode(arg);
             if (decl === undefined || !isVariableDeclaration(decl) || !isIdentifier(decl.name)) return false;
             const init: any = decl.initializer === undefined ? undefined : this.rustSkipWrappers(decl.initializer);
-            return init === undefined || isCallExpression(init) || isArrayLiteralExpression(init) || isObjectLiteralExpression(init) || this.literalKindOfNode(init) === 'null';
+            // ral-yc: an awaited venue result of this container kind (rustVenueContainerReturnKind) is held typed: lent too
+            return init === undefined || isCallExpression(init) || isArrayLiteralExpression(init) || isObjectLiteralExpression(init) || this.literalKindOfNode(init) === 'null'
+                || (init.kind === SyntaxKind.AwaitExpression && isCallExpression(this.rustSkipWrappers(init.expression)) && this.rustVenueContainerReturnKind(this.rustSkipWrappers(init.expression)) !== undefined);
         };
         // ral-tf: a hash / topic list slot binds only where a caller holds a list that is not already a `Vec` (which boxes anyway)
         const hashList = RustTranspiler.RUST_LENT_HASH_LIST_METHODS.has(name) && this.rustScalarListTypeNode(type);
@@ -23262,7 +23268,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string {
-        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p) || this.rustVenueStrParamType(p) !== undefined);
+        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p)
+            || (this.rustVenueStrParamType(p) !== undefined && !this.rustVenueStrParamUnbound(p)));
         return lent.map((p: any) => {
             const name = this.printNode(p.name, 0);
             return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();\n`;
@@ -25902,6 +25909,48 @@ export class RustTranspiler extends BaseTranspiler {
         const at = Array.from(method.parameters).indexOf(param);
         const calls = this.rustVenueStrCallSites(method);
         return calls.length > 0 && calls.every((call: any) => this.rustWsUrlReadIdent(call.arguments[at]));
+    }
+
+    /** ral-yc: a required `&str` venue parameter whose every read is a ws url / hash slot (`client(x)`, `watch` /
+     *  `watchMultiple` url, `watch` hashes: all `impl Into<Option<&str>>`) needs no `Value` binding: the borrow goes
+     *  there as it came in. Never written, never read anywhere else. */
+    private rustVenueStrUnbound = new WeakMap<any, boolean>();
+
+    rustVenueStrParamUnbound(param: any): boolean {
+        if (param?.kind !== SyntaxKind.Parameter || !isIdentifier(param.name)) return false;
+        let known = this.rustVenueStrUnbound.get(param);
+        if (known === undefined) {
+            this.rustVenueStrUnbound.set(param, false); // re-entrancy guard
+            try {
+                known = this.rustVenueStrParamUnboundUncached(param);
+            } catch (e) {
+                known = false;
+            }
+            this.rustVenueStrUnbound.set(param, known);
+        }
+        return known;
+    }
+
+    rustVenueStrParamUnboundUncached(param: any): boolean {
+        if (this.rustVenueStrParamType(param) !== '&str') return false;
+        const method: any = param.parent;
+        let uses = 0;
+        for (const n of this.rustScopeNameNodes(method, String(param.name.text)) as any[]) {
+            if (n === param.name || n === param || n.parent === param) continue;
+            if (!isIdentifier(n) || this.rustDeclaredNode(n) !== param) return false;
+            const call: any = n.parent;
+            if (!isCallExpression(call) || call.expression === n || !isPropertyAccessExpression(call.expression)) return false;
+            const name = String(call.expression.name.text);
+            if (!((name === 'client' || name === 'watch' || name === 'watchMultiple') && call.arguments.length <= 5)) return false;
+            if (!this.rustWsWatchSlot(call, Array.from(call.arguments).indexOf(n))) return false;
+            uses++;
+        }
+        return uses > 0;
+    }
+
+    rustVenueStrParamUnboundRead(node: any): boolean {
+        const param: any = this.rustDeclaredNode(node);
+        return param?.kind === SyntaxKind.Parameter && param.name !== node && this.rustVenueStrParamUnbound(param);
     }
 
     /** Scalar-local kind of a per-venue string parameter read through its `Value` binding. */

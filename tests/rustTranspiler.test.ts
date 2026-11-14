@@ -14037,3 +14037,81 @@ describe('ral-int45 (xf x wg): a literal map read at a borrowed string element k
         expect(out).toContain('grouped.get(fixtureId.as_deref().unwrap_or("")).cloned().unwrap_or(Value::Null)');
     });
 });
+
+describe('ral-yc: a &str venue parameter read only by ws url / hash slots keeps its borrow (no self-binding)', () => {
+    const base = 'export interface Dict { [key: string]: any }\n'
+        + 'export default class Exchange {\n'
+        + '    options: Dict = {};\n'
+        + '    client (url: string): any { return url; }\n'
+        + '    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return url; }\n'
+        + '    async watchMultiple (url: string, messageHashes: string[], message: any = undefined, subscribeHashes: any = undefined, subscription: any = undefined): Promise<any> { return url; }\n'
+        + '}\n';
+    const venue = "import Exchange from '../base/Exchange.js';\n"
+        + "import type { Dict } from '../base/Exchange.js';\n"
+        + 'export default class venue extends Exchange {\n'
+        + '    async negotiate (privateChannel: boolean): Promise<string> {\n        return privateChannel ? \'wss://a\' : \'wss://b\';\n    }\n'
+        + '    async subscribe (url: string, messageHash: string, params: Dict = {}) {\n        const client = this.client (url);\n        return await this.watch (url, messageHash, params, messageHash);\n    }\n'
+        + '    async subscribeMany (url: string, messageHashes: string[], params: Dict = {}) {\n        return await this.watchMultiple (url, messageHashes, params, messageHashes);\n    }\n'
+        + '    async subscribeOther (url: string, messageHash: string, params: Dict = {}) {\n        params[\'u\'] = url;\n        return await this.watch (url, messageHash, params, messageHash);\n    }\n'
+        + '    async watchA (params: Dict = {}) {\n        const url = await this.negotiate (false);\n        await this.subscribeMany (url, [ \'b\' ], params);\n        await this.subscribeOther (url, \'c\', params);\n        return await this.subscribe (url, \'a\', params);\n    }\n'
+        + '}\n';
+    let out: string;
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-yc-unbound');
+        for (const [ rel, text ] of Object.entries ({ 'ts/src/base/Exchange.ts': base, 'ts/src/pro/venue.ts': venue })) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    });
+    const rows: [string, RegExp, boolean][] = [
+        [ 'subscribe takes url: &str', /fn subscribe\(&(?:mut )?self, url: &str, /, true ],
+        [ 'subscribe binds no Value url', /fn subscribe\(&(?:mut )?self, url: &str, [^\n]*\n\s+let mut url: Value = url\.into\(\);/, false ],
+        [ 'client(url) lends the borrow', /self\.client\(url\)/, true ],
+        [ 'watch url slot lends the borrow', /self\.watch\(url, /, true ],
+        [ 'watchMultiple url slot lends the borrow', /self\.watch_?[mM]ultiple\(url, /, true ],
+        [ 'a param also written into a map keeps its binding', /fn subscribe_?[oO]ther\(&(?:mut )?self, url: &str, [^\n]*\n\s+let mut url: Value = url\.into\(\);/, true ],
+    ];
+    test.each(rows)('%s', (_name, re, present) => {
+        expect(re.test (out)).toBe(present);
+    });
+});
+
+describe('ral-yc: typed venue results handed whole (lent to a venue Dict slot, boxed into a map)', () => {
+    const base = 'export interface Dict { [key: string]: any }\n'
+        + 'export interface Ticker { symbol: string; [key: string]: any }\n'
+        + 'export default class Exchange {\n'
+        + '    options: Dict = {};\n'
+        + '    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n'
+        + '    safeDict (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n'
+        + '}\n';
+    const venue = "import Exchange from './base/Exchange.js';\n"
+        + "import type { Dict, Ticker } from './base/Exchange.js';\n"
+        + 'export default class venue extends Exchange {\n'
+        + '    async fetchAcct (): Promise<Dict> {\n        return this.safeDict (this.options, \'acct\', {});\n    }\n'
+        + '    async tick (m: string): Promise<Ticker> {\n        return this.safeDict (this.options, m, {});\n    }\n'
+        + '    signIt (key: string, account: Dict): string {\n        return key + this.safeString (account, \'seq\');\n    }\n'
+        + '    async run (p: Dict = {}): Promise<any> {\n        const account = await this.fetchAcct ();\n        return this.signIt (\'k\', account);\n    }\n'
+        + '    async runTick (p: Dict = {}): Promise<any> {\n        const ticker = await this.tick (\'x\');\n        const tickers: Dict = {};\n        const s = this.safeString (ticker, \'symbol\');\n        if (s !== undefined) {\n            tickers[s] = ticker;\n        }\n        return tickers;\n    }\n'
+        + '}\n';
+    let out: string;
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-yc-handoff');
+        for (const [ rel, text ] of Object.entries ({ 'ts/src/base/Exchange.ts': base, 'ts/src/venue.ts': venue })) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    const rows: [string, RegExp, boolean][] = [
+        [ 'the awaited Dict result is a shared map', /let mut account: crate::value::Dict = self\.fetch_?[aA]cct\(\)\.await\.into_dict\(\);/, true ],
+        [ 'the venue Dict slot takes impl Into<Value>', /fn sign_?[iI]t\(&self, key: &str, account: impl Into<crate::Value>\)/, true ],
+        [ 'the map is lent to the slot', /self\.sign_?[iI]t\("k", &account\)/, true ],
+        [ 'the awaited Ticker result is a shared map', /let mut ticker: crate::value::Dict = self\.tick\("x"\)\.await\.into_dict\(\);/, true ],
+        [ 'the ticker is boxed once into the map', /tickers\.insert\([^\n]*, Value::Dict\(ticker\)\);/, true ],
+        [ 'no Value local is left for either (the slot binding aside)', /let mut (account|ticker): Value(?! = \1\.into\(\);)/, false ],
+    ];
+    test.each(rows)('%s', (_name, re, present) => {
+        expect(re.test (out)).toBe(present);
+    });
+});
