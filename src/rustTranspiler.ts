@@ -10767,6 +10767,13 @@ export class RustTranspiler extends BaseTranspiler {
         return { params, ret };
     }
 
+    // A typed unified method is async when declared `async` or when it returns a `Promise` directly (the Rust printer does
+    // not set `implicitAsyncTranspiling`, so `isAsyncFunction` misses the pass-through form ccxt still prints `pub async fn`).
+    rustTypedIsAsync(node): boolean {
+        if (this.isAsyncFunction(node)) return true;
+        return /^Promise\s*</.test(String(node?.type?.getText?.() ?? ''));
+    }
+
     // The typed arguments lower to `Value` (`__args`, the derived-dispatch payload) and rebind as the `Value` body's
     // locals; `call_typed` turns its panics into `Err` and the result decodes through `types::FromRaw`.
     rustTypedBody(node, typed, identation: number, inner: string): string {
@@ -10774,8 +10781,9 @@ export class RustTranspiler extends BaseTranspiler {
         const lowered = [...required, ...typed.params.filter(p => p.optional)].map(p => p.toValue).join(', ');
         const i1 = this.getIden(identation + 1);
         const i2 = this.getIden(identation + 2);
-        // a sync method (`market`, `setSandboxMode`) runs the same body block, polled once: it never awaits
-        const isAsync = this.isAsyncFunction(node);
+        // a sync method (`market`, `setSandboxMode`) runs the same body block, polled once: it never awaits;
+        // a `Promise<..>` pass-through without the `async` keyword (`watchTicker () { return this.watchPublic (..); }`) awaits
+        const isAsync = this.rustTypedIsAsync(node);
         // the required parameters rebind by position (each is a `Value`, as the untyped signature declared it)
         const binds = required.map(p => `${i2}let mut ${p.name} = __it.next().unwrap_or_default();\n`).join('');
         return ` {\n${i2}let __args: Vec<Value> = vec![${lowered}];\n`
@@ -10815,7 +10823,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const typed = this.rustTypedSignature(decl);
         if (typed === undefined) return undefined;
-        const isAsync = this.isAsyncFunction(decl);
+        const isAsync = this.rustTypedIsAsync(decl);
         if (isAsync && !awaited) return undefined;
         const args = Array.from(node.arguments) as any[];
         const declParams = Array.from(decl.parameters) as any[];
