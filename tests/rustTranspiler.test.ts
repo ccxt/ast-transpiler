@@ -11302,7 +11302,8 @@ describe('rust ternary-initialised scalar locals', () => {
             "        request['limit'] = Math.min (limit, maxLimit);\n        const capped = (limit === undefined) ? maxLimit : Math.min (limit, maxLimit);\n" +
             "        return [ request, capped ];\n");
         expect(out).toContain('let mut maxLimit: i64 = (if ');
-        expect(out).toContain('crate::runtime::Math::min(&limit, &Value::from(maxLimit))');
+        // zb: a typed-signature `limit` makes the cap native (`Option<i64>` min, the helper's Null arm)
+        expect(out).toContain('(if let Some(__m0) = limit.as_i64() { Some(i64::min(__m0, maxLimit)) } else { None })');
         expect(out).not.toContain('maxLimit.clone()');
         expect(out).not.toContain('let mut maxLimit: Value');
     });
@@ -12103,7 +12104,8 @@ describe('od: typed results of other self method calls (third pass)', () => {
         expect(out).toContain('&[Value::Bool(uta)]');
     });
     test('sum with an optional integer operand prints the native Option<i64> sum (Null when an operand is missing)', () => {
-        expect(out).toContain('Value::from((if let Some(__m0) = start { Some((__m0 + 60)) } else { None }))');
+        // zb: the Option sum now types the `end` local itself (Option<i64>), boxed only where it is handed on
+        expect(out).toContain('let mut end: Option<i64> = (if let Some(__m0) = start { Some((__m0 + 60)) } else { None });');
         expect(out).not.toContain('self.sum(');
     });
     test('negative: a string local the method returns keeps the method\'s typed return', () => {
@@ -14513,5 +14515,72 @@ describe('ral-zf: a message field Dict / List stored whole into this.balance / t
     test('negative: a store into another this. field keeps the box', () => {
         const out = mk("    handleBalance (client: Client, message: Dict): void {\n        const rows = this.safeList (message, 'rows', []);\n        this.orderbooks['x'] = rows;\n        const total = this.safeString (rows, 0);\n        client.resolve (this.balance, total);\n    }");
         expect(out).toMatch(/let mut rows: Value = /);
+    });
+});
+
+describe('ral-zb: Math.min / max and sum over a typed-signature numeric parameter (round 39)', () => {
+    const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTrades'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    let n = 0;
+    const run = (body: string) => {
+        const file = path.join (rustFixtureRoot, 'zb-arith-param', String (n++), 'ts/src/venue.ts');
+        fs.mkdirSync (path.dirname (file), { recursive: true });
+        fs.writeFileSync (file, "type Int = number;\ntype Trade = any;\ninterface Dict { [key: string]: any }\nclass C {\n" +
+            "    async fetchTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<Trade[]> {\n" +
+            body + "    }\n    g (x: any): any { return x; }\n}\n");
+        return typed.transpileRustByPath (file).content;
+    };
+    // [ case, body, expected substrings, forbidden substrings ]
+    const cases: [ string, string, string[], string[] ][] = [
+        [ 'Math.min of an Int parameter and an i64 local: the first assignment decides the local Option<i64>',
+            "        const maxLimit = 1500;\n        let limitValue: Int = 500;\n        if (limit !== undefined) {\n            limitValue = Math.min (limit, maxLimit);\n        }\n        return this.g ({ 'limit': limitValue });\n",
+            [ 'let mut maxLimit: i64 = 1500;', 'let mut limitValue: Option<i64> = Some(500);', 'limitValue = (if let Some(__m0) = limit.as_i64() { Some(i64::min(__m0, maxLimit)) } else { None });' ],
+            [ 'let mut limitValue: Value', 'Math::min(&limit' ] ],
+        [ 'Math.max of an Int parameter and an int literal: Option<i64> with the helper Null arm',
+            "        let start: Int = 0;\n        if (since !== undefined) {\n            start = Math.max (since, 1000);\n        }\n        return this.g ({ 'start': start });\n",
+            [ 'let mut start: Option<i64> = Some(0);', 'start = (if let Some(__m0) = since.as_i64() { Some(i64::max(__m0, 1000)) } else { None });' ],
+            [ 'let mut start: Value', 'Math::max(&since' ] ],
+        [ 'zb lift 2: a dependent first assignment x = now - limit * d decides x with both operands (Option<i64>, never boxing an operand)',
+            "        const duration = 60000;\n        const now = 1700000000000;\n        let sinceResolved = since;\n        if (sinceResolved === undefined) {\n            sinceResolved = now - limit * duration;\n        }\n        return this.g ({ 'since': sinceResolved });\n",
+            [ 'sinceResolved = (if let Some(__r) = ((if let Some(__l) = limit.as_i64() { Some(__l * duration) } else { None })) { Some(now - __r) } else { None });' ],
+            [ 'let mut sinceResolved: Value', 'Value::from(duration)' ] ],
+        [ 'zb negative: an f64 parameter side keeps the runtime arithmetic (a build/ pass keys on that write text)',
+            "        let rest = undefined;\n        rest = 10 - this.g (since);\n        return this.g ({ 'r': rest });\n",
+            [ ], [ 'let mut rest: Option<f64>' ] ],
+        [ 'a Value operand (an any-typed param read) keeps the helper',
+            "        const p = this.g (params);\n        const capped = Math.min (p, 10);\n        return this.g ({ 'c': capped });\n",
+            [ 'Math::min(&' ], [ 'let mut capped: Option<i64>', 'let mut capped: i64' ] ],
+    ];
+    for (const [ name, body, yes, no ] of cases) {
+        test(name, () => {
+            const out = run(body);
+            for (const y of yes) expect(out).toContain(y);
+            for (const x of no) expect(out).not.toContain(x);
+        });
+    }
+});
+
+describe('ral-zb lift 3: a sum local over a typed-signature Int parameter is Option<i64> despite its any checker type', () => {
+    const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTrades'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, 'zb-sum-local');
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Trade = any;\nexport default class Exchange {\n" +
+        "    sum (...args: any[]): any { return args[0] + args[1]; }\n    g (x: any): any { return x; }\n    parseToInt (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Trade } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+        "    async fetchTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<Trade[]> {\n" + body + "    }\n}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue (body));
+        return typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('const end = this.sum (since, 60000) prints the Option sum into an Option<i64> local', () => {
+        const out = run ("        const end = this.sum (since, 60000);\n        return this.g ({ 'end': end });\n");
+        expect(out).toContain('let mut end: Option<i64> = (if let Some(__m0) = since.as_i64() { Some((__m0 + 60000)) } else { None });');
+        expect(out).not.toContain('let mut end: Value');
+    });
+    test('negative: a sum over an any-typed operand keeps the box', () => {
+        const out = run ("        const p = this.g (params);\n        const end = this.sum (p, 60000);\n        return this.g ({ 'end': end });\n");
+        expect(out).not.toContain('let mut end: Option<i64>');
     });
 });

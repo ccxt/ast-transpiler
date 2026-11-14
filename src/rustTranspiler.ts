@@ -4377,8 +4377,10 @@ export class RustTranspiler extends BaseTranspiler {
             || (kind === 'bool' && this.getRustBoolLocalInitializer(declaration, this.printNode(declaration.initializer, 0)) !== undefined)) return undefined;
         const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
         const expected = kind === 'ostr' || kind === 'str' ? 'string' : (kind === 'bool' || kind === 'obool' ? 'boolean' : 'number');
-        // an all-`i64` base `sum` is an `Int` whatever its `any` checker type says
-        if (checked !== expected && !boolTested && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(kind === 'int' && this.rustArithCombinator(this.unwrapParens(declaration.initializer)) && this.rustArithCallKind(declaration.initializer) === 'int')) return undefined;
+        // an all-`i64` base `sum` is an `Int` whatever its `any` checker type says; zb: likewise an `Option<i64>` / `f64` /
+        // `Option<f64>` combinator (`sum` / `Math.min|max`) whose kind its proven operands give (`any` is only its TS type)
+        const combinatorKind = this.rustArithCombinator(this.unwrapParens(declaration.initializer)) ? this.rustArithCallKind(declaration.initializer) : undefined;
+        if (checked !== expected && !boolTested && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(combinatorKind !== undefined && combinatorKind === kind && (kind === 'int' || checked === undefined))) return undefined;
         const seeded = kind;
         kind = this.rustScalarWidenedKind(declaration, kind);
         const widened = kind !== seeded || this.rustScalarExpressionKind(declaration.initializer) !== undefined;
@@ -4484,7 +4486,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (marketField && !marketLent) return undefined;
         if (marketLent) { this.rustStrLentLocals.add(declaration); this.rustScalarGuarded.add(declaration); this.rustMarketLentLocals.add(declaration); }
         // D11: a proven integer / number `sum` handed on boxes a Copy scalar (`Value::from`), no copy to earn back
-        const numericSum = (kind === 'int' || kind === 'num') && this.rustSumShape(this.unwrapParens(declaration.initializer));
+        // zb: an `Option<i64>` / `Option<f64>` sum is a Copy scalar too (`Value::from(x)` boxes it, no copy)
+        const numericSum = (kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustSumShape(this.unwrapParens(declaration.initializer));
         // rd: a clock / nonce string whose copying boxes all sit at lending slots lends there (`Value::from(x.as_str())`: the
         // one copy the `Value` clone made); one handed only to moving boxes is stored and boxed back (D11)
         const clockInit: any = this.unwrapParens(declaration.initializer);
@@ -8064,8 +8067,8 @@ export class RustTranspiler extends BaseTranspiler {
             // an optional operand gives an optional result: the helpers answer `Null` when either side is `Null`
             const numeric = (k: string) => k === 'int' || k === 'num' || k === 'oint' || k === 'onum';
             if (op === SyntaxKind.PlusToken || op === SyntaxKind.MinusToken || op === SyntaxKind.AsteriskToken) {
-                const a = this.rustScalarNumericKind(node.left);
-                const b = this.rustScalarNumericKind(node.right);
+                const a = this.rustArithSideKind(node.left);
+                const b = this.rustArithSideKind(node.right);
                 if (!numeric(a) || !numeric(b)) return undefined;
                 const kind = a.endsWith('int') && b.endsWith('int') ? 'int' : 'num';
                 return a.startsWith('o') || b.startsWith('o') ? `o${kind}` : kind;
@@ -8143,7 +8146,27 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(node);
         if (inner === undefined || inner.kind === SyntaxKind.SpreadElement) return undefined;
         const kind = this.rustScalarNumericKind(inner); if (kind !== undefined) return kind;
+        // zb: a typed-signature numeric parameter (`limit: Int` -> `Option<i64>`) holds only that variant or `Null`,
+        // so `Math.min|max (limit, n)` / `this.sum (since, d)` over it is the helper's own Int / Null arm exactly
+        const param = this.rustArithParamKind(inner); if (param !== undefined) return param;
         return isCallExpression(inner) && this.rustScalarValueKind(inner, true) === 'int' && this.rustScalarNativeText('int', inner) !== undefined ? 'int' : undefined;
+    }
+
+    /** zb: an arithmetic side's kind: a typed scalar shape, else a typed-signature numeric parameter read
+     *  (`now - limit * duration`: `limit` holds only `Int` or `Null`, so the Option arm equals the helper's). */
+    rustArithSideKind(node): string | undefined {
+        const own = this.rustScalarNumericKind(node); if (own !== undefined) return own;
+        // integer parameters only: an `f64` side re-prints value writes a ccxt build/ pass keys on (kalshi `filled`: cow_guard +1)
+        const param = this.rustArithParamKind(node);
+        return param === 'int' || param === 'oint' ? param : undefined;
+    }
+
+    /** zb: the numeric kind of an unwritten typed-signature parameter read (`oint` / `onum` / `int` / `num`), else undefined. */
+    rustArithParamKind(node): string | undefined {
+        const inner: any = this.unwrapParens(node);
+        if (inner === undefined || !isIdentifier(inner)) return undefined;
+        const kind = this.rustScalarParamRead(inner)?.kind;
+        return kind === 'oint' || kind === 'onum' || kind === 'int' || kind === 'num' ? kind : undefined;
     }
 
     /** A combinator over a typed operand prints native and boxes its result once. */
@@ -8845,7 +8868,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  (`add`/`subtract`/`multiply`/`divide` by a non-zero literal) answer `Null` when either operand is `Null`. */
     rustScalarOptArithText(base: string, node, sign: string): string {
         const sides = [ node.left, node.right ].map((n, i) => {
-            const k = this.rustScalarNumericKind(n);
+            const k = this.rustArithSideKind(n);
             if (k !== 'oint' && k !== 'onum') return { use: this.rustScalarOperandText(base, n) };
             const v = i === 0 ? '__l' : '__r';
             return { bind: v, src: this.rustScalarOperandText(k, n), use: base === 'num' && k === 'oint' ? `(${v} as f64)` : v };
