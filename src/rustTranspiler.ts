@@ -6311,6 +6311,8 @@ export class RustTranspiler extends BaseTranspiler {
         else if ((method === 'startsWith' || method === 'endsWith') && args.length === 1 && lit(args[0]) && args[0].text !== '') shape = 'affix';
         else if ((method === 'replace' || method === 'replaceAll') && args.length === 2 && lit(args[0]) && lit(args[1]) && args[0].text !== '') shape = 'replace';
         else if (method === 'indexOf' && args.length === 1 && this.rustStrFindNeedle(args[0], true) !== undefined) shape = 'find';
+        else if ((method === 'padStart' || method === 'padEnd') && this.rustStrPadArgs(args) !== undefined) shape = 'pad';
+        else if (method === 'slice' && this.rustStrSliceBounds(args) !== undefined) shape = 'slice';
         if (shape === undefined) return undefined;
         if (syntactic) return { recv, recvKind: '', method, kind: '' };
         const recvKind = this.rustScalarIdentifierKind(recv) ?? (params ? this.rustScalarParamRead(recv)?.kind : undefined);
@@ -6319,8 +6321,42 @@ export class RustTranspiler extends BaseTranspiler {
         if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
         if (shape === 'affix') return { recv, recvKind, method, kind: 'bool' };
         if (shape === 'find') return this.rustStrFindNeedle(args[0], false) === undefined ? undefined : { recv, recvKind, method, kind: 'int' };
-        if (recvKind === 'ostr' && shape !== 'case' && shape !== 'replace') return undefined;
+        // pad / slice only on a typed local (a parameter read would copy its `Value` and turn a null into "")
+        if ((shape === 'pad' || shape === 'slice') && this.rustScalarIdentifierKind(recv) === undefined) return undefined;
+        if (recvKind === 'ostr' && shape !== 'case' && shape !== 'replace' && shape !== 'pad' && shape !== 'slice') return undefined;
         return { recv, recvKind, method, kind: recvKind };
+    }
+
+    /** `padStart(N, "c")` / `padEnd(N, "c")`: a literal width (0..4096) and a one-char alphanumeric / space pad, the
+     *  helper's one-char arm, which `format!` width (counted in chars, never truncating) reproduces. */
+    rustStrPadArgs(args: any[]): { width: number, pad: string } | undefined {
+        if (args.length !== 2) return undefined;
+        const width = this.rustSliceLiteralBound(args[0]);
+        const pad: any = args[1];
+        if (width === undefined || width < 0 || width > 4096) return undefined;
+        if ((!isStringLiteral(pad) && !isNoSubstitutionTemplateLiteral(pad)) || !/^[A-Za-z0-9 ]$/.test(pad.text)) return undefined;
+        return { width, pad: pad.text };
+    }
+
+    /** Literal `slice(a)` / `slice(a, b)` bounds the closure-free char form handles: `b >= 0` and `a >= 0` when `b` is given. */
+    rustStrSliceBounds(args: any[]): { start: number, end: number | undefined } | undefined {
+        if (args.length === 0 || args.length > 2) return undefined;
+        const start = this.rustSliceLiteralBound(args[0]);
+        const end = args.length === 2 ? this.rustSliceLiteralBound(args[1]) : undefined;
+        if (start === undefined || (args.length === 2 && (end === undefined || end < 0 || start < 0))) return undefined;
+        return { start, end };
+    }
+
+    /** Native `String` text of a pad / slice over the `&str` `s`. */
+    rustStrPadSliceText(method: string, args: any[], s: string): string {
+        if (method === 'slice') {
+            const { start, end } = this.rustStrSliceBounds(args);
+            const skip = start >= 0 ? `${start}` : `${s}.chars().count().saturating_sub(${-start})`;
+            const take = end === undefined ? '' : `.take(${Math.max(end - start, 0)})`;
+            return `${s}.chars().skip(${skip})${take}.collect::<String>()`;
+        }
+        const { width, pad } = this.rustStrPadArgs(args);
+        return `format!("{:${pad}${method === 'padStart' ? '>' : '<'}${width}}", ${s})`;
     }
 
     /** `indexOf` needle as an `Option<&str>`: a non-empty literal, a typed string local, or a string-typed `Value` expression. */
@@ -6417,10 +6453,11 @@ export class RustTranspiler extends BaseTranspiler {
         return this.primitiveKindOfType(this.getChecker().getTypeFromTypeNode(fn.type)) === 'string';
     }
 
-    /** `split`, `replaceAll`, an optional receiver's `replace`, or an `indexOf` outside a literal contains test. */
+    /** `split`, `replaceAll`, `slice`, `padStart` / `padEnd`, an optional receiver's `replace`, or an `indexOf` outside a literal contains test. */
     rustStrMethodNewUse(call): boolean {
         const method = String(call.expression.name.text);
-        if (method === 'split' || method === 'replaceAll' || method === 'slice') return true;
+        // a pad / slice builds a new string from the receiver, like split (and its return keeps the method's ABI)
+        if (method === 'split' || method === 'replaceAll' || method === 'slice' || method === 'padStart' || method === 'padEnd') return true;
         if (method === 'replace') return this.rustScalarLocalOf(call.expression.expression)?.kind !== 'str';
         if (method !== 'indexOf') return false;
         let top: any = call;
@@ -6901,6 +6938,10 @@ export class RustTranspiler extends BaseTranspiler {
                 return wrap(`${hay}.${method.method === 'startsWith' ? 'starts_with' : 'ends_with'}("${arg(0)}")`);
             }
             if (method.method === 'indexOf') return wrap(this.rustStrFindText(method.recvKind, name, args[0]));
+            if (method.method === 'padStart' || method.method === 'padEnd' || method.method === 'slice') {
+                if (method.recvKind === 'ostr') return wrap(`(if let Some(__s) = ${name}.as_deref() { Some(${this.rustStrPadSliceText(method.method, args, '__s')}) } else { None })`);
+                return wrap(this.rustStrPadSliceText(method.method, args, name));
+            }
             if (method.method === 'replace' || method.method === 'replaceAll') {
                 if (method.recvKind === 'ostr') return wrap(`(if let Some(__s) = ${name}.as_deref() { Some(__s.replace("${arg(0)}", "${arg(1)}")) } else { None })`);
                 return wrap(`${name}.replace("${arg(0)}", "${arg(1)}")`);
@@ -12598,7 +12639,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
-        return this.printOptListJoin(node) ?? this.printStrVecParamJoin(node) ?? this.printVecJoin(node) ?? this.printNativeStringJoin(node, name) ?? `join(&${name}, &${parsedArg})`;
+        return this.printOptListJoin(node) ?? this.printLentListJoin(node) ?? this.printStrVecParamJoin(node) ?? this.printVecJoin(node) ?? this.printNativeStringJoin(node, name) ?? `join(&${name}, &${parsedArg})`;
     }
 
     printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -15857,6 +15898,11 @@ export class RustTranspiler extends BaseTranspiler {
                 boxes.push([n, 'clone']);
                 return true;
             }
+            // `x.join("lit")` of a `string[]`: joined in place (printLentListJoin)
+            if (at === n && this.rustOptListExtraUse(n, declaration) === 'join') {
+                natives++;
+                return true;
+            }
             return false;
         });
         // A list that is only handed on would trade each box for a handle box.
@@ -15894,6 +15940,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (node === undefined || !isIdentifier(node)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         return declaration !== undefined && declaration !== node && declaration.name !== node && this.rustLentListLocal(declaration);
+    }
+
+    /** `x.join("lit")` on a lent `string[]` list: each element's `Display` text (the helper's `stringify_simple` for
+     *  `Str` / `Int` / `Float` / `Bool` / `Null`) joined by the literal, with no copy of the list. */
+    printLentListJoin(node: any): string | undefined {
+        const access: any = node?.expression;
+        if (!isPropertyAccessExpression(access) || !isIdentifier(access.expression) || !this.rustLentListUse(access.expression)) return undefined;
+        const literal = this.rustNativeStringLiteralArg(node.arguments?.[0]);
+        if (literal === undefined || node.arguments.length !== 1) return undefined;
+        return `Value::Str(${this.printNode(access.expression, 0).trim()}.iter().map(Value::to_string).collect::<Vec<String>>().join("${literal}").into())`;
     }
 
     /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
