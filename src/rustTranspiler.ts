@@ -5111,10 +5111,19 @@ export class RustTranspiler extends BaseTranspiler {
         if (recvType === undefined || (recvType.flags & (TypeFlags.Any | TypeFlags.Unknown)) !== 0 || this.getChecker().isArrayType(recvType)) return undefined;
         const field: any = this.getChecker().getPropertyOfType(recvType, String(node.argumentExpression.text));
         if (field === undefined || this.primitiveKindOfType(this.typeOfNodeIfAny(node)) !== 'string') return undefined;
+        // oe: an `ecdsa(..)` signature (`{ r: string, s: string, .. }`) read while its own borrowed decision is still pending:
+        // `KeyRead` reads it through `&&Dict` and `&&Value` alike, so the text does not wait on that decision
+        if (owner.initializer !== undefined && this.rustEcdsaCall(this.rustSkipWrappers(owner.initializer)) && this.rustBorrowedPending.has(owner)) {
+            return `crate::value::KeyRead::key_read(&&${super.printIdentifier(node.expression)}, "${this.escapeRustStringLiteral(String(node.argumentExpression.text))}").as_str().map(str::to_owned)`;
+        }
         const read = this.printNode(node, 0).trim();
         const tail = '.cloned().unwrap_or(Value::Null)';
         if (read.endsWith(tail) && !read.includes('as_map()')) return `${read.slice(0, -tail.length)}.and_then(Value::as_str).map(str::to_owned)`;
         if (read.startsWith('crate::value::KeyRead::key_read(&&') && read.endsWith(')')) return `${read}.as_str().map(str::to_owned)`;
+        // oe: a row local printed as a plain `Value` (`row.as_map().and_then(|__m| ..)`): the closure-free `KeyRead` read of the same slot
+        if (read.endsWith(tail) && read.startsWith(`${super.printIdentifier(node.expression)}.as_map().and_then(|__m| __m.get(`)) {
+            return `${this.rustTestTierSource(node) ? 'ccxt' : 'crate'}::value::KeyRead::key_read(&&${super.printIdentifier(node.expression)}, "${this.escapeRustStringLiteral(String(node.argumentExpression.text))}").as_str().map(str::to_owned)`;
+        }
         return undefined;
     }
 

@@ -11471,3 +11471,20 @@ describe('od: typed results of other self method calls (third pass)', () => {
         expect(out).toContain('Value::from(url.as_deref())');
     });
 });
+
+describe('ral-oe: ecdsa r / s and row string fields of plain Value rows', () => {
+    test('an ecdsa r / s read is Option<String> through KeyRead; a Value row field reads through KeyRead, not a closure', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-oe-elements');
+        fs.mkdirSync (path.join (dir, 'ts/src/base/functions'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; id: string; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport default class Exchange {\n    markets: Dict = undefined;\n    safeMarket (id: Str, market: Market = undefined): MarketInterface { return market; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/base/functions/crypto.ts'), "export function ecdsa (request: any, secret: any, curve: any, prehash: any = null) { return { 'r': '', 's': '', 'v': 0 }; }\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nimport { ecdsa } from './base/functions/crypto.js';\nexport default class venue extends Exchange {\n    signHash (hash: string, key: string): string {\n        const signature = ecdsa (hash, key, 'secp256k1', undefined);\n        const r = signature['r'];\n        const s = signature['s'];\n        return '0x' + r.padStart (64, '0') + s.padStart (64, '0');\n    }\n    parseRow (row: Dict) {\n        let marketResolved = this.safeMarket (this.safeString (row, 'id'));\n        const symbol = marketResolved['symbol'];\n        if (symbol !== undefined) {\n            marketResolved = this.hold (symbol);\n        }\n        return { 'symbol': symbol, 'm': marketResolved };\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut r: Option<String> = crate::value::KeyRead::key_read(&&signature, "r").as_str().map(str::to_owned);');
+        expect(out).toContain('let mut s: Option<String> = crate::value::KeyRead::key_read(&&signature, "s").as_str().map(str::to_owned);');
+        expect(out).not.toContain('let mut r: Value');
+        expect(out).toContain('let mut symbol: Option<String> = crate::value::KeyRead::key_read(&&marketResolved, "symbol").as_str().map(str::to_owned);');
+        expect(out).not.toContain('let mut symbol: Value');
+    });
+});
