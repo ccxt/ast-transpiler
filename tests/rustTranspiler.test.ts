@@ -14479,7 +14479,8 @@ describe('ye: resolve proof for literal-map, cache-field and wildcard-hash resol
     const cases: Array<[ string, string, RegExp ]> = [
         // (1) a map literal is a Dict resolve; negative: a list literal is not
         [ 'map literal', tk + "        client.resolve ({ 'symbol': symbol }, 'ticker:' + symbol);\n    }\n", dictLocal ],
-        [ 'negative: list literal', tk + "        client.resolve ([ symbol ], 'ticker:' + symbol);\n    }\n", valueLocal ],
+        // ral-ze: a list literal is not a Dict resolve; it is now a proven List resolve
+        [ 'negative: list literal', tk + "        client.resolve ([ symbol ], 'ticker:' + symbol);\n    }\n", /let mut ticker: crate::value::List = self\.watch\(/ ],
         // (2) `this.tickers[k]` right after `this.tickers[k] = <Ticker>`; negative: an `any` field
         [ 'cache field read after a typed write', tk + "        const parsed: Ticker = { 'symbol': symbol, 'info': message } as Ticker;\n        this.tickers[symbol] = parsed;\n        client.resolve (this.tickers[symbol], 'ticker:' + symbol);\n    }\n", dictLocal ],
         [ 'negative: any field read', tk + "        this.other[symbol] = message;\n        client.resolve (this.other[symbol], 'ticker:' + symbol);\n    }\n", valueLocal ],
@@ -14814,4 +14815,36 @@ describe('zd: a string reader whose default is an options element written only a
     test('a number write anywhere poisons it (stays Value)', () => {
         expect(mk('1')).toMatch(/let mut region: Value = /);
     });
+});
+
+describe('ze: list resolves are a proven List watch result', () => {
+    // one venue with a `watchT` awaiting 'tickers'; `handlers` are the class's resolve sites
+    const base = "export interface Dict { [key: string]: any }\nexport interface Ticker { symbol: string; info: any }\nexport default class Exchange {\n    symbols: string[] = undefined;\n    safeString (o: any, k: any, d: any = undefined): any { return o[k]; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n";
+    const mk = (handlers: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-ze-'));
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Ticker } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    async watchT () {\n        const tickers = await this.watch ('u', 'tickers');\n        return this.safeString (tickers, 0);\n    }\n" + handlers + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
+    };
+    const listLocal = /let mut tickers: crate::value::List = self\.watch\(/;
+    const valueLocal = /let mut tickers: Value = self\.watch\(/;
+    const tk = "    handleTickers (client: any, message: Dict) {\n        const symbol: string = this.safeString (message, 's');\n";
+    const cases: Array<[ string, string, RegExp ]> = [
+        [ 'array literal', tk + "        client.resolve ([ symbol ], 'tickers');\n    }\n", listLocal ],
+        [ 'typed list local filled by pushes', tk + "        const result: Ticker[] = [];\n        result.push ({ 'symbol': symbol, 'info': message } as Ticker);\n        client.resolve (result, 'tickers');\n    }\n", listLocal ],
+        [ 'base list field', tk + "        client.resolve (this.symbols, 'tickers');\n    }\n", listLocal ],
+        // a per-symbol map under another hash does not meet 'tickers'
+        [ 'list beside a map under another hash', tk + "        client.resolve ({ 'symbol': symbol }, 'ticker:' + symbol);\n        client.resolve ([ symbol ], 'tickers');\n    }\n", listLocal ],
+        [ 'negative: a list and a map under the same hash', tk + "        client.resolve ({ 'symbol': symbol }, 'tickers');\n        client.resolve ([ symbol ], 'tickers');\n    }\n", valueLocal ],
+        [ 'negative: a list and a resolve with no value', tk + "        client.resolve ([ symbol ], 'tickers');\n    }\n    handleEmpty (client: any) {\n        client.resolve (undefined, 'tickers');\n    }\n", valueLocal ],
+        [ 'negative: a list spread into an array literal', tk + "        const rows = this.safeString (message, 'r');\n        client.resolve ([ ...rows ], 'tickers');\n    }\n", valueLocal ],
+    ];
+    for (const [ name, handlers, want ] of cases) {
+        test(name, () => {
+            expect(mk(handlers)).toMatch(want);
+        });
+    }
 });

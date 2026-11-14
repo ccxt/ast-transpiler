@@ -17693,6 +17693,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (sbAlias) from = 'dict';
         // ral-we: a watch result whose every matching resolve passes a proven map holds that map (`.await.into_dict()`)
         if (from === undefined && !nilDeclared && declaration.initializer !== undefined && this.rustWsWatchResultKind(declaration.initializer) === 'dict') from = 'dict';
+        // ral-ze: a watch result whose every matching resolve passes a proven list holds that list (`.await.into_list()`)
+        if (from === undefined && !nilDeclared && declaration.initializer !== undefined && this.rustWsWatchResultKind(declaration.initializer) === 'list') from = 'list';
         let sbMapWrites = 0;
         if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
@@ -18674,7 +18676,9 @@ export class RustTranspiler extends BaseTranspiler {
     rustDictElementBoxUse(n: any, init: any): boolean {
         const up: any = n.parent;
         // ral-we: a watch result proven a map hands on whole like a map element
-        const watched = init !== undefined && init.parent?.kind === SyntaxKind.AwaitExpression && this.rustWsWatchResultKind(init.parent) === 'dict';
+        const watchedKind = init !== undefined && init.parent?.kind === SyntaxKind.AwaitExpression ? this.rustWsWatchResultKind(init.parent) : undefined;
+        // ral-ze: a watch result proven a list hands on whole the same way
+        const watched = watchedKind === 'dict' || watchedKind === 'list';
         if (!watched && !this.rustDictElementSource(init) && !this.rustListElementSource(init) || up === undefined || this.rustScalarInNestedWrite(n)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
         // `rows.push (row)` into another local list: the list keeps its own type, the element enters as the shared map
@@ -20989,7 +20993,7 @@ export class RustTranspiler extends BaseTranspiler {
     // literals and locals of the method, a class with ws subclasses or a ws parent, or any other resolve under a
     // matching hash fails the proof and the local stays `Value`.
     private rustWsResolveTables = new WeakMap<Node, Array<{ pats: Array<Array<string | null>>, kind: string }> | null>();
-    private rustWsWatchKinds = new WeakMap<Node, 'book' | 'cache' | 'dict' | null>();
+    private rustWsWatchKinds = new WeakMap<Node, 'book' | 'cache' | 'dict' | 'list' | null>();
     // wrapper parameter -> the caller's argument (and the caller's own bindings) while a wrapper hash is read
     private rustWsHashEnv: Map<Node, { arg: any, env: Map<Node, any> | undefined }> | undefined = undefined;
     private rustWsFollowed = new Set<Node>();
@@ -21163,10 +21167,12 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** The typed kind a resolved value passes as, or undefined. */
-    rustWsResolvedKind(x: any): 'book' | 'cache' | 'dict' | undefined {
+    rustWsResolvedKind(x: any): 'book' | 'cache' | 'dict' | 'list' | undefined {
         const n: any = this.rustStripWrappers(x);
         if (n === undefined) return undefined;
         if (this.rustWsResolvedMap(n, 0)) return 'dict';
+        // ral-ze: a list on every path (an array literal, a typed list local, a parse* list return, a base list field)
+        if (this.rustWsResolvedList(n, 0)) return 'list';
         if (this.rustWsBookMapRead(n) || this.rustWsBookCtorLike(n)) return 'book';
         if (this.rustWsCacheField(n) || this.rustWsCacheCtor(n) || this.rustWsCacheMapEntry(n) || this.rustWsCacheMapLookup(n)) return 'cache';
         if (isIdentifier(n)) {
@@ -21240,6 +21246,31 @@ export class RustTranspiler extends BaseTranspiler {
             }
         }
         return false;
+    }
+
+    /** ral-ze: a resolved value that is a list on every path: an array literal, a base list field (`this.symbols`), a
+     *  call whose every return builds a fresh list (parse* list returns, the always-list producers), a non-nullable
+     *  venue list return, or an unreassigned single local bound to one of these (pushes and element writes keep it a
+     *  list) or printed as a typed list. */
+    rustWsResolvedList(x: any, depth: number): boolean {
+        const n: any = this.rustStripWrappers(x);
+        if (n === undefined || depth > 3) return false;
+        if (isArrayLiteralExpression(n)) return !(n as any).elements.some((e: any) => e.kind === SyntaxKind.SpreadElement);
+        if (this.rustTypedListField(n)) return true;
+        if (isCallExpression(n)) {
+            if (this.rustAlwaysListProducer(n)) return true;
+            let built: 'dict' | 'list' | undefined;
+            try { built = this.rustBuiltReturnSourceKind(n); } catch (e) { built = undefined; }
+            if (built === 'list') return true;
+            const venue = this.rustVenueContainerReturnKind(n);
+            return venue !== undefined && venue.kind === 'list' && !venue.nullable;
+        }
+        if (!isIdentifier(n)) return false;
+        const d: any = this.rustDeclarationOfIdentifier(n);
+        if (d === undefined || !isVariableDeclaration(d) || !isIdentifier(d.name) || d.initializer === undefined || this.rustLocalReassigned(d)) return false;
+        if ((d.parent as any)?.kind !== SyntaxKind.VariableDeclarationList || (d.parent as any).declarations.length !== 1) return false;
+        if (this.rustWsResolvedList(d.initializer, depth + 1)) return true;
+        return !this.rustBorrowedPending.has(d) && this.rustBorrowedLocalKind(d) === 'list';
     }
 
     // ral-we: base record builders that answer `this.extend (..)` (a fresh map) on every path
@@ -21479,7 +21510,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** The proven kind of an `await this.watch|watchMultiple (..)` initializer, else undefined. */
-    rustWsWatchResultKind(init: any): 'book' | 'cache' | 'dict' | undefined {
+    rustWsWatchResultKind(init: any): 'book' | 'cache' | 'dict' | 'list' | undefined {
         const awaited: any = this.unwrapParens(init);
         if (awaited?.kind !== SyntaxKind.AwaitExpression) return undefined;
         const call: any = this.unwrapParens(awaited.expression);
@@ -21500,19 +21531,19 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustWsHashEnv = save;
         }
         if (hashes === undefined || hashes.length === 0 || hashes.some((p) => p.every((s) => s === null))) return undefined;
-        let kind: 'book' | 'cache' | 'dict' | undefined;
+        let kind: 'book' | 'cache' | 'dict' | 'list' | undefined;
         let matched = 0;
         let none = false;
         for (const r of table) {
             if (!r.pats.some((rp) => hashes!.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
             if (r.kind === 'none') { none = true; continue; }
-            if (r.kind !== 'book' && r.kind !== 'cache' && r.kind !== 'dict') return undefined;
+            if (r.kind !== 'book' && r.kind !== 'cache' && r.kind !== 'dict' && r.kind !== 'list') return undefined;
             if (kind !== undefined && kind !== r.kind) return undefined;
             kind = r.kind;
             matched++;
         }
-        // a Null settle would read as an empty map: the dict kind needs every matching resolve to pass a map
-        if (matched === 0 || kind === undefined || (kind === 'dict' && none)) return undefined;
+        // a Null settle would read as an empty map / list: the dict and list kinds need every matching resolve to pass one
+        if (matched === 0 || kind === undefined || ((kind === 'dict' || kind === 'list') && none)) return undefined;
         this.rustWsWatchKinds.set(call, kind);
         return kind;
     }
