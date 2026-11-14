@@ -147,7 +147,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The use sits inside the receiver of a member access (`f(x).replace(..)`): native receiver forms print the
      *  receiver text twice (`.unwrap_or_else(|| recv.clone())`), so the argument is read twice. */
     rustOwnedInReceiverChain(node: any): boolean;
-    rustOwnedUseIsFree(node: any): boolean;
+    rustOwnedUseIsFree(node: any, element?: boolean): boolean;
     /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
     rustIsImportedValueName(node: any): boolean;
     printStringLiteral(node: any): any;
@@ -359,6 +359,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNilStrStoreBox(n: any): boolean;
     private rustNilAliasMoves;
     rustNilAliasMove(rhs: any, kind: string): boolean;
+    /** mc: `x = y` from a typed `Option<..>` local of the same kind that is read again later: the typed write clones
+     *  `y` where the boxed write cloned it too (`y.clone().map(Value::from)..`), so no copy is added. Strings only: an
+     *  `Option<i64>` / `Option<f64>` source boxed as `Value::from(y)` with no clone, and ccxt's build pass clones every
+     *  bare `x = y;` alias write, so typing those would add one. */
+    rustNilLiveAliasCopy(rhs: any, kind: string): boolean;
     /** Every box before the last sits at a `this.` / `super.` argument (where the `Value` form was cloned); no free-function,
      *  `Precise`, `Math` or `new` operand, which read `&Value` and would take a copy only because of the lending. */
     rustNilStrLendSites(declaration: any): boolean;
@@ -368,7 +373,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `[ x, .. ] = <list>` as its own statement: `x` is written from a tuple slot. */
     rustNilSlotWrite(n: any): boolean;
     /** Slot hook: an `Option<String>` local takes the slot's string. */
-    printRustNilSlotWrite(element: any, read: string, strRead?: string): string | undefined;
+    printRustNilSlotWrite(element: any, read: string, strRead?: string, boolRead?: string): string | undefined;
     /** Declaration hook: `let mut x: Option<..> = None` for an empty scalar local. */
     printRustNilScalarDeclaration(declaration: any, varName: string, indent: string): string | undefined;
     /** Assignment hook: `x = <rhs>` with the right-hand side unwrapped to the local's payload. */
@@ -512,6 +517,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarReceiver(node: any): boolean;
     /** String hand-off locals boxed more than once: each box before the last lends the string. */
     private rustStrLentLocals;
+    /** md: market-field strings lent at their boxes (guarded by their printed name: `type` prints `type_var`). */
+    private rustMarketLentLocals;
     rustScalarLocalKindUncached(declaration: any): string | undefined;
     rustAnyBoolTestedLocal(declaration: any): boolean;
     private rustStrNoLend;
@@ -522,6 +529,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Every non-moving box of the string is a slot where the `Value` form cloned it (a `this.`/`super.` argument,
      *  an object-literal value, a dict write or an array element), so lending there adds no copy. */
     rustReaderLendBoxes(declaration: any, nativeKeys?: boolean): boolean;
+    /** Test tier: every non-moving box of the string is a by-value `Value` argument / element of a call (the
+     *  harness helpers take `Value`), where the `Value` form printed `x.clone()`: lending there costs that copy. */
+    rustTestLendBoxes(declaration: any): boolean;
     /** The key reads a local declared with a non-null initializer (nil-declared locals and slots keep their own rules). */
     rustInitKeyLocal(n: any): boolean;
     /** Some use of the local is a native map-key read (`okey`) or `in` test (`kin`). */
@@ -707,6 +717,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueTypedText(kind: string, expr: any): string | undefined;
     /** A venue typed string is copied out of the `Value` once: a box short of a moving last use, or a hand-on, would copy it again. */
     rustVenueTypedCostly(declaration: any, kind: string, copied: number): boolean;
+    /** A price / size argument of an order-book side's `x.store(price, size)`: the hand-written runtime
+     *  `Value::store` / `store_to_bids|asks` take `impl Into<Value>`, so a Copy number passes as-is
+     *  (`From<Option<f64>>` / `From<Option<i64>>` give the same `Value::Null` the box held). */
+    rustSideStoreArg(n: any): boolean;
     /** The bare `format!(..)` a string concat prints as (its `Value::Str(..into())` box peeled), else undefined. */
     rustScalarFormatText(node: any): string | undefined;
     /** How a use of a scalar local prints: `test` (literal/null compare), `cond` (bool condition),
@@ -812,11 +826,20 @@ export declare class RustTranspiler extends BaseTranspiler {
     printElemKeyInOp(key: any, obj: any): string | undefined;
     rustThisFieldLiteralWrite(n: any): boolean;
     rustScalarInNestedWrite(n: any): boolean;
+    /** `this.f` (one level, no element read in between). */
+    rustThisFieldTarget(node: any): boolean;
+    /** `n` is (inside) an argument of a call that lies within `root`, the call itself not being `n`. */
+    rustInsideCallArgument(n: any, root: any): boolean;
     /** A write source the local's type holds exactly: a same-kind value, a typed scalar local of the
      *  same kind, or a ternary of those (its condition printed as a bool). */
     rustScalarWriteOk(kind: string, rhs: any, depth: number): boolean;
     /** Plain `Value` argument slots: `this.`/`super.` methods without a native-typed slot, and `Precise.*`. */
     rustNilBoxSlotOk(call: any, at: number): boolean;
+    /** Test tier: a call of the harness (`exchange.m(..)` on the base `Exchange`, `testSharedMethods.m(..)`) whose
+     *  printed callee takes every argument as a by-value `Value` (no native-typed slot). */
+    rustTestHarnessSlot(call: any): boolean;
+    /** ExchangeOps methods (rust/tests/src/test_helpers.rs) whose argument is not a plain `Value`. */
+    static RUST_TEST_NATIVE_SLOT_METHODS: Set<string>;
     /** Native right-hand side of `x == <literal>` for a scalar local of `kind`; undefined when not exact. */
     rustScalarLiteralTest(kind: string, other: any): string | undefined;
     /** Equality hook: `x.is_none()`, `x.as_deref() == Some("lit")`, `n == 5`. */
@@ -890,6 +913,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustArithCall(node: any): string | undefined;
     /** `this.sum(..)` / `Math.min|max(a, b)`: a call whose own kind comes from its operands. */
     rustArithCombinator(node: any): boolean;
+    private static readonly RUST_MATH_FLOAT_OPS;
+    rustMathFloatShape(node: any): boolean;
+    rustMathFloatCall(node: any): string | undefined;
+    rustMathFloatText(node: any): string;
     rustArithCallText(kind: string, expr: any): string | undefined;
     rustScalarJoinKinds(a: string | undefined, b: string | undefined, arms?: boolean): string | undefined;
     /** Joins the initializer kind with every `x = <rhs>` write: a nullish write makes the local optional. */
@@ -1010,6 +1037,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBaseNativeStrCall(node: any): boolean;
     /** The call's own `Option<String>`, unboxed. */
     rustBaseNativeStrBareText(node: any): string;
+    private static readonly RUST_VENUE_KEPT_STR_ARMS;
+    rustVenueKeptStrArm(node: any): boolean;
     /** A `: Str` method of the table declared in the base tier, or an override of one. */
     rustBaseNativeStrMethod(node: any): boolean;
     /** Every `return` of the method's own body converts, and the body's last
@@ -1268,6 +1297,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     static rustLentMark(text: string): string;
     private static readonly RUST_BY_VALUE_CALLEE_NO_SUPER;
     static cloneByValueCallArgs(text: string, superCalls?: boolean): string;
+    /** A bare local element of a `&[..]` argument slice or a `Value::from(vec![..])` list literal is moved into the
+     *  temporary: it is cloned unless the printer marked it owned (`\u0004`: a `Copy` local or its last use). */
+    static cloneSliceElements(text: string): string;
+    private static readonly RUST_CACHE_CALL_HEADS;
+    private static readonly RUST_CACHE_CALL_HEADS_TEST;
+    /** A bare local argument of a cache / order-book call on a local (`stored.append(x)`) or a ws cache constructor
+     *  is moved into the callee: cloned unless the printer marked it owned (`\u0004`). */
+    static cloneCacheCallArgs(text: string, on: boolean, exchange: boolean): string;
+    /** `set_value` / `append_to_array` / `add_element_to_object` take the value by move: a bare local final argument
+     *  is cloned unless the printer marked it owned (`\u0004`). */
+    static cloneHelperWriteValues(text: string): string;
     private static rustBalancedClose;
     private static rustSplitTopLevel;
     printCallExpression(node: any, identation: any): string;
@@ -1923,6 +1963,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `k in x` on a typed bearer: `in_op`'s own Dict arm — a key that is not a
      *  `Str` is never a hit — with the lookup on the bare map. */
     bearerInOp(key: any, obj: any): string | undefined;
+    /** `k in m` with `k` an optional-string scalar local keyed natively (`kin`): `printElemKeyInOp` prints the
+     *  bearer's own lookup; an open key decision leaves the bearer decision uncached, like a write key. */
+    rustBearerOptKeyIn(recv: any, keyNode: any): boolean;
     /** The key half of `bearerInOp`, also used while the receiver's own bearer
      *  proof is still running (its declaration probe answers "not typed" then). */
     bearerInOpKeyText(key: any): string | undefined;
