@@ -5701,10 +5701,53 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const kind = this.rustReaderFallbackKind(fallback);
         // wd: a venue method already printed `-> Option<String>` is a string-or-Null default as it stands
-        if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && (this.rustReaderFallbackChecked(fallback) === 'string' || this.rustVenueStrCall(fallback))) ? 'ostr' : undefined;
+        if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && (this.rustReaderFallbackChecked(fallback) === 'string' || this.rustVenueStrCall(fallback) || this.rustOptionsElemKind(fallback) === 'ostr')) ? 'ostr' : undefined;
         if (intBase !== undefined) return kind === 'int' || kind === 'oint' ? 'oint' : undefined;
         if (numBase !== undefined) return kind !== undefined || this.rustReaderFallbackChecked(fallback) === 'number' ? 'onum' : undefined;
         return fresh && (kind === 'bool' || kind === 'obool' || (kind === undefined && this.rustReaderFallbackChecked(fallback) === 'boolean')) ? 'obool' : undefined;
+    }
+
+    /** zd: `this.options['k']` as a reader default, where every write of key `k` over the venue family (describe()
+     *  literals `'k': v` anywhere in the family's files, incl. request literals, and `this.options['k'] = v`) is a string
+     *  literal or `undefined`: a string-or-Null default. Any other value, a dynamic options key write, an options
+     *  reassignment or the base Exchange writing `k` poisons it. */
+    private rustOptionsElemKinds = new Map<string, string | null>();
+
+    rustOptionsElemKind(fallback): string | undefined {
+        const node: any = this.unwrapParens(fallback);
+        if (!isElementAccessExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || node.expression.name.text !== 'options' || !isStringLiteral(this.unwrapParens(node.argumentExpression))) return undefined;
+        const key = String(this.unwrapParens(node.argumentExpression).text);
+        const file = String(node.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        const at = file.lastIndexOf('/ts/src/');
+        if (at < 0 || !/^[A-Za-z_]\w*$/.test(key)) return undefined;
+        const root = file.slice(0, at) + '/ts/src';
+        const rel = file.slice(at + '/ts/src/'.length);
+        if (rel.startsWith('base/') || rel.startsWith('test/')) return undefined;
+        const cacheKey = `${root}|${rel}|${key}`;
+        if (this.rustOptionsElemKinds.has(cacheKey)) return this.rustOptionsElemKinds.get(cacheKey) ?? undefined;
+        const { familyOf } = this.rustVenueFamilies(root);
+        const family = familyOf.get(rel);
+        let kind: string | null = null;
+        if (family !== undefined) {
+            const files = [ ...familyOf.entries() ].filter(([ , f ]) => f === family).map(([ r ]) => r);
+            let ok = true; let writes = 0;
+            const base = (() => { try { return fs.readFileSync(`${root}/base/Exchange.ts`, 'utf8'); } catch (e) { return undefined; } })();
+            if (base === undefined || new RegExp(`['"]${key}['"]\\s*:`).test(base) || new RegExp(`options\\[['"]${key}['"]\\]\\s*=(?!=)`).test(base)) ok = false;
+            for (const r of files) {
+                if (!ok) break;
+                const text = fs.readFileSync(`${root}/${r}`, 'utf8');
+                if (/this\.options\s*=(?!=)/.test(text) || /this\.options\[\s*[^'"\s\]]/.test(text.replace(/this\.options\[\s*[^'"\s\]][^\]]*\]\s*(?![=\[])/g, ''))) { ok = false; break; }
+                for (const m of text.matchAll(new RegExp(`(?:['"]${key}['"]\\s*:|options\\[['"]${key}['"]\\]\\s*=(?!=))\\s*([^,}\\n]*)`, 'g'))) {
+                    writes++;
+                    const v = m[1].trim().replace(/\s*\/\/.*$/, '').replace(/[;,]\s*$/, '');
+                    if (!(v === 'undefined' || /^'[^'\\]*'$/.test(v) || /^"[^"\\]*"$/.test(v))) { ok = false; break; }
+                }
+            }
+            if (ok && writes > 0) kind = 'ostr';
+        }
+        this.rustOptionsElemKinds.set(cacheKey, kind);
+        return kind ?? undefined;
     }
 
     rustReaderFallbackKind(fallback): string | undefined {
@@ -5920,9 +5963,22 @@ export class RustTranspiler extends BaseTranspiler {
             // nor when it feeds a write to another local (ccxt passes read that write's printed source)
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
-                && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration)) return false;
+                && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration) && !this.rustScalarCacheFieldCtor(n, write)) return false;
         }
         return true;
+    }
+
+    /** zd: the size argument of `this.<field> = new ArrayCache*(limit)`: the written place is a ws cache field, not a
+     *  local, and the hand-written `::new(impl Into<Value>)` boxes an `i64` / `Option<i64>` into the `Value` the boxed
+     *  local held (`Value::Int` / `Value::Null`), so no other local's decision reads this one's type. */
+    rustScalarCacheFieldCtor(n: any, write: any): boolean {
+        const left: any = this.unwrapParens(write.left);
+        if (!isPropertyAccessExpression(left) || left.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const right: any = this.unwrapParens(write.right);
+        if (right?.kind !== SyntaxKind.NewExpression || right.arguments?.length !== 1 || this.unwrapParens(right.arguments[0]) !== n) return false;
+        const kind = this.rustScalarDecisions.get(this.rustDeclaredNode(n));
+        const form = this.rustScalarUseForms.get(n);
+        return this.rustCacheCtorLimitArg(n, kind) && (form === 'targ' || form === 'box');
     }
 
     /** vi: a `Precise.string*` result moved at its last use into an operand of a `Precise.*` chain that is the whole
@@ -7775,6 +7831,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'concat' && local.kind === 'ostr') return `${super.printIdentifier(node)}.as_deref().unwrap_or("null")`;
         if (form === 'targ' && (local.kind === 'str' || local.kind === 'ostr') && this.rustWsKeyUse(node)) return this.rustWsKeyText(node);
         if (form === 'parg' && this.rustInArrayNeedle(node)) return `&${super.printIdentifier(node)}`;
+        // zd: a cache-constructor size boxes the `Copy` integer itself, so no argument pass clones a bare name there
+        if ((form === 'box' || form === 'targ') && (local.kind === 'int' || local.kind === 'oint') && this.rustCacheCtorLimitArg(node, local.kind)) return `Value::from(${super.printIdentifier(node)})`;
         if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'parg') return super.printIdentifier(node);
         if (form === 'err') return this.rustErrMsgMoves(node, local.declaration) ? super.printIdentifier(node) : `${super.printIdentifier(node)}.clone()`;
         if (form === 'inbox') return local.kind === 'ostr' ? `Value::from(&${super.printIdentifier(node)})` : `Value::from(${super.printIdentifier(node)}.as_str())`;

@@ -8842,11 +8842,12 @@ describe('rust ws cache size locals', () => {
     test('an integer size local passes natively to the cache constructor', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'cache-ctor-limit', 'ts/src/pro/venue.ts')).content;
         // the bare size argument is cloned on the file text like any by-value cache constructor argument
-        expect(out).toContain('ArrayCache::new(limit.clone())');
+        // zd: the `Copy` integer is boxed in place (no `.clone()`)
+        expect(out).toContain('ArrayCache::new(Value::from(limit))');
         expect(out).toContain('let mut limit: i64 = ');
         expect(out).toContain('let mut ordersLimit: Option<i64> = ');
         expect(out).toContain('ArrayCacheBySymbolById::new(Value::from(ordersLimit))');
-        expect(out).toContain('ArrayCacheBySymbolById::new(ordersLimit.clone()));');
+        expect(out).not.toContain('ordersLimit.clone()');
         expect(out).not.toMatch(/let mut limit: Value/);
         expect(out).not.toMatch(/let mut ordersLimit: Value/);
     });
@@ -14781,5 +14782,36 @@ describe('ral-zg: a Dict[] row appended whole to a cache local takes Option<Dict
     test('negative: appending to the row itself keeps it Value', () => {
         const out = mk(body('entry'));
         expect(out).toMatch(/let mut entry: Value = entries\.get\(i as usize\)/);
+    });
+});
+
+describe('zd: a reader integer that sizes `this.<field> = new ArrayCache*(limit)` types (the cache field is no local)', () => {
+    test('sibling `const limit` reader locals feeding cache-field constructors print i64 and pass bare into ::new', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-zd-cachector-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base/ws'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    orders: any = undefined;\n    myTrades: any = undefined;\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k] ?? d; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/base/ws/Cache.ts'), "export class ArrayCache { constructor (maxSize: any = undefined) {} }\nexport class ArrayCacheBySymbolById extends ArrayCache {}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport { ArrayCacheBySymbolById } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    handleOrders (message: any) {\n        if (this.orders === undefined) {\n            const limit = this.safeInteger (this.options, 'ordersLimit', 1000);\n            this.orders = new ArrayCacheBySymbolById (limit);\n        }\n        if (this.myTrades === undefined) {\n            const limit = this.safeInteger (this.options, 'tradesLimit', 1000);\n            this.myTrades = new ArrayCacheBySymbolById (limit);\n        }\n        return message;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
+        expect(out).not.toMatch(/let mut limit: Value = /);
+        expect((out.match(/let mut limit: i64 = /g) ?? []).length).toBe(2);
+    });
+});
+
+describe('zd: a string reader whose default is an options element written only as string literals / undefined types', () => {
+    const mk = (optVal: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-zd-optelem-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o[k1] ?? o[k2] ?? d; }\n    describe (): any { return {}; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    describe (): any {\n        return { 'options': { 'region': " + optVal + " } };\n    }\n    req (params: Dict = {}) {\n        const request: Dict = {};\n        const region = this.safeString2 (params, 'region', 'region', this.options['region']);\n        if (region !== undefined) {\n            request['region'] = region;\n        }\n        return request;\n    }\n}\n");
+        return transpiler.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+    };
+    test('undefined / string literal writes prove Option<String>', () => {
+        expect(mk('undefined')).toMatch(/let mut region: Option<String> = /);
+        expect(mk("'eu'")).toMatch(/let mut region: Option<String> = /);
+    });
+    test('a number write anywhere poisons it (stays Value)', () => {
+        expect(mk('1')).toMatch(/let mut region: Value = /);
     });
 });
