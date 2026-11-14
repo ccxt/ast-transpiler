@@ -202,7 +202,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 
 // A by-name dispatch parameter kind (one conversion each) and return kind, from the printer's type decisions.
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
-    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'other';
+    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
 export interface RustMethodSignature {
@@ -251,6 +251,8 @@ export const rustDispatch = {
         case 'optlist': return `${arg}.into_opt_list()`;
         case 'optmarket': return `<Option<crate::types::Market> as crate::types::FromRaw>::from_raw(${arg}).as_ref()`;
         case 'optcurrency': return `<Option<crate::types::Currency> as crate::types::FromRaw>::from_raw(${arg}).as_ref()`;
+        // ral-ve: an order-book side slot wraps the boxed side marker once
+        case 'side': return `crate::pro::order_book::Side::of(args.get(${i}).cloned().unwrap_or(crate::Value::Null))`;
         default: return arg;
         }
     },
@@ -264,6 +266,10 @@ export const rustDispatch = {
         case 'value': return `args.get(${i}).cloned().unwrap_or(crate::Value::Null)`;
         case 'optmarket': return rustDispatch.arg(kind, i);
         case 'optcurrency': return rustDispatch.arg(kind, i);
+        // ral-ve: a venue url slot (`&str` / `Option<&str>`) is decoded once inside the arm
+        case 'str': return rustDispatch.arg(kind, i);
+        case 'optstr': return rustDispatch.arg(kind, i);
+        case 'side': return rustDispatch.arg(kind, i);
         default: return undefined;
         }
     },
@@ -3379,6 +3385,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustParamPrintsStrVec(param)) return 'Vec<String>';
         if (this.rustParamReadsByReference(param)) return 'impl KeyRead';
         if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param)) return 'impl Into<crate::Value>';
+        if (this.rustBookSideParam(param)) return this.rustWsBookPath(param, 'pro::order_book::Side');
         return this.rustVenueStrParamType(param) ?? 'Value';
     }
 
@@ -9526,7 +9533,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const params = node.parameters;
         const requiredParams = params.filter(p => (!p.initializer && !p.questionToken) || this.rustVenuePositional(p));
-        const printedParams = requiredParams.map(p => ({ name: this.printNode(p.name, 0), rustType: this.rustParamType(p) }));
+        const printedParams = requiredParams.map(p => ({ name: (this.rustBookSideParam(p) ? 'mut ' : '') + this.printNode(p.name, 0), rustType: this.rustParamType(p) }));
         if (requiredParams.length < params.length) printedParams.push({ name: 'optional_args', rustType: '&[Value]' });
         const returnType = this.printRustFunctionType(node);
         this.rustRecordSignature(node, name, printedParams, returnType);
@@ -9546,7 +9553,7 @@ export class RustTranspiler extends BaseTranspiler {
         'Option<f64>': 'optf64', 'Option<i64>': 'opti64', 'i64': 'i64', 'Option<Vec<String>>': 'optstrvec', 'Vec<Vec<String>>': 'strvecvec',
         'impl Into<crate::Params> + Send': 'params', 'crate::value::Dict': 'dict', 'crate::value::List': 'list',
         'Option<crate::value::Dict>': 'optdict', 'Option<crate::value::List>': 'optlist', 'Option<&crate::types::Market>': 'optmarket',
-        'Option<&crate::types::Currency>': 'optcurrency',
+        'Option<&crate::types::Currency>': 'optcurrency', 'crate::pro::order_book::Side': 'side', 'ccxt::pro::order_book::Side': 'side',
     };
 
     private static readonly RUST_DISPATCH_RETURN_KINDS: Record<string, RustDispatchReturnKind> = {
@@ -10399,8 +10406,13 @@ export class RustTranspiler extends BaseTranspiler {
         const init: any = this.rustSkipWrappers(declaration.initializer);
         if (init === undefined || !isElementAccessExpression(init)) return false;
         const symbol: any = (this.typeOfNodeIfAny(declaration.name) as any)?.getSymbol?.();
-        if (symbol === undefined || !/^(Indexed|Counted)?OrderBookSide$/.test(String(symbol.name))) return false;
         const scope = this.rustEnclosingFunction(declaration);
+        // ral-ve: an element read of any type whose every use hands it to a side parameter (which wraps it anyway)
+        if (symbol === undefined || !/^(Indexed|Counted)?OrderBookSide$/.test(String(symbol.name))) {
+            let slots = 0;
+            const handed = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => this.rustEnclosingFunction(n) === scope && this.rustBookSideArgSlot(n) && ++slots > 0);
+            return handed && slots > 0;
+        }
         let uses = 0;
         const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
             if (this.rustEnclosingFunction(n) !== scope) return false;
@@ -10416,7 +10428,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const w: any = up.parent;
                 return !(isBinaryExpression(w) && w.left === up) && !((isPropertyAccessExpression(w) || isCallExpression(w) || isElementAccessExpression(w)) && w.expression === up);
             }
-            return false;
+            return this.rustBookSideArgSlot(n);
         });
         return ok && uses > 0;
     }
@@ -10424,7 +10436,80 @@ export class RustTranspiler extends BaseTranspiler {
     rustBookSideLocalOf(node: any): boolean {
         if (node === undefined || !isIdentifier(node)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration?.kind === SyntaxKind.Parameter) return declaration.name !== node && this.rustBookSideParam(declaration);
         return declaration !== undefined && declaration.name !== node && this.rustBookSideLocal(declaration);
+    }
+
+    // ── ral-ve: order-book side parameters (rustBookSideParam / rustBookSideArgSlot / printBookSideArg) ──
+    // A required `any` parameter of a sync per-venue ws method (no base / trait counterpart, never referenced as a
+    // value) whose every body use is a side operation (`p.store (..)` / `p.storeArray (..)` statement, `p.length`,
+    // a read `p[i]`) or a hand-on to another side slot prints the `Side` handle. `Side` only forwards to the boxed
+    // marker's own operations, so wrapping any caller value (`Side::of(v)`, once, in the caller or the by-name arm)
+    // keeps behaviour; a caller's side local is handed whole.
+    private rustBookSideParams = new WeakMap<any, boolean>();
+
+    rustBookSideParam(param: any): boolean {
+        if (param?.kind !== SyntaxKind.Parameter) return false;
+        let decision = this.rustBookSideParams.get(param);
+        if (decision === undefined) {
+            this.rustBookSideParams.set(param, false); // re-entrancy guard
+            try { decision = this.rustBookSideParamUncached(param); } catch (e) { decision = false; }
+            this.rustBookSideParams.set(param, decision);
+        }
+        return decision;
+    }
+
+    rustBookSideParamUncached(param: any): boolean {
+        const method: any = param.parent;
+        if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return false;
+        if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined || param.type?.kind !== SyntaxKind.AnyKeyword) return false;
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        if (!/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(file) || this.isAsyncFunction(method)) return false;
+        if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword || m.kind === SyntaxKind.OverrideKeyword)) return false;
+        if (this.getMethodOverride(method) !== undefined || this.toSnakeCaseName(String(method.name.text)) in (this.rustVirtualDispatch ?? {})) return false;
+        if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
+        if (this.rustVenueStrCallSites(method).length === 0) return false;
+        const name = String(param.name.text);
+        let uses = 0;
+        for (const n of this.rustScopeNameNodes(method, name) as any[]) {
+            if (n === param || n === param.name || (isPropertyAccessExpression(n.parent) && n.parent.name === n)) continue;
+            if (n !== param && this.rustBindsName(n, name)) return false;
+            if (!isIdentifier(n) || this.rustDeclaredNode(n) !== param) return false;
+            uses++;
+            const up: any = n.parent;
+            if (isPropertyAccessExpression(up) && up.expression === n) {
+                const op = String(up.name.text);
+                if (op === 'length') { if (isBinaryExpression(up.parent) && up.parent.left === up) return false; continue; }
+                if ((op === 'store' || op === 'storeArray') && isCallExpression(up.parent) && up.parent.expression === up && up.parent.parent?.kind === SyntaxKind.ExpressionStatement) continue;
+                return false;
+            }
+            if (isElementAccessExpression(up) && up.expression === n) {
+                const w: any = up.parent;
+                if ((isBinaryExpression(w) && w.left === up) || ((isPropertyAccessExpression(w) || isCallExpression(w) || isElementAccessExpression(w)) && w.expression === up)) return false;
+                continue;
+            }
+            if (!this.rustBookSideArgSlot(n)) return false;
+        }
+        return uses > 0;
+    }
+
+    /** The argument lands in a side parameter slot of a `this.<m>(..)` call. */
+    rustBookSideArgSlot(n: any): boolean {
+        const call: any = n?.parent;
+        if (!isCallExpression(call) || call.expression === n || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+        const at = Array.from(call.arguments).indexOf(n);
+        const params = this.rustCalleeParams(call);
+        return at >= 0 && params !== undefined && at < params.length && this.rustBookSideParam(params[at]);
+    }
+
+    /** Argument text for a side slot: a side handle passes whole, anything else is wrapped once. */
+    printBookSideArg(arg: any, identation: number): string {
+        const inner: any = this.unwrapParens(arg);
+        const path = this.rustWsBookPath(arg, 'pro::order_book::Side');
+        // a side handle passes whole; the owned-use mark lets the clone pass move it at its last use, as for a `Value`
+        if (isIdentifier(inner) && this.rustBookSideLocalOf(inner)) return this.rustOwnedArgText(inner, super.printIdentifier(inner));
+        return `${path}::of(${this.printNode(arg, identation).trim()})`;
     }
 
     printBookSideLocal(declaration: any, indent: string, varName: string): string | undefined {
@@ -11006,7 +11091,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (sig) {
                 const watchCall = this.printWsWatchCall(node, 'self', methodName, identation); if (watchCall !== undefined) return watchCall;
                 const calleeParams = this.rustCalleeParams(node);
-                const printArg = (a, at) => this.rustMarketSlot(calleeParams, at) ? this.rustMarketSlotArgText(a, 0) : this.rustCurrencySlot(calleeParams, at) ? this.rustCurrencySlotArgText(a, 0) : this.rustVenueStrSlot(calleeParams, at) !== undefined ? this.rustVenueStrArgText(a, this.rustVenueStrSlot(calleeParams, at), 0) : this.rustNativeMapArgumentSlot(calleeParams, at) !== undefined
+                const printArg = (a, at) => calleeParams !== undefined && at < calleeParams.length && this.rustBookSideParam(calleeParams[at]) ? this.printBookSideArg(a, 0) : this.rustMarketSlot(calleeParams, at) ? this.rustMarketSlotArgText(a, 0) : this.rustCurrencySlot(calleeParams, at) ? this.rustCurrencySlotArgText(a, 0) : this.rustVenueStrSlot(calleeParams, at) !== undefined ? this.rustVenueStrArgText(a, this.rustVenueStrSlot(calleeParams, at), 0) : this.rustNativeMapArgumentSlot(calleeParams, at) !== undefined
                     ? this.rustMapArgumentText(a, 0)
                     : this.rustNativeStrVecArgumentSlot(calleeParams, at)
                         ? this.rustStrVecArgumentText(a, 0)
@@ -11231,6 +11316,7 @@ export class RustTranspiler extends BaseTranspiler {
         for (let at = node.arguments.length; at < params.length && this.rustVenuePositional(params[at]); at++) pads.push(this.rustPositionalPad(params[at]));
         return [ ...Array.from(node.arguments).map((arg, at) => {
             const venueStr = this.rustVenueStrSlot(params, at); if (venueStr !== undefined) return this.rustVenueStrArgText(arg, venueStr, identation);
+            if (at < params.length && this.rustBookSideParam(params[at])) return this.printBookSideArg(arg, identation);
             // a lent `Option<&Market>` is `Copy`: a bare one is marked so the by-value clone step leaves it
             if (this.rustMarketSlot(params, at)) return RustTranspiler.rustLentMark(this.rustMarketSlotArgText(arg, identation));
             if (this.rustCurrencySlot(params, at)) return this.rustCurrencySlotArgText(arg, identation);
@@ -18459,6 +18545,7 @@ export class RustTranspiler extends BaseTranspiler {
         let known = this.rustWsUrlLocals.get(declaration);
         if (known === undefined) {
             known = false;
+            this.rustWsUrlLocals.set(declaration, false); // re-entrancy guard
             try {
                 known = this.rustWsUrlLocalUncached(declaration);
             } catch (e) {
@@ -18478,11 +18565,21 @@ export class RustTranspiler extends BaseTranspiler {
         let uses = 0;
         const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             const call: any = n.parent;
-            if (this.rustEnclosingFunction(n) !== scope || !isCallExpression(call) || call.expression === n || call.arguments[0] !== n || !this.rustWsWatchSlot(call, 0)) return false;
+            if (this.rustEnclosingFunction(n) !== scope || !isCallExpression(call) || call.expression === n) return false;
+            // ral-ve: a per-venue `url: string` slot lends the text as the watch url slot does
+            if (!(call.arguments[0] === n && this.rustWsWatchSlot(call, 0)) && !this.rustWsUrlVenueSlot(n)) return false;
             uses++;
             return true;
         });
         return ok && uses > 0 && !this.rustWsUrlDeclTooLong(declaration);
+    }
+
+    /** ral-ve: the url local lands in a per-venue string slot (`&str` / `Option<&str>`). */
+    rustWsUrlVenueSlot(n: any): boolean {
+        const call: any = n.parent;
+        const at = Array.from(call.arguments).indexOf(n);
+        const type = at < 0 ? undefined : this.rustVenueStrSlot(this.rustCalleeParams(call), at);
+        return type === '&str' || type === 'Option<&str>';
     }
 
     /** `this.urls[k1][k2]..` (through parens / `as` casts) with literal keys: a url string, or Null when absent. */
@@ -24429,7 +24526,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (!group && file.search(/(?:^|\/)ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) < 0 && !this.rustBaseOnlyMethod(method, file)) return undefined;
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return undefined;
         // a ws core's sync by-name handler table takes only `Value` / `bool` slots
-        if (!group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method)) return undefined;
+        // ral-ve: except a `url: string` parameter every caller fills with a `this.urls[..]` read (the arm decodes it once)
+        const urlOnly = this.rustVenueUrlParam(method, param);
+        if (!group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method) && !urlOnly) return undefined;
         const hidden: any = this.getMethodOverride(method);
         if (!group && hidden !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(hidden.getSourceFile().fileName))) return undefined;
         if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return undefined;
@@ -24448,7 +24547,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (args.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return undefined;
             if (optional && args[at] === undefined) continue;
             const argType: any = args[at] === undefined ? undefined : this.typeOfNodeIfAny(args[at]);
-            if (argType === undefined || (argType.flags & (TypeFlags.Any | TypeFlags.Unknown)) !== 0) return undefined;
+            if ((argType === undefined || (argType.flags & (TypeFlags.Any | TypeFlags.Unknown)) !== 0) && !this.rustWsUrlReadIdent(args[at])) return undefined;
             if (!this.rustVenueStrSimpleArg(args[at]) && !(rustType === 'bool' && this.rustVenueNegatedArg(args[at]))) return undefined;
             if (!this.rustVenueScalarArgExact(args[at], rustType)) return undefined;
             // an arithmetic operand in the same call prints a long numeric match: keep its line short
@@ -24585,6 +24684,25 @@ export class RustTranspiler extends BaseTranspiler {
         });
     }
 
+    /** ral-ve: an identifier bound once (`const`) to a `this.urls[..]` literal-key read: a url string or Null. */
+    rustWsUrlReadIdent(arg: any): boolean {
+        const inner: any = arg === undefined ? undefined : this.unwrapParens(arg);
+        if (inner === undefined || !isIdentifier(inner)) return false;
+        const declaration: any = this.rustDeclaredNode(inner);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.name === inner || !isIdentifier(declaration.name)) return false;
+        const list: any = declaration.parent;
+        return list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1 && (list.flags & NodeFlags.Const) !== 0 && this.rustWsUrlRead(declaration.initializer);
+    }
+
+    /** ral-ve: a required `string` parameter of a per-venue ws method that every caller in its file fills with a
+     *  `this.urls[..]` read: the url of a ws client (requestId / subscriptionExistsForHash / waitForPendingUnsubscribe). */
+    rustVenueUrlParam(method: any, param: any): boolean {
+        if (param.initializer !== undefined || param.questionToken !== undefined || param.type?.kind !== SyntaxKind.StringKeyword) return false;
+        const at = Array.from(method.parameters).indexOf(param);
+        const calls = this.rustVenueStrCallSites(method);
+        return calls.length > 0 && calls.every((call: any) => this.rustWsUrlReadIdent(call.arguments[at]));
+    }
+
     /** Scalar-local kind of a per-venue string parameter read through its `Value` binding. */
     rustVenueStrParamKind(param: any): string | undefined {
         const type = this.rustVenueStrParamType(param);
@@ -24673,6 +24791,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (local !== undefined) return local;
         const inner: any = this.unwrapParens(arg);
         if (type !== '&str' && type !== 'Option<&str>') return this.rustVenueScalarArgText(arg, type, identation);
+        // ral-ve: an `Option<String>` ws url local lends its text
+        if (isIdentifier(inner) && this.rustWsUrlLocalOf(inner)) return type === '&str' ? `${super.printIdentifier(inner)}.as_deref().unwrap_or_default()` : `${super.printIdentifier(inner)}.as_deref()`;
         // an `Option<String>` string local, or a call returning one, lends its text
         const slot: any = isIdentifier(inner) ? this.rustDeclaredNode(inner) : undefined;
         const optional = isIdentifier(inner) ? this.rustScalarIdentifierKind(inner) === 'ostr' || (slot?.kind === SyntaxKind.BindingElement && slot.name !== inner && this.rustTupleSlotKind(slot) === 'str')
