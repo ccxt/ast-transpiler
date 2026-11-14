@@ -7,6 +7,7 @@ import * as path from 'path';
 
 // fixture trees used above are written to a temp dir so the suite carries no fixture files
 const rustInlineFixtures: Record<string, Record<string, string>> = {
+ "pb-dict-slots": {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Ticker { symbol: string }\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o; }\n    safeInteger (o: any, k: any): number | undefined { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        return [ request, params ];\n    }\n    handleMarketTypeAndParams (m: string, market: any = undefined, params: Dict = {}): [string, Dict] { return [ m, params ]; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Ticker } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    prepareRequest (type: Str = undefined, params: Dict = {}): [Dict, Dict] {\n        const request: Dict = {};\n        if (type !== undefined) {\n            request['type'] = type;\n        }\n        return [ request, params ];\n    }\n    prepareLoose (params: Dict = {}): [any, Dict] {\n        return [ this.hold (params), params ];\n    }\n    async fetchThing (params: Dict = {}) {\n        const [ request, query ] = this.prepareRequest ('spot', params);\n        request['limit'] = 5;\n        return this.hold (this.extend (request, query));\n    }\n    async fetchLoose (params: Dict = {}) {\n        const [ loose, query ] = this.prepareLoose (params);\n        loose['limit'] = 5;\n        return this.hold (this.extend (loose, query));\n    }\n    async fetchTicker (symbol: string, params: Dict = {}): Promise<Ticker> {\n        return { 'symbol': symbol } as any;\n    }\n    pickMethod (params: Dict = {}): [Str, Dict] {\n        return [ this.safeString (params, 'm'), params ];\n    }\n    fetchMethod (params: Dict = {}) {\n        const [ methodOption, rest ] = this.pickMethod (params);\n        let method: Str = methodOption;\n        if (method === undefined) {\n            method = 'a';\n        }\n        if (method === 'b') {\n            return this.hold (rest);\n        }\n        return 1;\n    }\n    parseRate (info: Dict): Dict {\n        return info;\n    }\n    fetchRate (response: Dict) {\n        const timestamp = this.safeInteger (response, 'time');\n        const data = this.safeList (response, 'data', []);\n        const first = this.safeDict (data, 0, {});\n        first['timestamp'] = timestamp;\n        return this.parseRate (first);\n    }\n    fetchFills (since: number = undefined, params: Dict = {}) {\n        let request: Dict = {\n            'type': 'spot',\n        };\n        let paramsUntil = params;\n        [ request, paramsUntil ] = this.handleUntilOption ('end', request, paramsUntil);\n        if (since !== undefined) {\n            request['since'] = since;\n        }\n        return this.hold (this.extend (request, paramsUntil));\n    }\n    async fetchOther (symbol: string, params: Dict = {}) {\n        const [ marketType, query ] = this.handleMarketTypeAndParams ('fetchOther', undefined, params);\n        const s = this.safeString (query, 's');\n        return await this.fetchTicker (symbol, query);\n    }\n}\n"},
  "test-tier-harness": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    hold (a: any, b: any = undefined): any { return a; }\n}\n", "ts/src/base/Precise.ts": "export class Precise {\n    static stringGt (a: string, b: string): boolean { return a > b; }\n}\n", "ts/src/test/Exchange/test.harness.ts": "import Exchange from '../../base/Exchange';\nimport { Precise } from '../../base/Precise';\nfunction testHarness (exchange: Exchange, entry: any) {\n    const price = exchange.safeString (entry, 'price');\n    if (price === undefined) {\n        return undefined;\n    }\n    exchange.hold (entry, price);\n    exchange.hold (price);\n    const cost = exchange.safeString (entry, 'cost');\n    if (cost !== undefined && Precise.stringGt (cost, '0')) {\n        return exchange.hold (cost);\n    }\n    return Precise.stringGt (cost, '1');\n}\nexport default testHarness;\n"},
  "test-tier-readers": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/test/Exchange/test.readers.ts": "import Exchange from '../../base/Exchange';\nfunction testReaders (exchange: Exchange, entry: any) {\n    const a = exchange.safeValue (entry, 'a');\n    const b = exchange.safeValue (entry, 'b');\n    const other = 'ETH/USDT';\n    return exchange.hold ([ a, b, other ]);\n}\nexport default testReaders;\n"},
  "base-predicate-flags": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    httpProxy: any = undefined;\n    socksProxy: any = undefined;\n    valueIsDefined<T> (value: T): value is NonNullable<T> {\n        return value !== undefined && value !== null;\n    }\n    hold (x: any): any { return x; }\n    proxyFlags () {\n        const isHttp = this.valueIsDefined (this.httpProxy);\n        const isSocks = this.valueIsDefined (this.socksProxy);\n        if (isHttp || isSocks) {\n            return this.hold (isHttp ? this.httpProxy : this.socksProxy);\n        }\n        return undefined;\n    }\n}\n"},
@@ -11512,5 +11513,62 @@ describe('ral-oe: ecdsa r / s and row string fields of plain Value rows', () => 
         expect(out).not.toContain('let mut r: Value');
         expect(out).toContain('let mut symbol: Option<String> = crate::value::KeyRead::key_read(&&marketResolved, "symbol").as_str().map(str::to_owned);');
         expect(out).not.toContain('let mut symbol: Value');
+    });
+});
+
+describe('rust Dict tuple slots: declared Dict slot 0, typed params slot box (ral-pb)', () => {
+    let output = '';
+    beforeAll(() => {
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTicker'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = typed.transpileRustByPath(path.join (rustFixtureRoot, 'pb-dict-slots', 'ts/src/venue.ts')).content;
+    });
+
+    test('a slot 0 the callee declares `Dict` is the shared map: copy-on-write insert, lent to extend', () => {
+        expect(output).toMatch(/let mut request: crate::value::Dict = \w+\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\)/);
+        expect(output).toContain('std::sync::Arc::make_mut(&mut request).insert("limit".into()');
+    });
+
+    test('a slot 0 declared `any` stays a Value', () => {
+        expect(output).toMatch(/let mut loose: Value = /);
+    });
+
+    test('a params slot handed to a typed unified params slot boxes the shared map (moved at the last use)', () => {
+        expect(output).toMatch(/let mut query: crate::value::Dict = \w+\.get\(1\)/);
+        expect(output).toContain('Value::Dict(query)');
+    });
+});
+
+describe('rust string tuple slots decided with their receiving local (ral-pb)', () => {
+    let output = '';
+    beforeAll(() => {
+        output = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any).transpileRustByPath(path.join (rustFixtureRoot, 'pb-dict-slots', 'ts/src/venue.ts')).content;
+    });
+    test('slot and receiving local both print Option<String>; the slot moves into the local', () => {
+        expect(output).toContain('let mut methodOption: Option<String> =');
+        expect(output).toContain('let mut method: Option<String> = methodOption;');
+        expect(output).toContain('method.is_none()');
+    });
+});
+
+describe('rust key writes on a REST safeDict result (ral-pb)', () => {
+    let output = '';
+    beforeAll(() => {
+        output = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any).transpileRustByPath(path.join (rustFixtureRoot, 'pb-dict-slots', 'ts/src/venue.ts')).content;
+    });
+    test('a defaulted safeDict row of a local list is the shared map with a copy-on-write insert', () => {
+        expect(output).toContain('let mut first: crate::value::Dict = ');
+        expect(output).toContain('std::sync::Arc::make_mut(&mut first).insert("timestamp".into()');
+    });
+});
+
+describe('rust map literal written back through handleUntilOption (ral-pb)', () => {
+    let output = '';
+    beforeAll(() => {
+        output = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any).transpileRustByPath(path.join (rustFixtureRoot, 'pb-dict-slots', 'ts/src/venue.ts')).content;
+    });
+    test('the literal moves into the call and slot 0 takes the map back', () => {
+        expect(output).toMatch(/self\.handleUntilOption\(Value::Str\("end"\.into\(\)\), Value::Dict\(request\), /);
+        expect(output).toContain('request = __destr_tmp.get(0).cloned().unwrap_or(Value::Null).into_dict()');
+        expect(output).toContain('std::sync::Arc::make_mut(&mut request).insert("since".into()');
     });
 });

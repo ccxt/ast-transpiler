@@ -2887,6 +2887,10 @@ export class RustTranspiler extends BaseTranspiler {
     /** Slot hook: an `Option<String>` local takes the slot's string. */
     printRustNilSlotWrite(element, read: string, strRead?: string, boolRead?: string): string | undefined {
         if (this.rustNilSlotDictOf(element) !== undefined) return `${super.printIdentifier(element)} = ${read}.into_dict()`;
+        if (isIdentifier(element)) {
+            const reuse: any = this.rustDeclarationOfIdentifier(element);
+            if (reuse !== undefined && reuse.name !== element && this.rustExtendReuseLocals.has(reuse) && this.rustPrintedBorrowed.has(reuse) && this.rustUntilSelfWrite(element, reuse)) return `${super.printIdentifier(element)} = ${read}.into_dict()`;
+        }
         if (isIdentifier(element) && this.rustScalarUseForms.get(element) === 'bslot' && this.rustScalarLocalOf(element)?.kind === 'bool') return `${super.printIdentifier(element)} = ${read}.as_bool() == Some(true)`;
         if (isIdentifier(element) && this.rustNilLocalOfIdentifier(element)?.kind === 'bool') return `${super.printIdentifier(element)} = ${boolRead ?? `${read}.as_bool()`}`;
         if (!isIdentifier(element) || this.rustScalarLocalOf(element)?.kind !== 'ostr' || this.rustScalarUseForms.get(element) !== 'slot') return undefined;
@@ -4047,15 +4051,15 @@ export class RustTranspiler extends BaseTranspiler {
      *  then re-checks all of them in declaration order until a whole pass changes nothing (each kept
      *  decision is then proven against the final ones); a candidate that keeps flipping stays `Value`. */
     rustScalarSolveScope(scope): void {
-        const candidates = (this.rustScopeIndex(scope.getSourceFile()).nodes as any[]).filter((n) => isVariableDeclaration(n) && isIdentifier(n.name)
-            && this.rustScalarInitShape(n.initializer) && this.rustEnclosingFunction(n) === scope);
+        const candidates = (this.rustScopeIndex(scope.getSourceFile()).nodes as any[]).filter((n) => ((isVariableDeclaration(n) && isIdentifier(n.name)
+            && this.rustScalarInitShape(n.initializer)) || (isBindingElement(n) && this.rustSlotJoinsSolve(n))) && this.rustEnclosingFunction(n) === scope);
         this.rustScalarSolving.add(scope);
         try {
             // the other typed-local rules decide first and cache, so they never see a trial kind
             for (const n of candidates) {
                 this.rustScalarDecisions.set(n, null);
                 try {
-                    this.rustSafeStringLocalIsTyped(n); this.rustStringMethodLocalInit(n);
+                    if (isVariableDeclaration(n)) { this.rustSafeStringLocalIsTyped(n); this.rustStringMethodLocalInit(n); }
                 } catch (e) {
                     // the scalar rule re-checks and refuses on its own
                 }
@@ -4089,6 +4093,14 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustScalarTry(declaration): string | null {
+        if (isBindingElement(declaration)) {
+            if (this.rustScalarSeeding) return 'ostr';
+            try {
+                return this.rustStrSlotKind(declaration, this.rustEnclosingFunction(declaration)) ?? null;
+            } catch (e) {
+                return null;
+            }
+        }
         try {
             return this.rustScalarLocalKindUncached(declaration) ?? null;
         } catch (e) {
@@ -10902,6 +10914,12 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustExactSlotKind(element: any): string | undefined {
         let decision = this.rustExactSlotDecisions.get(element);
+        // pb: a string slot copied whole into another local is a candidate of its function's scalar solve (decided with that local)
+        if (this.rustSlotJoinsSolve(element)) {
+            const scope: any = this.rustEnclosingFunction(element);
+            if (!this.rustScalarSolved.has(scope) && !this.rustScalarSolving.has(scope)) this.rustScalarSolveScope(scope);
+            return this.rustScalarDecisions.get(element) ?? undefined;
+        }
         if (decision === undefined) {
             this.rustExactSlotDecisions.set(element, null); // re-entrancy guard
             try {
@@ -13813,7 +13831,7 @@ export class RustTranspiler extends BaseTranspiler {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text) ?? this.printNilMapBox(node, text); if (optList !== undefined) return optList;
         const asLent = this.printLentAsArg(node, text); if (asLent !== undefined) return asLent;
-        const borrowedArg = this.printExtendHeadArg(node, text) ?? this.printJwtLentArg(node, text) ?? this.printLentVenueArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printUntilSelfArg(node, text) ?? this.printExtendHeadArg(node, text) ?? this.printJwtLentArg(node, text) ?? this.printLentVenueArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -15076,6 +15094,7 @@ export class RustTranspiler extends BaseTranspiler {
         let keyReads = 0;
         let keySets = 0;
         let keyWrites = 0;
+        let safeDictKeyWrites = 0;
         const keyWriteUses: any[] = [];
         let extendHeads = 0;
         let extendWrites = 0;
@@ -15132,8 +15151,14 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             if (this.rustExtendHeadUse(n)) return ++extendHeads > 0 && ++reads > 0;
+            // pb: `[ x, p ] = this.handleUntilOption (k, x, p)` on a reuse literal: the map moves in and slot 0 hands it back
+            if (extendReuse && this.rustUntilSelfWrite(n, declaration)) return ++extendWrites > 0;
+            if (extendReuse && this.rustUntilSelfArg(n, declaration)) return ++reads > 0;
             // a fresh built map written at a literal key: copy-on-write insert on the shared handle
             // (jd's untagged indexBy / groupBy / extend table admits the same write through this one mechanism)
+            // pb: a literal-key write on a REST `safeDict*` result: copy-on-write insert (`if let Some` on the optional form, which
+            // skips a missing map exactly as `add_element_to_object` skipped the `Null`)
+            if (!extendReuse && this.rustSafeDictKeyWriteOk(n, init)) return keyWriteUses.push(n) > 0 && ++safeDictKeyWrites > 0 && ++keyWrites > 0 && ++reads > 0;
             if (this.rustUntilHeadKeyWrite(n) !== undefined && (extendReuse ? this.rustExtendReuseKeyWriteOk(n, declaration) : init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) === 'dict' || this.rustBuiltMapKeyWriteOk(n, init)))) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
             const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0
                 || this.rustBuiltReturnBoxUse(n, init, extendReuse) && ++defaultedBoxes > 0 || this.rustOptReaderBoxUse(n, init) && ++optionalBoxes > 0
@@ -15209,8 +15234,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (optionalBoxes > 0 && (boxedElementUses.length !== optionalBoxes || nilDeclared || writes > 0 || from !== 'dict')) return undefined;
         // a `handle*` params slot takes a `Value`: the map boxes there (the plain form only, its map is never Null)
         if (paramsBoxes > 0 && (optional || from !== 'dict')) return undefined;
-        if ((keySets > 0 || keyWrites > 0) && (from !== 'dict' || optional || (init !== undefined && !extendReuse && this.rustInitReadsTaggedStore(init)))) return undefined;
-        if (keyWriteUses.some((n: any) => !this.rustBuiltKeyWriteLineOk(n))) return undefined;
+        const onlySafeDictWrites = keyWrites > 0 && safeDictKeyWrites === keyWrites && keySets === 0;
+        if ((keySets > 0 || keyWrites > 0) && (from !== 'dict' || (optional && !onlySafeDictWrites) || (init !== undefined && !extendReuse && this.rustInitReadsTaggedStore(init)))) return undefined;
+        if (keyWriteUses.some((n: any) => !this.rustBuiltKeyWriteLineOk(n, optional ? 30 : 0))) return undefined;
         if (extendReuse && (keySets > 0 || boxedElementUses.some((n: any) => !this.rustBoxLineOk(n)))) return undefined;
         if (init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) !== undefined && boxedElementUses.some((n: any) => !this.rustBoxLineOk(n))) return undefined;
         if (keyWrites > 0) this.rustMutableBuiltLocals.add(declaration);
@@ -15251,6 +15277,42 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private static readonly RUST_SELF_EXTEND = new Set([ 'extend' ]);
+
+    /** pb: the base `handleUntilOption (k, x, p)` of a statement `[ x, q ] = ..` writing slot 0 back into `x` (base
+     *  `handleUntilOption` returns its own `request` argument as slot 0, so the map moves through it). */
+    rustUntilSelfCall(n: any, declaration: any): any {
+        if (!this.rustNilSlotWrite(n) || n.parent.elements.indexOf(n) !== 0 || n.parent.elements.length !== 2) return undefined;
+        const call: any = this.rustSkipWrappers(n.parent.parent.right);
+        if (!this.rustBaseCallNamed(call, RustTranspiler.RUST_REQUEST_TUPLE_HELPERS) || !this.rustNativeListSource(call)) return undefined;
+        const arg: any = this.rustSkipWrappers(call.arguments[1]);
+        if (arg === undefined || !isIdentifier(arg) || !this.rustIdentifierRefersToDeclaration(arg, declaration)) return undefined;
+        const names = (x: any): boolean => (isIdentifier(x) && x.text === n.text) || (x.forEachChild(names) ?? false);
+        // the `__destr_tmp` line: the source text bounds it (the printer's own text is not consulted inside the decision)
+        if (call.arguments.some((a: any, i: number) => i !== 1 && names(a)) || String(n.parent.parent.getText()).length > 160) return undefined;
+        return call;
+    }
+
+    rustUntilSelfWrite(n: any, declaration: any): boolean {
+        return this.rustUntilSelfCall(n, declaration) !== undefined;
+    }
+
+    /** pb: `x` as the `request` operand of such a write-back call. */
+    rustUntilSelfArg(n: any, declaration: any): boolean {
+        const call: any = n.parent;
+        if (!isCallExpression(call) || call.arguments[1] !== n) return false;
+        const write: any = call.parent;
+        if (!isBinaryExpression(write) || !isArrayLiteralExpression(write.left)) return false;
+        const target: any = write.left.elements[0];
+        return target !== undefined && isIdentifier(target) && this.rustUntilSelfCall(target, declaration) === call;
+    }
+
+    /** pb: `Value::Dict(x)` for the moved request operand of a write-back `handleUntilOption`. */
+    printUntilSelfArg(node: any, text: string): string | undefined {
+        if (!isIdentifier(node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration.name === node || !this.rustExtendReuseLocals.has(declaration) || !this.rustPrintedBorrowed.has(declaration)) return undefined;
+        return this.rustUntilSelfArg(node, declaration) ? `Value::Dict(${text})` : undefined;
+    }
 
     /** `n` is the request (first) operand of the runtime free function `jwt (request, secret, ..)`. */
     rustJwtRequestSlot(call: any, n: any): boolean {
@@ -15645,7 +15707,23 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** The copy-on-write insert line (indent + `Arc::make_mut(&mut x).insert(..)`) stays within the 400-char budget. */
-    rustBuiltKeyWriteLineOk(n: any): boolean {
+    /** pb: `x['k'] = v` (statement, literal non-meta key) on a local initialised from a base `safeDict*` read of a REST-tier
+     *  (`ts/src/<venue>.ts`) local or response: no ws subscription, cache or book store, so the map carries no runtime tag. */
+    rustSafeDictKeyWriteOk(n: any, init: any): boolean {
+        const key = this.rustUntilHeadKeyWrite(n);
+        // a REST response map is parsed JSON (no `__book_id`): a book-meta key is a plain insert there, as in the runtime helper
+        if (key === undefined || key.startsWith('__')) return false;
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict(?:2|N)?$/.test(String(init.expression.name.text))) return false;
+        if (!this.rustBorrowedDictSource(init) || this.rustInitReadsTaggedStore(init)) return false;
+        if (!/(?:^|[\\/])ts[\\/]src[\\/][^\\/]+\.ts$/.test(String(n.getSourceFile?.()?.fileName ?? ''))) return false;
+        const head: any = this.rustSkipWrappers(init.arguments[0]);
+        // the read's head is a local (or one element of a local list), never a `this.` store or a field of another object
+        if (head === undefined) return false;
+        if (isElementAccessExpression(head)) return isIdentifier(head.expression);
+        return isIdentifier(head);
+    }
+
+    rustBuiltKeyWriteLineOk(n: any, extra = 0): boolean {
         const write: any = n.parent.parent;
         let depth = 0;
         for (let up: any = write; up !== undefined && !isFunctionLike(up); up = up.parent) if (isBlock(up)) depth++;
@@ -15655,7 +15733,7 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return false;
         }
-        return depth * 4 + String(n.text).length + rhs.length + 70 <= 400;
+        return depth * 4 + String(n.text).length + rhs.length + 70 + extra <= 400;
     }
 
     // ── rustNullTestedDictLocal: a base `safeDict*` result that is only tested against null ──
@@ -18837,7 +18915,10 @@ export class RustTranspiler extends BaseTranspiler {
             const pattern: any = declaration.parent;
             const owner: any = pattern?.parent;
             if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || !isVariableDeclaration(owner) || owner.name !== pattern
-                || (owner.parent as any)?.declarations?.length !== 1 || pattern.elements.indexOf(declaration) !== 1) return false;
+                || (owner.parent as any)?.declarations?.length !== 1) return false;
+            // slot 1 is the params dict; any other slot only where the callee's own tuple type declares it `Dict`
+            const at = pattern.elements.indexOf(declaration);
+            if (at !== 1 && !(at >= 0 && this.rustDeclaredDictSlot(declaration))) return false;
             if (declaration.dotDotDotToken !== undefined || declaration.initializer !== undefined || this.rustTupleSlotKind(declaration) !== undefined) return false;
             const init: any = this.rustAwaitedCall(owner.initializer);
             const callee: any = init?.expression;
@@ -19151,7 +19232,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (key === undefined || declaration === recv || !(this.rustUntilHeadSlot(declaration) || this.rustMutableDictSlot(declaration))) return undefined;
         const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
         const value = this.rustNodeIsBoolExpression(right) && this.literalKindOfNode(this.unwrapParens(right)) !== 'boolean' ? `Value::Bool(${valueText})` : valueText.trim();
-        const insert = (v: string) => `std::sync::Arc::make_mut(&mut ${name}).insert(${this.quotedStringLiteral(key)}.into(), ${v})`;
+        // pb: the optional form skips a missing map, as `add_element_to_object` skipped the `Null`
+        const insert = this.rustOptContainerLocals.has(declaration)
+            ? (v: string) => `if let Some(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${this.quotedStringLiteral(key)}.into(), ${v}); }`
+            : (v: string) => `std::sync::Arc::make_mut(&mut ${name}).insert(${this.quotedStringLiteral(key)}.into(), ${v})`;
         const reads = (n: any): boolean => (isIdentifier(n) && n.text === recv.text) || (n.forEachChild(reads) ?? false);
         if (reads(right)) return `{ let __be_tmp = ${value}; ${insert('__be_tmp')}; }`;
         const bare: any = this.unwrapParens(right);
@@ -19989,6 +20073,8 @@ export class RustTranspiler extends BaseTranspiler {
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
         if (this.rustBorrowedDictReader(up) !== undefined || this.rustLentParamsSlot(up, n) || this.rustOptionalParamsSlot(up, n)) return false;
+        // the `impl Into<crate::Params>` slot of a typed unified call takes the boxed map as it took the `Value` local
+        if (this.rustTypedParamsSlot(up, Array.from(up.arguments).indexOf(n))) return true;
         return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
     }
 
@@ -20055,6 +20141,9 @@ export class RustTranspiler extends BaseTranspiler {
         let nativeUses = 0;
         let copies = 0;
         this.rustExactSlotDecisions.set(element, 'ostr'); // uses that read the slot itself see the trial kind
+        const joined = this.rustScalarSolving.has(scope) && this.rustSlotJoinsSolve(element);
+        const previous = this.rustScalarDecisions.get(element);
+        if (joined) this.rustScalarDecisions.set(element, 'ostr');
         let ok = false;
         try {
             ok = this.rustLocalUsesAll(element, String(element.name.text), true, (n: any) => {
@@ -20069,6 +20158,8 @@ export class RustTranspiler extends BaseTranspiler {
                 const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
                 if (push !== undefined && isCallExpression(push)) return false;
                 if ((form === 'box' || form === 'xbox') && !this.rustSlotUseOutsideLoop(n, element)) return false;
+                // pb: a whole alias into a local the joint solve types `Option<String>`, at the slot's last use, moves the string
+                if (joined && this.rustScalarAliasMove(n, 'ostr', element)) { nativeUses++; return true; }
                 // a box feeding another local's write or initializer would make that local's own typing depend on this slot
                 const feeds: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(m.left)) || isVariableDeclaration(m));
                 if (feeds !== undefined && !isStatement(feeds) && (form === 'box' || form === 'xbox')) return false;
@@ -20078,9 +20169,31 @@ export class RustTranspiler extends BaseTranspiler {
             });
         } finally {
             this.rustExactSlotDecisions.set(element, null);
+            if (joined) this.rustScalarDecisions.set(element, previous);
         }
         // a slot only handed back to `Value` slots is typed when each box moves it
         return ok && (nativeUses > 0 || copies === 0) ? 'ostr' : undefined;
+    }
+
+    /** pb: a checker-string slot of a native tuple in a method, read whole as the initializer or the statement write of
+     *  another local of the same function: the slot and that local are decided together by `rustScalarSolveScope`. */
+    rustSlotJoinsSolve(element: any): boolean {
+        if (element?.kind !== SyntaxKind.BindingElement || !isIdentifier(element.name) || this.rustTestTierSource(element)) return false;
+        const owner: any = element.parent?.parent;
+        if (owner === undefined || !isVariableDeclaration(owner) || owner.initializer === undefined || !this.rustNativeListSource(owner.initializer)) return false;
+        const scope: any = this.rustEnclosingFunction(owner);
+        if (scope === undefined || isSourceFile(scope) || scope.kind !== SyntaxKind.MethodDeclaration) return false;
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(element.name)) !== 'string' || this.rustTupleSlotKind(element) !== undefined) return false;
+        let alias = false;
+        this.rustLocalUsesAll(element, String(element.name.text), false, (n: any) => {
+            let top: any = n;
+            while (isParenthesizedExpression(top.parent)) top = top.parent;
+            const up: any = top.parent;
+            if ((isVariableDeclaration(up) && up.initializer === top && isIdentifier(up.name))
+                || (isBinaryExpression(up) && up.right === top && up.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(up.left) && up.parent?.kind === SyntaxKind.ExpressionStatement)) alias = true;
+            return true;
+        });
+        return alias;
     }
 
     // ── declared dict slots ──────────────────────────────────────────────────
