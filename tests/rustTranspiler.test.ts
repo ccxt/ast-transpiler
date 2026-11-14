@@ -11629,3 +11629,30 @@ describe('ral-pe: built lists lent / moved into impl Into<Value> helper slots', 
         expect(out).toMatch(/let mut kept: Value = /);
     });
 });
+
+describe('safe scalar locals, seventh pass: nested balance / options writes', () => {
+    test('a typed string key of a nested this.balance / this.options write prints the r05 insert with its own key text', () => {
+        const dir = path.join (rustFixtureRoot, 'scalar-pf');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: any = {};\n    options: any = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeCurrencyCode (c: Str, x: any = undefined): string { return c; }\n    account (): any { return {}; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue8.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue8 extends Exchange {\n    bal (type: string, rows: any[]) {\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            const currencyId = this.safeString (row, 'a');\n            const code = this.safeCurrencyCode (currencyId);\n            const account = this.account ();\n            account['free'] = this.safeString (row, 'f');\n            if (code !== undefined) {\n                this.balance[type][code] = account;\n            }\n        }\n    }\n    opt (row: any) {\n        const kind = this.safeString (row, 'k', 'spot');\n        this.options['listenKey'][kind] = undefined;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue8.ts')).content;
+        // Option<String>: stringify_param of the boxed key is its text or "null"; a missing intermediate map writes nothing either way
+        expect(out).toContain('let mut code: Option<String> = ');
+        expect(out).toContain('if let Value::Dict(__r05d) = get_value_mut(&mut self.balance, &type_var) { std::sync::Arc::make_mut(__r05d).insert(code.as_deref().unwrap_or("null").to_string(), ');
+        expect(out).not.toContain('add_element_to_object(get_value_mut(&mut self.balance, &type_var), &code');
+        // String (literal default): the key text itself
+        expect(out).toContain('let mut kind: String = ');
+        expect(out).toContain('insert(kind.to_string(), Value::Null)');
+    });
+    test('a reader string handed whole to another initialised local at its last use moves (no copy); a nil-declared receiver keeps it Value', () => {
+        const dir = path.join (rustFixtureRoot, 'scalar-pf2');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: any = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue9.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue9 extends Exchange {\n    hash (params: any, margin: boolean) {\n        let orderType = this.safeString (this.options, 'orderType', 'orders');\n        orderType = this.safeString (params, 'orderType', orderType);\n        const prefix = orderType;\n        let marginPrefix = prefix;\n        if (margin) {\n            marginPrefix = prefix + '_cross';\n        }\n        return marginPrefix + '.x';\n    }\n    stop (params: any) {\n        const slp = this.safeString (params, 'stopLossPrice', this.safeString (params, 'triggerPrice'));\n        let stopPrice;\n        if (slp !== undefined) {\n            stopPrice = slp;\n        }\n        return stopPrice;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue9.ts')).content;
+        expect(out).toContain('let mut orderType: Option<String> = ');
+        expect(out).toContain('let mut prefix: Option<String> = orderType;');
+        expect(out).toMatch(/let mut slp: Value = /);
+    });
+});

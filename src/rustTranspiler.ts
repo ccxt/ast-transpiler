@@ -2134,6 +2134,7 @@ export class RustTranspiler extends BaseTranspiler {
             const keyStrs = keys.map((k, at) => (at < keys.length - 1 ? this.rustI64HelperKeyText(k) : undefined) ?? this.printNode(k, 0));
             for (const key of keyStrs.slice(0, -1)) acc = `get_value_mut(${acc}, &${key})`;
             const rhs = this.printNode(right, 0);
+            const nestedKeyWrite = keyStrs.length > 1 ? this.printNestedFieldKeyWrite(left, acc, ((owned) => owned.startsWith('\u0004') ? owned : RustTranspiler.cloneIfBareLocal(owned))(this.rustOwnedArgText(right, rhs.trim()))) : undefined; if (nestedKeyWrite !== undefined) return nestedKeyWrite;
             const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) ?? this.printNilMapKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
             // the helper takes the value by move: an owned bare local (`Copy`, last use) is marked, the rest cloned on the file text
             const helperCall = `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${this.rustOwnedArgText(right, rhs.trim())})`;
@@ -4204,7 +4205,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' || !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -5263,11 +5264,17 @@ export class RustTranspiler extends BaseTranspiler {
             let top: any = n;
             while (isParenthesizedExpression(top.parent) || isConditionalExpression(top.parent)) top = top.parent;
             // an element / field write `m[k] = s` boxes into a Value slot: no other local's decision reads it
+            // a bare hand-off at the local's last use moves it: the receiver decides alone, nothing is copied
+            // (never into a nil-declared receiver: those locals are another group's)
+            const target: any = isVariableDeclaration(top.parent) ? top.parent : isBinaryExpression(top.parent) && isIdentifier(top.parent.left) ? this.rustDeclaredNode(top.parent.left) : undefined;
+            const moved = top === n && this.rustLocalLastUse(n, declaration) && target !== undefined && isVariableDeclaration(target)
+                && target.initializer !== undefined && this.literalKindOfNode(target.initializer) !== 'null';
             if (isBinaryExpression(top.parent) && top.parent.right === top && top.parent.operatorToken.kind === SyntaxKind.EqualsToken
-                && !isElementAccessExpression(this.unwrapParens(top.parent.left)) && !isPropertyAccessExpression(this.unwrapParens(top.parent.left))) handed = true;
-            if (isVariableDeclaration(top.parent) && top.parent.initializer === top) handed = true;
-            // a returned string decides the method's own `-> Option<String>` return (and its dispatch arm)
-            if (isReturnStatement(top.parent)) handed = true;
+                && !isElementAccessExpression(this.unwrapParens(top.parent.left)) && !isPropertyAccessExpression(this.unwrapParens(top.parent.left)) && !moved) handed = true;
+            if (isVariableDeclaration(top.parent) && top.parent.initializer === top && !moved) handed = true;
+            // a returned string decides the method's own `-> Option<String>` return (and its dispatch arm); a method whose
+            // return the signature table already keeps typed reads the local natively
+            if (isReturnStatement(top.parent) && !(top === n && this.rustMethodTypedReturnKind(findAncestor(top.parent.parent, isFunctionLike)) !== undefined)) handed = true;
             return true;
         });
         return handed;
@@ -5665,6 +5672,10 @@ export class RustTranspiler extends BaseTranspiler {
         // (a string only where the write moves it: an earlier box would copy where the `Value` was shared)
         if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustThisFieldLiteralWrite(n)) return 'box';
         if ((kind === 'str' || kind === 'ostr') && this.rustThisFieldLiteralWrite(n) && this.rustLocalLastUse(n, this.rustDeclaredNode(n))) return 'box';
+        // the last key of a nested `this.balance|options[..][k] = v` write: printed as the ccxt r05 insert itself
+        if ((kind === 'str' || kind === 'ostr') && this.rustNestedFieldKeyUse(n)) return 'nkey';
+        // a Copy number written into a nested `this.balance|options[..]['k'] = n`: the r05 insert takes the box
+        if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustNestedFieldValueUse(n)) return 'box';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -6368,6 +6379,58 @@ export class RustTranspiler extends BaseTranspiler {
         return !(this.rustThisFieldTarget(write.left.expression) && this.rustInsideCallArgument(n, write.right));
     }
 
+    // ── nested plain-field writes (rustNestedFieldKeyUse / printNestedFieldKeyWrite) ──
+    // `this.balance[t][code] = v` prints `add_element_to_object(get_value_mut(&mut self.balance, &t), &code, v)`,
+    // which ccxt's r05 pass turns into `if let Value::Dict(__r05d) = get_value_mut(..) { make_mut(__r05d).insert(
+    // stringify_param(&code), v); }` (balance / options never carry book, subscription or cache tags). A typed key
+    // prints that insert directly with its own key text: `stringify_param` of the boxed local is the string, or
+    // `"null"` for `Null`, which `as_deref().unwrap_or("null")` gives. A missing intermediate map is `Null` from
+    // `get_value_mut`'s `or_insert`, so neither form writes.
+
+    /** `this.balance|options[..][..]` with at least one hop below the field (the r05 receiver chain). */
+    rustNestedFieldChain(access: any): boolean {
+        let base: any = access;
+        let hops = 0;
+        while (isElementAccessExpression(base)) { base = base.expression; hops++; }
+        return hops >= 2 && isPropertyAccessExpression(base) && base.expression.kind === SyntaxKind.ThisKeyword
+            && [ 'balance', 'options' ].includes(String(base.name.text)) && this.rustDictField(base) !== undefined && !this.isTestSource(access);
+    }
+
+    /** The statement write `this.F[..][n] = v` whose last key is `n` and whose other operands never name `n` or `this`
+     *  (the r05 insert keeps the helper for a value reading `self`). */
+    rustNestedFieldKeyUse(n: any): boolean {
+        const keyNode = this.rustKeyWrapped(n);
+        const access: any = keyNode.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== keyNode || !this.rustNestedFieldChain(access)) return false;
+        const write: any = access.parent;
+        if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const name = new RegExp(`\\b(?:${String(n.text)}|this)\\b`);
+        return !name.test(String(write.right.getText())) && !name.test(String(access.expression.getText()).replace(/^this\./, ''));
+    }
+
+    /** `this.F[..]['lit'] = n` (statement): the value slot of a nested plain-field insert. */
+    rustNestedFieldValueUse(n: any): boolean {
+        const write: any = n.parent;
+        if (!isBinaryExpression(write) || write.right !== n || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const access: any = write.left;
+        return isElementAccessExpression(access) && isStringLiteral(access.argumentExpression) && this.rustNestedFieldChain(access)
+            && !/\bthis\b/.test(String(access.expression.getText()).replace(/^this\./, ''));
+    }
+
+    /** Assignment hook: the r05 insert of a nested plain-field write keyed by a typed string local. */
+    printNestedFieldKeyWrite(left: any, acc: string, value: string): string | undefined {
+        const key: any = this.rustSkipWrappers(left.argumentExpression);
+        if (!isIdentifier(key) || this.rustScalarUseForms.get(key) !== 'nkey') return undefined;
+        const kind = this.rustScalarLocalOf(key)?.kind;
+        const name = super.printIdentifier(key);
+        const keyText = kind === 'str' ? `${name}.to_string()` : kind === 'ostr' ? `${name}.as_deref().unwrap_or("null").to_string()` : undefined;
+        if (keyText === undefined) return undefined;
+        const insert = `if let Value::Dict(__r05d) = ${acc} { std::sync::Arc::make_mut(__r05d).insert(${keyText}, ${value}); }`;
+        // over the line budget ccxt's r05 keeps the helper: lend the key to it (`From<Option<&str>>`, the one allocation)
+        if (insert.split('\n')[0].length + 40 > 400) return `add_element_to_object(${acc}, &Value::from(${name}${kind === 'str' ? '.as_str()' : '.as_deref()'}), ${value})`;
+        return insert;
+    }
+
     /** `this.f` (one level, no element read in between). */
     rustThisFieldTarget(node): boolean {
         return isPropertyAccessExpression(node) && (node as any).expression.kind === SyntaxKind.ThisKeyword;
@@ -6481,7 +6544,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form === 'concat' && local.kind === 'ostr') return `${super.printIdentifier(node)}.as_deref().unwrap_or("null")`;
         if (form === 'targ' && (local.kind === 'str' || local.kind === 'ostr') && this.rustWsKeyUse(node)) return this.rustWsKeyText(node);
-        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin') return super.printIdentifier(node);
+        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey') return super.printIdentifier(node);
         if (form === 'err') return `${super.printIdentifier(node)}.clone()`;
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
