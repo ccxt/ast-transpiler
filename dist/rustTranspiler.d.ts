@@ -135,6 +135,19 @@ export declare class RustTranspiler extends BaseTranspiler {
     static readonly RUST_NAME_VALUE_IMPORTS: Set<string>;
     static readonly RUST_NUMBER_CONSTANT_IMPORTS: Set<string>;
     printIdentifier(node: any): string;
+    private static readonly RUST_COPY_SCALAR_KINDS;
+    rustOwnedUseMark(node: any, text: string): string;
+    /** `x = f(.., x, ..)` as a statement, `x` named once on the right side and not captured: the old value is dead
+     *  after the call (the write replaces it before any later read, in a loop too). */
+    rustOwnedSelfWrite(node: any): boolean;
+    private static readonly RUST_HOISTING_WORDS;
+    rustUnderHoistedCall(node: any): boolean;
+    /** A by-value argument of a call (the box is handed over whole). */
+    rustOwnedHandOff(node: any): boolean;
+    /** The use sits inside the receiver of a member access (`f(x).replace(..)`): native receiver forms print the
+     *  receiver text twice (`.unwrap_or_else(|| recv.clone())`), so the argument is read twice. */
+    rustOwnedInReceiverChain(node: any): boolean;
+    rustOwnedUseIsFree(node: any): boolean;
     /** A bare read of an imported (or top-level destructured) binding: never a callee, member, key or `new` target. */
     rustIsImportedValueName(node: any): boolean;
     printStringLiteral(node: any): any;
@@ -342,6 +355,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNilScalarKind(declaration: any): string | undefined;
     rustNilScalarHandOff(declaration: any, scope: any, kind: string, boxed: any[]): boolean;
     private rustNilStrLentLocals;
+    /** ral-ld: `m[k] = x` / `m.k = x` as a statement on a plain identifier receiver (not `x` itself), one level deep. */
+    rustNilStrStoreBox(n: any): boolean;
     private rustNilAliasMoves;
     rustNilAliasMove(rhs: any, kind: string): boolean;
     /** Every box before the last sits at a `this.` / `super.` argument (where the `Value` form was cloned); no free-function,
@@ -563,6 +578,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustStrRuntimeCall(node: any, identation: any): string | undefined;
     private static readonly RUST_BASE_TYPED_METHODS;
     private static readonly RUST_BASE_TYPED_RUNTIME;
+    private static readonly RUST_BASE_TYPED_HAND_METHODS;
     private rustBaseTypedBare;
     /** The native kind a method declaration returns under the table, else undefined. */
     rustMethodTypedReturnKind(node: any): string | undefined;
@@ -685,6 +701,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueTypedDecisions;
     rustVenueTypedCall(expr: any): string | undefined;
     rustVenueTypedKindUncached(declaration: any): string | undefined;
+    /** An override whose hidden base method and every venue declaration of the name declare its own return type. */
+    rustVenueOverrideAgrees(declaration: any, hidden: any): boolean;
     /** The once-converted native text of a venue typed call (the method keeps `-> Value` and its dispatch arm). */
     rustVenueTypedText(kind: string, expr: any): string | undefined;
     /** A venue typed string is copied out of the `Value` once: a box short of a moving last use, or a hand-on, would copy it again. */
@@ -698,6 +716,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsClientCallArg(call: any, kind: string): boolean;
     rustWsClientOnlyUse(declaration: any): boolean;
     rustWsClientLastUse(node: any, declaration: any): boolean;
+    /** `rustLocalLastUse`, also admitting earlier reads in the same statement that end before the hand-off: the
+     *  condition of a ternary whose branch holds the use, and the target of `x = f(.., x, ..)` (written after). */
+    rustOwnedLastUse(node: any, declaration: any): boolean;
     rustLocalLastUse(node: any, declaration: any): boolean;
     rustWsSettleCall(call: any): boolean;
     /** `client.future|reusableFuture(hash)` on a ws handle: the hand-written method takes `hash: impl Into<Value>`. */
@@ -820,6 +841,19 @@ export declare class RustTranspiler extends BaseTranspiler {
         method: string;
         kind: string;
     } | undefined;
+    /** `padStart(N, "c")` / `padEnd(N, "c")`: a literal width (0..4096) and a one-char alphanumeric / space pad, the
+     *  helper's one-char arm, which `format!` width (counted in chars, never truncating) reproduces. */
+    rustStrPadArgs(args: any[]): {
+        width: number;
+        pad: string;
+    } | undefined;
+    /** Literal `slice(a)` / `slice(a, b)` bounds the closure-free char form handles: `b >= 0` and `a >= 0` when `b` is given. */
+    rustStrSliceBounds(args: any[]): {
+        start: number;
+        end: number | undefined;
+    } | undefined;
+    /** Native `String` text of a pad / slice over the `&str` `s`. */
+    rustStrPadSliceText(method: string, args: any[], s: string): string;
     /** `indexOf` needle as an `Option<&str>`: a non-empty literal, a typed string local, or a string-typed `Value` expression. */
     rustStrFindNeedle(node: any, syntactic: boolean): string | undefined;
     /** `s.indexOf(n)` on a typed string local: `str::find` (byte index), `-1` when absent or either side is null, as the helper. */
@@ -836,7 +870,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrPushValueText(target: any, right: any, dry: boolean): string | undefined;
     /** A string-method local returned from a method whose signature alone could print `-> Option<String>`: typing it would flip that ABI. */
     rustStrReturnSignature(fn: any, n: any): boolean;
-    /** `split`, `replaceAll`, an optional receiver's `replace`, or an `indexOf` outside a literal contains test. */
+    /** `split`, `replaceAll`, `slice`, `padStart` / `padEnd`, an optional receiver's `replace`, or an `indexOf` outside a literal contains test. */
     rustStrMethodNewUse(call: any): boolean;
     /** `Precise.string<Add|Sub|..>(..)`: a `string | undefined` result. */
     rustScalarPreciseCall(node: any): boolean;
@@ -1217,7 +1251,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     printImplicitApiCall(node: any, methodName: string, identation: number): string | undefined;
     printTranspiledVariadicCall(node: any, receiver: string, methodName: string, identation: number): string | undefined;
     rustTranspiledCalleeParams(node: any, methodName: string): any[] | undefined;
-    printArgsForCallExpression(node: any, identation: any): any;
+    printArgsForCallExpression(node: any, identation: any): string;
+    /** A bare local argument whose hand-off needs no clone (`rustOwnedUseIsFree`) carries the owned-use mark. */
+    rustOwnedArgText(arg: any, text: string): string;
     rustPrintedArgs(node: any, identation: any, params?: any[]): string[];
     private static readonly RUST_PRECISE_TRIMMED;
     printRustNamespaceCall(node: any, identation: any): string | undefined;
@@ -1228,6 +1264,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `x = y;` / `let mut x: Value = y;` on its own line moves `y`: the source is cloned so it stays usable. */
     static cloneAliasSources(text: string, commented?: boolean): string;
     /** Clone every bare-local argument of each by-value call in `text` (an argument already `x.clone()` is left). */
+    /** `\u0004` before a bare lent argument: not a bare local to `cloneByValueCallArgs`, stripped from the file text. */
+    static rustLentMark(text: string): string;
     private static readonly RUST_BY_VALUE_CALLEE_NO_SUPER;
     static cloneByValueCallArgs(text: string, superCalls?: boolean): string;
     private static rustBalancedClose;
@@ -1605,6 +1643,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     isEqualityOp(op: any): boolean;
     isLogicalOp(op: any): boolean;
     printCondition(node: any, identation: any): any;
+    /** The `&&` / `||` / `!` chain around `node` ends in a statement or ternary condition (not a value the
+     *  `-> Value` post-passes box by its `is_true` operands). */
+    rustLogicalChainIsCondition(node: any): boolean;
     /** Bool-slot text of a parenthesised native comparison/predicate, else undefined. */
     printNativeParenthesizedCondition(node: any): string | undefined;
     printTruthyArgument(expression: string): string;
@@ -1755,6 +1796,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustDictBearerDecisions;
     /** Bearers whose escapes all box a clone (the prediction-tier multi-escape rule). */
     private rustDictBearerCloned;
+    /** The single move of a literal bearer into a list element / a ws settle or send value (`rustLiteralMoveSlot`). */
+    private rustLiteralMoves;
+    /** `xs.push (m)` on an array-typed local, an element of an array literal (not a destructure target), or the
+     *  value of a ws `client.resolve|reject|send (m, ..)`: each takes the boxed `Value` by value, so the map's last
+     *  use moves into `Value::Map(m)`, exactly the shared map the boxed local handed over. */
+    rustLiteralMoveSlot(n: any): boolean;
     /** A prediction venue: `ts/src/prediction/<id>.ts` builds nested request maps in one method. */
     private static readonly RUST_PREDICTION_VENUE_FILE;
     /** The declaration behind `node` when it is a local typed as a dict bearer. */
@@ -1786,6 +1833,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  Arc-moving returned-container rule asks (`rustFreshWide`): the copying `IndexMap` bearer rules keep the old set. */
     private static readonly RUST_BUILDER_PASSTHROUGH_WIDE;
     private rustFreshWide;
+    /** A pass-through builder's own object-literal argument (`safeTicker ({ .. })`, the venue parse* shape) is a leaf:
+     *  `rustPlainDictLiteral` proves it without recursing, so it costs no proof depth (Arc-moving rule only, as the
+     *  literal-initializer leaf). A `parseWsX -> parseX -> safeX ({..})` chain then fits the depth budget. */
+    rustPassthroughLiteralLeaf(arg: any): boolean;
     rustBuilderPassthrough(method: string): boolean;
     private static readonly RUST_LIST_PASSTHROUGH;
     /** `x` read as the list argument of a base pass-through (`filterBy* (x, ..)` / `sortBy* (x, ..)`). */
@@ -1969,6 +2020,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBuiltKeyWriteLineOk(n: any): boolean;
     rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean;
     rustDictElementSource(init: any): boolean;
+    /** lf: a local spelled `Dictionary<Dict>` (`const d: Dictionary<Dict> = …`): its string-keyed values are maps. */
+    rustDictOfDictsLocal(node: any): boolean;
     rustListElementSource(init: any): boolean;
     private rustDictElementBoxes;
     /** A whole-value hand-off of a map element local: a plain `Value` argument of a `this.` method or an object literal value. */
@@ -2047,6 +2100,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBuiltReturnSourceKind(call: any): 'dict' | 'list' | undefined;
     private static readonly RUST_BUILT_BOX_RECEIVER_METHODS;
     private static readonly RUST_BUILT_HELPER_RETURNS;
+    rustDeclaredEndpointBoxUse(n: any): boolean;
+    /** `this.F` for a checker dict-shaped field (`fundingRates: Dictionary<FundingRate>`) the native insert writes
+     *  (`printNativeDictInsert`: `rustFieldStaysDict`). The insert stores whatever handle it is given, so a built map
+     *  boxes there as the field-key rule's plain fields do. */
+    rustDictShapedFieldInsert(expr: any): boolean;
     rustBuiltReturnBoxUse(n: any, init: any): boolean;
     /** A base `this.omit (x, keys)` whose head always holds a map: a literal, a built map (`extend`, ..) or a local that
      *  prints the shared map. A `Dict`-typed parameter is not enough: a list body (`Array.isArray (params)` in `sign`)
@@ -2056,6 +2114,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  proven map, or the `params` of a typed unified method. The runtime then merges map into map on every path. */
     rustDeepExtendOfMaps(call: any): boolean;
     /** Every other `let`/`const` of `name` in the enclosing function is initialised by a call of the same `this.` method. */
+    /** lf: every same-named binding in the function is itself a `const`/`let` element read of a typed `Dict[]` (or
+     *  list-of-lists) local: each block-scoped binding converts to the same Rust type (`Dict` / `List`), so ccxt
+     *  passes that key on the name read the same declared type for every sibling. */
+    rustElementSiblingsAlike(declaration: any, name: string, init: any): boolean;
     rustSiblingBindingsAlike(declaration: any, name: string, init: any): boolean;
     /** The `params` of a typed unified method, never reassigned: it arrives through `impl Into<crate::Params>` and is
      *  rebound by `get_arg(.., Value::Map({}))`, so it is always a map (`From<Value> for Params` drops a non-map, and
@@ -2066,7 +2128,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTypedParamsSlot(call: any, at: number): boolean;
     /** `'dict' | 'list' | 'api'` for a container source the local may hold by reference. */
     rustBorrowedSourceKind(call: any): 'dict' | 'list' | 'api' | undefined;
+    /** `this.m(..)` of a venue method (no override, every venue declaration of the name returning `Dict`) whose every
+     *  return is `this.safeDict (this.<field>, '<key>', {})`: the shared handle of a typed store entry, a map on every path. */
+    rustStoreDictReturnCall(call: any): boolean;
     rustDeclaredEndpointKind(call: any): 'dict' | 'list' | undefined;
+    private static readonly RUST_TEST_KEYREAD_READERS;
+    printTestReaderArg(node: any, text: string): string | undefined;
     /** `&x` for a borrowed local (or a typed container local) passed to a hand-written any-key reader. */
     printBorrowedReaderArg(node: any, text: string): string | undefined;
     /** A base `safeDict*` / `extend` / `omit` call, or an implicit-API endpoint call. */
@@ -2089,6 +2156,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTypedListField(node: any): boolean;
     printTypedListFieldRead(node: any): string | undefined;
     rustLentListUse(node: any): boolean;
+    /** `x.join("lit")` on a lent `string[]` list: each element's `Display` text (the helper's `stringify_simple` for
+     *  `Str` / `Int` / `Float` / `Bool` / `Null`) joined by the literal, with no copy of the list. */
+    printLentListJoin(node: any): string | undefined;
     /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
     printRustLentListBox(node: any, text: string): string | undefined;
     rustWatchHashListSlot(call: any, n: any): 'clone' | 'lend' | undefined;
@@ -2619,7 +2689,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustPlainReturn(expr: any, depth: number): boolean;
     /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
      *  overload set), in the calling file or the base tier. */
-    rustMethodImpl(call: any): any;
+    /** A sync base method no venue source declares and outside virtual dispatch: a base-tier `self.m()` runs this body. */
+    rustBaseOnlyCallee(declaration: any, name: string): boolean;
+    rustMethodImpl(call: any, baseOnly?: boolean): any;
     /** The expression's Rust value is always `Value::Bool(_)` or `Value::Null`. */
     rustBoolValue(expr: any, depth?: number): boolean;
     /** A base `safeBool*` with a bool default, `checkOptionBool`, or a method (calling file or
@@ -2631,6 +2703,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A local whose declaration and every write store a bool value. Locals the printer or
      *  ccxt's narrowBoolLocals may declare `bool` (bool-expression initializer) are left out. */
     rustBoolLocal(ident: any, depth: number): boolean;
+    /** A local whose declaration already prints `let mut x: bool` (e.g. from a typed base helper such as `valueIsDefined`,
+     *  ral-le): its reads are native bools, never the `Value` truthiness form (RAL-INT-33: lh's base-only return proof
+     *  made `rustBoolValue` answer true for such locals too). */
+    rustNativeBoolLocal(inner: any): boolean;
     /** `if (x)` on a local or `this.m (…)` proven a bool value: `x.as_bool() == Some(true)`
      *  is `is_true` on `Value::Bool`/`Value::Null`; bool slots only (leading-token boxing). */
     rustNativeTruthiness(node: any): string | undefined;
