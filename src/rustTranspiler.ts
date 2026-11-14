@@ -2829,8 +2829,20 @@ export class RustTranspiler extends BaseTranspiler {
         const statement: any = findAncestor(parent, (a: any) => isStatement(a));
         if (statement === undefined || isBlock(statement)) return false;
         const column = statement.getStart() - String(statement.getSourceFile().text).lastIndexOf('\n', statement.getStart()) - 1;
-        const longest = Math.max(...this.printNode(statement, 0).split('\n').map((l: string) => l.trim().length));
-        return column + longest + '.as_deref().unwrap_or("null")'.length <= 400;
+        // an operand already printed boxed (`x.clone().map(Value::from).unwrap_or(Value::Null)`) is replaced by the
+        // shorter in-place read, so that line is measured with the replacement, not with the read added on top
+        const name = isIdentifier(n) ? String(n.text) : undefined;
+        const boxed = name === undefined ? undefined : `${name}.clone().map(Value::from).unwrap_or(Value::Null)`;
+        const inPlace = `${name}.as_deref().unwrap_or("null")`;
+        const width = (l: string) => {
+            const t = l.trim();
+            if (boxed !== undefined && t.includes(boxed)) return t.split(boxed).join(inPlace).length;
+            // a statement re-printed with the read already in place is measured as printed (no double count)
+            if (name !== undefined && t.includes(inPlace)) return t.length;
+            return t.length + '.as_deref().unwrap_or("null")'.length;
+        };
+        const longest = Math.max(...this.printNode(statement, 0).split('\n').map(width));
+        return column + longest <= 400;
     }
 
     /** A write that decodes a `Value` result (a call, or a ternary over one). */
@@ -18654,7 +18666,17 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // measured on the print taken while the slot decisions are still open, which only runs longer than the final one
         // (`.clone()` operands, boxed slot reads): the typed print adds `.into_dict()` and the local's lend or box in the call
-        return width + '.into_dict()'.length + 'Value::Dict()'.length <= 400;
+        // a string nil-slot target of the same destructure prints its own unwrap there (`.as_str().map(str::to_owned)`):
+        // the landed string slot keeps its room on the line, so the `Dict` slot gives way first
+        let reserve = 0;
+        const write: any = statement.kind === SyntaxKind.ExpressionStatement ? statement.expression : undefined;
+        if (write !== undefined && isBinaryExpression(write) && isArrayLiteralExpression(write.left)) {
+            for (const el of write.left.elements as any) {
+                if (el === n || !isIdentifier(el) || !this.rustNilSlotWrite(el)) continue;
+                if (this.primitiveKindOfType(this.typeOfNodeIfAny(el)) === 'string') reserve += '.as_str().map(str::to_owned)'.length;
+            }
+        }
+        return width + reserve + '.into_dict()'.length + 'Value::Dict()'.length <= 400;
     }
 
     /** A nil-declared slot local typed as the map. */
