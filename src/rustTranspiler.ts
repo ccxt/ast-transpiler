@@ -5966,7 +5966,7 @@ export class RustTranspiler extends BaseTranspiler {
         const parent: any = n.parent;
         if (parent === undefined || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) return false;
         const declaration: any = this.rustDeclaredNode(n);
-        if (!this.rustSbTypedCallInit(declaration) || this.rustSbHasPartner(declaration)) return false;
+        if (!this.rustSbTypedCallInit(declaration) || (this.rustSbHasPartner(declaration) && !this.rustUbPtiPartnersDecided(declaration))) return false;
         // operands keep the inline runtime arithmetic / compare the `Value` local printed (a boxed operand would print the helper call)
         if (isBinaryExpression(parent) || parent.kind === SyntaxKind.ConditionalExpression || this.rustIdentifierUseIsCondition(n)) return false;
         if (isParenthesizedExpression(parent) || parent.kind === SyntaxKind.AsExpression || parent.kind === SyntaxKind.NonNullExpression) return false;
@@ -7805,6 +7805,13 @@ export class RustTranspiler extends BaseTranspiler {
         if ((lk === undefined) !== (rk === undefined) && !equality) {
             const [ typed, other, k ] = lk === undefined ? [ right, left, rk ] : [ left, right, lk ];
             const own = isIdentifier(typed) ? this.rustScalarLocalOf(typed) : undefined;
+            // ub: an `Option<i64>` parseToInt local: `None` is the helper's `Null` (false), `Some` orders as f64 like `as_f64`
+            if (k === 'oint' && own !== undefined && this.rustUbPtiPartnersDecided(own.declaration) && (this.rustScalarValueNumber(other) || this.rustUbPtiCall(other)) && this.rustUbPartnerInBucket(other)) {
+                if (dry) return '_';
+                const value = `${this.printNode(other, 0).trim()}.as_f64().unwrap_or(f64::NAN)`;
+                const test = lk === undefined ? `${value} ${sign} (__p as f64)` : `(__p as f64) ${sign} ${value}`;
+                return `matches!(${text(k, typed)}, Some(__p) if ${test})`;
+            }
             if ((k !== 'int' && k !== 'num') || own === undefined || !this.rustRdOwnInit(own.declaration) || !this.rustScalarValueNumber(other)) return undefined;
             if (dry) return '_';
             const mine = k === 'int' ? `(${text(k, typed)} as f64)` : text(k, typed);
@@ -8588,6 +8595,44 @@ export class RustTranspiler extends BaseTranspiler {
             && init.expression.expression.kind === SyntaxKind.ThisKeyword && String(init.expression.name.text) === 'parseToInt';
     }
 
+    /** ub: a `this.parseToInt(..)` call printed as its boxed `Int` / `Null` (`Value::from(self.parse_to_int(..))`). */
+    rustUbPtiCall(node: any): boolean {
+        const inner: any = this.unwrapParens(node);
+        return inner !== undefined && isCallExpression(inner) && isPropertyAccessExpression(inner.expression) && inner.expression.expression.kind === SyntaxKind.ThisKeyword
+            && String(inner.expression.name.text) === 'parseToInt' && this.printsValueExpression(inner);
+    }
+
+    /** ub: a compare partner that is not another group's local: a literal, call, element / property read, parameter,
+     *  `for` counter or another parseToInt local (reader, ternary and nil-declared locals keep their own decisions). */
+    rustUbPartnerInBucket(node: any): boolean {
+        const inner: any = this.unwrapParens(node);
+        if (inner === undefined) return false;
+        if (!isIdentifier(inner)) return !isBinaryExpression(inner) || (this.rustUbPartnerInBucket(inner.left) && this.rustUbPartnerInBucket(inner.right));
+        const d: any = this.rustDeclaredNode(inner);
+        if (d === undefined || !isVariableDeclaration(d)) return d !== undefined && isParameterDeclaration(d);
+        return this.rustTbParseToIntInit(d) || d.parent?.parent?.kind === SyntaxKind.ForStatement;
+    }
+
+    /** ub: a parseToInt local whose partner uses are all ordered / equality tests the solver prints with both operands
+     *  decided (`rustScalarCompareText`): its plain reads box like any other typed base call result. */
+    rustUbPtiPartnersDecided(declaration: any): boolean {
+        if (!this.rustTbParseToIntInit(declaration)) return false;
+        let ok = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (u: any) => {
+            let top: any = u;
+            while (isParenthesizedExpression(top.parent)) top = top.parent;
+            const up: any = top.parent;
+            if (this.rustIdentifierIsWritten(u) || (isVariableDeclaration(up) && up.initializer === top)) ok = false;
+            else if (isBinaryExpression(up) && (RustTranspiler.NATIVE_COMPARISON_OPERATORS[up.operatorToken.kind] === undefined && !this.isEqualityOp(up.operatorToken.kind)
+                && !RustTranspiler.RUST_SCALAR_VALUE_OPERAND_OPS.has(up.operatorToken.kind))) ok = false;
+            else if (isBinaryExpression(up) && !this.rustUbPartnerInBucket(up.left === top ? up.right : up.left)) ok = false;
+            else if (up?.kind === SyntaxKind.ConditionalExpression || up?.kind === SyntaxKind.PrefixUnaryExpression || up?.kind === SyntaxKind.AsExpression) ok = false;
+            else if (isCallExpression(up) && isPropertyAccessExpression(up.expression) && isIdentifier(up.expression.expression) && up.expression.expression.text === 'Math') ok = false;
+            return true;
+        });
+        return ok;
+    }
+
     /** tb: `i OP b` as the condition of `for (let i = <int>; ..; i++)` (the step is the counter's only write, so it is always
      *  an `Int`), `b` a parseToInt `i64` / `Option<i64>` local: the counter operand, else undefined. */
     rustTbCounterBound(cond: any, n: any, kind: string): any {
@@ -8611,6 +8656,9 @@ export class RustTranspiler extends BaseTranspiler {
             let top: any = u;
             while (isParenthesizedExpression(top.parent) || top.parent?.kind === SyntaxKind.AsExpression) top = top.parent;
             const up: any = top.parent;
+            // ub: an ordered / equality test against a numeric literal meets no other local
+            if (isBinaryExpression(up) && !this.rustAssignmentOpKind(up.operatorToken.kind) && (RustTranspiler.NATIVE_COMPARISON_OPERATORS[up.operatorToken.kind] !== undefined || this.isEqualityOp(up.operatorToken.kind))
+                && this.rustScalarIntLiteral(this.unwrapParens(up.left === top ? up.right : up.left)) !== undefined) return true;
             if (this.rustIdentifierIsWritten(u) || isBinaryExpression(up) || up?.kind === SyntaxKind.ConditionalExpression || up?.kind === SyntaxKind.PrefixUnaryExpression
                 || (isVariableDeclaration(up) && up.initializer === top)) partner = true;
             return true;

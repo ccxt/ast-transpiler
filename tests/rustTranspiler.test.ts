@@ -12808,3 +12808,24 @@ describe('ral-uf: a push / concat accumulator returned through `as T[]` is a bui
         expect(out).toMatch(/fn pushRet[\s\S]*?let mut result: crate::value::List = [\s\S]*?return Value::Arr\(result\);/);
     });
 });
+
+describe('ral-ub: boxed typed values remainder (round 34)', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export default class Exchange {\n    parseToInt (n: any): number { return n; }\n    safeInteger (o: any, k: any, d: any = undefined): number { return o[k]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a parseToInt local met only by literals, a for counter and a number Value is an Option<i64> compared inline', () => {
+        const out = write ('ub-pti', "    m (n: any, o: number[]) {\n        let s = '1';\n        const c = this.parseToInt (n);\n        if (c < 0) {\n            return s;\n        }\n        if (o[0] > c) {\n            return s;\n        }\n        for (let i = 1; i < c; i++) {\n            s = s + 'x';\n        }\n        return s;\n    }\n");
+        expect(out).toContain('let mut c: Option<i64> = ');
+        expect(out).toContain('matches!(c, Some(__p) if o.get(0).cloned().unwrap_or(Value::Null).as_f64().unwrap_or(f64::NAN) > (__p as f64))');
+        expect(out).not.toContain('is_less_than(');
+        expect(out).not.toContain('is_greater_than(');
+    });
+    test('negative: a parseToInt local compared with an element-read local stays a Value', () => {
+        const out = write ('ub-ptin', "    m (n: any, o: number[]) {\n        const c = this.parseToInt (n);\n        if (c < 0) {\n            return 1;\n        }\n        const k = o[1];\n        if (k < c) {\n            return 1;\n        }\n        return 0;\n    }\n");
+        expect(out).toContain('let mut c: Value = ');
+    });
+});
