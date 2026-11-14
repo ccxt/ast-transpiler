@@ -2088,7 +2088,8 @@ export class RustTranspiler extends BaseTranspiler {
                 : `let ${tmpName} = ${rhs}`;
             const slotRead = (idx: number) => (nativeList ? this.printTypedVecElementRead(tmpName, idx) : `get_value(&${tmpName}, &Value::Int(${idx}))`);
             // a string slot of a native list reads the element through `as_str` (the tuple-slot spelling, no Null box)
-            const assignments = left.elements.map((e, idx) => this.printRustNilSlotWrite(e, slotRead(idx), nativeList && /(?:^|[\\/])ts[\\/]src[\\/]pro[\\/]/.test(String(node.getSourceFile().fileName)) ? `${tmpName}.get(${idx}).and_then(Value::as_str)` : undefined) ?? `${this.printNode(e, 0)} = ${slotRead(idx)}`).join('; ');
+            const assignments = left.elements.map((e, idx) => this.printRustNilSlotWrite(e, slotRead(idx), nativeList && /(?:^|[\\/])ts[\\/]src[\\/]pro[\\/]/.test(String(node.getSourceFile().fileName)) ? `${tmpName}.get(${idx}).and_then(Value::as_str)` : undefined,
+                nativeList ? `${tmpName}.get(${idx}).and_then(Value::as_bool)` : undefined) ?? `${this.printNode(e, 0)} = ${slotRead(idx)}`).join('; ');
             return `{ ${head}; ${assignments}; }`;
         }
         const bookWrite = isAssign ? this.printWsBookMetaWrite(left, right) ?? this.printWsBookMapWrite(left, right) ?? this.printWsBookLocalWrite(left, right) : undefined; if (bookWrite !== undefined) return bookWrite;
@@ -2385,9 +2386,11 @@ export class RustTranspiler extends BaseTranspiler {
     rustNilLocalKindUncached(declaration): string | undefined {
         const list: any = declaration.parent;
         if (declaration.name?.kind !== SyntaxKind.Identifier || list?.kind !== SyntaxKind.VariableDeclarationList
-            || list.declarations.length !== 1 || (list.flags & NodeFlags.Const) !== 0
-            || list.parent?.kind !== SyntaxKind.VariableStatement) return undefined;
+            || list.declarations.length !== 1 || list.parent?.kind !== SyntaxKind.VariableStatement) return undefined;
         if (declaration.initializer !== undefined && this.literalKindOfNode(declaration.initializer) !== 'null') return undefined;
+        // a const nil local is never written: it is always None, so any payload kind is exact
+        // (its declared one when annotated, else `str`, which boxes by lending)
+        const isConst = (list.flags & NodeFlags.Const) !== 0;
         let kind: string | undefined;
         if (declaration.type !== undefined) {
             const declared = this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
@@ -2413,9 +2416,10 @@ export class RustTranspiler extends BaseTranspiler {
                 // a flag slot of `[ flag, rest ] = <call>`: the checker types the slot `boolean`
                 if (this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== 'boolean') return false;
                 // the unwrap lengthens the printed statement: it must stay within the 400-char line budget
+                // (over a proven `Vec<Value>` the slot reads `.get(i).and_then(Value::as_bool)`, shorter than the boxed read)
                 const statement: any = parent.parent;
                 const column = statement.getStart() - String(statement.getSourceFile().text).lastIndexOf('\n', statement.getStart()) - 1;
-                if (column + this.printNode(statement, 0).trim().length + '.as_bool()'.length > 400) return false;
+                if (column + this.printNode(statement, 0).trim().length + '.as_bool()'.length > 400 && !this.rustNativeListSource(statement.right)) return false;
                 writes++;
                 return join('bool');
             }
@@ -2428,7 +2432,8 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return true; // reads are checked once the kind is known
         });
-        if (!ok || writes === 0 || kind === undefined) return undefined;
+        if (isConst && ok && writes === 0) kind = kind ?? 'str';
+        if (!ok || (writes === 0 && !isConst) || kind === undefined) return undefined;
         const readsOk = this.rustLocalUsesAll(declaration, declaration.name.text, false, (n) => {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             const parent: any = n.parent;
@@ -2597,6 +2602,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'cond') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form !== 'box') return undefined;
         const name = super.printIdentifier(node);
+        if (local.kind === 'str' && (local.declaration.parent.flags & NodeFlags.Const) !== 0) return `Value::from(${name}.as_deref())`;
         // a by-value argument at its last use hands the string over
         const moved = this.rustOwnedHandOff(node) && this.rustOwnedLastUse(node, local.declaration);
         return local.kind === 'str' ? `${name}${moved ? '' : '.clone()'}.map(Value::from).unwrap_or(Value::Null)`
@@ -2673,7 +2679,8 @@ export class RustTranspiler extends BaseTranspiler {
             const parent: any = n.parent;
             if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
                 const rhs: any = this.unwrapParens(parent.right);
-                if (isIdentifier(rhs) && !this.rustNilAliasMove(rhs, kind)) ok = false;
+                // a typed source of the same kind still read after the write copies once, as its `Value` box did (mc)
+                if (isIdentifier(rhs) && !this.rustNilAliasMove(rhs, kind) && !this.rustNilLiveAliasCopy(rhs, kind)) ok = false;
                 return true;
             }
             if (kind !== 'ostr') return true;
@@ -2718,6 +2725,17 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustEnclosingFunction(source) !== this.rustEnclosingFunction(rhs) || !this.rustLocalLastUse(rhs, source)) return false;
         this.rustNilAliasMoves.add(rhs);
         return true;
+    }
+
+    /** mc: `x = y` from a typed `Option<..>` local of the same kind that is read again later: the typed write clones
+     *  `y` where the boxed write cloned it too (`y.clone().map(Value::from)..`), so no copy is added. Strings only: an
+     *  `Option<i64>` / `Option<f64>` source boxed as `Value::from(y)` with no clone, and ccxt's build pass clones every
+     *  bare `x = y;` alias write, so typing those would add one. */
+    rustNilLiveAliasCopy(rhs: any, kind: string): boolean {
+        if (kind !== 'ostr') return false;
+        const source: any = this.rustDeclarationOfIdentifier(rhs);
+        if (source === undefined || !isVariableDeclaration(source) || source.name === rhs || this.rustScalarIdentifierKind(rhs) !== kind) return false;
+        return this.rustEnclosingFunction(source) === this.rustEnclosingFunction(rhs) && !this.rustLocalLastUse(rhs, source);
     }
 
     /** Every box before the last sits at a `this.` / `super.` argument (where the `Value` form was cloned); no free-function,
@@ -2770,9 +2788,9 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** Slot hook: an `Option<String>` local takes the slot's string. */
-    printRustNilSlotWrite(element, read: string, strRead?: string): string | undefined {
+    printRustNilSlotWrite(element, read: string, strRead?: string, boolRead?: string): string | undefined {
         if (isIdentifier(element) && this.rustScalarUseForms.get(element) === 'bslot' && this.rustScalarLocalOf(element)?.kind === 'bool') return `${super.printIdentifier(element)} = ${read}.as_bool() == Some(true)`;
-        if (isIdentifier(element) && this.rustNilLocalOfIdentifier(element)?.kind === 'bool') return `${super.printIdentifier(element)} = ${read}.as_bool()`;
+        if (isIdentifier(element) && this.rustNilLocalOfIdentifier(element)?.kind === 'bool') return `${super.printIdentifier(element)} = ${boolRead ?? `${read}.as_bool()`}`;
         if (!isIdentifier(element) || this.rustScalarLocalOf(element)?.kind !== 'ostr' || this.rustScalarUseForms.get(element) !== 'slot') return undefined;
         return `${super.printIdentifier(element)} = ${strRead ?? `${read}.as_str()`}.map(str::to_owned)`;
     }
