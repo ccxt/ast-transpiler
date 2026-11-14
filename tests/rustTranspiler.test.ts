@@ -14115,3 +14115,53 @@ describe('ral-yc: typed venue results handed whole (lent to a venue Dict slot, b
         expect(re.test (out)).toBe(present);
     });
 });
+
+describe('ral-yb: length local and counter decided together (round 38)', () => {
+    const src = (body: string) => transpiler.transpileRust("class X {\n    f (xs: any[]) {\n        const r = [];\n" + body + "\n        return r;\n    }\n}").content;
+    const cases: [ string, string, string[], string[] ][] = [
+        [ 'reverse index n - i - 1 over a list length', "        const n = xs.length;\n        for (let i = 0; i < n; i++) {\n            r.push (this.safeList (xs, n - i - 1));\n        }",
+            [ 'let mut n: i64 = xs.len() as i64;', 'let mut i: i64 = 0;', 'Value::Int((((n - i)) - 1))' ], [ 'let mut n: Value', 'let mut i: Value' ] ],
+        [ 'a Value receiver length stays Value', "        const ys = this.filterBySymbolSinceLimit (xs, 's', undefined, undefined);\n        const n = ys.length;\n        for (let i = 0; i < n; i++) {\n            r.push (this.safeList (ys, n - i - 1));\n        }",
+            [ 'let mut n: Value = get_array_length(&ys);' ], [ 'let mut n: i64' ] ],
+    ];
+    test.each(cases)('%s', (_name, body, has, hasNot) => {
+        const out = src(body);
+        has.forEach((h) => expect(out).toContain(h));
+        hasNot.forEach((h) => expect(out).not.toContain(h));
+    });
+});
+
+describe('ral-yb: parseToInt nonce plus an always-Int counter (round 38)', () => {
+    test('nonce + i over Option<i64> and the counter prints the Option sum, the counter an i64', () => {
+        const dir = path.join (rustFixtureRoot, 'yb-nonce-counter');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export default class Exchange {\n    numberToString (n: any): string { return undefined; }\n    parseToInt (number: any): number {\n        const s = this.numberToString (number) as string;\n        return parseInt (s);\n    }\n    milliseconds (): number { return 0; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    req (n: any, s: string) { return { 'n': n, 's': s }; }\n    many (orders: any[]) {\n        const nonce = this.parseToInt (this.milliseconds ());\n        const r = [];\n        for (let i = 0; i < orders.length; i++) {\n            const q = this.req (nonce + i, 'x');\n            r.push (q);\n        }\n        return r;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut nonce: Option<i64> = ');
+        expect(out).toContain('let mut i: i64 = 0;');
+        expect(out).toContain('Value::from((if let Some(__l) = nonce { Some(__l + i) } else { None }))');
+    });
+});
+
+describe('ral-yb: counter-indexed bind not followed by a write-back mutation (round 38)', () => {
+    const fn = (body: string) => transpiler.transpileRust("class X {\n    f (p: any) {\n        const r = [];\n        const xs = this.safeValue (p, 'x');\n        for (let i = 0; i < xs.length; i++) {\n" + body + "\n        }\n        return r;\n    }\n}").content;
+    const cases: [ string, string, string[], string[] ][] = [
+        [ 'next statement is an if reassigning the bind: the key boxes the i64 counter', "            let x = xs[i];\n            if (x['a'] === undefined) { x = this.safeDict (x, 'b'); }\n            r.push (x);", [ 'let mut i: i64 = 0;', 'get_value(&xs, &Value::Int(i))' ], [ 'let mut i: Value' ] ],
+        [ 'next statement writes into the bind: the counter stays Value for the write-back pass', "            const x = xs[i];\n            x['a'] = 1;\n            r.push (x);", [ 'let mut i: Value' ], [ 'let mut i: i64' ] ],
+    ];
+    test.each(cases)('%s', (_name, body, has, hasNot) => {
+        const out = fn(body);
+        has.forEach((h) => expect(out).toContain(h));
+        hasNot.forEach((h) => expect(out).not.toContain(h));
+    });
+});
+
+describe('ral-yb: !x of a bool local in a value slot (round 38)', () => {
+    test('a literal-seeded flag read as !flag in a map literal is a bool, boxed Value::Bool(!flag)', () => {
+        const out = transpiler.transpileRust("class X {\n    a (m: any) {\n        let swap = false;\n        if (m['t'] === 'swap') {\n            swap = true;\n        }\n        const r = { 'contract': !swap, 'swap': swap };\n        return r;\n    }\n}").content;
+        expect(out).toContain('let mut swap: bool = false;');
+        expect(out).toContain('m.insert("contract".to_string(), Value::Bool(!swap));');
+        expect(out).not.toContain('!is_true(&swap)');
+    });
+});
