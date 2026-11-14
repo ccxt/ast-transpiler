@@ -14413,3 +14413,39 @@ describe('yi: option-helper tuple slots', () => {
         expect(out).toContain('let mut perRequest: Value = ');
     });
 });
+
+describe('ye: resolve proof for literal-map, cache-field and wildcard-hash resolves', () => {
+    // one venue with a `watchT` awaiting 'ticker:' + symbol; `handlers` are the class's resolve sites
+    const base = "export interface Dict { [key: string]: any }\nexport interface Dictionary<T> { [key: string]: T }\nexport interface Ticker { symbol: string; info: any }\nexport default class Exchange {\n    balance: Dict = {};\n    tickers: Dictionary<Ticker> = {};\n    other: any = {};\n    safeString (o: any, k: any, d: any = undefined): any { return o[k]; }\n    extend (...args: any[]): any { return Object.assign ({}, ...args); }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    cleanUnsubscription (client: any, subHash: any, unsubHash: any) { client.resolve (true, unsubHash); }\n}\n";
+    const mk = (handlers: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-ye-'));
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Ticker } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    async watchT (symbol: string) {\n        const ticker = await this.watch ('u', 'ticker:' + symbol);\n        const result: any = {};\n        result[this.safeString (ticker, 'symbol')] = ticker;\n        return result;\n    }\n" + handlers + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
+    };
+    const dictLocal = /let mut ticker: crate::value::Dict = self\.watch\(/;
+    const valueLocal = /let mut ticker: Value = self\.watch\(/;
+    const tk = "    handleTicker (client: any, message: Dict) {\n        const symbol: string = this.safeString (message, 's');\n";
+    const cases: Array<[ string, string, RegExp ]> = [
+        // (1) a map literal is a Dict resolve; negative: a list literal is not
+        [ 'map literal', tk + "        client.resolve ({ 'symbol': symbol }, 'ticker:' + symbol);\n    }\n", dictLocal ],
+        [ 'negative: list literal', tk + "        client.resolve ([ symbol ], 'ticker:' + symbol);\n    }\n", valueLocal ],
+        // (2) `this.tickers[k]` right after `this.tickers[k] = <Ticker>`; negative: an `any` field
+        [ 'cache field read after a typed write', tk + "        const parsed: Ticker = { 'symbol': symbol, 'info': message } as Ticker;\n        this.tickers[symbol] = parsed;\n        client.resolve (this.tickers[symbol], 'ticker:' + symbol);\n    }\n", dictLocal ],
+        [ 'negative: any field read', tk + "        this.other[symbol] = message;\n        client.resolve (this.other[symbol], 'ticker:' + symbol);\n    }\n", valueLocal ],
+        // (3) wildcard hashes: a `true` under a different literal prefix does not poison the proof; under a matching one it does
+        [ 'bool under another prefix', tk + "        client.resolve ({ 'symbol': symbol }, 'ticker:' + symbol);\n    }\n    handleAuth (client: any, message: Dict) {\n        client.resolve (true, 'auth:' + this.safeString (message, 'id'));\n    }\n", dictLocal ],
+        [ 'negative: bool under a matching prefix', tk + "        client.resolve ({ 'symbol': symbol }, 'ticker:' + symbol);\n    }\n    handleAuth (client: any, message: Dict) {\n        client.resolve (true, 'ticker:' + this.safeString (message, 'id'));\n    }\n", valueLocal ],
+        // (4) cleanUnsubscription reads its hash per caller; negative: a caller passing a wildcard
+        [ 'cleanUnsubscription hash per caller', tk + "        client.resolve ({ 'symbol': symbol }, 'ticker:' + symbol);\n    }\n    unwatch (client: any, symbol: string) {\n        this.unsub (client, 'ticker:' + symbol, 'unsubscribe:ticker:' + symbol);\n    }\n    unsub (client: any, sub: string, unsub: string) {\n        this.cleanUnsubscription (client, sub, unsub);\n    }\n", dictLocal ],
+        [ 'negative: cleanUnsubscription under a wildcard caller', tk + "        client.resolve ({ 'symbol': symbol }, 'ticker:' + symbol);\n    }\n    unwatch (client: any, message: Dict) {\n        this.unsub (client, 'x', this.safeString (message, 'h'));\n    }\n    unsub (client: any, sub: string, unsub: string) {\n        this.cleanUnsubscription (client, sub, unsub);\n    }\n", valueLocal ],
+    ];
+    for (const [ name, handlers, want ] of cases) {
+        test(name, () => {
+            expect(mk(handlers)).toMatch(want);
+        });
+    }
+});

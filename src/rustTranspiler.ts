@@ -20631,7 +20631,15 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.PlusToken) return cross(this.rustWsHashPatterns(n.left, depth + 1, seen), this.rustWsHashPatterns(n.right, depth + 1, seen));
         if (isConditionalExpression(n)) return [ ...this.rustWsHashPatterns(n.whenTrue, depth + 1, seen), ...this.rustWsHashPatterns(n.whenFalse, depth + 1, seen) ].slice(0, 16);
-        if (isCallExpression(n)) return this.rustWsReturnPatterns(n, depth, seen) ?? any;
+        if (isCallExpression(n)) {
+            // ral-ye: `this.safeString (list, i, d)` reads an element of a hash list (or its literal default)
+            if (isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword && String(n.expression.name.text) === 'safeString'
+                && n.arguments.length >= 2 && n.arguments.length <= 3 && !isStringLiteralLikeNode(n.arguments[1]) && (n.arguments[2] === undefined || isStringLiteralLikeNode(n.arguments[2]))) {
+                const list = this.rustWsHashListPatterns(n.arguments[0], 1);
+                if (list !== undefined && list.length > 0) return n.arguments[2] === undefined ? list : [ ...list, [ String(n.arguments[2].text) ] ];
+            }
+            return this.rustWsReturnPatterns(n, depth, seen) ?? any;
+        }
         if (!isIdentifier(n)) return any;
         const declaration: any = this.rustDeclarationOfIdentifier(n);
         const bound = declaration === undefined ? undefined : this.rustWsHashEnv?.get(declaration);
@@ -20785,6 +20793,10 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustWsCacheLocal(declaration) !== undefined) return 'cache';
             // ral-xe: a handler local printed as the shared map (`let mut x: crate::value::Dict = ..into_dict()`) resolves `Value::Dict`
             if (declaration !== undefined && isVariableDeclaration(declaration) && !this.rustLocalReassigned(declaration) && this.rustBorrowedLocalKind(declaration) === 'dict') return 'dict';
+        }
+        if (this.rustWsCacheFieldDictRead(n)) return 'dict';
+        if (isIdentifier(n)) {
+            const declaration: any = this.rustDeclarationOfIdentifier(n);
             // a local left boxed whose only write is its book / cache source still holds that kind (or nothing)
             if (declaration !== undefined && isVariableDeclaration(declaration) && isIdentifier(declaration.name) && declaration.initializer !== undefined
                 && !this.rustLocalReassigned(declaration)) {
@@ -20796,6 +20808,58 @@ export class RustTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    /** ral-ye: a read of a plain base cache field the class keeps as a map, typed by the field's declaration:
+     *  `this.F` whose declared type is a map (`balance: Dict`, `tickers: Dictionary<Ticker>`), or `this.F[k]` right
+     *  after a statement of the same block (or an enclosing one) wrote `this.F[k] = v` with v a map (a declared record /
+     *  map type, a map-kinded resolve or `this.extend (..)`), the key a literal or an unreassigned local. */
+    rustWsCacheFieldDictRead(n: any): boolean {
+        const field = (e: any): boolean => {
+            e = this.rustStripWrappers(e);
+            return isPropertyAccessExpression(e) && e.expression.kind === SyntaxKind.ThisKeyword && isIdentifier(e.name)
+                && RustTranspiler.RUST_PLAIN_DICT_FIELDS.has(String(e.name.text)) && this.rustFieldStaysDict(e, String(e.name.text));
+        };
+        const mapType = (t: any): boolean => {
+            if (t === undefined || (t.flags & TypeFlags.Any)) return false;
+            if ((t.flags & TypeFlags.Union) && (typeParts(t) ?? []).some((p: any) => p.flags & (TypeFlags.Undefined | TypeFlags.Null | TypeFlags.Void | TypeFlags.Any))) return false;
+            return !(t.flags & (TypeFlags.Undefined | TypeFlags.Null | TypeFlags.Void)) && this.rustWriteDictShape(t);
+        };
+        if (field(n)) return mapType(this.typeOfNodeIfAny(n));
+        if (!isElementAccessExpression(n) || !field(n.expression)) return false;
+        const key: any = this.rustStripWrappers(n.argumentExpression);
+        if (!isStringLiteralLikeNode(key)) {
+            const d: any = isIdentifier(key) ? this.rustDeclarationOfIdentifier(key) : undefined;
+            if (d === undefined || this.rustLocalReassigned(d)) return false;
+        }
+        const keyText = String(key.getText());
+        const fieldName = String(this.rustStripWrappers(n.expression).name.text);
+        const isWrite = (s: any): any => {
+            const e: any = s?.kind === SyntaxKind.ExpressionStatement ? this.rustStripWrappers(s.expression) : undefined;
+            if (e === undefined || !isBinaryExpression(e) || e.operatorToken.kind !== SyntaxKind.EqualsToken) return undefined;
+            const l: any = this.rustStripWrappers(e.left);
+            if (l === undefined || !isElementAccessExpression(l) || !field(l.expression) || String(this.rustStripWrappers(l.expression).name.text) !== fieldName) return undefined;
+            return String(this.rustStripWrappers(l.argumentExpression).getText()) === keyText ? e.right : null;
+        };
+        const mapValue = (v: any): boolean => {
+            const x: any = this.rustStripWrappers(v);
+            if (x === undefined) return false;
+            return mapType(this.typeOfNodeIfAny(x)) || this.rustWsResolvedMap(x, 0) || (isIdentifier(x) && this.rustWsResolvedKind(x) === 'dict');
+        };
+        // the nearest earlier statement that writes the field (any key) must write this key with a map
+        for (let s: any = findAncestor(n, isStatement); s !== undefined && !isFunctionLike(s); s = s.parent) {
+            const list: any[] | undefined = isBlock(s.parent) ? Array.from(s.parent.statements) : undefined;
+            if (list === undefined) continue;
+            for (let i = list.indexOf(s) - 1; i >= 0; i--) {
+                const v = isWrite(list[i]);
+                if (v === null) return false;
+                if (v !== undefined) return mapValue(v);
+                // any other statement that mentions the field or rebinds the key ends the search
+                const text = String(list[i].getText());
+                if (new RegExp(`\\bthis\\.${fieldName}\\b`).test(text) || (!isStringLiteralLikeNode(key) && new RegExp(`\\b${keyText}\\s*=[^=]`).test(text))) return false;
+            }
+        }
+        return false;
+    }
+
     // ral-we: base record builders that answer `this.extend (..)` (a fresh map) on every path
     private static readonly RUST_WS_MAP_RECORD_BUILDERS = new Set([ 'safeTicker' ]);
 
@@ -20804,12 +20868,17 @@ export class RustTranspiler extends BaseTranspiler {
     rustWsResolvedMap(x: any, depth: number): boolean {
         const n: any = this.rustStripWrappers(x);
         if (n === undefined || depth > 3) return false;
+        // ral-ye: a map literal is a fresh map
+        if (isObjectLiteralExpression(n)) return true;
         if (isIdentifier(n)) {
             const d: any = this.rustDeclarationOfIdentifier(n);
             if (d === undefined || !isVariableDeclaration(d) || !isIdentifier(d.name) || d.initializer === undefined || this.rustLocalReassigned(d)) return false;
             return (d.parent as any)?.kind === SyntaxKind.VariableDeclarationList && (d.parent as any).declarations.length === 1 && this.rustWsResolvedMap(d.initializer, depth + 1);
         }
         if (!isCallExpression(n) || !isPropertyAccessExpression(n.expression) || n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        // ral-ye: the base generic `extend` (`Object.assign ({}, ..)`) and `indexBy` (default `out = {}`) build a fresh map
+        const callee = String(n.expression.name.text);
+        if ((callee === 'extend' || (callee === 'indexBy' && n.arguments.length === 2)) && RustTranspiler.RUST_BASE_TIER_FILE.test(String(this.rustScalarCallee(n)?.getSourceFile?.()?.fileName ?? ''))) return true;
         const declaration: any = this.rustScalarCallee(n);
         if (declaration === undefined || !isMethodDeclaration(declaration) || declaration.body === undefined) return false;
         const file = String(declaration.getSourceFile?.()?.fileName ?? '');
@@ -20865,7 +20934,8 @@ export class RustTranspiler extends BaseTranspiler {
         const nothing = (x: any) => x === undefined || this.rustStripWrappers(x)?.kind === SyntaxKind.UndefinedKeyword || (isIdentifier(this.rustStripWrappers(x)) && this.rustStripWrappers(x).text === 'undefined');
         const kindOf = (x: any) => (nothing(x) ? 'none' : (this.rustWsResolvedKind(x) ?? 'other'));
         const add = (hash: any, x: any, kind?: string, site?: any) => {
-            const sites = kind === undefined && site !== undefined ? this.rustWsHelperCallSites(cls, site, [ hash, x ]) : undefined;
+            // ral-ye: a fixed-kind resolve (cleanUnsubscription's `true`) reads its hash per caller too
+            const sites = site !== undefined ? this.rustWsHelperCallSites(cls, site, [ hash, x ]) : undefined;
             if (sites === undefined) {
                 table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), kind: kind ?? kindOf(x) });
                 return;
@@ -20876,7 +20946,7 @@ export class RustTranspiler extends BaseTranspiler {
                 this.rustWsHashEnv = env;
                 try {
                     const bound = (e: any) => { const d: any = e !== undefined && isIdentifier(this.rustStripWrappers(e)) ? this.rustDeclarationOfIdentifier(this.rustStripWrappers(e)) : undefined; return d !== undefined && env.has(d) ? env.get(d)!.arg : e; };
-                    table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), kind: kindOf(bound(x)) });
+                    table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), kind: kind ?? kindOf(bound(x)) });
                 } finally {
                     this.rustWsHashEnv = save;
                 }
@@ -20887,7 +20957,7 @@ export class RustTranspiler extends BaseTranspiler {
             const name = String(n.expression.name.text);
             const recv: any = this.rustStripWrappers(n.expression.expression);
             if (recv.kind === SyntaxKind.ThisKeyword) {
-                if (name === 'cleanUnsubscription') add(n.arguments[2] ?? null, undefined, 'other');
+                if (name === 'cleanUnsubscription') add(n.arguments[2] ?? null, undefined, 'other', n);
                 else if (name === 'loadOrderBook') add(n.arguments[1] ?? null, undefined, 'book');
                 else if (name === 'spawn' || name === 'delay') {
                     const target: any = this.rustStripWrappers(n.arguments[name === 'delay' ? 1 : 0]);
@@ -21132,6 +21202,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (isElementAccessExpression(up) && up.expression === n && !this.isNativeWriteTargetBase(up) && !isDeleteExpression(up.parent)) continue;
             if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n) continue;
             if (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken) continue;
+            // ral-ye: `this.safeString (p, i, ..)` reads one element
+            if (isCallExpression(up) && up.arguments[0] === n && isPropertyAccessExpression(up.expression) && up.expression.expression.kind === SyntaxKind.ThisKeyword
+                && String(up.expression.name.text) === 'safeString') continue;
             // `(x === undefined) ? p : x` style picks read it only
             if (isConditionalExpression(up) && up.condition !== n) continue;
             return false;
