@@ -11572,3 +11572,28 @@ describe('rust map literal written back through handleUntilOption (ral-pb)', () 
         expect(output).toContain('std::sync::Arc::make_mut(&mut request).insert("since".into()');
     });
 });
+
+describe('ral-pe: built lists lent / moved into impl Into<Value> helper slots', () => {
+    let out: string;
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-pe-lists');
+        fs.mkdirSync (path.join (dir, 'ts/src/base/functions'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/functions/generic.ts'), "// @ts-nocheck\nconst inArray = (needle: any, haystack: any[]): boolean => haystack.includes (needle);\nexport { inArray };\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "import { inArray } from './functions/generic.js';\nexport interface Dict { [key: string]: any }\nexport default class Exchange {\n    inArray = inArray;\n    hold (x: any): any { return x; }\n    arrayConcat (a: any[], b: any[]): any[] { return a.concat (b); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    isFiat (code: any) {\n        const fiats = [ 'USD', 'EUR' ];\n        return this.inArray (code, fiats);\n    }\n    joinAll (pages: any[]) {\n        let result: any[] = [];\n        for (let i = 0; i < pages.length; i++) {\n            result = this.arrayConcat (result, pages[i]);\n        }\n        return result;\n    }\n    keep (pages: any[]) {\n        const kept = [ 'a' ];\n        const joined = this.arrayConcat (kept, pages);\n        return this.hold ([ joined, kept ]);\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('an inArray haystack list is lent', () => {
+        expect(out).toContain('let mut fiats: crate::value::List = ');
+        expect(out).toMatch(/inArray\([^;]*, &fiats\)/);
+    });
+    test('an arrayConcat accumulator moves into its own rewrite and its return, with no clone in the loop', () => {
+        expect(out).toContain('let mut result: crate::value::List = ');
+        expect(out).toMatch(/result = self\.arrayConcat\(Value::Arr\(result\), [^;]*\)\.into_list\(\);/);
+        expect(out).toContain('return Value::Arr(result);');
+        expect(out).not.toMatch(/Value::Arr\(result\.clone\(\)\)/);
+    });
+    test('negative: a list also boxed into an array element stays Value', () => {
+        expect(out).toMatch(/let mut kept: Value = /);
+    });
+});

@@ -18548,6 +18548,15 @@ export class RustTranspiler extends BaseTranspiler {
                 handOffs++;
                 return true;
             }
+            // base `inArray (needle, x)` / `arrayConcat (a, b)` and a ws cache `stored.append (x)` take `impl Into<Value>`:
+            // lent `&x`, moved at the last use (`arrayConcat` also where its result is written back to the local)
+            const lentSlot = this.rustBuiltListLentHelperSlot(up, n);
+            if (lentSlot !== undefined) {
+                const move = lentSlot !== 'inArray' && (this.rustLocalLastUse(n, declaration) || (lentSlot === 'arrayConcat' && this.rustBuiltListSelfWriteArg(n, name)));
+                boxes.push([n, move ? 'move' : 'lend']);
+                handOffs++;
+                return true;
+            }
             // `Promise.all(x)` reads its operand once: the list moves into the box at its last use
             if (this.rustBuiltListPromiseAllOperand(up, n)) {
                 if (!this.rustLocalLastUse(n, declaration) || !short(n)) return false;
@@ -18565,11 +18574,29 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return false;
         });
-        // a list with no native use is typed only when every use is a ws settle / Promise.all hand-off that moves or lends it
-        if (!safe || (natives === 0 && (handOffs === 0 || handOffs !== boxes.length || boxes.some(([, form]) => form === 'clone')))) return false;
+        // a list with no native use is typed only when every use is a hand-off that moves or lends it (a `return x` move included)
+        if (!safe || (natives === 0 && (handOffs === 0 || handOffs + boxes.filter(([b]) => isReturnStatement(b.parent)).length !== boxes.length || boxes.some(([, form]) => form === 'clone')))) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         this.rustBuiltLists.add(declaration);
         return true;
+    }
+
+    /** `this.inArray (needle, x)` (haystack), `this.arrayConcat (a, b)` (either operand) on the base helpers, or the row of a
+     *  `stored.append (x)` statement on a ws cache local: hand-written slots taking `impl Into<Value>`. */
+    rustBuiltListLentHelperSlot(call: any, n: any): 'inArray' | 'arrayConcat' | 'append' | undefined {
+        if (!isCallExpression(call) || call.expression === n || !isPropertyAccessExpression(call.expression) || this.rustTestTierSource(call)) return undefined;
+        const callee: any = call.expression;
+        const method = String(callee.name.text);
+        const at = Array.from(call.arguments).indexOf(n);
+        if (call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return undefined;
+        if (callee.expression.kind === SyntaxKind.ThisKeyword) {
+            if (method === 'inArray' && at === 1 && call.arguments.length === 2 && this.rustCalleeIsRuntimeBase(call)) return 'inArray';
+            if (method === 'arrayConcat' && (at === 0 || at === 1) && call.arguments.length === 2 && this.rustAlwaysListProducer(call)) return 'arrayConcat';
+            return undefined;
+        }
+        if (method === 'append' && at === 0 && call.arguments.length === 1 && call.parent?.kind === SyntaxKind.ExpressionStatement
+            && isIdentifier(callee.expression) && this.rustWsCacheMethodReceiver(callee.expression)) return 'append';
+        return undefined;
     }
 
     /** `Promise.all(x)` with `x` its only argument (printed `promise_all(&x)`). */
