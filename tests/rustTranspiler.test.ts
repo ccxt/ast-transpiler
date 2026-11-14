@@ -6820,7 +6820,7 @@ describe('rust typed unified-method signatures', () => {
     });
 
     test('an intra-core call to a typed method lowers its arguments; a keyed read keeps the typed result', () => {
-        expect(output).toContain('let mut tickers: crate::types::Tickers = (match self.fetch_tickers((Value::from(vec![symbol])).to_opt_str_vec(), params.clone()).await { Ok(__mk) => __mk, Err(__e) => panic!(');
+        expect(output).toContain('let mut tickers: crate::types::Tickers = (match self.fetch_tickers((Value::from(vec![symbol.clone()])).to_opt_str_vec(), params.clone()).await { Ok(__mk) => __mk, Err(__e) => panic!(');
         expect(output).toContain('return crate::value::KeyRead::read(&&tickers, &symbol);');
         expect(output).not.toContain('crate::types::IntoRaw::into_raw(self.fetch_tickers(');
     });
