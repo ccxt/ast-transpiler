@@ -11086,7 +11086,7 @@ describe('safe scalar locals, fourth pass: element-write hand-offs, null-printin
         expect(out).toContain('bookside.store(price, amount)');
         // a this-field write whose source is a call keeps the call argument boxed with `Value::from`
         expect(out).toContain('let mut ts: Option<i64> = ');
-        expect(out).toContain('self.iso8601(Value::from(ts))');
+        expect(out).toContain('self.iso8601(ts)');
         // `k in seen` on an object-literal map local: the bearer's own lookup of the borrowed key, None never contained
         expect(out).toContain('let mut k: Option<String> = ');
         expect(out).toContain('matches!(k.as_deref(), Some(__k) if seen.contains_key(__k))');
@@ -13913,5 +13913,36 @@ describe('xi: Promise.all slots whose awaited operand is an endpoint declared Pr
     test('negative: a promise list read again after Promise.all keeps the Value slots', () => {
         const out = mk("    async fetchBoth (params: Dict = {}) {\n        const promises = [ this.publicGetA (params), this.publicGetB (params) ];\n        const [ a, b ] = await Promise.all (promises);\n        return this.hold ({ 'a': this.safeString (a, 'x'), 'p': promises, 'b': this.safeString (b, 'y') });\n    }");
         expect(out).toMatch(/let mut a: Value = /);
+    });
+});
+
+describe('xd: a number local as the argument of base iso8601 passes as is (runtime iso8601(ts: impl Into<Value>))', () => {
+    const mk = (venue: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-xd-iso-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base/functions'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/functions/time.ts'), "// @ts-nocheck\nconst iso8601 = (timestamp): string | undefined => undefined;\nexport { iso8601 };\n");
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "import { iso8601 } from './functions/time.js';\nexport interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    iso8601 = iso8601;\n    hold (x: any): any { return x; }\n    safeInteger (o: any, k: string, d: Int = undefined): Int { return o[k] ?? d; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        return transpiler.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+    };
+    test('a reader integer stored nested through iso8601 stays Option<i64> and passes bare', () => {
+        const out = mk("import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (message: Dict, type: string) {\n        const timestamp = this.safeInteger (message, 'E');\n        const r = {};\n        r[type] = {};\n        r[type]['datetime'] = this.iso8601 (timestamp);\n        return this.hold ([ r, timestamp ]);\n    }\n}\n");
+        expect(out).toMatch(/let mut timestamp: Option<i64> = /);
+        expect(out).toContain('self.iso8601(timestamp)');
+    });
+    test('negative: an argument of another base method keeps its own rule', () => {
+        const out = mk("import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (message: Dict, type: string) {\n        const timestamp = this.safeInteger (message, 'E');\n        const r = {};\n        r[type] = {};\n        r[type]['datetime'] = this.hold (timestamp);\n        return r;\n    }\n}\n");
+        expect(out).toMatch(/let mut timestamp: Value = /);
+    });
+});
+
+describe('xd: an Int parameter of a typed base filter signature (Option<i64>) is a native compare operand', () => {
+    test('a reader integer compared with the since parameter of filterBySinceLimit stays Option<i64>', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-xd-fsince-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k] ?? d; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterBySinceLimit (array: object[] | undefined, since: Int = undefined, limit: Int = undefined, key: string = 'timestamp', tail = false): any[] {\n        const result = [];\n        for (let i = 0; i < array.length; i++) {\n            const entry = array[i];\n            const value = this.safeInteger (entry, key);\n            if ((value !== undefined) && (value >= since)) {\n                result.push (entry);\n            }\n        }\n        return result;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts')).content;
+        expect(out).toMatch(/let mut value: Option<i64> = /);
+        expect(out).toContain('value.is_some() && since.is_some() && value >= since');
     });
 });
