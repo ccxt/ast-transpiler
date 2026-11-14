@@ -14269,3 +14269,54 @@ describe('ral-yg: a string element of a list parameter keying the base-declared 
         expect(out).toContain('let mut section: Value = ');
     });
 });
+
+describe('ral-yh: a proven-map producer lends its Dict to json', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    omit (x: any, ...args: any): any { return x; }\n    extend (...args: any): any { return {}; }\n    extractParams (s: string): string[] { return []; }\n    urlencode (o: any): string { return ''; }\n    json (o: any): string { return ''; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('extend ({}, omit (params, ..)) read by Object.keys, urlencode and json holds the Dict and lends it to json', () => {
+        const out = write ('yh-json', "    sign (path: string, params: Dict = {}) {\n        let url = '/' + path;\n        let body = undefined;\n        const query = this.extend ({}, this.omit (params, this.extractParams (path)));\n        if (Object.keys (query).length) {\n            url += '?' + this.urlencode (query);\n        }\n        body = this.json (query);\n        return [ url, body ];\n    }\n");
+        expect(out).toContain('let mut query: crate::value::Dict = ');
+        expect(out).not.toContain('let mut query: Value = ');
+    });
+    test('negative: an omit of sign params read by json keeps its box (a list body passes omit, json tells it from a map)', () => {
+        const out = write ('yh-jsonn', "    sign (path: string, params: Dict = {}) {\n        let url = '/' + path;\n        let body = undefined;\n        const query = this.omit (params, this.extractParams (path));\n        if (Object.keys (query).length) {\n            url += '?' + this.urlencode (query);\n        }\n        body = this.json (query);\n        return [ url, body ];\n    }\n");
+        expect(out).not.toContain('let mut query: crate::value::Dict = ');
+    });
+});
+
+describe('ral-yh: a defaulted safeDict written into another plain local at its last use moves in boxed once', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeDict (x: any, k: any, d: any = undefined): any { return x; }\n    safeString (x: any, k: any, d: any = undefined): any { return x; }\n    parseOrder (o: any): any { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('const data = safeDict (r, k, {}) read at a key, then `order = data` last: Dict, moved as Value::Dict(data)', () => {
+        const out = write ('yh-mv', "    m (response: Dict, flag: boolean) {\n        let order: Dict = {};\n        const data = this.safeDict (response, 'data', {});\n        const id = this.safeString (data, 'id');\n        if (flag) {\n            order = response;\n        } else {\n            order = data;\n        }\n        return [ id, this.parseOrder (order) ];\n    }\n");
+        expect(out).toContain('let mut data: crate::value::Dict = ');
+        expect(out).toContain('order = Value::Dict(data);');
+    });
+    test('negative: a later read of the source keeps it a Value (not its last use)', () => {
+        const out = write ('yh-mvn', "    m (response: Dict, flag: boolean) {\n        let order: Dict = {};\n        const data = this.safeDict (response, 'data', {});\n        if (flag) {\n            order = data;\n        }\n        const id = this.safeString (data, 'id');\n        return [ id, this.parseOrder (order), data ];\n    }\n");
+        expect(out).not.toContain('order = Value::Dict(data);');
+    });
+});
+
+describe('ral-yh: a safeList local rewritten only with its own kind holds the list', () => {
+    test('orders = safeList (r, k, []); if (orders === undefined) orders = []: Option<List>, lent whole', () => {
+        const dir = path.join (rustFixtureRoot, 'yh-rw');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    safeValue (o: any, k: any): any { return o[k]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThem (orders: Dict[]) {\n        const out = [];\n        for (let i = 0; i < orders.length; i++) {\n            out.push (orders[i]);\n        }\n        return out;\n    }\n    m (params: Dict = {}) {\n        const response = this.hold (params);\n        let orders = this.safeList (response, 'data', []);\n        if (orders === undefined) {\n            orders = [];\n        }\n        return this.parseThem (orders);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut orders: Option<crate::value::List> = ');
+        expect(out).toContain('orders.is_none()');
+        expect(out).toContain('orders = Value::from(vec![]).into_opt_list();');
+    });
+});

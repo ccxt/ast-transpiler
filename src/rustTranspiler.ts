@@ -17384,6 +17384,9 @@ export class RustTranspiler extends BaseTranspiler {
                 if (sbAlias && this.rustOmitOfDict(rhs) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
                 writes++;
                 if (this.literalKindOfNode(rhs) === 'null') return ++nullWrites > 0;
+                // ral-yh: a `safeDict*` / `safeList*` local rewritten only with its own kind: a tag-free map literal / a list
+                // literal, or a base builder that answers that container on every path (`arrayConcat`, `filterBy`, `extend`, ..)
+                if (!nilDeclared && (from === 'dict' || from === 'list') && this.rustSameKindRewrite(rhs, from)) return String(rhs.getText()).split('\n')[0].length <= 240;
                 const kind = this.rustNilResponseWriteKind(rhs, nilDeclared, declaration);
                 const declaredWrite = nilDeclared && this.rustDeclaredEndpointWrite(rhs);
                 if (declaredWrite) declaredEndpointWrites++;
@@ -17450,7 +17453,7 @@ export class RustTranspiler extends BaseTranspiler {
             if ((endpoint || this.rustLentContainerSource(init)) && this.rustLentEndpointSlot(up, n, from)) return ++lentResponses > 0 && ++reads > 0;
             // `json` tells Null from an empty container: only a never-null source lends there as the plain container
             // `omit` hands a list through unchanged: its result reaches the encoder slots only when its head is a proven map
-            if ((from === 'dict' || from === 'list') && this.rustLentHelperSlot(up, n, from) && (String(up.expression.name.text) !== 'json' || endpoint || this.rustLentContainerSource(init))
+            if ((from === 'dict' || from === 'list') && this.rustLentHelperSlot(up, n, from) && (String(up.expression.name.text) !== 'json' || endpoint || this.rustLentContainerSource(init) || (from === 'dict' && this.rustJsonMapProducer(init)))
                 && !(RustTranspiler.RUST_LIST_TELLING_SLOTS.has(String(up.expression.name.text)) && this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_OMIT) && !this.rustOmitOfDict(init))) return ++lentResponses > 0 && ++reads > 0;
             if (this.rustLentOptionalHandOff(up, n, init, from, nilDeclared)) return ++lentNullable > 0 && ++reads > 0;
             // a lent params slot (`watch` message, a lent `params`) takes the built map by reference, as the handed rule lends it
@@ -17570,6 +17573,26 @@ export class RustTranspiler extends BaseTranspiler {
         const d: any = isIdentifier(arg) ? this.rustDeclarationOfIdentifier(arg) : undefined;
         if (d === undefined || !isVariableDeclaration(d) || d.name === arg) return undefined;
         return this.rustVecLocalIsTyped(d) || this.rustLentListLocal(d) ? 'list' : undefined;
+    }
+
+    /** ral-yh: the right side of `x = ..` on a never-nil container local builds the same container kind on every path. */
+    rustSameKindRewrite(rhs: any, from: 'dict' | 'list'): boolean {
+        if (rhs === undefined || this.rustTestTierSource(rhs)) return false;
+        if (from === 'dict' && isObjectLiteralExpression(rhs)) return this.rustPlainDictLiteral(rhs) && rhs.properties.every((p: any) => p.kind === SyntaxKind.PropertyAssignment);
+        if (from === 'list' && isArrayLiteralExpression(rhs)) return !rhs.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement);
+        return isCallExpression(rhs) && this.rustBuiltReturnSourceKind(rhs) === from;
+    }
+
+    /** ral-yh: a producer that answers `Value::Map` on every path, so `json` of it can never print `null` or a list:
+     *  `extend` (always `Value::Map(out)`), `indexBy` / `groupBy`, `deepExtend` whose every operand is a proven map, and an
+     *  `omit` of a proven map head. An `omit (params, ..)` of `sign`'s params is not one (a list body passes through). */
+    rustJsonMapProducer(init: any): boolean {
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || this.rustTestTierSource(init)) return false;
+        const name = String(init.expression.name.text);
+        if (name === 'extend' || name === 'indexBy' || name === 'groupBy') return this.rustBuiltReturnSourceKind(init) === 'dict';
+        if (name === 'deepExtend') return this.rustDeepExtendOfMaps(init);
+        if (name === 'omit') return this.rustOmitOfDict(init);
+        return false;
     }
 
     /** `x[k]`, read only (no write, call, property or nested element target), with a numeric literal key or a key local
@@ -18395,12 +18418,43 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
             && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left)) && (this.rustThisRootedPlace(up.left) || this.rustLocalKeyPlace(up.left, n))) return true;
         if (this.rustLocalStoreHandOff(n)) return true;
+        if (this.rustValueLocalWriteHandOff(n)) return true;
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
         const at = Array.from(up.arguments).indexOf(n);
         return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && this.rustNilBoxSlotOk(up, at);
     }
+
+    /** ral-yh: `y = x` (statement) into another plain `Value` local `y` at `x`'s last use: `y` takes the container by
+     *  value, so the shared handle moves in boxed once (`Value::Dict(x)` / `Value::Arr(x)`), exactly the value the boxed
+     *  `x` held. A target with its own typed rule stays out (its write proof reads its sources). */
+    rustValueLocalWriteHandOff(n: any): boolean {
+        const up: any = n.parent;
+        if (!isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(up.left)) return false;
+        const own: any = this.rustDeclarationOfIdentifier(n);
+        const target: any = this.rustDeclarationOfIdentifier(up.left);
+        if (own === undefined || own === n || own.name === n || target === undefined || target === own || target.name === up.left || !isVariableDeclaration(target)) return false;
+        if (this.rustEnclosingFunction(target) !== this.rustEnclosingFunction(own) || !this.rustLocalLastUse(n, own)) return false;
+        // a list-literal or nil-declared target is typed from its write sources by its own lane (it would read this write)
+        const tinit: any = this.rustSkipWrappers(target.initializer);
+        if (tinit === undefined || isArrayLiteralExpression(tinit) || this.literalKindOfNode(tinit) === 'null') return false;
+        // the target's own container decision may be open (it reads this very write): its re-entrancy answer is no proof
+        if (this.rustBorrowedPending.has(target) || this.rustValueWriteOpen.has(target)) return false;
+        if (this.rustValueWriteTargets.has(target)) return this.rustValueWriteTargets.get(target) as boolean;
+        this.rustValueWriteOpen.add(target);
+        let stays = false;
+        try {
+            stays = this.rustSlotTargetStaysValue(target) && !this.rustOptContainerLocals.has(target) && !this.rustBorrowedPending.has(target);
+        } finally {
+            this.rustValueWriteOpen.delete(target);
+        }
+        this.rustValueWriteTargets.set(target, stays);
+        return stays;
+    }
+
+    private rustValueWriteTargets = new Map<any, boolean>();
+    private rustValueWriteOpen = new Set<any>();
 
     /** ral-ra: `m['k'] = x` / `m.k = x` one level on another local `m` (not `x` itself): the store takes the value by
      *  value, so the shared container is boxed there once (moved at its last use, else the Arc bump the `Value` paid). */
