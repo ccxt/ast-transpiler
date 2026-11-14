@@ -5013,7 +5013,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Runtime `Precise::string*` entry points whose string operands take `&impl PreciseArg` (precise.rs). The
      *  comparators keep `&Value` (a ccxt build/ pass reads their exact signature text). */
-    private static readonly RUST_PRECISE_LENT = new Set([ 'stringAdd', 'stringSub', 'stringMul', 'stringDiv', 'stringMod', 'stringAbs', 'stringNeg', 'stringMin', 'stringMax' ]);
+    private static readonly RUST_PRECISE_LENT = new Set([ 'stringAdd', 'stringSub', 'stringMul', 'stringDiv', 'stringMod', 'stringAbs', 'stringNeg', 'stringMin', 'stringMax', 'stringEq', 'stringEquals', 'stringGt', 'stringGe', 'stringLt', 'stringLe', 'stringOr' ]);
 
     /** vd: only a local declared with a value (nil-declared locals keep their own box rules). */
     rustPreciseLendLocal(n): boolean {
@@ -5531,7 +5531,8 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         const kind = this.rustReaderFallbackKind(fallback);
-        if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && this.rustReaderFallbackChecked(fallback) === 'string') ? 'ostr' : undefined;
+        // wd: a venue method already printed `-> Option<String>` is a string-or-Null default as it stands
+        if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && (this.rustReaderFallbackChecked(fallback) === 'string' || this.rustVenueStrCall(fallback))) ? 'ostr' : undefined;
         if (intBase !== undefined) return kind === 'int' || kind === 'oint' ? 'oint' : undefined;
         if (numBase !== undefined) return kind !== undefined || this.rustReaderFallbackChecked(fallback) === 'number' ? 'onum' : undefined;
         return fresh && (kind === 'bool' || kind === 'obool' || (kind === undefined && this.rustReaderFallbackChecked(fallback) === 'boolean')) ? 'obool' : undefined;
@@ -6246,6 +6247,8 @@ export class RustTranspiler extends BaseTranspiler {
         // vd: a string operand of a `Precise.string<Add|Sub|..>` arithmetic entry point is lent as is (the runtime takes
         // `&impl PreciseArg`: `None` reads as the `Null` box, a string as its `Str`); no box, no copy
         if ((kind === 'str' || kind === 'ostr') && this.rustPreciseLentOperand(n) && this.rustPreciseLendLocal(n)) return 'parg';
+        // wd: the needle of a base `inArray` is lent as is (`impl InArrayNeedle`: same answers as the boxed `is_equal`)
+        if ((kind === 'str' || kind === 'ostr' || kind === 'int' || kind === 'oint') && this.rustInArrayNeedle(n) && this.rustPreciseLendLocal(n)) return 'parg';
         if ((kind === 'str' || kind === 'ostr') && this.rustWsCacheMapKeyUse(n)) return 'fin';
         if (kind === 'bool' && this.rustScalarBoolLogicalText(this.rustClimbLogicalWrappers(n)) !== undefined) return 'cond';
         if (kind === 'str' || kind === 'ostr') { const fieldForm = this.rustFieldKeyUseForm(n); if (fieldForm !== undefined) return fieldForm; }
@@ -7205,8 +7208,8 @@ export class RustTranspiler extends BaseTranspiler {
         return kind === 'bool' ? super.printIdentifier(inner) : (kind === 'obool' ? `(${super.printIdentifier(inner)} == Some(true))` : undefined);
     }
 
-    /** The needle of a base `inArray` call outside the test crate: the hand-written `in_array(needle: impl Into<Value>, ..)`
-     *  takes an optional string lent as `&x` (`From<&Option<String>>`: `None` is Null, `Some(s)` a `Str`, as the box gave). */
+    /** The needle of a base `inArray` call outside the test crate: the hand-written `in_array(needle: impl InArrayNeedle, ..)`
+     *  takes a typed string / integer lent as `&x` (`None` matches Null, a value the element its box would equal). */
     /** vg: element locals printed as a borrowed `Option<&str>` off their list (`recv.get(i).and_then(Value::as_str)`). */
     private rustBorrowedStrElems = new WeakSet<any>();
 
@@ -7270,6 +7273,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form === 'concat' && local.kind === 'ostr') return `${super.printIdentifier(node)}.as_deref().unwrap_or("null")`;
         if (form === 'targ' && (local.kind === 'str' || local.kind === 'ostr') && this.rustWsKeyUse(node)) return this.rustWsKeyText(node);
+        if (form === 'parg' && this.rustInArrayNeedle(node)) return `&${super.printIdentifier(node)}`;
         if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'parg') return super.printIdentifier(node);
         if (form === 'err') return this.rustErrMsgMoves(node, local.declaration) ? super.printIdentifier(node) : `${super.printIdentifier(node)}.clone()`;
         if (form === 'inbox') return local.kind === 'ostr' ? `Value::from(&${super.printIdentifier(node)})` : `Value::from(${super.printIdentifier(node)}.as_str())`;
@@ -8537,13 +8541,19 @@ export class RustTranspiler extends BaseTranspiler {
         // a held local whose own typing keeps every line under the limit is released again, one at a time
         if (held.length < 2) return boxed;
         let best = long(boxed).length;
-        for (const n of held) {
-            this.rustScalarVetoed.delete(n);
-            const trial = redo();
-            if (long(trial).length <= best) {
-                boxed = trial;
-                best = long(trial).length;
-            } else this.rustScalarVetoed.add(n);
+        // wd: a second round releases a local whose first trial was held only by a local released after it
+        for (let round = 0, released = true; round < 2 && released; round++) {
+            released = false;
+            for (const n of held) {
+                if (!this.rustScalarVetoed.has(n)) continue;
+                this.rustScalarVetoed.delete(n);
+                const trial = redo();
+                if (long(trial).length <= best) {
+                    boxed = trial;
+                    best = long(trial).length;
+                    released = true;
+                } else this.rustScalarVetoed.add(n);
+            }
         }
         return redo();
     }
