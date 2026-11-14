@@ -23330,12 +23330,47 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
             || !isIdentifier(call.expression.expression) || call.expression.expression.text !== 'Promise' || String(call.expression.name.text) !== 'all') return false;
         const list: any = this.rustSkipWrappers(call.arguments[0]);
-        if (!isArrayLiteralExpression(list)) return false;
-        const operand: any = this.rustSkipWrappers(list.elements[element.parent.elements.indexOf(element)]);
-        if (operand === undefined || !isIdentifier(operand)) return false;
-        const d: any = this.rustDeclarationOfIdentifier(operand);
-        if (d === undefined || !isVariableDeclaration(d) || d.name === operand) return false;
-        return this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d);
+        if (isArrayLiteralExpression(list)) {
+            const operand: any = this.rustSkipWrappers(list.elements[element.parent.elements.indexOf(element)]);
+            const d: any = operand !== undefined && isIdentifier(operand) ? this.rustDeclarationOfIdentifier(operand) : undefined;
+            if (d !== undefined && isVariableDeclaration(d) && d.name !== operand && this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d)) return true;
+        }
+        // xi: the operand's awaited producer is an implicit endpoint declared `Promise<Dict>` (the signature table)
+        const producer: any = this.rustPromiseAllOperandProducer(element);
+        return producer !== undefined && this.rustDeclaredEndpointKind(producer) === 'dict';
+    }
+
+    /** xi: the awaited call behind slot `i` of `const [ .. ] = await Promise.all (x)`: `x` an array literal (or a
+     *  never-written local bound to one, read only by this call) of exactly the pattern's length, whose element `i` is
+     *  that call inline or a never-reassigned local initialised by it. `promise_all` hands each element back as it came. */
+    rustPromiseAllOperandProducer(element: any): any {
+        const pattern: any = element?.parent;
+        const owner: any = pattern?.parent;
+        if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || owner === undefined || !isVariableDeclaration(owner) || owner.name !== pattern) return undefined;
+        const awaited: any = this.rustSkipWrappers(owner.initializer);
+        if (awaited?.kind !== SyntaxKind.AwaitExpression) return undefined;
+        const call: any = this.rustSkipWrappers(awaited.expression);
+        if (!isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
+            || !isIdentifier(call.expression.expression) || call.expression.expression.text !== 'Promise' || String(call.expression.name.text) !== 'all') return undefined;
+        const fn: any = this.rustEnclosingFunction(owner);
+        const soleUse = (d: any, at: any): boolean => isVariableDeclaration(d) && isIdentifier(d.name) && this.rustEnclosingFunction(d) === fn
+            && !this.rustLocalIsReassigned(d, String(d.name.text))
+            && this.rustLocalUsesAll(d, String(d.name.text), false, (n: any) => this.rustIdentifierIsPropertyName(n) || n === at);
+        let list: any = this.rustSkipWrappers(call.arguments[0]);
+        if (isIdentifier(list)) {
+            const d: any = this.rustDeclarationOfIdentifier(list);
+            if (d === undefined || d.name === list || !soleUse(d, list)) return undefined;
+            list = this.rustSkipWrappers(d.initializer);
+        }
+        if (!isArrayLiteralExpression(list) || list.elements.length !== pattern.elements.length || list.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement)) return undefined;
+        let operand: any = this.rustSkipWrappers(list.elements[pattern.elements.indexOf(element)]);
+        if (operand !== undefined && isIdentifier(operand)) {
+            const d: any = this.rustDeclarationOfIdentifier(operand);
+            if (d === undefined || d.name === operand || !soleUse(d, operand)) return undefined;
+            operand = this.rustSkipWrappers(d.initializer);
+        }
+        if (operand?.kind === SyntaxKind.AwaitExpression) operand = this.rustSkipWrappers(operand.expression);
+        return operand !== undefined && isCallExpression(operand) ? operand : undefined;
     }
 
     rustDeclaredDictSlot(element: any): boolean {

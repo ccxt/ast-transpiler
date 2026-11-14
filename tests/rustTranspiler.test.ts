@@ -13868,3 +13868,32 @@ describe('ral-xf: a list literal with a bare local element read only by index is
         expect(body).toMatch(/let mut ids: Value = /);
     });
 });
+
+describe('xi: Promise.all slots whose awaited operand is an endpoint declared Promise<Dict>', () => {
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-xi-pall-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport type Str = string | undefined;\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeList (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/abstract/venue.ts'), "import _Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default abstract class Exchange extends _Exchange {\n    publicGetA (params = {}): Promise<Dict> { return this.hold (params); }\n    publicGetB (params = {}): Promise<Dict> { return this.hold (params); }\n    publicGetC (params = {}): Promise<any> { return this.hold (params); }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './abstract/venue.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('a destructured slot of two Promise<Dict> endpoint operands moves out as a Dict (no clone)', () => {
+        const out = mk("    async fetchBoth (params: Dict = {}) {\n        const promises = [\n            this.publicGetA (params),\n            this.publicGetB (params),\n        ];\n        const [ a, b ] = await Promise.all (promises);\n        const x = this.safeString (a, 'x');\n        const rows = this.safeList (b, 'rows', []);\n        return this.hold ({ 'x': x, 'rows': rows, 'b': b });\n    }");
+        expect(out).toMatch(/let mut a: crate::value::Dict = abVariable\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+        expect(out).toMatch(/let mut b: crate::value::Dict = abVariable\.get\(1\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+        expect(out).not.toMatch(/\b[ab]\.clone\(\)/);
+    });
+    test('negative: an operand with an untyped endpoint answer keeps the Value slot', () => {
+        const out = mk("    async fetchBoth (params: Dict = {}) {\n        const pa = this.publicGetA (params);\n        const pc = this.publicGetC (params);\n        const [ a, c ] = await Promise.all ([ pa, pc ]);\n        return this.hold ({ 'a': this.safeString (a, 'x'), 'c': this.safeString (c, 'x') });\n    }");
+        expect(out).toMatch(/let mut c: Value = /);
+    });
+    test('negative: a promise list read again after Promise.all keeps the Value slots', () => {
+        const out = mk("    async fetchBoth (params: Dict = {}) {\n        const promises = [ this.publicGetA (params), this.publicGetB (params) ];\n        const [ a, b ] = await Promise.all (promises);\n        return this.hold ({ 'a': this.safeString (a, 'x'), 'p': promises, 'b': this.safeString (b, 'y') });\n    }");
+        expect(out).toMatch(/let mut a: Value = /);
+    });
+});
