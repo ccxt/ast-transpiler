@@ -8493,9 +8493,11 @@ describe('rust test-source string locals', () => {
     test('a string re-boxed before its last read stays boxed; one re-boxed only at its last read moves', () => {
         const fresh = new Transpiler({ verbose: false, rust: {} } as any);
         const out = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'test-tier-strings', 'ts/src/test/Exchange/test.strings.ts')).content;
-        expect(out).toContain('let mut lent: Value = ');
+        // vd: a Precise operand is lent to the `&impl PreciseArg` entry point, so the re-read string is typed too
+        expect(out).toMatch(/let mut lent: Option<String> = /);
+        expect(out).toContain('Precise::stringAbs(&lent)');
         expect(out).toMatch(/let mut moved: Option<String> = /);
-        expect(out).toContain('moved.map(Value::from)');
+        expect(out).toContain('Precise::stringAbs(&moved)');
         expect(out).not.toContain('.clone().map(Value::from)');
         expect(out).not.toContain('id.clone()');
         expect(out).not.toMatch(/let mut keys: Vec<Value>/);
@@ -12239,9 +12241,9 @@ describe('pg: precision formatters answer Option<String> (results of other self 
         expect(out).toMatch(/let mut px: Option<String> = self\.priceToPrecision\(/);
         expect(out).toContain('Value::from(self.amountToPrecision(');
     });
-    test('uc: a precision string read again as a Precise operand is lent there (no copy), moved at its last box', () => {
+    test('a precision string read again as a Precise operand is lent to it (vd: the entry point takes &impl PreciseArg, no copy; uc lent it boxed)', () => {
         expect(out).toMatch(/let mut q: Option<String> = self\.amountToPrecision\(/);
-        expect(out).toContain('crate::precise::Precise::stringMul(&Value::from(q.as_deref()), ');
+        expect(out).toContain('Precise::stringMul(&q, ');
         expect(out).not.toContain('q.clone()');
     });
 });
@@ -12851,5 +12853,87 @@ describe('ral-uh: string-literal ternary locals key a proven map read', () => {
             "class X {\n    f (market: Dict, inverse: boolean, other: string) {\n        const k = inverse ? 'base' : other;\n        return market[k];\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).not.toContain('__m.get(k.as_str())');
+    });
+});
+
+describe('vd: a WS-handler shadow scalar read prints straight into its Option local', () => {
+    // the old print boxed the `.get` match into a Value and called `.as_i64()` on it: the same answers, but the line
+    // passed 400 chars on longer names and the guard sent the local back to Value
+    test('safeInteger without a default types the local from the borrowed .get match (no Value round trip)', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-vd-shadow-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport class Client { resolve (v: any, h: any = undefined): void {} }\nexport default class Exchange {\n    id: string = 'x';\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    hold (a: any): any { return a; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Client } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    handleTicker (client: Client, message: Dict) {\n        const n = this.safeInteger (message, 'count');\n        const s = this.safeString (message, 'channel');\n        if (n !== undefined && s !== undefined) {\n            client.resolve (message, s);\n        }\n        return this.hold (n);\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false });
+        const output = t.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
+        expect(output).toContain('let mut n: Option<i64> = (match __pro_message.get("count") { Some(Value::Int(__n)) => Some(*__n), Some(Value::Float(__f)) => Some(*__f as i64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>() { Ok(__n) => Some(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Some(__f as i64), _ => None } }, _ => None });');
+        expect(output).toContain('self.hold(Value::from(n))');
+        expect(output).not.toContain('.as_i64();');
+    });
+});
+
+describe('vd: shadowed-dict safeNumber with a plain default parses with map_or', () => {
+    test('the string arm is `__s.parse::<f64>().map_or(d, Value::Float)` (same Float / default answers, shorter line)', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-vd-num-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport class Client { resolve (v: any, h: any = undefined): void {} }\nexport default class Exchange {\n    id: string = 'x';\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    hold (a: any): any { return a; }\n    safeNumber (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue2.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue2 extends Exchange {\n    m (feeTier: Dict, d: number) {\n        const f = this.safeNumber (feeTier, 'taker_fee_rate', d);\n        return f;\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false });
+        const output = t.transpileRustByPath(path.join(root, 'ts/src/venue2.ts')).content;
+        expect(output).toContain('(match feeTier.get("taker_fee_rate") { Some(Value::Float(__f)) => Value::Float(*__f), Some(Value::Int(__n)) => Value::Float(*__n as f64), Some(Value::Str(__s)) => __s.parse::<f64>().map_or(d, Value::Float), _ => d })');
+    });
+});
+
+describe('vd: a reader string later overwritten by a venue string method stays Option<String>', () => {
+    test('status = this.parseStatus (status) assigns the method\'s own Option<String> (no box, no unwrap)', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-vd-reassign-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport class Client { resolve (v: any, h: any = undefined): void {} }\nexport default class Exchange {\n    id: string = 'x';\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    hold (a: any): any { return a; }\n    safeNumber (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue3.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue3 extends Exchange {\n    parseStatus (status: Str): Str {\n        const statuses: Dict = { 'a': 'open' };\n        return this.safeString (statuses, status, status);\n    }\n    m (order: Dict) {\n        let status = this.safeString (order, 'status');\n        if (status === 'x') {\n            status = 'canceled';\n        }\n        status = this.parseStatus (status);\n        return this.hold ({ 'status': status });\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false });
+        const output = t.transpileRustByPath(path.join(root, 'ts/src/venue3.ts')).content;
+        expect(output).toMatch(/let mut status: Option<String> = \(match order\.get\("status"\)/);
+        expect(output).toContain('status = Some("canceled".to_string());');
+        expect(output).toContain('status = self.parseStatus(status.as_deref());');
+        expect(output).toContain('m.insert("status".to_string(), status.map(Value::from).unwrap_or(Value::Null));');
+    });
+});
+
+describe('vd: a reader whose default is an explicit undefined takes the no-default kind', () => {
+    test('safeString (params, k, undefined) is an Option<String> local (the helper default is Null either way)', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-vd-undef-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport class Client { resolve (v: any, h: any = undefined): void {} }\nexport default class Exchange {\n    id: string = 'x';\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    hold (a: any): any { return a; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeNumber (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue4.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue4 extends Exchange {\n    m (market: Dict, params: Dict) {\n        const qty = this.safeString (params, 'cost', undefined);\n        if (qty === undefined) {\n            return this.hold (params);\n        }\n        return { 'qty': qty };\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false });
+        const output = t.transpileRustByPath(path.join(root, 'ts/src/venue4.ts')).content;
+        expect(output).toContain('let mut qty: Option<String> = self.safeString(params.clone(), Value::Str("cost".into()), &[Value::Null]).as_str().map(str::to_owned);');
+        expect(output).toContain('if (qty.is_none()) {');
+    });
+});
+
+describe('vd: a typed string operand of a Precise arithmetic entry point is lent (impl PreciseArg)', () => {
+    test('Precise.stringMul (amount, price) passes &amount / &price, no clone and no box', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-vd-precise-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport class Client { resolve (v: any, h: any = undefined): void {} }\nexport default class Exchange {\n    id: string = 'x';\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    hold (a: any): any { return a; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeNumber (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/base/Precise.ts'), "export class Precise {\n    static stringMul (a: string | undefined, b: string | undefined): string | undefined { return a; }\n    static stringAbs (a: string | undefined): string | undefined { return a; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue5.ts'), "import Exchange from './base/Exchange.js';\nimport { Precise } from './base/Precise.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue5 extends Exchange {\n    m (trade: Dict) {\n        const amount = this.safeString (trade, 'amount');\n        const price = this.safeString (trade, 'price');\n        const cost = Precise.stringMul (amount, price);\n        const abs = Precise.stringAbs (amount);\n        return this.hold ([ cost, abs, amount, price ]);\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false });
+        const output = t.transpileRustByPath(path.join(root, 'ts/src/venue5.ts')).content;
+        expect(output).toContain('let mut cost: Option<String> = crate::precise::Precise::stringMul(&amount, &price).as_str().map(str::to_owned);');
+        expect(output).toContain('crate::precise::Precise::stringAbs(&amount)');
+        expect(output).not.toContain('amount.clone()');
+    });
+    test('negative: a Precise call returned as is keeps its boxed operand (the method keeps its native return and its arms)', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-vd-precise-ret-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport class Client { resolve (v: any, h: any = undefined): void {} }\nexport default class Exchange {\n    id: string = 'x';\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k]; }\n    hold (a: any): any { return a; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeNumber (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/base/Precise.ts'), "export class Precise {\n    static stringMul (a: string | undefined, b: string | undefined): string | undefined { return a; }\n    static stringAbs (a: string | undefined): string | undefined { return a; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue6.ts'), "import Exchange from './base/Exchange.js';\nimport { Precise } from './base/Precise.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue6 extends Exchange {\n    signed (trade: Dict, side: Str): Str {\n        const amount = this.safeString (trade, 'amount');\n        if (side === 'sell') {\n            return Precise.stringAbs (amount);\n        }\n        return amount;\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false });
+        const output = t.transpileRustByPath(path.join(root, 'ts/src/venue6.ts')).content;
+        expect(output).not.toContain('Precise::stringAbs(&amount)');
     });
 });

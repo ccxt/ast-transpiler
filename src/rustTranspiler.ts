@@ -4305,7 +4305,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' ? !this.rustErrMsgMoves(n, declaration) : !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'parg' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -4965,6 +4965,54 @@ export class RustTranspiler extends BaseTranspiler {
         return written;
     }
 
+    /** Runtime `Precise::string*` entry points whose string operands take `&impl PreciseArg` (precise.rs). The
+     *  comparators keep `&Value` (a ccxt build/ pass reads their exact signature text). */
+    private static readonly RUST_PRECISE_LENT = new Set([ 'stringAdd', 'stringSub', 'stringMul', 'stringDiv', 'stringMod', 'stringAbs', 'stringNeg', 'stringMin', 'stringMax' ]);
+
+    /** vd: only a local declared with a value (nil-declared locals keep their own box rules). */
+    rustPreciseLendLocal(n): boolean {
+        const declaration: any = this.rustDeclaredNode(n);
+        return declaration !== undefined && isVariableDeclaration(declaration) && declaration.initializer !== undefined
+            && this.literalKindOfNode(this.unwrapParens(declaration.initializer)) !== 'null';
+    }
+
+    /** vd: `n` is a direct string operand (one of the first two, the third of `stringDiv` is the precision) of a lent
+     *  `Precise.<op>(..)` call. */
+    rustPreciseLentOperand(n): boolean {
+        let top: any = n;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const call: any = top.parent;
+        if (!isCallExpression(call) || call.expression === top || !isPropertyAccessExpression(call.expression)) return false;
+        const callee: any = call.expression;
+        if (!isIdentifier(callee.expression) || String(callee.expression.text) !== 'Precise' || !RustTranspiler.RUST_PRECISE_LENT.has(String(callee.name.text))) return false;
+        const at = Array.from(call.arguments).indexOf(top);
+        if (at < 0 || at >= (String(callee.name.text) === 'stringAbs' || String(callee.name.text) === 'stringNeg' ? 1 : 2)) return false;
+        // a Precise call returned as is stays on the boxed path: the method's native return decision reads it
+        // (gate getGateFuturesSignedAmount -> Option<String> would fall back to -> Value and gain a dispatch arm)
+        let ret: any = call;
+        while (isParenthesizedExpression(ret.parent)) ret = ret.parent;
+        if (isReturnStatement(ret.parent)) return false;
+        // a function holding a chain of four nested Precise calls keeps its boxed operands: lending its other operands
+        // shortens their lines, and the 400-char guard then prefers boxing the chain's own locals (hibachi orderMessage)
+        return !this.rustDeepPreciseChainIn(this.rustEnclosingFunction(call));
+    }
+
+    private rustDeepPreciseChainMemo = new WeakMap<Node, boolean>();
+
+    rustDeepPreciseChainIn(scope): boolean {
+        if (scope === undefined) return false;
+        let hit = this.rustDeepPreciseChainMemo.get(scope);
+        if (hit !== undefined) return hit;
+        const depthOf = (node: any): number => {
+            let best = 0;
+            node.forEachChild((child: any) => { best = Math.max(best, depthOf(child)); });
+            return this.rustScalarPreciseCall(node) && isCallExpression(node) ? best + 1 : best;
+        };
+        hit = depthOf(scope) >= 4;
+        this.rustDeepPreciseChainMemo.set(scope, hit);
+        return hit;
+    }
+
     /** pg: some use of the local is an argument of a `Precise.<op>(..)` call. */
     rustPreciseOperandLocal(declaration): boolean {
         let found = false;
@@ -5428,7 +5476,13 @@ export class RustTranspiler extends BaseTranspiler {
         const fallback: any = this.unwrapParens(args[base]);
         if (this.literalKindOfNode(fallback) !== undefined || this.rustScalarIntLiteral(fallback) !== undefined || this.rustScalarFloatLiteral(fallback) !== undefined) {
             // literal defaults are the existing rule's, except an `Int` literal on a number reader
-            return numBase !== undefined && this.rustScalarIntLiteral(fallback) !== undefined ? 'onum' : undefined;
+            if (numBase !== undefined && this.rustScalarIntLiteral(fallback) !== undefined) return 'onum';
+            // vd: a `Float` literal default on a number reader: every arm of the runtime helper answers a `Float`
+            // (parsed, widened `Int`, or the default itself), so `.as_f64()` never misses
+            if (numBase !== undefined && this.rustScalarFloatLiteral(fallback) !== undefined && !isCallExpression(fallback)) return 'onum';
+            // vd: an explicit `undefined` default is the helper's own `Null` default: the no-default kind
+            if (this.literalKindOfNode(fallback) === 'null') return strBase !== undefined ? 'ostr' : (intBase !== undefined ? 'oint' : (numBase !== undefined ? 'onum' : undefined));
+            return undefined;
         }
         const kind = this.rustReaderFallbackKind(fallback);
         if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && this.rustReaderFallbackChecked(fallback) === 'string') ? 'ostr' : undefined;
@@ -6094,6 +6148,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustScalarLiteralTest(kind, other) !== undefined) return 'test';
         }
         if ((kind === 'bool' || kind === 'obool') && this.rustIdentifierUseIsCondition(n)) return 'cond';
+        // vd: a string operand of a `Precise.string<Add|Sub|..>` arithmetic entry point is lent as is (the runtime takes
+        // `&impl PreciseArg`: `None` reads as the `Null` box, a string as its `Str`); no box, no copy
+        if ((kind === 'str' || kind === 'ostr') && this.rustPreciseLentOperand(n) && this.rustPreciseLendLocal(n)) return 'parg';
         if ((kind === 'str' || kind === 'ostr') && this.rustWsCacheMapKeyUse(n)) return 'fin';
         if (kind === 'bool' && this.rustScalarBoolLogicalText(this.rustClimbLogicalWrappers(n)) !== undefined) return 'cond';
         if (kind === 'str' || kind === 'ostr') { const fieldForm = this.rustFieldKeyUseForm(n); if (fieldForm !== undefined) return fieldForm; }
@@ -6978,7 +7035,10 @@ export class RustTranspiler extends BaseTranspiler {
             return source === kind || (optional && source === kind.slice(1));
         }
         const value = this.rustScalarValueKind(node, true);
-        return value === kind || (optional && (value === 'null' || value === kind.slice(1)));
+        if (value === kind || (optional && (value === 'null' || value === kind.slice(1)))) return true;
+        // vd: a later write from a venue string method (`status = this.parseStatus (status)`): the same proof the
+        // initialiser takes (every venue declaration returns `string` / `Str`), printed through rustVenueStrCallText
+        return kind === 'ostr' && value === undefined && this.rustVenueStrCall(node);
     }
 
     /** Plain `Value` argument slots: `this.`/`super.` methods without a native-typed slot, and `Precise.*`. */
@@ -7064,7 +7124,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form === 'concat' && local.kind === 'ostr') return `${super.printIdentifier(node)}.as_deref().unwrap_or("null")`;
         if (form === 'targ' && (local.kind === 'str' || local.kind === 'ostr') && this.rustWsKeyUse(node)) return this.rustWsKeyText(node);
-        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey') return super.printIdentifier(node);
+        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'parg') return super.printIdentifier(node);
         if (form === 'err') return this.rustErrMsgMoves(node, local.declaration) ? super.printIdentifier(node) : `${super.printIdentifier(node)}.clone()`;
         if (form === 'inbox') return local.kind === 'ostr' ? `Value::from(&${super.printIdentifier(node)})` : `Value::from(${super.printIdentifier(node)}.as_str())`;
         if (form !== 'box' && form !== 'xbox') return undefined;
@@ -7092,6 +7152,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustBaseTypedReturnKind(node) !== undefined && !(kind === 'int' && this.rustVenueParseToInt(node))) return this.rustBaseTypedText(kind, node);
         const paramText = this.rustOptParamText(kind, node); if (paramText !== undefined) return paramText;
         if (kind === 'oint' && this.rustLimitCall(node)) return this.rustLimitCallText(node);
+        const shadowRead = this.rustProShadowScalarText(kind, node); if (shadowRead !== undefined) return shadowRead;
         const marketField = base === 'str' ? this.rustMarketArmStrText(kind, node) : undefined; if (marketField !== undefined) return marketField;
         // `parseNumber('0.0005')`: a plain decimal literal parses to the same `f64` in the runtime, no box
         if (base === 'num' && this.rustParseNumberOfString(node)) {
@@ -12653,8 +12714,14 @@ export class RustTranspiler extends BaseTranspiler {
             return wrap(`match ${get} { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s.clone()), Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => ${fallback} }`);
         case 'safeInteger':
             return wrap(`match ${get} { Some(Value::Int(__n)) => Value::Int(*__n), Some(Value::Float(__f)) => Value::Int(*__f as i64), Some(Value::Str(__s)) => match __s.parse::<i64>() { Ok(__n) => Value::Int(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Value::Int(__f as i64), _ => ${fallback} } }, _ => ${fallback} }`);
-        case 'safeNumber':
-            return wrap(`match ${get} { Some(Value::Float(__f)) => Value::Float(*__f), Some(Value::Int(__n)) => Value::Float(*__n as f64), Some(Value::Str(__s)) => match __s.parse::<f64>() { Ok(__n) => Value::Float(__n), Err(_) => ${fallback} }, _ => ${fallback} }`);
+        case 'safeNumber': {
+            // vd: a default that is a plain local or literal costs nothing to evaluate in the string arm, so the
+            // parse prints as `map_or` (same Float / default answer, 25 chars shorter: lines near the 400-char
+            // guard keep their typed locals)
+            const plain = args.length === 2 || isIdentifier(args[2]) || this.literalKindOfNode(args[2]) !== undefined;
+            const str = plain ? `__s.parse::<f64>().map_or(${fallback}, Value::Float)` : `match __s.parse::<f64>() { Ok(__n) => Value::Float(__n), Err(_) => ${fallback} }`;
+            return wrap(`match ${get} { Some(Value::Float(__f)) => Value::Float(*__f), Some(Value::Int(__n)) => Value::Float(*__n as f64), Some(Value::Str(__s)) => ${str}, _ => ${fallback} }`);
+        }
         case 'safeBool':
             return wrap(`match ${get} { Some(Value::Bool(__b)) => Value::Bool(*__b), _ => ${fallback} }`);
         case 'safeDict':
@@ -12791,6 +12858,22 @@ export class RustTranspiler extends BaseTranspiler {
     /** A miss-arm default the match can hold: absent (`Value::Null`) or a
      *  literal; a computed default keeps the helper (its Value is not
      *  re-printable inside an arm without re-evaluating it twice). */
+    /** vd: a no-default `safeInteger` / `safeString` / `safeNumber` read of the WS-handler shadow, printed
+     *  straight into an `Option<i64>` / `Option<String>` / `Option<f64>` local. Same arms as
+     *  `rustProHandlerShadowReadText` (so the same Null / wrong-kind answers as the `_k` runtime helper:
+     *  a missing key, `Null`, an empty string, an unparsable string or any other kind is `None`), without the
+     *  `Value` round trip and its `.cloned()` (the old line exceeded 400 chars and vetoed the typed local). */
+    rustProShadowScalarText(kind: string, node: Node): string | undefined {
+        const want = kind === 'oint' ? 'integer' : (kind === 'ostr' ? 'string' : (kind === 'onum' ? 'float' : undefined));
+        if (want === undefined || !isCallExpression(node) || this.printProHandlerShadowRead(node, true) === undefined) return undefined;
+        const callee: any = node.expression;
+        if (RustTranspiler.PRO_HANDLER_SHADOW_SAFE_READS[String(callee.name?.text ?? '')] !== want || node.arguments.length !== 2) return undefined;
+        const at = `match ${RustTranspiler.PRO_HANDLER_SHADOW_NAME}.get("${this.escapeRustStringLiteral((node.arguments[1] as any).text)}")`;
+        if (want === 'integer') return `(${at} { Some(Value::Int(__n)) => Some(*__n), Some(Value::Float(__f)) => Some(*__f as i64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>() { Ok(__n) => Some(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Some(__f as i64), _ => None } }, _ => None })`;
+        if (want === 'string') return `(${at} { Some(Value::Str(__s)) if !__s.is_empty() => Some(__s.to_string()), Some(Value::Int(__n)) => Some(__n.to_string()), Some(Value::Float(__f)) => Some(__f.to_string()), _ => None })`;
+        return `(${at} { Some(Value::Float(__f)) => Some(*__f), Some(Value::Int(__n)) => Some(*__n as f64), Some(Value::Str(__s)) if !__s.is_empty() => __s.parse::<f64>().ok(), _ => None })`;
+    }
+
     rustProHandlerShadowDefaultShape(node: Node): boolean {
         return node.kind === SyntaxKind.StringLiteral || node.kind === SyntaxKind.NumericLiteral ||
             node.kind === SyntaxKind.TrueKeyword || node.kind === SyntaxKind.FalseKeyword ||
