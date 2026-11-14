@@ -5672,9 +5672,31 @@ export class RustTranspiler extends BaseTranspiler {
             // nor when it feeds a write to another local (ccxt passes read that write's printed source)
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
-                && !this.rustScalarFeedsElementWrite(n, write)) return false;
+                && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration)) return false;
         }
         return true;
+    }
+
+    /** vi: a `Precise.string*` result moved at its last use into an operand of a `Precise.*` chain that is the whole
+     *  write (`x = Precise.stringDiv (Precise.stringMul (local, y), ..)`): the written text is a `Precise` call either
+     *  way (the `&Value` operand takes the moved string), so the receiver's decision does not read this local's type. */
+    rustScalarPreciseFeed(n: any, write: any, declaration: any): boolean {
+        if (this.rustScalarUseForms.get(n) !== 'box' || !this.rustPreciseStringCall(declaration.initializer) || !this.rustLocalLastUse(n, declaration)) return false;
+        let top: any = n;
+        for (;;) {
+            while (isParenthesizedExpression(top.parent)) top = top.parent;
+            const call: any = top.parent;
+            if (!this.rustPreciseStringCall(call) || call.expression === top) return false;
+            if (call === this.unwrapParens(write.right)) return true;
+            top = call;
+        }
+    }
+
+    /** `Precise.<op> (..)`: the hand-written `crate::precise::Precise` string math (a string or undefined). */
+    rustPreciseStringCall(node: any): boolean {
+        const call: any = this.unwrapParens(node);
+        return call !== undefined && isCallExpression(call) && isPropertyAccessExpression(call.expression) && isIdentifier(call.expression.expression)
+            && String(call.expression.expression.text) === 'Precise' && /^string[A-Z]/.test(String(call.expression.name.text));
     }
 
     /** A String-helper result boxed as an object-literal value or as a one-level element write: the written
@@ -22080,7 +22102,12 @@ export class RustTranspiler extends BaseTranspiler {
             if (joined) this.rustScalarDecisions.set(element, previous);
         }
         // a slot only handed back to `Value` slots is typed when each box moves it
-        return ok && (nativeUses > 0 || copies === 0) ? 'ostr' : undefined;
+        if (ok && (nativeUses > 0 || copies === 0)) return 'ostr';
+        // vi: or when each copying box is a slot where the `Value` form cloned it (a self-call argument, an object-literal
+        // value, a dict write, an array element): lent there (`Value::from(x.as_deref())`), as the od / uc reader rule
+        if (!ok || joined || this.rustStrNoLend || !this.rustReaderLendBoxes(element)) return undefined;
+        this.rustStrLentLocals.add(element);
+        return 'ostr';
     }
 
     /** pb: a checker-string slot of a native tuple in a method, read whole as the initializer or the statement write of
