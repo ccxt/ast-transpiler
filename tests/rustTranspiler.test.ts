@@ -10131,6 +10131,14 @@ describe('rust by-name dispatch signature table', () => {
         ]);
     });
 
+    test('reads a string slot from a JSON string or number (binance fetchEvent integer id)', () => {
+        expect(kinds(rustDispatch.arg, [ 'str', 'optstr' ])).toEqual([
+            'args.get(0).and_then(crate::Value::as_text).as_deref().unwrap_or_default()',
+            'args.get(1).and_then(crate::Value::as_text).as_deref()',
+        ]);
+        expect(rustDispatch.wsArg('str', 2)).toBe('args.get(2).and_then(crate::Value::as_text).as_deref().unwrap_or_default()');
+    });
+
     test('converts each container parameter kind once, from args[i]', () => {
         expect(kinds(rustDispatch.arg, [ 'dict', 'list', 'optdict', 'optlist' ])).toEqual([
             'args.get(0).cloned().unwrap_or_default().into_dict()',
