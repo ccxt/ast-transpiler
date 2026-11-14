@@ -77,6 +77,8 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
   "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    requestId (): int {\n        const requestId = this.sum (this.safeInteger (this.options, 'requestId', 0), 1);\n        this.options['requestId'] = requestId;\n        return requestId;\n    }\n    topicName (symbol: Str): Str {\n        if (symbol === undefined) {\n            return undefined;\n        }\n        return 'topic:' + symbol;\n    }\n    mixedId (): int {\n        return 1;\n    }\n    subscribe (symbol: Str) {\n        const requestId = this.requestId ();\n        const request: Dict = { 'id': requestId.toString () };\n        const topic = this.topicName (symbol);\n        if (topic === undefined) {\n            return request;\n        }\n        const other = this.mixedId ();\n        return this.hold ([ request, other.toString () ]);\n    }\n}\n",
   "ts/src/other.ts": "import Exchange from './base/Exchange.js';\nexport default class other extends Exchange {\n    mixedId (): string {\n        return 'a';\n    }\n}\n"
  },
+ "na-self-calls": {"ts/src/base/functions/generic.ts": "// @ts-nocheck\nconst inArray = (needle: any, haystack: any[]): boolean => haystack.includes (needle);\nexport { inArray };\n", "ts/src/base/Exchange.ts": "import { inArray } from './functions/generic.js';\nexport interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    inArray = inArray;\n    hold (x: any): any { return x; }\n    implodeHostname (url: string): string { return url; }\n    nonce (): int {\n        return 1;\n    }\n    safeString (o: any, k: string, d: Str = undefined): Str { return o[k] ?? d; }\n    safeNumber (o: any, k: string, d: any = undefined): any { return o[k] ?? d; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    override nonce (): int {\n        return 2;\n    }\n    async urlFor (isPrivate: boolean): Promise<string> {\n        let url = this.hold (isPrivate);\n        url = this.implodeHostname (url);\n        return url;\n    }\n    async watchIt () {\n        const url = await this.urlFor (false);\n        return this.hold (url.length);\n    }\n    sign (path: string) {\n        const nonce = this.nonce ().toString ();\n        return this.hold (nonce + path);\n    }\n    parsePair (market: Dict, feeTier: Dict, stablePairs: string[]) {\n        const id = this.safeString (market, 'product_id');\n        const defaultTakerFee = this.safeNumber (market, 'taker');\n        const takerFee = this.inArray (id, stablePairs) ? 0.00001 : this.safeNumber (feeTier, 'taker_fee_rate_with_a_long_enough_key_name_to_push_the_line_over_the_limit_of_four_hundred_characters_xxxxxxxxxxxxxxxxxxxxxxxxx', defaultTakerFee);\n        return this.hold ({ 'id': id, 'taker': takerFee });\n    }\n}\n"},
+ "na-self-calls-mixed": {"ts/src/base/functions/generic.ts": "// @ts-nocheck\nconst inArray = (needle: any, haystack: any[]): boolean => haystack.includes (needle);\nexport { inArray };\n", "ts/src/base/Exchange.ts": "import { inArray } from './functions/generic.js';\nexport interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    inArray = inArray;\n    hold (x: any): any { return x; }\n    implodeHostname (url: string): string { return url; }\n    nonce (): int {\n        return 1;\n    }\n    safeString (o: any, k: string, d: Str = undefined): Str { return o[k] ?? d; }\n    safeNumber (o: any, k: string, d: any = undefined): any { return o[k] ?? d; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class other extends Exchange {\n    override nonce (): any {\n        return 'x';\n    }\n    sign (path: string) {\n        const nonce = this.nonce ().toString ();\n        return this.hold (nonce + path);\n    }\n}\n"},
  "clock-bound-function": {
   "ts/src/base/functions/time.ts": "// @ts-nocheck\nconst now = Date.now;\nconst milliseconds = now;\nconst seconds = () => Math.floor (now () / 1000);\nexport { milliseconds, seconds };\n",
   "ts/src/base/Exchange.ts": "import { milliseconds, seconds } from './functions/time.js';\nexport default class Exchange {\n    milliseconds = milliseconds;\n    seconds = seconds;\n    hold (x: any): any { return x; }\n}\n",
@@ -11248,5 +11250,27 @@ describe('ral-mg: string methods on per-venue string params, Math results on typ
         expect(out).toContain('let mut capped: Option<i64> = (if let Some(__m0) = o { Some(i64::min(__m0, 1000)) } else { None });');
         expect(out).not.toContain('Math::min(');
         expect(out).not.toContain('math_round(');
+    });
+});
+
+describe('nonce strings, lent inArray needles and the per-local line guard', () => {
+    let out: string;
+    let mixed: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'na-self-calls', 'ts/src/venue.ts')).content;
+        mixed = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'na-self-calls-mixed', 'ts/src/venue.ts')).content;
+    });
+    test('nonce().toString() is a String local when every nonce declaration says int', () => {
+        expect(out).toContain('let mut nonce: String = format!("{}", self.nonce());');
+    });
+    test('negative: an override declaring another return keeps the Value local', () => {
+        expect(mixed).toMatch(/let mut nonce: Value = /);
+    });
+    test('an async venue string method returning a local just written from a string call types its awaited callers', () => {
+        expect(out).toMatch(/let mut url: Option<String> = self\.urlFor\(/);
+    });
+    test('an optional string needle of inArray is lent as &x', () => {
+        expect(out).toMatch(/let mut id: Option<String> = /);
+        expect(out).toMatch(/self\.inArray\(&id, /);
     });
 });
