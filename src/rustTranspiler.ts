@@ -2764,6 +2764,12 @@ export class RustTranspiler extends BaseTranspiler {
         const other: any = parent.left === n ? parent.right : parent.left;
         if (!this.alwaysStr(other) || this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== 'string') return false;
         if (!this.isNativeStringConcatPair(this.typeOfNodeIfAny(parent.left), this.typeOfNodeIfAny(parent.right))) return false;
+        return this.rustOptStrConcatFits(n);
+    }
+
+    /** The `as_deref().unwrap_or("null")` read of a concat operand keeps its statement within the 400-char line budget. */
+    rustOptStrConcatFits(n): boolean {
+        const parent: any = n.parent;
         // the unwrap lengthens the printed statement: it must stay within the 400-char line budget
         const statement: any = findAncestor(parent, (a: any) => isStatement(a));
         if (statement === undefined || isBlock(statement)) return false;
@@ -5499,7 +5505,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (kind !== 'str' && kind !== 'ostr') return this.rustScalarExpressionUseForm(n, kind);
             // mh1: an optional string operand of an always-string `format!` concat reads in place (`as_deref().unwrap_or("null")`,
             // the nil-local rule's own form), no copy where the box cloned it
-            if (kind === 'ostr' && this.rustNilOptStrConcatUse(n) && this.printNode(parent, 0).trim().startsWith('Value::Str(format!(')) return 'concat';
+            // (mb) any `Option<String>` operand of a `format!` concat prints the text `Value::Null` displays (`null`),
+            // within the 400-char line budget (mh) so no guarded line gets longer
+            if (kind === 'ostr') return this.printNode(parent, 0).trim().startsWith('Value::Str(format!(') && this.rustOptStrConcatFits(n) ? 'concat' : 'box';
             return kind === 'str' && this.printNode(parent, 0).trim().startsWith('Value::Str(format!(') ? 'concat' : 'box';
         }
         if (isConditionalExpression(parent) && parent.condition !== n) return 'box';
@@ -7260,6 +7268,14 @@ export class RustTranspiler extends BaseTranspiler {
             this.forLoopCounter = loops;
             return print();
         };
+        // the market-field strings lent by name (md) are vetoed alone first: boxing them back must not take the other held locals with them
+        const lent = held.filter((n) => this.rustMarketLentLocals.has(n));
+        if (lent.length > 0 && lent.length < held.length) {
+            for (const n of lent) this.rustScalarVetoed.add(n);
+            const lentBoxed = redo();
+            if (long(lentBoxed).length < lines.length) return lentBoxed;
+            for (const n of lent) this.rustScalarVetoed.delete(n);
+        }
         for (const n of held) this.rustScalarVetoed.add(n);
         const boxed = redo();
         if (long(boxed).length < lines.length) return boxed;
