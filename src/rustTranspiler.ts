@@ -16534,7 +16534,25 @@ export class RustTranspiler extends BaseTranspiler {
         // ccxt's write-back pass matches `get_value` text to write a mutated bind back.
         // ral-xf: it also matches a literal map's native dynamic read (`m.get(k.as_str()..)`) and writes back by insert.
         if (this.isWriteBackBindRead(access) && !this.rustLiteralWriteBackBindOk(access)) return false;
-        return this.rustDictBearerKeyOk(access.argumentExpression);
+        return this.rustDictBearerKeyOk(access.argumentExpression) || this.rustBearerTypedStrReadKey(access) !== undefined;
+    }
+
+    /** ral-int45: a plain read `m[k]` whose key is a native optional string local (`Option<&str>` / `Option<String>`,
+     *  e.g. a borrowed string element) or a plain `String` local: the map lookup by its `&str`. `get_value` answers Null for a
+     *  Null key, and a bearer never holds the empty key, so `""` reads Null too. Never a write-back bind (ccxt's
+     *  write-back pass reads only the `as_str()` form). */
+    rustBearerTypedStrReadKey(access: any): string | undefined {
+        const key: any = this.rustSkipWrappers(access?.argumentExpression);
+        if (key === undefined || !isIdentifier(key) || key !== access.argumentExpression || this.isWriteBackBindRead(access)) return undefined;
+        const name = String(key.text);
+        if (name === 'self' || (this.rustNodeIsKeyUnsafePlace(name) && !this.rustBookMetaPlaceOnLiteral(key))) return undefined;
+        // a key local whose scalar decision is still open may yet stay `Value`: the bearer decision that leans on it is not cached
+        if (this.rustKeyScalarDecisionOpen(key)) { this.rustBearerSawOpenKey = true; return undefined; }
+        const scalar = this.rustScalarLocalOf(key)?.kind;
+        const bare = super.printIdentifier(key);
+        if (scalar === 'str') return `${bare}.as_str()`;
+        if (scalar === 'ostr' || this.rustStringLocalIdentifierIsTyped(key)) return `${bare}.as_deref().unwrap_or("")`;
+        return undefined;
     }
 
     /** ral-xf: `const x = m[k]` mutated by the next statement, where `m` is a map-literal local and `k` a plain
@@ -16696,7 +16714,11 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustMapParamDeclaration(receiverNode) !== undefined;
         if (!typed) return undefined;
         const key: any = this.rustSkipWrappers(keyNode);
-        if (key === undefined || isStringLiteralLikeNode(key) || !this.rustDictBearerKeyOk(key)) return undefined;
+        if (key === undefined || isStringLiteralLikeNode(key)) return undefined;
+        if (!this.rustDictBearerKeyOk(key)) {
+            const typedKey = this.rustBearerTypedStrReadKey(this.rustElementReadOfKey(keyNode));
+            return typedKey === undefined ? undefined : `${receiverText}.get(${typedKey}).cloned().unwrap_or(Value::Null)`;
+        }
         const bind = this.rustElementReadOfKey(keyNode);
         if (this.isWriteBackBindRead(bind) && !this.rustLiteralWriteBackBindOk(bind)) return undefined;
         const keyText = this.printNode(keyNode, 0).trim();

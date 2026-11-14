@@ -14014,3 +14014,18 @@ describe('ral-xg: an element of an untyped local list filled only by string push
         expect(out).toMatch(/let mut slug: Value = slugs\.get\(i as usize\)/);
     });
 });
+
+describe('ral-int45 (xf x wg): a literal map read at a borrowed string element key stays a typed map', () => {
+    test('grouped[fixtureId] with fixtureId an Option<&str> element of a string-pushed list reads the IndexMap', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-int45-optkey');
+        const files: Record<string, string> = {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    parseEvent (id: string, raw: any[]): Dict { return {}; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    group (rawMarkets: Dict[]) {\n        const grouped: Dict = {};\n        const order: string[] = [];\n        const n = rawMarkets.length;\n        for (let i = 0; i < n; i++) {\n            const raw = rawMarkets[i];\n            const sid = this.safeString (raw, 'sid');\n            if (sid === undefined) {\n                continue;\n            }\n            if (!(sid in grouped)) {\n                grouped[sid] = [];\n                order.push (sid);\n            }\n            grouped[sid].push (raw);\n        }\n        const result: any[] = [];\n        const orderLength = order.length;\n        for (let i = 0; i < orderLength; i++) {\n            const fixtureId = order[i];\n            const event = this.parseEvent (fixtureId, grouped[fixtureId]);\n            result.push (event);\n        }\n        return result;\n    }\n}\n"};
+        for (const [ rel, text ] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut fixtureId: Option<&str> = /);
+        expect(out).toMatch(/let mut grouped: indexmap::IndexMap<String, Value> = /);
+        expect(out).toContain('grouped.get(fixtureId.as_deref().unwrap_or("")).cloned().unwrap_or(Value::Null)');
+    });
+});
