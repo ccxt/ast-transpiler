@@ -1753,7 +1753,7 @@ ${body}
             expect(bare).toContain('let mut keys: Value = Value::Null;');
         });
 
-        test('ral-gf: a dead typed source written into a nil scalar moves (take), a live one keeps the box', () => {
+        test('ral-gf: a dead typed source written into a nil scalar moves (take), a live one copies where its box was cloned (nc)', () => {
             const out = transpiler.transpileRust(listCls(`        let size = undefined;
         const base = parts[0];
         if (base !== undefined) { size = base; } else { size = parts[1]; }
@@ -1765,9 +1765,30 @@ ${body}
         if (base !== undefined) { size = base; }
         return { 'amount': size, 'b': base };`)).content;
             expect(live).not.toContain('.take()');
-            // ral-mc: the live source copies once at the write, where the box cloned it too
             expect(live).toContain('let mut size: Option<String> = None;');
             expect(live).toContain('size = base.clone();');
+        });
+
+        test('nc: a numeric alias of a live typed source is typed and its write is not cloned (Copy)', () => {
+            const out = transpiler.transpileRust(listCls(`        let size = undefined;
+        const ts = parts.length;
+        if (ts === 5) { return 0; }
+        if (kind === 'a') { size = ts; }
+        return { 'amount': size, 'ts': ts };`)).content;
+            expect(out).toContain('let mut size: Option<i64> = None;');
+            expect(out).toContain('size = Some(ts);');
+            expect(out).not.toContain('ts.clone()');
+        });
+
+        test('nc: an alias chain converges (nil local written from a string, then aliased at its last use)', () => {
+            const out = transpiler.transpileRust(listCls(`        let body = undefined;
+        const auth = parts[0];
+        if (kind === 'a') { body = auth; }
+        const result = body;
+        return { 'body': result, 'a': auth };`)).content;
+            expect(out).toContain('let mut body: Option<String> = None;');
+            expect(out).toContain('let mut result: Option<String> = body;');
+            expect(out).toContain('m.insert("body".to_string(), result.map(Value::from).unwrap_or(Value::Null));');
         });
 
         test('ral-gf: a nil string boxed before its last use lends at this. arguments', () => {

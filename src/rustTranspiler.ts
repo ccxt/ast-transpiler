@@ -2627,6 +2627,8 @@ export class RustTranspiler extends BaseTranspiler {
         for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
             if (isIdentifier(n) && this.rustNilSlotWrite(n) && this.rustDeclaredNode(n) === declaration) {
                 if (this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== 'string') return undefined;
+                // nc: the slot unwrap must not take its `__destr_tmp` line over the 400-char budget (a line already over keeps its rule)
+                if (this.rustScalarSeeding && this.rustNilSlotLineOverBudget(n)) return undefined;
                 joined = this.rustScalarJoinKinds(joined, 'ostr');
                 continue;
             }
@@ -2643,6 +2645,9 @@ export class RustTranspiler extends BaseTranspiler {
         const declared = declaration.type === undefined ? undefined : this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
         if (declared !== undefined && declared !== (joined === 'ostr' ? 'string' : 'number')) return undefined;
         const kind = joined;
+        // nc: while the function's solver seeds, assume the kind (as the initialised path does), so an alias chain
+        // whose links hold each other converges to its largest consistent set; the later passes re-prove every link
+        if (this.rustScalarSeeding) return kind;
         const boxed: any[] = [];
         let native = 0;
         const ok = this.rustLocalUsesAll(declaration, name, false, (n) => {
@@ -2679,11 +2684,14 @@ export class RustTranspiler extends BaseTranspiler {
             const parent: any = n.parent;
             if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
                 const rhs: any = this.unwrapParens(parent.right);
-                // a typed source of the same kind still read after the write copies once, as its `Value` box did (mc)
+                // nc: a typed source of the same kind still read later copies once where its `Value` box was cloned
+                // (`Option<String>`), or is `Copy` (`Option<i64|f64>`, printed owned: the printer adds no alias clone)
                 if (isIdentifier(rhs) && !this.rustNilAliasMove(rhs, kind) && !this.rustNilLiveAliasCopy(rhs, kind)) ok = false;
                 return true;
             }
             if (kind !== 'ostr') return true;
+            // nc: a whole alias into a local typed with this kind, at this local's last use, moves the string (no copy)
+            if (this.rustScalarAliasMove(n, kind, declaration)) return true;
             // an alias or another local's write would take a copy; a one-level store `m[k] = x` / `m.k = x` boxes it (D11)
             if (parent?.kind === SyntaxKind.VariableDeclaration || (isBinaryExpression(parent) && parent.right === n && !this.rustNilStrStoreBox(n))) ok = false;
             if (form !== 'box' && form !== 'xbox') ok = false;
@@ -2727,15 +2735,50 @@ export class RustTranspiler extends BaseTranspiler {
         return true;
     }
 
-    /** mc: `x = y` from a typed `Option<..>` local of the same kind that is read again later: the typed write clones
-     *  `y` where the boxed write cloned it too (`y.clone().map(Value::from)..`), so no copy is added. Strings only: an
-     *  `Option<i64>` / `Option<f64>` source boxed as `Value::from(y)` with no clone, and ccxt's build pass clones every
-     *  bare `x = y;` alias write, so typing those would add one. */
+    /** nc: `n` is the whole source of `let t = n` / `t = n;` (a statement), `t` a typed scalar local of `kind`, and this is
+     *  the source's last use (no loop or closure between): the typed target takes the value by move. */
+    rustScalarAliasMove(n: any, kind: string, declaration: any): boolean {
+        let top: any = n;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const parent: any = top.parent;
+        let target: any;
+        if (isVariableDeclaration(parent) && parent.initializer === top && isIdentifier(parent.name)) target = parent;
+        else if (isBinaryExpression(parent) && parent.right === top && parent.operatorToken.kind === SyntaxKind.EqualsToken
+            && isIdentifier(parent.left) && parent.parent?.kind === SyntaxKind.ExpressionStatement) target = this.rustDeclaredNode(parent.left);
+        if (target === undefined || target === declaration || !isVariableDeclaration(target) || this.rustEnclosingFunction(target) !== this.rustEnclosingFunction(n)) return false;
+        const targetKind = this.rustScalarDecisions.get(target);
+        if (targetKind !== kind && targetKind !== `o${kind}`) return false;
+        return this.rustLocalLastUse(n, declaration);
+    }
+
+    /** nc: a string slot unwrap (`.as_str().map(str::to_owned)`) would take its destructure line from within to over 400 chars. */
+    rustNilSlotLineOverBudget(n: any): boolean {
+        const statement: any = findAncestor(n, (a: any) => isStatement(a));
+        if (statement === undefined || isBlock(statement)) return false;
+        const column = statement.getStart() - String(statement.getSourceFile().text).lastIndexOf('\n', statement.getStart()) - 1;
+        const length = column + Math.max(...this.printNode(statement, 0).split('\n').map((l: string) => l.trim().length));
+        return length <= 400 && length + '.as_str().map(str::to_owned)'.length > 400;
+    }
+
+    /** nc: the whole source of a `let t = n` / `t = n;` statement at the source's last use. */
+    rustScalarAliasMoveSite(n: any, declaration: any): boolean {
+        let top: any = n;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const parent: any = top.parent;
+        const whole = (isVariableDeclaration(parent) && parent.initializer === top && isIdentifier(parent.name))
+            || (isBinaryExpression(parent) && parent.right === top && parent.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(parent.left) && parent.parent?.kind === SyntaxKind.ExpressionStatement);
+        return whole && this.rustEnclosingFunction(declaration) === this.rustEnclosingFunction(n) && this.rustLocalLastUse(n, declaration);
+    }
+
+    /** nc: `x = y` from a typed `Option<String|i64|f64>` local of the same kind that is read again later (one function,
+     *  no closure between). A string clones `y` where the boxed write cloned it (`y.clone().map(Value::from)..`); a
+     *  number is `Copy` and its write prints `y` owned, so neither adds a copy. */
     rustNilLiveAliasCopy(rhs: any, kind: string): boolean {
-        if (kind !== 'ostr') return false;
+        if (kind !== 'ostr' && kind !== 'oint' && kind !== 'onum') return false;
         const source: any = this.rustDeclarationOfIdentifier(rhs);
-        if (source === undefined || !isVariableDeclaration(source) || source.name === rhs || this.rustScalarIdentifierKind(rhs) !== kind) return false;
-        return this.rustEnclosingFunction(source) === this.rustEnclosingFunction(rhs) && !this.rustLocalLastUse(rhs, source);
+        const sourceKind = this.rustScalarIdentifierKind(rhs);
+        if (source === undefined || !isVariableDeclaration(source) || source.name === rhs || (sourceKind !== kind && sourceKind !== kind.slice(1))) return false;
+        return this.rustEnclosingFunction(source) === this.rustEnclosingFunction(rhs);
     }
 
     /** Every box before the last sits at a `this.` / `super.` argument (where the `Value` form was cloned); no free-function,
@@ -6321,6 +6364,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (isIdentifier(node) && this.rustScalarLocalOf(node)?.kind === kind) {
             const name = super.printIdentifier(node);
+            // nc: a string alias at its source's last use moves (owned: the alias-source pass leaves it bare)
+            const source = this.rustScalarLocalOf(node)?.declaration;
+            if ((kind === 'str' || kind === 'ostr') && source !== undefined && this.rustScalarAliasMoveSite(node, source)) return `\u0004${name}`;
             return kind === 'str' || kind === 'ostr' ? `${name}.clone()` : name;
         }
         const expressionText = this.rustScalarExpressionText(kind, node);
@@ -6384,7 +6430,9 @@ export class RustTranspiler extends BaseTranspiler {
         const alias: any = this.unwrapParens(right);
         if (local !== undefined && isIdentifier(alias) && this.rustNilAliasMoves.has(alias) && this.rustScalarIdentifierKind(alias) === local.kind) return `${super.printIdentifier(left)} = ${super.printIdentifier(alias)}.take()`;
         const text = local === undefined ? undefined : this.rustScalarNativeText(local.kind, right);
-        return text === undefined ? undefined : `${super.printIdentifier(left)} = ${text}`;
+        // nc: a bare `Copy` source (`i64` / `f64` / `bool` or its `Option`) is owned: the alias-source pass must not clone it
+        const owned = text !== undefined && isIdentifier(alias) && text === super.printIdentifier(alias) && RustTranspiler.RUST_COPY_SCALAR_KINDS.has(local.kind);
+        return text === undefined ? undefined : `${super.printIdentifier(left)} = ${owned ? '\u0004' : ''}${text}`;
     }
 
     // Expression-shaped scalar locals: aliases, ternaries, arithmetic/comparisons over typed operands,
@@ -7087,7 +7135,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (isIdentifier(node)) {
             const name = super.printIdentifier(node);
             if (kind === 'num' && own === 'int') return `(${name} as f64)`;
-            return wrap(own === 'str' || own === 'ostr' ? `${name}.clone()` : name);
+            // nc: a string alias at its source's last use moves (`Some(x)`: no copy)
+            const source = this.rustScalarLocalOf(node)?.declaration;
+            const moved = (own === 'str' || own === 'ostr') && source !== undefined && this.rustScalarAliasMoveSite(node, source);
+            return wrap(own === 'str' || own === 'ostr' ? (moved ? name : `${name}.clone()`) : name);
         }
         if (isBinaryExpression(node)) {
             const op = node.operatorToken.kind;
