@@ -15320,6 +15320,10 @@ export class RustTranspiler extends BaseTranspiler {
         // `Value::Map`): the shared handle moves through the head and `.into_dict()` takes the result back without a copy
         const extendReuse = from === undefined && init !== undefined && this.rustExtendReuseLiteral(declaration, init);
         if (extendReuse) from = 'dict';
+        // ral-qa: a base `safeValue*` result read only at string keys: every non-map value (Null included) reads Null at
+        // a string key exactly as the empty map `into_dict()` leaves, so the local holds the shared map
+        const keyReadOnly = from === undefined && !nilDeclared && init !== undefined && this.rustSafeValueKeyReadSource(init);
+        if (keyReadOnly) from = 'dict';
         if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
@@ -15351,6 +15355,7 @@ export class RustTranspiler extends BaseTranspiler {
         let declaredEndpointWrites = 0;
         let nullWrites = 0;
         let endpointBoxes = 0;
+        let plainReads = 0;
         const boxedElementUses: any[] = [];
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
@@ -15384,8 +15389,10 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustDictKeyReadUse(n)) {
                 keyReads++;
                 reads++;
+                plainReads++;
                 return true;
             }
+            if (keyReadOnly) return this.rustSafeValueKeyReaderUse(n) && ++plainReads > 0 && ++reads > 0;
             if (this.rustBorrowedKeySetUse(n)) {
                 keyReads++;
                 keySets++;
@@ -15464,6 +15471,8 @@ export class RustTranspiler extends BaseTranspiler {
         const endpointBoxOnly = endpointBoxes > 0 && nullTests === 0 && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes
             && !this.rustNilResponseLocals.has(declaration) && boxedElementUses.every((u: any) => this.rustBoxLineOk(u));
         if (endpointBoxes > 0 && !endpointBoxOnly) return undefined;
+        // ral-qa: only string-key reads (no null test, write, length, box or lend could tell a non-map from the empty map)
+        if (keyReadOnly && (!safe || plainReads === 0 || plainReads !== reads || nullTests + writes + lengths + indexLikeReads + boxedElementUses.length + lentResponses + lentNullable + keySets + keyWrites + extendHeads + jwtLends > 0)) return undefined;
         if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !endpointBoxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
             || (this.rustListElementSource(init) && (nullTests > 0 || lengths > 0))) return undefined;
@@ -16861,6 +16870,31 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const file = String(this.rustScalarCallee(call)?.getSourceFile?.()?.fileName ?? '');
         return /ts[\\/]src[\\/]abstract[\\/]/.test(file) ? 'api' : 'dict';
+    }
+
+    // ── ral-qa: rustSafeValueKeyReadSource / rustSafeValueKeyReaderUse ──
+    // `const o = this.safeValue (r, k[, d])` (base hand-written reader) whose every use is a base reader at a literal
+    // string key (`this.safeX (o, 'k')`) or a `o.k` / `o['k']` read. Invariant: a string-key read of any non-map Value
+    // (Null, list, scalar) answers Null, exactly what the same read of the empty map `into_dict()` leaves answers, so the
+    // typed local is observably identical. Market / currency records, ws client / cache maps keep their own lanes.
+    private static readonly RUST_SAFE_VALUE_KEY_SOURCES = new Set([ 'safeValue', 'safeValue2', 'safeValueN' ]);
+
+    rustSafeValueKeyReadSource(call: any): boolean {
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (!RustTranspiler.RUST_SAFE_VALUE_KEY_SOURCES.has(String(call.expression.name.text)) || call.arguments.length < 2) return false;
+        const declaration: any = this.rustScalarCallee(call);
+        if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
+        if (this.rustWsCacheMapLike(call.arguments[0]) || this.rustRecordLookupSource(call)) return false;
+        // the receiver chain names no ws client state nor a market / currency table
+        const names = (x: any): boolean => (isPropertyAccessExpression(x) && /^(?:markets|markets_by_id|currencies|currencies_by_id|clients|futures|subscriptions|orderbooks|cache)$/.test(String(x.name.text))) || (x.forEachChild(names) ?? false);
+        return !names(call.arguments[0]);
+    }
+
+    /** `this.safeX (o, '<k>'[, d])`: a base by-reference reader whose container is `o`, at a literal non-index string key. */
+    rustSafeValueKeyReaderUse(n: any): boolean {
+        const up: any = n.parent;
+        if (!isCallExpression(up) || up.arguments[0] !== n || this.rustScalarInNestedWrite(n)) return false;
+        return this.rustBorrowedDictReader(up) !== undefined && !/^\d+$/.test(String(this.rustSkipWrappers(up.arguments[1]).text));
     }
 
     /** `this.m(..)` of a venue method (no override, every venue declaration of the name returning `Dict`) whose every
