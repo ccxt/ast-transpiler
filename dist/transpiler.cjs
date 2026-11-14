@@ -54041,8 +54041,19 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (statement === void 0 || _is.isBlock.call(void 0, statement))
       return false;
     const column = statement.getStart() - String(statement.getSourceFile().text).lastIndexOf("\n", statement.getStart()) - 1;
-    const longest = Math.max(...this.printNode(statement, 0).split("\n").map((l) => l.trim().length));
-    return column + longest + '.as_deref().unwrap_or("null")'.length <= 400;
+    const name = _is.isIdentifier.call(void 0, n) ? String(n.text) : void 0;
+    const boxed = name === void 0 ? void 0 : `${name}.clone().map(Value::from).unwrap_or(Value::Null)`;
+    const inPlace = `${name}.as_deref().unwrap_or("null")`;
+    const width = (l) => {
+      const t = l.trim();
+      if (boxed !== void 0 && t.includes(boxed))
+        return t.split(boxed).join(inPlace).length;
+      if (name !== void 0 && t.includes(inPlace))
+        return t.length;
+      return t.length + '.as_deref().unwrap_or("null")'.length;
+    };
+    const longest = Math.max(...this.printNode(statement, 0).split("\n").map(width));
+    return column + longest <= 400;
   }
   /** A write that decodes a `Value` result (a call, or a ternary over one). */
   rustNilDecodedWrite(rhs) {
@@ -69810,7 +69821,17 @@ ${iden}}`;
     } catch (e) {
       return false;
     }
-    return width + ".into_dict()".length + "Value::Dict()".length <= 400;
+    let reserve = 0;
+    const write = statement.kind === _ast.SyntaxKind.ExpressionStatement ? statement.expression : void 0;
+    if (write !== void 0 && _is.isBinaryExpression.call(void 0, write) && _is.isArrayLiteralExpression.call(void 0, write.left)) {
+      for (const el of write.left.elements) {
+        if (el === n || !_is.isIdentifier.call(void 0, el) || !this.rustNilSlotWrite(el))
+          continue;
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(el)) === "string")
+          reserve += ".as_str().map(str::to_owned)".length;
+      }
+    }
+    return width + reserve + ".into_dict()".length + "Value::Dict()".length <= 400;
   }
   /** A nil-declared slot local typed as the map. */
   rustNilSlotDictLocal(declaration) {
