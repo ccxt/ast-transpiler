@@ -13602,3 +13602,25 @@ describe('we: a side read off a proven book local and used only as a side holds 
         expect(mk("        const first = this.safeList (bookSide, 0);\n        bookSide.store (price, first);\n")).not.toContain('let mut bookSide: crate::pro::order_book::Side');
     });
 });
+
+describe('int44 glue: a borrowed string element (wg) as an inArray needle (wd) and as the key of a held-container read (wh)', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base/functions'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/functions/generic.ts'), "// @ts-nocheck\nconst inArray = (needle: any, haystack: any[]): boolean => haystack.includes (needle);\nexport { inArray };\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "import { inArray } from './functions/generic.js';\nexport interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    inArray = inArray;\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o[k]; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('an Object.keys element tested with inArray stays borrowed and boxes for the needle', () => {
+        const out = write ('int44-needle', "    m (balance: Dict) {\n        const reserved = [ 'free', 'used', 'total' ];\n        const keys = Object.keys (balance);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            if (this.inArray (key, reserved)) {\n                continue;\n            }\n            this.hold (this.safeValue (balance, key));\n        }\n    }\n");
+        expect(out).toContain('let mut key: Option<&str> = ');
+        expect(out).toContain('self.inArray(Value::from(key.as_deref()), ');
+    });
+    test('a defaulted safeDict read by a borrowed key element holds the Dict and reads by reference', () => {
+        const out = write ('int44-key', "    m (raw: Dict) {\n        const tokens = this.safeDict (raw, 'tokens', {});\n        const labels = Object.keys (tokens);\n        for (let i = 0; i < labels.length; i++) {\n            const label = labels[i];\n            this.hold (tokens[label]);\n        }\n    }\n");
+        expect(out).not.toContain('let mut tokens: Value = ');
+        expect(out).toContain('let mut label: Option<&str> = ');
+        expect(out).not.toContain('(tokens.as_map(), label.as_deref())');
+    });
+});

@@ -7318,6 +7318,8 @@ export class RustTranspiler extends BaseTranspiler {
             const form = this.rustScalarUseForms.get(n);
             if (keyed && (form === 'okey' || form === 'kin' || form === 'key' || form === 'inbox')) return false;
             if (form === 'test' || form === 'concat' || form === 'okey' || form === 'kin' || form === 'key' || form === 'inbox') return true;
+            // int44 (wg x wd): an inArray needle boxes the borrow (`Value` is an `InArrayNeedle`), as wg printed it
+            if (form === 'parg' && this.rustInArrayNeedle(n)) return true;
             // wg: the receiver of a string method reads the borrow (`k.as_deref()` is the same `Option<&str>`)
             if (form === 'native' && this.rustBorrowStrMethodRecv(n)) return true;
             if (form !== 'box' && form !== 'xbox') return false;
@@ -7487,7 +7489,7 @@ export class RustTranspiler extends BaseTranspiler {
         const form = local === undefined ? undefined : this.rustScalarUseForms.get(node);
         // an optional key that reaches a helper write (no native insert) takes the helper's boxed key
         // vg: a borrowed element lends at every box (`From<Option<&str>>`: `None` is Null, `Some(s)` the `Str` the box held)
-        if (local?.kind === 'ostr' && this.rustBorrowedStrElems.has(local.declaration) && (form === 'key' || form === 'inbox' || form === 'box' || form === 'xbox')) return `Value::from(${super.printIdentifier(node)}.as_deref())`;
+        if (local?.kind === 'ostr' && this.rustBorrowedStrElems.has(local.declaration) && (form === 'key' || form === 'inbox' || form === 'box' || form === 'xbox' || (form === 'parg' && this.rustInArrayNeedle(node)))) return `Value::from(${super.printIdentifier(node)}.as_deref())`;
         if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}${this.rustLocalLastUse(node, local.declaration) ? '' : '.clone()'}.map(Value::from).unwrap_or(Value::Null)`;
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form === 'concat' && local.kind === 'ostr') return `${super.printIdentifier(node)}.as_deref().unwrap_or("null")`;
@@ -8979,6 +8981,8 @@ export class RustTranspiler extends BaseTranspiler {
         const key: any = node.argumentExpression;
         const keyKind = isIdentifier(key) && this.rustScalarUseForms.get(key) === 'okey' ? this.rustScalarLocalOf(key)?.kind : undefined;
         if (keyKind !== 'ostr' && keyKind !== 'str') return undefined;
+        // int44 (wh x wg): a read wh lends off its held container prints there (`KeyRead::read`, boxed key)
+        if (this.rustBorrowedIndexReads.has(node)) return undefined;
         const recv = this.printNode(node.expression, 0).trim();
         const name = super.printIdentifier(key);
         if (keyKind === 'str') {
@@ -14288,7 +14292,8 @@ export class RustTranspiler extends BaseTranspiler {
             const { expression: receiver, argumentExpression: key } = link;
             // ral-wh: an index / variable-key read on a held Dict / List local: the arm `get_value` takes, by reference
             if (link === chain[0] && this.rustBorrowedIndexReads.has(link) && isIdentifier(receiver)) {
-                acc = `crate::value::KeyRead::read(&&${super.printIdentifier(receiver)}, &${this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0)})`;
+                const borrowedKey = isIdentifier(key) && this.rustBorrowedStrElems.has(this.rustDeclarationOfIdentifier(key));
+                acc = `crate::value::KeyRead::read(&&${super.printIdentifier(receiver)}, &${borrowedKey ? `Value::from(${super.printIdentifier(key)})` : (this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0))})`;
                 continue;
             }
             const native = nativeAllowed ? this.printNativeContainerAccess(acc, receiver, key)
@@ -17193,6 +17198,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(key)) return false;
         if (this.isRustValueIndexKey(key)) return true;
         const keyDecl: any = this.rustDeclarationOfIdentifier(key);
+        // int44 (wh x wg): a string element borrowed off its list keys the read as its box (`Value::from(k)`: the `Str` / Null the Value local held)
+        if (keyDecl !== undefined && this.rustBorrowedStrElems.has(keyDecl)) return true;
         if (keyDecl === undefined || !isVariableDeclaration(keyDecl) || !isIdentifier(keyDecl.name) || keyDecl.name === key) return false;
         const prim = this.primitiveKindOfType(this.typeOfNodeIfAny(key));
         if (prim !== 'number' && prim !== 'string') return false;
