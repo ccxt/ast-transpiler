@@ -5833,7 +5833,7 @@ export class RustTranspiler extends BaseTranspiler {
         const file = String(this.rustScalarCallee(node)?.getSourceFile?.()?.fileName ?? '');
         const at = file.search(/[/\\]ts[/\\]src[/\\]/);
         if (at < 0) return false;
-        const types = this.rustVenueReturnTypes(file.slice(0, at) + '/ts/src').get(String(node.expression.name.text));
+        const types = this.rustVenueFamilyReturnTypes(file, at, String(node.expression.name.text));
         // od: a same-named `Promise<..>` method of another venue (bybit's async getUrlByMarketType) cannot override a sync
         // string method (TS rejects the signature), so only the sync declarations have to agree
         return types !== undefined && [ ...types ].every((t) => t === 'string' || t === 'Str' || (/^Promise</.test(t) && !this.isAsyncFunction(this.rustScalarCallee(node))));
@@ -5849,7 +5849,7 @@ export class RustTranspiler extends BaseTranspiler {
         const file = String(declaration.getSourceFile?.()?.fileName ?? '');
         const at = file.search(/[/\\]ts[/\\]src[/\\]/);
         if (at < 0 || RustTranspiler.RUST_BASE_TIER_FILE.test(file) || this.getMethodOverride(declaration) !== undefined) return false;
-        const types = this.rustVenueReturnTypes(file.slice(0, at) + '/ts/src').get(String(node.expression.name.text));
+        const types = this.rustVenueFamilyReturnTypes(file, at, String(node.expression.name.text));
         return types !== undefined && [ ...types ].every((t) => t === 'int');
     }
 
@@ -5939,6 +5939,69 @@ export class RustTranspiler extends BaseTranspiler {
         }
         this.rustVenueReturnTypesByRoot.set(srcRoot, table);
         return table;
+    }
+
+    // wc: venue families keyed by file (relative to ts/src) and class: a family is the set of venue files joined by
+    // `extends` (REST class, its pro subclass, sibling venues deriving from it); two families never share an instance.
+    private rustVenueFamiliesByRoot = new Map<string, { familyOf: Map<string, string>, types: Map<string, Map<string, Set<string>>> }>();
+
+    rustVenueFamilies(srcRoot: string): { familyOf: Map<string, string>, types: Map<string, Map<string, Set<string>>> } {
+        let cached = this.rustVenueFamiliesByRoot.get(srcRoot);
+        if (cached !== undefined) return cached;
+        const header = /^\s+(?:(?:override|async|public|protected|private|static)\s+)*([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?::\s*([^{;]+?))?\s*\{\s*$/gm;
+        const texts = new Map<string, string>();
+        for (const dir of [ '', 'pro/', 'prediction/' ]) {
+            let entries: string[] = [];
+            try {
+                entries = fs.readdirSync(`${srcRoot}/${dir}`).filter((f) => f.endsWith('.ts'));
+            } catch (e) {
+                continue;
+            }
+            for (const f of entries) texts.set(dir + f, fs.readFileSync(`${srcRoot}/${dir}${f}`, 'utf8'));
+        }
+        const up = new Map<string, string>();
+        const find = (x: string): string => {
+            while (up.has(x) && up.get(x) !== x) x = up.get(x);
+            return x;
+        };
+        for (const [ rel, text ] of texts) {
+            const ext = /^export default class (\w+) extends (\w+)/m.exec(text);
+            const imp = ext === null ? null : new RegExp(`^import ${ext[2]} from '(\\.[^']+)\\.js';`, 'm').exec(text);
+            if (imp === null) continue;
+            const parts = (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/') + 1) + imp[1] : imp[1]).split('/');
+            const resolved: string[] = [];
+            for (const p of parts) {
+                if (p === '..') resolved.pop();
+                else if (p !== '.' && p !== '') resolved.push(p);
+            }
+            const parent = resolved.join('/') + '.ts';
+            if (texts.has(parent)) up.set(find(rel), find(parent));
+        }
+        const familyOf = new Map<string, string>();
+        const types = new Map<string, Map<string, Set<string>>>();
+        for (const [ rel, text ] of texts) {
+            const family = find(rel);
+            familyOf.set(rel, family);
+            const byName = types.get(family) ?? new Map<string, Set<string>>();
+            for (const m of text.matchAll(header)) {
+                const set = byName.get(m[1]) ?? new Set<string>();
+                set.add(String(m[3] ?? '').trim());
+                byName.set(m[1], set);
+            }
+            types.set(family, byName);
+        }
+        cached = { familyOf, types };
+        this.rustVenueFamiliesByRoot.set(srcRoot, cached);
+        return cached;
+    }
+
+    /** Declared return types of `name` over the venue family of `file` (the callee's declaring file). */
+    rustVenueFamilyReturnTypes(file: string, at: number, name: string): Set<string> | undefined {
+        const root = file.slice(0, at) + '/ts/src';
+        const rel = file.slice(at + '/ts/src/'.length).replace(/\\/g, '/');
+        const { familyOf, types } = this.rustVenueFamilies(root);
+        const family = familyOf.get(rel);
+        return family === undefined ? undefined : types.get(family)?.get(name);
     }
 
     /** The `Option<String>` text of a venue string-method call (the box a `Value` position adds is left off). */
@@ -6037,7 +6100,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(hidden.getSourceFile?.()?.fileName ?? '')) || this.rustMethodTypedReturnKind(hidden) !== undefined || this.rustBaseNativeStrMethod(declaration)) return false;
         const file = String(declaration.getSourceFile().fileName);
         const at = file.search(/[/\\]ts[/\\]src[/\\]/);
-        const types = at < 0 ? undefined : this.rustVenueReturnTypes(file.slice(0, at) + '/ts/src').get(String(declaration.name.text));
+        const types = at < 0 ? undefined : this.rustVenueFamilyReturnTypes(file, at, String(declaration.name.text));
         return types !== undefined && [ ...types ].every((t) => t.replace(/\s+/g, '') === own);
     }
 
@@ -9168,17 +9231,23 @@ export class RustTranspiler extends BaseTranspiler {
         }
     }
 
-    // Venue methods (class -> method names) whose `: Str` return was spelled after their by-name arm existed: the arm
-    // stays (it boxes the `Option<String>` once), so the dispatch-arm name set is unchanged.
-    private static readonly RUST_VENUE_KEPT_STR_ARMS: Record<string, string[]> = { coinbaseinternational: [ 'parseTimeInForce' ], bitfinex: [ 'convertDerivativesId' ], blofin: [ 'networkCodeToChainId' ], dydx: [ 'hashMessage' ], modetrade: [ 'hashMessage' ], polymarket: [ 'hashMessage' ] };
+    // Venue methods (file under ts/src + class -> method names) whose `: Str` return was spelled after their by-name arm
+    // existed: the arm stays (it boxes the `Option<String>` once), so the dispatch-arm name set is unchanged.
+    private static readonly RUST_VENUE_KEPT_STR_ARMS: Record<string, string[]> = {
+        'coinbaseinternational.ts#coinbaseinternational': [ 'parseTimeInForce' ], 'bitfinex.ts#bitfinex': [ 'convertDerivativesId' ],
+        'blofin.ts#blofin': [ 'networkCodeToChainId' ], 'dydx.ts#dydx': [ 'hashMessage' ], 'modetrade.ts#modetrade': [ 'hashMessage' ],
+        'polymarket.ts#polymarket': [ 'hashMessage', 'signMessage' ],
+    };
 
     rustVenueKeptStrArm(node: any): boolean {
         if (node?.kind !== SyntaxKind.MethodDeclaration || !isIdentifier(node.name)) return false;
-        // vc: the table names REST venue classes; a prediction class of the same name (polymarket) is another venue
-        if (/ts[\\/]src[\\/]prediction[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? ''))) return false;
+        // wc: keyed by file and class, so the REST and prediction polymarket classes are two venues
+        const file = String(node.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        const at = file.lastIndexOf('/ts/src/');
         const cls: any = node.parent;
         const clsName = cls?.name !== undefined && isIdentifier(cls.name) ? String(cls.name.text) : undefined;
-        return clsName !== undefined && (RustTranspiler.RUST_VENUE_KEPT_STR_ARMS[clsName] ?? []).includes(String(node.name.text));
+        if (at < 0 || clsName === undefined) return false;
+        return (RustTranspiler.RUST_VENUE_KEPT_STR_ARMS[`${file.slice(at + '/ts/src/'.length)}#${clsName}`] ?? []).includes(String(node.name.text));
     }
 
     /** A `: Str` method of the table declared in the base tier, or an override of one. */
@@ -18473,7 +18542,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (at < 0 || RustTranspiler.RUST_BASE_TIER_FILE.test(file) || /ts[\\/]src[\\/]test[\\/]/.test(file) || this.getMethodOverride(declaration) !== undefined) return false;
         const own = String(declaration.type?.getText?.() ?? '').replace(/\s+/g, '');
         if (own !== (this.isAsyncFunction(declaration) ? 'Promise<Dict>' : 'Dict')) return false;
-        const types = this.rustVenueReturnTypes(file.slice(0, at) + '/ts/src').get(String(declaration.name.text));
+        const types = this.rustVenueFamilyReturnTypes(file, at, String(declaration.name.text));
         if (types === undefined || ![ ...types ].every((t) => t.replace(/\s+/g, '') === own)) return false;
         let returns = 0;
         let ok = true;

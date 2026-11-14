@@ -11814,6 +11814,66 @@ describe('ral-vc: venue hash helpers whose `: string` return is spelled keep the
     });
 });
 
+describe('ral-wc: the venue return-type table is per venue family (file + class), not per method name', () => {
+    const write = (dir: string, files: Record<string, string>) => {
+        for (const [ rel, text ] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+    };
+    const base = 'export default class Exchange {\n'
+        + "    hash (request: any, algo: any, digest: string = 'hex'): string { return ''; }\n"
+        + '    hold (x: any): any { return x; }\n'
+        + '}\n';
+    test('a string signMessage types its result although another venue declares signMessage Dict', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-wc-family');
+        write (dir, {
+            'ts/src/base/Exchange.ts': base,
+            'ts/src/aster.ts': "import Exchange from './base/Exchange.js';\n"
+                + 'export default class aster extends Exchange {\n'
+                + "    signMessage (message: any, privateKey: string): string {\n        return '0x' + this.hash (message, 'keccak', 'hex');\n    }\n"
+                + "    pack (m: any): any {\n        const signature = this.signMessage (m, 'k');\n        return this.hold ({ 'sig': signature });\n    }\n"
+                + '}\n',
+            'ts/src/dydx.ts': "import Exchange from './base/Exchange.js';\n"
+                + 'export default class dydx extends Exchange {\n'
+                + "    signMessage (message: any, privateKey: any): any {\n        return { 'r': message };\n    }\n"
+                + '}\n',
+        });
+        const r = transpiler.transpileRustByPath (path.join (dir, 'ts/src/aster.ts'));
+        expect(r.content).toMatch(/let mut signature: Option<String> = /);
+    });
+    test('the pro subclass of a venue is in its family: a pro override with another kind blocks the REST name', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-wc-family-pro');
+        write (dir, {
+            'ts/src/base/Exchange.ts': base,
+            'ts/src/aster.ts': "import Exchange from './base/Exchange.js';\n"
+                + 'export default class aster extends Exchange {\n'
+                + "    signMessage (message: any, privateKey: string): string {\n        return '0x' + this.hash (message, 'keccak', 'hex');\n    }\n"
+                + "    pack (m: any): any {\n        const signature = this.signMessage (m, 'k');\n        return this.hold ({ 'sig': signature });\n    }\n"
+                + '}\n',
+            'ts/src/pro/aster.ts': "import asterRest from '../aster.js';\n"
+                + 'export default class aster extends asterRest {\n'
+                + "    signMessage (message: any, privateKey: string): any {\n        return { 'r': message };\n    }\n"
+                + '}\n',
+        });
+        const r = transpiler.transpileRustByPath (path.join (dir, 'ts/src/aster.ts'));
+        expect(r.content).toMatch(/let mut signature: Value = /);
+    });
+    test('the kept-arm table is keyed by file and class: REST polymarket keeps its arm, prediction polymarket does not', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-wc-kept');
+        const body = "    hashMessage (message: any): string {\n        return '0x' + this.hash (message, 'keccak', 'hex');\n    }\n";
+        write (dir, {
+            'ts/src/base/Exchange.ts': base,
+            'ts/src/polymarket.ts': "import Exchange from './base/Exchange.js';\nexport default class polymarket extends Exchange {\n" + body + '}\n',
+            'ts/src/prediction/polymarket.ts': "import Exchange from '../base/Exchange.js';\nexport default class polymarket extends Exchange {\n" + body + '}\n',
+        });
+        const rest = transpiler.transpileRustByPath (path.join (dir, 'ts/src/polymarket.ts'));
+        const pred = transpiler.transpileRustByPath (path.join (dir, 'ts/src/prediction/polymarket.ts'));
+        expect((rest.rustSignatures ?? []).find((s: any) => s.name === 'hash_message')?.ret).toBe('keptostr');
+        expect((pred.rustSignatures ?? []).find((s: any) => s.name === 'hash_message')?.ret).toBe('ostr');
+    });
+});
+
 describe('ral-md: market-field strings boxed before their last use', () => {
     test('a market-field string handed to a self call before its last box is lent there, not copied', () => {
         const dir = path.join (rustFixtureRoot, 'ral-md-market-lent');
