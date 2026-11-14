@@ -57642,6 +57642,13 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (!isBinaryExpression5(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind7.EqualsToken || write.parent?.kind !== SyntaxKind7.ExpressionStatement)
       return false;
     const name = new RegExp(`\\b(?:${String(n.text)}|this)\\b`);
+    for (let up = access.expression; isElementAccessExpression4(up); up = up.expression) {
+      const k = this.rustSkipWrappers(up.argumentExpression);
+      const kd = isIdentifier3(k) ? this.rustDeclaredNode(k) : void 0;
+      const ki = kd !== void 0 && isVariableDeclaration3(kd) ? this.rustSkipWrappers(kd.initializer) : void 0;
+      if (ki !== void 0 && isCallExpression6(ki) && isPropertyAccessExpression3(ki.expression) && ki.expression.expression.kind === SyntaxKind7.ThisKeyword && /^safeString/.test(String(ki.expression.name.text)) && ki.arguments.length < 3)
+        return false;
+    }
     return !name.test(String(write.right.getText())) && !name.test(String(access.expression.getText()).replace(/^this\./, ""));
   }
   /** `this.F[..]['lit'] = n` (statement): the value slot of a nested plain-field insert. */

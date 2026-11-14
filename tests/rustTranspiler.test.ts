@@ -11678,3 +11678,17 @@ describe('pg: precision formatters answer Option<String> (results of other self 
         expect(out).toMatch(/let mut q: Value = /);
     });
 });
+
+describe('int37: nested this.balance insert under a local upper key keeps that local typed', () => {
+    test('a local upper key of this.balance[acct][code] = v skips the nkey insert (bullish tradingAccountId stays Option<String>)', () => {
+        const dir = path.join (rustFixtureRoot, 'scalar-int37');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: any = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeCurrencyCode (c: Str, x: any = undefined): string { return c; }\n    account (): any { return {}; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue10.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue10 extends Exchange {\n    bal (head: any, rows: any[]) {\n        const acct = this.safeString (head, 'acct');\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            const currencyId = this.safeString (row, 'a');\n            const code = this.safeCurrencyCode (currencyId);\n            const account = this.account ();\n            if (code !== undefined) {\n                this.balance[acct][code] = account;\n            }\n        }\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue10.ts')).content;
+        // the nkey insert would print the upper key through get_value_mut(.., &acct) and send that local back to Value
+        // on bullish handleBalance (tradingAccountId); with a local upper key the helper chain stays and `code` is not nkey
+        expect(out).not.toContain('__r05d).insert(code');
+        expect(out).toContain('let mut code: Value = ');
+    });
+});

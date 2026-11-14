@@ -57641,6 +57641,13 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (!_is.isBinaryExpression.call(void 0, write) || write.left !== access || write.operatorToken.kind !== _ast.SyntaxKind.EqualsToken || _optionalChain([write, 'access', _8883 => _8883.parent, 'optionalAccess', _8884 => _8884.kind]) !== _ast.SyntaxKind.ExpressionStatement)
       return false;
     const name = new RegExp(`\\b(?:${String(n.text)}|this)\\b`);
+    for (let up = access.expression; _is.isElementAccessExpression.call(void 0, up); up = up.expression) {
+      const k = this.rustSkipWrappers(up.argumentExpression);
+      const kd = _is.isIdentifier.call(void 0, k) ? this.rustDeclaredNode(k) : void 0;
+      const ki = kd !== void 0 && _is.isVariableDeclaration.call(void 0, kd) ? this.rustSkipWrappers(kd.initializer) : void 0;
+      if (ki !== void 0 && _is.isCallExpression.call(void 0, ki) && _is.isPropertyAccessExpression.call(void 0, ki.expression) && ki.expression.expression.kind === _ast.SyntaxKind.ThisKeyword && /^safeString/.test(String(ki.expression.name.text)) && ki.arguments.length < 3)
+        return false;
+    }
     return !name.test(String(write.right.getText())) && !name.test(String(access.expression.getText()).replace(/^this\./, ""));
   }
   /** `this.F[..]['lit'] = n` (statement): the value slot of a nested plain-field insert. */

@@ -6452,6 +6452,15 @@ export class RustTranspiler extends BaseTranspiler {
         const write: any = access.parent;
         if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         const name = new RegExp(`\\b(?:${String(n.text)}|this)\\b`);
+        // int37: an upper key read by a safeString* reader with no default (may be undefined) keeps the helper chain:
+        // `get_value_mut(.., &k)` sent that local back to Value (bullish handleBalance tradingAccountId)
+        for (let up: any = access.expression; isElementAccessExpression(up); up = up.expression) {
+            const k: any = this.rustSkipWrappers(up.argumentExpression);
+            const kd: any = isIdentifier(k) ? this.rustDeclaredNode(k) : undefined;
+            const ki: any = kd !== undefined && isVariableDeclaration(kd) ? this.rustSkipWrappers(kd.initializer) : undefined;
+            if (ki !== undefined && isCallExpression(ki) && isPropertyAccessExpression(ki.expression) && ki.expression.expression.kind === SyntaxKind.ThisKeyword
+                && /^safeString/.test(String(ki.expression.name.text)) && ki.arguments.length < 3) return false;
+        }
         return !name.test(String(write.right.getText())) && !name.test(String(access.expression.getText()).replace(/^this\./, ''));
     }
 
