@@ -2560,6 +2560,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustNilValueStrAlias(node)) return 'str';
             return this.rustNilLocalOfIdentifier(node)?.kind;
         }
+        // za: `c ? undefined : false` (arms each undefined or a boolean literal, one of each): `None` / `Some(lit)` per arm
+        if (this.rustNilBoolNullTernary(node)) return 'bool';
         if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.PlusToken) {
             return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'string' ? 'str' : undefined;
         }
@@ -2588,6 +2590,14 @@ export class RustTranspiler extends BaseTranspiler {
             return args.length === boolBase || (args.length === boolBase + 1 && this.literalKindOfNode(args[boolBase]) === 'boolean') ? 'bool' : undefined;
         }
         return undefined;
+    }
+
+    /** za: a ternary whose arms are an `undefined` and a boolean literal (either order). */
+    rustNilBoolNullTernary(expr): boolean {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || !isConditionalExpression(node)) return false;
+        const kinds = [ node.whenTrue, node.whenFalse ].map((a) => this.literalKindOfNode(this.unwrapParens(a)));
+        return kinds.includes('null') && kinds.includes('boolean');
     }
 
     /** A boolean that is never undefined: `!x`, a ternary of boolean literals, or `&&` / `||` / parens over such operands. */
@@ -2646,6 +2656,9 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustNilBoxCallOk(parent, parent.arguments.indexOf(n)) ? 'box' : undefined;
         }
         if (parent.kind === SyntaxKind.PropertyAssignment && parent.initializer === n) return 'box';
+        // za: `const y = x;` copies a bool nil local into a `Value` local: the box is the Bool / Null the `Value` held
+        if (kind === 'bool' && isVariableDeclaration(parent) && parent.initializer === n && isIdentifier(parent.name)
+            && this.rustScalarLocalKind(parent) === undefined && this.rustNilLocalKind(parent) === undefined) return 'box';
         if (isArrayLiteralExpression(parent) && !(isBinaryExpression(parent.parent) && parent.parent.left === parent)) return 'box';
         if (isReturnStatement(parent) && parent.expression === n) {
             return this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike) as any) === 'str' ? undefined : 'box';
@@ -2763,7 +2776,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustDeclaredNode(n) !== declaration) continue;
             const rhs: any = this.unwrapParens(parent.right);
             if (!this.rustNilDecodedWrite(rhs)) writes++;
-            const write = isIdentifier(rhs) && this.literalKindOfNode(rhs) !== 'null' ? (this.rustScalarIdentifierKind(rhs) ?? (this.rustNilValueStrAlias(rhs) ? 'ostr' : undefined)) : this.rustScalarValueKind(rhs, true);
+            let write = isIdentifier(rhs) && this.literalKindOfNode(rhs) !== 'null' ? (this.rustScalarIdentifierKind(rhs) ?? (this.rustNilValueStrAlias(rhs) ? 'ostr' : undefined)) : this.rustScalarValueKind(rhs, true);
+            // za: `x = c ? <scalar> : x` keeps x on one arm: the write's kind is the other arm's (joined below with x's own)
+            if (write === undefined) write = this.rustNilSelfArmTernaryKind(rhs, declaration);
             joined = this.rustScalarJoinKinds(joined, write);
             if (joined === undefined) return undefined;
         }
@@ -2798,6 +2813,24 @@ export class RustTranspiler extends BaseTranspiler {
         return kind;
     }
 
+    /** za: kind of the scalar arm of `c ? <scalar> : x` / `c ? x : <scalar>` where the other arm is the written local itself. */
+    rustNilSelfArmTernaryKind(rhs: any, declaration: any): string | undefined {
+        if (rhs === undefined || !isConditionalExpression(rhs)) return undefined;
+        const self = (a: any) => { const u: any = this.unwrapParens(a); return isIdentifier(u) && this.rustDeclaredNode(u) === declaration; };
+        const t = self(rhs.whenTrue); const f = self(rhs.whenFalse);
+        if (t === f) return undefined;
+        const other: any = t ? rhs.whenFalse : rhs.whenTrue;
+        const k = this.rustScalarValueKind(other, true);
+        if (k !== 'str' && k !== 'ostr') return undefined;
+        // a `Precise.*` operand borrows the `Value` local (`&x`); the optional string would box with a copy there
+        const lentToPrecise = this.rustScopeNameNodes(this.rustEnclosingFunction(declaration), String(declaration.name.text)).some((n: any) => {
+            const call: any = n.parent;
+            return isIdentifier(n) && isCallExpression(call) && call.arguments.some((a: any) => a === n) && isPropertyAccessExpression(call.expression)
+                && isIdentifier(call.expression.expression) && call.expression.expression.text === 'Precise';
+        });
+        return lentToPrecise ? undefined : 'ostr';
+    }
+
     // ── nil scalar hand-off (rustNilScalarHandOff) ──
     // An empty local written from known scalar sources and only boxed back keeps that type: each box
     // converts once; a string box must move it (return or last use), so no string is copied.
@@ -2807,6 +2840,8 @@ export class RustTranspiler extends BaseTranspiler {
         let ok = true;
         let unmoved = false;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            // za: a same-spelled property name (`this.nonce ()`, `this.symbol (..)`) is not a use of the local
+            if (this.rustIdentifierIsPropertyName(n) && n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment) return true;
             const form = this.rustScalarUseForms.get(n);
             if (form === 'slot' || form === 'test') return true;
             const parent: any = n.parent;
@@ -2814,7 +2849,8 @@ export class RustTranspiler extends BaseTranspiler {
                 const rhs: any = this.unwrapParens(parent.right);
                 // nc: a typed source of the same kind still read later copies once where its `Value` box was cloned
                 // (`Option<String>`), or is `Copy` (`Option<i64|f64>`, printed owned: the printer adds no alias clone)
-                if (isIdentifier(rhs) && !this.rustNilAliasMove(rhs, kind) && !this.rustNilLiveAliasCopy(rhs, kind) && !(kind === 'ostr' && this.rustNilValueStrAlias(rhs))) ok = false;
+                // za: `x = undefined` is an Identifier node but writes `None` (no source, no copy)
+                if (isIdentifier(rhs) && this.literalKindOfNode(rhs) !== 'null' && !this.rustNilAliasMove(rhs, kind) && !this.rustNilLiveAliasCopy(rhs, kind) && !(kind === 'ostr' && this.rustNilValueStrAlias(rhs))) ok = false;
                 return true;
             }
             if (kind !== 'ostr') return true;
@@ -3049,6 +3085,10 @@ export class RustTranspiler extends BaseTranspiler {
         const int = this.rustNilIntLiteral(node);
         if (int !== undefined) return `${name} = Some(${int})`;
         if (isIdentifier(node) && local.kind === 'str' && this.rustNilValueStrAlias(node)) return `${name} = ${super.printIdentifier(node)}.into_opt_string()`;
+        if (local.kind === 'bool' && this.rustNilBoolNullTernary(node)) {
+            const arm = (a) => (this.literalKindOfNode(this.unwrapParens(a)) === 'null' ? 'None' : `Some(${this.unwrapParens(a).kind === SyntaxKind.TrueKeyword ? 'true' : 'false'})`);
+            return `${name} = (if ${this.printCondition(node.condition, 0)} { ${arm(node.whenTrue)} } else { ${arm(node.whenFalse)} })`;
+        }
         if (isIdentifier(node)) return `${name} = ${super.printIdentifier(node)}.clone()`;
         const text = this.printNode(node, 0).trim();
         if (local.kind === 'str') {
@@ -7855,6 +7895,8 @@ export class RustTranspiler extends BaseTranspiler {
     printRustScalarLocalWrite(left, right): string | undefined {
         const local = this.rustScalarLocalOf(left);
         const alias: any = this.unwrapParens(right);
+        // za: `x = undefined` (an Identifier node) on an optional scalar local writes `None`: nothing to copy
+        if (local !== undefined && local.kind.startsWith('o') && isIdentifier(alias) && this.literalKindOfNode(alias) === 'null') return `${super.printIdentifier(left)} = \u0004None`;
         if (local !== undefined && isIdentifier(alias) && this.rustNilAliasMoves.has(alias) && this.rustScalarIdentifierKind(alias) === local.kind) return `${super.printIdentifier(left)} = ${super.printIdentifier(alias)}.take()`;
         if (local?.kind === 'ostr' && isIdentifier(alias) && this.rustScalarIdentifierKind(alias) === undefined && this.rustNilValueStrAlias(alias)) return `${super.printIdentifier(left)} = ${super.printIdentifier(alias)}.into_opt_string()`;
         const text = local === undefined ? undefined : this.rustScalarNativeText(local.kind, right);
