@@ -79,6 +79,7 @@ const rustInlineFixtures: Record<string, Record<string, string>> = {
  },
  "na-self-calls": {"ts/src/base/functions/generic.ts": "// @ts-nocheck\nconst inArray = (needle: any, haystack: any[]): boolean => haystack.includes (needle);\nexport { inArray };\n", "ts/src/base/Exchange.ts": "import { inArray } from './functions/generic.js';\nexport interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    inArray = inArray;\n    hold (x: any): any { return x; }\n    implodeHostname (url: string): string { return url; }\n    nonce (): int {\n        return 1;\n    }\n    safeString (o: any, k: string, d: Str = undefined): Str { return o[k] ?? d; }\n    safeNumber (o: any, k: string, d: any = undefined): any { return o[k] ?? d; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    override nonce (): int {\n        return 2;\n    }\n    async urlFor (isPrivate: boolean): Promise<string> {\n        let url = this.hold (isPrivate);\n        url = this.implodeHostname (url);\n        return url;\n    }\n    async watchIt () {\n        const url = await this.urlFor (false);\n        return this.hold (url.length);\n    }\n    sign (path: string) {\n        const nonce = this.nonce ().toString ();\n        return this.hold (nonce + path);\n    }\n    parsePair (market: Dict, feeTier: Dict, stablePairs: string[]) {\n        const id = this.safeString (market, 'product_id');\n        const defaultTakerFee = this.safeNumber (market, 'taker');\n        const takerFee = this.inArray (id, stablePairs) ? 0.00001 : this.safeNumber (feeTier, 'taker_fee_rate_with_a_long_enough_key_name_to_push_the_line_over_the_limit_of_four_hundred_characters_xxxxxxxxxxxxxxxxxxxxxxxxx', defaultTakerFee);\n        return this.hold ({ 'id': id, 'taker': takerFee });\n    }\n}\n"},
  "na-self-calls-mixed": {"ts/src/base/functions/generic.ts": "// @ts-nocheck\nconst inArray = (needle: any, haystack: any[]): boolean => haystack.includes (needle);\nexport { inArray };\n", "ts/src/base/Exchange.ts": "import { inArray } from './functions/generic.js';\nexport interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    inArray = inArray;\n    hold (x: any): any { return x; }\n    implodeHostname (url: string): string { return url; }\n    nonce (): int {\n        return 1;\n    }\n    safeString (o: any, k: string, d: Str = undefined): Str { return o[k] ?? d; }\n    safeNumber (o: any, k: string, d: any = undefined): any { return o[k] ?? d; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class other extends Exchange {\n    override nonce (): any {\n        return 'x';\n    }\n    sign (path: string) {\n        const nonce = this.nonce ().toString ();\n        return this.hold (nonce + path);\n    }\n}\n"},
+ "od-self-calls": {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Bool = boolean | undefined;\nexport type Int = number | undefined;\nexport type int = number;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    keep (x: any, y: any): any { return x; }\n    safeString (o: any, k: string, d: Str = undefined): Str { return o[k] ?? d; }\n    safeBool (o: any, k: string, d: Bool = undefined): Bool { return o[k] ?? d; }\n    safeInteger (o: any, k: string, d: Int = undefined): Int { return o[k] ?? d; }\n    sum (...args: any[]): any { return args[0] + args[1]; }\n    binaryLength (binary: Uint8Array): number {\n        return binary.length;\n    }\n    isPostOnly (isMarketOrder: boolean, exchangeSpecificParam: Bool, params: Dict = {}): boolean {\n        const p = this.safeBool (params, 'postOnly', false);\n        if (p) {\n            return true;\n        } else {\n            return false;\n        }\n    }\n    handleOptionBoolAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        return [ this.safeBool (params, optionName, defaultValue), params ];\n    }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async isUnified (): Promise<boolean> {\n        return this.safeBool (this.hold ({}), 'u', false) === true;\n    }\n    wsUrl (): string {\n        return this.safeString (this.hold ({}), 'ws', '');\n    }\n    createOrderRequest (type: string, params: Dict = {}) {\n        const postOnly = this.isPostOnly (type === 'market', undefined, params);\n        if (postOnly) {\n            return this.hold (1);\n        }\n        return this.hold (2);\n    }\n    hashIt (m: Uint8Array) {\n        const n = this.binaryLength (m);\n        return this.hold (n + 1);\n    }\n    async fetchIt (params: Dict = {}) {\n        let uta = await this.isUnified ();\n        let rest: Dict = undefined;\n        [ uta, rest ] = this.handleOptionBoolAndParams (params, 'fetchIt', 'uta', uta);\n        if (uta) {\n            return this.hold (rest);\n        }\n        return this.hold (undefined);\n    }\n    window (params: Dict = {}) {\n        const start = this.safeInteger (params, 'start');\n        const end = this.sum (start, 60);\n        if (end !== undefined) {\n            return this.hold (end);\n        }\n        return this.hold (undefined);\n    }\n    pickDex (h: string): Str {\n        const dex = this.wsUrl ();\n        if (h === 'x') {\n            return dex;\n        }\n        this.keep (dex, h);\n        return dex;\n    }\n    watchIt (h: string) {\n        const url = this.wsUrl ();\n        this.keep (url, h);\n        return this.keep (url, h);\n    }\n}\n"},
  "clock-bound-function": {
   "ts/src/base/functions/time.ts": "// @ts-nocheck\nconst now = Date.now;\nconst milliseconds = now;\nconst seconds = () => Math.floor (now () / 1000);\nexport { milliseconds, seconds };\n",
   "ts/src/base/Exchange.ts": "import { milliseconds, seconds } from './functions/time.js';\nexport default class Exchange {\n    milliseconds = milliseconds;\n    seconds = seconds;\n    hold (x: any): any { return x; }\n}\n",
@@ -3170,8 +3171,10 @@ describe('rust is_true over a proven boolean Value', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut uta: Value = Value::Bool(true);');
-        expect(output).toContain('if uta.as_bool() == Some(true) {');
+        // od: the bool box inside its own first slot write reads the initializer, so the local is a native bool
+        expect(output).toContain('let mut uta: bool = true;');
+        expect(output).toContain('&[Value::Bool(uta)]');
+        expect(output).toContain('if uta {');
         expect(output).not.toContain('is_true(&uta)');
     });
 
@@ -6084,7 +6087,8 @@ describe('native `bool` parameters', () => {
 
     test('the base tier and base overrides keep the `Value` ABI', () => {
         expect(base).toContain('pub fn setSandboxMode(&self, enabled: Value)');
-        expect(base).toContain('pub fn isPostOnly(&self, isMarketOrder: Value, optional_args: &[Value]) -> Value {');
+        // od: the parameters keep the `Value` ABI; the return is the typed-return table's `bool`
+        expect(base).toContain('pub fn isPostOnly(&self, isMarketOrder: Value, optional_args: &[Value]) -> bool {');
         // native truthiness of a boolean-typed `Value` as the `as_bool()` compare,
         // so the boxed ABI still shows (no bare `if enabled {`)
         expect(base).toContain('if enabled.as_bool() == Some(true) {');
@@ -9056,11 +9060,13 @@ describe('rust boolean members read as conditions', () => {
         expect(out).not.toContain('isTestnet.as_bool()');
     });
     test('a boolean method result read only as a condition is a bool local', () => {
-        expect(out).toMatch(/let mut postOnly: bool = self\.isPostOnly\(.*\)\.as_bool\(\) == Some\(true\);/);
+        // od: the base isPostOnly returns a native bool, so no decode is printed
+        expect(out).toMatch(/let mut postOnly: bool = self\.isPostOnly\([^\n]*\);/);
+        expect(out).not.toMatch(/self\.isPostOnly\([^\n]*\.as_bool\(\)/);
         expect(out).not.toContain('postOnly.as_bool()');
     });
-    test('negative: a boolean result handed to another method keeps its box', () => {
-        expect(out).toMatch(/let mut postOnly: Value = self\.isPostOnly\(/);
+    test('a boolean result handed to another method boxes the Copy bool once', () => {
+        expect(out).toContain('self.hold(Value::Bool(postOnly))');
     });
 });
 
@@ -11435,5 +11441,33 @@ describe('rust built lists handed to ws settle / Promise.all', () => {
     test('a list only boxed to an unproven slot keeps its box', () => {
         const out = src('        const ps = [ a, b ];\n        a.consume (ps);');
         expect(out).toMatch(/let mut ps: Value = /);
+    });
+});
+
+describe('od: typed results of other self method calls (third pass)', () => {
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'od-self-calls', 'ts/src/venue.ts')).content;
+    });
+    test('base isPostOnly answers a bool: its local is a bool', () => {
+        expect(out).toMatch(/let mut postOnly: bool = self\.isPostOnly\(/);
+    });
+    test('the hand-written binaryLength answers an i64: its local is an i64', () => {
+        expect(out).toMatch(/let mut n: i64 = self\.binaryLength\(/);
+    });
+    test('a bool boxed only inside its own first slot write keeps its bool type', () => {
+        expect(out).toMatch(/let mut uta: bool = self\.isUnified\(/);
+        expect(out).toContain('&[Value::Bool(uta)]');
+    });
+    test('sum with an optional integer operand prints the native Option<i64> sum (Null when an operand is missing)', () => {
+        expect(out).toContain('Value::from((if let Some(__m0) = start { Some((__m0 + 60)) } else { None }))');
+        expect(out).not.toContain('self.sum(');
+    });
+    test('negative: a string local the method returns keeps the method\'s typed return', () => {
+        expect(out).toMatch(/pub fn pickDex\(&self, h: &str\) -> Option<String> \{/);
+    });
+    test('a venue string copied at a self-call slot is lent there', () => {
+        expect(out).toMatch(/let mut url: Option<String> = self\.wsUrl\(/);
+        expect(out).toContain('Value::from(url.as_deref())');
     });
 });

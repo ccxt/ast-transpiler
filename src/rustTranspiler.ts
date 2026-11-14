@@ -204,7 +204,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
     | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -216,10 +216,10 @@ export interface RustMethodSignature {
 // The typed parameter kinds a dispatch arm decodes from `args[i]` and a forwarder from its `Value` slot.
 const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist', 'optmarket', 'optcurrency' ]);
 // a native return a by-name arm boxes back to `Value`
-const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct' ]);
+const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct' ]);
 
 // the native returns of the typed-return base methods, boxed back with `Value::from` in each arm they had as `-> Value`
-const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr' ]);
+const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool' ]);
 
 export const rustDispatch = {
     isTyped: (kind: string): boolean => RUST_DISPATCH_TYPED_KINDS.has(kind),
@@ -299,7 +299,7 @@ export const rustDispatch = {
         const ret = isTyped === true ? 'typed' : isTyped === false || isTyped === undefined ? 'value' : isTyped;
         switch (ret) {
         case 'typed': case 'ostr': case 'struct': return `crate::types::IntoRaw::into_raw(${call})`;
-        case 'oint': case 'keptostr': case 'keptint': case 'keptstr': case 'int': case 'string': case 'bool': return `crate::Value::from(${call})`;
+        case 'oint': case 'keptostr': case 'keptint': case 'keptstr': case 'keptbool': case 'int': case 'string': case 'bool': return `crate::Value::from(${call})`;
         case 'dict': return `crate::Value::Dict(${call})`;
         case 'list': return `crate::Value::Arr(${call})`;
         case 'optdict': return `${call}.map_or(crate::Value::Null, crate::Value::Dict)`;
@@ -4211,8 +4211,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration)) return undefined;
         // a hand-off ternary whose arms print only as a `Value` keeps the box its uses would read
         if (handOff && isConditionalExpression(this.unwrapParens(declaration.initializer)) && this.rustScalarNativeText(kind, declaration.initializer) === undefined) return undefined;
-        if (this.rustVenueScalarSource(declaration.initializer) && ((boxed > 0 && !handOff) || this.rustVenueLocalHandedOn(declaration))) return undefined;
-        if (this.rustVenueTypedCostly(declaration, kind, copied)) return undefined;
+        if (this.rustVenueScalarSource(declaration.initializer) && ((boxed > 0 && !handOff) || this.rustVenueLocalHandedOn(declaration))) {
+            // od: unless every copying box sits at a lending slot (`Value::from(x.as_deref())`: the copy the `Value` clone made)
+            if (!strKind || this.rustStrNoLend || this.rustOdExcludedCallee(declaration.initializer) || this.rustStrReturnedLocal(declaration, scope) || this.rustVenueLocalHandedOn(declaration) || this.rustReaderDeclTooLong(declaration, kind) || !this.rustReaderLendBoxes(declaration)) return undefined;
+            this.rustStrLentLocals.add(declaration);
+        }
+        // od: a venue string whose copying boxes all sit at lending slots is lent there (`Value::from(x.as_deref())`: the copy the `Value` clone made)
+        const venueLent = kind === 'ostr' && copied > 0 && !this.rustStrNoLend && this.rustVenueTypedCall(declaration.initializer) !== undefined && !this.rustOdExcludedCallee(declaration.initializer) && !this.rustStrReturnedLocal(declaration, scope)
+            && !this.rustVenueLocalHandedOn(declaration) && !this.rustReaderDeclTooLong(declaration, kind) && this.rustReaderLendBoxes(declaration);
+        if (venueLent) this.rustStrLentLocals.add(declaration);
+        else if (this.rustVenueTypedCostly(declaration, kind, copied)) return undefined;
         if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined) return undefined;
         if ((boxed > 0 || expressionUses) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
         // a reader-default string re-boxed anywhere but a moving `return` would copy where the `Value` moved
@@ -4716,15 +4724,16 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_TYPED_METHODS: { [name: string]: [ string, string ] } = {
         parseToInt: [ 'number', 'oint' ], incrementingNonce: [ 'int', 'int' ], symbol: [ 'string', 'str' ],
         findTimeframe: [ 'Str', 'ostr' ], networkIdToCode: [ 'Str', 'ostr' ], requestId: [ 'int', 'int' ],
+        isPostOnly: [ 'boolean', 'bool' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
         milliseconds: 'int', parse8601: 'oint', numberToString: 'ostr', omitZero: 'ostr', parseTimeframe: 'int',
-        inArray: 'bool', valueIsDefined: 'bool', isJsonEncodedObject: 'bool', seconds: 'int', randNumber: 'int', precisionFromString: 'int',
+        inArray: 'bool', valueIsDefined: 'bool', isJsonEncodedObject: 'bool', seconds: 'int', randNumber: 'int', precisionFromString: 'int', binaryLength: 'int',
     };
 
     // base methods with a TS body that the runtime implements by hand (`exchange_stubs.rs`), typed like the runtime table
-    private static readonly RUST_BASE_TYPED_HAND_METHODS = new Set([ 'valueIsDefined', 'randNumber' ]);
+    private static readonly RUST_BASE_TYPED_HAND_METHODS = new Set([ 'valueIsDefined', 'randNumber', 'binaryLength' ]);
 
     private rustBaseTypedBare = new Set<Node>();
 
@@ -4802,6 +4811,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'int') return `${text}.as_i64().unwrap_or_default()`;
         if (kind === 'oint') return `${text}.as_i64()`;
         if (kind === 'ostr') return `${text}.as_str().map(str::to_owned)`;
+        if (kind === 'bool') return `${text}.as_bool().unwrap_or_default()`;
         return `${text}.as_str().unwrap_or_default().to_owned()`;
     }
 
@@ -5375,7 +5385,9 @@ export class RustTranspiler extends BaseTranspiler {
         const at = file.search(/[/\\]ts[/\\]src[/\\]/);
         if (at < 0) return false;
         const types = this.rustVenueReturnTypes(file.slice(0, at) + '/ts/src').get(String(node.expression.name.text));
-        return types !== undefined && [ ...types ].every((t) => t === 'string' || t === 'Str');
+        // od: a same-named `Promise<..>` method of another venue (bybit's async getUrlByMarketType) cannot override a sync
+        // string method (TS rejects the signature), so only the sync declarations have to agree
+        return types !== undefined && [ ...types ].every((t) => t === 'string' || t === 'Str' || (/^Promise</.test(t) && !this.isAsyncFunction(this.rustScalarCallee(node))));
     }
 
     /** A sync venue method (not a base one) every venue declaration of which returns `int`: it keeps its
@@ -5527,6 +5539,13 @@ export class RustTranspiler extends BaseTranspiler {
         };
         declaration.body.forEachChild(visit);
         return ok ? kind : undefined;
+    }
+
+    /** od: `parse*` / `handle*` results are their own groups' producers; the lending rules leave them alone. */
+    rustOdExcludedCallee(init): boolean {
+        let node: any = this.unwrapParens(init);
+        if (node?.kind === SyntaxKind.AwaitExpression) node = this.unwrapParens(node.expression);
+        return node !== undefined && isCallExpression(node) && isPropertyAccessExpression(node.expression) && /^(parse|handle)[A-Z]/.test(String(node.expression.name.text));
     }
 
     /** `x = E; return x;`: the returned local holds what the statement right before the return wrote. */
@@ -6831,6 +6850,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (math && kinds.every((k) => k !== undefined) && kinds.some((k) => k === 'oint' || k === 'onum')) {
             return kinds.every((k) => k === 'int' || k === 'oint') ? 'oint' : 'onum';
         }
+        // od: `sum` with an optional operand: `add` answers `Null` once either side is missing (the fold keeps it `Null`),
+        // `Int` while every operand is an `Int`, else one `Float` op (two operands only, as below)
+        if (!math && kinds.every((k) => k !== undefined) && kinds.some((k) => k === 'oint' || k === 'onum')) {
+            if (kinds.every((k) => k === 'int' || k === 'oint')) return 'oint';
+            return args.length === 2 && kinds.every((k) => k === 'int' || k === 'oint' || k === 'num' || k === 'onum') ? 'onum' : undefined;
+        }
         if (kinds.some((k) => k !== 'int' && k !== 'num')) return undefined;
         // the helper folds left through Int sums before a Float joins; only two operands are exactly one f64 op
         return kinds.every((k) => k === 'int') ? 'int' : (args.length === 2 ? 'num' : undefined);
@@ -6926,7 +6951,8 @@ export class RustTranspiler extends BaseTranspiler {
             const opts = sides.filter((x: any) => x.opt !== undefined);
             const pat = opts.length === 1 ? `Some(${opts[0].bind})` : `(${opts.map((x: any) => `Some(${x.bind})`).join(', ')})`;
             const scrut = opts.length === 1 ? opts[0].opt : `(${opts.map((x: any) => x.opt).join(', ')})`;
-            return `(if let ${pat} = ${scrut} { Some(${ty}::${name}(${sides[0].use}, ${sides[1].use})) } else { None })`;
+            const op = name === 'sum' ? `(${sides.map((x: any) => x.use).join(' + ')})` : `${ty}::${name}(${sides[0].use}, ${sides[1].use})`;
+            return `(if let ${pat} = ${scrut} { Some(${op}) } else { None })`;
         }
         if (this.rustBaseTypedReturnKind(node) === 'int') text = this.rustBaseTypedBareText(node);
         else if (RustTranspiler.RUST_ALWAYS_INT_CALLS.has(name)) text = `${this.printNode(node, 0).trim()}.as_i64().unwrap_or_default()`;
@@ -8377,7 +8403,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustRecordSignature(node: any, name: string, params: Array<{ name: string, rustType: string }>, returnType: string): void {
         let ret: RustDispatchReturnKind = RustTranspiler.RUST_DISPATCH_RETURN_KINDS[returnType] ?? (returnType.startsWith('crate::Result<') ? 'typed' : 'other');
         // a base method of the typed-return table keeps its by-name arm: `Option<i64>` / `Option<String>` box once inside it
-        if (this.rustMethodTypedReturnKind(node) !== undefined) ret = ({ 'Option<i64>': 'oint', 'Option<String>': 'keptostr', 'i64': 'keptint', 'String': 'keptstr' } as Record<string, RustDispatchReturnKind>)[returnType] ?? ret;
+        if (this.rustMethodTypedReturnKind(node) !== undefined) ret = ({ 'Option<i64>': 'oint', 'Option<String>': 'keptostr', 'i64': 'keptint', 'String': 'keptstr', 'bool': 'keptbool' } as Record<string, RustDispatchReturnKind>)[returnType] ?? ret;
         // ral-fb: a base method printing `Option<String>` (safeCurrencyCode and its overrides) keeps its `-> Value` arms the same way
         if (ret === 'ostr' && this.rustBaseNativeStrMethod(node)) ret = 'keptostr';
         // mh1: a venue method that printed `-> Value` (with a by-name arm) until its `: Str` return was spelled keeps that arm
@@ -12527,11 +12553,20 @@ export class RustTranspiler extends BaseTranspiler {
     rustBoolSlotUsesOk(declaration: any): boolean {
         let slots = 0;
         let others = true;
+        const writes = new Set<any>();
+        const boxes: any[] = [];
         this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => {
             const form = this.rustScalarUseForms.get(n);
-            if (form === 'bslot') { slots++; if (this.rustBoolSlotLineLong(n)) others = false; } else if (form !== 'cond' && form !== 'write') others = false;
+            if (form === 'bslot') { slots++; writes.add(n.parent.parent); if (this.rustBoolSlotLineLong(n)) others = false; } else if (form === 'box') boxes.push(n); else if (form !== 'cond' && form !== 'write') others = false;
             return true;
         });
+        // od: a `Value::Bool(x)` box inside the right side of the local's first slot write runs before any slot
+        // is read back, so it boxes the initializer or a plain `bool` write (never a slot's Null)
+        for (const n of (slots === 0 ? [] : boxes)) {
+            let up: any = n;
+            while (up?.parent !== undefined && !(up.parent.kind === SyntaxKind.BinaryExpression && up.parent.right === up && writes.has(up.parent))) up = up.parent;
+            if (up?.parent === undefined || [ ...writes ].some((w: any) => w.pos < up.parent.pos)) others = false;
+        }
         return slots === 0 || others;
     }
 
