@@ -5323,7 +5323,7 @@ export class RustTranspiler extends BaseTranspiler {
             || (owner.parent?.flags & NodeFlags.Const) === 0 || this.primitiveKindOfType(this.typeOfNodeIfAny(node)) !== 'boolean') return undefined;
         const at = Number(node.argumentExpression.text);
         if (!Number.isInteger(at) || this.rustTestTierSource(node) || !this.rustExactSlotCallee(owner.initializer, at, 'bool')) return undefined;
-        const name = String(owner.name.text);
+        const name = String(isIdentifier(owner.name) ? owner.name.text : undefined);
         const intact = this.rustLocalUsesAll(owner, name, true, (n: any) => {
             const up: any = n.parent;
             return up !== undefined && isElementAccessExpression(up) && up.expression === n && isNumericLiteral(up.argumentExpression)
@@ -6750,7 +6750,7 @@ export class RustTranspiler extends BaseTranspiler {
         // and whose every use is an `in` test, a key write or a whole store into a `this.` field (no reader takes it)
         const head: any = isPropertyAccessExpression(init.expression) && /^safeDict$/.test(String(init.expression.name.text)) ? this.rustSkipWrappers(init.arguments[0]) : undefined;
         if (head === undefined || !isPropertyAccessExpression(head) || head.expression.kind !== SyntaxKind.ThisKeyword) return false;
-        return this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (u: any) => {
+        return this.rustLocalUsesAll(declaration, String(isIdentifier(declaration.name) ? declaration.name.text : undefined), false, (u: any) => {
             const p: any = u.parent;
             if (isBinaryExpression(p) && p.operatorToken.kind === SyntaxKind.InKeyword) return p.right === u;
             if (isElementAccessExpression(p) && p.expression === u) return isBinaryExpression(p.parent) && p.parent.left === p && p.parent.operatorToken.kind === SyntaxKind.EqualsToken;
