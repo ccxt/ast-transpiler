@@ -15458,17 +15458,21 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         });
         const siblings = this.literalSiblingBindings;
+        const keyHits = this.literalKeyHits;
         const widened = this.literalKeyHits > 0 || siblings > 0 || escapes.some((e: any) => this.rustCastReturnOperand(e));
         this.literalKeyHits = outerWidened;
         this.literalSiblingBindings = outerSiblings;
         if (!safe) return false;
         // Built once and handed straight back stays boxed.
-        if (siblings > 0 && elementUses === 0) return false;
+        // ral-vf: except a single move at the last use (a list push / ws settle): each sibling `let` is its own Rust block,
+        // and the move is the box the helper form made (D11: stored and boxed back is typed)
+        const siblingMove = siblings > 0 && moveEscapes.length === 1 && escapes.length === 0 && rebuilds === 0 && enumUses === 0 && keyHits === 0;
+        if (siblings > 0 && elementUses === 0 && !siblingMove) return false;
         // a list-element / settle hand-off moves the map: only its single last use, with no other escape, may take it
         if (moveEscapes.length > 0) {
             // ral-tf: a map widened by string-local keys (written at `m[k] = v`) still moves whole into a ws settle value at
             // its last use: that is its only escape, so the move is the box the helper form made (no copy)
-            if (moveEscapes.length > 1 || escapes.length > 0 || rebuilds > 0 || (widened && !this.rustWsSettleMove(moveEscapes[0])) || enumUses > 0 || prediction
+            if (moveEscapes.length > 1 || escapes.length > 0 || rebuilds > 0 || (widened && !siblingMove && !this.rustWsSettleMove(moveEscapes[0])) || enumUses > 0 || prediction
                 || !this.rustLocalLastUse(moveEscapes[0], declaration) || !this.rustBoxLineOk(moveEscapes[0])) return false;
             this.rustLiteralMoves.add(moveEscapes[0]);
         }
@@ -16456,6 +16460,7 @@ export class RustTranspiler extends BaseTranspiler {
         const keyWriteUses: any[] = [];
         let extendHeads = 0;
         let extendWrites = 0;
+        const reuseProducerWrites: any[] = [];
         let jwtLends = 0;
         let lentResponses = 0;
         let lentNullable = 0;
@@ -16480,7 +16485,13 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
                 if (up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
-                if (extendReuse) return this.rustSelfExtendWrite(n, declaration) && ++extendWrites > 0;
+                if (extendReuse) {
+                    if (this.rustSelfExtendWrite(n, declaration)) return ++extendWrites > 0;
+                    // ral-vf: a write from a producer that answers a map on every path replaces the owned map
+                    if (!this.rustReuseMapProducerWrite(n)) return false;
+                    reuseProducerWrites.push(up);
+                    return ++extendWrites > 0;
+                }
                 const rhs: any = this.rustSkipWrappers(up.right);
                 // sb: an alias of a shared map rewritten only as an `omit` of a proven map holds a map on every path (not optional)
                 if (sbAlias && this.rustOmitOfDict(rhs) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
@@ -16627,6 +16638,8 @@ export class RustTranspiler extends BaseTranspiler {
         if ((keySets > 0 || keyWrites > 0) && (from !== 'dict' || (optional && !onlySafeDictWrites) || (init !== undefined && !extendReuse && this.rustInitReadsTaggedStore(init)))) return undefined;
         if (keyWriteUses.some((n: any) => !this.rustBuiltKeyWriteLineOk(n, optional ? 30 : 0))) return undefined;
         if (extendReuse && (keySets > 0 || boxedElementUses.some((n: any) => !this.rustBoxLineOk(n)))) return undefined;
+        // ral-vf: a `safeDict` result shares the response's Arc; a key write copies on write in both forms (the helper's
+        // `Arc::make_mut` too), and a store-read source is refused above, so no tagged write is lost
         if (init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) !== undefined && boxedElementUses.some((n: any) => !this.rustBoxLineOk(n))) return undefined;
         if (keyWrites > 0) this.rustMutableBuiltLocals.add(declaration);
         // ral-ua: an all-declared `Promise<List>` optional list (never null-tested) reads its length through the slice (0 for `None`)
@@ -16640,6 +16653,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         for (const n of boxedElementUses) this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) || (n.parent?.kind === SyntaxKind.ConditionalExpression && this.rustOwnedLastUse(n, declaration)) ? 'move' : 'share');
         if (extendReuse) this.rustExtendReuseLocals.add(declaration);
+        for (const w of reuseProducerWrites) this.rustReuseProducerWrites.add(w);
         return from === 'list' ? 'list' : 'dict';
     }
 
@@ -16669,6 +16683,42 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private static readonly RUST_SELF_EXTEND = new Set([ 'extend' ]);
+
+    // ── ral-vf: a reuse map literal overwritten from a map producer (`x = this.safeDict (r, k, {})`, `x = this.extend (..)`) ──
+    // `extend` / `indexBy` / `groupBy` answer a fresh `Value::Map`, a proven-map `omit` too, and a never-null base
+    // `safeDict` answers its map (or the empty default): `.into_dict()` moves the Arc out, the owned map is replaced, no copy.
+    private rustReuseProducerWrites = new WeakSet<any>();
+
+    /** A statement `n = <map producer>` whose right side does not name `n`. */
+    rustReuseMapProducerWrite(n: any): boolean {
+        const up: any = n.parent;
+        if (!isBinaryExpression(up) || up.left !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const rhs: any = this.rustSkipWrappers(up.right);
+        if (rhs === undefined || !isCallExpression(rhs) || String(up.getText()).split('\n')[0].length > 240) return false;
+        const names = (x: any): boolean => (isIdentifier(x) && x.text === n.text) || (x.forEachChild(names) ?? false);
+        if (names(rhs)) return false;
+        if (this.rustBaseCallNamed(rhs, RustTranspiler.RUST_ALWAYS_MAP_HELPERS)) return true;
+        if (this.rustOmitOfDict(rhs) && this.rustOmitLineFits(rhs)) return true;
+        if (this.rustBaseCallNamed(rhs, RustTranspiler.RUST_REUSE_SAFE_DICT) && this.rustContainerInitNeverNull(rhs, 'map')
+            && !this.rustContainerInitReadsStore(rhs) && !this.rustInitReadsTaggedStore(rhs) && this.rustWsFieldRead(rhs) === undefined) return true;
+        return false;
+    }
+
+    private static readonly RUST_REUSE_SAFE_DICT = new Set([ 'safeDict' ]);
+
+    /** The producer of a reuse write builds from untagged operands only: `extend` / `omit` operands proven plain
+     *  (`rustUntaggedMapOperand`), `indexBy` / `groupBy` fresh maps, a REST `safeDict` read off a local (parsed JSON). */
+    rustReuseProducerUntagged(n: any, rhs: any): boolean {
+        const method = String(rhs.expression?.name?.text ?? '');
+        if (method === 'indexBy' || method === 'groupBy') return true;
+        if (method === 'extend') return Array.from(rhs.arguments).every((a: any) => this.rustUntaggedMapOperand(a));
+        if (method === 'safeDict') {
+            const head: any = this.rustSkipWrappers(rhs.arguments[0]);
+            return /(?:^|[\\/])ts[\\/]src[\\/][^\\/]+\.ts$/.test(String(n.getSourceFile?.()?.fileName ?? ''))
+                && head !== undefined && (isIdentifier(head) || (isElementAccessExpression(head) && isIdentifier(head.expression)));
+        }
+        return this.rustUntaggedMapOperand(rhs.arguments[0]);
+    }
 
     /** pb: the base `handleUntilOption (k, x, p)` of a statement `[ x, q ] = ..` writing slot 0 back into `x` (base
      *  `handleUntilOption` returns its own `request` argument as slot 0, so the map moves through it). */
@@ -16739,6 +16789,8 @@ export class RustTranspiler extends BaseTranspiler {
         let ok = true;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (u: any) => {
             if (this.rustSelfExtendWrite(u, declaration) && !this.rustExtendReuseOperandUntagged(this.rustSkipWrappers(u.parent.right).arguments[1])) ok = false;
+            // ral-vf: a producer write must carry no runtime tag either (a native insert skips the helper's tagged routes)
+            else if (!this.rustSelfExtendWrite(u, declaration) && this.rustReuseMapProducerWrite(u) && !this.rustReuseProducerUntagged(u, this.rustSkipWrappers(u.parent.right))) ok = false;
             return true;
         });
         return ok;
@@ -16764,7 +16816,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** `x = self.extend(x, ..).into_dict()` for a reuse local (`extend` answers `Value::Map`: the Arc moves back). */
     printExtendReuseWrite(left: any, right: any): string | undefined {
         const declaration: any = this.rustDeclarationOfIdentifier(left);
-        if (declaration === undefined || !this.rustExtendReuseLocals.has(declaration) || !this.rustPrintedBorrowed.has(declaration) || !this.rustSelfExtendWrite(left, declaration)) return undefined;
+        if (declaration === undefined || !this.rustExtendReuseLocals.has(declaration) || !this.rustPrintedBorrowed.has(declaration)
+            || !(this.rustSelfExtendWrite(left, declaration) || this.rustReuseProducerWrites.has(left.parent))) return undefined;
         const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
         return `${name} = ${this.printNode(right, 0).trim()}.into_dict()`;
     }
@@ -20299,6 +20352,14 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-sf: an object-literal value at the list's proven last use (no later read or push, not in a loop or
             // closure) takes the list whole: `Value::Arr(x)` moves it, so a push accumulator is boxed once
             if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n && this.rustLocalLastUse(n, declaration) && short(n)) {
+                boxes.push([n, 'move']);
+                handOffs++;
+                return true;
+            }
+            // ral-vf: stored whole at a literal key of another local map (`m['k'] = x`, statement) at the list's provable last
+            // use: JS stores the reference and nothing reads or pushes `x` afterwards, so `Value::Arr(x)` moves it (one box)
+            if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
+                && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left)) && this.rustLocalKeyPlace(up.left, n) && short(n)) {
                 boxes.push([n, 'move']);
                 handOffs++;
                 return true;

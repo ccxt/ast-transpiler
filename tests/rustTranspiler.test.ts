@@ -4905,7 +4905,9 @@ describe('native element writes on plain-dict locals', () => {
         expect(output).not.toContain('merged.clone()');
         // negative: written from a foreign map / a non-self extend: keeps the helper (no shared-handle form)
         expect(output).not.toContain('let mut foreign: crate::value::Dict');
-        expect(output).not.toContain('let mut extended: crate::value::Dict');
+        // ral-vf: `extended = this.extend (params, {})` answers a fresh map from untagged operands (the built-map key-write
+        // proof): the reuse literal holds the shared Dict and the result moves in
+        expect(output).toContain('let mut extended: crate::value::Dict');
     });
 
     test('a local aliased into a let-bound literal keeps the helper', () => {
@@ -4919,7 +4921,7 @@ describe('native element writes on plain-dict locals', () => {
 
     test('omit / extend of a foreign dict keep the helper', () => {
         expect(output).toContain('add_element_to_object(&mut foreign, &Value::Str("e".into())');
-        expect(output).toContain('add_element_to_object(&mut extended, &Value::Str("f".into())');
+        expect(output).toContain('std::sync::Arc::make_mut(&mut extended).insert("f".into(), Value::Int(6));');
     });
 });
 
@@ -13039,5 +13041,67 @@ describe('ve: an order-book side parameter of a venue handler prints the Side ha
     test('a parameter read any other way keeps Value', () => {
         const out = mk("    handleBidAsks (bookSide: any, bidAsks: any[]) {\n        bookSide.storeArray (bidAsks);\n        return bookSide.foo;\n    }\n    handleBook (orderbook: OrderBook, bids: any[]) {\n        this.handleBidAsks (orderbook['bids'], bids);\n    }");
         expect(out).toMatch(/fn handleBidAsks\(&self, bookSide: Value, /);
+    });
+});
+
+describe('ral-vf: a reuse map literal overwritten from a map producer holds the shared Dict', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-vf-reuse');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    extend (...args: any[]): any { return args[0]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    hold (x: any, y: any = undefined): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fromExtend (params: Dict, a: Dict) {\n        let request: Dict = { 'a': 1 };\n        if (a !== undefined) {\n            request = this.extend ({ 'z': 0 }, params);\n        }\n        request['x'] = 2;\n        return this.hold (request);\n    }\n    fromSafeDict (response: any) {\n        let data: Dict = {};\n        data = this.safeDict (response, 'data', {});\n        data['x'] = 1;\n        return this.hold (data);\n    }\n    noDefault (response: any) {\n        let kept: Dict = {};\n        kept = this.safeDict (response, 'data');\n        kept['x'] = 1;\n        return this.hold (kept);\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('x = this.extend ({..}, params) replaces the owned map: the Arc moves out of the result, no copy', () => {
+        expect(out).toMatch(/fn fromExtend[\s\S]*?let mut request: crate::value::Dict = [\s\S]*?request = self\.extend\([\s\S]*?\)\.into_dict\(\);[\s\S]*?Arc::make_mut\(&mut request\)\.insert\("x"\.into\(\), Value::Int\(2\)\)/);
+    });
+    test('x = this.safeDict (r, k, {}) (never null) replaces the owned map', () => {
+        expect(out).toMatch(/fn fromSafeDict[\s\S]*?let mut data: crate::value::Dict = [\s\S]*?data = self\.safeDict\([\s\S]*?\)\.into_dict\(\);[\s\S]*?Arc::make_mut\(&mut data\)\.insert\("x"\.into\(\), Value::Int\(1\)\)/);
+    });
+    test('negative: a safeDict write without a map default (may be Null) keeps the box', () => {
+        expect(out).toMatch(/fn noDefault[\s\S]*?let mut kept: Value = /);
+    });
+});
+
+describe('ral-vf: same-named literal maps in sibling loops pushed whole at their last use', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-vf-sibling-push');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    build (ids: string[], cloids: string[]) {\n        const actions: Dict[] = [];\n        for (let i = 0; i < ids.length; i++) {\n            const action: Dict = {\n                'type': 'Cancel',\n                'data': ids[i],\n            };\n            actions.push (action);\n        }\n        for (let i = 0; i < cloids.length; i++) {\n            const action: Dict = {\n                'type': 'Cancel',\n                'data': cloids[i],\n            };\n            actions.push (action);\n        }\n        return this.hold (actions);\n    }\n    kept (ids: string[]) {\n        const rows: Dict[] = [];\n        for (let i = 0; i < ids.length; i++) {\n            const row: Dict = { 'id': ids[i] };\n            rows.push (row);\n            this.hold (row);\n        }\n        for (let i = 0; i < ids.length; i++) {\n            const row: Dict = { 'id': ids[i] };\n            rows.push (row);\n        }\n        return rows;\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('each sibling binding is a native map moved into the list at its push (no clone)', () => {
+        const body = out.slice (out.indexOf ('fn build'), out.indexOf ('fn kept'));
+        expect(body.match(/let mut action: indexmap::IndexMap<String, Value> = /g)?.length).toBe(2);
+        expect(body.match(/actions\.push\(Value::Map\(action\)\);/g)?.length).toBe(2);
+        expect(body).not.toContain('action.clone()');
+    });
+    test('negative: a sibling still used after the push keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn kept'));
+        expect(body).toMatch(/let mut row: Value = /);
+    });
+});
+
+describe('ral-vf: a built list stored at a key of another local map at its last use', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-vf-list-store');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    stored (ids: string[]) {\n        const request: Dict = {};\n        const idList: string[] = [];\n        for (let i = 0; i < ids.length; i++) {\n            idList.push (ids[i]);\n        }\n        request['ids'] = idList;\n        return this.hold (request);\n    }\n    pushedAfter (ids: string[]) {\n        const request: Dict = {};\n        const args: string[] = [];\n        request['args'] = args;\n        for (let i = 0; i < ids.length; i++) {\n            args.push (ids[i]);\n        }\n        return this.hold (request);\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('the list moves into the map at its last use (one box, no clone)', () => {
+        const body = out.slice (out.indexOf ('fn stored'), out.indexOf ('fn pushedAfter'));
+        expect(body).toMatch(/let mut idList: crate::value::List = /);
+        expect(body).toContain('Value::Arr(idList)');
+        expect(body).not.toContain('idList.clone()');
+    });
+    test('negative: a list pushed to after it was stored (the stored handle is shared) keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn pushedAfter'));
+        expect(body).toMatch(/let mut args: Value = /);
     });
 });
