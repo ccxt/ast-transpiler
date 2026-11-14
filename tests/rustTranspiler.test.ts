@@ -7,6 +7,7 @@ import * as path from 'path';
 
 // fixture trees used above are written to a temp dir so the suite carries no fixture files
 const rustInlineFixtures: Record<string, Record<string, string>> = {
+ "test-tier-harness": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    hold (a: any, b: any = undefined): any { return a; }\n}\n", "ts/src/base/Precise.ts": "export class Precise {\n    static stringGt (a: string, b: string): boolean { return a > b; }\n}\n", "ts/src/test/Exchange/test.harness.ts": "import Exchange from '../../base/Exchange';\nimport { Precise } from '../../base/Precise';\nfunction testHarness (exchange: Exchange, entry: any) {\n    const price = exchange.safeString (entry, 'price');\n    if (price === undefined) {\n        return undefined;\n    }\n    exchange.hold (entry, price);\n    exchange.hold (price);\n    const cost = exchange.safeString (entry, 'cost');\n    if (cost !== undefined && Precise.stringGt (cost, '0')) {\n        return exchange.hold (cost);\n    }\n    return Precise.stringGt (cost, '1');\n}\nexport default testHarness;\n"},
  "test-tier-readers": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/test/Exchange/test.readers.ts": "import Exchange from '../../base/Exchange';\nfunction testReaders (exchange: Exchange, entry: any) {\n    const a = exchange.safeValue (entry, 'a');\n    const b = exchange.safeValue (entry, 'b');\n    const other = 'ETH/USDT';\n    return exchange.hold ([ a, b, other ]);\n}\nexport default testReaders;\n"},
  "base-predicate-flags": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    httpProxy: any = undefined;\n    socksProxy: any = undefined;\n    valueIsDefined<T> (value: T): value is NonNullable<T> {\n        return value !== undefined && value !== null;\n    }\n    hold (x: any): any { return x; }\n    proxyFlags () {\n        const isHttp = this.valueIsDefined (this.httpProxy);\n        const isSocks = this.valueIsDefined (this.socksProxy);\n        if (isHttp || isSocks) {\n            return this.hold (isHttp ? this.httpProxy : this.socksProxy);\n        }\n        return undefined;\n    }\n}\n"},
  "reader-defaults": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    options: any = {};\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    safeInteger (o: any, k: any, d: number = undefined): number | undefined { return o[k]; }\n    safeNumber (o: any, k: any, d: number = undefined): number | undefined { return o[k]; }\n    safeBool (o: any, k: any, d: boolean = undefined): boolean | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange';\nexport default class venue extends Exchange {\n    f (o: any, fallback: string, n: number): any {\n        const flag = this.safeBool (o, 'flag');\n        if (flag) {\n            return 1;\n        }\n        const name = this.safeString (o, 'name', fallback);\n        if (name === 'x') {\n            return 2;\n        }\n        const limit = this.safeInteger (o, 'limit', this.safeInteger (o, 'max'));\n        if (limit === undefined) {\n            return 3;\n        }\n        const fee = this.safeNumber (o, 'fee', 0);\n        if (fee === undefined) {\n            return 4;\n        }\n        const boxed = this.safeNumber (o, 'boxed', 0);\n        return this.hold (boxed);\n    }\n}\n"},
@@ -8218,13 +8219,15 @@ describe('rust optional list joins and map values', () => {
 });
 
 describe('rust test-source locals', () => {
-    test('flags, loop counters and base reader results on the exchange get native types; a literal only handed on stays boxed', () => {
+    test('flags, loop counters and base reader results on the exchange get native types; a literal only handed on moves into its box', () => {
         const fresh = new Transpiler({ verbose: false, rust: {} } as any);
         const out = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'test-tier-locals', 'ts/src/test/Exchange/test.locals.ts')).content;
         expect(out).toContain('let mut ok: bool = true;');
         expect(out).toContain('let mut i: i64 = 0;');
         expect(out).toMatch(/let mut id: Option<String> = exchange\.safe_?[sS]tring\(/);
-        expect(out).toContain('let mut kept: Value = ');
+        // a literal only handed to the by-value harness moves into its box at the last use (D11)
+        expect(out).toContain('let mut kept: String = ');
+        expect(out).toContain('exchange.hold(Value::from(kept))');
     });
 });
 
@@ -11087,6 +11090,18 @@ describe('rust test-source reader arguments', () => {
     });
 });
 
+describe('rust test-tier harness boxes', () => {
+    test('a test string boxed into by-value harness args is lent there, a Precise operand keeps the local boxed', () => {
+        const fresh = new Transpiler({ verbose: false, rust: {} } as any);
+        const out = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'test-tier-harness', 'ts/src/test/Exchange/test.harness.ts')).content;
+        expect(out).toContain('let mut price: Option<String> = ');
+        expect(out).toContain('Value::from(price.as_deref())');
+        expect(out).not.toContain('price.clone()');
+        // `cost` reaches a `Precise` operand (read by reference): typing it would copy there, so it stays a `Value`
+        expect(out).toContain('let mut cost: Value = ');
+    });
+});
+
 describe('rust base predicate flags', () => {
     test('a base `v is T` predicate result read as a condition is a bool local', () => {
         const fresh = new Transpiler({ verbose: false, rust: {} } as any);
@@ -11097,5 +11112,39 @@ describe('rust base predicate flags', () => {
         // RAL-INT-33: a typed base helper's bool local reads as itself (no `Value` truthiness on a `bool`)
         expect(out).not.toContain('isHttp.as_bool()');
         expect(out).toContain('if isHttp || isSocks {');
+    });
+});
+
+describe('mh1: safeSymbol concat operands, venue kept-str arms', () => {
+    let out = '';
+    let sigs: any[] = [];
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'mh1-venue');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), 'export type Str = string | undefined;\n'
+            + 'export default class Exchange {\n'
+            + '    orderbooks: any = {};\n'
+            + '    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n'
+            + '    safeSymbol (id: string | undefined): string | undefined { return id; }\n'
+            + '    hold (x: any): any { return x; }\n'
+            + '}\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/coinbaseinternational.ts'), "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\n"
+            + 'export default class coinbaseinternational extends Exchange {\n'
+            + "    parseTimeInForce (timeInForce: Str): Str {\n        const m = { 'gtc': 'GTC' };\n        return this.safeString (m, timeInForce, timeInForce);\n    }\n"
+            + "    parseOrder (o: any): any {\n        const tif = this.parseTimeInForce (this.safeString (o, 't'));\n        return this.hold ({ 'timeInForce': tif });\n    }\n"
+            + "    handleBook (m: any) {\n        const symbol = this.safeSymbol (this.safeString (m, 's'));\n        const book = this.orderbooks[symbol];\n        const messageHash = 'book:' + symbol;\n        return this.hold ([ book, messageHash ]);\n    }\n"
+            + '}\n');
+        const r = transpiler.transpileRustByPath (path.join (dir, 'ts/src/coinbaseinternational.ts'));
+        out = r.content;
+        sigs = r.rustSignatures ?? [];
+    });
+    test('an optional-string operand of an always-string concat reads in place, no box', () => {
+        expect(out).toMatch(/let mut symbol: Option<String> = /);
+        expect(out).toContain('symbol.as_deref().unwrap_or("null")');
+    });
+    test('a venue method of the kept-str table keeps its by-name arm kind when its Str return is spelled', () => {
+        expect(out).toContain('-> Option<String>');
+        expect(sigs.find((s) => s.name === 'parse_time_in_force')?.ret).toBe('keptostr');
+        expect(out).toMatch(/let mut tif: Option<String> = /);
     });
 });

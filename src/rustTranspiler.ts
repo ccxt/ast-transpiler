@@ -4107,7 +4107,11 @@ export class RustTranspiler extends BaseTranspiler {
         // the converted declaration keeps the 400-char line budget (headroom for the later snake_case renames)
         if (readerTouched && this.rustReaderDeclTooLong(declaration, kind)) return undefined;
         // a test string re-boxed anywhere but its moving `return` copies where the `Value` was lent
-        if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustTestTierSource(declaration)) return undefined;
+        // (each such box is a by-value harness argument, where the `Value` form cloned it: lending there costs that copy)
+        if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustTestTierSource(declaration)) {
+            if (this.rustStrNoLend || !this.rustTestLendBoxes(declaration)) return undefined;
+            this.rustStrLentLocals.add(declaration);
+        }
         // a keyed optional string whose copying boxes all sit where the `Value` cloned is lent there instead
         const keyLent = !this.rustStrNoLend && this.rustScalarOptKeyCostly(declaration, kind) && this.rustReaderLendBoxes(declaration, true);
         if (this.rustScalarOptKeyCostly(declaration, kind) && !keyLent) return undefined;
@@ -4206,6 +4210,28 @@ export class RustTranspiler extends BaseTranspiler {
             const slot = selfArg || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n) || this.rustDictWriteValue(n)
                 || (isArrayLiteralExpression(up) && !(isBinaryExpression(up.parent) && up.parent.left === up));
             if (!slot) ok = false;
+            return true;
+        });
+        return ok;
+    }
+
+    /** Test tier: every non-moving box of the string is a by-value `Value` argument / element of a call (the
+     *  harness helpers take `Value`), where the `Value` form printed `x.clone()`: lending there costs that copy. */
+    rustTestLendBoxes(declaration): boolean {
+        let ok = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            const form = this.rustScalarUseForms.get(n);
+            if (form === 'err' || form === 'key') ok = false;
+            if (form !== 'box' && form !== 'xbox') return true;
+            const up: any = n.parent;
+            if (isReturnStatement(up) || this.rustLocalLastUse(n, declaration)) return true;
+            // a by-value harness slot (`exchange.m(..)`, `testSharedMethods.m(..)`), never a `Precise` / `Math` / free
+            // function operand: those read `&Value`, so lending there would add the copy the `&x` borrow never made
+            const callee: any = isCallExpression(up) && up.expression !== n ? up.expression : undefined;
+            const byValue = callee !== undefined && isPropertyAccessExpression(callee) && !(isIdentifier(callee.expression) && (callee.expression.text === 'Precise' || callee.expression.text === 'Math'));
+            const arg = byValue || (isArrayLiteralExpression(up) && !(isBinaryExpression(up.parent) && up.parent.left === up))
+                || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n);
+            if (!arg) ok = false;
             return true;
         });
         return ok;
@@ -5447,8 +5473,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.PlusToken) {
             // a `String` is a `format!` operand as-is; other concats need the box
             if (kind !== 'str' && kind !== 'ostr') return this.rustScalarExpressionUseForm(n, kind);
-            // an `Option<String>` operand prints `x.as_deref().unwrap_or("null")`: `Value::Null` displays as `null`
-            return this.printNode(parent, 0).trim().startsWith('Value::Str(format!(') ? 'concat' : 'box';
+            // mh1: an optional string operand of an always-string `format!` concat reads in place (`as_deref().unwrap_or("null")`,
+            // the nil-local rule's own form), no copy where the box cloned it
+            if (kind === 'ostr' && this.rustNilOptStrConcatUse(n) && this.printNode(parent, 0).trim().startsWith('Value::Str(format!(')) return 'concat';
+            return kind === 'str' && this.printNode(parent, 0).trim().startsWith('Value::Str(format!(') ? 'concat' : 'box';
         }
         if (isConditionalExpression(parent) && parent.condition !== n) return 'box';
         return this.rustScalarExpressionUseForm(n, kind);
@@ -6157,8 +6185,21 @@ export class RustTranspiler extends BaseTranspiler {
             return params === undefined || (this.rustNativeMapArgumentSlot(params, at) === undefined
                 && !this.rustNativeStrVecArgumentSlot(params, at) && !this.rustNativeBoolArgumentSlot(params, at));
         }
-        return isIdentifier(callee.expression) && callee.expression.text === 'Precise';
+        if (isIdentifier(callee.expression) && callee.expression.text === 'Precise') return true;
+        return this.rustTestHarnessSlot(call);
     }
+
+    /** Test tier: a call of the harness (`exchange.m(..)` on the base `Exchange`, `testSharedMethods.m(..)`) whose
+     *  printed callee takes every argument as a by-value `Value` (no native-typed slot). */
+    rustTestHarnessSlot(call): boolean {
+        const callee: any = call.expression;
+        if (!this.rustTestTierSource(call) || !isPropertyAccessExpression(callee) || !isIdentifier(callee.expression)) return false;
+        if (this.rustScalarReceiver(callee.expression)) return !RustTranspiler.RUST_TEST_NATIVE_SLOT_METHODS.has(String(callee.name.text));
+        return callee.expression.text === 'testSharedMethods';
+    }
+
+    /** ExchangeOps methods (rust/tests/src/test_helpers.rs) whose argument is not a plain `Value`. */
+    static RUST_TEST_NATIVE_SLOT_METHODS = new Set([ 'safeValue', 'safeString', 'safeBool', 'safeDict', 'safeList', 'safeNumber', 'safeInteger', 'safeStringN', 'market', 'setSandboxMode', 'sleep' ]);
 
     /** Native right-hand side of `x == <literal>` for a scalar local of `kind`; undefined when not exact. */
     rustScalarLiteralTest(kind: string, other): string | undefined {
@@ -7556,6 +7597,17 @@ export class RustTranspiler extends BaseTranspiler {
         }
     }
 
+    // Venue methods (class -> method names) whose `: Str` return was spelled after their by-name arm existed: the arm
+    // stays (it boxes the `Option<String>` once), so the dispatch-arm name set is unchanged.
+    private static readonly RUST_VENUE_KEPT_STR_ARMS: Record<string, string[]> = { coinbaseinternational: [ 'parseTimeInForce' ] };
+
+    rustVenueKeptStrArm(node: any): boolean {
+        if (node?.kind !== SyntaxKind.MethodDeclaration || !isIdentifier(node.name)) return false;
+        const cls: any = node.parent;
+        const clsName = cls?.name !== undefined && isIdentifier(cls.name) ? String(cls.name.text) : undefined;
+        return clsName !== undefined && (RustTranspiler.RUST_VENUE_KEPT_STR_ARMS[clsName] ?? []).includes(String(node.name.text));
+    }
+
     /** A `: Str` method of the table declared in the base tier, or an override of one. */
     rustBaseNativeStrMethod(node: any): boolean {
         if (node?.kind !== SyntaxKind.MethodDeclaration || !isIdentifier(node.name) || !RustTranspiler.RUST_BASE_NATIVE_STR_METHODS.has(String(node.name.text))) return false;
@@ -8047,6 +8099,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustMethodTypedReturnKind(node) !== undefined) ret = ({ 'Option<i64>': 'oint', 'Option<String>': 'keptostr', 'i64': 'keptint', 'String': 'keptstr' } as Record<string, RustDispatchReturnKind>)[returnType] ?? ret;
         // ral-fb: a base method printing `Option<String>` (safeCurrencyCode and its overrides) keeps its `-> Value` arms the same way
         if (ret === 'ostr' && this.rustBaseNativeStrMethod(node)) ret = 'keptostr';
+        // mh1: a venue method that printed `-> Value` (with a by-name arm) until its `: Str` return was spelled keeps that arm
+        if (ret === 'ostr' && this.rustVenueKeptStrArm(node)) ret = 'keptostr';
         this.rustSignatureTable.set(node, {
             file: node.getSourceFile?.(),
             name: this.toSnakeCaseName(name),
