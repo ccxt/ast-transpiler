@@ -10808,14 +10808,24 @@ export class RustTranspiler extends BaseTranspiler {
         const file = String(declaration.getSourceFile?.()?.fileName ?? '');
         if (!/ts[/]src[/]pro[/]/.test(file) || /ts[/]src[/](pro[/])?test[/]/.test(file)) return false;
         const init: any = this.rustSkipWrappers(declaration.initializer);
-        if (init === undefined || !isElementAccessExpression(init)) return false;
         const symbol: any = (this.typeOfNodeIfAny(declaration.name) as any)?.getSymbol?.();
         const scope = this.rustEnclosingFunction(declaration);
         // ral-we: `book['bids'|'asks']` off a proven book local reads the side marker whatever the checker type says
-        const bookRecv: any = this.rustSkipWrappers(init.expression);
-        const bookKey: any = this.rustSkipWrappers(init.argumentExpression);
-        const offBook = isIdentifier(bookRecv) && isStringLiteralLikeNode(bookKey) && (String(bookKey.text) === 'bids' || String(bookKey.text) === 'asks')
-            && this.rustWsBookLocal(this.rustDeclarationOfIdentifier(bookRecv)) !== undefined;
+        const sideOf = (e: any): any => {
+            const r: any = e === undefined || !isElementAccessExpression(e) ? undefined : this.rustSkipWrappers(e.expression);
+            const k: any = r === undefined ? undefined : this.rustSkipWrappers(e.argumentExpression);
+            const ok = isIdentifier(r) && isStringLiteralLikeNode(k) && (String(k.text) === 'bids' || String(k.text) === 'asks');
+            const d: any = ok ? this.rustDeclarationOfIdentifier(r) : undefined;
+            return d !== undefined && this.rustWsBookLocal(d) !== undefined ? d : undefined;
+        };
+        // ral-xe: `c ? book['bids'] : book['asks']`: both arms are sides of the same proven book
+        if (init !== undefined && isConditionalExpression(init)) {
+            const t: any = this.rustSkipWrappers(init.whenTrue);
+            const f: any = this.rustSkipWrappers(init.whenFalse);
+            const book = sideOf(t);
+            if (book === undefined || sideOf(f) !== book || String(this.rustSkipWrappers(t.argumentExpression).text) === String(this.rustSkipWrappers(f.argumentExpression).text)) return false;
+        } else if (init === undefined || !isElementAccessExpression(init)) return false;
+        const offBook = isConditionalExpression(init) || sideOf(init) !== undefined;
         // ral-ve: an element read of any type whose every use hands it to a side parameter (which wraps it anyway)
         if (!offBook && (symbol === undefined || !/^(Indexed|Counted)?OrderBookSide$/.test(String(symbol.name)))) {
             let slots = 0;
@@ -20362,6 +20372,8 @@ export class RustTranspiler extends BaseTranspiler {
             const declaration: any = this.rustDeclarationOfIdentifier(n);
             if (this.rustWsBookLocal(declaration) !== undefined) return 'book';
             if (this.rustWsCacheLocal(declaration) !== undefined) return 'cache';
+            // ral-xe: a handler local printed as the shared map (`let mut x: crate::value::Dict = ..into_dict()`) resolves `Value::Dict`
+            if (declaration !== undefined && isVariableDeclaration(declaration) && !this.rustLocalReassigned(declaration) && this.rustBorrowedLocalKind(declaration) === 'dict') return 'dict';
             // a local left boxed whose only write is its book / cache source still holds that kind (or nothing)
             if (declaration !== undefined && isVariableDeclaration(declaration) && isIdentifier(declaration.name) && declaration.initializer !== undefined
                 && !this.rustLocalReassigned(declaration)) {
