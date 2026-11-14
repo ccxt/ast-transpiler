@@ -4318,6 +4318,14 @@ export class RustTranspiler extends BaseTranspiler {
         const readerLent = readerTouched && strKind && boxed > 0 && copied > 0 && !this.rustStrNoLend && this.rustReaderLendBoxes(declaration);
         if (readerTouched && strKind && ((boxed > 0 && copied > 0 && !readerLent) || this.rustReaderStrHandedOn(declaration))) return undefined;
         if (readerLent) this.rustStrLentLocals.add(declaration);
+        // ud: a local seeded from a venue override of a native-`Str` base method never copies where the `Value` moved
+        // (lent at its copying boxes when every one sits at a lending slot: the copy the `Value` clone made)
+        if (strKind && copied > 0 && this.rustUdOverrideStrSeed(declaration.initializer)) {
+            if (this.rustStrNoLend || this.rustStrReturnedLocal(declaration, scope) || !this.rustUdOverrideLendBoxes(declaration)) return undefined;
+            this.rustStrLentLocals.add(declaration);
+        }
+        // ud: a base string reader copied only at lending slots lends there (the one copy the `Value` clone made)
+        if (!readerLent && strKind && copied > 0 && this.rustUdLent.has(declaration) && this.rustReaderLendBoxes(declaration)) this.rustStrLentLocals.add(declaration);
         if (readerTouched && boxed > 0) this.rustScalarGuarded.add(declaration);
         // the converted declaration keeps the 400-char line budget (headroom for the later snake_case renames)
         if (readerTouched && this.rustReaderDeclTooLong(declaration, kind)) return undefined;
@@ -4353,7 +4361,11 @@ export class RustTranspiler extends BaseTranspiler {
         // a case-converted `Value` place copies at every box but a moving last one, where the `Value` moved
         if (copied > 0 && this.rustValueCaseInit(declaration.initializer)) return undefined;
         // a local typed for its string-method reads must not copy where the `Value` moved
-        if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustStrMethodRecvLocal(declaration)) return undefined;
+        if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustStrMethodRecvLocal(declaration)) {
+            // ud: a reader string receiver whose copying boxes all sit at lending slots lends there (the copy the `Value` clone made)
+            if (this.rustStrNoLend || !this.rustUdReaderStr(declaration.initializer) || this.rustStrReturnedLocal(declaration, scope) || !this.rustReaderLendBoxes(declaration)) return undefined;
+            this.rustStrLentLocals.add(declaration);
+        }
         // an element of a typed list parameter keeps the 400-char guard and never copies at a box
         // and never feeds another local's write (typing it flips that local's own decision and its method's return)
         if (this.rustListParamElement(declaration.initializer) && (copied > 0 || (boxed > 0 && typedUses === 0) || this.rustScalarFeedsWrite(declaration))) return undefined;
@@ -4719,7 +4731,8 @@ export class RustTranspiler extends BaseTranspiler {
         // the member is declared on the base class (an override keeps the base signature)
         const member: any = this.getChecker().getSymbolAtLocation(call.expression.name)?.valueDeclaration;
         const owner: any = member?.resolve?.() ?? member;
-        if (owner === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(owner.getSourceFile?.()?.fileName ?? ''))) return undefined;
+        // ud: a venue override of a base `: Str` method of the native table still prints `-> Option<String>`
+        if ((owner === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(owner.getSourceFile?.()?.fileName ?? ''))) && !(kind === 'ostr' && this.rustBaseNativeStrCall(call))) return undefined;
         const want = kind === 'ostr' ? 'string' : 'number';
         return this.primitiveKindOfType(this.typeOfNodeIfAny(call)) === want ? kind : undefined;
     }
@@ -5432,6 +5445,46 @@ export class RustTranspiler extends BaseTranspiler {
         return handed;
     }
 
+    /** ud: `rustReaderLendBoxes`, plus a whole `const t = s` alias initialiser (the `Value` form cloned there too). */
+    rustUdOverrideLendBoxes(declaration): boolean {
+        let ok = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            const form = this.rustScalarUseForms.get(n);
+            if (form === 'err' || form === 'key') ok = false;
+            if (form !== 'box' && form !== 'xbox') return true;
+            const up: any = n.parent;
+            if (isReturnStatement(up) || this.rustLocalLastUse(n, declaration)) return true;
+            if (isVariableDeclaration(up) && up.initializer === n) return true;
+            const selfArg = isCallExpression(up) && up.expression !== n && isPropertyAccessExpression(up.expression)
+                && (up.expression.expression.kind === SyntaxKind.ThisKeyword || up.expression.expression.kind === SyntaxKind.SuperKeyword);
+            if (!(selfArg || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n) || this.rustDictWriteValue(n)
+                || (isArrayLiteralExpression(up) && !(isBinaryExpression(up.parent) && up.parent.left === up)))) ok = false;
+            return true;
+        });
+        return ok;
+    }
+
+    /** ud: a `this.m(..)` initialiser whose callee is a venue override of a base native-`Str` method (step 3 seed). */
+    rustUdOverrideStrSeed(init): boolean {
+        const node: any = this.unwrapParens(init);
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustBaseNativeStrCall(node)) return false;
+        const declaration: any = this.rustCallDeclarations.get(node);
+        return declaration !== undefined && declaration !== null && !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
+    }
+
+    /** ud: reader strings admitted only through the lending-slot exemption of `rustBlockLocalUsesAll`. */
+    private rustUdLent = new WeakSet<any>();
+
+    /** ud: a base-tier string reader (`safeString*`, `safeCurrencyCode`) initialiser, with or without a default. */
+    rustUdReaderStr(init): boolean {
+        const node: any = this.unwrapParens(init);
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(node.expression.name.text);
+        if (!RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(name) && name !== 'safeCurrencyCode') return false;
+        const declaration: any = this.rustScalarCallee(node);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
+    }
+
     /** True when the initializer is a reader this block admits (its kind comes from `rustReaderDefaultKind`). */
     rustReaderDefaultInit(init): boolean {
         const node: any = this.unwrapParens(init);
@@ -5483,7 +5536,9 @@ export class RustTranspiler extends BaseTranspiler {
             if ((trial === 'str' || trial === 'ostr') && (form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)
                 && !(form === 'box' && this.rustElementReadScalarKind(this.unwrapParens(declaration.initializer)) !== undefined && this.rustScalarSelfArgBox(n))
                 && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && this.rustScalarSelfArgBox(n) && this.rustFormatLendLocal(declaration))
-                && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && this.rustClockString(this.unwrapParens(declaration.initializer)) && this.rustLendSlot(n))) return false;
+                && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && this.rustClockString(this.unwrapParens(declaration.initializer)) && this.rustLendSlot(n))
+                // ud: a reader string boxed at a lending slot lends there (the one copy the `Value` clone made)
+                && !(form === 'box' && !this.rustStrNoLend && this.rustUdReaderStr(declaration.initializer) && this.rustLendSlot(n) && this.rustUdLent.add(declaration))) return false;
             // a `.push(..)` argument: ccxt's native-push pass keys on the boxed operand text
             const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
             if (push !== undefined && isCallExpression(push)) return false;
@@ -5971,6 +6026,10 @@ export class RustTranspiler extends BaseTranspiler {
         if ((kind === 'str' || kind === 'ostr') && this.rustNestedFieldKeyUse(n)) return 'nkey';
         // a Copy number written into a nested `this.balance|options[..]['k'] = n`: the r05 insert takes the box
         if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustNestedFieldValueUse(n)) return 'box';
+        // ud: the whole value of `x[k1][k2] = n` on a typed two-level local map prints the printer's own
+        // `entry(..).or_default().insert(k2, ..)` (no ccxt pass reads it): a Copy number boxes, a string moves at its last use
+        if (this.rustUdNestedBearerValue(n) && ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum')
+            || ((kind === 'str' || kind === 'ostr') && this.rustLocalLastUse(n, this.rustDeclaredNode(n))))) return 'box';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -6712,6 +6771,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isElementAccessExpression(left) || !isPropertyAccessExpression(left.expression) || left.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const key: any = this.rustSkipWrappers(left.argumentExpression);
         return key !== undefined && isStringLiteral(key) && !/^\d+$/.test(String(key.text)) && !(String(key.text) in this.StringLiteralReplacements);
+    }
+
+    /** ud: `n` is the whole right side of `x[k1][k2] = n` with `x` a typed two-level local map (`rustNestedBearerInsert`). */
+    rustUdNestedBearerValue(n: any): boolean {
+        const write: any = n.parent;
+        if (!isBinaryExpression(write) || write.right !== n || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const outer: any = write.left;
+        if (!isElementAccessExpression(outer) || !isElementAccessExpression(outer.expression)) return false;
+        return this.rustNestedDictBearerDeclaration(outer.expression.expression) !== undefined;
     }
 
     rustScalarInNestedWrite(n): boolean {

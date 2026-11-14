@@ -12550,3 +12550,70 @@ describe('te: this.urls map entries declared Dict in the base Exchange', () => {
         expect(out).toContain('let mut other: Value = ');
     });
 });
+
+describe('ud: a reader string boxed at a lending slot before its last use', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    id: string = 'x';\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    hold (a: any, b: any = undefined): any { return a; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a sibling-block reader string is Option<String> and lends at the self-call slot (the copy the Value clone made), then moves', () => {
+        const out = write ('ud-lend', "    m (u: any, f: boolean) {\n        if (f) {\n            const messageHash = this.safeString (u, 'messageHash');\n            if (messageHash !== undefined) {\n                this.hold (messageHash, 'x');\n                return this.hold (messageHash);\n            }\n        } else {\n            const messageHash = this.safeString (u, 'other');\n            return this.hold (messageHash);\n        }\n        return undefined;\n    }\n");
+        expect(out).toMatch(/let mut messageHash: Option<String> = /);
+        expect(out).toContain('Value::from(messageHash.as_deref())');
+        expect(out).toContain('messageHash.map(Value::from).unwrap_or(Value::Null)');
+        expect(out).not.toContain('messageHash.clone()');
+    });
+    test('negative: a box at a free-function slot (reads &Value) keeps the Value', () => {
+        const out = write ('ud-lend-neg', "    m (u: any, f: boolean) {\n        if (f) {\n            const code = this.safeString (u, 'code');\n            const n = JSON.stringify (code);\n            return this.hold (code, n);\n        } else {\n            const code = this.safeString (u, 'other');\n            return this.hold (code);\n        }\n    }\n");
+        expect(out).toContain('let mut code: Value = self.safeString(u.clone(), Value::Str("code"');
+    });
+    test('a reader string that is a split receiver lends at its earlier self-call box instead of staying a Value', () => {
+        const out = write ('ud-recv', "    m (u: any) {\n        const topic = this.safeString (u, 'topic');\n        this.hold (topic, 'x');\n        const parts = topic.split (':');\n        return this.hold (parts, topic);\n    }\n");
+        expect(out).toMatch(/let mut topic: Option<String> = /);
+        expect(out).toContain('self.hold(Value::from(topic.as_deref()), ');
+        expect(out).toContain('topic.as_deref() { __s.split(');
+        expect(out).not.toContain('topic.clone()');
+    });
+});
+
+describe('ud: a venue override of base safeCurrencyCode still prints Option<String>, so its locals take that kind', () => {
+    test('the local is Option<String> from the bare call (no Value round trip)', () => {
+        const dir = path.join (rustFixtureRoot, 'ud-scc-ovr');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    id: string = 'x';\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    hold (a: any, b: any = undefined): any { return a; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    override safeCurrencyCode (currencyId: Str, currency: any = undefined): Str {\n        if (currencyId === 'X') {\n            return 'Y';\n        }\n        return super.safeCurrencyCode (currencyId, currency);\n    }\n    m (u: any) {\n        const code = this.safeCurrencyCode (this.safeString (u, 'c'));\n        if (code === undefined) {\n            return undefined;\n        }\n        return this.hold (code);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut code: Option<String> = self.safeCurrencyCode(');
+        expect(out).toContain('if (code.is_none())');
+        expect(out).not.toContain('.map(Value::from).unwrap_or(Value::Null);');
+    });
+});
+
+describe('ud: a reader number written whole into a two-level local map (missing intermediate created first)', () => {
+    test('the local is Option<f64> and boxes into the bearer insert (no clone)', () => {
+        const dir = path.join (rustFixtureRoot, 'ud-nested-bearer');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    id: string = 'x';\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o[k]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (rows: any[]) {\n        const fees = {};\n        for (let i = 0; i < rows.length; i++) {\n            const code = this.safeString (rows[i], 'c');\n            const net = this.safeString (rows[i], 'n');\n            const fee = this.safeNumber (rows[i], 'f');\n            fees[code] = {};\n            fees[code][net] = fee;\n        }\n        return { 'withdraw': fees };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut fee: Option<f64> = ');
+        expect(out).toContain('.or_default().insert(crate::runtime::stringify_param(&net), Value::from(fee));');
+        expect(out).not.toContain('fee.clone()');
+    });
+});
+
+describe('ud: an override-seeded safeCurrencyCode string copied only at literal values lends there', () => {
+    test('no clone at the non-last literal value; the last one moves', () => {
+        const dir = path.join (rustFixtureRoot, 'ud-scc-lend');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    id: string = 'x';\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    hold (a: any, b: any = undefined): any { return a; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    override safeCurrencyCode (currencyId: Str, currency: any = undefined): Str {\n        if (currencyId === 'X') {\n            return 'Y';\n        }\n        return super.safeCurrencyCode (currencyId, currency);\n    }\n    m (u: any) {\n        const code = this.safeCurrencyCode (this.safeString (u, 'c'));\n        return this.hold ({ 'currency': code, 'fee': { 'currency': code } });\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut code: Option<String> = self.safeCurrencyCode(');
+        expect(out).toContain('Value::from(code.as_deref())');
+        expect(out).not.toContain('code.clone()');
+    });
+});
