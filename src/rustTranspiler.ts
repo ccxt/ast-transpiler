@@ -5539,7 +5539,8 @@ export class RustTranspiler extends BaseTranspiler {
             let top: any = n;
             while (isParenthesizedExpression(top.parent)) top = top.parent;
             const parent: any = top.parent;
-            if ((isBinaryExpression(parent) && parent.right === top && parent.operatorToken.kind === SyntaxKind.EqualsToken)
+            // rc: an element / field write (`request['k'] = x`) is a box slot the lending rules price; only another local takes it over
+            if ((isBinaryExpression(parent) && parent.right === top && parent.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(this.unwrapParens(parent.left)))
                 || (isVariableDeclaration(parent) && parent.initializer === top) || isConditionalExpression(parent)) handed = true;
             return true;
         });

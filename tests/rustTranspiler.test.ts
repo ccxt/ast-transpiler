@@ -11981,6 +11981,28 @@ describe('pg: precision formatters answer Option<String> (results of other self 
     });
 });
 
+describe('rc: a venue string written once into a dict slot is no hand-on (results of other self method calls, fifth pass)', () => {
+    let out: string;
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'rc-venue-slot');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k] ?? d; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue11.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue11 extends Exchange {\n    signIt (h: string): string {\n        return '0x' + h;\n    }\n    pickDex (h: string): Str {\n        if (h === 'x') {\n            return undefined;\n        }\n        return this.safeString (this.hold ({}), h);\n    }\n    placeIt (h: string) {\n        const request: Dict = {};\n        const signature = this.signIt (h);\n        request['signature'] = signature;\n        const dex = this.pickDex (h);\n        if (dex !== undefined) {\n            request['dex'] = dex;\n        }\n        return this.hold (request);\n    }\n    aliasIt (h: string) {\n        let other: Str = undefined;\n        const sig = this.signIt (h);\n        other = sig;\n        return this.hold (other);\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue11.ts')).content;
+    });
+    test('a venue string stored at a dict key (its last use) is an Option<String> moved into the slot', () => {
+        expect(out).toMatch(/let mut signature: Option<String> = self\.signIt\(/);
+        expect(out).toContain('signature.map(Value::from).unwrap_or(Value::Null)');
+    });
+    test('a guarded optional venue string stored at a dict key is tested with is_some()', () => {
+        expect(out).toMatch(/let mut dex: Option<String> = self\.pickDex\(/);
+        expect(out).toContain('dex.is_some()');
+    });
+    test('negative: a venue string handed on to another local stays a Value', () => {
+        expect(out).toMatch(/let mut sig: Value = /);
+    });
+});
+
 describe('int37: nested this.balance insert under a local upper key keeps that local typed', () => {
     test('a local upper key of this.balance[acct][code] = v skips the nkey insert (bullish tradingAccountId stays Option<String>)', () => {
         const dir = path.join (rustFixtureRoot, 'scalar-int37');
