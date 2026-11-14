@@ -8263,3 +8263,22 @@ describe('ws future settle calls bind the declared Future methods', () => {
         expect(output).not.toContain("return (future as Future)");
     });
 });
+
+describe('csharp ws cache-map entry locals', () => {
+    const root = fs.mkdtempSync(path.join(require('os').tmpdir(), 'cs-cachemap-'));
+    const write = (relative: string, content: string): string => {
+        const file = path.join(root, relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, content);
+        return file;
+    };
+    write('ts/src/base/ws/Cache.ts', 'export class ArrayCache {\n    append (item: any) {}\n}\n');
+    write('ts/src/base/Exchange.ts', "import { ArrayCache } from './ws/Cache.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    positionsByType: Dictionary<ArrayCache> = {};\n    loose: any = {};\n    safeValue (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n}\n");
+    const venue = write('ts/src/pro/venue.ts', "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    a (type: string, p: any) {\n        const cache = this.positionsByType[type];\n        cache.append (p);\n        const other = this.safeValue (this.positionsByType, type);\n        other.append (p);\n        const plain = this.safeValue (this.loose, type);\n        return plain;\n    }\n}\n");
+    test('a const read of a Dictionary<ArrayCache> base field names the cache class', () => {
+        const output = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any).transpileCSharpByPath(venue).content;
+        expect(output).toMatch(/ccxt\.pro\.ArrayCache cache = \(\(ccxt\.pro\.ArrayCache\)/);
+        expect(output).toMatch(/ccxt\.pro\.ArrayCache other = \(\(ccxt\.pro\.ArrayCache\)this\.safeValue\(this\.positionsByType, type\)\)/);
+        expect(output).not.toMatch(/ccxt\.pro\.ArrayCache plain/);
+    });
+});

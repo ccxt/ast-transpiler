@@ -6,7 +6,7 @@ import { CSharpTranspiler } from './csharpTranspiler.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput, ITranspileContext, ITranspileProgramCache } from './types.js';
 import { GoTranspiler, alignGoTrailingComments } from './goTranspiler.js';
 import { JavaTranspiler } from './javaTranspiler.js';
-import { RustTranspiler, RUST_DECLARED_DICT_LOCALS } from './rustTranspiler.js';
+import { RustTranspiler, RUST_DECLARED_DICT_LOCALS, rustDispatch } from './rustTranspiler.js';
 import type { RustDeclaredDictLocalEntry } from './rustTranspiler.js';
 import { CppTranspiler } from './cppTranspiler.js';
 import { installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest } from './goTranspiler.js';
@@ -35,7 +35,7 @@ export default class Transpiler {
     cloneSharingProgramCache(config?: any): Transpiler;
     private setSnapshotContext;
     createProgramInMemoryAndSetContext(content: any): ITranspileContext;
-    createProgramByPathAndSetContext(filePath: any): ITranspileContext;
+    createProgramByPathAndSetContext(filePath: any, extraRoots?: string[]): ITranspileContext;
     setSharedProgram(paths: string[]): void;
     private findSharedProgramFile;
     createProgramBatch(paths: string[]): TranspileProgramBatch;
@@ -91,5 +91,5 @@ declare class TranspileProgramBatch {
     transpileRustByPath(filePath: string): ITranspiledFile;
     transpileCppByPath(filePath: string): ITranspiledFile;
 }
-export { Transpiler, TranspileProgramBatch, CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, SyntaxKind, alignGoTrailingComments, RUST_DECLARED_DICT_LOCALS, installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest, };
+export { Transpiler, TranspileProgramBatch, CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, SyntaxKind, alignGoTrailingComments, RUST_DECLARED_DICT_LOCALS, rustDispatch, installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest, };
 export type { RustDeclaredDictLocalEntry };
