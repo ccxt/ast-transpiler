@@ -19922,7 +19922,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (init === undefined || !this.rustDefaultedListRead(init)) return false;
         if (this.rustLentListLocal(declaration) || this.rustBorrowedPending.has(declaration) || this.rustBorrowedLocalKind(declaration) !== undefined
             || this.rustOptListLocal(declaration) || this.rustScalarLocalKind(declaration) !== undefined || this.rustNilLocalKind(declaration) !== undefined) return false;
-        return this.printNode(y, 0).trim().replace(/^\u0004/, '') === String(y.text);
+        const printedY = this.printNode(y, 0).trim();
+        return (printedY.startsWith('\u0004') ? printedY.slice(1) : printedY) === String(y.text);
     }
 
     printBuiltListWrite(left: any, right: any): string | undefined {
