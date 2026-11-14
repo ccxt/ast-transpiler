@@ -3872,7 +3872,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_SCALAR_BOOL_HELPERS[name] !== undefined || RustTranspiler.RUST_BOOL_READERS[name] !== undefined) return false;
         const declarations: any[] = symbolDeclarations(this.checkerOrUndefined()?.getSymbolAtLocation(access.name));
         const wanted = isCallExpression(node) ? SyntaxKind.MethodDeclaration : SyntaxKind.PropertyDeclaration;
-        if (declarations.length === 0 || !declarations.every((d: any) => d.kind === wanted && d.type?.kind === SyntaxKind.BooleanKeyword)) return false;
+        // a base-tier `v is T` predicate method answers a boolean like a `: boolean` one
+        const predicate = (d: any): boolean => d.type?.kind === SyntaxKind.TypePredicate && d.type.assertsModifier === undefined
+            && RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile?.()?.fileName ?? ''));
+        if (declarations.length === 0 || !declarations.every((d: any) => d.kind === wanted && (d.type?.kind === SyntaxKind.BooleanKeyword || predicate(d)))) return false;
         // a method also proves every `return` is a bool value (the use sites' own truthiness proof)
         return !isCallExpression(node) || this.rustBoolValue(node);
     }
@@ -4093,7 +4096,6 @@ export class RustTranspiler extends BaseTranspiler {
         if (handOff && isConditionalExpression(this.unwrapParens(declaration.initializer)) && this.rustScalarNativeText(kind, declaration.initializer) === undefined) return undefined;
         if (this.rustVenueScalarSource(declaration.initializer) && ((boxed > 0 && !handOff) || this.rustVenueLocalHandedOn(declaration))) return undefined;
         if (this.rustVenueTypedCostly(declaration, kind, copied)) return undefined;
-        if (typedUses === 0 && this.rustTestTierSource(declaration)) return undefined;
         if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined) return undefined;
         if ((boxed > 0 || expressionUses) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
         // a reader-default string re-boxed anywhere but a moving `return` would copy where the `Value` moved
@@ -15744,8 +15746,28 @@ export class RustTranspiler extends BaseTranspiler {
         return name === 'Dict' ? 'dict' : (name === 'List' ? 'list' : undefined);
     }
 
+    // Test-tier readers: the harness `ExchangeOps` readers take `impl KeyRead` like the base ones, so a test's
+    // `Value` container argument is lent (`&x`) where the call cloned it.
+    private static readonly RUST_TEST_KEYREAD_READERS = /^safe(?:Value|String|Bool|Dict|List|Number|Integer)$|^safeStringN$/;
+
+    printTestReaderArg(node: any, text: string): string | undefined {
+        const call: any = node.parent;
+        if (call === undefined || !isCallExpression(call) || call.arguments[0] !== node || !isIdentifier(node) || !/^\w+$/.test(text)) return undefined;
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || !RustTranspiler.RUST_TEST_KEYREAD_READERS.test(String(callee.name.text))) return undefined;
+        if (!this.rustTestTierSource(call) || !this.rustScalarReceiver(callee.expression) || call.arguments.length < 2) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
+        // a parameter, or a local still printed `Value` (no scalar / bytes rule, not a harness cache struct)
+        if (declaration.kind === SyntaxKind.Parameter) return `&${text}`;
+        if (!isVariableDeclaration(declaration) || this.rustScalarLocalOf(node) !== undefined || this.rustBytesLocal(declaration)) return undefined;
+        const init: any = this.unwrapParens(declaration.initializer);
+        return init !== undefined && init.kind === SyntaxKind.NewExpression ? undefined : `&${text}`;
+    }
+
     /** `&x` for a borrowed local (or a typed container local) passed to a hand-written any-key reader. */
     printBorrowedReaderArg(node: any, text: string): string | undefined {
+        const testLent = this.printTestReaderArg(node, text); if (testLent !== undefined) return testLent;
         const call: any = node.parent;
         if (call === undefined || !isCallExpression(call) || call.arguments[0] !== node || !this.rustBorrowedAnyKeyReader(call)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
@@ -19887,7 +19909,17 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
      *  overload set), in the calling file or the base tier. */
-    rustMethodImpl(call: any): any {
+    /** A sync base method no venue source declares and outside virtual dispatch: a base-tier `self.m()` runs this body. */
+    rustBaseOnlyCallee(declaration: any, name: string): boolean {
+        const file = String(declaration.getSourceFile().fileName).replace(/\\/g, '/');
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(file) || this.isAsyncFunction(declaration)) return false;
+        if (this.rustVirtualDispatch[this.toSnakeCaseName(name)] !== undefined) return false;
+        const root = file.search(/(?:^|\/)ts\/src\//);
+        if (root < 0) return false;
+        return !this.rustVenueMethodNames(file.slice(0, file.indexOf('ts/src/', root)) + 'ts/src').has(name);
+    }
+
+    rustMethodImpl(call: any, baseOnly = false): any {
         const checker: any = this.checkerOrUndefined();
         const callee: any = call?.expression;
         if (checker === undefined || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) {
@@ -19902,7 +19934,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // a base-tier caller may dispatch to any venue override
         const callerFile = String(call.getSourceFile().fileName).replace(/\\/g, '/');
-        if (declarations.length !== 1 || RustTranspiler.RUST_BASE_TIER_FILE.test(callerFile)) return undefined;
+        if (declarations.length !== 1 || (RustTranspiler.RUST_BASE_TIER_FILE.test(callerFile) && !(baseOnly && this.rustBaseOnlyCallee(declarations[0], String(callee.name.text))))) return undefined;
         const file = String(declarations[0].getSourceFile().fileName).replace(/\\/g, '/');
         return declarations[0].getSourceFile() === call.getSourceFile() || RustTranspiler.RUST_BASE_TIER_FILE.test(file)
             ? declarations[0] : undefined;
@@ -19954,7 +19986,8 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustEveryReturn(call: any, depth: number, ok: (e: any) => boolean): boolean {
-        const method: any = this.rustMethodImpl(call);
+        // a return proof may read a base-only callee from the base tier (no venue body can answer instead)
+        const method: any = this.rustMethodImpl(call, true);
         if (method === undefined || this.rustVisiting.has(method)) return false;
         this.rustVisiting.add(method);
         let proven = true;

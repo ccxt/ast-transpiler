@@ -7,6 +7,8 @@ import * as path from 'path';
 
 // fixture trees used above are written to a temp dir so the suite carries no fixture files
 const rustInlineFixtures: Record<string, Record<string, string>> = {
+ "test-tier-readers": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/test/Exchange/test.readers.ts": "import Exchange from '../../base/Exchange';\nfunction testReaders (exchange: Exchange, entry: any) {\n    const a = exchange.safeValue (entry, 'a');\n    const b = exchange.safeValue (entry, 'b');\n    const other = 'ETH/USDT';\n    return exchange.hold ([ a, b, other ]);\n}\nexport default testReaders;\n"},
+ "base-predicate-flags": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    httpProxy: any = undefined;\n    socksProxy: any = undefined;\n    valueIsDefined<T> (value: T): value is NonNullable<T> {\n        return value !== undefined && value !== null;\n    }\n    hold (x: any): any { return x; }\n    proxyFlags () {\n        const isHttp = this.valueIsDefined (this.httpProxy);\n        const isSocks = this.valueIsDefined (this.socksProxy);\n        if (isHttp || isSocks) {\n            return this.hold (isHttp ? this.httpProxy : this.socksProxy);\n        }\n        return undefined;\n    }\n}\n"},
  "reader-defaults": {"ts/src/base/Exchange.ts": "export default class Exchange {\n    options: any = {};\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o[k]; }\n    safeInteger (o: any, k: any, d: number = undefined): number | undefined { return o[k]; }\n    safeNumber (o: any, k: any, d: number = undefined): number | undefined { return o[k]; }\n    safeBool (o: any, k: any, d: boolean = undefined): boolean | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange';\nexport default class venue extends Exchange {\n    f (o: any, fallback: string, n: number): any {\n        const flag = this.safeBool (o, 'flag');\n        if (flag) {\n            return 1;\n        }\n        const name = this.safeString (o, 'name', fallback);\n        if (name === 'x') {\n            return 2;\n        }\n        const limit = this.safeInteger (o, 'limit', this.safeInteger (o, 'max'));\n        if (limit === undefined) {\n            return 3;\n        }\n        const fee = this.safeNumber (o, 'fee', 0);\n        if (fee === undefined) {\n            return 4;\n        }\n        const boxed = this.safeNumber (o, 'boxed', 0);\n        return this.hold (boxed);\n    }\n}\n"},
  "bool-params": {
   "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    setSandboxMode (enabled: boolean) {\n        if (enabled) {\n            this.options['sandbox'] = true;\n        }\n    }\n    isPostOnly (isMarketOrder: boolean, params: Dict = {}): boolean {\n        return isMarketOrder;\n    }\n    hold (f: any): any {\n        return f;\n    }\n}\n",
@@ -10975,5 +10977,25 @@ describe('method on a typed string local: pad / slice results typed with their r
         expect(out).not.toContain('|__a|');
         // a `: string` method returning its sliced local keeps its `Option<String>` signature (no ABI flip)
         expect(out).toContain('pub fn trimZeros(&self, data: &str) -> Option<String> {');
+    });
+});
+
+describe('rust test-source reader arguments', () => {
+    test('a test container handed to a harness reader is lent; a test string only handed on takes its native type', () => {
+        const fresh = new Transpiler({ verbose: false, rust: {} } as any);
+        const out = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'test-tier-readers', 'ts/src/test/Exchange/test.readers.ts')).content;
+        expect(out).toMatch(/exchange\.safe_?[vV]alue\(&entry, /);
+        expect(out).not.toContain('entry.clone()');
+        expect(out).toContain('let mut other: String = ');
+    });
+});
+
+describe('rust base predicate flags', () => {
+    test('a base `v is T` predicate result read as a condition is a bool local', () => {
+        const fresh = new Transpiler({ verbose: false, rust: {} } as any);
+        const out = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'base-predicate-flags', 'ts/src/base/Exchange.ts')).content;
+        expect(out).toMatch(/let mut isHttp: bool = /);
+        expect(out).toMatch(/let mut isSocks: bool = /);
+        expect(out).not.toMatch(/let mut isHttp: Value/);
     });
 });
