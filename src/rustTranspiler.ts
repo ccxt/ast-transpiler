@@ -3139,7 +3139,8 @@ export class RustTranspiler extends BaseTranspiler {
         let safe = true;
         for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
             // the enclosing method's own name (`requestId () { const requestId = .. }`) is no use of a scalar local
-            if (skipScopeName && n === (scope as any).name) continue;
+            // ral-qd: nor of any other local (`transfer () { const transfer = this.parseTransfer (..) }`): it names the method
+            if ((skipScopeName || this.rustOwnMethodName(n, scope)) && n === (scope as any).name) continue;
             if (n !== declaration && this.rustBindsName(n, name)) {
                 safe = false; // a second binding of the name in scope — stay boxed
                 break;
@@ -3152,6 +3153,14 @@ export class RustTranspiler extends BaseTranspiler {
         }
         return safe;
     }
+
+    /** ral-qd: `n` is the name of the method declaration `scope` itself (a declaration name, never a read of a local),
+     *  asked while the shared-container rule walks its uses (the copying `IndexMap` bearer rules keep the old walk). */
+    rustOwnMethodName(n: any, scope: any): boolean {
+        return this.rustOwnNameSkip && scope?.kind === SyntaxKind.MethodDeclaration && n === scope.name && n?.kind === SyntaxKind.Identifier;
+    }
+
+    private rustOwnNameSkip = false;
 
     rustLocalUsesAcceptBool(declaration, sourceName: string): boolean {
         return this.rustLocalUsesAll(declaration, sourceName, false, (n) =>
@@ -5621,11 +5630,13 @@ export class RustTranspiler extends BaseTranspiler {
         return ok ? kind : undefined;
     }
 
-    /** od: `parse*` / `handle*` results are their own groups' producers; the lending rules leave them alone. */
+    /** od: `handle*` results are their own group's producers; the lending rules leave them alone.
+     *  ral-qd: a venue `parse*` string result lends like any other venue string (`Value::from(x.as_deref())`
+     *  at each copying box: the copy the `Value` clone made). */
     rustOdExcludedCallee(init): boolean {
         let node: any = this.unwrapParens(init);
         if (node?.kind === SyntaxKind.AwaitExpression) node = this.unwrapParens(node.expression);
-        return node !== undefined && isCallExpression(node) && isPropertyAccessExpression(node.expression) && /^(parse|handle)[A-Z]/.test(String(node.expression.name.text));
+        return node !== undefined && isCallExpression(node) && isPropertyAccessExpression(node.expression) && /^handle[A-Z]/.test(String(node.expression.name.text));
     }
 
     /** `x = E; return x;`: the returned local holds what the statement right before the return wrote. */
@@ -5850,6 +5861,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (own === undefined || scope === undefined) return false;
         for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
             if (n === node || n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) continue;
+            // ral-qd: the enclosing method's own name is a declaration, not a later read
+            if (n === (scope as any).name && (scope as any).kind === SyntaxKind.MethodDeclaration) continue;
             const symbol = this.rustSymbolOf(n);
             if (symbol !== undefined && symbol !== own) continue;
             if (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end)) return false;
@@ -15350,7 +15363,14 @@ export class RustTranspiler extends BaseTranspiler {
             || (!recordLookup && this.rustSiblingBindingsAlike(declaration, name, init))
             // lf: an element of a typed `Dict[]` / list-of-lists (`rows[i]`) in a sibling block of a same-named element local
             || (!recordLookup && this.rustElementSiblingsAlike(declaration, name, init)));
-        const safe = blockScoped ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
+        const ownNameSkip = this.rustOwnNameSkip;
+        this.rustOwnNameSkip = true;
+        let safe: boolean;
+        try {
+            safe = blockScoped ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept);
+        } finally {
+            this.rustOwnNameSkip = ownNameSkip;
+        }
         // a fresh built container handed on whole (D11): every use is a box, the declaration converts once
         const builtBoxOnly = reads === 0 && boxedElementUses.length > 0 && nullTests === 0 && writes === 0 && init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) !== undefined
             || (paramsBoxes === boxedElementUses.length && this.rustOmitOfDict(init))
@@ -19416,7 +19436,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (!shared) return undefined;
         // a literal shared map moves into the head at its last use or when the statement writes the result back
         if (this.rustExtendReuseLocals.has(declaration) && (this.rustSelfExtendHead(node, declaration) || this.rustLocalLastUse(node, declaration))) return RustTranspiler.rustLentMark(text);
-        return this.rustLocalLastUse(node, declaration) ? text : `&${text}`;
+        if (!this.rustLocalLastUse(node, declaration)) return `&${text}`;
+        // ral-qd: a parse* result moves into the head at its last use; the mark keeps the by-value clone pass off it
+        return this.rustParseResultLocal(declaration) ? RustTranspiler.rustLentMark(text) : text;
+    }
+
+    /** ral-qd: a local initialised from a `this.parse*(..)` call. */
+    rustParseResultLocal(declaration: any): boolean {
+        const init: any = isVariableDeclaration(declaration) ? this.rustSkipWrappers(declaration.initializer) : undefined;
+        return init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) && init.expression.expression.kind === SyntaxKind.ThisKeyword
+            && /^parse[A-Z]/.test(String(init.expression.name.text));
     }
 
     /** The literal key of a statement write `n['k'] = v` (one level, not a book-meta or replaced key). */

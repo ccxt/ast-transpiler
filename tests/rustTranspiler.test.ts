@@ -11604,6 +11604,46 @@ describe('ral-oe: ecdsa r / s and row string fields of plain Value rows', () => 
     });
 });
 
+describe('ral-qd: venue parse* string results lend like other venue strings', () => {
+    test('a venue parseOrderStatus result is Option<String>: compared natively, boxed once into the order map', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-qd-parse-str');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeOrder (o: Dict): Dict { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseOrderStatus (status: Str): Str {\n        const statuses: Dict = { 'NEW': 'open', 'DONE': 'closed' };\n        return this.safeString (statuses, status, status);\n    }\n    parseOrder (order: Dict) {\n        const status = this.parseOrderStatus (this.safeString (order, 'state'));\n        let remaining = undefined;\n        if (status === 'closed') {\n            remaining = '0';\n        }\n        return this.safeOrder ({ 'status': status, 'remaining': remaining, 'again': status });\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut status: Option<String> = self\.parseOrderStatus\(/);
+        expect(out).not.toContain('let mut status: Value = self.parseOrderStatus(');
+        expect(out).toContain('status.as_deref() == Some("closed")');
+        // each copying box lends (the copy the `Value` clone made)
+        expect(out).toContain('m.insert("status".to_string(), Value::from(status.as_deref()));');
+    });
+});
+
+describe('ral-qd: parse* map results named like their method, moved into an extend head', () => {
+    const write = (dir: string) => {
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    extend (...args: any[]): any { return Object.assign ({}, ...args); }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTransfer (transfer: Dict): Dict {\n        return { 'id': transfer['id'], 'info': transfer };\n    }\n    async transfer (code: string, amount: number) {\n        const response = this.hold ({});\n        const transfer = this.parseTransfer (response);\n        transfer['amount'] = amount;\n        return transfer;\n    }\n    async withdraw (code: string) {\n        const response = this.hold ({});\n        const withdraw = this.parseTransfer (response);\n        return this.extend (withdraw, { 'code': code });\n    }\n}\n");
+    };
+    test('a parse* map local sharing the method name is a Dict (the method name is no use of the local)', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-qd-own-name');
+        write (dir);
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut transfer: crate::value::Dict = self\.parseTransfer\(.*\)\.into_dict\(\);/);
+        expect(out).toContain('std::sync::Arc::make_mut(&mut transfer).insert("amount".into()');
+        expect(out).toContain('return Value::Dict(transfer);');
+    });
+    test('a parse* map local moves into the extend head at its last use (no clone)', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-qd-own-name');
+        write (dir);
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut withdraw: crate::value::Dict = /);
+        expect(out).toContain('self.extend(withdraw, &[');
+        expect(out).not.toContain('withdraw.clone()');
+    });
+});
+
 describe('rust Dict tuple slots: declared Dict slot 0, typed params slot box (ral-pb)', () => {
     let output = '';
     beforeAll(() => {
