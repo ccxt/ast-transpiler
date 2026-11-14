@@ -5507,7 +5507,7 @@ describe('base-tier enumeration, Arr-only sources and string-method receivers', 
     // `built` is a literal-built local, so it is a typed bearer now and
     // enumerates through the map's own iterators (no `as_map` box, no `object_keys`).
     test('Object.keys / Object.values on a base-tier plain local are native; any keeps the helper', () => {
-        expect(base).toContain('let mut keys: Value = Value::Array(built.keys().map(|__k| Value::Str(__k.clone().into())).collect());');
+        expect(base).toContain('let mut keys: Value = Value::Array(built.keys().cloned().map(Value::from).collect());');
         expect(base).toContain('let mut values: Value = Value::Array(built.values().cloned().collect());');
         expect(base).toContain('object_keys(&response)');
     });
@@ -7631,7 +7631,7 @@ describe ('rustBearerBoxedKeyWrites', () => {
                 + '    }\n');
             expect(out).toContain('let mut marketIds: indexmap::IndexMap<String, Value> = (');
             expect(out).toContain('marketIds.insert(crate::runtime::stringify_param(&(market.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null))), Value::Bool(true));');
-            expect(out).toContain('Value::Array(marketIds.keys().map(|__k| Value::Str(__k.clone().into())).collect())');
+            expect(out).toContain('Value::Array(marketIds.keys().cloned().map(Value::from).collect())');
             expect(out).not.toContain('add_element_to_object(&mut marketIds');
         });
 
@@ -7656,7 +7656,7 @@ describe ('rustBearerBoxedKeyWrites', () => {
                 + '    }\n');
             expect(out).toContain('let mut seen: indexmap::IndexMap<String, Value> = (');
             expect(out).toContain('seen.insert(crate::runtime::stringify_param(&(crate::value::get_value_k(&value, "id"))), value.clone());');
-            expect(out).toContain('Value::Array(seen.keys().map(|__k| Value::Str(__k.clone().into())).collect())');
+            expect(out).toContain('Value::Array(seen.keys().cloned().map(Value::from).collect())');
             expect(out).not.toContain('add_element_to_object(&mut seen');
             expect(out).not.toContain('object_keys(&seen');
         });
@@ -12002,6 +12002,59 @@ describe('ral-pe: built lists lent / moved into impl Into<Value> helper slots', 
     });
     test('negative: a list also boxed into an array element stays Value', () => {
         expect(out).toMatch(/let mut kept: Value = /);
+    });
+});
+
+describe('ral-sf: built lists lent to impl Into<Value> parse / per-venue slots, moved into a literal value at last use', () => {
+    let out: string;
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-sf-lists');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    toArray (x: any): any[] { return Object.values (x); }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    parseTrades (trades: List, market: any = undefined): any { return trades; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    rows (response: any, flag: boolean) {\n        let responseList = [];\n        if (flag) {\n            responseList = this.toArray (response);\n        }\n        return this.parseTrades (responseList);\n    }\n    send (a: any, ids: Dict[]) {\n        return this.hold (ids);\n    }\n    many (response: any, flag: boolean) {\n        let ids = [];\n        if (flag) {\n            ids = this.toArray (response);\n        }\n        this.hold (1);\n        return this.send (1, ids);\n    }\n    body (response: any, n: number) {\n        let amount = [];\n        if (n > 1) {\n            amount = this.toArray (response);\n        }\n        for (let i = 0; i < n; i++) {\n            amount.push ({ 'n': i });\n        }\n        const request: Dict = { 'amount': amount };\n        return this.hold (request);\n    }\n    late (response: any, n: number) {\n        let kept = [];\n        if (n > 1) {\n            kept = this.toArray (response);\n        }\n        const request: Dict = { 'kept': kept };\n        kept.push (n);\n        return this.hold (request);\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('a list handed to a plural parse* response slot is lent', () => {
+        expect(out).toContain('let mut responseList: crate::value::List = ');
+        expect(out).toMatch(/parseTrades\(&responseList/);
+    });
+    test('a list handed to a per-venue list slot is lent', () => {
+        expect(out).toContain('let mut ids: crate::value::List = ');
+        expect(out).toMatch(/self\.send\([^;]*&ids\)/);
+    });
+    test('a push accumulator moves into an object-literal value at its last use, boxed once', () => {
+        expect(out).toContain('let mut amount: crate::value::List = ');
+        expect(out).toContain('Value::Arr(amount)');
+        expect(out).not.toContain('Value::Arr(amount.clone())');
+    });
+    test('negative: a push after the literal keeps the aliased Value', () => {
+        expect(out).toMatch(/let mut kept: Value = /);
+    });
+});
+
+describe('ral-sf: a literal map written at string-local keys and enumerated by Object.keys holds the IndexMap', () => {
+    test('the key set prints the map\'s own keys (insertion order), closure-free; the write is a native insert', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-sf-keyset');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    parseOrder (o: any): Order { return o; }\n}\nexport interface Order { symbol: string; id: string }\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    collect (rows: any[]) {\n        const symbols: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const parsed = this.parseOrder (rows[i]);\n            const symbol = parsed['symbol'];\n            symbols[symbol] = true;\n        }\n        const keys = Object.keys (symbols);\n        for (let i = 0; i < keys.length; i++) {\n            this.hold (keys[i]);\n        }\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut symbols: indexmap::IndexMap<String, Value> = ');
+        expect(out).toContain('symbols.insert(crate::runtime::stringify_param(&symbol), Value::Bool(true));');
+        expect(out).toContain('Value::Array(symbols.keys().cloned().map(Value::from).collect())');
+        expect(out).not.toContain('object_keys(&symbols)');
+    });
+});
+
+describe('ral-sf: a list local written only under Array.isArray (y) from that y moves the tested list', () => {
+    test('y.into_list() under the guard at its last use, the list read natively; an unguarded write keeps Value', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-sf-guarded');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    fetchRaw (): any { return []; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    guarded () {\n        const response = this.fetchRaw ();\n        let items: Dict[] = [];\n        if (Array.isArray (response)) {\n            items = response;\n        }\n        for (let i = 0; i < items.length; i++) {\n            this.hold (items[i]);\n        }\n    }\n    loose () {\n        const response = this.fetchRaw ();\n        let items: Dict[] = [];\n        if (response !== undefined) {\n            items = response;\n        }\n        for (let i = 0; i < items.length; i++) {\n            this.hold (items[i]);\n        }\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/fn guarded[\s\S]*?let mut items: crate::value::List = [\s\S]*?items = response\.into_list\(\);[\s\S]*?items\.get\(i as usize\)/);
+        expect(out).toMatch(/fn loose[\s\S]*?let mut items: Value = /);
     });
 });
 

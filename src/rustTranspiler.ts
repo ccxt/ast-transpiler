@@ -13578,8 +13578,9 @@ export class RustTranspiler extends BaseTranspiler {
         // a test map's key list copies each key where the helper lent the map
         if (arg === undefined || this.rustTestTierSource(arg) || this.rustDictBearerDeclaration(arg) === undefined) return undefined;
         const recv = String(arg.text);
+        // the keys print like the borrowed-dict form (`printBorrowedKeys`): closure-free, one `Value::Str` per key
         const body = kind === 'keys'
-            ? `${recv}.keys().map(|__k| Value::Str(__k.clone().into())).collect()`
+            ? `${recv}.keys().cloned().map(Value::from).collect()`
             : `${recv}.values().cloned().collect()`;
         return `Value::Array(${body})`;
     }
@@ -14601,7 +14602,9 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustLiteralMoves.add(moveEscapes[0]);
         }
         // Admitted by the literal hand-off shapes: every escape must be a move.
-        if (widened && (enumUses > 0 || !escapes.every((e: any) => this.rustReturnOperand(e) || (this.rustVecIsFinalUse(e, name) && !this.loopBetween(e))))) return false;
+        // ral-sf: `Object.keys/values` on such a map prints the map's own iterators (insertion order, the helper's order; a
+        // literal-built map carries no ws tag for the helper to filter), so an enumeration is a native read like an element read
+        if (widened && !escapes.every((e: any) => this.rustReturnOperand(e) || (this.rustVecIsFinalUse(e, name) && !this.loopBetween(e)))) return false;
         // A produced map that also escapes re-boxes as `Value::Map(x.clone())`
         // at the escape, so it pays off only where the bearer folds a helper call on it.
         if (produced && escapes.length > 0 && elementUses === 0) return false;
@@ -19186,7 +19189,7 @@ export class RustTranspiler extends BaseTranspiler {
             const up: any = n.parent;
             if (isBinaryExpression(up) && up.left === n) {
                 return up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
-                    && this.rustBuiltListWriteSource(up.right) && String(up.parent.getText()).split('\n')[0].length <= 200;
+                    && (this.rustBuiltListWriteSource(up.right) || this.rustArrayGuardedMove(up)) && String(up.parent.getText()).split('\n')[0].length <= 200;
             }
             if (isElementAccessExpression(up) && up.expression === n) {
                 natives++;
@@ -19231,6 +19234,20 @@ export class RustTranspiler extends BaseTranspiler {
             // `Promise.all(x)` reads its operand once: the list moves into the box at its last use
             if (this.rustBuiltListPromiseAllOperand(up, n)) {
                 if (!this.rustLocalLastUse(n, declaration) || !short(n)) return false;
+                boxes.push([n, 'move']);
+                handOffs++;
+                return true;
+            }
+            // ral-sf: a plural `parse*` response slot or a per-venue list / map slot takes `impl Into<crate::Value>`:
+            // the shared list is lent there (`&x`, an Arc bump), never copied
+            if (isCallExpression(up) && up.expression !== n && !this.rustTestTierSource(up) && (this.rustLentListSlot(up, n) || this.rustLentVenueSlot(up, n) !== undefined)) {
+                boxes.push([n, 'lend']);
+                handOffs++;
+                return true;
+            }
+            // ral-sf: an object-literal value at the list's proven last use (no later read or push, not in a loop or
+            // closure) takes the list whole: `Value::Arr(x)` moves it, so a push accumulator is boxed once
+            if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n && this.rustLocalLastUse(n, declaration) && short(n)) {
                 boxes.push([n, 'move']);
                 handOffs++;
                 return true;
@@ -19296,6 +19313,35 @@ export class RustTranspiler extends BaseTranspiler {
         // a bare local element would be copied into the native literal
         if (isArrayLiteralExpression(rhs)) return !rhs.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement || isIdentifier(this.rustSkipWrappers(e)));
         return this.rustAlwaysListProducer(rhs) || this.rustDefaultedListRead(rhs);
+    }
+
+    /** ral-sf: `x = y` as the only statement under `if (Array.isArray (y))` (the then-branch, `y` a plain `Value` local or
+     *  parameter never written after its declaration), at `y`'s last use: `y` holds a `Value::Arr` there, so
+     *  `y.into_list()` moves exactly that list (no copy, no other variant to lose). */
+    rustArrayGuardedMove(write: any): boolean {
+        const y: any = this.rustSkipWrappers(write.right);
+        if (y === undefined || !isIdentifier(y)) return false;
+        const statement: any = write.parent;
+        let branch: any = statement?.parent;
+        if (isBlock(branch)) {
+            if (branch.statements.length !== 1) return false;
+        } else branch = statement;
+        const guard: any = branch?.parent;
+        if (guard === undefined || guard.kind !== SyntaxKind.IfStatement || guard.thenStatement !== branch) return false;
+        const test: any = this.rustSkipWrappers(guard.expression);
+        if (!isCallExpression(test) || test.arguments.length !== 1 || !isPropertyAccessExpression(test.expression)
+            || !isIdentifier(test.expression.expression) || test.expression.expression.text !== 'Array' || String(test.expression.name.text) !== 'isArray') return false;
+        const tested: any = this.rustSkipWrappers(test.arguments[0]);
+        if (tested === undefined || !isIdentifier(tested) || tested.text !== y.text) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(y);
+        if (declaration === undefined || declaration.name === y || !(isVariableDeclaration(declaration) || isParameterDeclaration(declaration))) return false;
+        if (this.rustDeclarationOfIdentifier(tested) !== declaration || this.rustLocalIsReassigned(declaration, String(y.text))) return false;
+        if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(write)) return false;
+        if (isVariableDeclaration(declaration) && (this.rustLentListLocal(declaration) || this.rustBorrowedLocalKind(declaration) !== undefined
+            || this.rustScalarLocalKind(declaration) !== undefined || this.rustNilLocalKind(declaration) !== undefined)) return false;
+        // the printer may mark the bare move owned (`\u0004`): still the plain `Value` binding
+        if (this.printNode(y, 0).trim().replace(/^\u0004/, '') !== String(y.text)) return false;
+        return this.rustLocalLastUse(y, declaration);
     }
 
     rustBuiltListOf(node: any): any {
