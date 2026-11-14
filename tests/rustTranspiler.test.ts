@@ -319,6 +319,75 @@ describe('rust transpiling tests', () => {
         expect(out).toContain('self.parseNumber(v, &[])');
     });
 
+    test('an object-literal value clones a bare local read again and moves one at its last use', () => {
+        const ts = [
+            'class A {',
+            '    hold (x: any) { return x; }',
+            '    run (a: any, b: any) {',
+            '        const r = { \'x\': a, \'y\': b };',
+            '        return [ r, a ];',
+            '    }',
+            '}',
+        ].join('\n');
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('m.insert("x".to_string(), a.clone());');
+        expect(out).toContain('m.insert("y".to_string(), b);');
+    });
+
+    test('a slice element clones a local read again and moves one at its last use', () => {
+        const ts = [
+            'class A {',
+            '    opt (a: any = undefined) { return a; }',
+            '    run (x: any, y: any) {',
+            '        this.opt (x);',
+            '        this.opt (y);',
+            '        return x;',
+            '    }',
+            '}',
+        ].join('\n');
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('self.opt(&[x.clone()])');
+        expect(out).toContain('self.opt(&[y])');
+    });
+
+    test('a list-literal element clones a local read again and moves one at its last use', () => {
+        const ts = [
+            'class A {',
+            '    run (x: any, y: any) {',
+            '        const a = [ x, y ];',
+            '        return [ a, x ];',
+            '    }',
+            '}',
+        ].join('\n');
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('Value::from(vec![x.clone(), y])');
+        expect(out).toContain('Value::from(vec![a, x])');
+    });
+
+    test('cloneCacheCallArgs clones a bare cache-call argument and keeps an owned one', () => {
+        const T: any = (transpiler as any).rustTranspiler.constructor;
+        const clone = (t: string, on: boolean, ex: boolean): string => T.cloneCacheCallArgs(t, on, ex);
+        expect(clone('stored.append(trade); c = ArrayCache::new(limit, Value::Null); s.append(\u0004t);', true, true))
+            .toBe('stored.append(trade.clone()); c = ArrayCache::new(limit.clone(), Value::Null); s.append(\u0004t);');
+        expect(clone('stored.limit(x);', true, false)).toBe('stored.limit(x);');
+        expect(clone('stored.append(trade);', false, true)).toBe('stored.append(trade);');
+    });
+
+    test('a helper write clones a value read again and moves one at its last use', () => {
+        const ts = [
+            'class A {',
+            '    run (d: any, x: any, y: any) {',
+            '        d[\'a\'] = x;',
+            '        d[\'b\'] = y;',
+            '        return x;',
+            '    }',
+            '}',
+        ].join('\n');
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toMatch(/\(&mut d, &Value::Str\("a"\.into\(\)\), x\.clone\(\)\)/);
+        expect(out).toMatch(/\(&mut d, &Value::Str\("b"\.into\(\)\), y\)/);
+    });
+
     test('a for-loop counter handed off by value is cloned (the next pass reads it again)', () => {
         const ts = [
             'class A {',
@@ -1208,7 +1277,7 @@ describe('rust transpiling tests', () => {
     test('array push call', () => {
         const ts = 'arr.push(x);'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('append_to_array(&mut arr, x)');
+        expect(output).toContain('append_to_array(&mut arr, x.clone())');
     });
 
     test('array includes call', () => {
@@ -5075,11 +5144,11 @@ describe('safeDict / builder plain dicts and bool-value truthiness', () => {
         expect(output).toContain('let mut paginate: bool = ');
         expect(output).toContain('if paginate {');
         expect(output).toContain('if isTrigger.as_bool() == Some(true) {');
-        expect(output).toContain('if !(self.isConditionalOrder(&[params]).as_bool() == Some(true)) {');
+        expect(output).toContain('if !(self.isConditionalOrder(&[params.clone()]).as_bool() == Some(true)) {');
     });
 
     test('an any-valued method / tuple element keeps is_true', () => {
-        expect(output).toContain('if is_true(&self.looseFlag(&[params])) {');
+        expect(output).toContain('if is_true(&self.looseFlag(&[params.clone()])) {');
         expect(output).toContain('if is_true(&loose) {');
     });
 });
@@ -6561,7 +6630,7 @@ describe('two-level dict bearers', () => {
 
     test('a three-level chain keeps every middle hop on get_value_mut', () => {
         const out = rs("        const d = {};\n        d['a']['b']['c'] = v;\n        return d;");
-        expect(out).toContain('add_element_to_object(get_value_mut(d.entry("a".into()).or_default(), &Value::Str("b".into())), &Value::Str("c".into()), v);');
+        expect(out).toContain('add_element_to_object(get_value_mut(d.entry("a".into()).or_default(), &Value::Str("b".into())), &Value::Str("c".into()), v.clone());');
     });
 
     test('negative: an unproven hop key or a receiver-reading value keeps the box', () => {
@@ -6749,7 +6818,7 @@ describe('rust typed unified-method signatures', () => {
     test('an OrderRequest[] parameter prints the typed request list and decodes at intra-core calls', () => {
         expect(output).toContain('pub fn createOrders(&self, orders: Vec<crate::types::OrderRequest>, params: impl Into<crate::Params> + Send) -> crate::Result<Vec<crate::types::Order>>');
         expect(output).toContain('crate::types::IntoRaw::into_raw(orders)');
-        expect(output).toContain('self.create_orders(crate::types::FromRaw::from_raw(Value::from(vec![order])), params.clone()).await');
+        expect(output).toContain('self.create_orders(crate::types::FromRaw::from_raw(Value::from(vec![order.clone()])), params.clone()).await');
     });
 
     test('literal arguments of a typed call print in the native parameter type', () => {
@@ -7333,7 +7402,7 @@ describe ('rustBearerBoxedKeyWrites', () => {
                 + '        return result;\n'
                 + '    }\n');
             expect(out).toContain('let mut result: indexmap::IndexMap<String, Value> = (');
-            expect(out).toContain('result.insert(crate::runtime::stringify_param(&(crate::value::get_value_k(&value, "id"))), Value::from(vec![value]));');
+            expect(out).toContain('result.insert(crate::runtime::stringify_param(&(crate::value::get_value_k(&value, "id"))), Value::from(vec![value.clone()]));');
             expect(out).not.toContain('add_element_to_object(&mut result');
             expect(out).not.toContain('if let Value::Dict(__d) = &mut result');
         });
@@ -8365,11 +8434,12 @@ describe('rust string locals moved at their last use', () => {
 describe('rust ws cache size locals', () => {
     test('an integer size local passes natively to the cache constructor', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'cache-ctor-limit', 'ts/src/pro/venue.ts')).content;
-        expect(out).toContain('ArrayCache::new(limit)');
+        // the bare size argument is cloned on the file text like any by-value cache constructor argument
+        expect(out).toContain('ArrayCache::new(limit.clone())');
         expect(out).toContain('let mut limit: i64 = ');
         expect(out).toContain('let mut ordersLimit: Option<i64> = ');
         expect(out).toContain('ArrayCacheBySymbolById::new(Value::from(ordersLimit))');
-        expect(out).toContain('ArrayCacheBySymbolById::new(ordersLimit));');
+        expect(out).toContain('ArrayCacheBySymbolById::new(ordersLimit.clone()));');
         expect(out).not.toMatch(/let mut limit: Value/);
         expect(out).not.toMatch(/let mut ordersLimit: Value/);
     });

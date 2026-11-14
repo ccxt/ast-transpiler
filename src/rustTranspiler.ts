@@ -571,14 +571,15 @@ export class RustTranspiler extends BaseTranspiler {
         return false;
     }
 
-    rustOwnedUseIsFree(node): boolean {
+    rustOwnedUseIsFree(node, element = false): boolean {
         if (node.text === 'undefined') return true;
         if (this.rustOwnedInReceiverChain(node)) return false;
         // the test tier's exchange handles become the typed `Exchange` (or `&mut` it) after printing, by their name
         if (/ts[/]src[/](?:pro[/])?test[/]/.test(String(node.getSourceFile().fileName)) && /^(?:exchange\d*|[A-Za-z_]\w*Exchange\d*)$/.test(String(node.text))) return false;
         // a call inside an array literal may be a `Promise.all` operand, reshaped after printing (ccxt re-runs a
         // static ws watch until its queue drains), so its argument is not a last use
-        if (findAncestor(node, (a: any) => isArrayLiteralExpression(a) || isStatement(a)) !== undefined
+        // (an element of the literal itself is moved into the new list, never a call argument)
+        if (!element && findAncestor(node, (a: any) => isArrayLiteralExpression(a) || isStatement(a)) !== undefined
             && isArrayLiteralExpression(findAncestor(node, (a: any) => isArrayLiteralExpression(a) || isStatement(a)))) return false;
         const scalar = this.rustScalarLocalOf(node)?.kind;
         if (scalar !== undefined) return RustTranspiler.RUST_COPY_SCALAR_KINDS.has(scalar);
@@ -2122,7 +2123,8 @@ export class RustTranspiler extends BaseTranspiler {
             for (const key of keyStrs.slice(0, -1)) acc = `get_value_mut(${acc}, &${key})`;
             const rhs = this.printNode(right, 0);
             const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) ?? this.printNilMapKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
-            const helperCall = `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
+            // the helper takes the value by move: an owned bare local (`Copy`, last use) is marked, the rest cloned on the file text
+            const helperCall = `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${this.rustOwnedArgText(right, rhs.trim())})`;
             // a nested helper write whose value was read natively binds the value first, like the ccxt hoist did
             const helperWrite = this.rustDictHoistHosts.has(node)
                 ? `{ let __be_tmp = ${rhs}; add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, __be_tmp); }` : helperCall;
@@ -9326,7 +9328,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const ownedArgs = (list) => list.map((a, i) => this.rustOwnedArgText(a, this.rustWsWatchSlot(node, i) ? this.rustWsWatchSlotText(a, this.printNode(a, 0)) : printArg(a, i))).join(', ');
                 const requiredArgs = [ ownedArgs(args.slice(0, sig.requiredCount)), ...this.rustVenuePads(calleeParams, args.length, sig.requiredCount) ].filter((a) => a !== '').join(', ');
                 const reqPart = requiredArgs ? `${requiredArgs}, ` : '';
-                return `self.${methodName}(${reqPart}&[${printArgs(args.slice(sig.requiredCount), sig.requiredCount)}])`;
+                return `self.${methodName}(${reqPart}&[${args.slice(sig.requiredCount).map((a, i) => this.rustOwnedArgText(a, printArgs([ a ], sig.requiredCount + i))).join(', ')}])`;
             }
         }
 
@@ -9638,6 +9640,70 @@ export class RustTranspiler extends BaseTranspiler {
             i = j + 1;
         }
         return out;
+    }
+
+    /** A bare local element of a `&[..]` argument slice or a `Value::from(vec![..])` list literal is moved into the
+     *  temporary: it is cloned unless the printer marked it owned (`\u0004`: a `Copy` local or its last use). */
+    static cloneSliceElements(text: string): string {
+        const elements = (inside: string) => {
+            const parts = RustTranspiler.rustSplitTopLevel(inside);
+            return parts === undefined ? inside : parts.map((a) => (RustTranspiler.isBareLocal(a) && a !== 'None' ? `${a}.clone()` : a)).join(', ');
+        };
+        let out = '';
+        let i = 0;
+        const re = /(?:[,(]\s*&\[|Value::from\(vec!\[)/g;
+        while (i < text.length) {
+            re.lastIndex = i;
+            const m = re.exec(text);
+            if (!m) { out += text.slice(i); break; }
+            const open = m.index + m[0].length;
+            const j = RustTranspiler.rustBalancedClose(text, open);
+            if (j >= text.length) { out += text.slice(i); break; }
+            const head = m[0].startsWith('V') ? m[0] : `${m[0][0]}${m[0][0] === '(' ? '' : ' '}&[`;
+            out += text.slice(i, m.index) + head + elements(RustTranspiler.cloneSliceElements(text.slice(open, j))) + ']';
+            i = j + 1;
+        }
+        return out;
+    }
+
+    private static readonly RUST_CACHE_CALL_HEADS = [
+        /\b[a-zA-Z_]\w*\.(?:append|store|store_array|reset|update|get_limit|limit|reusable_future)\(/g,
+        /\b(?:(?:Indexed|Counted)?OrderBook|ArrayCache(?:|ByTimestamp|BySymbolById|BySymbolBySide|ByOutcomeById))::new\(/g,
+    ];
+
+    private static readonly RUST_CACHE_CALL_HEADS_TEST = [
+        /\b[a-zA-Z_]\w*\.(?:append|store|store_array|reset|update|get_limit)\(/g,
+        RustTranspiler.RUST_CACHE_CALL_HEADS[1],
+    ];
+
+    /** A bare local argument of a cache / order-book call on a local (`stored.append(x)`) or a ws cache constructor
+     *  is moved into the callee: cloned unless the printer marked it owned (`\u0004`). */
+    static cloneCacheCallArgs(text: string, on: boolean, exchange: boolean): string {
+        if (!on) return text;
+        for (const head of exchange ? RustTranspiler.RUST_CACHE_CALL_HEADS : RustTranspiler.RUST_CACHE_CALL_HEADS_TEST) {
+            const re = new RegExp(head.source, 'g');
+            let out = '';
+            let i = 0;
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(text)) !== null) {
+                const open = m.index + m[0].length;
+                const j = RustTranspiler.rustBalancedClose(text, open);
+                if (j >= text.length) break;
+                const parts = RustTranspiler.rustSplitTopLevel(text.slice(open, j));
+                out += text.slice(i, open) + (parts === undefined ? text.slice(open, j) : parts.map((a) => (/^[a-zA-Z_]\w*$/.test(a) ? `${a}.clone()` : a)).join(', ')) + ')';
+                i = j + 1;
+                re.lastIndex = i;
+            }
+            text = out + text.slice(i);
+        }
+        return text;
+    }
+
+    /** `set_value` / `append_to_array` / `add_element_to_object` take the value by move: a bare local final argument
+     *  is cloned unless the printer marked it owned (`\u0004`). */
+    static cloneHelperWriteValues(text: string): string {
+        return text.replace(/\b((?:set_value|append_to_array|add_element_to_object)\([^;]*?,\s*)([a-zA-Z_][a-zA-Z0-9_]*)\)(\s*;)/g,
+            (whole: string, prefix: string, ident: string, tail: string) => (ident === 'self' ? whole : `${prefix}${ident}.clone())${tail}`));
     }
 
     private static rustBalancedClose(text: string, from: number): number {
@@ -11516,7 +11582,10 @@ export class RustTranspiler extends BaseTranspiler {
             const file = String((node as any).fileName ?? '');
             const test = /ts[/]src[/](?:pro[/])?test[/]/.test(file);
             const ws = /ts[/]src[/]pro[/]/.test(file);
-            return RustTranspiler.cloneByValueCallArgs(RustTranspiler.cloneAliasSources(this.printNodeUncloned(node, identation), !test), !ws).replaceAll('\u0004', '');
+            // cache / order-book calls on locals and the ws cache constructors (exchange files and the ws base tests)
+            const cacheCalls = !test || /ts[/]src[/]pro[/]test[/]base[/]/.test(file);
+            const exchangeFile = cacheCalls && !/ts[/]src[/]base[/]/.test(file);
+            return RustTranspiler.cloneSliceElements(RustTranspiler.cloneHelperWriteValues(RustTranspiler.cloneCacheCallArgs(RustTranspiler.cloneByValueCallArgs(RustTranspiler.cloneAliasSources(this.printNodeUncloned(node, identation), !test), !ws), exchangeFile, !test))).replaceAll('\u0004', '');
         }
         return this.printNodeUncloned(node, identation);
     }
@@ -12421,7 +12490,11 @@ export class RustTranspiler extends BaseTranspiler {
                 return `${idn2}m.insert("${escapeKey(name)}".to_string(), ${name}.clone());`;
             }
             const keyText = isStringLiteral(p.name) ? p.name.text : p.name.text;
-            return `${idn2}m.insert("${escapeKey(keyText)}".to_string(), ${this.printNode(p.initializer, 0)});`;
+            // a bare local value is handed into the map: cloned unless the hand-off is owned (`rustOwnedUseIsFree`)
+            const value = this.printNode(p.initializer, 0);
+            const bare = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value.trim()) && value.trim() !== 'self';
+            const owned = bare && isIdentifier(this.unwrapParens(p.initializer)) && this.rustOwnedUseIsFree(this.unwrapParens(p.initializer));
+            return `${idn2}m.insert("${escapeKey(keyText)}".to_string(), ${bare && !owned ? `${value.trim()}.clone()` : value});`;
         });
         const idn1 = this.getIden(identation + 1);
         const body = lines.map(l => l + '\n').join('');
@@ -12429,7 +12502,12 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printArrayLiteralExpression(node, identation) {
-        return `Value::from(vec![${node.elements.map(e => this.printNode(e, 0)).join(', ')}])`;
+        // a bare local element is moved into the list: owned (`\u0004`, left uncloned) when `Copy` or at its last use
+        const element = (e: any) => {
+            const text = this.printNode(e, 0);
+            return isIdentifier(e) && RustTranspiler.isBareLocal(text.trim()) && this.rustOwnedUseIsFree(e, true) ? `\u0004${text.trim()}` : text;
+        };
+        return `Value::from(vec![${node.elements.map(element).join(', ')}])`;
     }
 
     printDeleteExpression(node, identation) {
@@ -12616,7 +12694,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
-        return this.printRustVecPush(node, name, parsedArg) ?? this.printBuiltListPush(node, name, parsedArg) ?? this.arrPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${parsedArg})`;
+        return this.printRustVecPush(node, name, parsedArg) ?? this.printBuiltListPush(node, name, parsedArg) ?? this.arrPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${node?.arguments?.length === 1 && parsedArg !== undefined ? this.rustOwnedArgText(node.arguments[0], parsedArg.trim()) : parsedArg})`;
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
