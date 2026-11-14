@@ -1022,6 +1022,8 @@ export class RustTranspiler extends BaseTranspiler {
         const cacheTest = this.printWsCacheNullTest(left, right, op) ?? this.printFilterRowsNullTest(left, right, op); if (cacheTest !== undefined) return cacheTest;
         const optContainer = this.printOptContainerNullTest(left, right, op) ?? this.printOptListNullTest(left, right, op) ?? this.printNilMapNullTest(left, right, op); if (optContainer !== undefined) return optContainer;
         const optMarket = this.printOptMarketNullTest(left, right, op); if (optMarket !== undefined) return optMarket;
+        const fieldList = this.printLentFieldListNullTest(left, right, op); if (fieldList !== undefined) return fieldList;
+        const handlerTest = this.printHandlerTableNullTest(left, right, op); if (handlerTest !== undefined) return handlerTest;
         const currencySlot = this.printCurrencySlotNullTest(left, right, op) ?? this.printCurrencyLocalNullTest(left, right, op); if (currencySlot !== undefined) return currencySlot;
         const scalarLocal = this.printRustScalarLocalEquality(left, right, op); if (scalarLocal !== undefined) return scalarLocal;
         const nativeIntResult = this.rustLengthEquality(left, right, op); if (nativeIntResult !== undefined) return nativeIntResult;
@@ -2133,6 +2135,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (nilWrite !== undefined) return nilWrite;
         const bytesWrite = isAssign && isIdentifier(left) ? this.printRustBytesLocalWrite(left, right) : undefined;
         if (bytesWrite !== undefined) return bytesWrite;
+        const handlerWrite = isAssign && isIdentifier(left) ? this.printHandlerTableLocalWrite(left, right) : undefined; if (handlerWrite !== undefined) return handlerWrite;
         const scalarWrite = isAssign && isIdentifier(left) ? this.printRustScalarLocalWrite(left, right) : undefined;
         if (scalarWrite !== undefined) return scalarWrite;
         const scalarBinary = this.printRustScalarBinary(node); if (scalarBinary !== undefined) return scalarBinary;
@@ -2303,7 +2306,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // the test crate reaches the runtime's types through `ccxt::`
         if (node.declarations.length === 1 && this.rustBytesLocal(declaration)) return `${indent}let mut ${varName}: ${this.rustTestTierSource(declaration) ? 'ccxt' : 'crate'}::value::Bytes = ${this.rustBytesBareText(this.unwrapParens(declaration.initializer), identation)}`;
-        const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) ?? this.printWsFlightLocalDeclaration(declaration, varName, indent) ?? this.printWsCacheLocalDeclaration(declaration, varName, indent) : undefined;
+        const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printHandlerTableLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) ?? this.printWsFlightLocalDeclaration(declaration, varName, indent) ?? this.printWsCacheLocalDeclaration(declaration, varName, indent) : undefined;
         if (scalarDecl !== undefined) return scalarDecl;
         const parsedValue = this.printNode(declaration.initializer, identation).trim();
         if (declaration.initializer.kind === SyntaxKind.NewExpression) {
@@ -6365,6 +6368,9 @@ export class RustTranspiler extends BaseTranspiler {
             // so is a `safeValue (this.<cache map>, k)` key (trades, positionsByType)
             if (form === 'fin' && isCallExpression(this.rustWsBookKeyParent(n)) && this.rustWsCacheMapLookup(this.rustWsBookKeyParent(n)) && this.rustWsCacheMapField(this.rustWsBookKeyParent(n).arguments[0])) return true;
             if (form === 'fin' || form === 'frd' || (form === 'key' && this.rustFieldKeyReceiver(n.parent?.expression) !== undefined)) field = true;
+            // rf: a native insert key takes the key text (`as_deref().unwrap_or("null").to_string()`), the one allocation
+            // `stringify_param` made for the boxed key: no copy where the `Value` moved
+            else if (form === 'key' && RustTranspiler.RUST_PRO_TIER_FILE.test(String(n.getSourceFile().fileName)) && this.rustLiteralKeyReceiver(n) && this.rustScalarInsertKeyUse(n)) return true;
             else if ((form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)) {
                 boxed = true;
                 // a `this.` / `super.` argument cloned the `Value`: lending the string there costs that same one copy
@@ -6377,6 +6383,21 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         return field && boxed;
+    }
+
+    /** rf: the map `m[k] = v` writes into is not a call-bound local that a typed key turns into an IndexMap bearer (its
+     *  `.as_map().cloned()` copies the map out of the `Value`; bitvavo `limits`). A literal-bound map, or one whose insert
+     *  stays the guarded `if let Value::Dict(..)` write, takes the key text with no copy. */
+    rustLiteralKeyReceiver(n: any): boolean {
+        const access: any = this.rustKeyWrapped(n).parent;
+        if (!isElementAccessExpression(access)) return false;
+        if (!isIdentifier(access.expression)) return true;
+        const declaration: any = this.rustDeclarationOfIdentifier(access.expression);
+        if (declaration === undefined || !isVariableDeclaration(declaration)) return true;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        // syntactic: a call-bound receiver (`safeDict (..)`) may become that bearer once the key is typed (the bearer
+        // decision reads the key's own decision), so only a literal-bound or unbound one is taken
+        return init === undefined || isObjectLiteralExpression(init) || !isCallExpression(init);
     }
 
     /** A loop (or closure) lies between the declaration and `n`: a box there repeats. */
@@ -8265,6 +8286,8 @@ export class RustTranspiler extends BaseTranspiler {
     // `ts/src/base/**` — the shared `Exchange` / `PredictionExchange` classes
     // (the transpiler synthesises variants like `.__ExchangeNoOverloads.ts`).
     private static readonly RUST_BASE_TIER_FILE = /ts[\\/]src[\\/]base[\\/]/;
+    // rf: the ws tier (`ts/src/pro/`); REST-tier locals are another group's
+    private static readonly RUST_PRO_TIER_FILE = /ts[\\/]src[\\/]pro[\\/]/;
 
     /** `'str'` when the method is emitted `-> Option<String>`, else undefined. */
     rustNativeStrReturnKind(node: Node): string | undefined {
@@ -17352,6 +17375,8 @@ export class RustTranspiler extends BaseTranspiler {
                 natives++;
                 return true;
             }
+            // rf: a null test of a typed list field's handle: the field is a `List`, never `Null` (printLentFieldListNullTest)
+            if (at === n && this.rustLentFieldNullTest(up, at, init)) return true;
             return false;
         });
         // A list that is only handed on would trade each box for a handle box.
@@ -17382,6 +17407,117 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(up) && up.left === node && rustIsAssignmentOperator(up.operatorToken.kind)) return place;
         if (isCallExpression(up) && up.arguments[0] === node && this.rustBorrowedAnyKeyReader(up)) return `&${place}`;
         return `Value::Arr(${place}.clone())`;
+    }
+
+    /** rf: `x === undefined` / `x !== undefined` of a local bound to a typed list field (`this.symbols`): the field is a
+     *  `List`, so the boxed `Value::Arr(..)` the local held was never `Null` and the test is a constant. */
+    rustLentFieldNullTest(up: any, at: any, init: any): boolean {
+        if (!RustTranspiler.RUST_PRO_TIER_FILE.test(String(up?.getSourceFile?.()?.fileName ?? '')) || !this.rustTypedListField(init) || !isBinaryExpression(up) || !this.isEqualityOp(up.operatorToken.kind)) return false;
+        return this.literalKindOfNode(this.unwrapParens(up.left === at ? up.right : up.left)) === 'null';
+    }
+
+    printLentFieldListNullTest(left: any, right: any, op: any): string | undefined {
+        const leftNull = this.literalKindOfNode(this.unwrapParens(left)) === 'null';
+        const other: any = this.rustSkipWrappers(leftNull ? right : left);
+        if (!isIdentifier(other) || (!leftNull && this.literalKindOfNode(this.unwrapParens(right)) !== 'null')) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(other);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.name === other || !this.rustTypedListField(declaration.initializer) || !this.rustLentListLocal(declaration)) return undefined;
+        return (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) ? 'false' : 'true';
+    }
+
+    // ── ws handler tables (rustHandlerTableLocal / printHandlerTableLocalDeclaration) ──
+    // rf: `const method = this.safeValue (methods, key)` where `methods` is a literal whose every value is a `this.<method>`
+    // reference (lowered to its name string) and `method` is only null-tested and `.call`ed: the read is a handler name or
+    // `Null`, so the local is the `Option<String>` the by-name `dispatch_ws_handler` table takes (no arm added or lost).
+    private rustHandlerTableLocals = new Map<any, boolean>();
+
+    rustHandlerTableLocal(declaration: any): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        let known = this.rustHandlerTableLocals.get(declaration);
+        if (known === undefined) {
+            this.rustHandlerTableLocals.set(declaration, false); // re-entrancy guard
+            try {
+                known = this.rustHandlerTableLocalUncached(declaration);
+            } catch (e) {
+                known = false;
+            }
+            this.rustHandlerTableLocals.set(declaration, known);
+        }
+        return known;
+    }
+
+    rustHandlerTableLocalUncached(declaration: any): boolean {
+        const list: any = declaration.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
+        if (!RustTranspiler.RUST_PRO_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
+        if (!this.rustHandlerTableRead(declaration.initializer)) return false;
+        const fn: any = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || isSourceFile(fn)) return false;
+        let calls = 0;
+        const ok = this.rustBlockLocalUsesAll(declaration, String(declaration.name.text), (n: any) => {
+            if (this.rustEnclosingFunction(n) !== fn) return false;
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && this.isEqualityOp(up.operatorToken.kind)) return this.literalKindOfNode(this.unwrapParens(up.left === n ? up.right : up.left)) === 'null';
+            if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'call' && isCallExpression(up.parent) && up.parent.expression === up) return ++calls > 0;
+            // a rewrite from a handler table again (woo / bitvavo fall back from `event` to `topic`)
+            if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement) return this.rustHandlerTableRead(up.right);
+            return false;
+        });
+        return ok && calls > 0;
+    }
+
+    /** `this.safeValue (table, k)` of a base-tier `safeValue` over a handler table. */
+    rustHandlerTableRead(expr: any): boolean {
+        const init: any = this.rustSkipWrappers(expr);
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(init.expression.name.text) !== 'safeValue' || init.arguments.length !== 2) return false;
+        const callee: any = this.rustScalarCallee(init);
+        return callee !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile().fileName)) && this.rustHandlerTable(this.rustSkipWrappers(init.arguments[0]));
+    }
+
+    printHandlerTableLocalWrite(left: any, right: any): string | undefined {
+        if (!this.rustHandlerTableLocalOf(left)) return undefined;
+        return `${String(left.text)} = ${this.printNode(right, 0).trim()}.as_str().map(str::to_owned)`;
+    }
+
+    /** A local map literal whose every value is a `this.<method>` reference, only read by `this.safeValue (m, k)`. */
+    rustHandlerTable(node: any): boolean {
+        if (node === undefined || !isIdentifier(node)) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.name === node) return false;
+        const literal: any = this.rustSkipWrappers(declaration.initializer);
+        if (literal === undefined || !isObjectLiteralExpression(literal) || literal.properties.length === 0) return false;
+        for (const p of literal.properties as any) {
+            if (p.kind !== SyntaxKind.PropertyAssignment) return false;
+            const v: any = p.initializer;
+            if (!isPropertyAccessExpression(v) || v.expression.kind !== SyntaxKind.ThisKeyword) return false;
+            const member: any = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(v.name));
+            if (member === undefined || !isMethodDeclaration(member)) return false;
+        }
+        // a same-named table in a sibling block is another binding (`rustBlockLocalUsesAll`)
+        return this.rustBlockLocalUsesAll(declaration, String(declaration.name.text), (n: any) => {
+            const up: any = n.parent;
+            return isCallExpression(up) && up.arguments[0] === n && isPropertyAccessExpression(up.expression) && up.expression.expression.kind === SyntaxKind.ThisKeyword
+                && String(up.expression.name.text) === 'safeValue';
+        });
+    }
+
+    rustHandlerTableLocalOf(node: any): boolean {
+        if (node === undefined || !isIdentifier(node)) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        return declaration !== undefined && declaration.name !== node && this.rustHandlerTableLocal(declaration);
+    }
+
+    printHandlerTableLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined {
+        if (!this.rustHandlerTableLocal(declaration)) return undefined;
+        return `${indent}let mut ${varName}: Option<String> = ${this.printNode(declaration.initializer, 0).trim()}.as_str().map(str::to_owned)`;
+    }
+
+    printHandlerTableNullTest(left: any, right: any, op: any): string | undefined {
+        const leftNull = this.literalKindOfNode(this.unwrapParens(left)) === 'null';
+        const other: any = this.rustSkipWrappers(leftNull ? right : left);
+        if ((!leftNull && this.literalKindOfNode(this.unwrapParens(right)) !== 'null') || !this.rustHandlerTableLocalOf(other)) return undefined;
+        return `${String(other.text)}.${(op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) ? 'is_none' : 'is_some'}()`;
     }
 
     rustLentListUse(node: any): boolean {

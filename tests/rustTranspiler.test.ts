@@ -12046,3 +12046,43 @@ describe('ral-rd: scalar-literal and boxed locals', () => {
         expect(out).toContain('if j > 0 {');
     });
 });
+
+describe('rf: ws-tier handler tables, symbols field and typed insert keys', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Ticker { symbol: Str; info: any }\nexport default class Exchange {\n    symbols: string[] = undefined;\n    tickers: Dict = {};\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    market (s: string): Dict { return {}; }\n    hold (x: any): any { return x; }\n    parseTicker (t: Dict): Ticker { return { 'symbol': this.safeString (t, 's'), 'info': t }; }\n}\n";
+    const client = "export default class Client {\n    resolve (v: any, h: string | undefined = undefined): void {}\n}\n";
+    const pro = "import Exchange from '../base/Exchange';\nimport type { Dict } from '../base/Exchange';\nimport Client from '../base/ws/Client';\nexport default class venue extends Exchange {\n    handleA (client: Client, message: Dict) {}\n    handleB (client: Client, message: Dict) {}\n    handleMessage (client: Client, message: Dict) {\n        const event = this.safeString (message, 'e');\n        const methods: Dict = {\n            'a': this.handleA,\n            'b': this.handleB,\n        };\n        let method = this.safeValue (methods, event);\n        if (method === undefined) {\n            method = this.safeValue (methods, 'a');\n        }\n        if (method !== undefined) {\n            method.call (this, client, message);\n        }\n    }\n    handleTickers (client: Client, message: Dict) {\n        const parsed = this.parseTicker (message);\n        const symbol = parsed['symbol'];\n        const newTickers: Dict = {};\n        if (symbol !== undefined) {\n            newTickers[symbol] = parsed;\n            this.tickers[symbol] = parsed;\n        }\n        client.resolve (parsed, 'ticker:' + symbol);\n        client.resolve (newTickers, 'tickers');\n    }\n    loadMarkets2 () {\n        const symbols = this.symbols;\n        if (symbols === undefined) {\n            return 0;\n        }\n        let n = 0;\n        for (let i = 0; i < symbols.length; i++) {\n            const m = this.market (symbols[i]);\n            n = n + 1;\n        }\n        return n;\n    }\n}\n";
+    const rest = pro.replace("import Exchange from '../base/Exchange';\nimport type { Dict } from '../base/Exchange';\nimport Client from '../base/ws/Client';", "import Exchange from './base/Exchange';\nimport type { Dict } from './base/Exchange';\nimport Client from './base/ws/Client';");
+    let out = '';
+    let restOut = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'rf-ws');
+        fs.mkdirSync (path.join (dir, 'ts/src/base/ws'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/base/ws/Client.ts'), client);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), pro);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), rest);
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+        restOut = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('a handler-table read only null-tested and called is the Option<String> handler name', () => {
+        expect(out).toContain('let mut method: Option<String> = ');
+        expect(out).toMatch(/method = self\.safe\w*\([^\n]*\)\.as_str\(\)\.map\(str::to_owned\)/);
+        expect(out).toContain('method.is_none()');
+        expect(out).toContain('method.is_some()');
+    });
+    test('a parsed symbol used as a null test, insert keys and a concat operand is Option<String> (binance handleTickers)', () => {
+        expect(out).toContain('let mut symbol: Option<String> = ');
+        expect(out).toContain('symbol.as_deref().unwrap_or("null").to_string()');
+        expect(out).not.toContain('stringify_param(&symbol)');
+    });
+    test('this.symbols bound once and only null-tested / indexed shares the List handle', () => {
+        expect(out).toContain('let mut symbols: crate::value::List = self.symbols.clone()');
+        expect(out).toContain('if (false)');
+    });
+    test('REST-tier locals keep their decisions', () => {
+        expect(restOut).toContain('let mut method: Value = ');
+        expect(restOut).toContain('let mut symbol: Value = ');
+        expect(restOut).toContain('let mut symbols: Value = ');
+    });
+});
