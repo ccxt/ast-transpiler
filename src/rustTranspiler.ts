@@ -8168,8 +8168,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (d === undefined || !isVariableDeclaration(d) || loop?.kind !== SyntaxKind.ForStatement || this.rustScalarIntLiteral(this.unwrapParens(d.initializer)) === undefined) return false;
         const incr: any = loop.incrementor;
         if (incr === undefined || !this.isNodeInsideNode(node, loop)) return false;
-        const symbol = this.rustSymbolOf(d.name);
-        for (const n of this.rustScopeNameNodes(loop, String(d.name.text)) as any[]) {
+        const symbol = this.rustSymbolOf(d.name as any);
+        for (const n of this.rustScopeNameNodes(loop, String((d.name as any).text)) as any[]) {
             if (n === d.name || !isIdentifier(n) || this.rustSymbolOf(n) !== symbol || this.isNodeInsideNode(n, incr)) continue;
             if (this.rustIdentifierIsWritten(n)) return false;
         }
@@ -19713,7 +19713,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(n)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(n);
         if (declaration === undefined || declaration.name === n || !isVariableDeclaration(declaration) || this.rustNilSlotDictCandidate(declaration)) return undefined;
-        return this.rustHandedDictLocal(declaration) && this.rustLocalIsReassigned(declaration, String(declaration.name.text)) ? declaration : undefined;
+        return this.rustHandedDictLocal(declaration) && this.rustLocalIsReassigned(declaration, String((declaration.name as any).text)) ? declaration : undefined;
     }
 
     // ── nil-declared params slots (ral-nd) ──
