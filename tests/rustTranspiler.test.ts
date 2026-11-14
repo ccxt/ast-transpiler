@@ -15002,3 +15002,96 @@ describe('40d: an integer reader with an integer-literal default bounding its ow
         expect(out).toMatch(/let mut maxPages: i64 = .*\.as_i64\(\)\.unwrap_or\(20\);/);
     });
 });
+
+describe('ral-40h: container aliases decided in two phases (the source settles first, the alias then shares or takes the box)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    omit (o: any, k: any): any { return o; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeString (o: any, k: any, d: any = undefined): any { return o[k]; }\n    keep (p: any): any { return p; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n";
+    const run = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a written alias takes the box: the source is a Dict moved at its last use', () => {
+        const out = run ('r40h-alias-box', "    a (response: Dict) {\n        const data = this.safeDict (response, 'data', {});\n        const code = this.safeString (data, 'code');\n        let result: Dict = data;\n        if (code !== undefined) {\n            result = this.keep (code);\n        }\n        return this.keep (result);\n    }\n");
+        expect(out).toContain('let mut data: crate::value::Dict = ');
+        expect(out).toContain('let mut result: Value = Value::Dict(data);');
+    });
+    test('a never-written alias shares the map (an Arc bump, no copy)', () => {
+        const out = run ('r40h-alias-share', "    b (response: Dict) {\n        const data = this.safeDict (response, 'data', {});\n        const id = this.safeString (data, 'id');\n        const result = data;\n        return [ id, this.safeString (result, 'k') ];\n    }\n");
+        expect(out).toContain('let mut data: crate::value::Dict = ');
+        expect(out).toContain('let mut result: crate::value::Dict = Value::from(&data).into_dict();');
+    });
+    test('an alias of an optional container keeps both boxed', () => {
+        const out = run ('r40h-alias-opt', "    c (response: Dict) {\n        const data = this.safeDict (response, 'data');\n        const id = this.safeString (data, 'id');\n        const result = data;\n        return [ id, result ];\n    }\n");
+        expect(out).not.toContain('let mut result: crate::value::Dict');
+        expect(out).not.toContain('Value::Dict(data)');
+    });
+});
+
+describe('ral-40h: deepExtend of proven maps beyond the json hand-off (omit-of-map operand, reassigned plain literal operand)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    omit (o: any, k: any): any { return o; }\n    deepExtend (...args: any[]): any { return args[0]; }\n    safeString (o: any, k: any, d: any = undefined): any { return o[k]; }\n    keep (a: any): any { return a; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n";
+    const run = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['watchTicker'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return typed.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    test('a const omit of a typed params map is a map operand', () => {
+        const out = run ('r40h-dx-omit', "    async watchTicker (symbol: string, params: Dict = {}): Promise<any> {\n        const paramsOmitted: Dict = this.omit (params, 'interval');\n        const message: Dict = { 'method': 'subscribe' };\n        const request = this.deepExtend (message, paramsOmitted);\n        return await this.watch ('u', 'h', request, 'h');\n    }\n");
+        expect(out).toContain('let mut request: crate::value::Dict = ');
+    });
+    test('a let literal rewritten only by plain literals is a map operand', () => {
+        const out = run ('r40h-dx-let', "    async watchTicker (symbol: string, params: Dict = {}): Promise<any> {\n        let message: Dict = { 'e': 'subscribe' };\n        if (symbol === 'x') {\n            message = { 'e': 'ticker' };\n        }\n        const request = this.deepExtend (message, params);\n        return await this.watch ('u', 'h', request, 'h');\n    }\n");
+        expect(out).toContain('let mut request: crate::value::Dict = ');
+    });
+    test('a let literal rewritten from an unproven value keeps the box', () => {
+        const out = run ('r40h-dx-unproven', "    async watchTicker (symbol: string, params: Dict = {}): Promise<any> {\n        const other = this.keep (symbol);\n        return await this.watchIt2 (symbol, params, other);\n    }\n    async watchIt2 (symbol: string, params: Dict = {}, other: any = undefined): Promise<any> {\n        let message: Dict = { 'e': 'subscribe' };\n        if (symbol === 'x') {\n            message = other;\n        }\n        const request = this.deepExtend (message, params);\n        return await this.watch ('u', 'h', request, 'h');\n    }\n");
+        expect(out).not.toContain('let mut request: crate::value::Dict = ');
+    });
+});
+
+describe('ral-40h: REST safeDict element of a same-venue built list takes a literal-key write (untagged source)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    extend (...args: any[]): any { return args[0]; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n";
+    const run = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const build = "    build (side: string, params: Dict = {}): Dict[] {\n        const request: Dict = { 'side': side };\n        const orders: Dict[] = [];\n        orders.push (this.extend (request, params));\n        return orders;\n    }\n";
+    test('element 0 of a built list is a Dict written in place', () => {
+        const out = run ('r40h-sd-built', build + "    m (params: Dict = {}): Dict[] {\n        const orders: Dict[] = [];\n        const orderObj = this.safeDict (this.build ('buy', params), 0, {});\n        orderObj['client_order_index'] = 0;\n        orders.push (orderObj);\n        return orders;\n    }\n");
+        expect(out).toContain('let mut orderObj: crate::value::Dict = ');
+        expect(out).toContain('std::sync::Arc::make_mut(&mut orderObj).insert(\"client_order_index\".into(), Value::Int(0));');
+    });
+    test('an element of an unproven call result keeps the helper', () => {
+        const out = run ('r40h-sd-unproven', "    other (x: any): any { return x; }\n    m (params: Dict = {}): Dict[] {\n        const orders: Dict[] = [];\n        const orderObj = this.safeDict (this.other (params), 0, {});\n        orderObj['client_order_index'] = 0;\n        orders.push (orderObj);\n        return orders;\n    }\n");
+        expect(out).not.toContain('let mut orderObj: crate::value::Dict = ');
+    });
+});
+
+describe('ral-40h: a dynamic this[m] call whose names are all implicit map endpoints keeps the sign params proof', () => {
+    const write = (name: string, caller: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    omit (x: any, ...args: any): any { return x; }\n    extend (...args: any): any { return {}; }\n    safeString (x: any, k: any, d: any = undefined): any { return x; }\n    extractParams (s: string): string[] { return []; }\n    urlencode (o: any): string { return ''; }\n    json (o: any): string { return ''; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/' + name + '.ts'), "import _Exchange from '../base/Exchange.js';\nexport default abstract class Exchange extends _Exchange {\n    privatePostAWithdrawal (params = {}): Promise<any> {\n        return this.omit (params);\n    }\n    privatePostBWithdrawal (params = {}): Promise<any> {\n        return this.omit (params);\n    }\n}\n");
+        const sign = "    sign (path: string, api = 'public', method = 'GET', params = {}, headers: any = undefined, body: any = undefined) {\n        let url = '/' + path;\n        const query = this.omit (params, this.extractParams (path));\n        if (Object.keys (query).length) {\n            url += '?' + this.urlencode (query);\n        }\n        body = this.json (query);\n        return [ url, body ];\n    }\n";
+        fs.writeFileSync (path.join (dir, 'ts/src/' + name + '.ts'), "import Exchange from './abstract/" + name + ".js';\nimport type { Dict } from './base/Exchange.js';\nexport default class " + name + " extends Exchange {\n" + caller + sign + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/' + name + '.ts')).content;
+    };
+    test('every name the table spells is an implicit endpoint and the argument a map: proof holds', () => {
+        const out = write ('r40hdynok', "    async w (code: string, params: Dict = {}) {\n        const methods: Dict = { 'X': 'A', 'Y': 'B' };\n        const method = this.safeString (methods, code);\n        const request: Dict = { 'a': 1 };\n        const classMethod = 'privatePost' + method + 'Withdrawal';\n        return await this[classMethod] (this.extend (request, params));\n    }\n");
+        expect(out).toContain('let mut query: crate::value::Dict = ');
+    });
+    test('negative: one spelled name is not an endpoint: the box stays', () => {
+        const out = write ('r40hdynbad', "    async w (code: string, params: Dict = {}) {\n        const methods: Dict = { 'X': 'A', 'Y': 'C' };\n        const method = this.safeString (methods, code);\n        const request: Dict = { 'a': 1 };\n        const classMethod = 'privatePost' + method + 'Withdrawal';\n        return await this[classMethod] (this.extend (request, params));\n    }\n");
+        expect(out).not.toContain('let mut query: crate::value::Dict = ');
+    });
+});
