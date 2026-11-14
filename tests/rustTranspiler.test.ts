@@ -12128,6 +12128,22 @@ describe('rc: a venue string written once into a dict slot is no hand-on (result
     });
 });
 
+describe('sc: a venue string boxed only at lending slots is handed off (other self method results, sixth pass)', () => {
+    let out: string;
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'sc-venue-lend');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    parseIt (x: any): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k] ?? d; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue12.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue12 extends Exchange {\n    convertIt (h: Str): Str {\n        return this.safeString (this.hold ({}), h);\n    }\n    buildIt (h: string) {\n        const datetime = this.convertIt (h);\n        const request: Dict = {\n            'a': this.parseIt (datetime),\n            'b': datetime,\n        };\n        return this.hold (request);\n    }\n    keepIt (h: string) {\n        const code = this.convertIt (h);\n        const x = this.hold (code);\n        return x;\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue12.ts')).content;
+    });
+    test('a venue string read at a self-call arg and moved into a literal value is Option<String>, lent before the last box', () => {
+        expect(out).toMatch(/let mut datetime: Option<String> = self\.convertIt\(/);
+        expect(out).toContain('Value::from(datetime.as_deref())');
+        expect(out).not.toContain('datetime.clone()');
+    });
+});
+
 describe('int37: nested this.balance insert under a local upper key keeps that local typed', () => {
     test('a local upper key of this.balance[acct][code] = v skips the nkey insert (bullish tradingAccountId stays Option<String>)', () => {
         const dir = path.join (rustFixtureRoot, 'scalar-int37');

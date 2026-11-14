@@ -4263,8 +4263,11 @@ export class RustTranspiler extends BaseTranspiler {
         // a local only handed back to `Value` slots keeps its producer's type: one conversion per box, no extra string copy
         // (never a local returned from a method declaring a string return: that signature decides from the boxed local)
         const strKind = kind === 'str' || kind === 'ostr';
+        // sc: a venue string whose copying boxes all sit at lending slots (self-call arg, literal value, dict write, element) is handed off too
         const handOff = nativeUses === 0 && boxed >= 1 && (copied === 0 || !strKind || (!this.rustStrNoLend && (this.rustStrLendSites(declaration)
-            || (kind === 'str' && this.rustClockString(this.unwrapParens(declaration.initializer)) && this.rustReaderLendBoxes(declaration))))) && !this.rustStrReturnedLocal(declaration, scope);
+            || (kind === 'str' && this.rustClockString(this.unwrapParens(declaration.initializer)) && this.rustReaderLendBoxes(declaration))
+            || (this.rustScOwnSelfCall(declaration.initializer) && !this.rustOdExcludedCallee(declaration.initializer) && !this.rustVenueLocalHandedOn(declaration) && this.rustReaderLendBoxes(declaration)))))
+            && !this.rustStrReturnedLocal(declaration, scope);
         const storeOnly = guarded && nativeUses === 0 && boxed === 1 && !handOff;
         const unused = typedUses === 0 && !handOff && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
         // a string handed once to a ws client call and nothing else stays a `Value`
@@ -4385,6 +4388,13 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Every box of the string sits where the `Value` form cloned it (a `this.` / `super.` argument) or is its
      *  moving last use, and no use reads it by reference: lending there costs the one copy the clone made. */
+    /** sc: the initializer is a call of another `this.` method (sync or awaited) that the scalar seed typed as a string */
+    rustScOwnSelfCall(init): boolean {
+        let n: any = this.unwrapParens(init);
+        if (n?.kind === SyntaxKind.AwaitExpression) n = this.unwrapParens(n.expression);
+        return isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword;
+    }
+
     rustStrLendSites(declaration): boolean {
         let ok = true;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
