@@ -17872,6 +17872,7 @@ export class RustTranspiler extends BaseTranspiler {
         let keySets = 0;
         let keyWrites = 0;
         let safeDictKeyWrites = 0;
+        let elementKeyWrites = 0;
         const keyWriteUses: any[] = [];
         let extendHeads = 0;
         let extendWrites = 0;
@@ -17968,6 +17969,9 @@ export class RustTranspiler extends BaseTranspiler {
             // pb: a literal-key write on a REST `safeDict*` result: copy-on-write insert (`if let Some` on the optional form, which
             // skips a missing map exactly as `add_element_to_object` skipped the `Null`)
             if (!extendReuse && this.rustSafeDictKeyWriteOk(n, init)) return keyWriteUses.push(n) > 0 && ++safeDictKeyWrites > 0 && ++keyWrites > 0 && ++reads > 0;
+            // ral-40g: a literal-key write on a REST `Dict[]` row (`rows[i]`): copy-on-write insert on the optional form (`if let Some`
+            // skips a non-map row exactly as `add_element_to_object` skipped a Null / Str / Int / List receiver)
+            if (!extendReuse && this.rustElementKeyWriteOk(n, init)) return keyWriteUses.push(n) > 0 && ++elementKeyWrites > 0 && ++safeDictKeyWrites > 0 && ++keyWrites > 0 && ++reads > 0;
             if (this.rustUntilHeadKeyWrite(n) !== undefined && (extendReuse ? this.rustExtendReuseKeyWriteOk(n, declaration) : init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) === 'dict' || this.rustBuiltMapKeyWriteOk(n, init)))) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
             // ral-wf: a dynamic-key write on a reuse literal (untagged operands only): the helper's tag routes cannot fire
             if (extendReuse && this.rustReuseDynamicKeyWrite(n, declaration)) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
@@ -18057,7 +18061,7 @@ export class RustTranspiler extends BaseTranspiler {
         // a nullable source lent whole keeps Null apart from an empty container: the optional form
         // ral-zg: a sibling-admitted map row handed on whole keeps Null apart from the empty map (the optional form)
         const zgRow = this.rustZgSiblingRows.has(declaration) && boxedElementUses.length > 0;
-        const optional = nilDeclared || nullTests > 0 || writes > 0 || lentNullable > 0 || optionalBoxes > 0 || zgRow;
+        const optional = nilDeclared || nullTests > 0 || writes > 0 || lentNullable > 0 || optionalBoxes > 0 || zgRow || elementKeyWrites > 0;
         if (jwtLends > 0 && optional) return undefined;
         // ral-40h: an alias takes the plain container only (an optional one would copy at the box)
         if (aliasBoxes > 0 && (optional || reads === 0 && aliasBoxes === boxedElementUses.length)) return undefined;
@@ -18086,7 +18090,7 @@ export class RustTranspiler extends BaseTranspiler {
         for (const n of indexReadUses) this.rustBorrowedIndexReads.add(n.parent);
         if (optional) {
             // Null stays distinct from an empty container: the local holds `Option<Dict>` / `Option<List>`.
-            if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !(zgRow && this.rustDictElementSource(init)) && !this.rustOptContainerSourceOk(init, from))) return undefined;
+            if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !((zgRow || elementKeyWrites > 0) && this.rustDictElementSource(init)) && !this.rustOptContainerSourceOk(init, from))) return undefined;
             this.rustOptContainerLocals.add(declaration);
         }
         for (const n of boxedElementUses) this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) || (n.parent?.kind === SyntaxKind.ConditionalExpression && this.rustOwnedLastUse(n, declaration)) ? 'move' : 'share');
@@ -18756,6 +18760,22 @@ export class RustTranspiler extends BaseTranspiler {
             return at !== undefined && this.literalKindOfNode(at) === 'number' && this.rustCallBuildsContainer(head, 'list');
         }
         return isIdentifier(head);
+    }
+
+    /** ral-40g: `row['k'] = v` (statement, literal non-meta key) on a row of a typed `Dict[]` list local (`rows[i]`, the checker
+     *  proves a map element) in a REST or prediction venue file: the list comes from a parsed response (no ws subscription,
+     *  cache or book tag), and the row's copy is written exactly as the boxed copy was (the list is never written back). */
+    rustElementKeyWriteOk(n: any, init: any): boolean {
+        const key = this.rustUntilHeadKeyWrite(n);
+        if (key === undefined || key.startsWith('__') || init === undefined || !isElementAccessExpression(init) || this.rustUrlsMapEntry(init)) return false;
+        if (!this.rustDictElementSource(init) || !this.getChecker().isArrayType(this.typeOfNodeIfAny(init.expression))) return false;
+        if (!/(?:^|[\\/])ts[\\/]src[\\/](?:prediction[\\/])?[^\\/]+\.ts$/.test(String(n.getSourceFile?.()?.fileName ?? ''))) return false;
+        const list: any = this.rustDeclarationOfIdentifier(init.expression);
+        if (list === undefined || !isVariableDeclaration(list as any)) return false;
+        const source: any = this.rustSkipWrappers((list as any).initializer);
+        if (source === undefined || this.rustInitReadsTaggedStore(source)) return false;
+        // the row must print straight off the list (a typed list's `.get(i)` or a literal index), never through `get_value`
+        return isNumericLiteral(this.rustSkipWrappers(init.argumentExpression)) || this.rustReadBearerKindOfDeclaration(list) === 'list' || this.rustBorrowedLocalKind(list) === 'list' || this.rustVecLocalIsTyped(list);
     }
 
     rustBuiltKeyWriteLineOk(n: any, extra = 0): boolean {

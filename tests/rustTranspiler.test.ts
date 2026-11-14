@@ -15252,3 +15252,38 @@ describe('ral-40b lift C: a bool local with a later `x = undefined` write is an 
         expect(out).not.toContain('let mut hedged: Option<bool>');
     });
 });
+
+describe('ral-40g: a Dict[] row written at a literal key takes Option<Dict> with a copy-on-write insert on Some (add_element_to_object skips a non-map row)', () => {
+    const mk = (venueBody: string, file = 'ts/src/venue.ts') => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-40g-ew-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync(path.join(root, path.dirname(file)), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type List = any[];\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    safeList (o: any, k: any, d: any = undefined): any { return d; }\n    parseBalance (o: any): any { return o; }\n}\n");
+        const up = file.split('/').length - 3;
+        const base = up === 0 ? './base/Exchange.js' : '../'.repeat(up) + 'base/Exchange.js';
+        fs.writeFileSync(path.join(root, file), "import Exchange from '" + base + "';\nimport type { Dict, Str, List } from '" + base + "';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, file)).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    const body = (key: string) => "    tag (response: Dict) {\n        const rows: Dict[] = this.safeList (response, 'rows', []);\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            const q = this.safeString (row, 'quote');\n            row[" + key + "] = q;\n        }\n        return this.parseBalance (response);\n    }";
+    test('row[\'symbol\'] = q: optional row, if let Some insert', () => {
+        const out = mk(body("'symbol'"));
+        expect(out).toMatch(/let mut row: Option<crate::value::Dict> = rows\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_opt_dict\(\);/);
+        expect(out).toContain('if let Some(__d) = &mut row { std::sync::Arc::make_mut(__d).insert("symbol".into(), ');
+        expect(out).not.toContain('add_element_to_object(&mut row');
+    });
+    test('prediction tier: same form', () => {
+        const out = mk(body("'symbol'"), 'ts/src/prediction/venue.ts');
+        expect(out).toContain('if let Some(__d) = &mut row { std::sync::Arc::make_mut(__d).insert("symbol".into(), ');
+    });
+    test('negative: a ws-tier row keeps Value (cache / subscription tags)', () => {
+        const out = mk(body("'symbol'"), 'ts/src/pro/venue.ts');
+        expect(out).toMatch(/let mut row: Value = /);
+    });
+    test('negative: a digit key keeps Value', () => {
+        const out = mk(body("'0'"));
+        expect(out).toMatch(/let mut row: Value = /);
+    });
+});
