@@ -348,6 +348,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSiblingStrBoxesMove(declaration: any, scope: any): boolean;
     /** Static kind of a write's right-hand side: `null`, or the `Option` payload it yields exactly. */
     rustNilWriteKind(rhs: any): string | undefined;
+    /** za: a ternary whose arms are an `undefined` and a boolean literal (either order). */
+    rustNilBoolNullTernary(expr: any): boolean;
     /** A boolean that is never undefined: `!x`, a ternary of boolean literals, or `&&` / `||` / parens over such operands. */
     rustNilDefiniteBool(expr: any): boolean;
     /** `if <cond> { true } else { false }` for a ternary of boolean literals. */
@@ -373,6 +375,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_NIL_SCALAR_NATIVE_FORMS;
     /** `ostr|oint|onum` for an empty local the scalar rule types, else undefined. */
     rustNilScalarKind(declaration: any): string | undefined;
+    /** za: kind of the scalar arm of `c ? <scalar> : x` / `c ? x : <scalar>` where the other arm is the written local itself. */
+    rustNilSelfArmTernaryKind(rhs: any, declaration: any): string | undefined;
     rustNilScalarHandOff(declaration: any, scope: any, kind: string, boxed: any[]): boolean;
     private rustNilStrLentLocals;
     /** ral-ld: `m[k] = x` / `m.k = x` as a statement on a plain identifier receiver (not `x` itself), one level deep. */
@@ -750,6 +754,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Some statement of the parameter's function assigns the parameter itself. */
     rustParamWritten(param: any): boolean;
     rustReaderDefaultKind(name: string, args: any[], fresh: boolean): string | undefined;
+    /** zd: `this.options['k']` as a reader default, where every write of key `k` over the venue family (describe()
+     *  literals `'k': v` anywhere in the family's files, incl. request literals, and `this.options['k'] = v`) is a string
+     *  literal or `undefined`: a string-or-Null default. Any other value, a dynamic options key write, an options
+     *  reassignment or the base Exchange writing `k` poisons it. */
+    private rustOptionsElemKinds;
+    rustOptionsElemKind(fallback: any): string | undefined;
     rustReaderFallbackKind(fallback: any): string | undefined;
     /** The checker scalar of a default that is a field, parameter or local (never a call: its `Value` may differ). */
     rustReaderFallbackChecked(fallback: any): string | undefined;
@@ -780,7 +790,19 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */
     rustReaderIntDefaultNum(init: any): boolean;
     rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
-    rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar?: boolean): boolean;
+    /** zi: a `const [ .. ] = ..` slot goes through the same per-binding walk (rustBlockLocalUsesAll). */
+    rustSlotUsesAll(element: any, name: string, skipPropertyNames: boolean, acceptUse: (n: any) => boolean): boolean;
+    /** The one "decide per binding when a same-named twin sits in a sibling block" walk (round 39 merged here: zg map rows,
+     *  zh Object.keys / values key lists, zi tuple slots; za's same-spelled method-name skip lives in its use callback).
+     *  A `let` / `const` declaration whose same-named twins are other `let` / `const` declarations outside it, or a
+     *  destructure slot whose twins are slots of destructures in disjoint sibling blocks, is its own Rust block-scoped
+     *  local: only uses bound to its own symbol are walked. Any other second binding keeps the plain walk. */
+    rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar?: boolean, skipPropertyNames?: boolean): boolean;
+    rustBindingUsesWalk(declaration: any, nodes: any[], own: any, home: any, skip: any[], skipPropertyNames: boolean, acceptUse: (n: any) => boolean, scalar: boolean): boolean;
+    /** zd: the size argument of `this.<field> = new ArrayCache*(limit)`: the written place is a ws cache field, not a
+     *  local, and the hand-written `::new(impl Into<Value>)` boxes an `i64` / `Option<i64>` into the `Value` the boxed
+     *  local held (`Value::Int` / `Value::Null`), so no other local's decision reads this one's type. */
+    rustScalarCacheFieldCtor(n: any, write: any): boolean;
     /** vi: a `Precise.string*` result moved at its last use into an operand of a `Precise.*` chain that is the whole
      *  write (`x = Precise.stringDiv (Precise.stringMul (local, y), ..)`): the written text is a `Precise` call either
      *  way (the `&Value` operand takes the moved string), so the receiver's decision does not read this local's type. */
@@ -1141,6 +1163,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustArithBaseCallee(node: any, name: string): boolean;
     /** An operand's numeric kind; a never-null integer call (e.g. a literal-defaulted reader) prints natively too. */
     rustArithOperandKind(node: any): string | undefined;
+    /** zb: an arithmetic side's kind: a typed scalar shape, else a typed-signature numeric parameter read
+     *  (`now - limit * duration`: `limit` holds only `Int` or `Null`, so the Option arm equals the helper's). */
+    rustArithSideKind(node: any): string | undefined;
+    /** zb: the numeric kind of an unwritten typed-signature parameter read (`oint` / `onum` / `int` / `num`), else undefined. */
+    rustArithParamKind(node: any): string | undefined;
     /** A combinator over a typed operand prints native and boxes its result once. */
     printRustArithCall(node: any): string | undefined;
     /** qb: a local whose initializer prints as an inline `if` / `match` (a ternary, or runtime arithmetic): the
@@ -2051,7 +2078,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBoolSlotLineLong(n: any): boolean;
     /** The `usize` index text of a `Value` list read: a registered `i64` counter indexes directly. */
     rustI64IndexText(keyNode: any, place: string): string;
-    /** A registered `i64` counter as a helper key (`Value::Int(i)`); a read the ccxt write-back binds keeps the counter `Value`. */
+    /** A registered `i64` counter as a helper key (`Value::Int(i)`). zf: a read the ccxt write-back binds takes it too
+     *  (`writeBackIndexedMutations` matches `get_value(&xs, &Value::Int(i))` and writes back at the same `Int` key). */
     rustI64HelperKeyText(keyNode: any, read?: any): string | undefined;
     /** xb: a use of a registered counter in its own function, outside any scalar scope solve (decisions never see a trial counter). */
     rustI64CounterOperand(node: any): boolean;
@@ -2288,6 +2316,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  (never `this.*`, `client.subscriptions` or a cache `hashmap()` read): the map enters the store whole, once. */
     rustLocalStoreHandOff(n: any): boolean;
     /** `this.<field>` or `this.<field>[…]` — a store the runtime may tag. */
+    /** zf: `this.balance[..]` / `this.options[..]` (any depth): the plain untagged store maps the r05 insert writes into. */
+    rustBalanceOptionsPlace(node: any): boolean;
     rustThisRootedPlace(node: any): boolean;
     /** Container kind an expression the callee body builds yields, or undefined.
      *  Shapes: a tag-free literal, a local that only ever receives element
@@ -2694,6 +2724,12 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  list-of-lists) local: each block-scoped binding converts to the same Rust type (`Dict` / `List`), so ccxt
      *  passes that key on the name read the same declared type for every sibling. */
     rustElementSiblingsAlike(declaration: any, name: string, init: any): boolean;
+    /** ral-zg: `y = el` where `y` is another `let` of the same function declared before the row's block, never typed by a
+     *  container rule (it stays the boxed `Value` the write targets). */
+    rustZgOuterLocalWrite(left: any, n: any): boolean;
+    /** ral-zg: map rows admitted next to a differently sourced sibling; a whole hand-off of such a row takes the optional form
+     *  (`Option<Dict>` boxes back to exactly `Null` or the map, where `into_dict()` would hand an empty map for a Null row). */
+    private rustZgSiblingRows;
     /** Every other binding of `name` in the function is a `const` plain map literal declaration (ral-oc). */
     rustLiteralSiblingsAlike(declaration: any, name: string): boolean;
     rustSiblingBindingsAlike(declaration: any, name: string, init: any): boolean;
@@ -2701,6 +2737,18 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  rebound by `get_arg(.., Value::Map({}))`, so it is always a map (`From<Value> for Params` drops a non-map, and
      *  the empty set's `Value::Null` takes the `{}` default). A list body only reaches untyped `sign` / `request`. */
     rustTypedParamsParam(d: any): boolean;
+    private static readonly RUST_SIGN_MAP_PROOF;
+    private static rustSignProofApi;
+    /** A venue `sign (path, api, method, params)` whose `params` is a map on every path. `params` reaches `sign` only
+     *  through `fetch2` (from `request`, every implicit endpoint and the venue's own direct calls); the base declares
+     *  it `Dict`, but a list body passes through untouched (`omit` hands a list back, and `into_dict()` would empty
+     *  it). So the venue is proven when every request-path call in its own file, its pro file and each subclass file
+     *  that inherits this `sign` hands over a map: an object literal, a map builder (`extend`, `deepExtend`,
+     *  `keysort`, `ordered`, `omit` of a proven map), a `Dict` parameter, a `handle*AndParams` params slot, a method
+     *  declared `Dict`, or a local whose every write is one of these. Any list literal, any dynamic `this[name] (..)`
+     *  / `callDynamically` call, or anything else unproven fails the venue (fail closed). */
+    rustSignParamsProvenMap(fn: any): boolean;
+    rustSignParamsProofUncached(root: string, venue: string): boolean;
     /** The `params` slot of a typed unified call (`impl Into<crate::Params> + Send`): `From<Value> for Params` takes the
      *  boxed map exactly as it took the `Value` local, so a dict local boxes there once (moved at the last use). */
     rustTypedParamsSlot(call: any, at: number): boolean;
@@ -2894,12 +2942,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Whether some string matches both patterns (a sound over-approximation: prefix and suffix agree). */
     static rustWsPatternsMeet(a0: Array<string | null>, b0: Array<string | null>): boolean;
     /** The typed kind a resolved value passes as, or undefined. */
-    rustWsResolvedKind(x: any): 'book' | 'cache' | 'dict' | undefined;
+    rustWsResolvedKind(x: any): 'book' | 'cache' | 'dict' | 'list' | undefined;
     /** ral-ye: a read of a plain base cache field the class keeps as a map, typed by the field's declaration:
      *  `this.F` whose declared type is a map (`balance: Dict`, `tickers: Dictionary<Ticker>`), or `this.F[k]` right
      *  after a statement of the same block (or an enclosing one) wrote `this.F[k] = v` with v a map (a declared record /
      *  map type, a map-kinded resolve or `this.extend (..)`), the key a literal or an unreassigned local. */
     rustWsCacheFieldDictRead(n: any): boolean;
+    /** ral-ze: a resolved value that is a list on every path: an array literal, a base list field (`this.symbols`), a
+     *  call whose every return builds a fresh list (parse* list returns, the always-list producers), a non-nullable
+     *  venue list return, or an unreassigned single local bound to one of these (pushes and element writes keep it a
+     *  list) or printed as a typed list. */
+    rustWsResolvedList(x: any, depth: number): boolean;
     private static readonly RUST_WS_MAP_RECORD_BUILDERS;
     /** A resolved value that is a map on every path: a base record builder call, a sync method of the same class whose
      *  every return is one, or an unreassigned single local bound to one. */
@@ -2927,7 +2980,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A ws subclass whose only methods are `describe` / `describeData` adds no handler and no resolve. */
     rustWsDescribeOnly(path: string): boolean;
     /** The proven kind of an `await this.watch|watchMultiple (..)` initializer, else undefined. */
-    rustWsWatchResultKind(init: any): 'book' | 'cache' | 'dict' | undefined;
+    rustWsWatchResultKind(init: any): 'book' | 'cache' | 'dict' | 'list' | undefined;
     /** The hash patterns a `this.watch|watchMultiple (..)` call (or a venue wrapper whose every return is one) awaits;
      *  undefined when the call is anything else. Runs with `rustWsHashEnv` binding the wrapper parameters. */
     rustWsAwaitedHashes(call: any, cls: any, depth: number): Array<Array<string | null>> | undefined;
@@ -3293,6 +3346,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `ostr` for a string slot read through the scalar forms: tests, `format!` concats, string methods, typed
      *  writes, and boxes (alias, ternary arm, `Value` slots) that re-box through `From`; needs one native use. */
     rustStrSlotKind(element: any, scope: any): string | undefined;
+    /** zi: `n` is an arm of `c ? a : b`, the whole initializer of a local the joint solve currently types `Option<String>`
+     *  (or `String`), and the other arm prints as that kind too: the target is decided with the slot, never left `Value`. */
+    rustStrSlotTernaryArmJoined(n: any, element: any): boolean;
     /** pb: a checker-string slot of a native tuple in a method, read whole as the initializer or the statement write of
      *  another local of the same function: the slot and that local are decided together by `rustScalarSolveScope`. */
     rustSlotJoinsSolve(element: any): boolean;
@@ -3303,7 +3359,21 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  never-written local bound to one, read only by this call) of exactly the pattern's length, whose element `i` is
      *  that call inline or a never-reassigned local initialised by it. `promise_all` hands each element back as it came. */
     rustPromiseAllOperandProducer(element: any): any;
+    /** zf: the awaited producer behind a `Promise.all` slot when it answers a list on every path (a declared
+     *  `Promise<List>` endpoint, a non-overridden venue method declared `Promise<List | X[]>`, or a typed unified core
+     *  whose `Vec<T>` result boxes through `IntoRaw` as an Arr); `promise_all` hands it back as it came. */
+    rustPromiseAllListProducer(element: any): any;
+    /** zf: a venue-private async method (no override, no typed signature) whose every family declaration returns `Promise<Market[]>`. */
+    rustVenueMarketListMethod(declaration: any): boolean;
+    private rustPromiseAllListKinds;
+    rustPromiseAllListSlotKind(element: any): 'list' | undefined;
+    /** `let mut x: crate::value::List = <slot read>.into_list()` for a Promise.all list slot (the producer is always a list). */
+    printPromiseAllListSlot(element: any, printedName: string, read: string, indent: string): string | undefined;
     rustDeclaredDictSlot(element: any): boolean;
+    /** zi: `const [ a, b ] = c ? this.f (..) : this.g (..)`: slot `at` is a map when each arm's own callee declares it one
+     *  (the venue-pair form of `rustDeclaredDictSlot`; the temp keeps its `Vec<Value>` head). */
+    rustTernaryDictSlot(element: any): boolean;
+    rustCallDeclaresDictSlot(init: any, at: number): boolean;
     /** Every `return` of the callee's own body is an array literal whose element `at` is a map literal or a `const`
      *  local initialised with one (a map on every path, whatever keys are written into it). */
     rustReturnsBuildMapSlot(declaration: any, at: number): boolean;
