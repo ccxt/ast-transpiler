@@ -10773,6 +10773,45 @@ describe('option, route and safe* results typed at the declaration', () => {
     });
 });
 
+describe('ral-lg: parse results through safeTicker literals, ws cache appends and dict-shaped field inserts', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-lg-parse');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), 'export interface Dict { [key: string]: any }\n'
+            + 'export class ArrayCache { append (x: any) {} }\n'
+            + 'export default class Exchange {\n'
+            + '    orders: ArrayCache | undefined = undefined;\n'
+            + '    fundingRates: { [key: string]: any } = {};\n'
+            + '    extend (a: any, b: any): any { return a; }\n'
+            + '    safeString (o: any, k: any): string | undefined { return o[k]; }\n'
+            + "    safeTicker (ticker: Dict, market: any = undefined): any {\n        return this.extend (ticker, { 'x': 1 });\n    }\n"
+            + '    hold (x: any): any { return x; }\n'
+            + '}\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    parseTicker (t: any, market: any = undefined): any {\n        return this.safeTicker ({ 'info': t, 'symbol': this.safeString (t, 's') }, market);\n    }\n"
+            + '    parseWsTicker (t: any, market: any = undefined): any {\n        return this.parseTicker (t, market);\n    }\n'
+            + "    parseRate (r: any): any {\n        return this.extend ({ 'info': r }, { 'symbol': this.safeString (r, 's') });\n    }\n"
+            + "    parseOrder (o: any): any {\n        return this.extend ({ 'info': o }, { 'id': this.safeString (o, 'i') });\n    }\n"
+            + "    handleTicker (m: any) {\n        const ticker = this.parseWsTicker (m);\n        const symbol = this.safeString (ticker, 'symbol');\n        return this.hold ([ symbol, ticker ]);\n    }\n"
+            + "    handleRate (m: any) {\n        const rate = this.parseRate (m);\n        const symbol = this.safeString (rate, 'symbol');\n        this.fundingRates[symbol] = rate;\n        return this.hold (rate);\n    }\n"
+            + "    handleOrder (m: any) {\n        const order = this.parseOrder (m);\n        this.orders.append (order);\n    }\n"
+            + '}\n');
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('a parseWs* -> parse* -> safeTicker ({ .. }) chain is a fresh map (the literal leaf costs no proof depth)', () => {
+        expect(out).toMatch(/let mut ticker: crate::value::Dict = self\.parseWsTicker\(.*\)\.into_dict\(\);/);
+    });
+    test('a fresh map stored into a dict-shaped base field boxes there as a shared handle', () => {
+        expect(out).toMatch(/let mut rate: crate::value::Dict = /);
+        expect(out).toContain('Value::from(&rate)');
+    });
+    test('a fresh map appended to a base ArrayCache field is typed and boxed once at the append', () => {
+        expect(out).toMatch(/let mut order: crate::value::Dict = /);
+        expect(out).toContain('self.orders.append(Value::Dict(order));');
+    });
+});
+
 describe('rust parseNumber of a proven string', () => {
     test('a one-argument parseNumber of a string reader / literal is an Option<f64>; any or number arguments keep the box', () => {
         const dir = path.join (rustFixtureRoot, 'parse-number-str');

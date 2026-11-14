@@ -13569,6 +13569,14 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BUILDER_PASSTHROUGH_WIDE = new Set([ 'safeLiquidation', 'safeBalance' ]);
     private rustFreshWide = false;
 
+    /** A pass-through builder's own object-literal argument (`safeTicker ({ .. })`, the venue parse* shape) is a leaf:
+     *  `rustPlainDictLiteral` proves it without recursing, so it costs no proof depth (Arc-moving rule only, as the
+     *  literal-initializer leaf). A `parseWsX -> parseX -> safeX ({..})` chain then fits the depth budget. */
+    rustPassthroughLiteralLeaf(arg: any): boolean {
+        const literal: any = this.rustSkipWrappers(arg);
+        return this.rustFreshWide && literal !== undefined && isObjectLiteralExpression(literal) && this.rustPlainDictLiteral(literal);
+    }
+
     rustBuilderPassthrough(method: string): boolean {
         return RustTranspiler.RUST_BUILDER_PASSTHROUGH.has(method) || (this.rustFreshWide && RustTranspiler.RUST_BUILDER_PASSTHROUGH_WIDE.has(method));
     }
@@ -13608,7 +13616,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (passMethod !== undefined && this.rustBuilderPassthrough(passMethod)) {
             const passArgs: any[] = (call as any).arguments ?? [];
             if (passArgs.length === 0) return false;
-            return this.rustBuiltContainerKind(passArgs[0], depth + 1) === kind;
+            return this.rustBuiltContainerKind(passArgs[0], this.rustPassthroughLiteralLeaf(passArgs[0]) ? depth : depth + 1) === kind;
         }
         let declaration: any;
         try {
@@ -13721,7 +13729,7 @@ export class RustTranspiler extends BaseTranspiler {
         const args: any[] = (expr as any).arguments ?? [];
         if (owner.kind === SyntaxKind.ThisKeyword) {
             if (this.rustBuilderPassthrough(method) && args.length > 0) {
-                return this.rustBuiltContainerKind(args[0], depth + 1);
+                return this.rustBuiltContainerKind(args[0], this.rustPassthroughLiteralLeaf(args[0]) ? depth : depth + 1);
             }
             // a pass-through re-yields its argument: no extra proof depth
             if (this.rustListPassthroughCall(expr)) return this.rustBuiltContainerKind(args[0], depth) === 'list' ? 'list' : undefined;
@@ -15452,12 +15460,21 @@ export class RustTranspiler extends BaseTranspiler {
         return isAsExpression(up) && up.expression === n && isReturnStatement(up.parent);
     }
 
+    /** `this.F` for a checker dict-shaped field (`fundingRates: Dictionary<FundingRate>`) the native insert writes
+     *  (`printNativeDictInsert`: `rustFieldStaysDict`). The insert stores whatever handle it is given, so a built map
+     *  boxes there as the field-key rule's plain fields do. */
+    rustDictShapedFieldInsert(expr: any): boolean {
+        if (!isPropertyAccessExpression(expr) || expr.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(expr.name)) return false;
+        const name = String(expr.name.text);
+        return !RustTranspiler.RUST_TAGGED_HANDLE_FIELDS.has(name) && this.rustWriteDictShape(this.typeOfNodeIfAny(expr)) && this.rustFieldStaysDict(expr, name);
+    }
+
     rustBuiltReturnBoxUse(n: any, init: any): boolean {
         const up: any = n.parent;
         if (init === undefined || !isCallExpression(init) || up === undefined || this.rustBuiltReturnSourceKind(init) === undefined) return false;
         // `this.tickers[k] = x` (a plain base cache field, one key, statement): the field insert stores the handle
         if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(up.left)
-            && up.parent?.kind === SyntaxKind.ExpressionStatement && this.rustFieldKeyReceiver(up.left.expression) !== undefined) {
+            && up.parent?.kind === SyntaxKind.ExpressionStatement && (this.rustFieldKeyReceiver(up.left.expression) !== undefined || this.rustDictShapedFieldInsert(up.left.expression))) {
             return !new RegExp(`\\b${String(n.text)}\\b`).test(String(up.left.argumentExpression.getText()));
         }
         if (this.rustScalarInNestedWrite(n)) return false;
@@ -15473,6 +15490,8 @@ export class RustTranspiler extends BaseTranspiler {
         const callee = String(up.expression.name.text);
         const at = Array.from(up.arguments).indexOf(n);
         if (isIdentifier(up.expression.expression)) return at === 0 && RustTranspiler.RUST_BUILT_BOX_RECEIVER_METHODS.has(callee) && !this.rustIdentifierRefersToDeclaration(up.expression.expression, this.rustDeclarationOfIdentifier(n));
+        // `this.orders.append (x)` (a base `ArrayCache | undefined` field, statement): `CacheSlot::append` takes the handle as a `Value`
+        if (callee === 'append' && at === 0 && up.arguments.length === 1 && up.parent?.kind === SyntaxKind.ExpressionStatement && this.rustWsCacheField(up.expression.expression)) return true;
         if (up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
         if (this.rustTypedParamsSlot(up, at)) return RustTranspiler.RUST_BUILT_HELPER_RETURNS[String((init.expression as any).name.text)] === 'dict';
