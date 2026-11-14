@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { NodeFlags, SyntaxKind, type Block, type CallExpression, type Declaration, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
-import { isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration } from "typescript/unstable/ast/is";
+import { isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 import * as fs from 'fs';
@@ -8127,7 +8127,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (rewrites) return;
             if (isIdentifier(m) && String(m.text) === key && ((isBinaryExpression(m.parent) && m.parent.left === m
                 && m.parent.operatorToken.kind >= SyntaxKind.FirstAssignment && m.parent.operatorToken.kind <= SyntaxKind.LastAssignment)
-                || ((isPrefixUnaryExpression(m.parent) || m.parent?.kind === SyntaxKind.PostfixUnaryExpression)
+                || ((isPrefixUnaryExpression(m.parent) || isPostfixUnaryExpression(m.parent))
                     && (m.parent.operator === SyntaxKind.PlusPlusToken || m.parent.operator === SyntaxKind.MinusMinusToken)))) rewrites = true;
             m.forEachChild?.(visit);
         };
