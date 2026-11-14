@@ -216,23 +216,112 @@ const rustInParseXClass = (body: string, params = 'v: any') =>
     transpiler.transpileRust(`class T {\n    parseX (x) { return x; }\n    f (${params}) {\n${body}\n    }\n}`).content;
 
 describe('rust transpiling tests', () => {
-    test('by-value call arguments and alias sources are cloned by the printer', () => {
+    test('by-value hand-offs clone only a local read again: last uses move, Copy scalars and None are bare', () => {
         const ts = [
             'class A {',
             '    m (x: any, y: any) { return x; }',
-            '    run (a: any, b: any) {',
+            '    run (a: any, b: any, n: number) {',
             '        let c = a;',
             '        c = b;',
             '        const r = this.m (a, b);',
+            '        const k = 5;',
+            '        this.m (k, n);',
+            '        for (let i = 0; i < 2; i++) {',
+            '            this.m (r, i);',
+            '        }',
+            '        const f = () => this.m (c, undefined);',
+            '        this.m (c, f);',
             '        return this.m (r, true);',
             '    }',
             '}',
         ].join('\n');
         const out = transpiler.transpileRust(ts).content;
+        // read again after the alias / the call: cloned
         expect(out).toContain('let mut c: Value = a.clone();');
         expect(out).toContain('c = b.clone();');
-        expect(out).toContain('self.m(a.clone(), b.clone())');
-        expect(out).toContain('self.m(r.clone(), Value::Bool(true))');
+        // last use: moved
+        expect(out).toContain('let mut r: Value = self.m(a, b);');
+        expect(out).toContain('return self.m(r, Value::Bool(true));');
+        // a typed scalar is boxed by value, and a parameter at its last use moves
+        expect(out).toContain('self.m(Value::from(k), n);');
+        // a use inside a loop below the declaration, and a local captured by a closure, keep the clone
+        expect(out).toContain('self.m(r.clone(), ');
+        expect(out).toContain('self.m(c.clone(), f');
+    });
+
+    test('a hand-off inside an array-literal element keeps its clone (Promise.all operands are reshaped after printing)', () => {
+        const ts = [
+            'class A {',
+            '    async m (x: any) { return x; }',
+            '    async run (a: any) {',
+            '        const promises = [ this.m (a), this.m (1) ];',
+            '        const r = await Promise.all (promises);',
+            '        return r;',
+            '    }',
+            '}',
+        ].join('\n');
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('self.m(a.clone())');
+    });
+
+    test('a self-write and a ternary branch move the local; a read after the statement keeps the clone', () => {
+        const ts = [
+            'class A {',
+            '    extend (x: any, y: any) { return x; }',
+            '    m (x: any) { return x; }',
+            '    run (a: any, p: any, c: any) {',
+            '        for (let i = 0; i < 2; i++) {',
+            '            a = this.extend (a, p);',
+            '        }',
+            '        const r = (c !== undefined) ? this.m (c) : undefined;',
+            '        const q = this.m (p);',
+            '        return [ a, r, q, p ];',
+            '    }',
+            '}',
+        ].join('\n');
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('a = self.extend(a, p.clone());');
+        expect(out).toMatch(/\{ self\.m\(c\) \}/);
+        expect(out).toContain('self.m(p.clone())');
+    });
+
+    test('a required argument of a defaulted transpiled method and a later object-literal property move at their last use', () => {
+        const ts = [
+            'class A {',
+            '    parseNumber (x: any, d: any = undefined) { return x; }',
+            '    hold (x: any) { return x; }',
+            '    run (position: any, s: any) {',
+            '        const n = this.hold (s);',
+            '        position[\'n\'] = this.parseNumber (n);',
+            '        const v = this.hold (s);',
+            '        const r = { \'a\': this.hold (v), \'b\': this.parseNumber (v) };',
+            '        return r;',
+            '    }',
+            '}',
+        ].join('\n');
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('self.parseNumber(n, &[])');
+        expect(out).toContain('self.hold(v.clone())');
+        expect(out).toContain('self.parseNumber(v, &[])');
+    });
+
+    test('a for-loop counter handed off by value is cloned (the next pass reads it again)', () => {
+        const ts = [
+            'class A {',
+            '    m (x: any) { return x; }',
+            '    run (n: any) {',
+            '        let page = undefined;',
+            '        for (let i = 0; i < n; i++) {',
+            '            page = i;',
+            '            this.m (i);',
+            '        }',
+            '        return page;',
+            '    }',
+            '}',
+        ].join('\n');
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).not.toMatch(/page = i;/);
+        expect(out).toContain('self.m(i.clone());');
     });
 
     test('basic variable declaration', () => {
@@ -1387,9 +1476,9 @@ ${body}
         return this.hold(side);`)).content;
             expect(out).toContain('let mut side: Option<String> = None;');
             expect(out).toContain('side = Some("buy".to_string());');
-            expect(out).toContain('side = self.safeString(o.clone(), Value::Str("side".into()), &[]).as_str().map(str::to_owned);');
+            expect(out).toContain('side = self.safeString(o, Value::Str("side".into()), &[]).as_str().map(str::to_owned);');
             expect(out).toContain('side.as_deref() == Some("buy")');
-            expect(out).toContain('self.hold(side.clone().map(Value::from).unwrap_or(Value::Null))');
+            expect(out).toContain('self.hold(side.map(Value::from).unwrap_or(Value::Null))');
             expect(out).not.toContain('side: Value');
         });
 
@@ -1404,7 +1493,7 @@ ${body}
             expect(out).toContain('flag = Some(true);');
             expect(out).toContain('if (flag == Some(true)) {');
             expect(out).toContain('let mut n: Option<i64> = None;');
-            expect(out).toContain('n = self.safeInteger(o.clone(), Value::Str("n".into()), &[]).as_i64();');
+            expect(out).toContain('n = self.safeInteger(o, Value::Str("n".into()), &[]).as_i64();');
             expect(out).toContain('if (n.is_none()) {');
             expect(out).toContain('m.insert("n".to_string(), Value::from(n));');
             expect(out).toContain('m.insert("flag".to_string(), flag.map(Value::from).unwrap_or(Value::Null));');
@@ -1621,7 +1710,7 @@ ${body}
             const ts = withHelper('safeString',
                 "        const side = this.safeString(o, 'side');\n        if (side === 'buy') { return 1; }\n        return 2;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut side: Option<String> = self.safeString(o.clone(), Value::Str("side".into())).as_str().map(str::to_owned);');
+            expect(output).toContain('let mut side: Option<String> = self.safeString(o, Value::Str("side".into())).as_str().map(str::to_owned);');
             expect(output).toContain('if (side.as_deref() == Some("buy")) {');
             expect(output).not.toContain('side: Value');
         });
@@ -1630,7 +1719,7 @@ ${body}
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        if (s === null) { return 1; }\n        return 2;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Option<String> = self.safeString(o.clone(), Value::Str("s".into())).as_str().map(str::to_owned);');
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".into())).as_str().map(str::to_owned);');
             expect(output).toContain('if (s.is_none()) {');
             expect(output).not.toContain('s == Value::Null');
         });
@@ -1639,7 +1728,7 @@ ${body}
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        if (s !== undefined) { return 1; }\n        return 2;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Option<String> = self.safeString(o.clone(), Value::Str("s".into())).as_str().map(str::to_owned);');
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".into())).as_str().map(str::to_owned);');
             expect(output).toContain('if (s.is_some()) {');
             expect(output).not.toContain('s != Value::Null');
         });
@@ -1648,7 +1737,7 @@ ${body}
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        if (s === undefined) { return 0; }\n        return s === 'x';");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Option<String> = self.safeString(o.clone(), Value::Str("s".into())).as_str().map(str::to_owned);');
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".into())).as_str().map(str::to_owned);');
             expect(output).toContain('if (s.is_none()) {');
             expect(output).toContain('s.as_deref() == Some("x")');
         });
@@ -1656,11 +1745,11 @@ ${body}
         test('safeStringLower / safeString2 results are typed too', () => {
             const lower = transpiler.transpileRust(withHelper('safeStringLower',
                 "        const side = this.safeStringLower(o, 'side');\n        return side === 'buy';")).content;
-            expect(lower).toContain('let mut side: Option<String> = self.safeStringLower(o.clone(), Value::Str("side".into())).as_str().map(str::to_owned);');
+            expect(lower).toContain('let mut side: Option<String> = self.safeStringLower(o, Value::Str("side".into())).as_str().map(str::to_owned);');
             expect(lower).toContain('side.as_deref() == Some("buy")');
             const two = transpiler.transpileRust(withHelper('safeString2',
                 "        const id = this.safeString2(o, 'a', 'b');\n        return id !== undefined;")).content;
-            expect(two).toContain('let mut id: Option<String> = self.safeString2(o.clone(), Value::Str("a".into()), Value::Str("b".into())).as_str().map(str::to_owned);');
+            expect(two).toContain('let mut id: Option<String> = self.safeString2(o, Value::Str("a".into()), Value::Str("b".into())).as_str().map(str::to_owned);');
             expect(two).toContain('id.is_some()');
         });
 
@@ -1678,7 +1767,7 @@ ${body}
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        m.insert('k', s);");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o.clone(), Value::Str("s".into()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
             expect(output).not.toContain('Option<String>');
         });
 
@@ -1686,7 +1775,7 @@ ${body}
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        if (s) { return 1; }\n        return 2;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o.clone(), Value::Str("s".into()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
             expect(output).toContain('if is_true(&s) {');
         });
 
@@ -1702,7 +1791,7 @@ ${body}
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        const f = (s) => s === 'x';\n        return f(s);");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o.clone(), Value::Str("s".into()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
             expect(output).not.toContain('Option<String>');
         });
 
@@ -1710,13 +1799,13 @@ ${body}
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        return 1;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o.clone(), Value::Str("s".into()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
         });
 
         test('string concat and other payload compares keep Value', () => {
             const concat = transpiler.transpileRust(withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        return s + 'x';")).content;
-            expect(concat).toContain('let mut s: Value = self.safeString(o.clone(), Value::Str("s".into()));');
+            expect(concat).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
             const againstLocal = transpiler.transpileRust(withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        return s === o.other;")).content;
             expect(againstLocal).toContain('let mut s: Value = self.safeString(o.clone(), Value::Str("s".into()));');
@@ -1727,7 +1816,7 @@ ${body}
                 "        const s = this.safeString(o, 's');\n        return s === 'x';")
                 .replace('safeString(o: any, k: any): string', 'safeString(o: any, k: any): any');
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o.clone(), Value::Str("s".into()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
         });
     });
 
@@ -3294,7 +3383,7 @@ describe('rust declared-Dict locals: table and census', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(snippet).content;
-        expect(output).toContain('let mut data: indexmap::IndexMap<String, Value> = self.safeDict(response.clone(), Value::Str("data".into()), Value::Map({');
+        expect(output).toContain('let mut data: indexmap::IndexMap<String, Value> = self.safeDict(response, Value::Str("data".into()), Value::Map({');
         const written =
             'class T {\n' +
             '    m(response) {\n' +
@@ -3303,7 +3392,7 @@ describe('rust declared-Dict locals: table and census', () => {
             "        return data['b'];\n" +
             '    }\n' +
             '}';
-        expect(transpiler.transpileRust(written).content).toContain('let mut data: Value = self.safeDict(response.clone(), Value::Str("data".into()), Value::Map({');
+        expect(transpiler.transpileRust(written).content).toContain('let mut data: Value = self.safeDict(response, Value::Str("data".into()), Value::Map({');
     });
 
     test('safe_dict without a default may be Value::Null, so no proof', () => {
@@ -4244,7 +4333,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
             "    f (status: any) {\n        const m: any = {};\n" +
             "        m['status'] = this.parseStatus (status);\n        return m;\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('.insert("status".into(), self.parseStatus(status.clone()).map(Value::from).unwrap_or(Value::Null));');
+        expect(output).toContain('.insert("status".into(), self.parseStatus(status).map(Value::from).unwrap_or(Value::Null));');
     });
 
     test('an assignment of a native return boxes', () => {
@@ -4253,7 +4342,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
             "    f (status: any) {\n        let x: any = undefined;\n" +
             "        x = this.parseStatus (status);\n        return x;\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('x = self.parseStatus(status.clone()).map(Value::from).unwrap_or(Value::Null);');
+        expect(output).toContain('x = self.parseStatus(status).map(Value::from).unwrap_or(Value::Null);');
     });
 
     test('a declaration whose uses are not all native sinks stays a Value box', () => {
@@ -4262,7 +4351,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
             "    f (status: any) {\n        const x = this.parseStatus (status);\n" +
             "        const m: any = {};\n        m['status'] = x;\n        return m;\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut x: Value = self.parseStatus(status.clone()).map(Value::from).unwrap_or(Value::Null);');
+        expect(output).toContain('let mut x: Value = self.parseStatus(status).map(Value::from).unwrap_or(Value::Null);');
     });
 
     test('a caller whose uses are all native sinks binds Option<String>', () => {
@@ -4272,7 +4361,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
             "        if (x === undefined) { return 'a'; }\n" +
             "        if (x === 'open') { return 'b'; }\n        return 'c';\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut x: Option<String> = self.parseStatus(status.clone());');
+        expect(output).toContain('let mut x: Option<String> = self.parseStatus(status);');
         expect(output).not.toContain('let mut x: Value = self.parseStatus(status)');
     });
 });
@@ -4455,7 +4544,7 @@ describe('rust pro-tier handler message shadow', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('self.safeString(message.clone(), Value::Str("symbol"');
+        expect(output).toContain('self.safeString(message, Value::Str("symbol"');
         expect(output).not.toContain('__pro_message');
     });
 
@@ -4483,7 +4572,7 @@ describe('rust pro-tier handler message shadow', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('self.safeString(message.clone(), Value::Str("channel"');
+        expect(output).toContain('self.safeString(message, Value::Str("channel"');
         expect(output).not.toContain('__pro_message');
     });
 
@@ -4512,7 +4601,7 @@ describe('rust pro-tier handler message shadow', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain(SHADOW);
-        expect(output).toContain('self.parseWsTrade(message.clone(), Value::Null);');
+        expect(output).toContain('self.parseWsTrade(message, Value::Null);');
     });
 
     test('an unproven (any) message param keeps everything boxed', () => {
@@ -5096,7 +5185,7 @@ describe('rust math/comparison on structurally numeric operands', () => {
     test('this.sum of numbers, numeric method returns and inductive locals go native', () => {
         expect(out).toContain('let mut bit: Value = (match (&(bits), &(Value::Int(2))) { (Value::Int(x), Value::Int(y)) if *y != 0 => Value::Int(x % y)');
         expect(out).toContain('bits = (match ((((match (&(bits), &(bit)) { (Value::Int(x), Value::Int(y)) => Value::Int(x - y)');
-        expect(out).toContain('let mut neg: Value = (match &((self.readU(bits0.clone(), Value::Int(2)))) { Value::Int(x) => Value::Int(-x)');
+        expect(out).toContain('let mut neg: Value = (match &((self.readU(bits0, Value::Int(2)))) { Value::Int(x) => Value::Int(-x)');
         expect(out).toContain('let mut q: Value = (match (&(Value::Int(-1)), &(Value::Int(ids.len() as i64))) {');
         expect(out).not.toContain('divide(&self.sum(&[idsLength');
         expect(out).not.toContain('mod_val(&bits');
@@ -5110,7 +5199,7 @@ describe('rust math/comparison on structurally numeric operands', () => {
     test('any operands and two nullable sides of <= keep the helpers', () => {
         expect(out).toContain('(match (&(a), &(bid)) { (__a, __b) =>'); // inline math/comparison dispatch
         expect(out).toContain('(match (&(a), &(Value::Int(1))) {'); // inline math/comparison dispatch
-        expect(out).toContain('(match (&(self.sum(a.clone(), Value::Int(1))), &(Value::Int(2))) { (__a, __b) =>'); // inline math/comparison dispatch
+        expect(out).toContain('(match (&(self.sum(a, Value::Int(1))), &(Value::Int(2))) { (__a, __b) =>'); // inline math/comparison dispatch
         expect(out).toContain('let mut m: Value = (match ((self.sum(bid.clone(), Value::Int(1))).as_f64(), (Value::Int(2)).as_f64())');
         expect(out).toContain('(match (&(bid), &(limit)) { (__a, __b) =>'); // inline math/comparison dispatch
     });
@@ -5555,14 +5644,14 @@ describe('string locals from hand-written runtime methods returning String', () 
         out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'str-runtime-returns', 'ts/src/venue.ts')).content;
     });
     test('an implodeParams / intToBase16 result is a String local joined natively', () => {
-        expect(out).toContain('let mut implodedPath: String = self.implodeParams(path.clone(), params.clone());');
-        expect(out).toContain('let mut v: String = self.intToBase16(n.clone(), &[]);');
+        expect(out).toContain('let mut implodedPath: String = self.implodeParams(path, params);');
+        expect(out).toContain('let mut v: String = self.intToBase16(n, &[]);');
         expect(out).not.toMatch(/let mut (implodedPath|v): Value/);
     });
     test('a result handed straight to a Value slot is boxed once with Value::from', () => {
-        expect(out).toMatch(/let mut request: String = self\.implodeParams\(path\.clone\(\), params\.clone\(\)\);/);
+        expect(out).toMatch(/let mut request: String = self\.implodeParams\(path, params\);/);
         expect(out).toContain('return self.hold(Value::from(request));');
-        expect(out).toContain('self.hold(Value::from(self.implodeParams(path.clone(), params.clone())))');
+        expect(out).toContain('self.hold(Value::from(self.implodeParams(path, params)))');
     });
 });
 
@@ -5760,14 +5849,14 @@ describe('native `bool` parameters', () => {
     });
 
     test('a call into a native-`bool` slot passes the bare bool, a `Value` coerces', () => {
-        expect(venue).toContain('return self.settlementData(on.clone(), Value::Int(1));');
+        expect(venue).toContain('return self.settlementData(on, Value::Int(1));');
         expect(venue).toContain('return self.settlementData(raw.is_truthy(), Value::Int(2));');
     });
 
     test('a bool parameter read outside a bool sink keeps the box', () => {
         expect(venue).toContain('pub fn boxed(&self, flag: bool) -> Value {');
         expect(venue).toContain('let mut flag: Value = flag.into();');
-        expect(venue).toContain('let mut held: Value = flag.clone();');
+        expect(venue).toContain('let mut held: Value = flag;');
     });
 
     test('the base tier and base overrides keep the `Value` ABI', () => {
@@ -5816,7 +5905,7 @@ describe('typed dict bearers', () => {
         const elem = rs("        const d = this.parseX (v)[0];\n        d['a'] = 1;\n        return d;");
         expect(elem).toContain('add_element_to_object(&mut d');
         const keys = rs("        const d = this.parseX (v);\n        const n = Object.keys (d).length;\n        return n;");
-        expect(keys).toContain('let mut d: Value = self.parseX(v.clone());');
+        expect(keys).toContain('let mut d: Value = self.parseX(v);');
         expect(keys).toContain('object_keys(&d)');
     });
 
@@ -5853,7 +5942,7 @@ describe('bool locals into native-`bool` slots', () => {
 
     test('a comparison local read in a native-`bool` slot is declared `bool`', () => {
         expect(venue).toContain('let mut isMarket: bool = type_var.as_str() == Some("market");');
-        expect(venue).toContain('return self.settle(isMarket.clone(), Value::Int(2));');
+        expect(venue).toContain('return self.settle(isMarket, Value::Int(2));');
         expect(venue).not.toContain('isMarket.is_truthy()');
     });
 
@@ -6284,7 +6373,7 @@ describe('read-only container bearers', () => {
 
     test('a safeList local with a list default is a Vec<Value>; Promise.all too', () => {
         const out = rs("        const xs = this.safeList (v, 'a', []);\n        const b = xs[1];\n        return b;");
-        expect(out).toContain('let mut xs: Vec<Value> = self.safeList(v.clone(), Value::Str("a".into()), Value::from(vec![])).as_array().cloned().unwrap_or_default();');
+        expect(out).toContain('let mut xs: Vec<Value> = self.safeList(v, Value::Str("a".into()), Value::from(vec![])).as_array().cloned().unwrap_or_default();');
         expect(out).toContain('xs.get(1).cloned().unwrap_or(Value::Null)');
         const allOut = rs("        const rs2 = await Promise.all (ps);\n        const b = rs2[0];\n        return b;", 'ps: any');
         expect(allOut).toContain('let mut rs2: Vec<Value> = promise_all(&ps).await.as_array().cloned().unwrap_or_default();');
@@ -6793,7 +6882,7 @@ describe ('rustCallInitContainerLocals', () => {
                 + "        orderbook['nonce'] = 1;\n"
                 + '        return orderbook;\n'
                 + '    }\n');
-            expect(out).toContain('let mut orderbook: indexmap::IndexMap<String, Value> = self.parseOrderBook(response.clone(), symbol.clone()).as_map().cloned().unwrap_or_default();');
+            expect(out).toContain('let mut orderbook: indexmap::IndexMap<String, Value> = self.parseOrderBook(response, symbol).as_map().cloned().unwrap_or_default();');
             expect(out).toContain('orderbook.insert("nonce".into(), Value::Int(1));');
             expect(out).not.toContain('add_element_to_object(&mut orderbook');
             expect(out).not.toContain('if let Value::Dict(__d) = &mut orderbook');
@@ -6821,7 +6910,7 @@ describe ('rustCallInitContainerLocals', () => {
                 + "        request['amount'] = 1;\n"
                 + '        return this.extend (request, params);\n'
                 + '    }\n');
-            expect(out).toContain('let mut request: indexmap::IndexMap<String, Value> = self.createOrderRequest(symbol.clone(), params.clone()).as_map().cloned().unwrap_or_default();');
+            expect(out).toContain('let mut request: indexmap::IndexMap<String, Value> = self.createOrderRequest(symbol, params).as_map().cloned().unwrap_or_default();');
             expect(out).toContain('request.insert("limit".into(), Value::Int(10));');
             expect(out).not.toContain('add_element_to_object(&mut request');
         });
@@ -6851,7 +6940,7 @@ describe ('rustCallInitContainerLocals', () => {
                 + "        const data = this.safeDict (o, 'data');\n"
                 + '        return data;\n'
                 + '    }\n');
-            expect(out).toContain('let mut orderbook: Value = self.parseOrderBook(response.clone(), Value::Str("BTC/USDT".into()));');
+            expect(out).toContain('let mut orderbook: Value = self.parseOrderBook(response, Value::Str("BTC/USDT".into()));');
         });
 
         test('a callee that also returns an element read keeps the helper', () => {
@@ -6866,7 +6955,7 @@ describe ('rustCallInitContainerLocals', () => {
                 + "        return { 'seen': false };\n"
                 + '    }\n');
             expect(out).toContain('add_element_to_object(&mut first');
-            expect(out).toContain('let mut first: Value = self.pick(rows.clone())');
+            expect(out).toContain('let mut first: Value = self.pick(rows)');
         });
 
         test('a callee that reassigns its built local keeps the box', () => {
@@ -6901,7 +6990,7 @@ describe ('rustCallInitContainerLocals', () => {
                 + '        const orderbook = this.parseOrderBook (response, "BTC/USDT");\n'
                 + '        return this.use (orderbook);\n'
                 + '    }\n');
-            expect(out).toContain('let mut orderbook: crate::value::Dict = self.parseOrderBook(response.clone(), Value::Str("BTC/USDT".into())).into_dict();');
+            expect(out).toContain('let mut orderbook: crate::value::Dict = self.parseOrderBook(response, Value::Str("BTC/USDT".into())).into_dict();');
             expect(out).toContain('self.use(Value::Dict(orderbook))');
         });
 
@@ -7003,7 +7092,7 @@ describe ('rustGetValueOnMapLocals', () => {
                 "        const bids = ob['bids'];\n" +
                 '        return bids;\n' +
                 '    }\n');
-            expect(out).toContain('let mut ob: indexmap::IndexMap<String, Value> = self.safeValue(self.orderbooks, sym.clone())');
+            expect(out).toContain('let mut ob: indexmap::IndexMap<String, Value> = self.safeValue(self.orderbooks, sym)');
             expect(out).toContain(`let mut bids: Value = ${MAP_READ('ob', 'bids')};`);
             expect(out).not.toContain('get_value(&ob');
         });
@@ -7525,7 +7614,7 @@ describe ('rustPredictionBearers', () => {
 
         test('a reassigned local keeps the box', () => {
             expect(prediction).toContain('let mut query: Value = Value::Map({');
-            expect(prediction).toContain('query = self.extend(query.clone(), params.clone());');
+            expect(prediction).toContain('query = self.extend(query, params);');
         });
 
         test('a closure capture keeps the box', () => {
@@ -7584,7 +7673,7 @@ describe('rust dynamic self access and optional-argument slices', () => {
         expect(venue).toContain('self.safeStringUpperN(o.clone(), Value::Str("id".into()), &[])');
     });
     test('a transpiled base method folds its optional parameters', () => {
-        expect(venue).toContain('self.parseLiquidation(o.clone(), &[])');
+        expect(venue).toContain('self.parseLiquidation(o, &[])');
     });
 });
 
@@ -7931,7 +8020,7 @@ describe('rust optional list locals', () => {
         expect(out).toContain('if (normalized.is_some()) {');
         expect(out).toContain('normalized.as_deref().map(Vec::as_slice).unwrap_or_default().get(i as usize)');
         expect(out).toContain('self.safeString(&normalized, ');
-        expect(out).toContain('return self.parseTickers(rows.clone(), normalized.map_or(Value::Null, Value::Arr));');
+        expect(out).toContain('return self.parseTickers(rows, normalized.map_or(Value::Null, Value::Arr));');
         expect(out).toContain('let mut data: Option<crate::value::List> = ');
         expect(out).toContain('if (data.is_some()) {');
         expect(out).toContain('data.as_deref().map(Vec::as_slice).unwrap_or_default().len() as i64');
@@ -8235,7 +8324,7 @@ describe('rust list reads with an empty list default', () => {
         fs.rmSync (root, { recursive: true, force: true });
     });
     test('a list read by index and length holds the shared list with a native bound', () => {
-        expect(out).toContain('let mut rows: crate::value::List = self.safeList(response.clone(), Value::Str("data".into()), &[Value::from(vec![])]).into_list();');
+        expect(out).toContain('let mut rows: crate::value::List = self.safeList(response, Value::Str("data".into()), &[Value::from(vec![])]).into_list();');
         expect(out).not.toContain('&[Value::from(vec![])]).as_array().cloned().unwrap_or_default()');
         expect(out).toContain('i < (rows.len() as i64)');
         expect(out).toContain('rows.get(i as usize).cloned().unwrap_or(Value::Null)');
@@ -8297,7 +8386,7 @@ describe('rust lists built by pushes and reassigned from list producers', () => 
         expect(rs).toContain('return Value::Arr(out);');
     });
     test('negative: a list only built and boxed straight back keeps its box', () => {
-        expect(out).toContain('return self.hold(rows.clone());');
+        expect(out).toContain('return self.hold(rows);');
         expect(out).toMatch(/let mut rows: Value = Value::from\(vec!\[\]\);/);
     });
 });
@@ -8708,7 +8797,7 @@ describe('rust native arithmetic over numeric base calls', () => {
         expect(output).toContain('let mut next: i64 = 0;');
         expect(output).toContain('next = (next + 2);');
         expect(output).toContain('let mut digits: i64 = i64::max(5, next);');
-        expect(output).toContain('let mut duration: i64 = ((self.parseTimeframe(timeframe.clone()).as_i64().unwrap_or_default()) * 1000);');
+        expect(output).toContain('let mut duration: i64 = ((self.parseTimeframe(timeframe).as_i64().unwrap_or_default()) * 1000);');
         expect(output).not.toContain('Value::Int(x * y)');
     });
 
@@ -8823,7 +8912,7 @@ describe('lent response dicts', () => {
     test('negative: an optional map or an any-typed base response keeps the Value hand-off', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'lent-response-dicts', 'ts/src/venue.ts')).content;
         expect(out).toMatch(/fn parseLoose\(&self, (mut )?thing: Value, optional_args/);
-        expect(out).toContain('return self.parseLoose(data.clone(), &[]);');
+        expect(out).toContain('return self.parseLoose(data, &[]);');
         expect(out).not.toContain('let mut data: crate::value::Dict = resp.get(\"data\").cloned().unwrap_or_default().into_dict();\n        return self.parseLoose');
         // a nullable safeDict is lent in its optional form now (Null stays Null)
         expect(out).toMatch(/let mut data: Option<crate::value::Dict> = [^;]*;\n\s*return self\.parseThing\(&data, &\[\]\);/);
@@ -9163,7 +9252,7 @@ describe('per-venue scalar parameters', () => {
         expect(out).toContain('self.pad("x", 4, true)');
         expect(out).toContain('self.pad("y", 2, !true)');
         expect(out).toContain('if left {');
-        expect(out).toContain('let mut size: i64 = self.parseToInt(length.clone()).unwrap_or_default();');
+        expect(out).toContain('let mut size: i64 = self.parseToInt(length).unwrap_or_default();');
         expect(out).toContain('pub fn width(&self, n: f64) -> Value {');
         expect(out).toContain('self.width(7.0)');
     });
@@ -9445,7 +9534,7 @@ describe('typed safeMarket and market slots', () => {
         expect(out).toContain('let mut resolved: crate::types::Market = self.safeMarket(');
         expect(out).toContain('crate::value::KeyRead::key_read(&&resolved, "symbol")');
         expect(out).toContain('Some(&resolved))');
-        expect(out).toContain('return self.safeTrade(trade.clone(), market);');
+        expect(out).toContain('return self.safeTrade(trade, market);');
         expect(out).not.toContain('resolved.as_map()');
     });
 });
@@ -9953,11 +10042,11 @@ describe('rust base safeCurrency / safeCurrencyCode take a lent Option<&Currency
         expect(base).toContain('fn safeCurrencyCode(&self, currencyId: Value, currency: Option<&crate::types::Currency>) ->');
         expect(base).toContain('(currency.is_some())');
         expect(base).toContain('return crate::Value::from(currency);');
-        expect(base).toContain('self.safeCurrency(currencyId.clone(), currency.clone())');
+        expect(base).toContain('self.safeCurrency(currencyId, currency)');
     });
     test('the override follows the base signature and hands its slot to super as is', () => {
         expect(venue).toContain('fn safeCurrencyCode(&self, currencyId: Value, currency: Option<&crate::types::Currency>) ->');
-        expect(venue).toContain('super.safeCurrencyCode(currencyId.clone(), currency.clone())');
+        expect(venue).toContain('super.safeCurrencyCode(currencyId, currency)');
     });
     test('a caller converts once: absent is None, a Value currency decodes once', () => {
         expect(caller).toContain('<Option<crate::types::Currency> as crate::types::FromRaw>::from_raw(currency.clone()).as_ref())');
@@ -10067,11 +10156,11 @@ describe('rust currency producers return crate::types::Currency and their locals
         expect(base).toContain('<crate::types::Currency as crate::types::FromRaw>::from_raw(self.safeCurrencyStructure(');
     });
     test('currency locals are typed: native key reads, lent slot args, Option for nil-declared', () => {
-        expect(base).toContain('let mut currency: crate::types::Currency = self.currency(code.clone());');
+        expect(base).toContain('let mut currency: crate::types::Currency = self.currency(code);');
         expect(base).toContain('crate::value::KeyRead::key_read(&&currency, "id")');
         expect(base).toContain('Some(&currency)');
         expect(base).toContain('let mut currency: Option<crate::types::Currency> = None;');
-        expect(base).toContain('currency = Some(self.currency(code.clone()));');
+        expect(base).toContain('currency = Some(self.currency(code));');
         expect(base).toContain('currency.as_ref()');
         expect(base).not.toMatch(/FromRaw>::from_raw\(currency/);
     });
