@@ -11110,7 +11110,7 @@ describe('ral-lf: market / currency field locals, sibling element bindings, Dict
         expect(out).toContain('let mut symbol: Option<String> = crate::value::KeyRead::key_read(&&resolved, "symbol").as_str().map(str::to_owned);');
         expect(out).toContain('symbol.map(Value::from).unwrap_or(Value::Null)');
         expect(out).toContain('let mut currencyCode: Option<String> = crate::value::KeyRead::key_read(&&currency, "code").as_str().map(str::to_owned);');
-        expect(out).not.toContain('let mut symbol: Value');
+        expect(out).not.toContain('let mut symbol: Value = ticker');
     });
     test('elements of typed Dict[] lists bound under one name in sibling blocks are each a crate::value::Dict', () => {
         const dir = path.join (rustFixtureRoot, 'ral-lf-sibling-elems');
@@ -11237,7 +11237,7 @@ describe('ral-md: market-field strings boxed before their last use', () => {
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut symbol: Option<String> = crate::value::KeyRead::key_read(&&resolved, "symbol").as_str().map(str::to_owned);');
         expect(out).toContain('self.hold(Value::from(symbol.as_deref()))');
-        expect(out).not.toContain('let mut symbol: Value');
+        expect(out).not.toContain('let mut symbol: Value = ticker');
     });
 });
 
@@ -11283,5 +11283,23 @@ describe('nonce strings, lent inArray needles and the per-local line guard', () 
     test('an optional string needle of inArray is lent as &x', () => {
         expect(out).toMatch(/let mut id: Option<String> = /);
         expect(out).toMatch(/self\.inArray\(&id, /);
+    });
+});
+describe('ral-ne: market flags, unified-row string fields and padded strings', () => {
+    test('struct market flags are bool / Option<bool>, row symbols Option<String>, padStart / padEnd native', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-ne-elements');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; id: string; spot: boolean; contract: boolean; linear: boolean | undefined; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport interface Ticker { symbol: string; info: any }\nexport default class Exchange {\n    markets: Dict = undefined;\n    market (symbol: string): MarketInterface { return this.markets[symbol]; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    parseTicker (t: Dict, market: Market = undefined): Ticker { return { 'symbol': this.safeString (t, 's'), 'info': t } as any; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (symbol: string, params: Dict = {}) {\n        const market = this.market (symbol);\n        const isContract = market['contract'];\n        const isLinear = market['linear'];\n        const kind = isContract ? 'swap' : 'spot';\n        const sub = isLinear ? 'linear' : 'inverse';\n        return this.hold ([ kind, sub ]);\n    }\n    parseTickers (rows: Dict[]) {\n        const result: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const ticker = this.parseTicker (rows[i]);\n            const symbol = ticker['symbol'];\n            if (symbol !== undefined) {\n                result[symbol] = ticker;\n            }\n        }\n        return result;\n    }\n    pad (resp: Dict) {\n        const r = this.safeString (resp, 'r', '');\n        const s = this.safeString (resp, 's');\n        const rp = r.padStart (64, '0');\n        const sp = s.padEnd (8, ' ');\n        return this.hold ([ rp, sp ]);\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut isContract: bool = (market).contract;');
+        expect(out).toContain('let mut isLinear: Option<bool> = (market).linear;');
+        expect(out).toContain('let mut symbol: Option<String> = ticker.get("symbol").and_then(Value::as_str).map(str::to_owned);');
+        expect(out).not.toContain('let mut symbol: Value = ticker');
+        expect(out).toContain('let mut rp: String = format!("{:0>64}", r);');
+        expect(out).toContain('format!("{: <8}", __s)');
+        expect(out).not.toContain('let mut r: Value');
+        expect(out).not.toContain('let mut s: Value');
     });
 });
