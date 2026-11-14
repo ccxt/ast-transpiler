@@ -4530,14 +4530,14 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
         expect(output).not.toContain('Option<String>');
     });
 
-    test('an override keeps the boxed signature', () => {
+    test('an override of a venue method printed -> Option<String> joins its group (xd)', () => {
         const ts = HEAD +
             "class A {\n    parseStatus (status: any): Str { return 'x'; }\n}\n" +
             "class E extends A {\n    override parseStatus (status: any): Str { return 'y'; }\n}";
         const output = transpiler.transpileRust(ts).content;
         const overridden = output.split('class E')[1] ?? output;
         expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Option<String>');
-        expect(output.match(/pub fn parseStatus\(&self, status: Value\) -> Value \{/g)?.length).toBe(1);
+        expect(output.match(/pub fn parseStatus\(&self, status: Value\) -> Option<String> \{/g)?.length).toBe(2);
         expect(overridden.length).toBeGreaterThan(0);
     });
 
@@ -14318,5 +14318,49 @@ describe('ral-yh: a safeList local rewritten only with its own kind holds the li
         expect(out).toContain('let mut orders: Option<crate::value::List> = ');
         expect(out).toContain('orders.is_none()');
         expect(out).toContain('orders = Value::from(vec![]).into_opt_list();');
+    });
+});
+
+describe('yd: pro phemex fromEn joins venue fromEn -> Option<String> and keeps its by-name arm (lift C done right)', () => {
+    const mk = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-yd-vgrp-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k] ?? d; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/phemex.ts'), "import Exchange from './base/Exchange.js';\nimport type { Str, Int } from './base/Exchange.js';\nexport default class phemex extends Exchange {\n    fromEn (en: Str, scale: Int): Str {\n        if (en === undefined || scale === undefined) {\n            return undefined;\n        }\n        return en + 'x';\n    }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/pro/phemex.ts'), "import phemexRest from '../phemex.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class phemex extends phemexRest {\n    fromEn (en: any, scale: any): Str {\n        if (en === undefined) {\n            return undefined;\n        }\n        return en + 'y';\n    }\n    m (balance: Dict) {\n        let used = this.safeString (balance, 'u');\n        if (used === undefined) {\n            used = this.fromEn (this.safeString (balance, 'e'), 8);\n        }\n        return this.hold (used);\n    }\n}\n");
+        return transpiler.transpileRustByPath(path.join(root, 'ts/src/pro/phemex.ts'));
+    };
+    test('the override prints -> Option<String>, its reassigned reader local stays Option<String>, and the from_en arm is kept', () => {
+        const r = mk();
+        expect(r.content).toMatch(/fn fromEn\([^)]*\) -> Option<String>/);
+        expect(r.content).toMatch(/let mut used: Option<String> = /);
+        expect((r.rustSignatures ?? []).find((s: any) => s.name === 'from_en')?.ret).toBe('keptostr');
+    });
+});
+
+describe('yd: a long line that holds a typed local is split by a let-bound typed temp (a move, no copy)', () => {
+    test('a returned list over 400 chars hoists into `let __yd0: Vec<Value> = vec![..]` one element per line and the reader number local types', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-yd-split-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Num = number | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o[k] ?? d; }\n    safeTimestamp (o: any, k: any, d: Int = undefined): Int { return o[k] ?? d; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue9.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue9 extends Exchange {\n    parseRow (row: Dict): any {\n        const openingPriceOfTheCandle = this.safeNumber (row, 'open');\n        const highestPriceOfTheCandle = this.safeNumber (row, 'high');\n        const lowestPriceOfTheCandle = this.safeNumber (row, 'low');\n        const closingPriceOfTheCandle = this.safeNumber (row, 'close');\n        const fallbackSinglePrice = this.safeNumber (row, 'price', this.safeNumber (row, 'value'));\n        return [\n            this.safeTimestamp (row, 'timestamp'),\n            (openingPriceOfTheCandle !== undefined) ? openingPriceOfTheCandle : fallbackSinglePrice,\n            (highestPriceOfTheCandle !== undefined) ? highestPriceOfTheCandle : fallbackSinglePrice,\n            (lowestPriceOfTheCandle !== undefined) ? lowestPriceOfTheCandle : fallbackSinglePrice,\n            (closingPriceOfTheCandle !== undefined) ? closingPriceOfTheCandle : fallbackSinglePrice,\n            0,\n        ];\n    }\n}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/venue9.ts')).content;
+        expect(out).toMatch(/let mut fallbackSinglePrice: Option<f64> = /);
+        expect(out).toContain('let __yd0: Vec<Value> = vec![\n');
+        expect(out).toContain('return Value::from(__yd0);');
+        expect(out.split('\n').filter((l: string) => l.length > 400)).toEqual([]);
+        expect(out).not.toContain('fallbackSinglePrice.clone()');
+    });
+});
+
+describe('yd: filterByValueSinceLimit joins the typed filter group (rows borrowed, since / limit Option<i64>)', () => {
+    test('the base signature types since / limit positionally (value stays Value); its reader integer compared with since stays Option<i64>', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-yd-fvsl-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type IndexType = number | string;\nexport default class Exchange {\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k] ?? d; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterByValueSinceLimit (array: object[] | undefined, field: IndexType, value: any = undefined, since: Int = undefined, limit: Int = undefined, key = 'timestamp', tail = false): any[] {\n        const result = [];\n        for (let i = 0; i < array.length; i++) {\n            const entry = array[i];\n            const entryKeyValue = this.safeInteger (entry, key);\n            if ((entryKeyValue !== undefined) && (entryKeyValue >= since)) {\n                result.push (entry);\n            }\n        }\n        return result;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts')).content;
+        expect(out).toMatch(/fn filterByValueSinceLimit\(&self, array: [^,]+, field: Value, value: Value, since: Option<i64>, limit: Option<i64>, optional_args: &\[Value\]\)/);
+        expect(out).toMatch(/let mut entryKeyValue: Option<i64> = /);
     });
 });
