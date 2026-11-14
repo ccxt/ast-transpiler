@@ -462,7 +462,7 @@ describe('rust transpiling tests', () => {
         "    break;\n" +
         "}"
         const rust =
-        "while (true) {\n" +
+        "loop {\n" +
         "    let mut x: Value = Value::Int(1);\n" +
         "    break;\n" +
         "}";
@@ -14871,4 +14871,54 @@ describe('ze: list resolves are a proven List watch result', () => {
             expect(mk(handlers)).toMatch(want);
         });
     }
+});
+
+describe('ral-40f: a nested literal-key write on a typed params slot inserts the inner slot in place', () => {
+    const fn = (body: string) => transpiler.transpileRust("class X {\n    f (params: any) {\n        const [ a, p1 ] = this.handleOptionStringAndParams (params, 'w', 'b', 'S');\n        const [ a2, p2 ] = this.handleOptionStringAndParams (p1, 'w', 'b', a);\n" + body + "\n        const [ c, p3 ] = this.handleOptionStringAndParams (p2, 'w', 'c');\n        return [ c, p3 ];\n    }\n}").content;
+    const cases: [ string, string, string[], string[] ][] = [
+        [ "p['params']['k'] = v: Dict slot, first hop entry(..).or_insert(Null) in place, the inner write keeps add_element_to_object, no copy", "        p2['params']['bookSubscriptionType'] = a2;", [ 'let mut p2: crate::value::Dict = ', 'add_element_to_object(std::sync::Arc::make_mut(&mut p2).entry("params".to_string()).or_insert(Value::Null), &Value::Str("bookSubscriptionType".into()), a2', 'handleOptionStringAndParams(Value::Dict(p2), ' ], [ 'let mut p2: Value', 'get_value_mut(&mut p2' ] ],
+        [ 'negative: a value reading the slot keeps the helper on a Value slot', "        p2['params']['k'] = p2['x'];", [ 'let mut p2: Value' ], [ 'entry("params"' ] ],
+        [ 'negative: a book-meta inner key keeps the helper', "        p2['params']['symbol'] = a2;", [ 'let mut p2: Value' ], [ 'entry("params"' ] ],
+        [ 'negative: a slot in a function touching a live subscription keeps the helper', "        p2['params']['k'] = a2;\n        const s = this.clients['x'].subscriptions;", [ 'let mut p2: Value' ], [ 'entry("params"' ] ],
+    ];
+    test.each(cases)('%s', (_name, body, has, hasNot) => {
+        const out = fn(body);
+        has.forEach((h) => expect(out).toContain(h));
+        hasNot.forEach((h) => expect(out).not.toContain(h));
+    });
+});
+
+describe('ral-40f: a defaulted safeDict / safeList local written whole into this.options[k] keeps its typed container (no veto for the r05 store)', () => {
+    const mk = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-40f-bo-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base/ws'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: Dict = {};\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/base/ws/Client.ts'), "export default class Client {\n    resolve (v: any, h: string | undefined = undefined): void {}\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange';\nimport type { Dict } from '../base/Exchange';\nimport Client from '../base/ws/Client';\nexport default class venue extends Exchange {\n" + body + "\n}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('a defaulted map stored then returned shares the map (Value::from(&x), an Arc bump) and a list stored last moves', () => {
+        const out = mk("    loadMeta (response: Dict): Dict {\n        const data = this.safeDict (response, 'data', {});\n        this.options['meta'] = data;\n        return data;\n    }\n    storeChains (multi: Dict): void {\n        const chains = this.safeList (multi, 'chains', []);\n        this.options['chains'] = chains;\n    }");
+        expect(out).toContain('let mut data: crate::value::Dict = ');
+        expect(out).toContain('insert("meta".into(), Value::from(&data))');
+        expect(out).toContain('let mut chains: crate::value::List = ');
+        expect(out).toContain('insert("chains".into(), Value::Arr(chains))');
+    });
+    test('negative: a scalar written into a nested write keeps the scalar use-form veto (Value local)', () => {
+        const out = mk("    keep (m: Dict): void {\n        const flag = this.safeString (m, 'f');\n        this.options['a']['b'] = flag;\n    }");
+        expect(out).not.toContain('let mut flag: Option<String>');
+    });
+});
+
+describe('ral-40f: while (true) prints as loop (moved from ccxt build/ whileTrueToLoop)', () => {
+    test('while (true) is loop; any other condition stays while', () => {
+        const out = transpiler.transpileRust("class X {\n    f (a: any) {\n        let i = 0;\n        while (true) {\n            i = i + 1;\n            if (i > 3) {\n                break;\n            }\n        }\n        while (i > 0) {\n            i = i - 1;\n        }\n        return i;\n    }\n}").content;
+        expect(out).toContain('        loop {');
+        expect(out).not.toContain('while true');
+        expect(out).not.toContain('while (true)');
+        expect(out).toContain('while i > 0 {');
+    });
 });
