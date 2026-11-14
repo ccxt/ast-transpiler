@@ -4645,8 +4645,10 @@ describe('rust typed-receiver native reads', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        // the ccxt write-back pass matches the printer's closure-free bind of the same container/key
-        expect(output).toContain('let mut row: Value = (if let (Some(__m), Some(__k)) = (result.as_map(), key.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null });');
+        // the ccxt write-back pass matches the printer's bind of the same container/key (ral-xf: the literal map is now a
+        // typed IndexMap and the bind its native get, which the pass writes back by insert)
+        expect(output).toContain('let mut row: Value = result.get(key.as_str().unwrap_or("")).cloned().unwrap_or(Value::Null);');
+        expect(output).toContain('append_to_array(&mut row, ');
         expect(output).not.toContain('row.as_map()');
     });
 
@@ -13763,5 +13765,106 @@ describe('ral-xb: integer for counters used in arithmetic (round 37)', () => {
     test('negative: i % a non-literal divisor keeps the counter a Value (mod_val may answer Null for a zero divisor)', () => {
         const out = fn("r.push (i % n);");
         expect(out).toContain('let mut i: Value = Value::Int(0);');
+    });
+});
+
+describe('ral-xf: a literal map element bound and pushed to (ccxt write-back pass reads the native get)', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-xf-bindpush');
+        const files: Record<string, string> = {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    group (rows: Dict[]) {\n        const byCode: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const code = this.safeString (rows[i], 'c');\n            if (!(code in byCode)) {\n                byCode[code] = [];\n            }\n            const bucket = byCode[code];\n            bucket.push (rows[i]);\n            byCode[code] = bucket;\n        }\n        return byCode;\n    }\n    groupProduced (rows: Dict[]) {\n        const byCode: Dict = this.hold ({});\n        for (let i = 0; i < rows.length; i++) {\n            const code = this.safeString (rows[i], 'c');\n            const bucket = byCode[code];\n            bucket.push (rows[i]);\n        }\n        return byCode;\n    }\n}\n"};
+        for (const [ rel, text ] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('const e = m[k]; e.push (v): the bind reads natively off the IndexMap, the push stays the helper for the write-back pass', () => {
+        const body = out.slice (out.indexOf ('fn group'), out.indexOf ('fn groupProduced'));
+        expect(body).toMatch(/let mut byCode: indexmap::IndexMap<String, Value> = /);
+        expect(body).toMatch(/let mut bucket: Value = byCode\.get\(code\.as_str\(\)\.unwrap_or\(""\)\)\.cloned\(\)\.unwrap_or\(Value::Null\);/);
+        expect(body).toContain('append_to_array(&mut bucket, ');
+        expect(body).toContain('Value::Map(byCode)');
+    });
+    test('negative: a produced map keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn groupProduced'));
+        expect(body).toMatch(/let mut byCode: Value = /);
+    });
+});
+
+describe('ral-xf: symbol-named key places and m[k].push receivers on a map literal', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-xf-symbolpush');
+        const files: Record<string, string> = {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] { return o; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    bySymbol (rows: Dict[]) {\n        const ids: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const symbol = this.safeString (rows[i], 's');\n            ids[symbol] = this.safeString (rows[i], 'id');\n        }\n        const keys = Object.keys (ids);\n        const out = [];\n        for (let i = 0; i < keys.length; i++) {\n            const symbol = keys[i];\n            out.push (ids[symbol]);\n        }\n        return out;\n    }\n    group (rows: Dict[]) {\n        const grouped: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const id = this.safeString (rows[i], 'id');\n            if (!(id in grouped)) {\n                grouped[id] = [];\n            }\n            grouped[id].push (rows[i]);\n        }\n        return grouped;\n    }\n    groupAny (rows: Dict[], x: any) {\n        const grouped: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const id = this.safeString (rows[i], 'id');\n            grouped[id] = x;\n            grouped[id].push (rows[i]);\n        }\n        return grouped;\n    }\n    groupHanded (rows: Dict[]) {\n        const grouped: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const id = this.safeString (rows[i], 'id');\n            grouped[id] = this.safeList (grouped, id, []);\n            grouped[id].push (rows[i]);\n        }\n        return grouped;\n    }\n}\n"};
+        for (const [ rel, text ] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('a `symbol` key place on a literal (no __book_id can be in it) reads and writes the IndexMap', () => {
+        const body = out.slice (out.indexOf ('fn bySymbol'), out.indexOf ('fn group('));
+        expect(body).toMatch(/let mut ids: indexmap::IndexMap<String, Value> = /);
+        expect(body).toMatch(/ids\.get\(symbol\./);
+    });
+    test('m[k].push (v) with list-only values pushes on the entry of the typed map', () => {
+        const body = out.slice (out.indexOf ('fn group('), out.indexOf ('fn groupAny'));
+        expect(body).toMatch(/let mut grouped: indexmap::IndexMap<String, Value> = /);
+        expect(body).toContain('.entry(__k.to_string()).or_insert_with(|| Value::Array(Vec::new())) { std::sync::Arc::make_mut(__a).push(');
+        expect(body).not.toContain('append_to_object_array');
+    });
+    test('negative: an any-typed stored value (may be a book cache) keeps the helper', () => {
+        const body = out.slice (out.indexOf ('fn groupAny'), out.indexOf ('fn groupHanded'));
+        expect(body).toMatch(/let mut grouped: Value = /);
+    });
+    test('negative: a map also handed to a this. call keeps the box (no IndexMap copy)', () => {
+        const body = out.slice (out.indexOf ('fn groupHanded'));
+        expect(body).toMatch(/let mut grouped: Value = /);
+    });
+});
+
+describe('ral-xf: a built list re-sorted in place (x = this.sortBy (x, ..)) stays a native list', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-xf-sortself');
+        const files: Record<string, string> = {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    parseRow (x: any): Dict { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    sortBy (array: any[], key: any, descending = false, defaultValue: any = 0): any[] { return array; }\n    filterBySinceLimit (array: any[], since: any = undefined, limit: any = undefined, key = 'timestamp', tail = false): any[] { return array; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    rows (raw: Dict[], since: any, limit: any) {\n        let result = [];\n        for (let i = 0; i < raw.length; i++) {\n            result.push (this.parseRow (raw[i]));\n        }\n        result = this.sortBy (result, 'timestamp');\n        return this.filterBySinceLimit (result, since, limit);\n    }\n    rowsOther (raw: Dict[], other: any[], since: any, limit: any) {\n        let result = [];\n        for (let i = 0; i < raw.length; i++) {\n            result.push (this.parseRow (raw[i]));\n        }\n        result = this.sortBy (other, 'timestamp');\n        return this.filterBySinceLimit (result, since, limit);\n    }\n}\n"};
+        for (const [ rel, text ] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('x = sortBy (x, ..): moves in as Value::Arr(x), comes back .into_list()', () => {
+        const body = out.slice (out.indexOf ('fn rows('), out.indexOf ('fn rowsOther'));
+        expect(body).toMatch(/let mut result: crate::value::List = /);
+        expect(body).toMatch(/result = self\.(?:sort_by|sortBy)\(Value::Arr\(result\), [^;]*\)\.into_list\(\);/);
+        expect(body).not.toContain('result.clone()');
+    });
+    test('negative: sorting another list into x keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn rowsOther'));
+        expect(body).toMatch(/let mut result: Value = /);
+    });
+});
+
+describe('ral-xf: a list literal with a bare local element read only by index is a native list (its elements as the box printed them)', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-xf-bareelem');
+        const files: Record<string, string> = {"ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n}\n", "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    pair (row: Dict) {\n        const ticker = this.safeString (row, 't');\n        const ids = [ ticker, ticker + '-NO' ];\n        const out = [];\n        for (let i = 0; i < 2; i++) {\n            out.push ({ 'id': ids[i] });\n        }\n        return out;\n    }\n    pairKept (row: Dict) {\n        const ticker = this.safeString (row, 't');\n        const ids = [ ticker, ticker + '-NO' ];\n        ids.push (this.hold (ids));\n        return ids;\n    }\n}\n"};
+        for (const [ rel, text ] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('[ ticker, ticker + .. ] (the box copies ticker): the vec! holds the same element texts, reads go native', () => {
+        const body = out.slice (out.indexOf ('fn pair('), out.indexOf ('fn pairKept'));
+        expect(body).toMatch(/let mut ids: crate::value::List = std::sync::Arc::new\(vec!\[ticker\.clone\(\)\.map\(Value::from\)/);
+        expect(body).toMatch(/ids\.get\(i as usize\)/);
+    });
+    test('negative: a list read inside its own push keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn pairKept'));
+        expect(body).toMatch(/let mut ids: Value = /);
     });
 });
