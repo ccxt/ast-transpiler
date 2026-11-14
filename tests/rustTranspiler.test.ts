@@ -13440,3 +13440,98 @@ describe('ral-wb: scalar literals, loop counters, aliases (round 36)', () => {
         expect(output).toContain('let mut i: Value = Value::Int(0);');
     });
 });
+
+describe('ral-wg: a string element of a list parameter proven string borrows as Option<&str>', () => {
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-wg-param-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    urls: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeList (o: any, k: any, d: any = undefined): any { return o[k]; }\n    sign (path: string, api: string[] = [ 'public' ], method: string = 'GET', params: Dict = {}): Dict { return {}; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('the api element of a sign override (base declares string[]) lends at its boxes', () => {
+        const out = mk("    sign (path: string, api: string[] = [ 'public' ], method: string = 'GET', params: Dict = {}): Dict {\n        const apiName = api[0];\n        const url = this.safeString (this.urls, apiName);\n        if (apiName === 'private') {\n            return { 'url': url + '/' + apiName };\n        }\n        return { 'url': url };\n    }");
+        expect(out).toMatch(/let mut apiName: Option<&str> = api\.get\(0\)\.and_then\(Value::as_str\);/);
+        expect(out).toContain('Value::from(apiName.as_deref())');
+        expect(out).not.toContain('apiName.clone()');
+    });
+    test('a venue-private string[] parameter whose every caller passes string lists', () => {
+        const out = mk("    pick (names: string[]) {\n        const r = [];\n        for (let i = 0; i < names.length; i++) {\n            const name = names[i];\n            r.push (this.safeString (this.urls, name));\n        }\n        return r;\n    }\n    run () {\n        const ks = Object.keys (this.urls);\n        return [ this.pick ([ 'a', 'b' ]), this.pick (ks) ];\n    }");
+        expect(out).toMatch(/let mut name: Option<&str> = names\.get\(i as usize\)\.and_then\(Value::as_str\);/);
+    });
+    test('negative: a caller handing user data (safeList) keeps the Value element', () => {
+        const out = mk("    pick (names: string[]) {\n        const r = [];\n        for (let i = 0; i < names.length; i++) {\n            const name = names[i];\n            r.push (this.safeString (this.urls, name));\n        }\n        return r;\n    }\n    run (params: Dict) {\n        const qs = this.safeList (params, 'queries', []);\n        return this.pick (qs);\n    }");
+        expect(out).not.toMatch(/let mut name: Option<&str>/);
+    });
+});
+
+describe('ral-wg: a borrowed string element is the receiver of a string method', () => {
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-wg-meth-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('split on an Object.keys element calls str::split on the borrow', () => {
+        const out = mk("    parse (data: Dict) {\n        const keys = Object.keys (data);\n        const r = [];\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const parts = key.split ('_');\n            r.push ([ parts, this.safeString (data, key) ]);\n        }\n        return r;\n    }");
+        expect(out).toMatch(/let mut key: Option<&str> = keys\.get\(i as usize\)\.and_then\(Value::as_str\);/);
+        expect(out).toContain('key.as_deref()');
+    });
+    test('negative: a non-string-method member call keeps the Value element', () => {
+        const out = mk("    parse (data: Dict) {\n        const keys = Object.keys (data);\n        const r = [];\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            r.push (key.slice (1));\n        }\n        return r;\n    }");
+        expect(out).not.toMatch(/let mut key: Option<&str>/);
+    });
+});
+
+describe('ral-wg: a borrowed element keys a this.balance write whose value reads it', () => {
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-wg-bal-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: Dict = {};\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('the insert builds the owned key once, the value reads the borrow', () => {
+        const out = mk("    handleBalance (balance: Dict) {\n        const keys = Object.keys (balance);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            this.balance[key] = this.safeValue (balance, key);\n        }\n    }");
+        expect(out).toMatch(/let mut key: Option<&str> = keys\.get\(i as usize\)\.and_then\(Value::as_str\);/);
+        expect(out).toContain('.insert(key.as_deref().unwrap_or("null").to_string(), __be_tmp)');
+        expect(out).not.toContain('key.clone()');
+    });
+    test('negative: a non-borrowed key read in the written value keeps the helper key', () => {
+        const out = mk("    handleBalance (balance: Dict, other: Dict) {\n        const key = this.safeValue (other, 'k');\n        this.balance[key] = this.safeValue (balance, key);\n    }");
+        expect(out).not.toContain('Option<&str>');
+    });
+});
+
+describe('ral-wg: an element of a string list filled by pushes that end before the read borrows', () => {
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-wg-fill-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    const body = (late: string) => "    group (rows: Dict[]) {\n        const order: string[] = [];\n        const grouped: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const id = this.safeString (rows[i], 'id');\n            if (id === undefined) {\n                continue;\n            }\n            order.push (id);\n        }\n        const r = [];\n        for (let i = 0; i < order.length; i++) {\n            const fixtureId = order[i];\n" + late + "            r.push ({ 'id': fixtureId, 'rows': grouped[fixtureId] });\n        }\n        return r;\n    }";
+    test('the element borrows and keys the map read with the borrow itself', () => {
+        const out = mk(body(''));
+        expect(out).toMatch(/let mut fixtureId: Option<&str> = order\.get\(i as usize\)\.and_then\(Value::as_str\);/);
+        expect(out).not.toContain('Value::from(fixtureId.as_deref()).as_str()');
+    });
+    test('negative: a push after the element is read (a write while it lives) keeps Value', () => {
+        const out = mk(body("            order.push ('x');\n"));
+        expect(out).not.toMatch(/let mut fixtureId: Option<&str>/);
+    });
+});
