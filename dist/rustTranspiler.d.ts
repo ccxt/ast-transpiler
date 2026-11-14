@@ -91,6 +91,10 @@ export declare const rustDispatch: {
     fromValue(kind: string, v: string): string;
     /** Parameter list of a `DerivedExchange` slot: its `market` and currency arguments (never the first) are lent structs. */
     slotParams: (args: string[]) => string;
+    /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
+    isSlotStr: (arg: string, i: number) => boolean;
+    /** A forwarder's argument for an inherent parameter of `kind`: a slot already of that type passes by name. */
+    slotArg: (kind: string, arg: string, i: number) => string;
     isSlotMarket: (arg: string, i: number) => boolean;
     isSlotCurrency: (arg: string, i: number) => boolean;
     /** A `DerivedExchange` slot argument handed on in a `&[Value]` tail. */
@@ -408,6 +412,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBindsName(node: any, name: string): boolean;
     rustIdentifierUseIsCondition(node: any): boolean;
     private rustLocalUsesAll;
+    /** ral-qd: `n` is the name of the method declaration `scope` itself (a declaration name, never a read of a local),
+     *  asked while the shared-container rule walks its uses (the copying `IndexMap` bearer rules keep the old walk). */
+    rustOwnMethodName(n: any, scope: any): boolean;
+    private rustOwnNameSkip;
     rustLocalUsesAcceptBool(declaration: any, sourceName: string): boolean;
     private rustBoolParamDecisions;
     rustParamPrintsBool(param: any): boolean;
@@ -741,7 +749,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueTypedDecisions;
     rustVenueTypedCall(expr: any): string | undefined;
     rustVenueTypedKindUncached(declaration: any): string | undefined;
-    /** od: `parse*` / `handle*` results are their own groups' producers; the lending rules leave them alone. */
+    /** od: `handle*` results are their own group's producers; the lending rules leave them alone.
+     *  ral-qd: a venue `parse*` string result lends like any other venue string (`Value::from(x.as_deref())`
+     *  at each copying box: the copy the `Value` clone made). */
     rustOdExcludedCallee(init: any): boolean;
     /** `x = E; return x;`: the returned local holds what the statement right before the return wrote. */
     rustVenueReturnSource(ret: any): any;
@@ -957,6 +967,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustArithOperandKind(node: any): string | undefined;
     /** A combinator over a typed operand prints native and boxes its result once. */
     printRustArithCall(node: any): string | undefined;
+    /** qb: a local whose initializer prints as an inline `if` / `match` (a ternary, or runtime arithmetic): the
+     *  ternary / match result family. Reader, self-call, nil-declared and element-read locals belong to other families. */
+    rustInlineIfMatchInit(declaration: any): boolean;
+    /** qb: `n` is an argument of a two-operand `Math.min|max` the printer keeps as the runtime helper (no native kind). */
+    rustMathMinMaxValueOperand(n: any): boolean;
     /** `this.sum(..)` / `Math.min|max(a, b)`: a call whose own kind comes from its operands. */
     rustArithCombinator(node: any): boolean;
     private static readonly RUST_MATH_FLOAT_OPS;
@@ -1003,6 +1018,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The local is one side of `x === y` / `x !== y` against a `Value` partner (`rustScalarValuePartnerTest`). */
     rustScalarHasPairEquality(declaration: any): boolean;
     rustScalarValuePartnerTest(typed: any, other: any, kind: string, sign: string, dry: boolean): string | undefined;
+    /** qf: the `Option<&str>` text of a typed string local keying an `in` test (`inbox` use), else undefined:
+     *  `Some(k.as_str())` / `k.as_deref()`, so a native `contains_key` reads it without the box (`None` misses like `Null`). */
+    rustInKeyTypedText(key: any): string | undefined;
+    /** The key local of an `in` test has a non-null initializer (nil-declared locals are left to their own rule). */
+    rustInKeyInitialised(n: any): boolean;
+    /** qf: a typed local against an untyped `Value` partner (a local or parameter) that the checker types like the local:
+     *  the `Value` pair printed `a.<payload>() == p.<payload>()` (PAYLOAD_ACCESSORS by checker kind), and the typed local
+     *  is exactly `a.<payload>()` (`None` where the `Value` was `Null`), so the same compare reads `own == p.<payload>()`.
+     *  `Option<i64>` is left out (its payload is an `f64`, which needs a closure). */
+    rustScalarPayloadPartnerTest(self: any, partner: any, kind: string, sign: string, dry: boolean): string | undefined;
     /** `'str'` / `'int'` when `p` is a plain `Value` local (no typed-local rule claims it) whose initializer and every
      *  write is a fresh `str|ostr|null` (`int|oint|null`) producer, written only by whole `p = ..` statements. */
     rustScalarValuePartnerKind(partner: any): string | undefined;
@@ -1436,6 +1461,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustTupleSlotDecisions;
     rustTupleSlotKind(element: any): string | undefined;
     private rustTupleSlotKindUncached;
+    /** qe: `x === true` / `x !== true` on a bool tuple slot: the slot reads `as_bool() == Some(true)`, so the native
+     *  bool answers the strict test exactly (Null and a non-bool are `false` on both sides). Never `=== false`. */
+    rustBoolSlotTrueTest(n: any): boolean;
     rustStrSlotBoxUse(n: any): boolean;
     /** A `+` operand of a thrown error message: the statement diverges, so the slot moves into its `format!`. */
     rustStrSlotThrownConcat(n: any): boolean;
@@ -1955,6 +1983,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  order/subscription cache) or a `.subscriptions` / `.futures` read. The
      *  runtime tags those dicts, so a write must reach the store. */
     rustInitReadsTaggedStore(node: any): boolean;
+    /** qe: `rows.push (x)` into another local list, or `m[k] = x` into a local container that is not a tagged store
+     *  (never `this.*`, `client.subscriptions` or a cache `hashmap()` read): the map enters the store whole, once. */
+    rustLocalStoreHandOff(n: any): boolean;
     /** `this.<field>` or `this.<field>[…]` — a store the runtime may tag. */
     rustThisRootedPlace(node: any): boolean;
     /** Container kind an expression the callee body builds yields, or undefined.
@@ -2247,6 +2278,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A call to a generated base reader (any overload) whose container parameter prints `impl KeyRead`. */
     rustReaderTakesContainerByReference(call: any): boolean;
     rustBuiltReturnSourceKind(call: any): 'dict' | 'list' | undefined;
+    /** The printed `let mut x: crate::value::Dict = self.omit(..).into_dict();` line of a one-line omit stays under 400 chars. */
+    rustOmitLineFits(call: any): boolean;
     private static readonly RUST_BUILT_BOX_RECEIVER_METHODS;
     private static readonly RUST_BUILT_HELPER_RETURNS;
     private static readonly RUST_BASE_FILTER_LISTS;
@@ -2287,6 +2320,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTypedParamsSlot(call: any, at: number): boolean;
     /** `'dict' | 'list' | 'api'` for a container source the local may hold by reference. */
     rustBorrowedSourceKind(call: any): 'dict' | 'list' | 'api' | undefined;
+    private static readonly RUST_SAFE_VALUE_KEY_SOURCES;
+    rustSafeValueKeyReadSource(call: any): boolean;
+    /** `this.safeX (o, '<k>'[, d])`: a base by-reference reader whose container is `o`, at a literal non-index string key. */
+    rustSafeValueKeyReaderUse(n: any): boolean;
     /** `this.m(..)` of a venue method (no override, every venue declaration of the name returning `Dict`) whose every
      *  return is `this.safeDict (this.<field>, '<key>', {})`: the shared handle of a typed store entry, a map on every path. */
     rustStoreDictReturnCall(call: any): boolean;
@@ -2614,12 +2651,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustExtendHeadUse(n: any): boolean;
     private static readonly RUST_EXTEND_HEAD_CALLS;
     private rustUntilHeadDecisions;
+    /** qe: slot 0 of `const [ x, p ] = this.handleUntilOption (k, r, ..)` with `r` a map literal or a typed map local:
+     *  the base helper hands `r` back (inserting the until key), so the slot is that map on every path. */
+    rustUntilRequestSlot(element: any): boolean;
     rustUntilHeadSlot(element: any): boolean;
     /** Slot 0 of `const [ x, p ] = this.handleUntilOption (k, r, ..)` with `r` a map literal or a typed map local,
      *  used only as an extend head or written at literal keys (`Arc::make_mut(&mut x).insert(..)`). */
     rustUntilHeadSlotUncached(element: any): boolean;
     /** `x` (moved at its last use) or `&x` for a shared-map local as the head of a base `extend`, else undefined. */
     printExtendHeadArg(node: any, text: string): string | undefined;
+    /** ral-qd: a local initialised from a `this.parse*(..)` call. */
+    rustParseResultLocal(declaration: any): boolean;
     /** The literal key of a statement write `n['k'] = v` (one level, not a book-meta or replaced key). */
     rustUntilHeadKeyWrite(n: any): string | undefined;
     /** `std::sync::Arc::make_mut(&mut x).insert("k".into(), v)` for a literal-key write on a typed request slot. */
@@ -2768,7 +2810,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** pb: a checker-string slot of a native tuple in a method, read whole as the initializer or the statement write of
      *  another local of the same function: the slot and that local are decided together by `rustScalarSolveScope`. */
     rustSlotJoinsSolve(element: any): boolean;
+    /** qe: slot `i` of `await Promise.all ([ .., x, .. ])` whose operand `x` is a local printed `crate::value::Dict`
+     *  (never the optional form): `promise_all` hands each operand back as it came, so the slot is that map. */
+    rustPromiseAllDictSlot(element: any): boolean;
     rustDeclaredDictSlot(element: any): boolean;
+    /** Every `return` of the callee's own body is an array literal whose element `at` is a map literal or a `const`
+     *  local initialised with one (a map on every path, whatever keys are written into it). */
+    rustReturnsBuildMapSlot(declaration: any, at: number): boolean;
     /** One element read rooted at the bearer: a plain read the native op serves. */
     rustReadBearerElementUse(access: any, kind: 'list' | 'map'): boolean;
     /** Key a read-only bearer serves natively: a literal string for a map, a
@@ -3036,6 +3084,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueStrParamType(param: any): string | undefined;
     rustVenueStrParamTypeUncached(param: any): string | undefined;
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS;
+    private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
+    private rustOverrideGroupAgreeByRoot;
+    /** The first parameter of a listed override group when ALL declarations (base, prediction base, every venue,
+     *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
+    rustOverrideGroupParam(method: any, param: any, file: string): boolean;
     /** A sync method of the base `Exchange` class with no override in any venue file, no trait slot and no typed
      *  signature: every call resolves to this one body, so typing its parameter changes no other declaration. */
     rustBaseOnlyMethod(method: any, file: string): boolean;
