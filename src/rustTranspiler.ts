@@ -6283,6 +6283,8 @@ export class RustTranspiler extends BaseTranspiler {
         const callee: any = call.expression;
         if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
         const name = String(callee.name.text);
+        // `client(url)` takes the same `impl Into<Option<&str>>` url slot
+        if (name === 'client') return at === 0 && call.arguments.length === 1 && this.rustCalleeIsRuntimeBase(call);
         if (!(at === 0 || ((at === 1 || at === 3) && name === 'watch')) || (name !== 'watch' && name !== 'watchMultiple') || call.arguments.length < 2) return false;
         return this.rustCalleeIsRuntimeBase(call);
     }
@@ -6741,7 +6743,19 @@ export class RustTranspiler extends BaseTranspiler {
         const init: any = this.rustSkipWrappers(declaration.initializer);
         // syntactic: a call-bound receiver (`safeDict (..)`) may become that bearer once the key is typed (the bearer
         // decision reads the key's own decision), so only a literal-bound or unbound one is taken
-        return init === undefined || isObjectLiteralExpression(init) || !isCallExpression(init);
+        if (init === undefined || isObjectLiteralExpression(init) || !isCallExpression(init)) return true;
+        // a `safeDict (this.<field>, ..)` map never becomes that bearer (rustSafeDictKeyWriteOk refuses a `this.` head)
+        // and whose every use is an `in` test, a key write or a whole store into a `this.` field (no reader takes it)
+        const head: any = isPropertyAccessExpression(init.expression) && /^safeDict$/.test(String(init.expression.name.text)) ? this.rustSkipWrappers(init.arguments[0]) : undefined;
+        if (head === undefined || !isPropertyAccessExpression(head) || head.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        return this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (u: any) => {
+            const p: any = u.parent;
+            if (isBinaryExpression(p) && p.operatorToken.kind === SyntaxKind.InKeyword) return p.right === u;
+            if (isElementAccessExpression(p) && p.expression === u) return isBinaryExpression(p.parent) && p.parent.left === p && p.parent.operatorToken.kind === SyntaxKind.EqualsToken;
+            if (!isBinaryExpression(p) || p.right !== u || p.operatorToken.kind !== SyntaxKind.EqualsToken) return false;
+            const store: any = this.rustSkipWrappers(p.left);
+            return isElementAccessExpression(store) && isPropertyAccessExpression(store.expression) && store.expression.expression.kind === SyntaxKind.ThisKeyword;
+        });
     }
 
     /** A loop (or closure) lies between the declaration and `n`: a box there repeats. */
@@ -19837,6 +19851,7 @@ export class RustTranspiler extends BaseTranspiler {
     // `watch(url, hash, message, subscribe_hash, subscription)` and `watch_multiple(url, hashes, message, subscribe_hashes,
     // subscription)` take every parameter by position: an omitted one is `Value::Null`, an omitted subscribe hash `None`.
     printWsWatchCall(node: any, receiver: string, methodName: string, identation: number): string | undefined {
+        if (receiver === 'self' && methodName === 'client' && this.rustWsWatchSlot(node, 0)) return `self.client(${this.rustWsWatchSlotText(node.arguments[0], this.rustPrintedArgs(node, identation)[0])})`;
         if (receiver !== 'self' || (methodName !== 'watch' && methodName !== 'watchMultiple') || node.arguments.length > 5 || !this.rustWsWatchSlot(node, 0)) return undefined;
         const printed = this.rustPrintedArgs(node, identation);
         const single = methodName === 'watch';

@@ -12727,3 +12727,42 @@ describe('ud: an override-seeded safeCurrencyCode string copied only at literal 
         expect(out).not.toContain('code.clone()');
     });
 });
+
+describe('ue: client(url) takes the url as a string slot', () => {
+    // `client(url)` takes `impl Into<Option<&str>>` like `watch`: a `this.urls[..]` read used only there is a string local
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-ue-client-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    urls: any;\n    client (url: Str): any { return {}; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+    };
+    test('a urls read handed to client() and watch() is an Option<String> lent to both', () => {
+        const out = mk("    async authenticate () {\n        const url = this.urls['api']['ws'];\n        const client = this.client (url);\n        return await this.watch (url, 'auth');\n    }");
+        expect(out).toContain('let mut url: Option<String> = ');
+        expect(out).toContain('self.client(url.as_deref())');
+    });
+    test('a literal client() url prints as &str', () => {
+        const out = mk("    async authenticate () {\n        const client = this.client ('authenticationFlights');\n        return client;\n    }");
+        expect(out).toContain('self.client("authenticationFlights")');
+    });
+});
+
+describe('ue: an optional string key written into a safeDict of a this. field', () => {
+    // `safeDict (this.options, ..)` is never an IndexMap bearer, so its insert keeps the guarded write and takes the key text
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-ue-key-'));
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: any;\n    balance: any;\n    numberToString (x: any): Str { return String (x); }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
+    };
+    test('the key stays Option<String> and inserts its text', () => {
+        const out = mk("    async watchX (id: number) {\n        const key = this.numberToString (id) as string;\n        if (!(key in this.balance)) {\n            this.balance[key] = {};\n        }\n        const loaded = this.safeDict (this.options, 'loaded', {});\n        if (!(key in loaded)) {\n            loaded[key] = true;\n            this.options['loaded'] = loaded;\n        }\n        return key;\n    }");
+        expect(out).toContain('let mut key: Option<String> = ');
+        expect(out).toContain('insert(key.as_deref().unwrap_or("null").to_string(), Value::Bool(true))');
+    });
+});
