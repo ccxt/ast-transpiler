@@ -7656,6 +7656,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** Kind of a typed local an identifier reads: a scalar local, or a typed `Option<String>|Option<i64>` of another rule. */
     rustScalarIdentifierKind(node): string | undefined {
         if (node === undefined || !isIdentifier(node) || node.text === 'undefined') return undefined;
+        // xb: a registered `i64` counter is an `int` operand while its body prints (never inside a scope solve)
+        if (this.rustI64CounterOperand(node)) return 'int';
         const scalar = this.rustScalarLocalOf(node)?.kind;
         if (scalar !== undefined) return scalar;
         if (this.rustStringLocalIdentifierIsTyped(node)) return 'ostr';
@@ -7884,6 +7886,13 @@ export class RustTranspiler extends BaseTranspiler {
                 if (!numeric(a) || !numeric(b)) return undefined;
                 const kind = a.endsWith('int') && b.endsWith('int') ? 'int' : 'num';
                 return a.startsWith('o') || b.startsWith('o') ? `o${kind}` : kind;
+            }
+            // xb: `x % k` over an `int` / `oint` operand and a non-zero int literal: `mod_val` answers `Int(x % k)` (both truncate
+            // toward zero, the sign follows `x` as in JavaScript) and `Null` for a `Null` operand
+            if (op === SyntaxKind.PercentToken) {
+                const a = this.rustScalarNumericKind(node.left);
+                const k = this.rustScalarIntLiteral(this.unwrapParens(node.right));
+                return (a === 'int' || a === 'oint') && k !== undefined && Number(k) !== 0 ? a : undefined;
             }
             if (op === SyntaxKind.SlashToken) {
                 const a = this.rustScalarNumericKind(node.left);
@@ -8144,6 +8153,8 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustScalarRecvName(node): string {
+        // xb: a registered counter prints bare (its `this.m(..)` argument box belongs to the boxed-use path only)
+        if (this.rustI64CounterOperand(this.unwrapParens(node)) && this.rustI64CounterUse(this.unwrapParens(node))) return String(this.unwrapParens(node).text);
         return this.rustScalarParamRead(node)?.text ?? super.printIdentifier(this.unwrapParens(node));
     }
 
@@ -8535,7 +8546,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarOwnsOperand(node): boolean {
         const inner: any = this.unwrapParens(node);
         if (inner === undefined) return false;
-        if (isIdentifier(inner)) return this.rustScalarLocalOf(inner) !== undefined;
+        if (isIdentifier(inner)) return this.rustScalarLocalOf(inner) !== undefined || this.rustI64CounterOperand(inner);
         if (isBinaryExpression(inner)) return this.rustScalarOwnsOperand(inner.left) || this.rustScalarOwnsOperand(inner.right);
         if (isPropertyAccessExpression(inner)) return isIdentifier(inner.name) && inner.name.text === 'length' && this.rustScalarOwnsOperand(inner.expression);
         if (isCallExpression(inner) && isPropertyAccessExpression(inner.expression)) {
@@ -8578,7 +8589,7 @@ export class RustTranspiler extends BaseTranspiler {
         const optional = kind.startsWith('o');
         const wrap = (t: string) => own === kind ? t : (optional && own === kind.slice(1) ? `Some(${t})` : undefined);
         if (isIdentifier(node)) {
-            const name = super.printIdentifier(node);
+            const name = this.rustI64CounterOperand(node) && this.rustI64CounterUse(node) ? String(node.text) : super.printIdentifier(node);
             if (kind === 'num' && own === 'int') return `(${name} as f64)`;
             // nc: a string alias at its source's last use moves (`Some(x)`: no copy)
             const source = this.rustScalarLocalOf(node)?.declaration;
@@ -8588,7 +8599,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(node)) {
             const op = node.operatorToken.kind;
             if (own === 'bool') return wrap(this.rustScalarCompareText(node, false));
-            const sign = op === SyntaxKind.PlusToken ? '+' : (op === SyntaxKind.MinusToken ? '-' : (op === SyntaxKind.AsteriskToken ? '*' : '/'));
+            const sign = op === SyntaxKind.PlusToken ? '+' : (op === SyntaxKind.MinusToken ? '-' : (op === SyntaxKind.AsteriskToken ? '*' : (op === SyntaxKind.PercentToken ? '%' : '/')));
             if (own === 'oint' || own === 'onum') return own === kind ? this.rustScalarOptArithText(own.slice(1), node, sign) : undefined;
             const text = `(${this.rustScalarOperandText(own, node.left)} ${sign} ${this.rustScalarOperandText(own, node.right)})`;
             return kind === 'num' && own === 'int' ? `(${text} as f64)` : wrap(text);
@@ -8664,7 +8675,7 @@ export class RustTranspiler extends BaseTranspiler {
         const tbBound = this.printTbCounterBound(node); if (tbBound !== undefined) return tbBound;
         const op = node.operatorToken.kind;
         if (op === SyntaxKind.PlusEqualsToken || op === SyntaxKind.MinusEqualsToken) return this.rustScalarCompoundText(node, false);
-        if (!RustTranspiler.RUST_SCALAR_ARITH_OPS.has(op) || this.isEqualityOp(op)) return undefined;
+        if ((!RustTranspiler.RUST_SCALAR_ARITH_OPS.has(op) && op !== SyntaxKind.PercentToken) || this.isEqualityOp(op)) return undefined;
         if (!this.rustScalarOwnsOperand(node.left) && !this.rustScalarOwnsOperand(node.right)) return undefined;
         const kind = this.rustScalarExpressionKind(node);
         if (kind !== 'int' && kind !== 'num' && kind !== 'bool' && kind !== 'oint' && kind !== 'onum') return undefined;
@@ -9197,7 +9208,7 @@ export class RustTranspiler extends BaseTranspiler {
                 if (target !== undefined) return target === kind || target === `o${kind}` ? 'native' : undefined;
                 return this.rustScalarPlainValueTarget(parent.left) ? 'xbox' : undefined;
             }
-            if (RustTranspiler.RUST_SCALAR_ARITH_OPS.has(op) && this.rustScalarExpressionKind(parent) !== undefined) return 'native';
+            if ((RustTranspiler.RUST_SCALAR_ARITH_OPS.has(op) || op === SyntaxKind.PercentToken) && this.rustScalarExpressionKind(parent) !== undefined) return 'native';
             // tb: the bound of its own `for` counter's ordered test prints with the counter, unboxed (`printTbCounterBound`)
             if (this.rustTbCounterBound(parent, n, kind) !== undefined) return 'native';
             // the other operand is still a `Value`: the runtime arithmetic reads this one boxed
@@ -14342,6 +14353,9 @@ export class RustTranspiler extends BaseTranspiler {
         let statements: string;
         let typed = false;
         if (bound !== undefined && counter !== undefined) {
+            // xb: the method's scalar decisions are taken before the counter registers, so a re-print as `Value` meets the same decisions
+            const scope: any = this.rustEnclosingFunction(node);
+            if (scope !== undefined && !isSourceFile(scope) && !this.rustScalarSolved.has(scope) && !this.rustScalarSolving.has(scope)) this.rustScalarSolveScope(scope);
             const before = this.forLoopCounter;
             const previous = this.rustI64Counters.get(counter.name);
             this.rustI64Counters.set(counter.name, counter.symbol);
@@ -14440,7 +14454,10 @@ export class RustTranspiler extends BaseTranspiler {
             const up: any = id.parent;
             const admissible = (isElementAccessExpression(up) && up.argumentExpression === id)
                 || this.rustI64BoxedUse(id) || this.rustI64LiteralCompare(id) !== undefined
-                || (isVariableDeclaration(up) && up.initializer === id);
+                || (isVariableDeclaration(up) && up.initializer === id)
+                // xb: an operand of integer arithmetic / a compare, or `i.toString()`: printed by the scalar rules (else re-printed as `Value`)
+                || (isBinaryExpression(up) && (RustTranspiler.RUST_SCALAR_ARITH_OPS.has(up.operatorToken.kind) || up.operatorToken.kind === SyntaxKind.PercentToken))
+                || (isPropertyAccessExpression(up) && up.expression === id && up.name.text === 'toString' && isCallExpression(up.parent) && up.parent.expression === up);
             if (!admissible) return undefined;
         }
         return bound;
@@ -14473,6 +14490,12 @@ export class RustTranspiler extends BaseTranspiler {
     /** A bare counter use that is an argument of a `this.m(..)` call or the value of an `x[k] = i` write. */
     rustI64BoxedUse(id: any): boolean {
         const up: any = id.parent;
+        // xb: `return i`, `x = i`, `{ k: i }`, `xs.push (i)`: the `Int` the `Value` counter held, boxed once there
+        if (isReturnStatement(up) && up.expression === id) return this.rustEnclosingFunction(id) === this.rustEnclosingFunction(this.rustDeclaredNode(id));
+        if (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken && up.right === id && isIdentifier(up.left)) return up.parent?.kind === SyntaxKind.ExpressionStatement;
+        if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === id) return true;
+        if (isCallExpression(up) && isPropertyAccessExpression(up.expression) && up.expression.name.text === 'push' && up.expression.expression.kind !== SyntaxKind.ThisKeyword
+            && up.arguments.length === 1 && up.arguments[0] === id) return true;
         if (isCallExpression(up)) {
             const callee: any = up.expression;
             return callee.kind === SyntaxKind.PropertyAccessExpression && callee.expression.kind === SyntaxKind.ThisKeyword
@@ -14531,6 +14554,13 @@ export class RustTranspiler extends BaseTranspiler {
         const key = this.rustSkipWrappers(keyNode);
         if (this.rustI64CounterOf(key) === undefined || (read !== undefined && this.isWriteBackBindRead(read))) return undefined;
         return this.rustI64CounterUse(key) ? `Value::Int(${String(key.text)})` : undefined;
+    }
+
+    /** xb: a use of a registered counter in its own function, outside any scalar scope solve (decisions never see a trial counter). */
+    rustI64CounterOperand(node: any): boolean {
+        if (this.rustI64Counters.size === 0 || this.rustScalarSolving.size > 0 || this.rustI64CounterOf(node) === undefined) return false;
+        const declaration: any = this.rustDeclaredNode(node);
+        return declaration !== undefined && this.rustEnclosingFunction(declaration) === this.rustEnclosingFunction(node);
     }
 
     /** The registered counter's symbol when `node` is a use of it, else undefined. */
@@ -23788,6 +23818,8 @@ export class RustTranspiler extends BaseTranspiler {
         // sb: a Copy number local boxed at its `.toString()` read displays the box (`format!("{}", Value::from(x))`)
         const sbLocal = receiver !== undefined && isIdentifier(receiver) ? this.rustScalarLocalOf(receiver) : undefined;
         if (sbLocal !== undefined && this.rustScalarUseForms.get(receiver) === 'xbox' && this.rustSbCopyBoxUse(receiver, sbLocal.kind)) return `Value::Str(format!("{}", ${name}).into())`;
+        // xb: an `i64` counter displays as the `Int` box it replaces (`Display` of `Value::Int(n)` is `n`'s)
+        if (receiver !== undefined && this.rustI64CounterOperand(this.unwrapParens(receiver)) && this.rustI64CounterUse(this.unwrapParens(receiver))) return `Value::Str(format!("{}", ${name}).into())`;
         const kind = this.rustOperandKind(receiver);
         if (kind !== 'number' && kind !== 'string') return undefined;
         const inner = this.unwrapParensNode(receiver);

@@ -420,7 +420,8 @@ describe('rust transpiling tests', () => {
         ].join('\n');
         const out = transpiler.transpileRust(ts).content;
         expect(out).not.toMatch(/page = i;/);
-        expect(out).toContain('self.m(i.clone());');
+        // xb: the counter is an i64 (its `x = i` write and `this.m (i)` argument box the Int), so nothing is cloned
+        expect(out).toContain('self.m(Value::Int(i));');
     });
 
     test('basic variable declaration', () => {
@@ -5347,7 +5348,8 @@ describe('overloaded base safeDict/safeList/safeBool feed the plain-dict and lis
     test('list reads at counter/length arithmetic indices are native; an any-typed operand keeps get_value', () => {
         // rd: numTrades is an i64 (its `i < numTrades` bound is a Value counter, always an Int), so the index is native
         expect(output).toContain('last = trades.as_array().and_then(|__arr| match &(Value::Int((numTrades - 1)))');
-        expect(output).toContain('let mut prev: Value = trades.as_array().and_then(|__arr| match &((match (&(i), &(Value::Int(1)))');
+        // xb: the counter is an i64, so `i - 1` is inline i64 math boxed once (a negative index still reads Null)
+        expect(output).toContain('let mut prev: Value = trades.as_array().and_then(|__arr| match &(Value::Int((i - 1)))');
         expect(output).toContain('Value::Int(__n) if *__n >= 0 => __arr.get(*__n as usize), _ => None }).cloned().unwrap_or(Value::Null)');
         expect(output).toContain('get_value(&trades, &(match (&(k), &(Value::Int(1))) {'); // inline math/comparison dispatch
     });
@@ -13717,5 +13719,49 @@ describe('ral-xh: omit results lent to the encoder slots', () => {
     test('negative: the same omit also handed to isEmpty stays a Value (isEmpty tells a list from the empty map)', () => {
         const out = write ('xh-urln', "    sign (path: string, params: Dict = {}) {\n        let url = '/' + path;\n        const query = this.omit (params, this.extractParams (path));\n        if (!this.isEmpty (query)) {\n            url += '?' + this.urlencode (query);\n        }\n        return url;\n    }\n");
         expect(out).toContain('let mut query: Value = ');
+    });
+});
+
+describe('ral-xb: integer for counters used in arithmetic (round 37)', () => {
+    const fn = (body: string) => transpiler.transpileRust("class X {\n    f (xs: any[]) {\n        const r = [];\n        const n = xs.length;\n        for (let i = 0; i < n; i++) {\n            " + body + "\n        }\n        return r;\n    }\n}").content;
+    test('n - 1 - i over typed operands is inline i64 arithmetic, boxed once at the Value slot', () => {
+        const out = fn("const index = n - 1 - i;\n            r.push (this.safeValue (xs, index));");
+        expect(out).toContain('let mut i: i64 = 0;');
+        expect(out).toContain('Value::Int((((n - 1)) - i))');
+        expect(out).not.toContain('let mut i: Value');
+    });
+    test('i === n - 1 compares the i64 natively', () => {
+        const out = fn("if (i === n - 1) { r.push (1); }");
+        expect(out).toContain('let mut i: i64 = 0;');
+        expect(out).toContain('(i == ((n - 1)))');
+    });
+    test('i % 2 by a non-zero literal is the i64 remainder (truncating, as mod_val on Int)', () => {
+        const out = fn("if (i % 2 === 0) { r.push (1); }");
+        expect(out).toContain('let mut i: i64 = 0;');
+        expect(out).toContain('(i % 2)');
+        expect(out).not.toContain('Value::Int(x % y)');
+    });
+    test('return i boxes the i64 once', () => {
+        const out = transpiler.transpileRust("class X {\n    f (xs: any[]) {\n        for (let i = 0; i < xs.length; i++) {\n            if (this.safeValue (xs, i) === 3) { return i; }\n        }\n        return -1;\n    }\n}").content;
+        expect(out).toContain('let mut i: i64 = 0;');
+        expect(out).toContain('return Value::Int(i);');
+    });
+    test('i.toString () and this.m (i + 1) read the i64 directly', () => {
+        const out = fn("r.push (i.toString ());\n            r.push (this.numberToString (i + 1));");
+        expect(out).toContain('let mut i: i64 = 0;');
+        expect(out).toContain('Value::Str(format!("{}", i).into())');
+        expect(out).toContain('self.numberToString(Value::Int((i + 1)))');
+    });
+    test('this.sum (i, 1) is an integer sum of the i64 (never Value::Int(i) + 1)', () => {
+        const out = fn("r.push ({ 'tier': this.sum (i, 1) });");
+        expect(out).not.toContain('Value::Int(i) +');
+    });
+    test('negative: arithmetic with a Value (untyped parameter) operand keeps the counter a Value', () => {
+        const out = transpiler.transpileRust("class X {\n    f (xs: any[], n) {\n        const r = [];\n        for (let i = 0; i < xs.length; i++) { r.push (n - i); }\n        return r;\n    }\n}").content;
+        expect(out).toContain('let mut i: Value = Value::Int(0);');
+    });
+    test('negative: i % a non-literal divisor keeps the counter a Value (mod_val may answer Null for a zero divisor)', () => {
+        const out = fn("r.push (i % n);");
+        expect(out).toContain('let mut i: Value = Value::Int(0);');
     });
 });
