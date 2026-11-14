@@ -2675,8 +2675,8 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             if (kind !== 'ostr') return true;
-            // an alias or another local's write would take a copy
-            if (parent?.kind === SyntaxKind.VariableDeclaration || (isBinaryExpression(parent) && parent.right === n)) ok = false;
+            // an alias or another local's write would take a copy; a one-level store `m[k] = x` / `m.k = x` boxes it (D11)
+            if (parent?.kind === SyntaxKind.VariableDeclaration || (isBinaryExpression(parent) && parent.right === n && !this.rustNilStrStoreBox(n))) ok = false;
             if (form !== 'box' && form !== 'xbox') ok = false;
             else if (!this.rustScalarBoxMoves(n, form, declaration)) unmoved = true;
             return true;
@@ -2690,6 +2690,19 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustNilStrLentLocals = new WeakSet<any>();
+
+    /** ral-ld: `m[k] = x` / `m.k = x` as a statement on a plain identifier receiver (not `x` itself), one level deep. */
+    rustNilStrStoreBox(n: any): boolean {
+        const up: any = n.parent;
+        if (!isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const left: any = up.left;
+        if (!isElementAccessExpression(left) && !isPropertyAccessExpression(left)) return false;
+        if (!isIdentifier(left.expression) || this.rustScalarInNestedWrite(n)) return false;
+        const own: any = this.rustDeclarationOfIdentifier(n);
+        if (this.rustIdentifierRefersToDeclaration(left.expression, own)) return false;
+        if (!isElementAccessExpression(left) || isStringLiteralLikeNode(this.rustSkipWrappers(left.argumentExpression))) return true;
+        return !new RegExp(`\\b${String(n.text)}\\b`).test(String(left.argumentExpression.getText()));
+    }
 
     // ── alias writes as moves (rustNilAliasMove) ──
     // `x = y` from a typed `Option<..>` local of the same kind that is never read after the write moves the
@@ -14363,6 +14376,8 @@ export class RustTranspiler extends BaseTranspiler {
         let optionalBoxes = 0;
         let paramsBoxes = 0;
         let declaredEndpointWrites = 0;
+        let nullWrites = 0;
+        let endpointBoxes = 0;
         const boxedElementUses: any[] = [];
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
@@ -14377,7 +14392,7 @@ export class RustTranspiler extends BaseTranspiler {
                 if (up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
                 const rhs: any = this.rustSkipWrappers(up.right);
                 writes++;
-                if (this.literalKindOfNode(rhs) === 'null') return true;
+                if (this.literalKindOfNode(rhs) === 'null') return ++nullWrites > 0;
                 const kind = this.rustNilResponseWriteKind(rhs, nilDeclared, declaration);
                 const declaredWrite = nilDeclared && this.rustDeclaredEndpointWrite(rhs);
                 if (declaredWrite) declaredEndpointWrites++;
@@ -14408,7 +14423,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustUntilHeadKeyWrite(n) !== undefined && init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) === 'dict' || this.rustBuiltMapKeyWriteOk(n, init))) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
             const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0
                 || this.rustBuiltReturnBoxUse(n, init) && ++defaultedBoxes > 0 || this.rustOptReaderBoxUse(n, init) && ++optionalBoxes > 0
-                || this.rustOptionalParamsSlot(up, n) && (from === 'dict' || from === 'api' && this.rustDeclaredEndpointKind(init) === 'dict') && ++paramsBoxes > 0) && boxedElementUses.push(n) > 0;
+                || this.rustOptionalParamsSlot(up, n) && (from === 'dict' || from === 'api' && this.rustDeclaredEndpointKind(init) === 'dict') && ++paramsBoxes > 0
+                || nilDeclared && this.rustDeclaredEndpointBoxUse(n) && ++endpointBoxes > 0) && boxedElementUses.push(n) > 0;
             const asArg: any = isAsExpression(up) && up.expression === n && isCallExpression(up.parent) && Array.from(up.parent.arguments).includes(up) ? up : undefined;
             if (asArg !== undefined && this.rustLentAsHandOff(asArg, init, from, endpoint, nilDeclared)) return ++lentResponses > 0 && ++reads > 0 && (this.rustLentAsNullable(init, nilDeclared, endpoint) ? ++lentNullable > 0 : true);
             if (this.rustLentResponseSlot(up, n) && this.rustLentResponseSource(init)) return ++lentResponses > 0 && ++reads > 0;
@@ -14449,7 +14465,11 @@ export class RustTranspiler extends BaseTranspiler {
         // a map-list element handed on whole (hg), or an element of a typed `Dict[]` / list-of-lists list (ral-kf): every use
         // is a box of the shared container; the element converts once at the declaration (D11)
         const boxOnly = reads === 0 && boxedElementUses.length > 0 && (this.rustDictElementSource(init) || this.rustListElementSource(init)) && nullTests === 0 && writes === 0;
-        if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
+        // ral-ld: an empty `let` filled only by declared endpoints and stored into a literal / returned (D11)
+        const endpointBoxOnly = endpointBoxes > 0 && nullTests === 0 && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes
+            && !this.rustNilResponseLocals.has(declaration) && boxedElementUses.every((u: any) => this.rustBoxLineOk(u));
+        if (endpointBoxes > 0 && !endpointBoxOnly) return undefined;
+        if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !endpointBoxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
             || (this.rustListElementSource(init) && (nullTests > 0 || lengths > 0))) return undefined;
         // ral-kc: a declared endpoint answering off its declared shape is `None` in the optional form: a null test would tell it apart
@@ -14463,6 +14483,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (lentResponses > 0 && optional && !this.rustLentOptionalOk(declaration, name, fn, init, from)) return undefined;
         if (extendHeads > 0 && (optional || from !== 'dict' && from !== 'api')) return undefined;
         if (optional && boxedElementUses.length > 0 && (this.rustWsFieldRead(init) !== undefined || defaultedBoxes > 0)) return undefined;
+        if (endpointBoxes > 0 && endpointBoxes !== boxedElementUses.length) return undefined;
         // a nullable reader result boxed whole keeps Null apart from the map: only the optional form prints that box
         if (optionalBoxes > 0 && (boxedElementUses.length !== optionalBoxes || nilDeclared || writes > 0 || from !== 'dict')) return undefined;
         // a `handle*` params slot takes a `Value`: the map boxes there (the plain form only, its map is never Null)
@@ -14964,7 +14985,8 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration !== undefined && this.rustOptContainerLocals.has(declaration)) {
             if (!this.rustPrintedOptional.has(declaration)) return undefined;
-            return form === 'move' ? `${text}.map_or(Value::Null, Value::Dict)` : `${text}.clone().map_or(Value::Null, Value::Dict)`;
+            const variant = this.rustBorrowedLocalKind(declaration) === 'list' ? 'Arr' : 'Dict';
+            return form === 'move' ? `${text}.map_or(Value::Null, Value::${variant})` : `${text}.clone().map_or(Value::Null, Value::${variant})`;
         }
         const list = declaration !== undefined && this.rustBorrowedLocalKind(declaration) === 'list';
         return form === 'move' ? `Value::${list ? 'Arr' : 'Dict'}(${text})` : `Value::from(&${text})`;
@@ -15418,6 +15440,17 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BUILT_HELPER_RETURNS: Record<string, 'dict' | 'list'> = {
         extend: 'dict', indexBy: 'dict', groupBy: 'dict', toArray: 'list', arrayConcat: 'list', filterBy: 'list',
     };
+
+    // ── rustDeclaredEndpointBoxUse (ral-ld): a declared-endpoint optional container handed on whole ──
+    // `{ 'info': response }` / `return response`: the box `x.map_or(Value::Null, Value::Dict|Arr)` gives back the
+    // answer of the declared shape, Null for an unset local.
+    rustDeclaredEndpointBoxUse(n: any): boolean {
+        const up: any = n.parent;
+        if (up === undefined || this.rustScalarInNestedWrite(n)) return false;
+        if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n && isObjectLiteralExpression(up.parent) && !this.rustInDestructureWrite(n);
+        if (isReturnStatement(up)) return up.expression === n;
+        return isAsExpression(up) && up.expression === n && isReturnStatement(up.parent);
+    }
 
     rustBuiltReturnBoxUse(n: any, init: any): boolean {
         const up: any = n.parent;
