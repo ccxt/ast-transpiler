@@ -12503,3 +12503,25 @@ describe('td: an `in` key under an `as string` cast', () => {
         expect(out).toContain('matches!(token.as_deref(), Some(__k) if mapping.contains_key(__k))');
     });
 });
+
+describe('te: this.urls map entries declared Dict in the base Exchange', () => {
+    // the base declares `urls!: { api: Dict, .. }`: `this.urls['api']` leaves its box as the shared map; a missing or
+    // non-map entry reads Null at every string key, exactly as the empty map `into_dict()` leaves
+    const mk = (venueBody: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-te-urls-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    urls!: {\n        api: Dict;\n        www?: string;\n        [key: string]: any;\n    };\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+    };
+    test('a urls[api] local read at string and variable keys holds the shared map and lends it', () => {
+        const out = mk("    sign (apiGroup: string) {\n        const baseUrls = this.urls['api'];\n        const baseUrl = this.safeString (baseUrls, apiGroup, this.safeString (baseUrls, 'main', ''));\n        return baseUrl;\n    }");
+        expect(out).toMatch(/let mut baseUrls: crate::value::Dict = self\.urls[\s\S]{0,120}?\.into_dict\(\);/);
+        expect(out).toContain('self.safe_string_k(&baseUrls, "main", ');
+    });
+    test('negative: an entry that is not declared a map (any) keeps the box', () => {
+        const out = mk("    sign (apiGroup: string) {\n        const other = this.urls['www2'];\n        const baseUrl = this.safeString (other, apiGroup);\n        return baseUrl;\n    }");
+        expect(out).toContain('let mut other: Value = ');
+    });
+});

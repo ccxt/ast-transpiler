@@ -16034,7 +16034,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-qa: only string-key reads (no null test, write, length, box or lend could tell a non-map from the empty map)
         if (keyReadOnly && (!safe || plainReads === 0 || plainReads !== reads || nullTests + writes + lengths + indexLikeReads + boxedElementUses.length + lentResponses + lentNullable + keySets + keyWrites + extendHeads + jwtLends > 0)) return undefined;
         if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !endpointBoxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
-            || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || indexLikeReads > 0))
+            || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || (indexLikeReads > 0 && !this.rustUrlsMapEntry(init))))
             || (this.rustListElementSource(init) && (nullTests > 0 || lengths > 0))) return undefined;
         // ral-kc: a declared endpoint answering off its declared shape is `None` in the optional form: a null test would tell it apart
         if (declaredEndpointWrites > 0 && nullTests > 0) return undefined;
@@ -16576,6 +16576,7 @@ export class RustTranspiler extends BaseTranspiler {
     // The element leaves its copied box as the shared map (the same Arc bump the copy paid). A missing
     // element reads as an empty map, so the borrowed rule keeps it only for null-safe key reads.
     rustDictElementSource(init: any): boolean {
+        if (this.rustUrlsMapEntry(init)) return true;
         if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression) || this.checkerOrUndefined() === undefined) return false;
         const key: any = this.rustSkipWrappers(init.argumentExpression);
         if (key === undefined) return false;
@@ -16585,6 +16586,22 @@ export class RustTranspiler extends BaseTranspiler {
             // lf: `d[k]` on a local declared `Dictionary<Dict>` (a string key, a proven map value type) reads a map row
             if (!isIdentifier(key) || this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== 'string' || !this.rustDictOfDictsLocal(init.expression)) return false;
         } else if (!this.getChecker().isArrayType(listType)) return false;
+        const element: any = this.typeOfNodeIfAny(init);
+        if (element === undefined || (element.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Union)) !== 0) return false;
+        return this.primitiveKindOfType(element) === undefined && this.getChecker().getIndexTypeOfType(element, IndexKind.String) !== undefined
+            && !this.getChecker().isArrayType(element);
+    }
+
+    /** te: `this.urls['<lit>']` where the base `Exchange` declaration types that entry as a string-keyed map
+     *  (`urls!: { api: Dict, .. }`). The read leaves its box as the shared map (the same Arc bump the copy paid);
+     *  a missing or non-map entry reads Null at every string key, exactly as the empty map `into_dict()` leaves. */
+    rustUrlsMapEntry(init: any): boolean {
+        if (init === undefined || !isElementAccessExpression(init) || this.checkerOrUndefined() === undefined) return false;
+        const field: any = this.rustSkipWrappers(init.expression);
+        const key: any = this.rustSkipWrappers(init.argumentExpression);
+        if (!isPropertyAccessExpression(field) || field.expression.kind !== SyntaxKind.ThisKeyword || String(field.name.text) !== 'urls' || key === undefined || !isStringLiteralLikeNode(key)) return false;
+        const declarations = symbolDeclarations(this.getChecker().getSymbolAtLocation(field.name));
+        if (declarations.length === 0 || !declarations.every((d: any) => d.kind === SyntaxKind.PropertyDeclaration && RustTranspiler.RUST_BASE_TIER_FILE.test(String(d.getSourceFile().fileName)))) return false;
         const element: any = this.typeOfNodeIfAny(init);
         if (element === undefined || (element.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Union)) !== 0) return false;
         return this.primitiveKindOfType(element) === undefined && this.getChecker().getIndexTypeOfType(element, IndexKind.String) !== undefined
