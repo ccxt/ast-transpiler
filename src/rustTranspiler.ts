@@ -5812,6 +5812,38 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustBlockLocalUsesAll(declaration, name, acceptUse, true);
     }
 
+    /** zi: `rustLocalUsesAll` for a `const [ .. ] = ..` slot: a same-named slot of another `let` / `const` destructure in a
+     *  disjoint sibling block (`if { const [ r, p ] = .. } else { const [ r, p ] = .. }`) is another symbol, printed as its
+     *  own block-scoped `let`, so its name and uses are skipped. Any other second binding of the name keeps the old walk. */
+    rustSlotUsesAll(element: any, name: string, skipPropertyNames: boolean, acceptUse: (n: any) => boolean): boolean {
+        const statementOf = (b: any) => b?.parent?.parent?.parent?.parent;
+        const own: any = element?.kind === SyntaxKind.BindingElement ? this.rustSymbolOf(element.name) : undefined;
+        const scope: any = this.rustEnclosingFunction(element);
+        const blockScoped = (b: any) => b?.kind === SyntaxKind.BindingElement && b.parent?.kind === SyntaxKind.ArrayBindingPattern
+            && isVariableDeclaration(b.parent.parent) && (b.parent.parent.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) !== 0;
+        if (own === undefined || scope === undefined || !blockScoped(element)) return this.rustLocalUsesAll(element, name, skipPropertyNames, acceptUse);
+        const nodes = this.rustScopeNameNodes(scope, name) as any[];
+        const siblings = nodes.filter((n: any) => isIdentifier(n) && n !== element.name && n.parent?.kind === SyntaxKind.BindingElement && n.parent.name === n);
+        if (siblings.length === 0 || nodes.some((n: any) => n !== element && this.rustBindsName(n, name))) return this.rustLocalUsesAll(element, name, skipPropertyNames, acceptUse);
+        const mine = statementOf(element);
+        for (const s of siblings) {
+            const other = statementOf(s.parent);
+            if (!blockScoped(s.parent) || this.rustEnclosingFunction(s) !== scope || mine === undefined || other === undefined
+                || this.isNodeInsideNode(mine, other.parent) || this.isNodeInsideNode(other, mine.parent)) return this.rustLocalUsesAll(element, name, skipPropertyNames, acceptUse);
+        }
+        for (const n of nodes) {
+            if (n.kind !== SyntaxKind.Identifier || n === element.name || siblings.includes(n)) continue;
+            if (skipPropertyNames && this.rustIdentifierIsPropertyName(n)) continue;
+            if (n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment && !this.rustIdentifierIsPropertyName(n)) {
+                const symbol = this.rustSymbolOf(n);
+                if (symbol === undefined) return false;
+                if (symbol !== own) continue;
+            } else if (!this.isNodeInsideNode(n, mine.parent)) continue;
+            if (!acceptUse(n)) return false;
+        }
+        return true;
+    }
+
     rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar = false): boolean {
         const own: any = this.rustSymbolOf(declaration.name);
         const scope = this.rustEnclosingFunction(declaration);
@@ -22690,7 +22722,7 @@ export class RustTranspiler extends BaseTranspiler {
                 || (owner.parent as any)?.declarations?.length !== 1) return false;
             // slot 1 is the params dict; any other slot only where the callee's own tuple type declares it `Dict`
             const at = pattern.elements.indexOf(declaration);
-            const allSlot = at >= 0 && (this.rustPromiseAllDictSlot(declaration) || at === 0 && this.rustUntilRequestSlot(declaration));
+            const allSlot = at >= 0 && (this.rustPromiseAllDictSlot(declaration) || at === 0 && this.rustUntilRequestSlot(declaration) || this.rustTernaryDictSlot(declaration));
             if (at !== 1 && !allSlot && !(at >= 0 && this.rustDeclaredDictSlot(declaration))) return false;
             if (declaration.dotDotDotToken !== undefined || declaration.initializer !== undefined || this.rustTupleSlotKind(declaration) !== undefined) return false;
             const init: any = this.rustAwaitedCall(owner.initializer);
@@ -22720,7 +22752,9 @@ export class RustTranspiler extends BaseTranspiler {
         let uses = 0;
         let boxes = 0;
         let longBox = false;
-        const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
+        // zi: a slot re-declared by a destructure in a disjoint sibling block is its own block-scoped local
+        const walk = declaration.kind === SyntaxKind.BindingElement ? this.rustSlotUsesAll.bind(this) : this.rustLocalUsesAll.bind(this);
+        const safe = walk(declaration, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (this.rustDeclaredNode(n) !== declaration || this.rustEnclosingFunction(n) !== fn) return false;
             const call: any = n.parent;
@@ -23036,7 +23070,7 @@ export class RustTranspiler extends BaseTranspiler {
         const fn: any = this.rustEnclosingFunction(element);
         if (fn === undefined || isSourceFile(fn) || this.rustLocalIsReassigned(element, name)) return false;
         let heads = 0;
-        const safe = this.rustLocalUsesAll(element, name, false, (n: any) => {
+        const safe = this.rustSlotUsesAll(element, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (this.rustDeclaredNode(n) !== element || this.rustEnclosingFunction(n) !== fn) return false;
             if (this.rustExtendHeadUse(n)) return heads++ >= 0;
@@ -24041,6 +24075,9 @@ export class RustTranspiler extends BaseTranspiler {
                 if (joined && this.rustScalarAliasMove(n, 'ostr', element)) { nativeUses++; return true; }
                 // wi: a whole alias read again later copies once, where the `Value` alias printed `x.clone()` (no added copy)
                 if (joined && this.rustScalarAliasCopy(n, 'ostr', element)) { nativeUses++; return true; }
+                // zi: an arm of a ternary initialising a local the joint solve types `Option<String>`: the arm moves (last use) or
+                // copies where the boxed arm printed `x.clone()`
+                if (joined && this.rustStrSlotTernaryArmJoined(n, element)) { nativeUses++; return true; }
                 // a box feeding another local's write or initializer would make that local's own typing depend on this slot
                 const feeds: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(m.left)) || isVariableDeclaration(m));
                 if (feeds !== undefined && !isStatement(feeds) && (form === 'box' || form === 'xbox')) return false;
@@ -24061,6 +24098,25 @@ export class RustTranspiler extends BaseTranspiler {
         return 'ostr';
     }
 
+    /** zi: `n` is an arm of `c ? a : b`, the whole initializer of a local the joint solve currently types `Option<String>`
+     *  (or `String`), and the other arm prints as that kind too: the target is decided with the slot, never left `Value`. */
+    rustStrSlotTernaryArmJoined(n: any, element: any): boolean {
+        let top: any = n;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const ternary: any = top.parent;
+        if (!isConditionalExpression(ternary) || ternary.condition === top || !this.rustStrTernaryArmSolved(ternary, element)) return false;
+        let up: any = ternary;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        const target: any = up.parent;
+        const kind = this.rustScalarDecisions.get(target);
+        if (kind !== 'ostr' && kind !== 'str') return false;
+        // the other arm is a string literal or null: an identifier arm prints `x.clone()` where its `Value` box moved
+        const other: any = this.unwrapParens(ternary.whenTrue === top ? ternary.whenFalse : ternary.whenTrue);
+        const lit = this.literalKindOfNode(other);
+        if (lit !== 'string' && lit !== 'null') return false;
+        return this.rustLocalLastUse(n, element) || this.rustSlotUseOutsideLoop(n, element);
+    }
+
     /** pb: a checker-string slot of a native tuple in a method, read whole as the initializer or the statement write of
      *  another local of the same function: the slot and that local are decided together by `rustScalarSolveScope`. */
     rustSlotJoinsSolve(element: any): boolean {
@@ -24077,6 +24133,8 @@ export class RustTranspiler extends BaseTranspiler {
             const up: any = top.parent;
             if ((isVariableDeclaration(up) && up.initializer === top && isIdentifier(up.name))
                 || (isBinaryExpression(up) && up.right === top && up.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(up.left) && up.parent?.kind === SyntaxKind.ExpressionStatement)) alias = true;
+            // zi: an arm of a ternary that is the whole initializer of another local joins that local's solve too
+            if (isConditionalExpression(up) && up.condition !== top && this.rustStrTernaryArmSolved(up, element)) alias = true;
             return true;
         });
         return alias;
@@ -24198,15 +24256,31 @@ export class RustTranspiler extends BaseTranspiler {
         let init: any = this.rustSkipWrappers(owner?.initializer);
         if (init?.kind === SyntaxKind.AwaitExpression) init = this.rustSkipWrappers(init.expression);
         if (!isCallExpression(init) || !this.rustNativeListSource(init)) return false;
+        return this.rustCallDeclaresDictSlot(init, element.parent.elements.indexOf(element));
+    }
+
+    /** zi: `const [ a, b ] = c ? this.f (..) : this.g (..)`: slot `at` is a map when each arm's own callee declares it one
+     *  (the venue-pair form of `rustDeclaredDictSlot`; the temp keeps its `Vec<Value>` head). */
+    rustTernaryDictSlot(element: any): boolean {
+        const owner: any = element?.parent?.parent;
+        if (element?.parent?.kind !== SyntaxKind.ArrayBindingPattern || !isVariableDeclaration(owner) || owner.name !== element.parent) return false;
+        const init: any = this.rustSkipWrappers(owner.initializer);
+        if (init?.kind !== SyntaxKind.ConditionalExpression || !this.rustNativeListSource(owner.initializer)) return false;
+        const at = element.parent.elements.indexOf(element);
+        const arm = (n: any) => { const c: any = this.rustSkipWrappers(n); return isCallExpression(c) && isPropertyAccessExpression(c.expression) && c.expression.expression.kind === SyntaxKind.ThisKeyword && this.rustCallDeclaresDictSlot(c, at); };
+        return at >= 0 && arm(init.whenTrue) && arm(init.whenFalse);
+    }
+
+    rustCallDeclaresDictSlot(init: any, at: number): boolean {
         const declaration: any = this.rustCalleeDeclaration(init);
         if (declaration === undefined || declaration.body === undefined || RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
         let type: any = declaration.type;
         const named = (t: any, name: string): boolean => t?.kind === SyntaxKind.TypeReference && isIdentifier(t.typeName) && t.typeName.text === name;
         if (named(type, 'Promise') && type.typeArguments?.length === 1) type = type.typeArguments[0];
         // qe: an `any` return proves the slot by its own returns: each builds slot `i` from a map literal
-        if (type === undefined || type.kind === SyntaxKind.AnyKeyword) return this.rustReturnsBuildMapSlot(declaration, element.parent.elements.indexOf(element));
+        if (type === undefined || type.kind === SyntaxKind.AnyKeyword) return this.rustReturnsBuildMapSlot(declaration, at);
         if (type?.kind !== SyntaxKind.TupleType) return false;
-        const slot: any = type.elements?.[element.parent.elements.indexOf(element)];
+        const slot: any = type.elements?.[at];
         return named(slot, 'Dict') && slot.typeArguments === undefined;
     }
 

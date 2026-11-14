@@ -14629,3 +14629,41 @@ describe('ral-zh: an Object.keys key list with a same-named twin in a sibling bl
         expect(out).not.toContain('let mut symbols: crate::value::List = ');
     });
 });
+
+describe('zi: tuple slots fifth pass', () => {
+    const fx = (name: string, base: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const base = "export interface Dict { [key: string]: any }\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeInteger (o: any, k: any): number | undefined { return o; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        const until = this.safeInteger (params, 'until');\n        if (until !== undefined) {\n            request[key] = until;\n        }\n        const paramsOmitted = (until !== undefined) ? this.omit (params, 'until') : params;\n        return [ request, paramsOmitted ];\n    }\n}\n";
+    test('zi: a slot re-declared by a destructure in a disjoint sibling block is its own block-scoped Dict local', () => {
+        const file = fx ('zi-sibling-slots', base, "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (flag: boolean, params: Dict = {}) {\n        const request: Dict = { 'a': 1 };\n        if (flag) {\n            const [ requestUntil, paramsUntil ] = this.handleUntilOption ('before', request, params);\n            return this.hold (this.extend (requestUntil, paramsUntil));\n        } else {\n            const [ requestUntil, paramsUntil ] = this.handleUntilOption ('lastTime', request, params);\n            return this.hold (this.extend (requestUntil, paramsUntil));\n        }\n    }\n    fetchNested (flag: boolean, params: Dict = {}) {\n        const request: Dict = { 'a': 1 };\n        const [ requestUntil, paramsUntil ] = this.handleUntilOption ('before', request, params);\n        if (flag) {\n            const [ requestUntil, paramsUntil ] = this.handleUntilOption ('lastTime', request, params);\n            return this.hold (this.extend (requestUntil, paramsUntil));\n        }\n        return this.hold (this.extend (requestUntil, paramsUntil));\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        const thing = out.slice (out.indexOf ('fn fetchThing'), out.indexOf ('fn fetchNested'));
+        expect(thing.match(/let mut requestUntil: crate::value::Dict = /g)?.length).toBe(2);
+        expect(thing.match(/let mut paramsUntil: crate::value::Dict = /g)?.length).toBe(2);
+        // negative: a nested (shadowing) re-declaration keeps the old walk
+        const nested = out.slice (out.indexOf ('fn fetchNested'));
+        expect(nested).toContain('let mut requestUntil: Value = ');
+    });
+    test('zi: a venue-pair ternary destructure types a slot Dict when both arms declare it Dict', () => {
+        const file = fx ('zi-venue-pair', base, "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    prepareA (params: Dict = {}): [Dict, Dict] {\n        const request: Dict = { 'a': 1 };\n        return [ request, params ];\n    }\n    prepareB (params: Dict = {}): [Dict, Dict] {\n        const request: Dict = { 'b': 1 };\n        return [ request, params ];\n    }\n    prepareC (params: Dict = {}): [any, Dict] {\n        return [ this.hold (params), params ];\n    }\n    fetchThing (flag: boolean, params: Dict = {}) {\n        const [ request, requestParams ] = flag ? this.prepareA (params) : this.prepareB (params);\n        request['id'] = 1;\n        return this.hold (this.extend (request, requestParams));\n    }\n    fetchMixed (flag: boolean, params: Dict = {}) {\n        const [ loose, looseParams ] = flag ? this.prepareA (params) : this.prepareC (params);\n        loose['id'] = 1;\n        return this.hold (this.extend (loose, looseParams));\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        expect(out).toContain('let mut request: crate::value::Dict = ');
+        expect(out).toContain('let mut requestParams: crate::value::Dict = ');
+        // negative: an arm whose callee does not declare slot 0 `Dict` keeps the box
+        expect(out).toContain('let mut loose: Value = ');
+    });
+    test('zi: a string-option slot feeding a ternary arm types the TARGET local Option<String> (literal other arm)', () => {
+        const b2 = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionStringAndParams (params: object, methodName: string, optionName: string, defaultValue: Str = undefined): [Str, Dict] {\n        const value = this.safeString (params, optionName, defaultValue);\n        return [ value, params as Dict ];\n    }\n}\n";
+        const file = fx ('zi-ternary-target', b2, "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    watchThing (fut: boolean, params: Dict = {}) {\n        const [ spotMethod, rest ] = this.handleOptionStringAndParams (params, 'watchThing', 'spotMethod', '/m');\n        const method = (fut === true) ? '/f' : spotMethod;\n        const topic = method + ':x';\n        return this.hold ([ topic, rest ]);\n    }\n    watchOther (fut: boolean, params: Dict = {}) {\n        const [ spotOther, rest ] = this.handleOptionStringAndParams (params, 'watchOther', 'spotMethod', '/m');\n        const fallback = fut ? 'a' : 'b';\n        const pick = (spotOther === undefined) ? fallback : spotOther;\n        return this.hold ({ 'p': pick, 'r': rest, 'f': fallback });\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        expect(out).toContain('let mut spotMethod: Option<String> = ');
+        expect(out).toContain('let mut method: Option<String> = ');
+        // negative: the other arm is a typed local (its copy would be an added clone): the target stays Value
+        expect(out).toContain('let mut spotOther: Value = ');
+    });
+});
