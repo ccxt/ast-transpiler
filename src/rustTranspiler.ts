@@ -4719,7 +4719,10 @@ export class RustTranspiler extends BaseTranspiler {
         // an all-`i64` base `sum` is an `Int` whatever its `any` checker type says; zb: likewise an `Option<i64>` / `f64` /
         // `Option<f64>` combinator (`sum` / `Math.min|max`) whose kind its proven operands give (`any` is only its TS type)
         const combinatorKind = this.rustArithCombinator(this.unwrapParens(declaration.initializer)) ? this.rustArithCallKind(declaration.initializer) : undefined;
-        if (checked !== expected && !boolTested && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(combinatorKind !== undefined && combinatorKind === kind && (kind === 'int' || checked === undefined))
+        // ral-51n: `xs.length` of an untyped list always prints a `Value::Int` (`get_array_length` answers Int for every
+        // receiver), so an `any`-typed length local is an `i64` exactly; the checker's `any` is only the receiver's type
+        const anyLength = kind === 'int' && checked === undefined && this.rustListLengthInit(this.unwrapParens(declaration.initializer));
+        if (checked !== expected && !boolTested && !anyLength && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(combinatorKind !== undefined && combinatorKind === kind && (kind === 'int' || checked === undefined))
             && !(kind === 'int' && checked === undefined && this.rustSafeDictKeyOnlyLocal(declaration))) return undefined;
         const seeded = kind;
         kind = this.rustScalarWidenedKind(declaration, kind);
@@ -4766,6 +4769,8 @@ export class RustTranspiler extends BaseTranspiler {
         const unused = typedUses === 0 && !handOff && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
         // a string handed once to a ws client call and nothing else stays a `Value`
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
+        // ral-51n: an any-list length typed only for its native uses (a box-only length stays the `Value` it is handed as)
+        if (anyLength && typedUses === 0) return undefined;
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration)) return undefined;
         // of: a string compared against another local must not copy at a box where the `Value` was lent
         // (a call argument already copied the `Value`; an `in` key or other borrowed slot did not)
@@ -4791,7 +4796,7 @@ export class RustTranspiler extends BaseTranspiler {
         // pd: a box-only alias of a typed numeric / bool parameter is stored and boxed back (D11): the Copy scalar boxes
         // with `Value::from` and no copy, where the `Value` alias cloned the parameter's binding; strings keep the veto
         if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined && !RustTranspiler.RUST_COPY_SCALAR_KINDS.has(kind)) return undefined;
-        if ((boxed > 0 || expressionUses) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
+        if ((boxed > 0 || (expressionUses && !this.rustCompareOnlyNumUses(declaration))) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
         // a reader-default string re-boxed anywhere but a moving `return` would copy where the `Value` moved
         const readerTouched = this.rustReaderDefaultTouched(declaration);
         // a reader string copied at a box is lent there (`Value::from(x.as_deref())`: the copy the `Value` clone made)
@@ -6340,6 +6345,24 @@ export class RustTranspiler extends BaseTranspiler {
         const node: any = this.unwrapParens(init);
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustScalarReceiver(node.expression.expression)) return false;
         return this.rustReaderDefaultKind(String(node.expression.name.text), Array.from(node.arguments ?? []), true) !== undefined;
+    }
+
+    /** ral-51n: every use of a number local is a presence test or an operand of a numeric comparison (never boxed, never
+     *  arithmetic): an `Int` reader default read back as `f64` compares exactly as the `Int` did, so no number can change. */
+    rustCompareOnlyNumUses(declaration): boolean {
+        let ok = true;
+        this.rustScalarUsesAll(declaration, String(declaration.name.text), (n) => {
+            const form = this.rustScalarUseForms.get(n);
+            let parent: any = n.parent;
+            while (parent !== undefined && parent.kind === SyntaxKind.ParenthesizedExpression) parent = parent.parent;
+            if (form === 'test' && parent !== undefined && isBinaryExpression(parent)) {
+                const other: any = this.unwrapParens(parent.left === n || this.unwrapParens(parent.left) === n ? parent.right : parent.left);
+                if (this.literalKindOfNode(other) === 'null' || (isIdentifier(other) && other.text === 'undefined')) return true;
+            }
+            if (form !== 'native' || parent === undefined || !isBinaryExpression(parent) || !RustTranspiler.RUST_NUM_ORDER_OPS.has(parent.operatorToken.kind)) ok = false;
+            return true;
+        });
+        return ok;
     }
 
     /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */
@@ -16736,6 +16759,11 @@ export class RustTranspiler extends BaseTranspiler {
         const plain = isIdentifier(recv) || (isPropertyAccessExpression(recv) && recv.expression.kind === SyntaxKind.ThisKeyword);
         return place !== undefined && (plain || this.rustOptListOf(recv) !== undefined) ? place : undefined;
     }
+
+    /** ral-51n: numeric ordering only (an `Int` and a `Float` of one value order the same; equality goes through `is_equal`). */
+    private static readonly RUST_NUM_ORDER_OPS = new Set([
+        SyntaxKind.LessThanToken, SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanToken, SyntaxKind.GreaterThanEqualsToken,
+    ]);
 
     private static readonly COMPARISON_OPS = new Set([
         SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken,
@@ -31153,4 +31181,5 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustBoolArgumentText(arg, identation);
     }
 }
+
 

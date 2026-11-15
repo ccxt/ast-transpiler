@@ -5192,8 +5192,10 @@ describe('rust typed-operand is_equal/add/subtract', () => {
 
     test('const length local of an any receiver compares natively', () => {
         const out = nativeIntResult('function f (x: any, y: any) {\n    const length = x.length;\n    const other = y.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (length === other) {\n        return 2;\n    }\n    return 3;\n}\n');
-        expect(out).toContain('if (length.as_f64() == Some(0.0))');
-        expect(out).toContain('if (length.as_f64() == other.as_f64())');
+        // ral-51n: a const length of an any receiver is an i64 (get_array_length always answers an Int)
+        expect(out).toContain('let mut length: i64 = get_array_length(&x).as_i64().unwrap_or_default();');
+        expect(out).toContain('if (length == 0)');
+        expect(out).toContain('if (length == other)');
         expect(out).not.toContain('is_equal(');
     });
 
@@ -14393,7 +14395,7 @@ describe('ral-yb: length local and counter decided together (round 38)', () => {
         [ 'reverse index n - i - 1 over a list length', "        const n = xs.length;\n        for (let i = 0; i < n; i++) {\n            r.push (this.safeList (xs, n - i - 1));\n        }",
             [ 'let mut n: i64 = xs.len() as i64;', 'let mut i: i64 = 0;', 'Value::Int((((n - i)) - 1))' ], [ 'let mut n: Value', 'let mut i: Value' ] ],
         [ 'a Value receiver length stays Value', "        const ys = this.filterBySymbolSinceLimit (xs, 's', undefined, undefined);\n        const n = ys.length;\n        for (let i = 0; i < n; i++) {\n            r.push (this.safeList (ys, n - i - 1));\n        }",
-            [ 'let mut n: Value = get_array_length(&ys);' ], [ 'let mut n: i64' ] ],
+            [ 'let mut n: i64 = get_array_length(&ys).as_i64().unwrap_or_default();' ], [ 'let mut n: Value' ] ], // ral-51n: an any-list length is an i64
     ];
     test.each(cases)('%s', (_name, body, has, hasNot) => {
         const out = src(body);
@@ -17663,5 +17665,34 @@ describe('ral-51h: dispatch locals started Null and method fields fed from a par
     });
     test('a Null-started local only rewritten from a method reference keeps a Value', () => {
         expect(out).toMatch(/let mut refOnly: Value = /);
+    });
+});
+
+describe('ral-51n: length locals of untyped lists and compare-only number reader locals', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Num = number | undefined;\nexport default class Exchange {\n    markets_by_id: Dict = {};\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-51n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('apex / bitfinex / phemex: `const n = xs.length` of an any list is an i64', () => {
+        const out = run("    a (id: string) {\n        const markets = this.markets_by_id[id];\n        const numMarkets = markets.length;\n        if (numMarkets > 0) { return this.hold (markets[0]); }\n        return undefined;\n    }\n    b (interest) {\n        const interestLength = interest.length;\n        const idx = (interestLength === 23) ? 17 : 18;\n        return this.hold (idx);\n    }\n    c (message) {\n        const messageLength = message.length;\n        if (messageLength === 0) { return; }\n        for (let i = 0; i < messageLength; i++) { this.hold (message[i]); }\n    }\n");
+        expect(out).toContain('let mut numMarkets: i64 = get_array_length(&markets).as_i64().unwrap_or_default();');
+        expect(out).toContain('if numMarkets > 0 {');
+        expect(out).toContain('let mut interestLength: i64 = get_array_length(&interest).as_i64().unwrap_or_default();');
+        expect(out).toContain('let mut messageLength: i64 = get_array_length(&message).as_i64().unwrap_or_default();');
+    });
+    test('pro loadPositionsSnapshot: a safeNumber local with an int default read only by a presence test and `>` is Option<f64>', () => {
+        const out = run("    e (position: Dict) {\n        const contracts = this.safeNumber (position, 'contracts', 0);\n        if ((contracts !== undefined) && (contracts > 0)) { this.hold (position); }\n    }\n");
+        expect(out).toContain('let mut contracts: Option<f64> = ');
+        expect(out).toContain('(contracts > Some(0.0))');
+    });
+    test('guard: the same local boxed, or read in arithmetic, keeps the Value (the Int default would come back a Float)', () => {
+        const out = run("    f (market: Dict) {\n        const price = this.safeNumber (market, 'markPx', 0);\n        return this.hold (price);\n    }\n    g (position: Dict) {\n        const contracts = this.safeNumber (position, 'contracts', 0);\n        if ((contracts !== undefined) && (contracts > 0)) { this.hold (contracts * 2); }\n    }\n");
+        expect(out).toMatch(/let mut price: Value = /);
+        expect(out).toMatch(/let mut contracts: Value = /);
     });
 });
