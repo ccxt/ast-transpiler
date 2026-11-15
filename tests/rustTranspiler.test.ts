@@ -19442,3 +19442,44 @@ describe('ral-56k: safeCurrencyCode key of a map-literal local only enumerated a
         expect(out).toMatch(/let mut code: Value = this|let mut code: Value = self/);
     });
 });
+
+describe('ral-56i: a built list joined by a literal separator', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (flag: boolean, d: Dict) {\n" + body + "    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('`ids.join (\',\')` of a string list reassigned from Object.keys types the list and joins natively', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-56i-join', "        let ids = [ 'ALL' ];\n        if (flag) {\n            ids = Object.keys (d);\n        }\n        const request: Dict = {\n            'keys': ids.join (','),\n        };\n        return request;\n")).content;
+        expect(out).toContain('let mut ids: crate::value::List = ');
+        expect(out).toContain('.join(",")');
+        expect(out).not.toMatch(/\.join\(ids/);
+    });
+    test('a join with a non-literal separator keeps the local Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-56i-join-neg', "        let ids = [ 'ALL' ];\n        if (flag) {\n            ids = Object.keys (d);\n        }\n        const sep = this.safeString (d, 's');\n        return ids.join (sep);\n")).content;
+        expect(out).not.toContain('let mut ids: crate::value::List');
+    });
+});
+
+describe('ral-56i: a built list local wrapped in itself', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (flag: boolean, d: Dict) {\n" + body + "    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('`ids = [ ids ]` keeps a list reassigned from Object.keys typed', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-56i-wrap', "        let ids = [];\n        ids = Object.keys (d);\n        if (flag) {\n            ids = [ ids ];\n        }\n        const request: Dict = {\n            'params': ids,\n        };\n        return request;\n")).content;
+        expect(out).toContain('let mut ids: crate::value::List = ');
+        expect(out).toMatch(/ids = std::sync::Arc::new\(vec!\[Value::Arr\(ids\)\]\)/);
+    });
+    test('a two-element wrap is no self-wrap: the local stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-56i-wrap-neg', "        let ids = [];\n        ids = Object.keys (d);\n        if (flag) {\n            ids = [ ids, 1 ];\n        }\n        const request: Dict = {\n            'params': ids,\n        };\n        return request;\n")).content;
+        expect(out).not.toContain('let mut ids: crate::value::List');
+    });
+});
