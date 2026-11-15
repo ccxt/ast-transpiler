@@ -19836,3 +19836,32 @@ describe('ral-57i: a built list aliased into a plain Value local at its last use
         expect(out).not.toContain('let mut kept: crate::value::List');
     });
 });
+
+describe('ral-57w: a prediction venue (ts/src/prediction/) reads its own ws resolve table like a pro venue', () => {
+    const base: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    futures: any = {};\n    resolve (result: any, messageHash: string): any { return result; }\n    future (messageHash: string): any { return undefined; }\n}\n",
+        "ts/src/base/Exchange.ts": "export default class Exchange {\n    trades: any = undefined;\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n",
+    };
+    const venue = "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchTrades (symbol: string) {\n        const trades = await this.watch ('wss://x', 'trades::' + symbol);\n        return trades;\n    }\n    handleTrades (client: Client, message: any) {\n        const stored = new ArrayCache (10);\n        stored.append (message);\n        client.resolve (stored, 'trades::' + message['s']);\n    }\n}\n";
+    const emit = (extra: Record<string, string>) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-57w-prediction-'));
+        const files = { ...base, 'ts/src/prediction/venue.ts': venue, ...extra };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        try {
+            return transpiler.transpileRustByPath(path.join (root, 'ts/src/prediction/venue.ts')).content;
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    };
+    test('a prediction venue with no ws relative: the watched cache is an optional cache', () => {
+        expect(emit ({})).toContain('let mut trades: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: a prediction subclass that resolves under the same hash keeps the watch result a Value', () => {
+        const out = emit ({ 'ts/src/prediction/venuetwo.ts': "import venue from './venue.js';\nimport Client from '../base/ws/Client.js';\nexport default class venuetwo extends venue {\n    handleOther (client: Client, message: any) {\n        client.resolve ({}, 'trades::' + message['s']);\n    }\n}\n" });
+        expect(out).toContain('let mut trades: Value = ');
+    });
+});
