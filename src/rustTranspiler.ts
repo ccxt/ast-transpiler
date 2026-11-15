@@ -845,7 +845,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustDeclarationPrintsNativeBool(declaration): boolean {
         if (declaration?.kind === SyntaxKind.BindingElement) return this.rustTupleSlotKind(declaration) === 'bool';
         if (declaration?.kind !== SyntaxKind.VariableDeclaration) return false;
-        if (this.rustBoolDeclaredLocals.has(declaration)) return true;
+        if (this.rustBoolDeclaredLocals.has(declaration) || this.rustMarketFlagBoolLocal(declaration)) return true;
         const initializer = declaration.initializer;
         if (initializer === undefined || declaration.name?.kind !== SyntaxKind.Identifier) return false;
         return this.rustTypeIsBoolean(initializer) &&
@@ -2209,6 +2209,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (nativeList && typedSlots.every((t) => t !== undefined) && this.rustShortDestrHeads.has(node)) return `{ let ${tmpName} = ${rhs}.into_list(); ${assignments}; }`;
             return `{ ${head}; ${assignments}; }`;
         }
+        const flagWrite = isAssign && isIdentifier(left) ? this.printMarketFlagBoolWrite(left, right) : undefined; if (flagWrite !== undefined) return flagWrite;
         const bookWrite = isAssign ? this.printWsBookMetaWrite(left, right) ?? this.printWsBookMapWrite(left, right) ?? this.printWsBookLocalWrite(left, right) : undefined; if (bookWrite !== undefined) return bookWrite;
         const mapWrite = isAssign ? this.printWsCacheMapWrite(left, right) : undefined; if (mapWrite !== undefined) return mapWrite;
         const cacheWrite = isAssign ? this.printWsCacheWrite(left, right) : undefined; if (cacheWrite !== undefined) return cacheWrite;
@@ -2451,6 +2452,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
+        if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
+            this.rustBoolDeclaredLocals.add(declaration);
+            return `${indent}let mut ${varName}: bool = ${this.unwrapParens(declaration.initializer).kind === SyntaxKind.TrueKeyword ? 'true' : 'false'}`;
+        }
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
         if (boolValue !== undefined) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -3653,8 +3658,86 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(a);
         if (inner === undefined || !isIdentifier(inner)) return false;
         const declaration: any = this.rustDeclaredNode(inner);
+        if (declaration !== undefined && this.rustMarketFlagBoolLocal(declaration)) return true;
         return declaration !== undefined && isVariableDeclaration(declaration) && declaration.initializer !== undefined
             && this.rustNodeIsBoolExpression(declaration.initializer) && this.literalKindOfNode(this.unwrapParens(declaration.initializer)) !== 'boolean';
+    }
+
+    // ── ral-47e: literal-seeded bool locals rewritten from a Market flag ──
+    // `let x: Bool = false; .. x = m['contract']; .. x = true;` where `m` is a typed market local (a loaded struct or an
+    // `Option<Market>`): every write is a bool literal or the market's own `bool` flag (`None` reads `false`, as the
+    // truthiness of the old Null box did), every read a condition, an `=== / !== true|false` test or a native /
+    // optional native-`bool` venue slot. Printed `let mut x: bool` by the printer itself (never left to ccxt
+    // narrowBoolLocals, whose regex only matches `: Value = Value::Bool(` declarations).
+    private rustMarketFlagBoolDecisions = new Map<any, boolean>();
+
+    rustMarketFlagBoolLocal(declaration: any): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        let decision = this.rustMarketFlagBoolDecisions.get(declaration);
+        if (decision === undefined) {
+            this.rustMarketFlagBoolDecisions.set(declaration, false); // re-entrancy guard
+            try {
+                decision = this.rustMarketFlagBoolLocalUncached(declaration);
+            } catch (e) {
+                decision = false;
+            }
+            this.rustMarketFlagBoolDecisions.set(declaration, decision);
+        }
+        return decision;
+    }
+
+    rustMarketFlagText(right: any): string | undefined {
+        const inner: any = this.unwrapParens(right);
+        if (inner === undefined) return undefined;
+        if (inner.kind === SyntaxKind.TrueKeyword) return 'true';
+        if (inner.kind === SyntaxKind.FalseKeyword) return 'false';
+        if (!(isElementAccessExpression(inner) || isPropertyAccessExpression(inner))) return undefined;
+        const key = this.rustMarketReadKey(inner.expression);
+        if (key === undefined || !RustTranspiler.RUST_MARKET_BOOL_FIELDS.has(key)) return undefined;
+        const optMarket = this.rustOptMarketLocalOf(inner.expression);
+        if (optMarket !== undefined) return `matches!(${this.printNode(optMarket.name, 0)}, Some(crate::types::Market { ${key}: true, .. }))`;
+        const declaration = this.rustTypedMarketLocalOf(inner.expression);
+        if (declaration === undefined || this.rustMarketLocalKind(declaration) !== 'struct') return undefined;
+        return `(${this.printNode(declaration.name, 0)}).${key}`;
+    }
+
+    rustMarketFlagBoolLocalUncached(declaration: any): boolean {
+        const init: any = this.unwrapParens(declaration.initializer);
+        if (init === undefined || (init.kind !== SyntaxKind.TrueKeyword && init.kind !== SyntaxKind.FalseKeyword)) return false;
+        const list: any = declaration.parent;
+        if (list === undefined || !(list.flags & NodeFlags.Let) || list.declarations?.length !== 1) return false;
+        const name = String(declaration.name.text);
+        let flagWrites = 0;
+        const ok = this.rustLocalUsesAll(declaration, name, true, (n: any) => {
+            if (this.rustEnclosingFunction(n) !== this.rustEnclosingFunction(declaration)) return false;
+            const parent: any = n.parent;
+            if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
+                if (parent.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+                const text = this.rustMarketFlagText(parent.right);
+                if (text === undefined) return false;
+                if (text !== 'true' && text !== 'false') flagWrites++;
+                return true;
+            }
+            if (isBinaryExpression(parent) && parent.left === n && (parent.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken || parent.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken)) {
+                const lit: any = this.unwrapParens(parent.right);
+                return (lit?.kind === SyntaxKind.TrueKeyword || lit?.kind === SyntaxKind.FalseKeyword) && this.rustIdentifierUseIsCondition(parent);
+            }
+            if (this.rustIdentifierUseIsCondition(n)) return true;
+            const call: any = parent;
+            if (call?.kind !== SyntaxKind.CallExpression) return false;
+            const at = Array.from(call.arguments).indexOf(n);
+            const params = at < 0 ? undefined : this.rustCalleeParams(call);
+            return params !== undefined && this.rustOptionalBoolArgumentSlot(call, params, at);
+        });
+        return ok && flagWrites > 0;
+    }
+
+    /** `x = m['contract']` / `x = true` into a `rustMarketFlagBoolLocal`. */
+    printMarketFlagBoolWrite(left: any, right: any): string | undefined {
+        const declaration: any = this.rustDeclaredNode(left);
+        if (declaration === undefined || declaration.name === left || !this.rustMarketFlagBoolLocal(declaration)) return undefined;
+        const text = this.rustMarketFlagText(right);
+        return text === undefined ? undefined : `${this.printNode(left, 0).trim()} = ${text}`;
     }
 
     /** An argument in an optional native-`bool` slice slot: a bool local the printer still prints bare is boxed once
@@ -3725,7 +3808,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return this.printNode(inner, 0).trim();
             }
             if (declaration?.kind === SyntaxKind.VariableDeclaration
-                && this.getRustBoolLocalInitializer(declaration, this.printNode(inner, 0)) !== undefined) {
+                && (this.rustMarketFlagBoolLocal(declaration) || this.getRustBoolLocalInitializer(declaration, this.printNode(inner, 0)) !== undefined)) {
                 return this.printNode(inner, 0).trim();
             }
             return undefined;
@@ -27848,6 +27931,12 @@ export class RustTranspiler extends BaseTranspiler {
                 const name = this.printNode(inner, 0).trim();
                 return (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) ? name : `!${name}`;
             }
+        }
+        // ral-47e: a market-flag bool local against a literal is the bool itself
+        const flagDecl: any = inner !== undefined && isIdentifier(inner) ? this.rustDeclaredNode(inner) : undefined;
+        if (flagDecl !== undefined && flagDecl.name !== inner && this.rustMarketFlagBoolLocal(flagDecl)) {
+            const name = this.printNode(inner, 0).trim();
+            return ((op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) === (literal.kind === SyntaxKind.TrueKeyword)) ? name : `!${name}`;
         }
         if (inner === undefined || (!isIdentifier(inner) && !isCallExpression(inner)) || !this.printsValueExpression(inner)
             || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || this.rustBoolMemberLocal(inner) || this.rustNativeBoolLocal(inner) || !this.rustBoolValue(inner)) {

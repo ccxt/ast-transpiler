@@ -17041,3 +17041,30 @@ describe('ral-47f: a string handle*AndParams slot read in place by a concat whos
         }
     });
 });
+
+describe('ral-47e: a literal-seeded bool local rewritten from a Market flag stays bool', () => {
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-47e-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Bool = boolean | undefined;\nexport interface MarketInterface { id: string; symbol: string; contract: boolean; type: string; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport default class Exchange {\n    market (symbol: string): MarketInterface { return undefined; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Market, Str, Bool } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleTradeType (isContractMarket: boolean = false, marginMode: Str = undefined, params: Dict = {}): Str {\n        if (isContractMarket) {\n            return 'c';\n        }\n        return marginMode;\n    }\n    fetchA (symbol: Str = undefined, params: Dict = {}): Str {\n        const request: Dict = {};\n        let isContract: Bool = false;\n        let market: Market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n            request['symbol'] = market['id'];\n            isContract = market['contract'];\n        } else {\n            isContract = true;\n        }\n        return this.handleTradeType (isContract, 'x', request);\n    }\n    cancelB (symbol: Str = undefined, params: Dict = {}): Str {\n        let market: Market = undefined;\n        let isContractMarket: Bool = true;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n            isContractMarket = market['contract'];\n            if (isContractMarket !== true) {\n                return 'spot';\n            }\n        }\n        return this.handleTradeType (isContractMarket, undefined, params);\n    }\n    keepC (symbol: Str = undefined): Dict {\n        let market: Market = undefined;\n        let flag: Bool = false;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n            flag = market['contract'];\n        }\n        return { 'flag': flag };\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('declared bool, flag write is a matches! pattern, boxed once at the optional bool slot', () => {
+        const text = out();
+        expect(text).toContain('let mut isContract: bool = false;');
+        expect(text).toContain('isContract = matches!(market, Some(crate::types::Market { contract: true, .. }));');
+        expect(text).toContain('isContract = true;');
+        expect(text).toContain('self.handleTradeType(&[Value::Bool(isContract), ');
+        expect(text).toContain('let mut isContractMarket: bool = true;');
+        expect(text).toContain('if (!isContractMarket) {');
+        expect(text).toContain('self.handleTradeType(&[Value::Bool(isContractMarket), ');
+        expect(text).not.toContain('Value::Bool(Value::Bool(');
+        expect(text).not.toMatch(/\|__\w+\|/);
+    });
+    test('negative: a flag local stored into a map keeps its Value box', () => {
+        const text = out();
+        expect(text).toContain('let mut flag: Value = Value::Bool(false);');
+    });
+});
