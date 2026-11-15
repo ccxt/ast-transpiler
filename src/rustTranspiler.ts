@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { NodeFlags, SyntaxKind, type Block, type CallExpression, type Declaration, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
-import { isArrayBindingPattern, isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
+import { isArrayBindingPattern, isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 import * as fs from 'fs';
@@ -2892,12 +2892,13 @@ export class RustTranspiler extends BaseTranspiler {
             // neither seeds before the other, so while the solver seeds assume the partner's optional string; the later
             // passes re-prove the write against the partner's settled decision (a partner left `Value` drops both)
             if (write === undefined && this.rustScalarSeeding && this.rustNilStrPartner(rhs, declaration, scope)) write = 'ostr';
-            joined = this.rustScalarJoinKinds(joined, write);
+            // ral-55x O1: `x = Precise.stringEq|..(a, b)` into a nil-declared local: a `Bool` each time, so the local is an `Option<bool>`
+            joined = this.rustScalarJoinKinds(joined, write, write === 'bool' && this.rustPreciseCompareCall(rhs));
             if (joined === undefined) return undefined;
         }
-        if (joined !== 'ostr' && joined !== 'oint' && joined !== 'onum') return undefined;
+        if (joined !== 'ostr' && joined !== 'oint' && joined !== 'onum' && joined !== 'obool') return undefined;
         const declared = declaration.type === undefined ? undefined : this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name));
-        if (declared !== undefined && declared !== (joined === 'ostr' ? 'string' : 'number')) return undefined;
+        if (declared !== undefined && declared !== (joined === 'ostr' ? 'string' : (joined === 'obool' ? 'boolean' : 'number'))) return undefined;
         const kind = joined;
         if (kind === 'ostr' && !this.rustSiblingStrBoxesMove(declaration, scope)) return undefined;
         // ral-45b: a local the new self-slice / `+=` forms type keeps `Value` when a string-returning method returns it
@@ -9256,7 +9257,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (shape === 'affix') return { recv, recvKind, method, kind: 'bool' };
         // 41b: the new forms read a typed string local receiver only (a parameter read keeps the old paths)
         if (shape === 'vslice' || shape === 'vaffix' || shape === 'vfind' || shape === 'vreplace') {
-            if (this.rustScalarLocalOf(recv) === undefined || this.rust41bWsKeyLocal(recv)) return undefined;
+            // ral-55x K1: a ws key local (a `url` the client / watch take as a `&str`) may still be read by `replace` (its own new text)
+            if (this.rustScalarLocalOf(recv) === undefined || (this.rust41bWsKeyLocal(recv) && shape !== 'vreplace')) return undefined;
             if (args.some((a) => isIdentifier(this.unwrapParens(a)) && this.rust41bWsKeyLocal(this.unwrapParens(a)))) return undefined;
             if (shape === 'vslice') return this.rustStrSliceVarBounds(args) === undefined ? undefined : { recv, recvKind, method, kind: recvKind };
             if (shape === 'vaffix') return this.rustStrVarNeedle(args[0], method === 'includes') === undefined ? undefined : { recv, recvKind, method, kind: 'bool' };
@@ -9344,7 +9346,43 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(node);
         const lit = this.rustNativeStringLiteralArg(inner);
         if (lit !== undefined) return `"${lit}"`;
-        return isIdentifier(inner) && this.rustScalarLocalOf(inner)?.kind === 'str' ? `${super.printIdentifier(inner)}.as_str()` : undefined;
+        if (isIdentifier(inner) && this.rustScalarLocalOf(inner)?.kind === 'str') return `${super.printIdentifier(inner)}.as_str()`;
+        // ral-55x K1: `'lit' + s` of string literals and typed string locals: the printer's own `format!` concat is a `String`
+        // (never `Null`), the same text the boxed `Value::Str(format!(..))` operand held
+        if (isBinaryExpression(inner) && inner.operatorToken.kind === SyntaxKind.PlusToken && this.rustStrConcatOperandLeaves(inner)) {
+            const text = this.rustUnboxedFormatText(this.printNode(inner, 0));
+            if (text !== undefined) return `${text}.as_str()`;
+        }
+        return undefined;
+    }
+
+    /** ral-55x K1: `Value::Str(format!(..).into())` -> the `format!(..)` itself, when that macro call spans the whole box. */
+    rustUnboxedFormatText(text: string): string | undefined {
+        const head = 'Value::Str(format!(';
+        if (!text.startsWith(head) || !text.endsWith(').into())')) return undefined;
+        let depth = 1;
+        let quoted = false;
+        for (let i = head.length; i < text.length; i++) {
+            const c = text[i];
+            if (quoted) { if (c === '\\') i++; else if (c === '"') quoted = false; continue; }
+            if (c === '"') quoted = true;
+            else if (c === '(') depth++;
+            else if (c === ')' && --depth === 0) return text.slice(i + 1) === '.into())' ? text.slice('Value::Str('.length, i + 1) : undefined;
+        }
+        return undefined;
+    }
+
+    /** ral-55x K1: every leaf of a `+` chain is a string literal or a `str` / `ostr` typed local, and at least one is a literal. */
+    rustStrConcatOperandLeaves(node): boolean {
+        let literal = false;
+        const walk = (n: any): boolean => {
+            const inner: any = this.unwrapParens(n);
+            if (isBinaryExpression(inner) && inner.operatorToken.kind === SyntaxKind.PlusToken) return walk(inner.left) && walk(inner.right);
+            if (this.rustNativeStringLiteralArg(inner) !== undefined) { literal = true; return true; }
+            const kind = isIdentifier(inner) ? this.rustScalarLocalOf(inner)?.kind : undefined;
+            return kind === 'str' || kind === 'ostr';
+        };
+        return walk(node) && literal;
     }
 
     private rust41bWsKeyMemo = new WeakMap<any, boolean>();
@@ -10886,6 +10924,26 @@ export class RustTranspiler extends BaseTranspiler {
     // boxed local is its string, or `"null"` for `Null`; the borrowed `Option` gives the same text.
     // An object-literal receiver is the typed-bearer rule's: its key proof wants a `Value` key, so an
     // optional key there would turn the map back into a `Value`.
+    /** ral-55x K1: `let id = this.safeString(o, k)` inserted as `m[id] = v` only inside an `if (id !== undefined ..)` block: the
+     *  insert never sees a `None` key, so the key text is the `Str` the boxed key held (removeRepeatedTradesFromArray `id`). */
+    rust55xGuardedSafeStringKey(n, local): boolean {
+        const init: any = this.rustSkipWrappers(local.initializer);
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(init.expression.name.text) !== 'safeString' || init.arguments.length !== 2) return false;
+        const name = String(n.text);
+        for (let up: any = n.parent; up !== undefined && !isFunctionLike(up); up = up.parent) {
+            if (isIfStatement(up) && up.thenStatement !== undefined && n.pos >= up.thenStatement.pos && n.end <= up.thenStatement.end) {
+                const conjuncts: any[] = [];
+                const split = (e: any) => { e = this.unwrapParens(e); if (isBinaryExpression(e) && e.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken) { split(e.left); split(e.right); } else conjuncts.push(e); };
+                split(up.expression);
+                if (conjuncts.some((c: any) => isBinaryExpression(c) && c.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken
+                    && isIdentifier(this.unwrapParens(c.left)) && String(this.unwrapParens(c.left).text) === name && this.rustDeclaredNode(this.unwrapParens(c.left)) === local
+                    && this.literalKindOfNode(this.unwrapParens(c.right)) === 'null')) return true;
+            }
+        }
+        return false;
+    }
+
     rustScalarOptKeyUse(n): boolean {
         const local: any = this.rustDeclaredNode(n);
         if (local === undefined || !isVariableDeclaration(local) || local.initializer === undefined || this.literalKindOfNode(local.initializer) === 'null') return false;
@@ -10918,7 +10976,8 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-55k: a map also read back by the key local itself is fine too (digifinex): the read prints `m.get(k.as_deref()..)`
             // and the push on the bucket read is printed natively by arrPush (rustLitKeyBearerReadLocal), not by a ccxt pass
             if (enumerated && keyRead && this.rustSafeCurrencyCodeInit(local.initializer)) return this.rustScalarInsertKeyUse(n);
-            if (enumerated) return !keyRead && (isElementAccessExpression(this.rustSkipWrappers(local.initializer)) || this.rustTbNetworkCodeInit(local.initializer))
+            if (enumerated) return !keyRead && (isElementAccessExpression(this.rustSkipWrappers(local.initializer)) || this.rustTbNetworkCodeInit(local.initializer)
+                || this.rust55xGuardedSafeStringKey(n, local))
                 && this.rustScalarInsertKeyUse(n);
             return this.rustBearerWriteKeyOk(n, name) || this.rustScalarInsertKeyUse(n);
         }

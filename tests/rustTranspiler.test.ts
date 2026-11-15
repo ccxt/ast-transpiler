@@ -19142,3 +19142,41 @@ describe('ral-55h: a reply hash echoing a request key written only from this.req
         expect(run ('n', "'fetchPositions' + requestId")).toContain('let mut snapshot: Value = ');
     });
 });
+
+describe('ral-55x O1: a Precise compare written into a nil-declared local', () => {
+    test('let winnerRaw: Bool = undefined; winnerRaw = Precise.stringEq(..) is an Option<bool>', () => {
+        const dir = path.join (rustFixtureRoot, '55x-o1');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Precise.ts'), "export class Precise {\n    static stringEq (a: string, b: string): boolean { return a === b; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport { Precise } from './base/Precise.js';\nimport type { Dict, Bool, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    po (o: Dict, resolved: boolean) {\n        const price = this.safeString (o, 'price');\n        let handle = undefined;\n        let winnerRaw: Bool = undefined;\n        let settleFractionRaw: Int = undefined;\n        if (resolved && (price !== undefined)) {\n            winnerRaw = Precise.stringEq (price, '1');\n            settleFractionRaw = (winnerRaw) ? 1 : 0;\n            if (winnerRaw) {\n                handle = price;\n            }\n        }\n        const winner = winnerRaw;\n        return { 'winner': winner, 'f': settleFractionRaw, 'h': handle };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut winnerRaw: Option<bool> = None;');
+        expect(out).not.toContain('let mut winnerRaw: Value');
+    });
+});
+
+describe('ral-55x K1: a ws url local read by replace with a concatenated operand', () => {
+    test('url.replace(\'wss://\' + hostname, \'\') keeps url an Option<String> and the operand a format!', () => {
+        const dir = path.join (rustFixtureRoot, '55x-k1url');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    client (url: string): any { return url; }\n    async authenticate (params: Dict = {}) {\n        const url = this.safeString (params, 'url');\n        const hostname = this.safeString (params, 'hostname');\n        if (url === undefined || hostname === undefined) {\n            throw new Error ('x');\n        }\n        const relativePath = url.replace ('wss://' + hostname, '');\n        const client = this.client (url);\n        const payload = 'GET' + \"\\n\" + hostname + \"\\n\" + relativePath;\n        return [ client, payload ];\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+        expect(out).toContain('let mut url: Option<String> = ');
+        expect(out).toContain('let mut relativePath: Option<String> = (if let Some(__s) = url.as_deref() { Some(__s.replace(format!(');
+    });
+});
+
+describe('ral-55x K1: a safeString id inserted as a map key only under its own !== undefined guard', () => {
+    test('removeRepeatedTradesFromArray id is an Option<String> and the insert takes its text', () => {
+        const dir = path.join (rustFixtureRoot, '55x-k1id');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    removeRepeatedTradesFromArray (input: Dict[]) {\n        const uniqueResult: Dict = {};\n        for (let i = 0; i < input.length; i++) {\n            const entry = input[i];\n            let id = this.safeString (entry, 'id');\n            if (id === undefined) {\n                const price = this.safeString (entry, 'price', '');\n                const amount = this.safeString (entry, 'amount', '');\n                const timestamp = this.safeString (entry, 'timestamp');\n                const side = this.safeString (entry, 'side', '');\n                // unique trade identifier\n                if (timestamp === undefined) {\n                    throw new Error (this.id + ' removeRepeatedTradesFromArray() missing timestamp');\n                }\n                // optional parts are empty when absent, separators keep positions distinct\n                id = 't_' + timestamp.toString () + '_' + side + '_';\n                id = id + (price + '_' + amount);\n            }\n            if (id !== undefined && !(id in uniqueResult)) {\n                uniqueResult[id] = entry;\n            }\n        }\n        const values = Object.values (uniqueResult);\n        return values as any;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut id: Option<String> = ');
+        expect(out).toContain('uniqueResult.insert(id.as_deref().unwrap_or(\"null\").to_string(), ');
+    });
+});
