@@ -20491,9 +20491,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (keyDecl === undefined || !isVariableDeclaration(keyDecl) || !isIdentifier(keyDecl.name) || keyDecl.name === key) return false;
         if (!this.rustValueKeyType(key)) return false;
-        // ral-53e: an int / Option<i64> local boxed at this key (`Value::from(k)`) keys the read as the Value local did
+        // ral-53e (merged into ral-52e's rustListIndexIntKey): an int / Option<i64> local boxed at this key keys the read as the Value local did
+        if (this.rustListIndexIntKey(key)) return true;
         const keyScalar = this.rustScalarLocalOf(key);
-        if ((keyScalar?.kind === 'int' || keyScalar?.kind === 'oint') && this.rust53eElemReadKey(key)) return true;
         return keyScalar === undefined && this.rustNilLocalKind(keyDecl) === undefined && !this.rustWsUrlLocal(keyDecl)
             && this.rustBorrowedLocalKind(keyDecl) === undefined && !this.rustLentListLocal(keyDecl);
     }
@@ -21177,12 +21177,15 @@ export class RustTranspiler extends BaseTranspiler {
         return key !== undefined && this.rustListIndexIntKey(key) && String(write.getText()).split('\n')[0].length <= 240;
     }
 
-    /** ral-52e: a list index key proved i64: an integer literal, or `+` / `-` over integer literals and i64 scalar locals (at least one literal). */
+    /** ral-52e: a list index key proved i64: an integer literal, or `+` / `-` over integer literals and i64 scalar locals (at least one literal);
+     *  ral-53e: or, as the whole key of a plain element read, an int / Option<i64> local (rust53eElemReadKey). */
     rustListIndexIntKey(key: any, top = true): boolean {
         const node: any = this.rustSkipWrappers(key);
         if (node === undefined) return false;
         if (node.kind === SyntaxKind.NumericLiteral) return /^\d+$/.test(String(node.text));
         if (top) {
+            // ral-53e: a whole key that is an int / Option<i64> local of a plain element read boxes there (`Value::from(k)`)
+            if (isIdentifier(node)) return (this.rustScalarLocalOf(node)?.kind === 'int' || this.rustScalarLocalOf(node)?.kind === 'oint') && this.rust53eElemReadKey(node);
             if (!isBinaryExpression(node)) return false;
         }
         if (isBinaryExpression(node)) {
