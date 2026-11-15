@@ -1238,6 +1238,9 @@ export declare class RustTranspiler extends BaseTranspiler {
         method: string;
         kind: string;
     } | undefined;
+    /** ral-48f: `x.toString()` read as a `+` operand, `x` a destructured handle*AndParams slot or a local declared `Str` whose
+     *  initializer is such a slot read whole (the slot and the alias are decided together by the joint scalar solve). */
+    rust48fSlotAliasConcatRecv(call: any, recv: any): boolean;
     /** `padStart(N, "c")` / `padEnd(N, "c")`: a literal width (0..4096) and a one-char alphanumeric / space pad, the
      *  helper's one-char arm, which `format!` width (counted in chars, never truncating) reproduces. */
     rustStrPadArgs(args: any[]): {
@@ -1447,6 +1450,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  JS evaluates the key before the value, and so does the printed `insert(key, value)`, so the key text is taken before
      *  any box in the value. Scoped to that initialiser (other key locals keep their own rules). */
     rustTbKeyReadOnlyInValue(n: any, value: any): boolean;
+    /** ral-48i: `x['lit'][k] = v` with `k` a `networkIdToCode` local and `x` a typed one-level map bearer: the chained write
+     *  prints `if let Value::Dict(__d) = x.entry(\"lit\"..).or_default() { make_mut(__d).insert(<key>, v) }`, whose key is the
+     *  `stringify_param` text of the boxed local (`\"null\"` for `None`, as rustScalarOptKeyText prints). The key is taken before
+     *  the value, so a value that only reads the key is fine (rustTbKeyReadOnlyInValue). */
+    rust48iChainKeyUse(n: any): boolean;
     /** tb: `this.networkIdToCode (..)` (the base typed `Str` reader of a network id). */
     rustTbNetworkCodeInit(init: any): boolean;
     /** A key written `m[k as string]` / `m[(k)]`: the cast and parens print nothing, so the key is `k` itself. */
@@ -2841,6 +2849,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The `Value` hand-off: the map moved at the last use, else the Arc bump; `None` is `Value::Null`. */
     printNilMapBox(node: any, text: string): string | undefined;
     private rustMutableBuiltLocals;
+    /** ral-48b: statement writes `x['k'] = v` printed as `add_element_to_object(&mut x, ..)` on a typed map local. */
+    private rustAeoWrites;
+    /** ral-48b: the boxed local's write is already a native insert (asked while the local's kind is pending, i.e. the
+     *  untyped view): that write is not a helper row, and its source proof is the native-insert rule's, not this one. */
+    rustAeoBoxedNative(n: any): boolean;
+    /** ral-48b: `n['k'] = v` (statement, literal non-digit key) whose value does not read `n`. */
+    rustAeoTargetWrite(n: any): boolean;
     /** The source statement of a box (`Value::Dict(x)`, +13 chars) leaves the printed line within 400 chars. */
     rustBoxLineOk(n: any): boolean;
     /** The copy-on-write insert line (indent + `Arc::make_mut(&mut x).insert(..)`) stays within the 400-char budget. */
@@ -3109,6 +3124,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentListLocal(declaration: any): boolean;
     /** A call that yields a string list on every path (never `undefined`). */
     rustLentListSource(init: any): boolean;
+    /** ral-48e: `xs[i]['k'] = v` (a statement) on a `[]`-defaulted list local, `i` an i64 counter or a non-negative integer
+     *  literal: the write prints `add_element_to_object(get_value_mut(&mut xs, &Value::Int(i)), ..)` as before, and the
+     *  runtime `get_value_mut` hops a held `List` exactly as the `Value::Arr` arm did (the same padded slot). */
+    rustLentListRowWrite(access: any): boolean;
     /** A base `safeList*` read with an empty `[]` default: a list on every path. */
     rustDefaultedListRead(init: any): boolean;
     rustLentListLocalUncached(declaration: any): boolean;
@@ -3124,6 +3143,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustHandlerTableLocalUncached(declaration: any): boolean;
     /** `this.safeValue (table, k)` of a base-tier `safeValue` over a handler table. */
     rustHandlerTableRead(expr: any): boolean;
+    private rustSubscriptionMethodFields;
+    rustSubscriptionMethodField(call: any): boolean;
+    rustSubscriptionMethodFieldUncached(call: any): boolean;
     printHandlerTableLocalWrite(left: any, right: any): string | undefined;
     /** A local map literal whose every value is a `this.<method>` reference, only read by `this.safeValue (m, k)`. */
     rustHandlerTable(node: any): boolean;
