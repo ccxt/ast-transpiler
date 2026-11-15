@@ -22136,6 +22136,22 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustDefaultedListRead(init);
     }
 
+    /** ral-48e: `xs[i]['k'] = v` (a statement) on a `[]`-defaulted list local, `i` an i64 counter or a non-negative integer
+     *  literal: the write prints `add_element_to_object(get_value_mut(&mut xs, &Value::Int(i)), ..)` as before, and the
+     *  runtime `get_value_mut` hops a held `List` exactly as the `Value::Arr` arm did (the same padded slot). */
+    rustLentListRowWrite(access: any): boolean {
+        const outer: any = access.parent;
+        if (!isElementAccessExpression(outer) || outer.expression !== access) return false;
+        const assign: any = outer.parent;
+        if (!isBinaryExpression(assign) || assign.left !== outer || assign.operatorToken.kind !== SyntaxKind.EqualsToken
+            || assign.parent?.kind !== SyntaxKind.ExpressionStatement || this.rustTestTierSource(access)) return false;
+        const key: any = this.rustSkipWrappers(access.argumentExpression);
+        if (key === undefined) return false;
+        if (isNumericLiteral(key)) return Number.isInteger(Number(key.text)) && Number(key.text) >= 0;
+        // a literal-initialised number counter (`let i = 0`): the hop key prints `&Value::Int(i)` (i64) or the `Value` it held
+        return this.isRustValueIndexKey(key);
+    }
+
     /** A base `safeList*` read with an empty `[]` default: a list on every path. */
     rustDefaultedListRead(init: any): boolean {
         const callee: any = isCallExpression(init) && isPropertyAccessExpression(init.expression) ? init.expression : undefined;
@@ -22174,6 +22190,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (String(declaration.initializer.getText()).split('\n')[0].length > 240) return false;
         const boxes: [any, 'clone' | 'move'][] = [];
         let natives = 0;
+        let rowWrites = 0;
         // a same-named `let`/`const` in a sibling block is another binding
         // a same-named `const` key list in a sibling block (`Object.keys (m)` in two throwing branches) is another binding
         // (never a ws store / field key list: the receiver is a plain local or parameter)
@@ -22190,7 +22207,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (isElementAccessExpression(up) && up.expression === at) {
                 natives++;
                 indexed++;
-                return this.rustReadBearerElementUse(up, 'list');
+                if (this.rustReadBearerElementUse(up, 'list')) return true;
+                if (defaulted && this.rustLentListRowWrite(up)) { rowWrites++; return true; }
+                return false;
             }
             if (at === n && isCallExpression(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
                 natives++;
@@ -22232,6 +22251,8 @@ export class RustTranspiler extends BaseTranspiler {
         });
         // A list that is only handed on would trade each box for a handle box.
         if (!safe || natives === 0 || (defaulted && indexed === 0 && boxes.some(([, form]) => form === 'clone'))) return false;
+        // ral-48e: a row-written list handed on by copy would trade the moved box for a cloned handle
+        if (rowWrites > 0 && boxes.some(([, form]) => form === 'clone')) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         return true;
     }

@@ -17139,3 +17139,23 @@ describe('ral-48b: add_element_to_object on a typed map local (impl AddTarget)',
         expect(r).toContain('let mut sub: Value =');
     });
 });
+
+describe('ral-48e: a []-defaulted safeList local written row by row is a held List', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeList (o: any, k: any, d: any[]): any[];\n    safeList (o: any, k: any, d?: any[]): any[] | undefined;\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    tag (response: Dict) {\n        const rows: Dict[] = this.safeList (response, 'rows', []);\n        for (let i = 0; i < rows.length; i++) {\n            rows[i]['side'] = 'buy';\n        }\n        return rows;\n    }\n    keep (response: Dict, k: string) {\n        const kept: Dict[] = this.safeList (response, 'rows', []);\n        for (let i = 0; i < kept.length; i++) {\n            kept[i][k] = 1;\n        }\n        return this.hold (kept);\n    }\n    copy (response: Dict) {\n        const both: Dict[] = this.safeList (response, 'rows', []);\n        both[0]['x'] = 1;\n        this.hold (both);\n        return this.hold (both);\n    }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-48e-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('the row write hops the held list; a keyed or twice-handed list keeps the box', () => {
+        const text = out();
+        expect(text).toContain('let mut rows: crate::value::List =');
+        expect(text).toContain('get_value_mut(&mut rows, &Value::Int(i))');
+        // negative: the hop is the helper either way; a copy hand-off would trade a move for a clone
+        expect(text).toContain('let mut both: Value =');
+    });
+});
