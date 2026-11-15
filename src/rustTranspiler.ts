@@ -5051,7 +5051,8 @@ export class RustTranspiler extends BaseTranspiler {
             // a native insert key borrows the local (`as_deref`); a helper-write key would copy it
             // ral-53i: likewise a key of the two-level bearer's own bucket seed / insert (rustNestedBearerWriteKey: one key text either way)
             // ral-56f: in the copy-decl mode only the printer-owned options-field insert key lends (rustPlainFieldInsertKey)
-            if (form === 'err' || (form === 'key' && !(nativeKeys && (copyDecls ? this.rustPlainFieldInsertKey(n) : (this.rustScalarInsertKeyUse(n) || this.rustNestedBearerKeySlot(n) || this.rustPlainFieldInsertKey(n)))))) ok = false;
+            // ral-56k: and the first key of a deep chained write on a map bearer (rustDeepBearerChainKey: the hop's own insert-key text)
+            if (form === 'err' || (form === 'key' && !(nativeKeys && (copyDecls ? this.rustPlainFieldInsertKey(n) : (this.rustScalarInsertKeyUse(n) || this.rustNestedBearerKeySlot(n) || this.rustPlainFieldInsertKey(n) || this.rustDeepBearerChainKey(n) === 'first'))))) ok = false;
             if (form !== 'box' && form !== 'xbox') return true;
             const up: any = n.parent;
             if (isReturnStatement(up) || this.rustLocalLastUse(n, declaration)) return true;
@@ -5062,7 +5063,9 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-56f: `const y = x` into a string candidate of the same function decided with the local (rustStrHandOffDecided
             // `solved`): the typed copy is the copy the `Value` clone made (binance pro keepAliveListenKey `urlType = type`)
             const copyDecl = copyDecls && isVariableDeclaration(up) && up.initializer === n && this.rustStrHandOffDecided(n, n, declaration).solved;
+            // ral-56k: a later key of a deep chained bearer write (`&k` of get_value_mut / add_element_to_object) boxes once there
             const slot = selfArg || precise || copyDecl || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n) || this.rustDictWriteValue(n)
+                || (nativeKeys && this.rustDeepBearerChainKey(n) === 'later')
                 || (isArrayLiteralExpression(up) && !(isBinaryExpression(up.parent) && up.parent.left === up));
             if (!slot) ok = false;
             return true;
@@ -6721,6 +6724,8 @@ export class RustTranspiler extends BaseTranspiler {
                 // 40d: an optional-string insert key prints its key text (`as_deref().unwrap_or("null").to_string()`): one fresh
                 // `String`, exactly the allocation the `stringify_param(&k)` of the boxed key made, so no copy where the `Value` moved
                 && !(form === 'key' && trial === 'ostr')
+                // ral-56k: a later key of a deep chained bearer write takes `&<box>`: the `Value` form cloned the local there too
+                && !(form === 'box' && trial === 'ostr' && this.rustDeepBearerChainKey(n) === 'later')
                 && !(form === 'box' && this.rustElementReadScalarKind(this.unwrapParens(declaration.initializer)) !== undefined && this.rustScalarSelfArgBox(n))
                 && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && this.rustScalarSelfArgBox(n) && this.rustFormatLendLocal(declaration))
                 && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && (this.rustClockString(this.unwrapParens(declaration.initializer)) || this.rustIdString(this.unwrapParens(declaration.initializer))) && this.rustLendSlot(n))
@@ -7671,6 +7676,14 @@ export class RustTranspiler extends BaseTranspiler {
         if ((kind === 'str' || kind === 'ostr') && this.rustUdNestedBearerKey(n)) return 'key';
         // ral-56f: the one upper key of `this.balance|options[k][k2] = v` whose bucket entry the printer prints itself
         if ((kind === 'str' || kind === 'ostr') && this.rustNestedFieldUpperKeyUse(n)) return 'ukey';
+        // ral-56k: a key of a statement write `x[k][..][..] = v` (three or more keys) on a typed one-level map bearer: the
+        // printer's own rustBearerChainedWrite prints the first hop as `x.entry(<key>).or_default()` and every later key as
+        // `&<boxed key>` of get_value_mut / add_element_to_object (no ccxt pass reads it); the first takes the insert-key text
+        if ((kind === 'str' || kind === 'ostr') && this.rustInitKeyLocal(n)) {
+            const deep = this.rustDeepBearerChainKey(n);
+            if (deep === 'first') return 'key';
+            if (deep === 'later') return 'box';
+        }
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -8547,6 +8560,29 @@ export class RustTranspiler extends BaseTranspiler {
         if (!lit(outer.argumentExpression) || !lit(hop.argumentExpression)) return false;
         const base: any = this.rustStripWrappers(hop.expression);
         return base !== undefined && isIdentifier(base) && this.rustDictBearerDeclaration(base) !== undefined;
+    }
+
+    /** ral-56k: `n` is a key of a statement `x[k1][k2][k3..] = v` (three or more keys) with `x` a typed one-level map bearer
+     *  (rustBearerChainedWrite's deep form): 'first' for k1, 'later' for any other key, else undefined. */
+    rustDeepBearerChainKey(n: any): 'first' | 'later' | undefined {
+        const keyNode: any = this.rustKeyWrapped(n);
+        const access: any = keyNode.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== keyNode) return undefined;
+        let outer: any = access;
+        while (isElementAccessExpression(outer.parent) && outer.parent.expression === outer) outer = outer.parent;
+        const write: any = outer.parent;
+        if (!isBinaryExpression(write) || write.left !== outer || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
+        let base: any = outer;
+        let depth = 0;
+        while (isElementAccessExpression(base)) { base = base.expression; depth++; }
+        if (depth < 3 || !isIdentifier(base)) return undefined;
+        // the bearer decision of `x` leans on this very key (rustBearerChainHopArg), so it is asked syntactically here: a never
+        // reassigned object-literal local; a local the bearer proof then refuses for another reason keeps the boxed chain,
+        // whose key `&k` is the typed local's box (rustDeepBearerChainKeyText)
+        const declaration: any = this.rustDeclarationOfIdentifier(base);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isObjectLiteralExpression(this.rustSkipWrappers(declaration.initializer))
+            || this.rustLocalReassigned(declaration)) return undefined;
+        return access.expression === base ? 'first' : 'later';
     }
 
     /** ral-53i: `n` is k1 or k2 of a statement `x[k1][k2] = v` with `x` a typed two-level local map (`rustNestedBearerInsert`). */
@@ -11304,7 +11340,8 @@ export class RustTranspiler extends BaseTranspiler {
             // the later reads key by other locals and the map's keys are the same strings either way
             // ral-55k: a map also read back by the key local itself is fine too (digifinex): the read prints `m.get(k.as_deref()..)`
             // and the push on the bucket read is printed natively by arrPush (rustLitKeyBearerReadLocal), not by a ccxt pass
-            if (enumerated && keyRead && this.rustSafeCurrencyCodeInit(local.initializer)) return this.rustScalarInsertKeyUse(n);
+            // ral-56k: and a map only enumerated (never read back by key: btse fetchBalance `totals[code] = ..`): same key text
+            if (enumerated && this.rustSafeCurrencyCodeInit(local.initializer)) return this.rustScalarInsertKeyUse(n);
             if (enumerated) return !keyRead && (isElementAccessExpression(this.rustSkipWrappers(local.initializer)) || this.rustTbNetworkCodeInit(local.initializer)
                 || this.rust55xGuardedSafeStringKey(n, local))
                 && this.rustScalarInsertKeyUse(n);
@@ -11397,7 +11434,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** 'map' for a typed map receiver, 'value' for a proven-dict `Value` receiver, else undefined. */
     rustOkeyKind(receiver: any, read: any): 'map' | 'value' | undefined {
-        if (this.isTestSource(receiver) || this.isWriteBackBindRead(read)) return undefined;
+        if (this.isTestSource(receiver) || (this.isWriteBackBindRead(read) && !this.rustOwnedWriteBackPushBind(read))) return undefined;
         if (this.rustDictBearerDeclaration(receiver) !== undefined || this.rustMapParamDeclaration(receiver) !== undefined) return 'map';
         if (this.rustReadBearerKind(receiver) !== undefined || this.rustParamShadowOf(receiver) !== undefined || this.rustLentListUse(receiver)
             || this.printOptListElement(receiver, read.argumentExpression) !== undefined) return undefined;
@@ -19888,7 +19925,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  write-back pass reads only the `as_str()` form). */
     rustBearerTypedStrReadKey(access: any): string | undefined {
         const key: any = this.rustSkipWrappers(access?.argumentExpression);
-        if (key === undefined || !isIdentifier(key) || key !== access.argumentExpression || this.isWriteBackBindRead(access)) return undefined;
+        if (key === undefined || !isIdentifier(key) || key !== access.argumentExpression || (this.isWriteBackBindRead(access) && !this.rustOwnedWriteBackPushBind(access))) return undefined;
         const name = String(key.text);
         if (name === 'self' || (this.rustNodeIsKeyUnsafePlace(name) && !this.rustBookMetaPlaceOnLiteral(key))) return undefined;
         // a key local whose scalar decision is still open may yet stay `Value`: the bearer decision that leans on it is not cached
@@ -19898,6 +19935,32 @@ export class RustTranspiler extends BaseTranspiler {
         if (scalar === 'str') return `${bare}.as_str()`;
         if (scalar === 'ostr' || this.rustStringLocalIdentifierIsTyped(key)) return `${bare}.as_deref().unwrap_or("")`;
         return undefined;
+    }
+
+    /** ral-56k: `const b = m[k]; b.push (v);` with `m` a map-literal local, `k` a plain identifier key and `b` never reassigned and
+     *  not mutated again by the statement after the push. The printer prints the push AND the write-back insert itself (arrPush),
+     *  so the bind no longer leans on ccxt's write-back pass (which reads only the boxed `k.as_str()` text). */
+    rustOwnedWriteBackPushBind(access: any): boolean {
+        if (!this.rustLiteralWriteBackBindOk(access)) return false;
+        const declaration: any = access.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer !== access || !isIdentifier(declaration.name)) return false;
+        if (this.rustLocalReassigned(declaration)) return false;
+        const name = String(declaration.name.text);
+        const statement: any = declaration.parent?.parent;
+        if (statement?.kind !== SyntaxKind.VariableStatement || statement.declarationList.declarations.length !== 1) return false;
+        const siblings: any[] = statement.parent?.statements ?? [];
+        const at = siblings.indexOf(statement);
+        const push: any = siblings[at + 1]?.kind === SyntaxKind.ExpressionStatement ? siblings[at + 1].expression : undefined;
+        if (push === undefined || !isCallExpression(push) || !isPropertyAccessExpression(push.expression) || String(push.expression.name.text) !== 'push'
+            || !isIdentifier(push.expression.expression) || String(push.expression.expression.text) !== name || push.arguments.length !== 1
+            || push.arguments[0].kind === SyntaxKind.SpreadElement) return false;
+        if (at + 2 < siblings.length && this.rustStatementMutatesLocal(siblings[at + 2], name)) return false;
+        // the pushed value must not read the bucket or its map (it is evaluated while the bucket is borrowed mutably)
+        const mapName = String(access.expression.text);
+        let reads = false;
+        const visit = (n: any) => { if (isIdentifier(n) && (String(n.text) === name || String(n.text) === mapName)) reads = true; else n.forEachChild(visit); };
+        visit(push.arguments[0]);
+        return !reads;
     }
 
     /** ral-xf: `const x = m[k]` mutated by the next statement, where `m` is a map-literal local and `k` a plain
@@ -31281,6 +31344,23 @@ export class RustTranspiler extends BaseTranspiler {
             const bareArg = parsedArg.trim();
             const bareValue = RustTranspiler.cloneIfBareLocal(bareArg);
             return `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${bareValue}); }`;
+        }
+        // ral-56k: `const b = m[k]; b.push (v);` on a map-literal `m` whose read keys by a typed string local: the printer owns the
+        // push and the write-back insert (`if let Some(__k) = k.as_deref()`: a `None` key wrote nothing back, as `Null.as_str()` did)
+        const ownedBind: any = this.rustSkipWrappers(this.rustSingleLocalDeclaration(recv)?.initializer);
+        if (name !== undefined && parsedArg !== undefined && recv !== undefined && isIdentifier(recv) && ownedBind !== undefined && isElementAccessExpression(ownedBind)
+            && node.parent?.kind === SyntaxKind.ExpressionStatement && name.trim() === this.printNode(recv, 0).trim()
+            && this.rustOwnedWriteBackPushBind(ownedBind) && this.rustSingleLocalDeclaration(recv)?.parent?.parent?.parent === node.parent.parent) {
+            const keyRead = this.rustBearerTypedStrReadKey(ownedBind);
+            const key: any = this.rustSkipWrappers(ownedBind.argumentExpression);
+            const keyText = keyRead === undefined ? undefined : (keyRead.endsWith('.as_str()') ? `Some(${super.printIdentifier(key)}.as_str())` : `${super.printIdentifier(key)}.as_deref()`);
+            if (keyText !== undefined) {
+                const mapText = super.printIdentifier(ownedBind.expression);
+                // the bucket moves into the map at its last use (the write-back pass inserted it by move as well)
+                const moved = this.rustLocalLastUse(recv, this.rustDeclaredNode(recv)) ? name : `${name}.clone()`;
+                return `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${RustTranspiler.cloneIfBareLocal(parsedArg.trim())}); } `
+                    + `if let Some(__k) = ${keyText} { ${mapText}.insert(__k.to_string(), ${moved}); }`;
+            }
         }
         // ral-55k: `const f = m[k]; const x = f['lit']; x.push (v)` with `m` a typed plain map: `x` is plain data two reads down.
         // The printer owns this push (it used to be finished by ccxt's rustVecPushInline, which proves the
