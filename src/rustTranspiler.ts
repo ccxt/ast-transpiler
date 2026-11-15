@@ -8047,14 +8047,23 @@ export class RustTranspiler extends BaseTranspiler {
     /** A local keyed on a field and re-boxed anywhere but a moving use would copy where the `Value` moved. */
     rustFieldKeyCostly(declaration: any): boolean {
         let field = false;
+        let bookField = false;
+        let keyUse = false;
         let boxed = false;
         let lendable = true;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
             const form = this.rustScalarUseForms.get(n);
             // a `safeValue (this.orderbooks, k)` key was a by-value reader argument before the map was typed, never a field key
             if (form === 'fin' && this.rustWsBookKeyOf(n) && isCallExpression(this.rustWsBookKeyParent(n))) return true;
+            // ral-53x K1: a `this.orderbooks[k]` read / write or `k in this.orderbooks` test takes `&k` from the typed book
+            // map: it still lets the boxes lend, but alone it does not make the re-boxes costly
+            if (form === 'fin' && this.rustWsBookKeyOf(n) && RustTranspiler.RUST_PRO_TIER_FILE.test(String(n.getSourceFile().fileName))) {
+                bookField = true;
+                return true;
+            }
             // so is a `safeValue (this.<cache map>, k)` key (trades, positionsByType)
             if (form === 'fin' && isCallExpression(this.rustWsBookKeyParent(n)) && this.rustWsCacheMapLookup(this.rustWsBookKeyParent(n)) && this.rustWsCacheMapField(this.rustWsBookKeyParent(n).arguments[0])) return true;
+            if (form === 'key') keyUse = true;
             if (form === 'fin' || form === 'frd' || (form === 'key' && this.rustFieldKeyReceiver(this.rustKeyWrapped(n).parent?.expression) !== undefined)) field = true;
             // rf: a native insert key takes the key text (`as_deref().unwrap_or("null").to_string()`), the one allocation
             // `stringify_param` made for the boxed key: no copy where the `Value` moved
@@ -8066,7 +8075,10 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return true;
         });
-        if (field && boxed && lendable && !this.rustStrNoLend) {
+        // a local also used as an insert key keeps the book key as a field key (its typed key would turn a call-bound map
+        // into an IndexMap bearer copied out of its `Value`: bitvavo `limits`)
+        if (bookField && keyUse) field = true;
+        if ((field || bookField) && boxed && lendable && !this.rustStrNoLend) {
             this.rustStrLentLocals.add(declaration);
             return false;
         }

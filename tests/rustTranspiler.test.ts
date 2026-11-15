@@ -18198,3 +18198,22 @@ describe('ral-53f: lift 2, a const tuple slot read and the box line budget', () 
         expect(output).toMatch(/let mut type_var: Value = resolvedAuth/);
     });
 });
+describe('ral-53x K1: a pro book-map key re-boxed elsewhere lends its string', () => {
+    const write = (name: string, extra: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base/ws'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/ws/OrderBook.ts'), "export class WsOrderBook {\n    cache: any[] = [];\n    constructor (snapshot: any = {}, depth: any = undefined) {}\n    reset (snapshot: any = {}) {}\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "import { WsOrderBook } from './ws/OrderBook.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    orderbooks: Dictionary<WsOrderBook> = {};\n    options: any = {};\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k] ?? d; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k] ?? d; }\n    safeMarket (id: any): any { return { 'symbol': id }; }\n    orderBook (snapshot = {}, depth = 100): WsOrderBook { return new WsOrderBook (snapshot, depth); }\n    parseOrderBook (o: any, symbol: Str = undefined): any { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    handleOrderBook (message: Dict) {\n        const market = this.safeMarket (this.safeString (message, 's'));\n        const symbol = this.safeString (market, 'symbol', '');\n        const messageHash = 'orderbook:' + symbol;\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = this.orderBook ();\n        }\n        const orderbook = this.orderbooks[symbol];\n        const snapshot = this.parseOrderBook ({ 'bids': [], 'asks': [] }, symbol);\n        orderbook.reset (snapshot);\n" + extra + "        orderbook['symbol'] = symbol;\n        this.orderbooks[symbol] = orderbook;\n        return messageHash;\n    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    test('book-map key, self-call argument and hash concat: the local is a String', () => {
+        const out = write ('53x-book', '');
+        expect(out).toContain('let mut symbol: String = ');
+    });
+    test('negative: also an insert key into a call-bound map keeps the local Value', () => {
+        const out = write ('53x-bookn', "        const limits = this.safeDict (this.options, 'limits', {});\n        limits[symbol] = 1;\n        this.options['limits'] = limits;\n");
+        expect(out).toContain('let mut symbol: Value = ');
+    });
+});
