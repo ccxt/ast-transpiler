@@ -4746,7 +4746,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-51n: `xs.length` of an untyped list always prints a `Value::Int` (`get_array_length` answers Int for every
         // receiver), so an `any`-typed length local is an `i64` exactly; the checker's `any` is only the receiver's type
         const anyLength = kind === 'int' && checked === undefined && this.rustListLengthInit(this.unwrapParens(declaration.initializer));
-        if (checked !== expected && !boolTested && !anyLength && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(combinatorKind !== undefined && combinatorKind === kind && (kind === 'int' || checked === undefined))
+        if (checked !== expected && !boolTested && !anyLength && !(kind === 'ostr' && this.rustOptDictStrKeyTernary(declaration.initializer)) && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(combinatorKind !== undefined && combinatorKind === kind && (kind === 'int' || checked === undefined))
             && !(kind === 'int' && checked === undefined && this.rustSafeDictKeyOnlyLocal(declaration))) return undefined;
         const seeded = kind;
         kind = this.rustScalarWidenedKind(declaration, kind);
@@ -5157,6 +5157,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && this.rustListLengthInit(node)) return 'int';
         // ral-52k: a base credential field declared `string` (`this.apiKey`) as an arm of a ternary initializer: a `Str` or `Null`
         if (fresh && this.rustTernaryArm(node) && this.rustBaseStrFieldRead(node)) return 'ostr';
+        // ral-53k: `c['code']` of an `Option<Dict>` local (a unified string key) as an arm of a ternary initializer
+        if (fresh && this.rustTernaryArm(node) && this.rustOptDictStrKeyText(node) !== undefined) return 'ostr';
         if (!isCallExpression(node)) return undefined;
         if (isIdentifier(node.expression) && this.rustStrRuntimeCall(node)) return 'str';
         if (fresh && this.rustDeclInitPosition(node) && this.rustValueCaseRecv(node) !== undefined) return 'ostr';
@@ -5239,6 +5241,28 @@ export class RustTranspiler extends BaseTranspiler {
         member = member?.resolve?.() ?? member;
         return member !== undefined && member.kind === SyntaxKind.PropertyDeclaration && member.type?.kind === SyntaxKind.StringKeyword
             && RustTranspiler.RUST_BASE_TIER_FILE.test(String(member.getSourceFile?.()?.fileName ?? ''));
+    }
+
+    /** ral-53k: a ternary whose arms are each a checker-typed string or a unified string key of an `Option<Dict>` local (one at least). */
+    rustOptDictStrKeyTernary(init: any): boolean {
+        const node: any = this.unwrapParens(init);
+        if (node === undefined || !isConditionalExpression(node)) return false;
+        const arms = [ this.unwrapParens(node.whenTrue), this.unwrapParens(node.whenFalse) ];
+        const keyed = arms.filter((a: any) => this.rustOptDictStrKeyText(a) !== undefined).length;
+        return keyed > 0 && arms.every((a: any) => this.rustOptDictStrKeyText(a) !== undefined || this.primitiveKindOfType(this.typeOfNodeIfAny(a)) === 'string');
+    }
+
+    /** ral-53k: `c['code']` (a unified string key of a market / currency record) on an `Option<Dict>` local, printed as the
+     *  owned `KeyRead::key_read(&&c, "code")` temporary moved into its string (`into_opt_string`: `None` for a missing key). */
+    rustOptDictStrKeyText(node: any): string | undefined {
+        if (node === undefined || !isElementAccessExpression(node) || !isIdentifier(node.expression) || !isStringLiteralLikeNode(node.argumentExpression)) return undefined;
+        if (!RustTranspiler.RUST_NIL_ELEM_STR_KEYS.has(String(node.argumentExpression.text))) return undefined;
+        if (/[/]test[/]/.test(String(node.getSourceFile?.()?.fileName ?? ''))) return undefined;
+        const local = this.rustOptContainerOf(node.expression);
+        if (local === undefined || local.kind !== 'dict') return undefined;
+        const read = this.printNode(node, 0).trim();
+        if (!/^(?:crate|ccxt)::value::KeyRead::key_read\(&{1,2}[A-Za-z_][A-Za-z0-9_]*, "[A-Za-z]+"\)$/.test(read)) return undefined;
+        return `${read}.into_opt_string()`;
     }
 
     /** True when `node` (through parens) is the `whenTrue`/`whenFalse` arm of a ternary that initialises a declaration. */
@@ -8198,7 +8222,8 @@ export class RustTranspiler extends BaseTranspiler {
             // allocation the boxed key's `stringify_param` made: lent, not copied
             // ral-52i: an object-literal value of the `in`-guarded insert itself (`m[k] = { .., 'f': k }`) copied the `Value` too
             const insertValue = form === 'box' && up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n && this.rustElemKeyInsertLiteralValue(n, declaration);
-            if (form === 'err' || (form === 'key' && !this.rustElemInsertKey(this.rustKeyWrapped(n))) || ((form === 'box' || form === 'xbox') && !argCopy && !insertValue && !this.rustScalarBoxMoves(n, form, declaration))) copied = true;
+            // ral-53k: a plain map-literal read key handed as a call argument (`rustElemPlainMapReadKey`) borrows, no copy
+            if (form === 'err' || (form === 'key' && !this.rustElemInsertKey(this.rustKeyWrapped(n)) && !this.rustElemPlainMapReadKey(n)) || ((form === 'box' || form === 'xbox') && !argCopy && !insertValue && !this.rustScalarBoxMoves(n, form, declaration))) copied = true;
             return true;
         });
         return keyed && copied;
@@ -8214,6 +8239,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isElementAccessExpression(access)) return false;
         const key: any = this.rustSkipWrappers(access.argumentExpression);
         return key !== undefined && isIdentifier(key) && this.rustDeclarationOfIdentifier(key) === declaration && this.rustElemInsertKey(key);
+    }
+
+    /** ral-53k: `m[k]` handed as a call argument off a plain map-literal local: the lookup borrows the key's `&str`, no copy. */
+    rustElemPlainMapReadKey(n: any): boolean {
+        const access: any = n.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== n || !isIdentifier(access.expression)) return false;
+        let top: any = access;
+        while (isParenthesizedExpression(top.parent) && top.parent.expression === top) top = top.parent;
+        const up: any = top.parent;
+        // only a call argument (`this.extend (m[k], ..)`): a bind (`const e = m[k]`) or a receiver (`m[k].push`) is read by ccxt's write-back pass
+        if (!isCallExpression(up) || up.expression === top || !up.arguments.some((a: any) => a === top)) return false;
+        return this.rustDictLocalProof(access.expression) === 'plain';
     }
 
     /** `m[k] = v` as a statement: the element key of a native insert. */
@@ -8914,6 +8951,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'int' && this.rustListLengthInit(node)) return this.rustListLengthText(node);
         // ral-52k: a base credential field (`Value` in the struct, `Str` or `Null`) read once as its text
         if (kind === 'ostr' && this.rustTernaryArm(node) && this.rustBaseStrFieldRead(node)) return `${this.printNode(node, 0).trim()}.as_str().map(str::to_owned)`;
+        if (kind === 'ostr' && this.rustTernaryArm(node)) { const read = this.rustOptDictStrKeyText(node); if (read !== undefined) return read; }
         if (kind === 'ostr') { const row = this.rustRowFieldStrText(node); if (row !== undefined) return row; }
         if (kind === 'ostr') { const owned = this.rustNilElemStrText(node); if (owned !== undefined) return owned; }
         if (kind === 'ostr' && (this.rustElementReadScalarKind(node) !== undefined || this.rustInlineHandleStrSlot(node))) {
@@ -26097,7 +26135,7 @@ export class RustTranspiler extends BaseTranspiler {
     // `&x`, and a `Value` slot of a `this.` method gets `x.clone().map_or(Value::Null, Value::Arr)` (the shared
     // handle, no element copy; a move at `return x`). A list that is only handed on keeps its box.
 
-    private static readonly RUST_OPT_LIST_SOURCES = new Set([ 'marketSymbols', 'marketIds', 'safeList', 'safeList2', 'safeListN' ]);
+    private static readonly RUST_OPT_LIST_SOURCES = new Set([ 'marketSymbols', 'marketIds', 'marketCodes', 'safeList', 'safeList2', 'safeListN' ]);
 
     private rustOptListDecisions = new WeakMap<any, boolean>();
 

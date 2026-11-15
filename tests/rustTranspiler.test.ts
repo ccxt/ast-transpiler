@@ -13754,7 +13754,8 @@ describe('ral-wf: a literal map read inside the value of a write on itself holds
     test('m[k] = f (m[k]): the read is a native get bound before the insert, the map moves at its return', () => {
         const body = out.slice (out.indexOf ('fn merge'), out.indexOf ('fn mergeKept'));
         expect(body).toMatch(/let mut result: indexmap::IndexMap<String, Value> = /);
-        expect(body).toMatch(/let __be_tmp = self\.extend\(result\.get\(code\.as_str\(\)\.unwrap_or\(""\)\)\.cloned\(\)\.unwrap_or\(Value::Null\)/);
+        // ral-53k: an `in`-keyed code read back as a call argument is now an Option<String> local (`as_deref`)
+        expect(body).toMatch(/let __be_tmp = self\.extend\(result\.get\(code\.as_(?:str|deref)\(\)\.unwrap_or\(""\)\)\.cloned\(\)\.unwrap_or\(Value::Null\)/);
         expect(body).toContain('Value::Map(result)');
         expect(body).not.toContain('result.clone()');
     });
@@ -18304,5 +18305,42 @@ describe('ral-53i: a list local reassigned whole from a venue call the typed-ret
         write (dir, 'Promise<any>');
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).not.toContain('let mut rows: crate::value::List');
+    });
+});
+
+describe('ral-53k: kind unification (Option<Dict> string key arm, marketCodes optional list, plain-map read keys)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport default class Exchange {\n    options: any = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict | undefined { return o; }\n    safeList (o: any, k: any, d: any = undefined): any[] | undefined { return o; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    commonCurrencyCode (code: string): string { return code; }\n    inArray (needle: any, haystack: any): boolean { return true; }\n    extend (...args: any[]): any { return args[0]; }\n    account (): Dict { return {}; }\n    hold (x: any): any { return x; }\n    marketCodes (codes: Strings = undefined): Strings {\n        if (codes === undefined) {\n            return codes;\n        }\n        const result: string[] = [];\n        for (let i = 0; i < codes.length; i++) {\n            result.push (this.commonCurrencyCode (codes[i]));\n        }\n        return result;\n    }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Strings } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const delta = (key: string) => "    parseBalance (response: Dict) {\n        const balances: Dict[] = this.safeList (response, 'result', []);\n        const result: Dict = { 'info': response };\n        const byId = this.safeDict (this.options, 'currenciesByNumericId', {});\n        for (let i = 0; i < balances.length; i++) {\n            const balance = this.safeDict (balances, i);\n            const currencyId = this.safeString (balance, 'asset_id');\n            const currency = this.safeDict (byId, currencyId);\n            const code = (currency === undefined) ? currencyId : currency['" + key + "'];\n            result[code] = this.account ();\n        }\n        return result;\n    }\n";
+    test('delta: a ternary of an id and c.code over an Option<Dict> local is an Option<String> local', () => {
+        const out = write ('53k-delta', delta ('code'));
+        expect(out).toContain('let mut currency: Option<crate::value::Dict> = ');
+        expect(out).toContain('let mut code: Option<String> = (if (currency.is_none()) {');
+        expect(out).toContain('crate::value::KeyRead::key_read(&&currency, "code").into_opt_string()');
+    });
+    test('negative: a key outside the unified string keys keeps the local Value', () => {
+        const out = write ('53k-delta-neg', delta ('numericId'));
+        expect(out).toMatch(/let mut code: Value = /);
+    });
+    test('marketCodes: its result held only for a null test and an inArray haystack is an optional list', () => {
+        const out = write ('53k-codes', "    fees (codes: Strings, rows: any[]) {\n        const codesValue: Strings = this.marketCodes (codes);\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const code = this.safeString (rows[i], 'ccy');\n            if ((codesValue === undefined) || this.inArray (code, codesValue)) {\n                out.push (code);\n            }\n        }\n        return out;\n    }\n");
+        expect(out).toContain('let mut codesValue: Option<crate::value::List> = ');
+        expect(out).toContain('.into_opt_list()');
+        expect(out).toContain('codesValue.is_none()');
+    });
+    const luno = (recv: string) => "    parseBalance (response: Dict" + (recv === 'result' ? '' : ', result: Dict') + ") {\n        const wallets: Dict[] = this.safeList (response, 'balance', []);\n" + (recv === 'result' ? "        const result: Dict = { 'info': response };\n" : '') + "        for (let i = 0; i < wallets.length; i++) {\n            const wallet = this.safeDict (wallets, i);\n            const code = this.safeCurrencyCode (this.safeString (wallet, 'asset'));\n            if ((code !== undefined) && (code in result)) {\n                result[code] = this.extend (result[code], { 'used': this.safeString (result[code], 'used') });\n            } else if (code !== undefined) {\n                result[code] = this.account ();\n            }\n        }\n        return this.hold (result);\n    }\n";
+    test('luno: an `in`-keyed code read back as `result[code]` off a plain map literal is an Option<String> local', () => {
+        const out = write ('53k-luno', luno ('result'));
+        expect(out).toMatch(/let mut code: Option<String> = /);
+    });
+    test('negative: the same reads off a Dict parameter keep the local Value', () => {
+        const out = write ('53k-luno-neg', luno ('param'));
+        expect(out).toMatch(/let mut code: Value = /);
     });
 });
