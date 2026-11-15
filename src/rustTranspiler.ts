@@ -2143,7 +2143,7 @@ export class RustTranspiler extends BaseTranspiler {
         const r20 = this.nativeNumericAdd(op, left, right, leftText, rightText); if (r20 !== undefined) return r20;
         if (op === SyntaxKind.PlusToken && (this.isNativeStringConcatPair(leftType, rightType) || this.concatIsAnchored(left, right, leftType, rightType)
             || this.strOrNullConcatIsAnchored(left, right, leftType, rightType))) {
-            return this.printNativeStringConcat(this.rustConcatLiteralText(left, leftText, right), this.rustConcatLiteralText(right, rightText, left));
+            return this.rustRecordFormatConcat(left.parent, this.rustConcatLiteralText(left, leftText, right), this.rustConcatLiteralText(right, rightText, left));
         }
         if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
             return this.nativeCoercingArithmetic(op, left, right, leftText, rightText);
@@ -2162,7 +2162,37 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeStringConcat(leftText: string, rightText: string): string {
-        return `Value::Str(format!("{}{}", ${leftText}, ${rightText}).into())`;
+        return `Value::Str(${this.rustFormatConcatText(leftText, rightText)}.into())`;
+    }
+
+    rustFormatConcatText(leftText: string, rightText: string): string {
+        return `format!("{}{}", ${leftText}, ${rightText})`;
+    }
+
+    /** ral-57x: the `format!(..)` a `+` / `.toString()` node took at its latest print (the printer's own arm decision,
+     *  recorded where the box is built), cleared whenever that node is printed again; never read back from printed text. */
+    private rustFormatPrints = new WeakMap<any, string>();
+
+    /** The `+` node (or the `+=` node) printed the native concat arm: record its unboxed `format!` and return the box. */
+    rustRecordFormatConcat(node: any, leftText: string, rightText: string): string {
+        const format = this.rustFormatConcatText(leftText, rightText);
+        if (node !== undefined) this.rustFormatPrints.set(node, format);
+        return `Value::Str(${format}.into())`;
+    }
+
+    /** A `.toString()` call printed as a whole `Value::Str(format!("{}", x).into())`: record the `format!` and return the box. */
+    rustRecordFormatToString(node: any, name: string): string {
+        const format = `format!("{}", ${name})`;
+        if (node !== undefined) this.rustFormatPrints.set(node, format);
+        return `Value::Str(${format}.into())`;
+    }
+
+    /** ral-57x: the `format!(..)` that the node's print boxes whole as `Value::Str(format!(..).into())`, else undefined. Decided
+     *  from the node: it is printed (as before) and the arm that printer took for this very node is looked up. */
+    rustUnboxedFormatOf(node: any): string | undefined {
+        if (node === undefined) return undefined;
+        this.printNode(node, 0);
+        return this.rustFormatPrints.get(node);
     }
 
     // Both operands are `Int`/`Float` at runtime; `-> Value::Null` covers the
@@ -2361,6 +2391,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printBinaryExpression(node, identation) {
+        this.rustFormatPrints.delete(node);
         return this.printCustomBinaryExpressionIfAny(node, identation) || super.printBinaryExpression(node, identation);
     }
 
@@ -3201,13 +3232,28 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustOptStrConcatFits(n);
     }
 
+    /** ral-56x K1: `return x` of a literal-seeded string local (never a parameter alias) in a `-> Option<String>` method. */
+    rust56xStrReturnLocal(n: any, fn: any): boolean {
+        if (!isIdentifier(n) || !isReturnStatement(n.parent) || findAncestor(n.parent.parent, isFunctionLike) !== fn) return false;
+        const declaration: any = this.rustDeclaredNode(n);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined) return false;
+        return this.literalKindOfNode(this.unwrapParens(declaration.initializer)) === 'string' && this.rustEnclosingFunction(declaration) === fn;
+    }
+
+    rust56xStrReturnText(exp: any, fn: any): string | undefined {
+        if (exp === undefined || !isIdentifier(exp) || !this.rust56xStrReturnLocal(exp, fn)) return undefined;
+        const kind = this.rustScalarLocalOf(exp)?.kind;
+        if (kind === 'str') return `Some(${super.printIdentifier(exp)})`;
+        return kind === 'ostr' ? super.printIdentifier(exp) : undefined;
+    }
+
     /** ral-56x K1: a `+` partner that is itself a concat (or a `.toString()`) the printer already prints as a boxed `Value::Str(format!(..))`
      *  (always a `Str`, never `Null`), so the optional string joins the same `format!` with its `as_deref().unwrap_or("null")` text. */
     rust56xFormatPartner(other): boolean {
         const inner: any = this.unwrapParensNode(other);
         if (inner === undefined || !(isBinaryExpression(inner) && inner.operatorToken.kind === SyntaxKind.PlusToken)
             && !(isCallExpression(inner) && isPropertyAccessExpression(inner.expression) && inner.expression.name.text === 'toString' && (inner.arguments?.length ?? 0) === 0)) return false;
-        return this.rustUnboxedFormatText(this.printNode(inner, 0).trim()) !== undefined;
+        return this.rustUnboxedFormatOf(inner) !== undefined;
     }
 
     /** The `as_deref().unwrap_or("null")` read of a concat operand keeps its statement within the 400-char line budget. */
@@ -7084,7 +7130,7 @@ export class RustTranspiler extends BaseTranspiler {
     printRustVenueIntToString(node, name: string): string | undefined {
         const receiver: any = node?.expression?.expression;
         if (receiver === undefined || !isIdentifier(receiver) || this.rustScalarLocalOf(receiver)?.kind !== 'int') return undefined;
-        return `Value::Str(format!("{}", ${name}).into())`;
+        return this.rustRecordFormatToString(node, name);
     }
 
     /** Declared return type texts per method name over the venue sources under `srcRoot`. */
@@ -7689,6 +7735,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (isReturnStatement(parent) && parent.expression === n) {
             const fn: any = findAncestor(parent.parent, isFunctionLike);
             const typedReturn = this.rustMethodTypedReturnKind(fn); if (typedReturn !== undefined) return typedReturn === kind || typedReturn === `o${kind}` ? 'native' : undefined;
+            // ral-56x K1: a typed string local returned from a method that already prints `-> Option<String>` is that
+            // payload itself (`Some(x)` / `x`), the same text the boxed `x.as_str().map(str::to_owned)` gave back
+            // ral-57x: decided from the method itself (head + every return path), not from its cached decision: this use is
+            // asked while that decision is still in progress (its return-path walk types this very local)
+            if ((kind === 'str' || kind === 'ostr') && this.rust56xStrReturnLocal(n, fn) && this.rustStrReturnSignature(fn, n) && this.rust57xStrReturnMethod(fn)) return 'native';
             return this.rustNativeStrReturnKind(fn) === 'str' || this.rustStrReturnSignature(fn, n) ? undefined : 'box';
         }
         // ral-ua: the right operand of `acc += x` onto a `Value` string accumulator joins with `format!` like a `+` operand
@@ -9646,24 +9697,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-55x K1: `'lit' + s` of string literals and typed string locals: the printer's own `format!` concat is a `String`
         // (never `Null`), the same text the boxed `Value::Str(format!(..))` operand held
         if (isBinaryExpression(inner) && inner.operatorToken.kind === SyntaxKind.PlusToken && this.rustStrConcatOperandLeaves(inner)) {
-            const text = this.rustUnboxedFormatText(this.printNode(inner, 0));
+            const text = this.rustUnboxedFormatOf(inner);
             if (text !== undefined) return `${text}.as_str()`;
-        }
-        return undefined;
-    }
-
-    /** ral-55x K1: `Value::Str(format!(..).into())` -> the `format!(..)` itself, when that macro call spans the whole box. */
-    rustUnboxedFormatText(text: string): string | undefined {
-        const head = 'Value::Str(format!(';
-        if (!text.startsWith(head) || !text.endsWith(').into())')) return undefined;
-        let depth = 1;
-        let quoted = false;
-        for (let i = head.length; i < text.length; i++) {
-            const c = text[i];
-            if (quoted) { if (c === '\\') i++; else if (c === '"') quoted = false; continue; }
-            if (c === '"') quoted = true;
-            else if (c === '(') depth++;
-            else if (c === ')' && --depth === 0) return text.slice(i + 1) === '.into())' ? text.slice('Value::Str('.length, i + 1) : undefined;
         }
         return undefined;
     }
@@ -11972,7 +12007,38 @@ export class RustTranspiler extends BaseTranspiler {
         return method;
     }
 
+    /** ral-57x: the method prints `-> Option<String>` whatever its literal-seeded string locals become: the signature head
+     *  admits it and every return converts, a returned own literal-seeded local (checker `string`) counted as converting
+     *  (as a `String` it is `Some(x)`; as a `Value` it is a checker-string `Value`: rustStrReturnValueConverts either way). */
+    rust57xStrReturnMethod(fn: any): boolean {
+        if (fn === undefined || fn.kind !== SyntaxKind.MethodDeclaration || !this.rustNativeStrReturnHead(fn)) return false;
+        const body: any = fn.body;
+        const last = body?.statements[body.statements.length - 1];
+        if (last === undefined || !isReturnStatement(last)) return false;
+        let ok = true;
+        const visit = (n: any) => {
+            if (!ok || (n !== body && isFunctionLike(n))) return;
+            if (isReturnStatement(n)) {
+                const inner: any = this.unwrapParensNode(n.expression);
+                // only a local the `-> Option<String>` signature itself held back (rustStrReturnSignature: its return use answered no form);
+                // a local other rules already type keeps the decision it had
+                const own = inner !== undefined && isIdentifier(inner) && this.rust56xStrReturnLocal(inner, fn) && this.rustStrReturnSignature(fn, inner)
+                    && this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string';
+                if (!own && !this.rustStrReturnValueConverts(n.expression)) { ok = false; return; }
+            }
+            n.forEachChild(visit);
+        };
+        body.forEachChild(visit);
+        return ok;
+    }
+
     private rustNativeStrReturnDecisionUncached(node): boolean {
+        // ral-57x: a returned own literal-seeded string local converts whichever form it takes (rust57xStrReturnMethod)
+        return this.rust57xStrReturnMethod(node);
+    }
+
+    /** The signature half of the native-`Str` return decision: a sync `string` method outside the base tier / override groups. */
+    private rustNativeStrReturnHead(node): boolean {
         // An override's base/trait copy prints `-> Value`. The base classes are hand-tuned across the
         // whole tree: their methods are called from ~every derived file (and the hand-written runtime),
         // where the boxed `Value` ABI is load-bearing. Only per-exchange
@@ -11992,7 +12058,7 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return false;
         }
-        return this.primitiveKindOfType(type) === 'string' && this.rustStrReturnPathsConvert(node.body);
+        return this.primitiveKindOfType(type) === 'string';
     }
 
     // Base methods printed `-> Option<String>` in the base tier and in every override (their only hand-written
@@ -12165,8 +12231,10 @@ export class RustTranspiler extends BaseTranspiler {
     /** Wrap a call text when the callee returns a native `Option<String>`
      *  and the position still needs a `Value`. */
     rustBoxNativeStrCallIfNeeded(node: Node, text: string): string {
-        return this.rustNativeStrCalleeKind(node) === 'str' && !this.rustBaseNativeStrBare.has(node) && this.rustNativeStrCallNeedsBox(node)
-            ? this.rustNativeStrValueBox(text) : text;
+        if (!(this.rustNativeStrCalleeKind(node) === 'str' && !this.rustBaseNativeStrBare.has(node) && this.rustNativeStrCallNeedsBox(node))) return text;
+        // the box wraps the call's print: it is no longer a whole `format!` box
+        this.rustFormatPrints.delete(node);
+        return this.rustNativeStrValueBox(text);
     }
 
     // ── declared-Dict locals (`let x: Value = self.safe_dict_k(..)`) ───────────
@@ -14833,6 +14901,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printCallExpression(node, identation) {
+        this.rustFormatPrints.delete(node);
         const expression = node.expression;
         const bookCall = this.printWsBookMapRead(node) ?? this.printWsBookCtorCall(node, identation); if (bookCall !== undefined) return bookCall;
         const mapLookup = this.printWsCacheMapRead(node); if (mapLookup !== undefined) return mapLookup;
@@ -18611,6 +18680,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustReturnsMarket(fn)) return `${idn}return ${this.printMarketReturnValue(exp)};`;
         if (this.rustReturnsOptMarket(fn)) return `${idn}return ${this.printOptMarketReturnValue(exp)};`;
         if (this.rustReturnsCurrency(fn)) return `${idn}return ${this.printCurrencyReturnValue(exp)};`;
+        // ral-57x: an own literal-seeded string local typed `String` is the payload itself (`Some(x)`); one left `Value` takes the paths below
+        if (this.rustNativeStrReturnKind(fn) === 'str') { const own = this.rust56xStrReturnText(this.unwrapParensNode(exp), fn); if (own !== undefined) return `${idn}return ${own};`; }
         if (this.rustNativeStrReturnKind(fn) === 'str' && this.rustStrReturnValueConverts(exp)) {
             if (this.literalKindOfNode(this.unwrapParensNode(exp)) === 'null') return `${idn}return None;`;
             const local = this.rustVenueStrReturnLocal(this.unwrapParensNode(exp));
@@ -30370,14 +30441,14 @@ export class RustTranspiler extends BaseTranspiler {
         const receiver = node?.expression?.expression;
         // sb: a Copy number local boxed at its `.toString()` read displays the box (`format!("{}", Value::from(x))`)
         const sbLocal = receiver !== undefined && isIdentifier(receiver) ? this.rustScalarLocalOf(receiver) : undefined;
-        if (sbLocal !== undefined && this.rustScalarUseForms.get(receiver) === 'xbox' && this.rustSbCopyBoxUse(receiver, sbLocal.kind)) return `Value::Str(format!("{}", ${name}).into())`;
+        if (sbLocal !== undefined && this.rustScalarUseForms.get(receiver) === 'xbox' && this.rustSbCopyBoxUse(receiver, sbLocal.kind)) return this.rustRecordFormatToString(node, name);
         // xb: an `i64` counter displays as the `Int` box it replaces (`Display` of `Value::Int(n)` is `n`'s)
-        if (receiver !== undefined && this.rustI64CounterOperand(this.unwrapParens(receiver)) && this.rustI64CounterUse(this.unwrapParens(receiver))) return `Value::Str(format!("{}", ${name}).into())`;
+        if (receiver !== undefined && this.rustI64CounterOperand(this.unwrapParens(receiver)) && this.rustI64CounterUse(this.unwrapParens(receiver))) return this.rustRecordFormatToString(node, name);
         const kind = this.rustOperandKind(receiver);
         if (kind !== 'number' && kind !== 'string') return undefined;
         const inner = this.unwrapParensNode(receiver);
         if (inner !== undefined && (this.rustStringLocalIdentifierIsTyped(inner) || this.rustNativeStrCalleeKind(inner) === 'str')) return undefined;
-        return `Value::Str(format!("{}", ${name}).into())`;
+        return this.rustRecordFormatToString(node, name);
     }
 
     // `Math.floor|round|ceil(n)`: the helper answers `Float(op(x))` for a numeric box, `Null` otherwise.
@@ -30456,7 +30527,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (stringSide === undefined || !this.printsValueExpression(stringSide)) return undefined;
         const inner = this.unwrapParensNode(stringSide);
         if (inner !== undefined && (this.rustStringLocalIdentifierIsTyped(inner) || this.rustNativeStrCalleeKind(inner) === 'str')) return undefined;
-        return this.printNativeStringConcat(this.rustConcatLiteralText(left, leftText, right), this.rustConcatLiteralText(right, rightText, left));
+        return this.rustRecordFormatConcat(left.parent, this.rustConcatLiteralText(left, leftText, right), this.rustConcatLiteralText(right, rightText, left));
     }
 
     // Native reads on receivers the plain-dict proof admits (tag-free literal / `account ()` / `omit` /
@@ -31045,7 +31116,7 @@ export class RustTranspiler extends BaseTranspiler {
     // `x.toString()` on a proven-`Str` local: `stringify_simple` of `Str`/`Null` is `Display`.
     printRustToString(node, receiverText: string): string | undefined {
         const receiver = this.rustReceiver(node, receiverText);
-        return receiver === undefined || (node.arguments?.length ?? 0) !== 0 ? undefined : `Value::Str(format!("{}", ${receiver}).into())`;
+        return receiver === undefined || (node.arguments?.length ?? 0) !== 0 ? undefined : this.rustRecordFormatToString(node, receiver);
     }
 
     // `x.toUpperCase()` / `x.toLowerCase()` on a proven-`Str` local (any TS type).

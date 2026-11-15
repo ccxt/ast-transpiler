@@ -9412,7 +9412,9 @@ describe('rust string locals read by string methods', () => {
     });
     test('negative: a returned local keeps the method signature that returns Option<String>', () => {
         expect(out).toContain('-> Option<String>');
-        expect(out).toContain('let mut joined: Value = ');
+        // ral-57x: the literal-seeded accumulator returned from that `-> Option<String>` method is now its `String` payload
+        expect(out).toContain('let mut joined: String = ');
+        expect(out).toContain('return Some(joined);');
     });
     test('a string append of a string-typed value is a push_str', () => {
         expect(out).toContain('let mut url: String = ');
@@ -19601,5 +19603,45 @@ describe('RAL-INT-64: a built list json-stringified in the then branch whose lat
     test('a read after the if keeps the clone', () => {
         const out = transpiler.transpileRustByPath (write ('int64-json-after', body ("request['c'] = 1;").replace ("        return this.fetchX (request);\n", "        request['d'] = parsedIds;\n        return this.fetchX (request);\n"))).content;
         expect(out).not.toMatch(/json_stringify\(&Value::Arr\(parsedIds\)\)/);
+    });
+});
+
+describe('ral-57x: the unboxed format! of a concat operand is the printer arm decision for that node, not a scan of its printed text', () => {
+    test('rustUnboxedFormatOf answers from the node for the `+` replace operand; the text scanner rustUnboxedFormatText is gone', () => {
+        const dir = path.join (rustFixtureRoot, '57x-fmt');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    client (url: string): any { return url; }\n    async authenticate (params: Dict = {}) {\n        const url = this.safeString (params, 'url');\n        const hostname = this.safeString (params, 'hostname');\n        if (url === undefined || hostname === undefined) {\n            throw new Error ('x');\n        }\n        const relativePath = url.replace ('wss://' + hostname, '');\n        const client = this.client (url);\n        return [ client, relativePath ];\n    }\n}\n");
+        const rt: any = (transpiler as any).rustTranspiler;
+        expect(typeof rt.rustUnboxedFormatOf).toBe('function');
+        expect(rt.rustUnboxedFormatText).toBeUndefined();
+        const seen: string[] = [];
+        const own = rt.rustUnboxedFormatOf;
+        rt.rustUnboxedFormatOf = function (node: any) {
+            const r = own.call(this, node);
+            seen.push(`${node.getText()} => ${r}`);
+            return r;
+        };
+        try {
+            const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+            expect(out).toContain('Some(__s.replace(format!("{}{}", "wss://", hostname.as_deref().unwrap_or("null")).as_str(), ""))');
+        } finally {
+            rt.rustUnboxedFormatOf = own;
+        }
+        expect(seen).toContain("'wss://' + hostname => format!(\"{}{}\", \"wss://\", hostname.as_deref().unwrap_or(\"null\"))");
+    });
+});
+
+describe('ral-57x K1: a literal-seeded string accumulator returned from a method that prints -> Option<String>', () => {
+    test('newString = \'\' grown by += and returned is a String returned as Some(newString)', () => {
+        const dir = path.join (rustFixtureRoot, '57x-k1ret');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    removeCommaFromValue (str: string): string {\n        let newString = '';\n        const strParts = str.split (',');\n        for (let i = 0; i < strParts.length; i++) {\n            newString += strParts[i];\n        }\n        return newString;\n    }\n    parseIt (raw: string) {\n        const price = this.removeCommaFromValue (raw);\n        return [ price ];\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('pub fn removeCommaFromValue(&self, str_val: &str) -> Option<String> {');
+        expect(out).toContain('let mut newString: String = "".to_string();');
+        expect(out).toContain('return Some(newString);');
     });
 });
