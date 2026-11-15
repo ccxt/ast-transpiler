@@ -18452,3 +18452,31 @@ describe('ral-53s: an i64 local handed to a base `sum` written whole to another 
         expect(out).toContain('let mut oneWeek: Value = Value::Int(604800000);');
     });
 });
+
+describe('ral-54f: base handle*AndParams trailing Dict slot', () => {
+    test('grvt createOrder: handleTriggerPricesAndParams slot 3 is a Dict and its omit-rewritten alias follows', () => {
+        const dir = path.join (rustFixtureRoot, 'ral54f-trig');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    handleTriggerPricesAndParams (symbol: any, params: Dict, omitParams = true): [Str, Str, Str, Dict] { return [ undefined, undefined, undefined, params ]; }\n    omit (x: any, k: any): any { return x; }\n    safeString (o: any, k: any): string { return o[k]; }\n    safeBool (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (symbol: string, params: Dict = {}) {\n        const [ triggerPrice, stopLossPrice, takeProfitPrice, paramsTriggerPrices ] = this.handleTriggerPricesAndParams (symbol, params);\n        const d = this.safeString (paramsTriggerPrices, 'triggerDirection');\n        let paramsTrigger: Dict = paramsTriggerPrices;\n        if (triggerPrice !== undefined) {\n            paramsTrigger = this.omit (paramsTriggerPrices, [ 'triggerDirection' ]);\n        }\n        const b = this.safeBool (paramsTrigger, 'builderFee', true);\n        const paramsOmitted: Dict = this.omit (paramsTrigger, [ 'builderFee' ]);\n        return this.hold ([ d, b, stopLossPrice, takeProfitPrice, paramsOmitted ]);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut paramsTriggerPrices: crate::value::Dict = /);
+        expect(out).toMatch(/let mut paramsTrigger: crate::value::Dict = /);
+    });
+});
+
+describe('ral-54f: a params alias rewritten by a venue [Str, Dict] destructure write at its Dict slot', () => {
+    const run = (venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, 'ral54f-inst-' + Math.abs (venueBody.length));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Bool = boolean | undefined;\nexport default class Exchange {\n    handleOptionBoolAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] { return [ defaultValue, params ]; }\n    extend (a: any, b: any): any { return a; }\n    safeString (o: any, k: any): string { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    getInstType (methodName: Str, uta: boolean = false, params: Dict = {}): [Str, Dict] {\n        return [ this.safeString (params, 'x'), params ];\n    }\n" + venueBody + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('bitget pro watchPositions: paramsUta and paramsInstType are both Dict', () => {
+        const out = run ("    m (params: Dict = {}, has: boolean = false) {\n        let instType: Str = 'USDT';\n        const [ uta, paramsUta ] = this.handleOptionBoolAndParams (params, 'watchPositions', 'uta', false);\n        let paramsInstType: Dict = paramsUta;\n        if (has) {\n            [ instType, paramsInstType ] = this.getInstType ('watchPositions', uta, paramsUta);\n        }\n        let paramsRequest = paramsInstType;\n        if (uta) {\n            paramsRequest = this.extend (paramsInstType, { 'uta': true });\n        }\n        return this.hold ([ instType, paramsRequest ]);\n    }\n");
+        expect(out).toMatch(/let mut paramsUta: crate::value::Dict = /);
+        expect(out).toMatch(/let mut paramsInstType: crate::value::Dict = /);
+        expect(out).toMatch(/paramsInstType = __destr_tmp\.get\(1\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\)/);
+    });
+});

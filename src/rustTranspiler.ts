@@ -3236,7 +3236,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Slot hook: an `Option<String>` local takes the slot's string. */
     printRustNilSlotWrite(element, read: string, strRead?: string, boolRead?: string): string | undefined {
-        if (this.rustNilSlotDictOf(element) !== undefined || this.rustHandedSlotWriteOf(element) !== undefined) return `${super.printIdentifier(element)} = ${read}.into_dict()`;
+        if (this.rustNilSlotDictOf(element) !== undefined || this.rustHandedSlotWriteOf(element) !== undefined || this.rustSbAliasSlotWriteOf(element)) return `${super.printIdentifier(element)} = ${read}.into_dict()`;
         if (isIdentifier(element)) {
             const reuse: any = this.rustDeclarationOfIdentifier(element);
             if (reuse !== undefined && reuse.name !== element && this.rustExtendReuseLocals.has(reuse) && this.rustPrintedBorrowed.has(reuse) && this.rustUntilSelfWrite(element, reuse)) return `${super.printIdentifier(element)} = ${read}.into_dict()`;
@@ -20102,6 +20102,9 @@ export class RustTranspiler extends BaseTranspiler {
                 nullTests++;
                 return true;
             }
+            // ral-54f: `[ a, y ] = this.m (..)` rewriting a shared-map alias at a slot the venue callee declares a bare `Dict`
+            // (bitget pro `getInstType`: `[Str, Dict]`), its line within the budget: the slot read is taken back with `.into_dict()`
+            if (sbAlias && this.rustNilSlotWrite(n) && this.rustDictSlotOfWrite(n) && this.rustDestrBoxLineOk(n)) { this.rustSbAliasSlotWrites.add(n); return ++sbMapWrites > 0; }
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
                 if (up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
                 if (extendReuse) {
@@ -20740,6 +20743,13 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** sb: `y = self.omit(&x, ..).into_dict()` for a shared-map alias (`omit` of a proven map answers `Value::Map`: the Arc moves back). */
     private rustSbAliasWrites = new WeakSet<any>();
+    private rustSbAliasSlotWrites = new WeakSet<any>();
+    /** ral-54f: a slot write accepted by the shared-map alias rule, printed typed only when the alias printed as the map. */
+    rustSbAliasSlotWriteOf(element: any): boolean {
+        if (!isIdentifier(element) || !this.rustSbAliasSlotWrites.has(element)) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(element);
+        return declaration !== undefined && this.rustPrintedBorrowed.has(declaration) && this.rustBorrowedLocalKind(declaration) === 'dict';
+    }
     printSbAliasWrite(node: any, left: any, right: any): string | undefined {
         const declaration: any = this.rustDeclarationOfIdentifier(left);
         if (declaration === undefined || !this.rustSbAliasWrites.has(node) || !this.rustPrintedBorrowed.has(declaration)) return undefined;
@@ -26543,7 +26553,7 @@ export class RustTranspiler extends BaseTranspiler {
             // slot 1 is the params dict; any other slot only where the callee's own tuple type declares it `Dict`
             const at = pattern.elements.indexOf(declaration);
             const allSlot = at >= 0 && (this.rustPromiseAllDictSlot(declaration) || at === 0 && this.rustUntilRequestSlot(declaration) || this.rustTernaryDictSlot(declaration));
-            if (at !== 1 && !allSlot && !(at >= 0 && this.rustDeclaredDictSlot(declaration))) return false;
+            if (at !== 1 && !allSlot && !(at >= 0 && (this.rustDeclaredDictSlot(declaration) || this.rustBaseHandleLastDictSlot(declaration)))) return false;
             if (declaration.dotDotDotToken !== undefined || declaration.initializer !== undefined || this.rustTupleSlotKind(declaration) !== undefined) return false;
             const init: any = this.rustAwaitedCall(owner.initializer);
             const callee: any = init?.expression;
@@ -26608,7 +26618,8 @@ export class RustTranspiler extends BaseTranspiler {
             // an optional-slice hand-off boxes the shared map back, so it only rides along with a by-reference use
             const boxed = this.rustOptionalParamsSlot(call, n) || this.rustHandedSlotBoxUse(n, declaration);
             if (boxed) boxes++;
-            if (boxed && this.rustInDestructureWrite(n) && (nilSlot ? !this.rustNilSlotLineOk(n) : uses === 0)) longBox = true;
+            // ral-54f: a bare box into a destructure write whose measured line keeps the budget is no longer long
+            if (boxed && this.rustInDestructureWrite(n) && (nilSlot ? !this.rustNilSlotLineOk(n) : uses === 0 && !this.rustDestrBoxLineOk(n))) longBox = true;
             return ok || boxed;
         });
         // a params slot only handed back to `Value` slots shares its map there (moved at the last use, lent before it)
@@ -26780,6 +26791,23 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustShortDestrHeads = new WeakSet<any>();
+
+    /** ral-54f: a typed params map boxed whole (`Value::Dict(x)`, +13 over the `x.clone()` it replaces) as an argument of a
+     *  `[a, b] = this.m (.., x)` destructure write: admitted when that one printed line stays within 400 (non-test sources). */
+    rustDestrBoxLineOk(n: any): boolean {
+        const source: any = n.getSourceFile?.()?.fileName;
+        if (typeof source !== 'string' || /[\\/]test[\\/]/.test(source)) return false;
+        let statement: any = n;
+        while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
+        let depth = 0;
+        for (let up: any = statement; up !== undefined && !isFunctionLike(up); up = up.parent) if (isBlock(up)) depth++;
+        try {
+            return (depth + 1) * 4 + String(this.printNode(statement, 0)).trim().split('\n')[0].length + 'Value::Dict()'.length + '.into_dict()'.length <= 400;
+        } catch (e) {
+            return false;
+        }
+    }
+
 
     /** A nil-declared slot local typed as the map. */
     rustNilSlotDictLocal(declaration: any): boolean {
@@ -28270,6 +28298,26 @@ export class RustTranspiler extends BaseTranspiler {
         const at = element.parent.elements.indexOf(element);
         const arm = (n: any) => { const c: any = this.rustSkipWrappers(n); return isCallExpression(c) && isPropertyAccessExpression(c.expression) && c.expression.expression.kind === SyntaxKind.ThisKeyword && this.rustCallDeclaresDictSlot(c, at); };
         return at >= 0 && arm(init.whenTrue) && arm(init.whenFalse);
+    }
+
+    /** ral-54f: the last slot of a base `this.handle*AndParams (..)` whose own tuple return declares it a bare `Dict`
+     *  (`handleTriggerPricesAndParams`: `[Str, Str, Str, Dict]`) is the params map handed back, exactly as slot 1 of the
+     *  two-slot helpers. Non-test sources only (the caller checks the tier). */
+    rustBaseHandleLastDictSlot(element: any): boolean {
+        const owner: any = element?.parent?.parent;
+        if (element?.parent?.kind !== SyntaxKind.ArrayBindingPattern || !isVariableDeclaration(owner) || owner.name !== element.parent) return false;
+        const init: any = this.rustAwaitedCall(owner.initializer);
+        const callee: any = init?.expression;
+        if (!isCallExpression(init) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
+            || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) || !this.rustNativeListSource(init)) return false;
+        const declaration: any = this.rustCalleeDeclaration(init);
+        if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName))) return false;
+        const type: any = declaration.type;
+        if (type?.kind !== SyntaxKind.TupleType) return false;
+        const at = element.parent.elements.indexOf(element);
+        const slot: any = type.elements?.[at];
+        return at >= 2 && at === type.elements.length - 1 && slot?.kind === SyntaxKind.TypeReference && isIdentifier(slot.typeName)
+            && slot.typeName.text === 'Dict' && slot.typeArguments === undefined;
     }
 
     rustCallDeclaresDictSlot(init: any, at: number): boolean {
