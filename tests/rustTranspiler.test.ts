@@ -15334,3 +15334,40 @@ describe('ral-41f: the nested-write veto is lifted per class (non-safe* producer
         expect(out).toContain('let mut s: Value = ');
     });
 });
+
+describe('ral-41b item 1: string-method forms with variable / negative bounds and variable needles on a typed string local', () => {
+    const t41 = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, '41b-str-methods');
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n" +
+        "    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue (body));
+        return t41.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const cases: [string, string, string[], string[]][] = [
+        [ 'slice with a variable end (indexOf of a typed local) keeps both locals typed',
+            "    parseThing (d: Dict) {\n        const s = this.safeString (d, 't', 'a_b');\n        const end = s.indexOf ('_');\n        const id = s.slice (0, end);\n        return this.hold ({ 'id': id });\n    }\n",
+            [ 'let mut end: i64 = ', 'let mut id: String = ({ let (__l, __b, __e) = (s.chars().count() as i64, 0, end);', '.clamp(0, __l)' ], [ 'let mut id: Value', 'let mut end: Value' ] ],
+        [ 'slice with a negative literal end on an Option<String> local',
+            "    parseThing (d: Dict) {\n        const sym = this.safeString (d, 's');\n        const head = sym.slice (0, -3);\n        return this.hold ({ 'h': head });\n    }\n",
+            [ 'let mut head: Option<String> = (if let Some(__s) = sym.as_deref() { Some(({ let (__l, __b, __e) = (__s.chars().count() as i64, 0, -3);' ], [ 'let mut head: Value' ] ],
+        [ 'endsWith with a variable needle: false unless both sides are strings',
+            "    parseThing (d: Dict) {\n        const id = this.safeString (d, 'i');\n        const quote = this.safeString (d, 'q', 'USD');\n        if (id.endsWith (quote)) {\n            return this.hold ({ 'q': quote });\n        }\n        return this.hold ({ 'i': id });\n    }\n",
+            [ '(if let (Some(__h), Some(__n)) = (id.as_deref(), Some(quote.as_str())) { __h.ends_with(__n) } else { false })', 'let mut id: Option<String>', 'let mut quote: String' ], [ 'let mut quote: Value', 'let mut id: Value' ] ],
+        [ 'negative: a slice bound that is a Value local keeps the helper dispatch',
+            "    parseThing (d: Dict, e: any) {\n        const sym = this.safeString (d, 's');\n        const head = sym.slice (0, e);\n        return this.hold ({ 'h': head });\n    }\n",
+            [], [ 'let mut head: Option<String>' ] ],
+    ];
+    for (const [ name, body, want, no ] of cases) {
+        test(name, () => {
+            const out = run (body);
+            for (const x of want) expect(out).toContain(x);
+            for (const x of no) expect(out).not.toContain(x);
+        });
+    }
+});

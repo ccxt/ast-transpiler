@@ -6776,6 +6776,8 @@ export class RustTranspiler extends BaseTranspiler {
         // yi: a Copy number argument of `this[name](..)` boxes into its `vec![..]` slot (`Value::from`: the Int / Null the `Value` held)
         if ((kind === 'int' || kind === 'oint') && isCallExpression(parent) && parent.expression !== n && isElementAccessExpression(parent.expression)
             && parent.expression.expression.kind === SyntaxKind.ThisKeyword && isIdentifier(parent.expression.argumentExpression)) return 'box';
+        // 41b: a bound / needle / operand of a string method its typed receiver prints natively
+        if (this.rustStrMethodArgNative(n, kind)) return 'native';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
         }
@@ -8175,6 +8177,11 @@ export class RustTranspiler extends BaseTranspiler {
         else if (method === 'indexOf' && args.length === 1 && this.rustStrFindNeedle(args[0], true) !== undefined) shape = 'find';
         else if ((method === 'padStart' || method === 'padEnd') && this.rustStrPadArgs(args) !== undefined) shape = 'pad';
         else if (method === 'slice' && this.rustStrSliceBounds(args) !== undefined) shape = 'slice';
+        // 41b: variable / negative slice bounds, a variable affix / includes / indexOf needle, variable replace operands
+        else if (method === 'slice' && args.length >= 1 && args.length <= 2) shape = 'vslice';
+        else if ((method === 'startsWith' || method === 'endsWith' || method === 'includes') && args.length === 1) shape = 'vaffix';
+        else if (method === 'indexOf' && args.length === 1 && this.rustNativeStringLiteralArg(args[0]) === undefined) shape = 'vfind';
+        else if ((method === 'replace' || method === 'replaceAll') && args.length === 2) shape = 'vreplace';
         if (shape === undefined) return undefined;
         if (syntactic) return { recv, recvKind: '', method, kind: '' };
         const recvKind = this.rustScalarIdentifierKind(recv) ?? (params ? this.rustScalarParamRead(recv)?.kind : undefined);
@@ -8182,6 +8189,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (recvKind === 'int' && method === 'toString') return { recv, recvKind, method, kind: 'str' };
         if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
         if (shape === 'affix') return { recv, recvKind, method, kind: 'bool' };
+        // 41b: the new forms read a typed string local receiver only (a parameter read keeps the old paths)
+        if (shape === 'vslice' || shape === 'vaffix' || shape === 'vfind' || shape === 'vreplace') {
+            if (this.rustScalarLocalOf(recv) === undefined || this.rust41bWsKeyLocal(recv)) return undefined;
+            if (args.some((a) => isIdentifier(this.unwrapParens(a)) && this.rust41bWsKeyLocal(this.unwrapParens(a)))) return undefined;
+            if (shape === 'vslice') return this.rustStrSliceVarBounds(args) === undefined ? undefined : { recv, recvKind, method, kind: recvKind };
+            if (shape === 'vaffix') return this.rustStrVarNeedle(args[0], method === 'includes') === undefined ? undefined : { recv, recvKind, method, kind: 'bool' };
+            if (shape === 'vfind') return this.rustStrFindNeedle(args[0], false) === undefined ? undefined : { recv, recvKind, method, kind: 'int' };
+            return args.every((a) => this.rustStrReplaceOperand(a) !== undefined) ? { recv, recvKind, method, kind: recvKind } : undefined;
+        }
         if (shape === 'find') return this.rustStrFindNeedle(args[0], false) === undefined ? undefined : { recv, recvKind, method, kind: 'int' };
         // pad / slice on a typed local, or on a typed parameter read: a `&str` parameter's binding is never `Null`
         // (callers and dispatch arms convert once), an `Option<&str>` one keeps `None` through the `if let` form
@@ -8210,8 +8226,85 @@ export class RustTranspiler extends BaseTranspiler {
         return { start, end };
     }
 
+    /** 41b: `slice(a)` / `slice(a, b)` whose bounds are not both literal, each an `i64` / `Option<i64>` operand (literal, typed
+     *  integer local, arithmetic or `.length` of typed operands): the start as `i64` (a `None` start is the helper's `0`) and the
+     *  end as `i64` or `Option<i64>` (`None` is the helper's missing end, the char length). */
+    rustStrSliceVarBounds(args: any[]): { start: string, end: string | undefined, endOpt: boolean } | undefined {
+        if (args.length === 0 || args.length > 2 || this.rustStrSliceBounds(args) !== undefined) return undefined;
+        const kinds = args.map((a) => this.rustScalarNumericKind(a));
+        if (kinds.some((k) => k !== 'int' && k !== 'oint')) return undefined;
+        if (args.some((a) => String(a.getText()).includes('\n'))) return undefined;
+        const text = (i: number) => this.rustScalarOperandText(kinds[i], args[i]);
+        const start = kinds[0] === 'oint' ? `${text(0)}.unwrap_or(0)` : text(0);
+        return { start, end: args.length === 2 ? text(1) : undefined, endOpt: kinds[1] === 'oint' };
+    }
+
+    /** 41b: the char slice of the `&str` `s` with `i64` bounds, clamped as the helper's `Str` arm (a negative bound counts from the
+     *  char length floored at 0, a bound past the end is the length, `b <= a` is empty). */
+    rustStrSliceVarText(s: string, b: { start: string, end: string | undefined, endOpt: boolean }): string {
+        const clamp = (v: string) => `(if ${v} < 0 { __l + ${v} } else { ${v} }).clamp(0, __l)`;
+        if (b.end === undefined) return `({ let (__l, __b) = (${s}.chars().count() as i64, ${b.start}); ${s}.chars().skip(${clamp('__b')} as usize).collect::<String>() })`;
+        const j = b.endOpt ? `match __e { Some(__k) => ${clamp('__k')}, None => __l }` : clamp('__e');
+        return `({ let (__l, __b, __e) = (${s}.chars().count() as i64, ${b.start}, ${b.end}); let (__i, __j) = (${clamp('__b')}, ${j}); ${s}.chars().skip(__i as usize).take((__j - __i).max(0) as usize).collect::<String>() })`;
+    }
+
+    /** 41b: an affix / includes needle as `Option<&str>`: any string literal (an empty one included when `empty`), a typed string local
+     *  or a string-typed `Value` expression (`None` for `Null`: the helper answers `false`). */
+    rustStrVarNeedle(node, empty: boolean): string | undefined {
+        const inner: any = this.unwrapParens(node);
+        const lit = this.rustNativeStringLiteralArg(inner);
+        if (lit !== undefined) return inner.text === '' && !empty ? undefined : `Some("${lit}")`;
+        return this.rustStrFindNeedle(inner, false);
+    }
+
+    /** 41b: a replace operand that is never `Null`: a string literal or a `String` local (`&str` text). */
+    rustStrReplaceOperand(node): string | undefined {
+        const inner: any = this.unwrapParens(node);
+        const lit = this.rustNativeStringLiteralArg(inner);
+        if (lit !== undefined) return `"${lit}"`;
+        return isIdentifier(inner) && this.rustScalarLocalOf(inner)?.kind === 'str' ? `${super.printIdentifier(inner)}.as_str()` : undefined;
+    }
+
+    private rust41bWsKeyMemo = new WeakMap<any, boolean>();
+
+    /** 41b: a local some use of which is a ws subscription / future / cache key, a ws client call argument or a ws cache
+     *  write key: those keep their `Value` (the new string-method forms never decide them). */
+    rust41bWsKeyLocal(node): boolean {
+        const declaration: any = this.rustDeclaredNode(node);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        const memo = this.rust41bWsKeyMemo.get(declaration);
+        if (memo !== undefined) return memo;
+        this.rust41bWsKeyMemo.set(declaration, true);
+        let hit = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            let up: any = n;
+            while (isParenthesizedExpression(up.parent) || isAsExpression(up.parent) || isNonNullExpression(up.parent)) up = up.parent;
+            const p: any = up.parent;
+            if (this.rustWsKeyUse(up) || this.rustWsCacheMapKeyUse(n) || this.rustWsSubscriptionWriteValue(n)) hit = true;
+            else if (p !== undefined && isCallExpression(p) && p.expression !== up && (this.rustWsClientCallArg(p, 'str') || this.rustWsWatchSlot(p, p.arguments.indexOf(up)))) hit = true;
+            // a key of any `this.<field>[k]` element in the ws tier (cache stores such as `this.tickers[symbol] = ..`)
+            else if (p !== undefined && isElementAccessExpression(p) && p.argumentExpression === up && this.rust40bProTier(n)) hit = true;
+            return true;
+        });
+        this.rust41bWsKeyMemo.set(declaration, hit);
+        return hit;
+    }
+
+    /** 41b: an argument (bound / needle / operand) of a string method its typed string local receiver prints natively. */
+    rustStrMethodArgNative(n, kind: string): boolean {
+        const call: any = n.parent;
+        if (call === undefined || !isCallExpression(call) || call.expression === n || !isPropertyAccessExpression(call.expression)) return false;
+        const name = String(call.expression.name.text);
+        const numeric = kind === 'int' || kind === 'oint';
+        if (name === 'slice' ? !numeric : (kind !== 'str' && kind !== 'ostr')) return false;
+        if (![ 'slice', 'startsWith', 'endsWith', 'includes', 'indexOf', 'replace', 'replaceAll' ].includes(name)) return false;
+        const method = this.rustScalarStrMethod(call);
+        return method !== undefined && method.recvKind !== 'int' && this.rustScalarLocalOf(method.recv) !== undefined && !this.rust41bWsKeyLocal(n) && !this.rust41bWsKeyLocal(method.recv);
+    }
+
     /** Native `String` text of a pad / slice over the `&str` `s`. */
     rustStrPadSliceText(method: string, args: any[], s: string): string {
+        if (method === 'slice' && this.rustStrSliceBounds(args) === undefined) return this.rustStrSliceVarText(s, this.rustStrSliceVarBounds(args));
         if (method === 'slice') {
             const { start, end } = this.rustStrSliceBounds(args);
             const skip = start >= 0 ? `${start}` : `${s}.chars().count().saturating_sub(${-start})`;
@@ -8274,8 +8367,14 @@ export class RustTranspiler extends BaseTranspiler {
         if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
         const start = this.rustSliceLiteralBound(args[0]);
         const end = args.length === 2 ? this.rustSliceLiteralBound(args[1]) : undefined;
-        if (start === undefined || (args.length === 2 && (end === undefined || end < 0 || start < 0))) return undefined;
         const s = recvKind === 'str' ? super.printIdentifier(recv) : '__s';
+        // 41b: variable / negative bounds
+        const vb = this.rustStrSliceVarBounds(args);
+        if (vb !== undefined) {
+            const vtext = `Value::from(${this.rustStrSliceVarText(s, vb)})`;
+            return recvKind === 'str' ? vtext : `(if let Some(__s) = ${super.printIdentifier(recv)}.as_deref() { ${vtext} } else { Value::Null })`;
+        }
+        if (start === undefined || (args.length === 2 && (end === undefined || end < 0 || start < 0))) return undefined;
         const skip = start >= 0 ? `${start}` : `${s}.chars().count().saturating_sub(${-start})`;
         const take = end === undefined ? '' : `.take(${Math.max(end - start, 0)})`;
         const text = `Value::from(${s}.chars().skip(${skip})${take}.collect::<String>())`;
@@ -9139,6 +9238,13 @@ export class RustTranspiler extends BaseTranspiler {
             const name = this.rustScalarRecvName(method.recv);
             const args: any[] = Array.from(node.arguments ?? []);
             const arg = (i: number) => this.rustNativeStringLiteralArg(args[i]);
+            const vneedle = (method.method === 'startsWith' || method.method === 'endsWith' || method.method === 'includes') && !(method.method !== 'includes' && this.rustNativeStringLiteralArg(args[0]) !== undefined && args[0].text !== '');
+            if (vneedle) {
+                // 41b: `false` unless both sides are a `Str` (the helper's only `true` arm)
+                const hay = method.recvKind === 'str' ? `Some(${name}.as_str())` : `${name}.as_deref()`;
+                const fn = method.method === 'startsWith' ? 'starts_with' : (method.method === 'endsWith' ? 'ends_with' : 'contains');
+                return wrap(`(if let (Some(__h), Some(__n)) = (${hay}, ${this.rustStrVarNeedle(args[0], true)}) { __h.${fn}(__n) } else { false })`);
+            }
             if (method.method === 'startsWith' || method.method === 'endsWith') {
                 const hay = method.recvKind === 'str' ? name : `${name}.as_deref().unwrap_or_default()`;
                 return wrap(`${hay}.${method.method === 'startsWith' ? 'starts_with' : 'ends_with'}("${arg(0)}")`);
@@ -9147,6 +9253,12 @@ export class RustTranspiler extends BaseTranspiler {
             if (method.method === 'padStart' || method.method === 'padEnd' || method.method === 'slice') {
                 if (method.recvKind === 'ostr') return wrap(`(if let Some(__s) = ${name}.as_deref() { Some(${this.rustStrPadSliceText(method.method, args, '__s')}) } else { None })`);
                 return wrap(this.rustStrPadSliceText(method.method, args, name));
+            }
+            if ((method.method === 'replace' || method.method === 'replaceAll') && !args.every((a) => this.rustNativeStringLiteralArg(a) !== undefined)) {
+                // 41b: never-`Null` operands: the helper's all-`Str` arm (every occurrence), `None` for a `None` receiver
+                const [ from, to ] = args.map((a) => this.rustStrReplaceOperand(a));
+                if (method.recvKind === 'ostr') return wrap(`(if let Some(__s) = ${name}.as_deref() { Some(__s.replace(${from}, ${to})) } else { None })`);
+                return wrap(`${name}.replace(${from}, ${to})`);
             }
             if (method.method === 'replace' || method.method === 'replaceAll') {
                 if (method.recvKind === 'ostr') return wrap(`(if let Some(__s) = ${name}.as_deref() { Some(__s.replace("${arg(0)}", "${arg(1)}")) } else { None })`);
