@@ -18221,6 +18221,13 @@ export class RustTranspiler extends BaseTranspiler {
                 escapes.push(n);
                 return true;
             }
+            // ral-50i: arg 0 of a base any-key reader (`this.safeDict (m, k)`) on a literal-built map: the reader takes
+            // `impl KeyRead` and runs the same `get_map_value` on `&IndexMap` as on the boxed `Value::Dict` (a literal
+            // carries no store tag), so the map is lent as `&m` (printBorrowedReaderArg) and counts as a native read
+            if (!produced && this.rustBearerReaderLend(n)) {
+                elementUses++;
+                return true;
+            }
             if (isCallExpression(parent) && parent.arguments.some((a: any) => a === n)
                 && isPropertyAccessExpression(parent.expression)
                 && (parent.expression.expression.kind === SyntaxKind.ThisKeyword
@@ -21427,6 +21434,12 @@ export class RustTranspiler extends BaseTranspiler {
         return declaration !== undefined && declaration !== node && declaration.name !== node && this.rustBorrowedLocalKind(declaration) === 'list';
     }
 
+    /** ral-50i: `n` is arg 0 of a base any-key reader call in a non-test source (the dict-bearer lend). */
+    rustBearerReaderLend(n: any): boolean {
+        const call: any = n?.parent;
+        return call !== undefined && isCallExpression(call) && call.arguments[0] === n && !this.rustTestTierSource(call) && this.rustBorrowedAnyKeyReader(call);
+    }
+
     /** A base hand-written reader (`safeString`, `safeValue2`, `safeIntegerN`, ..) with any key. */
     rustBorrowedAnyKeyReader(call: any): boolean {
         const callee: any = call.expression;
@@ -22354,6 +22367,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustBorrowedLocalKind(declaration) !== undefined || this.rustLentListLocal(declaration) || this.rustReaderTables.has(declaration)
             || this.rustSafeMarketLocalOf(node) !== undefined || this.rustMarketSlotParamOf(node) !== undefined || this.rustTypedMarketLocalOf(node) !== undefined
             || this.rustCurrencySlotParamOf(node) !== undefined || this.rustCurrencyLocalOf(node) !== undefined) return `&${text}`;
+        // ral-50i: a literal-built dict bearer lent to the reader
+        if (this.rustBearerReaderLend(node) && this.rustDictBearerDeclaration(node) !== undefined) return `&${text}`;
         if (this.rustMarketStoreElementOf(node) !== undefined) return `&*${text}`;
         if (this.rustUntilHeadReaderUse(node) && this.rustUntilHeadSlot(declaration)) return `&${text}`;
         return this.rustContainerBoxUses.get(node) !== undefined && this.rustReadBearerKind(node) !== undefined ? `&${text}` : undefined;

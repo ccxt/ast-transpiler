@@ -17431,3 +17431,23 @@ describe('ral-50c prediction outcome consumers', () => {
         expect(out).toContain('crate::value::KeyRead::key_read(&&posObj, "outcomeId")');
     });
 });
+
+describe('ral-50i: a literal-built map lent to a base any-key reader stays a typed map', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k] ?? d; }\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k] ?? d; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = (tail: string) => "    m (entries: any[]): any {\n        const fees: Dict = {};\n        for (let i = 0; i < entries.length; i++) {\n            const code = this.safeString (entries[i], 'ccy');\n            const fee = this.safeValue (fees, code);\n            if (fee === undefined) {\n                fees[code] = { 'info': {} };\n            }\n            fees[code]['info'][this.safeString (entries[i], 'id')] = entries[i];\n        }\n        const codes = Object.keys (fees);\n        for (let i = 0; i < codes.length; i++) {\n            const code = codes[i];\n            fees[code] = this.hold (fees[code]);\n        }\n" + tail + "    }\n";
+    test('safeValue (m, k) lends `&m`: the literal map is an IndexMap', () => {
+        const out = write ('50i-lend', body ("        return fees;\n"));
+        expect(out).toContain('let mut fees: indexmap::IndexMap<String, Value> = ');
+        expect(out).toContain('(&fees, ');
+    });
+    test('negative: a map also handed whole to a venue method keeps the box', () => {
+        const out = write ('50i-lendn', body ("        this.hold (fees);\n        return fees;\n"));
+        expect(out).toContain('let mut fees: Value = ');
+    });
+});
