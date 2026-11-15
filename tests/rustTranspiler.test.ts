@@ -19054,3 +19054,63 @@ describe('ral-55i: a list local reassigned whole from Object.keys or split', () 
         expect(out).not.toContain('let mut rows: crate::value::List');
     });
 });
+
+describe('ral-55h: a nullable safeDict local handed to a by-name ws dispatch `method.call (this, ..)` is Option<Dict>', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/ws/Client.ts': 'export default class Client {\n    subscriptions: any;\n    resolve (result: any, messageHash: string): any { return result; }\n}\n',
+        'ts/src/base/Exchange.ts': "export default class Exchange {\n    safeDict (obj: any, key: any, d: any = undefined): any { return obj[key] ?? d; }\n    safeValue (obj: any, key: any, d: any = undefined): any { return obj[key] ?? d; }\n    safeString (obj: any, key: any, d: any = undefined): any { return obj[key] ?? d; }\n    indexBy (obj: any, key: any): any { return {}; }\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n" +
+            "    handleSubscriptionStatus (client: Client, message: any) {\n        const id = this.safeString (message, 'id');\n        const subscriptionsById = this.indexBy (client.subscriptions, 'id');\n        const subscription = this.safeDict (subscriptionsById, id);\n        if (subscription !== undefined) {\n            const method = this.safeValue (subscription, 'method');\n            if (method !== undefined) {\n                method.call (this, client, message, subscription);\n            }\n        }\n    }\n" +
+            "    handleOtherStatus (client: Client, message: any) {\n        const id = this.safeString (message, 'id');\n        const byId = this.indexBy (client.subscriptions, 'id');\n        const other = this.safeDict (byId, id);\n        if (other !== undefined) {\n            const method = this.safeValue (other, 'method');\n            if (method !== undefined) {\n                method.call (client, message, other);\n            }\n        }\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-55h-dispatch-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the local is Option<Dict> and boxes back to the reader answer at the dispatch slot', () => {
+        expect(out).toMatch(/let mut subscription: Option<crate::value::Dict> = [^\n]*\.into_opt_dict\(\);/);
+        expect(out).toMatch(/method\.call\(&\[self, client\.clone\(\), message\.clone\(\), subscription(?:\.clone\(\))?\.map_or\(Value::Null, Value::Dict\)\]\)/);
+    });
+    test('negative: a .call whose first argument is not this keeps the local a Value', () => {
+        expect(out).toMatch(/let mut other: Value = /);
+    });
+});
+
+describe('ral-55h: a reply hash echoing a request key written only from this.requestId () is digits', () => {
+    const base: Record<string, string> = {
+        'ts/src/base/ws/Cache.ts': 'export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n',
+        'ts/src/base/ws/Client.ts': 'export default class Client {\n    futures: any = {};\n    resolve (result: any, messageHash: string): any { return result; }\n    future (messageHash: string): any { return undefined; }\n}\n',
+        'ts/src/base/Exchange.ts': "import { ArrayCache } from './ws/Cache.js';\nexport default class Exchange {\n    positions: ArrayCache = undefined;\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    parseOrder (o: any): any { return o; }\n}\n",
+    };
+    const venue = (write: string) => "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n" +
+        "    requestId (): int {\n        return 1;\n    }\n" +
+        "    async createIt () {\n        const requestId = this.requestId ().toString ();\n        const request: any = { 'op': 'order.create', 'reqId': " + write + " };\n        return request;\n    }\n" +
+        "    async watchPositions (client: Client) {\n        const cache = this.positions;\n        if (cache === undefined) {\n            const snapshot = await client.future ('fetchPositionsSnapshot');\n            return snapshot;\n        }\n        return cache;\n    }\n" +
+        "    loadSnapshot (client: Client, messageHash: string) {\n        this.positions = new ArrayCache ();\n        const cache = this.positions;\n        if (messageHash in client.futures) {\n            const future = client.futures[messageHash];\n            future.resolve (cache);\n        }\n    }\n" +
+        "    handleOrderWs (client: Client, message: any) {\n        const messageHash = this.safeString (message, 'reqId');\n        const order = this.parseOrder (message);\n        client.resolve (order, messageHash);\n    }\n}\n";
+    const run = (tag: string, write: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-55h-reqid-' + tag + '-'));
+        const files: Record<string, string> = { ...base, 'ts/src/pro/venue.ts': venue (write) };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        try {
+            return transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    };
+    test('the snapshot awaited under a literal hash is Option<Cache> (the reqId resolve cannot meet it)', () => {
+        expect(run ('p', 'requestId')).toContain('let mut snapshot: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: a request key also written from another value (one the future hash can match) keeps the snapshot a Value', () => {
+        expect(run ('n', "'fetchPositions' + requestId")).toContain('let mut snapshot: Value = ');
+    });
+});

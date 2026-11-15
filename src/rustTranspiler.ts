@@ -21989,11 +21989,26 @@ export class RustTranspiler extends BaseTranspiler {
         if (isAsExpression(up) && up.expression === n && isReturnStatement(up.parent)) return true;
         // qe: pushed / stored whole into a local container: `None` boxes to exactly the `Null` the reader answered
         if (this.rustLocalStoreHandOff(n)) return true;
+        // ral-55h: a handler argument of a by-name dispatch `method.call (this, .., x)` (an `any` handle routed to
+        // `dispatch_ws_handler(&method, &[..])`): the slice takes `Value`s, so `None` boxes to the `Null` the reader answered
+        if (this.rustWsDispatchCallArg(n)) return true;
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
         const at = Array.from(up.arguments).indexOf(n);
         return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && !this.rustLentHelperSlot(up, n, 'dict') && this.rustNilBoxSlotOk(up, at);
+    }
+
+    /** ral-55h: `n` is a handler argument (not the `this` receiver slot) of `h.call (this, ..)` on an identifier `h` typed
+     *  `any` (the by-name ws dispatch the ccxt build turns into `self.dispatch_ws_handler(&h, &[..])`). */
+    rustWsDispatchCallArg(n: any): boolean {
+        const up: any = n.parent;
+        if (up === undefined || !isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression)) return false;
+        const callee: any = up.expression;
+        if (String(callee.name.text) !== 'call' || !isIdentifier(callee.expression) || !this.rust40bProTier(up)) return false;
+        const args = Array.from(up.arguments);
+        if (args.length < 2 || args[0].kind !== SyntaxKind.ThisKeyword || args.indexOf(n) < 1) return false;
+        return (this.getChecker().getTypeAtLocation(callee.expression).flags & TypeFlags.Any) !== 0;
     }
 
     // ── rustBorrowedKeySetUse / printBorrowedKeys / printBorrowedInOp: key sets of a shared dict local ──
@@ -24842,6 +24857,9 @@ export class RustTranspiler extends BaseTranspiler {
         // `methods[this.safeString (message, 'f')]` dispatch holds one of the handler's dispatch keys
         const dispatched = this.rustWsDispatchKeyPatterns(declaration);
         if (dispatched !== undefined) return dispatched;
+        // ral-55h: (refined patterns only) the whole hash is a reply's echo of a request key every request of the venue
+        // writes from `this.requestId ()`: decimal digits only
+        if (this.rustWsFoundRefine && depth === 0 && this.rustWsRequestIdEcho(declaration)) return [[ RustTranspiler.RUST_WS_DIGITS_HASH ]];
         const keyed = declaration.initializer === undefined ? undefined : this.rustWsSubscriptionKeyRead(declaration.initializer);
         if (keyed !== undefined && !this.rustLocalReassigned(declaration)) {
             // a hash read back from a subscription field: every value the venue class writes under that key
@@ -25038,8 +25056,62 @@ export class RustTranspiler extends BaseTranspiler {
         return o;
     }
 
+    /** ral-55h: the hash text of a request-id echo (`rustWsRequestIdEcho`): some run of decimal digits. */
+    private static readonly RUST_WS_DIGITS_HASH = '\u0001digits';
+
+    /** ral-55h: `const h = this.safeString (message, 'K')` (never rewritten) where every write of key K in the venue file is
+     *  an object-literal property `'K': v` whose value is `this.requestId ()`, its `.toString ()`, or a never-rewritten const
+     *  local bound to one of those, and the venue's `requestId` is declared to return a number: the reply echoes the id the
+     *  request sent, so the hash is decimal digits (the 47h request-id marker, bybit reqId). */
+    rustWsRequestIdEcho(declaration: any): boolean {
+        if (!isVariableDeclaration(declaration) || this.rustLocalReassigned(declaration)) return false;
+        const init: any = this.rustStripWrappers(declaration.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(init.expression.name.text) !== 'safeString' || init.arguments.length !== 2 || !isStringLiteralLikeNode(init.arguments[1])) return false;
+        const key = String(init.arguments[1].text);
+        const file: any = declaration.getSourceFile();
+        if (!/ts[\\/]src[\\/]pro[\\/]/.test(String(file.fileName))) return false;
+        const idCall = (e: any): boolean => {
+            let x: any = this.rustStripWrappers(e);
+            if (x !== undefined && isCallExpression(x) && x.arguments.length === 0 && isPropertyAccessExpression(x.expression) && String(x.expression.name.text) === 'toString') x = this.rustStripWrappers(x.expression.expression);
+            if (x === undefined || !isCallExpression(x) || x.arguments.length !== 0 || !isPropertyAccessExpression(x.expression) || x.expression.expression.kind !== SyntaxKind.ThisKeyword
+                || String(x.expression.name.text) !== 'requestId') return false;
+            const callee: any = this.rustScalarCallee(x);
+            const ret = callee?.type !== undefined ? String(callee.type.getText?.() ?? '') : '';
+            return ret === 'int' || ret === 'number' || ret === 'Int';
+        };
+        const value = (e: any): boolean => {
+            if (idCall(e)) return true;
+            const v: any = this.rustStripWrappers(e);
+            if (v === undefined || !isIdentifier(v)) return false;
+            const d: any = this.rustDeclarationOfIdentifier(v);
+            return d !== undefined && isVariableDeclaration(d) && !!(d.parent?.flags & NodeFlags.Const) && idCall(d.initializer);
+        };
+        let writes = 0;
+        let ok = true;
+        this.rustWalkScope(file, (n: any) => {
+            if (!ok) return;
+            if (n.kind === SyntaxKind.PropertyAssignment && (isStringLiteralLikeNode(n.name) || isIdentifier(n.name)) && String(n.name.text) === key) {
+                if (value(n.initializer)) writes++; else ok = false;
+                return;
+            }
+            // any other write of the key (`x[K] = v`, `x.K = v`, a computed property) is not proven
+            if (isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind)) {
+                const l: any = n.left;
+                if ((isElementAccessExpression(l) && isStringLiteralLikeNode(l.argumentExpression) && String(l.argumentExpression.text) === key)
+                    || (isPropertyAccessExpression(l) && String(l.name.text) === key)) ok = false;
+            }
+            if (n.kind === SyntaxKind.ComputedPropertyName) ok = false;
+        });
+        return ok && writes > 0;
+    }
+
     /** Whether some string matches both patterns (a sound over-approximation: prefix and suffix agree). */
     static rustWsPatternsMeet(a0: Array<string | null>, b0: Array<string | null>): boolean {
+        // ral-55h: a request-id echo meets only patterns whose literal parts are digits
+        const digits = (p: Array<string | null>) => p.length === 1 && p[0] === RustTranspiler.RUST_WS_DIGITS_HASH;
+        const digitOnly = (p: Array<string | null>) => digits(p) || p.every((s) => s === null || /^[0-9]*$/.test(s));
+        if (digits(a0) || digits(b0)) return digitOnly(a0) && digitOnly(b0);
         const a = RustTranspiler.rustWsPatternNorm(a0);
         const b = RustTranspiler.rustWsPatternNorm(b0);
         const exact = (p: Array<string | null>) => p.every((s) => s !== null);
