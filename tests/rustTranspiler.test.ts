@@ -17111,3 +17111,16 @@ describe('ral-47a: `s += v.toString ()` with an any-typed `v` appends the Displa
         expect(output).not.toContain('(to_string_val(&n)).to_string()');
     });
 });
+
+describe('ral-47c: a built list local named after its own method', () => {
+    test('`const fetchMarkets = []` in `fetchMarkets ()`, pushed then read by safeString, is a native List', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-47c');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport type List = any[];\nexport default class Exchange {\n    options: any = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { List, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchMarkets (raw: List): any {\n        const fetchMarkets: List = [];\n        for (let i = 0; i < raw.length; i++) {\n            const t = this.safeString (raw, i);\n            if (t === 'option') {\n                continue;\n            }\n            fetchMarkets.push (t);\n        }\n        const out = [];\n        for (let i = 0; i < fetchMarkets.length; i++) {\n            const marketType = this.safeString (fetchMarkets, i);\n            out.push (this.hold (marketType));\n        }\n        return out;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut fetchMarkets: crate::value::List = ');
+        expect(out).toContain('self.safeString(&fetchMarkets, Value::Int(i), &[])');
+        expect(out).not.toContain('let mut fetchMarkets: Value');
+    });
+});

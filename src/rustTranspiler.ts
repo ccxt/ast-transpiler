@@ -24318,105 +24318,113 @@ export class RustTranspiler extends BaseTranspiler {
         let handOffs = 0;
         // the boxed hand-off lengthens its statement
         const short = (n: any): boolean => { let st: any = n; while (st !== undefined && !isStatement(st)) st = st.parent; return st !== undefined && String(st.getText()).split('\n')[0].length <= 160; };
-        const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
-            if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
-            if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
-            const up: any = n.parent;
-            if (isBinaryExpression(up) && up.left === n) {
-                return up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
-                    && (this.rustBuiltListWriteSource(up.right) || this.rustBuiltListSelfSort(up, name) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== undefined || this.rustDefaultedAliasMove(up) !== undefined) && String(up.parent.getText()).split('\n')[0].length <= 200;
-            }
-            if (isElementAccessExpression(up) && up.expression === n) {
-                natives++;
-                return !(isElementAccessExpression(up.parent) && up.parent.expression === up) && this.rustReadBearerElementUse(up, 'list');
-            }
-            if (isPropertyAccessExpression(up) && up.expression === n) {
-                const member = String(up.name.text);
-                natives++;
-                if (member === 'push') return this.rustVecPushShape(up.parent, name);
-                const use: any = up.parent;
-                return member === 'length' && use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
-                    && !(isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
-            }
-            if (isCallExpression(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
-                natives++;
-                return true;
-            }
-            if (isReturnStatement(up) && up.expression === n) {
-                boxes.push([n, 'move']);
-                return true;
-            }
-            // ral-uf: `return x as T[]` hands the list on whole too (the cast prints nothing)
-            if (up?.kind === SyntaxKind.AsExpression && up.expression === n && isReturnStatement(up.parent) && up.parent.expression === up) {
-                boxes.push([n, 'move']);
-                return true;
-            }
-            const hashSlot = this.rustWatchHashListSlot(up, n);
-            if (hashSlot !== undefined) {
-                boxes.push([n, hashSlot]);
-                return true;
-            }
-            // ws `client.resolve|reject(value, hash)` takes `impl Into<Value>`: the list moves at its last use, else is lent
-            if (this.rustLentWsSettleSlot(up, n)) {
-                boxes.push([n, this.rustLocalLastUse(n, declaration) ? 'move' : 'lend']);
-                handOffs++;
-                return true;
-            }
-            // base `inArray (needle, x)` / `arrayConcat (a, b)` and a ws cache `stored.append (x)` take `impl Into<Value>`:
-            // lent `&x`, moved at the last use (`arrayConcat` also where its result is written back to the local)
-            const lentSlot = this.rustBuiltListLentHelperSlot(up, n);
-            if (lentSlot !== undefined) {
-                const move = lentSlot !== 'inArray' && (this.rustLocalLastUse(n, declaration) || (lentSlot === 'arrayConcat' && this.rustBuiltListSelfWriteArg(n, name)));
-                boxes.push([n, move ? 'move' : 'lend']);
-                handOffs++;
-                return true;
-            }
-            // `Promise.all(x)` reads its operand once: the list moves into the box at its last use
-            if (this.rustBuiltListPromiseAllOperand(up, n)) {
-                if (!this.rustLocalLastUse(n, declaration) || !short(n)) return false;
-                boxes.push([n, 'move']);
-                handOffs++;
-                return true;
-            }
-            // ral-sf: a plural `parse*` response slot or a per-venue list / map slot takes `impl Into<crate::Value>`:
-            // the shared list is lent there (`&x`, an Arc bump), never copied
-            if (isCallExpression(up) && up.expression !== n && !this.rustTestTierSource(up) && (this.rustLentListSlot(up, n) || this.rustLentVenueSlot(up, n) !== undefined)) {
-                boxes.push([n, 'lend']);
-                handOffs++;
-                return true;
-            }
-            // ral-sf: an object-literal value at the list's proven last use (no later read or push, not in a loop or
-            // closure) takes the list whole: `Value::Arr(x)` moves it, so a push accumulator is boxed once
-            if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n && this.rustLocalLastUse(n, declaration) && short(n)) {
-                boxes.push([n, 'move']);
-                handOffs++;
-                return true;
-            }
-            // ral-vf: stored whole at a literal key of another local map (`m['k'] = x`, statement) at the list's provable last
-            // use: JS stores the reference and nothing reads or pushes `x` afterwards, so `Value::Arr(x)` moves it (one box)
-            if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
-                && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left)) && this.rustLocalKeyPlace(up.left, n) && short(n)) {
-                boxes.push([n, 'move']);
-                handOffs++;
-                return true;
-            }
-            // ral-tf: a one-kind push accumulator boxed into an object-literal value before its last hand-off shares the
-            // list there (`Value::Arr(x.clone())`, an Arc bump where the Value box was `x.clone()`); nothing mutates it afterwards
-            if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n && short(n) && this.rustBuiltListFrozenAfter(n, declaration, name)) {
-                boxes.push([n, 'clone']);
-                handOffs++;
-                return true;
-            }
-            if (isCallExpression(up) && up.expression !== n && up.arguments.some((a: any) => a === n)) {
-                const callee: any = up.expression;
-                if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || !short(n)
-                    || RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.text)))
-                    || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n))) return false;
-                boxes.push([n, this.rustLocalLastUse(n, declaration) || this.rustBuiltListSelfWriteArg(n, name) ? 'move' : 'clone']);
-                return true;
-            }
-            return false;
-        });
+        // ral-47c: the enclosing method's own name (`const fetchMarkets = []` in `fetchMarkets ()`) is no use of the list (ral-qd skip)
+        const ownNameSkip = this.rustOwnNameSkip;
+        this.rustOwnNameSkip = true;
+        let safe: boolean;
+        try {
+            safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
+                if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
+                if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
+                const up: any = n.parent;
+                if (isBinaryExpression(up) && up.left === n) {
+                    return up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
+                        && (this.rustBuiltListWriteSource(up.right) || this.rustBuiltListSelfSort(up, name) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== undefined || this.rustDefaultedAliasMove(up) !== undefined) && String(up.parent.getText()).split('\n')[0].length <= 200;
+                }
+                if (isElementAccessExpression(up) && up.expression === n) {
+                    natives++;
+                    return !(isElementAccessExpression(up.parent) && up.parent.expression === up) && this.rustReadBearerElementUse(up, 'list');
+                }
+                if (isPropertyAccessExpression(up) && up.expression === n) {
+                    const member = String(up.name.text);
+                    natives++;
+                    if (member === 'push') return this.rustVecPushShape(up.parent, name);
+                    const use: any = up.parent;
+                    return member === 'length' && use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
+                        && !(isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
+                }
+                if (isCallExpression(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
+                    natives++;
+                    return true;
+                }
+                if (isReturnStatement(up) && up.expression === n) {
+                    boxes.push([n, 'move']);
+                    return true;
+                }
+                // ral-uf: `return x as T[]` hands the list on whole too (the cast prints nothing)
+                if (up?.kind === SyntaxKind.AsExpression && up.expression === n && isReturnStatement(up.parent) && up.parent.expression === up) {
+                    boxes.push([n, 'move']);
+                    return true;
+                }
+                const hashSlot = this.rustWatchHashListSlot(up, n);
+                if (hashSlot !== undefined) {
+                    boxes.push([n, hashSlot]);
+                    return true;
+                }
+                // ws `client.resolve|reject(value, hash)` takes `impl Into<Value>`: the list moves at its last use, else is lent
+                if (this.rustLentWsSettleSlot(up, n)) {
+                    boxes.push([n, this.rustLocalLastUse(n, declaration) ? 'move' : 'lend']);
+                    handOffs++;
+                    return true;
+                }
+                // base `inArray (needle, x)` / `arrayConcat (a, b)` and a ws cache `stored.append (x)` take `impl Into<Value>`:
+                // lent `&x`, moved at the last use (`arrayConcat` also where its result is written back to the local)
+                const lentSlot = this.rustBuiltListLentHelperSlot(up, n);
+                if (lentSlot !== undefined) {
+                    const move = lentSlot !== 'inArray' && (this.rustLocalLastUse(n, declaration) || (lentSlot === 'arrayConcat' && this.rustBuiltListSelfWriteArg(n, name)));
+                    boxes.push([n, move ? 'move' : 'lend']);
+                    handOffs++;
+                    return true;
+                }
+                // `Promise.all(x)` reads its operand once: the list moves into the box at its last use
+                if (this.rustBuiltListPromiseAllOperand(up, n)) {
+                    if (!this.rustLocalLastUse(n, declaration) || !short(n)) return false;
+                    boxes.push([n, 'move']);
+                    handOffs++;
+                    return true;
+                }
+                // ral-sf: a plural `parse*` response slot or a per-venue list / map slot takes `impl Into<crate::Value>`:
+                // the shared list is lent there (`&x`, an Arc bump), never copied
+                if (isCallExpression(up) && up.expression !== n && !this.rustTestTierSource(up) && (this.rustLentListSlot(up, n) || this.rustLentVenueSlot(up, n) !== undefined)) {
+                    boxes.push([n, 'lend']);
+                    handOffs++;
+                    return true;
+                }
+                // ral-sf: an object-literal value at the list's proven last use (no later read or push, not in a loop or
+                // closure) takes the list whole: `Value::Arr(x)` moves it, so a push accumulator is boxed once
+                if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n && this.rustLocalLastUse(n, declaration) && short(n)) {
+                    boxes.push([n, 'move']);
+                    handOffs++;
+                    return true;
+                }
+                // ral-vf: stored whole at a literal key of another local map (`m['k'] = x`, statement) at the list's provable last
+                // use: JS stores the reference and nothing reads or pushes `x` afterwards, so `Value::Arr(x)` moves it (one box)
+                if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
+                    && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left)) && this.rustLocalKeyPlace(up.left, n) && short(n)) {
+                    boxes.push([n, 'move']);
+                    handOffs++;
+                    return true;
+                }
+                // ral-tf: a one-kind push accumulator boxed into an object-literal value before its last hand-off shares the
+                // list there (`Value::Arr(x.clone())`, an Arc bump where the Value box was `x.clone()`); nothing mutates it afterwards
+                if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n && short(n) && this.rustBuiltListFrozenAfter(n, declaration, name)) {
+                    boxes.push([n, 'clone']);
+                    handOffs++;
+                    return true;
+                }
+                if (isCallExpression(up) && up.expression !== n && up.arguments.some((a: any) => a === n)) {
+                    const callee: any = up.expression;
+                    if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || !short(n)
+                        || RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.text)))
+                        || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n))) return false;
+                    boxes.push([n, this.rustLocalLastUse(n, declaration) || this.rustBuiltListSelfWriteArg(n, name) ? 'move' : 'clone']);
+                    return true;
+                }
+                return false;
+            });
+        } finally {
+            this.rustOwnNameSkip = ownNameSkip;
+        }
         // a list with no native use is typed only when every use is a hand-off that moves or lends it (a `return x` move included)
         if (!safe || (natives === 0 && (handOffs === 0 || handOffs + boxes.filter(([b]) => isReturnStatement(b.parent) || (b.parent?.kind === SyntaxKind.AsExpression && isReturnStatement(b.parent.parent))).length !== boxes.length || boxes.some(([, form]) => form === 'clone')))) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
