@@ -2449,7 +2449,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rustTypedListField(declaration.initializer)) return `${indent}let mut ${varName}: crate::value::List = self.${String(this.rustSkipWrappers(declaration.initializer).name.text)}.clone()`;
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
         if (boolValue !== undefined) {
@@ -6828,6 +6828,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // ral-40h: a container alias asked from inside its source's open decision is re-asked once the source settles
         if (source !== undefined && isVariableDeclaration(source) && this.rustBorrowedPending.has(source) && this.rustContainerAliasAsking.has(init)) { this.rustSbAliasDeferred.add(init.parent); return false; }
+        // ral-44c: `let y = params` of a typed unified method's never-rebound `params` (a map on every path, `Into<Params>`)
+        if (source !== undefined && source.kind === SyntaxKind.Parameter) return this.rustTypedParamsParam(source);
         if (source === undefined || !isVariableDeclaration(source) || this.rustBorrowedPending.has(source)) return false;
         return this.rustBorrowedLocalKind(source) === 'dict';
     }
@@ -6837,9 +6839,49 @@ export class RustTranspiler extends BaseTranspiler {
     /** sb: the alias declaration shares its source's Arc (`Value::from(&x).into_dict()`, the bump the `Value` alias made). */
     rustSbDictAliasDecl(declaration: any): boolean {
         const init: any = this.rustSkipWrappers(declaration?.initializer);
-        return init !== undefined && isIdentifier(init) && this.rustBorrowedLocalKind(declaration) === 'dict' && this.rustSbDictAliasSource(init);
+        return init !== undefined && isIdentifier(init) && this.rustDeclaredNode(init)?.kind !== SyntaxKind.Parameter && this.rustBorrowedLocalKind(declaration) === 'dict' && this.rustSbDictAliasSource(init);
     }
     private rustSbAliasDeferred = new WeakSet<any>();
+
+    /** ral-44c: the aliased parameter is read again after the alias declaration (or the alias sits in a loop): the
+     *  alias copies the Arc; otherwise the parameter moves into it, as the boxed alias did at its last use. */
+    rustParamReadAfter(declaration: any): boolean {
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        const param: any = this.rustDeclaredNode(init);
+        if (findAncestor(declaration, (a: any) => a.kind === SyntaxKind.ForStatement || a.kind === SyntaxKind.ForInStatement || a.kind === SyntaxKind.ForOfStatement || a.kind === SyntaxKind.WhileStatement || a.kind === SyntaxKind.DoStatement || isFunctionLike(a)) !== this.rustEnclosingFunction(declaration)) return true;
+        let after = false;
+        const end = declaration.getEnd();
+        const seen = this.rustLocalUsesAll(param, String(param.name.text), true, (n: any) => {
+            if (n.getStart() >= end || this.rustEnclosingFunction(n) !== this.rustEnclosingFunction(declaration)) after = true;
+            return true;
+        });
+        return after || !seen;
+    }
+
+    /** ral-44c: write forms of a params alias that answer a map on every path: `omit` of the alias itself, or `extend`
+     *  whose every operand is a proven untagged map (`extend` answers `Value::Map`). */
+    rustParamsAliasWrite(rhs: any, declaration: any): boolean {
+        const init: any = this.rustSkipWrappers(declaration?.initializer);
+        if (init === undefined || !isIdentifier(init) || this.rustDeclaredNode(init)?.kind !== SyntaxKind.Parameter) return false;
+        if (this.rustBaseCallNamed(rhs, RustTranspiler.RUST_HANDED_DICT_OMIT) && rhs.arguments.length === 2) {
+            const head: any = this.rustSkipWrappers(rhs.arguments[0]);
+            return head !== undefined && isIdentifier(head) && this.rustDeclaredNode(head) === declaration;
+        }
+        if (this.rustBaseCallNamed(rhs, RustTranspiler.RUST_HANDED_DICT_EXTEND) && rhs.arguments.length >= 1) {
+            return Array.from(rhs.arguments).every((a: any) => {
+                const op: any = this.rustSkipWrappers(a);
+                return (op !== undefined && isIdentifier(op) && this.rustDeclaredNode(op) === declaration) || this.rustUntaggedMapOperand(a);
+            });
+        }
+        return false;
+    }
+
+    /** ral-44c: `let y = params` of a typed unified method's `params`: the alias takes the map behind the boxed parameter
+     *  (`params.clone().into_dict()`, the same Arc bump the boxed alias paid); the parameter itself stays readable. */
+    rustParamsAliasDecl(declaration: any): boolean {
+        const init: any = this.rustSkipWrappers(declaration?.initializer);
+        return init !== undefined && isIdentifier(init) && this.rustDeclaredNode(init)?.kind === SyntaxKind.Parameter && this.rustBorrowedLocalKind(declaration) === 'dict' && this.rustSbDictAliasSource(init);
+    }
 
     rustAssignmentOpKind(op): boolean {
         return op >= SyntaxKind.FirstAssignment && op <= SyntaxKind.LastAssignment;
@@ -11651,7 +11693,9 @@ export class RustTranspiler extends BaseTranspiler {
             });
             return ok && (valueUses === 0 || elemUses === 0) ? 'call' : false;
         }
-        const fromOpt = this.rustIsOptMarketCall(declaration.initializer) || this.rustOptMarketTernary(declaration.initializer) !== undefined;
+        // ral-44c: `let m = market` of a lent `Option<&Market>` parameter starts as the owned copy (`market.cloned()`)
+        const fromSlot = this.rustMarketSlotParamOf(this.rustSkipWrappers(declaration.initializer)) !== undefined && (declaration.parent.flags & NodeFlags.Const) === 0;
+        const fromOpt = this.rustIsOptMarketCall(declaration.initializer) || this.rustOptMarketTernary(declaration.initializer) !== undefined || fromSlot;
         const empty = declaration.initializer === undefined || this.literalKindOfNode(declaration.initializer) === 'null' || fromOpt;
         if (!empty && !this.rustIsTypedMarketCall(declaration.initializer)) return false;
         if (empty && !fromOpt && ((declaration.parent.flags & NodeFlags.Const) !== 0 || this.rustNilLocalKind(declaration) !== undefined)) return false;
@@ -12319,8 +12363,10 @@ export class RustTranspiler extends BaseTranspiler {
     printTypedMarketLocal(declaration: any, indent: string, varName: string): string | undefined {
         const kind = this.rustMarketLocalKind(declaration);
         if (kind === 'opt') {
+            const slot: any = this.rustSkipWrappers(declaration.initializer);
             const init = this.rustIsOptMarketCall(declaration.initializer) ? this.printNode(declaration.initializer, 0).trim()
-                : (this.printOptMarketTernary(declaration.initializer) ?? 'None');
+                : this.rustMarketSlotParamOf(slot) !== undefined ? `${super.printIdentifier(slot)}.cloned()`
+                    : (this.printOptMarketTernary(declaration.initializer) ?? 'None');
             return `${indent}let mut ${varName}: Option<crate::types::Market> = ${init}`;
         }
         if (kind === 'call') {
@@ -18655,6 +18701,8 @@ export class RustTranspiler extends BaseTranspiler {
                 const rhs: any = this.rustSkipWrappers(up.right);
                 // sb: an alias of a shared map rewritten only as an `omit` of a proven map holds a map on every path (not optional)
                 if (sbAlias && this.rustOmitOfDict(rhs) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
+                // ral-44c: a params alias also rewritten as `y = this.omit (y, ..)` (its own map) or `y = this.extend (maps..)`
+                if (sbAlias && this.rustParamsAliasWrite(rhs, declaration) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
                 writes++;
                 if (this.literalKindOfNode(rhs) === 'null') return ++nullWrites > 0;
                 // ral-yh: a `safeDict*` / `safeList*` local rewritten only with its own kind: a tag-free map literal / a list
