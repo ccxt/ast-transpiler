@@ -466,6 +466,12 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  asked while the shared-container rule walks its uses (the copying `IndexMap` bearer rules keep the old walk). */
     rustOwnMethodName(n: any, scope: any): boolean;
     private rustOwnNameSkip;
+    /** ral-52i: set only while the built-list rule walks its uses. */
+    private rustDisjointShadowSkip;
+    private rustDisjointShadowSeen;
+    private rustBuiltListCopiedElement;
+    /** ral-52i: `other` (a variable declaration) and `declaration` sit in two blocks of one function, neither inside the other. */
+    rustDisjointBinding(other: any, declaration: any): boolean;
     rustLocalUsesAcceptBool(declaration: any, sourceName: string): boolean;
     private rustBoolParamDecisions;
     rustParamPrintsBool(param: any): boolean;
@@ -659,6 +665,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Base `parseNumber(s)` with no default over a string (literal, string local, `Precise.string*`): the
      *  runtime parses a `Str` to `Float` and answers `Null` otherwise, so the result is exactly an `Option<f64>`. */
     rustParseNumberOfString(call: any): boolean;
+    private static readonly RUST_BASE_STR_FIELDS;
+    /** ral-52k: `this.<field>` of the table whose declaration is the base-tier `string` property (no venue redeclares it). */
+    rustBaseStrFieldRead(node: any): boolean;
     /** True when `node` (through parens) is the `whenTrue`/`whenFalse` arm of a ternary that initialises a declaration. */
     rustTernaryArm(node: any): boolean;
     /** `node` (through parens and ternary arms) is a variable declaration's initializer. */
@@ -787,7 +796,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustParseNumberStrCall(call: any): boolean;
     rustDerivedScalarKind(call: any): string | undefined;
     rustListLengthInit(node: any): boolean;
+    rustSelfRootedLengthRecv(recv: any): boolean;
     rustListLengthText(node: any): string;
+    /** ral-52f: `this.handle*AndParams (..)[0]` read inline (bitget `productType`, toobit / okx pro `marketType`) where the
+     *  helper's declared tuple slot 0 is a string (`[string, Dict]` / `[Str, Dict]`): the read is that string or undefined,
+     *  printed off the temp list exactly as the destructured slot 0 (`.and_then(Value::as_str).map(str::to_owned)`). */
+    rustInlineHandleStrSlot(node: any): boolean;
     rustElementReadScalarKind(node: any): string | undefined;
     /** xg: the element read prints straight off the list place (`xs.get(..).and_then(Value::as_str)..`), never a helper read
      *  that would leave the declaration `Value` while its uses read a string (the paradex E0599 trap). */
@@ -873,6 +887,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-51n: every use of a number local is a presence test or an operand of a numeric comparison (never boxed, never
      *  arithmetic): an `Int` reader default read back as `f64` compares exactly as the `Int` did, so no number can change. */
     rustCompareOnlyNumUses(declaration: any): boolean;
+    /** Every boxed use of the local is a direct argument of a `number`-typed parameter. */
+    rustNumParamBoxesOnly(declaration: any): boolean;
+    /** The parameter `arg` binds in `call` is declared `number` (not `int`), so it prints as an `f64`. */
+    rustNumParamArg(call: any, arg: any): boolean;
     /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */
     rustReaderIntDefaultNum(init: any): boolean;
     rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
@@ -1140,6 +1158,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustElemKeyInUse(n: any): boolean;
     /** An `in`-keyed element local stays `Value` when a boxed use would copy where the `Value` moved or was lent. */
     rustElemKeyInCostly(declaration: any): boolean;
+    /** ral-52i: `n` is a top-level value of the object literal written by `m[k] = { .. }` keyed by the same local `k`. */
+    rustElemKeyInsertLiteralValue(n: any, declaration: any): boolean;
     /** `m[k] = v` as a statement: the element key of a native insert. */
     rustElemInsertKey(n: any): boolean;
     printElemKeyInOp(key: any, obj: any): string | undefined;
@@ -2068,6 +2088,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  the same block mutates (`x['k'] = v` -> `add_element_to_object(&mut x…)`,
      *  `x.push(v)` -> `append_to_array(&mut x…)`). */
     isWriteBackBindRead(read: Node): boolean;
+    /** ral-52e: `const e = xs[k]; e['f'] = v; ..; xs[k] = e;` -- the bind is followed only by top-level writes on `e` and then the
+     *  source's own write-back at the same receiver and key text, so a cloned element read writes the same element back. */
+    rustExplicitWriteBackBind(read: any): boolean;
     /** yb: the ccxt write-back pass (`writeBackIndexedMutations`) only fires when the line right after the bind is a top-level
      *  element / property write or push on the bound local; any other next statement (an `if`, a plain reassignment) leaves
      *  the bind alone, so its counter key may print boxed (`get_value(&xs, &Value::Int(i))`, the same helper call and value). */
@@ -2932,6 +2955,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustAeoBoxedNative(n: any): boolean;
     /** ral-50b: `n[<integer literal>] = v` (statement, one level, `=`). */
     rustListIndexLiteralWrite(n: any): boolean;
+    /** ral-52e: a list index key proved i64: an integer literal, or `+` / `-` over integer literals and i64 scalar locals (at least one literal). */
+    rustListIndexIntKey(key: any, top?: boolean): boolean;
     /** ral-48b: `n['k'] = v` (statement, literal non-digit key) whose value does not read `n`. */
     rustAeoTargetWrite(n: any): boolean;
     /** The source statement of a box (`Value::Dict(x)`, +13 chars) leaves the printed line within 400 chars. */
@@ -3268,6 +3293,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustWsFlightLocals;
     rustWsFlightSource(init: any): boolean;
     rustWsFlightLocal(declaration: any): boolean;
+    /** `this.safeValue(client.futures, k)` on the planned handle with a literal or string-local key: the access and key. */
+    rustWsFlightSafeRead(node: any): {
+        access: any;
+        key: any;
+    } | undefined;
+    /** `x === undefined` / `x !== undefined` on a flight local read through `safeValue`: whether it is the `!==` form. */
+    rustWsFlightNullTestOf(n: any): boolean | undefined;
+    /** The null test of a flight local read through `safeValue`: an absent entry reads as the empty `Flight::default()`. */
+    printWsFlightNullTest(left: any, right: any): string | undefined;
     printWsFlightLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
     /** A flight handle stays typed where it is awaited, a statement, or a `Flight` local's initializer; elsewhere it is boxed. */
     rustWsFlightBox(node: any, text: string): string;
@@ -3539,6 +3573,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  parameter never written after its declaration), at `y`'s last use: `y` holds a `Value::Arr` there, so
      *  `y.into_list()` moves exactly that list (no copy, no other variant to lose). */
     rustArrayGuardedMove(write: any): boolean;
+    private rustArrayGuardedCopies;
+    /** ral-52i: `id` names a plain `Value` local or parameter of its own function (no typed local form). */
+    rustPlainValueBinding(id: any): boolean;
     /** ral-uf: every later read of `node`'s local lies in the else branch of `guard` (a path disjoint from the move) and
      *  nothing reads it after the if statement; no loop or closure sits between the move and the declaration. */
     rustGuardedBranchLastUse(node: any, declaration: any, guard: any): boolean;
