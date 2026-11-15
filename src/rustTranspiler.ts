@@ -7010,6 +7010,13 @@ export class RustTranspiler extends BaseTranspiler {
         return column + 2 * String(parent.left.getText()).length + String(n.getText()).length + 72 <= 400;
     }
 
+    /** ral-46d: `n` reads a local declared `const f = m['<opt flag>']` off a loaded market struct (`Option<bool>` field). */
+    rustMarketFlagFieldLocal(n: any): boolean {
+        const declaration: any = isIdentifier(n) ? this.rustDeclaredNode(n) : undefined;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined) return false;
+        return this.rustMarketFieldScalar(this.unwrapParens(declaration.initializer))?.kind === 'obool';
+    }
+
     rustScalarUseFormOwn(n, kind: string): string | undefined {
         const parent: any = n.parent;
         if (parent === undefined) return undefined;
@@ -7024,6 +7031,10 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustScalarLiteralTest(kind, other) !== undefined) return 'test';
         }
         if ((kind === 'bool' || kind === 'obool') && this.rustIdentifierUseIsCondition(n)) return 'cond';
+        // ral-46d: an `Option<bool>` leaf of a logical the printer emits as a native `bool` (a narrowed bool local's initializer,
+        // a `Value::Bool(..)` box): the leaf prints its truthiness `(x == Some(true))`, the very test the boxed `is_true` made
+        // (only a local the printer itself types off the struct field: other `Option<bool>` locals may be narrowed to `bool` later)
+        if (kind === 'obool' && this.rustClimbLogicalWrappers(n) !== n && this.rustConditionBoolSlot(n) && this.rustMarketFlagFieldLocal(n)) return 'cond';
         // vd: a string operand of a `Precise.string<Add|Sub|..>` arithmetic entry point is lent as is (the runtime takes
         // `&impl PreciseArg`: `None` reads as the `Null` box, a string as its `Str`); no box, no copy
         if ((kind === 'str' || kind === 'ostr') && this.rustPreciseLentOperand(n) && this.rustPreciseLendLocal(n)) return 'parg';
@@ -11684,7 +11695,8 @@ export class RustTranspiler extends BaseTranspiler {
     // fields every loaded market carries (`from_value` defaults only a missing key, which a market never lacks)
     private static readonly RUST_MARKET_BOOL_FIELDS = new Set(['spot', 'swap', 'future', 'option', 'contract']);
     // nullable flags (`Option<bool>`): only a truthiness test reads them natively
-    private static readonly RUST_MARKET_OPT_BOOL_FIELDS = new Set(['linear', 'inverse', 'margin']);
+    // (ral-46d: `stock` is `Option<bool>` on `crate::types::Market`, read by `safe_bool` exactly as `linear`)
+    private static readonly RUST_MARKET_OPT_BOOL_FIELDS = new Set(['linear', 'inverse', 'margin', 'stock']);
     private static readonly RUST_MARKET_SAFE_READERS = new Set(['safeString', 'safeBool']);
     // `Str` keys of `MarketInterface` (`Option<String>` fields)
     private static readonly RUST_MARKET_OPT_STR_FIELDS: Record<string, string> = { settle: 'settle', id: 'id', baseId: 'base_id', quoteId: 'quote_id' };
@@ -12746,6 +12758,8 @@ export class RustTranspiler extends BaseTranspiler {
         const list: any = declaration.parent;
         if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & NodeFlags.Const) === 0) return undefined;
         if (this.rustDeclarationPrintsNativeBool(declaration) || this.rustEnclosingFunction(inner) !== this.rustEnclosingFunction(declaration)) return undefined;
+        // ral-46d: a flag local the scalar solve typed (`Option<bool>` off the struct field) prints through its own condition form
+        if (this.rustScalarLocalOf(inner) !== undefined) return undefined;
         const init: any = this.unwrapParens(declaration.initializer);
         if (init === undefined || !(isElementAccessExpression(init) || isPropertyAccessExpression(init))) return undefined;
         if (this.rustTypedMarketLocalOf(init.expression) === undefined) return undefined;

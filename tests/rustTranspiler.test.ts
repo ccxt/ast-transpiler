@@ -8403,8 +8403,10 @@ describe('rust typed Market locals', () => {
     });
 
     test('flag reads off a market struct print plain bools, never is_true', () => {
-        expect(output).toContain('let mut isStock: Value = crate::value::KeyRead::key_read(&&market, "stock")');
-        expect(output).toContain('isStock.as_bool() == Some(true) && ((market).spot)');
+        // ral-46d: `stock` is the struct's own `Option<bool>` field; the flag local holds it and tests `== Some(true)`
+        expect(output).toContain('let mut isStock: Option<bool> = (market).stock;');
+        expect(output).toContain('(isStock == Some(true)) && ((market).spot)');
+        expect(output).not.toContain('key_read(&&market, "stock")');
         expect(output).toContain('!(market).spot');
         expect(output).not.toContain('is_true(&isStock)');
         expect(output).not.toContain('Value::Bool((market).spot)');
@@ -16822,5 +16824,21 @@ describe('ral-46e: a venue Market producer returning undefined or a safeMarket r
         expect(out).toContain('let mut marketResolved: Option<crate::types::Market> = None');
         // negative: a cast return keeps the boxed producer
         expect(out).toMatch(/fn getMarketCast\(&self, [^)]*\) -> Value/);
+    });
+});
+
+describe('ral-46d: the Option<bool> logical-leaf form is limited to market struct flag locals', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Bool = boolean | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    handleOptionAndParams (params: object, methodName: Str, optionName: string, defaultValue: any = undefined): [any, Dict] { return [ defaultValue, params ]; }\n    checkOptionBool (m: Str, o: string, v: any): Bool { return v; }\n    checkOptionInteger (m: Str, o: string, v: any): Int { return v; }\n    handleOptionBoolAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const [ value, newParams ] = this.handleOptionAndParams (params, methodName, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), newParams ];\n    }\n    handleOptionIntegerAndParams (params: object, methodName: Str, optionName: string, defaultValue: Int = undefined): [Int, Dict] {\n        const [ value, newParams ] = this.handleOptionAndParams (params, methodName, optionName, defaultValue);\n        return [ this.checkOptionInteger (methodName, optionName, value), newParams ];\n    }\n    async fetchX (p: Dict): Promise<any> { return {}; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchX (since: any = undefined, params = {}) {\n        const [ historical, rest ] = this.handleOptionBoolAndParams (params, 'fetchX', 'historical', false);\n        const useHistory = historical || (since !== undefined);\n        if (useHistory) {\n            return rest;\n        }\n        return params;\n    }\n}\n";
+    test('guard: a bool tuple slot in a bool logical keeps its bare form (only market flag locals take `== Some(true)`)', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-46d-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let text = '';
+        try { text = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(text).toContain('let mut useHistory: bool = ');
+        expect(text).toContain('let mut useHistory: bool = historical || ');
     });
 });
