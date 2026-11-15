@@ -15371,3 +15371,28 @@ describe('ral-41b item 1: string-method forms with variable / negative bounds an
         });
     }
 });
+
+describe('41d: a reader whose long declaration is held by the 400-char guard splits its default into a typed temp', () => {
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-41d-rdsplit-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k] ?? d; }\n    safeString2 (o: any, k: any, k2: any, d: Str = undefined): Str { return o[k] ?? o[k2] ?? d; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k] ?? d; }\n    seconds (): number { return 1; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('string reader with a nested no-default string reader default: the nested reader prints into Option<String> __rd_x, the outer takes Value::from(__rd_x)', () => {
+        const out = run("    m (params: any, account: any) {\n        const vault = this.safeString2 (params, 'K1', 'K2', this.safeString (account, 'K3'));\n        if (vault === undefined) {\n            return 0;\n        }\n        return this.hold (vault);\n    }\n".replace('K1', 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk').replace('K2', 'jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj').replace('K3', 'qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'));
+        expect(out).toMatch(/let __rd_vault: Option<String> = .*qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq.*;\n\s*let mut vault: Option<String> = .*&\[Value::from\(__rd_vault\)\]\)\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out.split('\n').filter((l: string) => l.length > 400)).toEqual([]);
+    });
+    test('integer reader with a `this.seconds () + N` default: i64 temp, Option<i64> local', () => {
+        const out = run("    m (params: any) {\n        const exp = this.safeInteger (params, 'K1', this.seconds () + 7776000);\n        if (exp === undefined) {\n            return 0;\n        }\n        return this.hold (exp);\n    }\n".replace('K1', 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk'));
+        expect(out).toMatch(/let __rd_exp: i64 = .*7776000.*;\n\s*let mut exp: Option<i64> = .*&\[Value::from\(__rd_exp\)\]\)\.as_i64\(\);/);
+    });
+    test('a nested reader with a default of its own is not split (the reader stays Value)', () => {
+        const out = run("    m (params: any, account: any) {\n        const vault = this.safeString2 (params, 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk', 'jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj', this.safeString (account, 'qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq', 'x'));\n        return this.hold (vault);\n    }\n");
+        expect(out).not.toMatch(/__rd_vault/);
+    });
+});

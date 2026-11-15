@@ -5824,11 +5824,60 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustReaderDeclTooLong(declaration, kind: string): boolean {
-        const init = this.rustScalarNativeText(kind, declaration.initializer);
-        if (init === undefined) return true;
+        return this.rustReaderDeclText(declaration, kind) === undefined;
+    }
+
+    /** 41d: the declaration's native initializer within the line budget: the plain native text, else (a reader whose
+     *  default is a no-default reader of the same optional kind) the nested reader hoisted into a typed temp on the line
+     *  before (`pre`) and handed to the outer reader as its default `Value::from(__rd_x)`. */
+    rustReaderDeclText(declaration, kind: string): { pre?: string, init: string } | undefined {
         let depth = 0;
         for (let up: any = declaration.parent; up !== undefined; up = up.parent) if (isBlock(up)) depth++;
-        return depth * 4 + `let mut ${declaration.name.text}: ${RustTranspiler.RUST_SCALAR_TYPES[kind]} = ${init};`.length > 360;
+        const type = RustTranspiler.RUST_SCALAR_TYPES[kind];
+        const fits = (name: string, init: string | undefined) => init !== undefined && depth * 4 + `let mut ${name}: ${type} = ${init};`.length <= 360;
+        const init = this.rustScalarNativeText(kind, declaration.initializer);
+        if (init === undefined) return undefined;
+        if (fits(String(declaration.name.text), init)) return { init };
+        const split = this.rustReaderDefaultSplit(kind, declaration.initializer, `__rd_${declaration.name.text}`);
+        return split !== undefined && fits(`__rd_${declaration.name.text}`, split.pre) && fits(String(declaration.name.text), split.init) ? split : undefined;
+    }
+
+    /** 41d: `this.safeX (o, k.., this.safeY (o2, k2))`, an optional string / integer reader whose default is a no-default
+     *  reader of the same kind: the nested reader prints natively into `tmp` (`Option<String>` / `Option<i64>`) and the
+     *  outer reader takes `Value::from(tmp)` as its default, the same `Str|Null` (`Int|Null`) value the boxed nested
+     *  reader handed it (the nested native form is that reader's own form). Every other argument is a plain local,
+     *  property read or literal, so evaluating the nested reader first changes no order a side effect could see. */
+    private rustReaderSplitKinds = new Map<string, string>();
+
+    rustReaderDefaultSplit(kind: string, expr, tmp: string): { pre: string, init: string } | undefined {
+        if (kind !== 'ostr' && kind !== 'oint') return undefined;
+        const node: any = this.unwrapParens(expr);
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustScalarReceiver(node.expression.expression)) return undefined;
+        const args = Array.from(node.arguments ?? []) as any[];
+        if (args.length < 2 || this.rustReaderDefaultKind(String(node.expression.name.text), args, true) !== kind) return undefined;
+        const plain = (a: any) => { const n: any = this.unwrapParens(a); return isIdentifier(n) || this.literalKindOfNode(n) !== undefined || (isPropertyAccessExpression(n) && (isIdentifier(n.expression) || n.expression.kind === SyntaxKind.ThisKeyword)); };
+        if (!args.slice(0, -1).every(plain)) return undefined;
+        const fallback: any = this.unwrapParens(args[args.length - 1]);
+        const reader = isCallExpression(fallback) && isPropertyAccessExpression(fallback.expression) && this.rustScalarReceiver(fallback.expression.expression);
+        let tmpKind = kind;
+        if (reader) {
+            if (!(Array.from(fallback.arguments ?? []) as any[]).every(plain)) return undefined;
+            if (this.rustReaderDefaultKind(String(fallback.expression.name.text), Array.from(fallback.arguments ?? []), true) !== undefined) return undefined;
+            if (this.rustScalarValueKind(fallback, true) !== kind) return undefined;
+        } else {
+            // a default the expression rule proves of the reader's own non-optional kind (`this.seconds () + N`,
+            // `'lit' + s`): its `i64` / `String` boxes to the same `Int` / `Str` the boxed default was
+            tmpKind = kind.slice(1);
+            if (this.rustScalarExpressionKind(fallback) !== tmpKind) return undefined;
+        }
+        if (tmp.length > 0) this.rustReaderSplitKinds.set(tmp, tmpKind);
+        const pre = this.rustScalarNativeText(tmpKind, fallback);
+        const whole = this.rustScalarNativeText(kind, node);
+        const fb = this.printNode(args[args.length - 1], 0).trim();
+        if (pre === undefined || whole === undefined || fb.length === 0) return undefined;
+        const at = whole.indexOf(fb);
+        if (at < 0 || whole.indexOf(fb, at + 1) >= 0) return undefined;
+        return { pre, init: `${whole.slice(0, at)}Value::from(${tmp})${whole.slice(at + fb.length)}` };
     }
 
     /** True when the initializer or any `x = ..` write is a reader this block admits. */
@@ -8070,6 +8119,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** Declaration hook: `let mut x: <scalar> = <native init>`, else undefined. */
     printRustScalarLocalDeclaration(declaration, varName: string, indent: string): string | undefined {
         const kind = this.rustScalarLocalKind(declaration);
+        const split = kind === undefined || !this.rustReaderDefaultTouched(declaration) ? undefined : this.rustReaderDeclText(declaration, kind);
+        if (split?.pre !== undefined) return `${indent}let __rd_${varName}: ${RustTranspiler.RUST_SCALAR_TYPES[this.rustReaderSplitKinds.get(`__rd_${declaration.name.text}`) ?? kind]} = ${split.pre};\n${indent}let mut ${varName}: ${RustTranspiler.RUST_SCALAR_TYPES[kind]} = ${split.init}`;
         const init = kind === undefined ? undefined : this.rustScalarNativeText(kind, declaration.initializer);
         const owned = '.and_then(Value::as_str).map(str::to_owned)';
         const recvName = kind === 'ostr' && this.rustBorrowedStrElems.has(declaration) ? super.printIdentifier(this.unwrapParens(declaration.initializer).expression) : undefined;
