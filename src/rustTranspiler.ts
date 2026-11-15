@@ -3255,8 +3255,17 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.isNativeStringConcatPair(this.typeOfNodeIfAny(parent.left), this.typeOfNodeIfAny(parent.right))) return false;
         // ral-va: a checker-string partner that is not always a Str (a `Value` / optional local) still takes the
         // `format!` arm (the pair test above), where `Display` of the `Value` it replaces printed `null` / the text
-        if (!this.alwaysStr(other) && !this.rustNilConcatPartner(other)) return false;
+        if (!this.alwaysStr(other) && !this.rustNilConcatPartner(other) && !this.rust56xFormatPartner(other)) return false;
         return this.rustOptStrConcatFits(n);
+    }
+
+    /** ral-56x K1: a `+` partner that is itself a concat (or a `.toString()`) the printer already prints as a boxed `Value::Str(format!(..))`
+     *  (always a `Str`, never `Null`), so the optional string joins the same `format!` with its `as_deref().unwrap_or("null")` text. */
+    rust56xFormatPartner(other): boolean {
+        const inner: any = this.unwrapParensNode(other);
+        if (inner === undefined || !(isBinaryExpression(inner) && inner.operatorToken.kind === SyntaxKind.PlusToken)
+            && !(isCallExpression(inner) && isPropertyAccessExpression(inner.expression) && inner.expression.name.text === 'toString' && (inner.arguments?.length ?? 0) === 0)) return false;
+        return this.rustUnboxedFormatText(this.printNode(inner, 0).trim()) !== undefined;
     }
 
     /** The `as_deref().unwrap_or("null")` read of a concat operand keeps its statement within the 400-char line budget. */
