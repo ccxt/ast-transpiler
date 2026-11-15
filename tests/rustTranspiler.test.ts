@@ -19694,3 +19694,27 @@ describe('ral-57e: a side level read only for a literal-key part holds the list;
         expect(out).toContain('let mut bidParts: Value = ');
     });
 });
+
+describe('ral-57a: a never-reassigned omit result read by a hand-written any-key reader is lent', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeBool (o: any, k: any, d: boolean = undefined): boolean { return o; }\n    safeInteger (o: any, k: any, d: number = undefined): number { return o; }\n    omit (x: any, k: any): any { return x; }\n    extend (...args: any[]): any { return args[0]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionIntegerAndParams (params: object, methodName: string, optionName: string, defaultValue: number = undefined): [number, Dict] {\n        return [ this.safeInteger (params, optionName, defaultValue), this.omit (params, optionName) ];\n    }\n}\n";
+    const venue = (head: string): string => "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchOrder (id: string, params = {}): Promise<any> {\n        const [ generation, paramsGeneration ] = this.handleOptionIntegerAndParams (params, 'fetchOrder', 'generation', 2);\n        const twap = this.safeBool (paramsGeneration, 'twap', false);\n        const paramsOmitted = this.omit (" + head + ", 'twap');\n        const request: Dict = { 'id': id, 'g': generation, 't': twap };\n        const clientOrderId = this.safeString2 (paramsOmitted, 'clientOrderId', 'client_order_id');\n        if (clientOrderId !== undefined) {\n            request['cid'] = clientOrderId;\n        }\n        const paramsRequest: Dict = (clientOrderId !== undefined) ? this.omit (paramsOmitted, [ 'clientOrderId', 'client_order_id' ]) : paramsOmitted;\n        return this.extend (request, paramsRequest);\n    }\n    other (x: any): any {\n        return x;\n    }\n}\n";
+    // ccxt transpiles the base class first on the same Transpiler
+    const mk = (name: string, src: string): string => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), src);
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('safeString2 on the omit of a handed params slot lends it: the local stays Dict', () => {
+        const out = mk ('r57a-any', venue ('paramsGeneration'));
+        expect(out).toContain('let mut paramsOmitted: crate::value::Dict = self.omit(&paramsGeneration, ');
+        expect(out).toContain('self.omit(&paramsOmitted, ');
+        expect(out).toContain('self.safeString2(&paramsOmitted, ');
+    });
+    test('guard: an omit whose head is not a proven map (it may carry a list body) keeps Value', () => {
+        const out = mk ('r57a-any-neg', venue ('this.other (paramsGeneration)'));
+        expect(out).toContain('let mut paramsOmitted: Value = ');
+    });
+});
