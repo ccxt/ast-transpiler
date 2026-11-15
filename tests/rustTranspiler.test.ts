@@ -15712,3 +15712,29 @@ describe('ral-42b item 2: a nested all-`{}` concat chain on a guarded long line 
         expect(rt.rustFlattenConcatChain(dbg)).toBe(dbg);
     });
 });
+
+describe('ral-42d: a literal-default safeDict / safeList returned through `as T`', () => {
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-42d-retas-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport interface Order { id: string }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o[k] ?? d; }\n    safeList (o: any, k: any, d: List = undefined): List { return o[k] ?? d; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Order, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('`return x as Order` of a `{}`-defaulted safeDict holds a Dict and boxes it once', () => {
+        const out = run("    m (orders: any): Order {\n        const order = this.safeDict (orders, 0, {});\n        return order as Order;\n    }\n");
+        expect(out).toMatch(/let mut order: crate::value::Dict = .*\.into_dict\(\);/s);
+        expect(out).toMatch(/return Value::Dict\(order\);/);
+    });
+    test('a `{}`-defaulted safeDict as one arm of a ternary initialising a Value local boxes once in that arm', () => {
+        const out = run("    m (t: any, c: boolean): any {\n        const td = this.safeDict (t, 'ticker', {});\n        const data = c ? t : td;\n        return this.hold (data);\n    }\n");
+        expect(out).toMatch(/let mut td: crate::value::Dict = .*\.into_dict\(\);/s);
+        expect(out).toMatch(/else \{ Value::Dict\(td\) \}/);
+    });
+    test('`return x as List` of a no-default safeList stays Value (it may be Null)', () => {
+        const out = run("    m (r: any): List {\n        const rows = this.safeList (r, 'rows');\n        return rows as List;\n    }\n");
+        expect(out).toMatch(/let mut rows: Value = /);
+    });
+});

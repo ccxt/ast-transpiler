@@ -19541,6 +19541,16 @@ export class RustTranspiler extends BaseTranspiler {
             || !this.rustContainerInitNeverNull(init, from === 'list' ? 'list' : 'map') || this.rustContainerInitReadsStore(init)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
         if (isReturnStatement(up) && up.expression === n) return true;
+        // ral-42d: `return x as T` returns the same box (`as` prints nothing)
+        if (isAsExpression(up) && up.expression === n && isReturnStatement(up.parent) && up.parent.expression === up) return true;
+        // ral-42d: an arm of a ternary that initialises a plain `Value` local (`y = c ? x : z`): the arm boxes once, the
+        // other arm prints as before, so `y` holds the very map / list the boxed `x` held
+        if (isConditionalExpression(up) && up.condition !== n && isVariableDeclaration(up.parent) && up.parent.initializer === up && isIdentifier(up.parent.name)
+            && this.rustDictTernaryArmPlace(n, this.rustDeclarationOfIdentifier(n))) {
+            const target: any = up.parent;
+            return this.rustBorrowedLocalKind(target) === undefined && this.rustScalarLocalKind(target) === undefined && this.rustNilLocalKind(target) === undefined
+                && !this.rustDictLocalIsTyped(target) && !this.rustVecLocalIsTyped(target) && this.rustMarketLocalKind(target) === false;
+        }
         // stored whole into a plain `this.f[..]` / `this.f` slot or an array literal element (D11: stored and boxed back)
         if (up.kind === SyntaxKind.ArrayLiteralExpression) return !this.rustInDestructureWrite(n);
         if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
