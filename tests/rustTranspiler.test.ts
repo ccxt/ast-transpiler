@@ -19318,3 +19318,29 @@ describe('ral-56n: a ternary of two i64 locals bounding its own for counter', ()
         expect(out).toContain('let mut capped: Value = ');
     });
 });
+
+describe('ral-56a: handed-map destructure measured after the base-class pass filled the arity table', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    omit (x: any, k: any): any { return x; }\n    extend (...args: any[]): any { return args[0]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionBoolAndParams (params: object, methodName: string, optionName: string, defaultValue: boolean = undefined): [boolean, Dict] {\n        return [ this.safeString (params, optionName) === 'x', this.omit (params, optionName) ];\n    }\n}\n";
+    const venue = (opt: string, use: string): string => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    orderRequest (symbol: string, market: boolean, params: Dict = {}): any {\n        const result: Dict = { 'symbol': symbol };\n        const [ po, query ] = this.handleOptionBoolAndParams (params, 'createOrder', 'postOnly');\n        let queryOmitted: Dict = this.omit (query, [ 'postOnly', 'triggerPrice', 'stopPrice' ]);\n        if (market) {\n            let createMarketBuyOrderRequiresPrice = true;\n            [ createMarketBuyOrderRequiresPrice, queryOmitted ] = this.handleOptionBoolAndParams (queryOmitted, 'createOrder', '" + opt + "', true);\n            const cost = this.safeNumber (queryOmitted, 'cost');\n            queryOmitted = this.omit (queryOmitted, 'cost');\n            result['cost'] = cost;\n            " + use + "\n        }\n        const clientOrderId = this.safeString2 (queryOmitted, 'clientOrderId', 'clOrdId');\n        if (clientOrderId !== undefined) {\n            result['clientOid'] = clientOrderId;\n            queryOmitted = this.omit (queryOmitted, [ 'clientOrderId', 'clOrdId' ]);\n        }\n        return [ result, queryOmitted ];\n    }\n}\n";
+    // ccxt transpiles the base class first on the same Transpiler: its methodSignatures entry makes the venue's
+    // `this.handleOptionBoolAndParams (x, ..)` print the required argument bare in the open measure
+    const mk = (name: string, src: string): string => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), src);
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a bare required argument is measured as its lend: the map stays Dict and the line fits 400', () => {
+        const out = mk ('r56a-polo', venue ('p'.repeat (30), "if (createMarketBuyOrderRequiresPrice) { result['req'] = 1; }"));
+        expect(out).toContain('let mut queryOmitted: crate::value::Dict = self.omit(&query, ');
+        expect(out).toContain('self.handleOptionBoolAndParams(&queryOmitted, ');
+        const line = out.split ('\n').find ((l) => l.includes ('__destr_tmp') && l.includes ('queryOmitted ='));
+        expect((line as string).length).toBeLessThanOrEqual(400);
+    });
+    test('guard: a bool sibling read as a value keeps the parent decision', () => {
+        const out = mk ('r56a-polo-neg', venue ('p'.repeat (30), "result['req'] = createMarketBuyOrderRequiresPrice;"));
+        expect(out).toContain('let mut queryOmitted: Value = ');
+    });
+});

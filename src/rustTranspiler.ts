@@ -27821,7 +27821,11 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-55a: the handed map's own slot-1 write is measured exactly: its argument `x.clone()` prints `&x` (-7), its slot read
         // takes `.into_dict()` (+12) and no `Value::Dict()` box
         const own = isIdentifier(n) ? `${String(n.text)}.clone()` : undefined;
-        const exact = own === undefined || !firstLine.includes(own) ? undefined : width + reserve + '.into_dict()'.length - (own.length - String(n.text).length - 1) - short;
+        // ral-56a: a base method in the arity table (`methodSignatures`, filled by the base-class pass ccxt runs before every
+        // venue) prints its required argument bare (`x`, owned hand-off) in the open print; the typed print lends it (`&x`, +1)
+        const bareArg = isIdentifier(n) && firstLine.includes(`(${String(n.text)}, `) ? '&'.length : undefined;
+        const exact = own !== undefined && firstLine.includes(own) ? width + reserve + '.into_dict()'.length - (own.length - String(n.text).length - 1) - short
+            : bareArg !== undefined ? width + reserve + '.into_dict()'.length + bareArg - short : undefined;
         if (write === undefined || !isBinaryExpression(write) || !isArrayLiteralExpression(write.left) || !this.rustNativeListSource(write.right) || (budget - short > 400 && !(exact !== undefined && exact <= 400 && this.rustDictSlotOfWrite(n)))) return false;
         // ral-55a: or the handed map's own slot-1 write (ral-46g) beside a `let b = true|false` boolean slot (printed `.as_bool() == Some(true)`)
         const boolSlot = (el: any): boolean => {
@@ -27829,7 +27833,41 @@ export class RustTranspiler extends BaseTranspiler {
             return d !== undefined && isVariableDeclaration(d) && d.initializer !== undefined && (d.initializer.kind === SyntaxKind.TrueKeyword || d.initializer.kind === SyntaxKind.FalseKeyword);
         };
         const handedSlot = (el: any): boolean => el === n && (write.left as any).elements.indexOf(el) === 1 && this.rustDictSlotOfWrite(el);
-        if (!(write.left.elements as any).every((el: any) => isIdentifier(el) && (this.rustNilSlotWrite(el) || handedSlot(el) || (el !== n && boolSlot(el))))) return false;
+        // ral-56a: the bare-argument measure holds only when every sibling slot is a typed nil-slot write (a boxed `let b = true`
+        // slot keeps the long head, which the measure does not cover)
+        const ownMeasured = own !== undefined && firstLine.includes(own);
+        if (!(write.left.elements as any).every((el: any) => isIdentifier(el) && (this.rustNilSlotWrite(el) || handedSlot(el) || (el !== n && (ownMeasured || budget - short <= 400) && boolSlot(el))))) return false;
+        if (!ownMeasured && budget - short > 400) {
+            let typed = true;
+            // a `let b = true|false` sibling read only as a condition (`if (b)`, `!b`, `a && b`) keeps its typed slot in the
+            // final print; any other read can still box it after this measure
+            const condOnly = (el: any): boolean => {
+                const d: any = this.rustDeclaredNode(el);
+                const fn: any = d === undefined ? undefined : this.rustEnclosingFunction(d);
+                if (fn === undefined || !boolSlot(el)) return false;
+                let ok = true;
+                const name = String(el.text);
+                const visit = (x: any): void => {
+                    if (!ok) return;
+                    if (isIdentifier(x) && String(x.text) === name && x !== d.name) {
+                        const up: any = x.parent;
+                        const cond = (up.kind === SyntaxKind.IfStatement && up.expression === x) || (up.kind === SyntaxKind.PrefixUnaryExpression && up.operator === SyntaxKind.ExclamationToken)
+                            || (isBinaryExpression(up) && (up.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken || up.operatorToken.kind === SyntaxKind.BarBarToken) && up.parent?.kind === SyntaxKind.IfStatement)
+                            || (isArrayLiteralExpression(up) && isBinaryExpression(up.parent) && up.parent.left === up);
+                        if (!cond) ok = false;
+                    }
+                    x.forEachChild(visit);
+                };
+                visit(fn);
+                return ok;
+            };
+            try {
+                typed = (write.left.elements as any).every((el: any) => el === n || (!boolSlot(el) && this.rustNilSlotWrite(el)) || condOnly(el));
+            } catch (e) {
+                typed = false;
+            }
+            if (!typed) return false;
+        }
         this.rustShortDestrHeads.add(write);
         return true;
     }
