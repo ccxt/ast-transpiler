@@ -815,6 +815,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Some statement of the parameter's function assigns the parameter itself. */
     rustParamWritten(param: any): boolean;
     rustReaderDefaultKind(name: string, args: any[], fresh: boolean): string | undefined;
+    /** ral-49i: a `sign` reader default `m['<lit>']` (or `m['<lit>'] as string`) where `m` is the reader's own receiver, a
+     *  never-written `const m = this.urls['api']` (rustUrlsMapEntry) of the same function, and every venue file of the family
+     *  writes `'<lit>'` only as a string literal (the describe() urls literal; checked by rustOptionsElemKind's scan of
+     *  literal `'<lit>': v` writes): the default the runtime reader hands back unconverted is a `Str` or `Null`. */
+    rustSignReaderUrlsLitDefault(fallback: any, receiver: any): boolean;
     /** zd: `this.options['k']` as a reader default, where every write of key `k` over the venue family (describe()
      *  literals `'k': v` anywhere in the family's files, incl. request literals, and `this.options['k'] = v`) is a string
      *  literal or `undefined`: a string-or-Null default. Any other value, a dynamic options key write, an options
@@ -1479,6 +1484,12 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  typed-container rule holds: the boxed read is `get_value(&m, &k)`; the typed key is handed to `get_value` as is
      *  (`impl ValueKey` boxes it inside, so the lookup is the same `Str` / `Null` key the boxed read took). */
     rustAnyGetValueKeyUse(n: any): boolean;
+    /** ral-49e: the read's checker type is a declared record (`Dictionary<Dict>` receiver): its bind prints as the held
+     *  `Option<Dict>` form, which ccxt's `Value`-bind write-back pass never matched, so the borrowed key changes no write-back. */
+    rustOwnKeysTypedRowRead(read: any): boolean;
+    /** ral-49e: `k` is `const k = keys[i]` where `keys` is `const keys = Object.keys (m)` and `m` is the receiver's own
+     *  declaration (a local of the same function): every key the list holds is a key `m` had when listed. */
+    rustOwnKeysElementKey(recv: any, key: any): boolean;
     /** ral-yg: `this.urls['<lit>'][k]` read only (no write, chain link, delete or update) where `this.urls['<lit>']` is the
      *  base-declared string-keyed map (`rustUrlsMapEntry`): the native read takes the borrowed key off the map the boxed
      *  read reached (a non-map entry or a `None` key reads Null, as `get_value` did on a non-map or a `Null` key). */
@@ -1691,6 +1702,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustMarketSafeReadField(call: any): string | undefined;
     /** `this.safeString (m, 'k', '')`: three arguments, the last an empty string literal. */
     rustMarketEmptyDefaultRead(call: any): boolean;
+    /** ral-49c: `m as any` (in parentheses or not) as a call argument: the same whole-value hand-off of `m`. */
+    rustMarketValueUseThroughCast(n: any): boolean;
     /** A whole-value hand-off: a call argument, an array element, a dict value or a returned value. */
     rustMarketValueUse(n: any): boolean;
     rustMarketLocalKind(declaration: any): false | 'struct' | 'opt' | 'call' | 'smkt';
@@ -1756,6 +1769,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustIsOptMarketWriteOf(n: any): boolean;
     private static readonly RUST_OPT_MARKET_RETURNS;
     rustReturnsOptMarket(node: any): boolean;
+    private static readonly RUST_OPT_OUTCOME_RETURNS;
+    /** ral-48c: `outcome` / `safeOutcome` / `loadOutcome` of the prediction base class, declared with the outcome record. */
+    rustReturnsOptOutcome(node: any): boolean;
+    /** ral-48c: `await this.loadOutcome (..)` is the call itself for the `Option<Market>` proofs. */
+    rustSkipOutcomeAwait(node: any): any;
     private rustVenueOptMarketDecisions;
     /** ral-46e: a venue (not base-tier) method declared `Market`, not async, no override, never referenced by name as a
      *  value, whose every return is `undefined` or a `safeMarket` record and that returns at least one of each
@@ -1776,6 +1794,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     printOptSafeMarketTernary(init: any): string | undefined;
     /** `(if c { None } else { Some(market) })` for an `Option<Market>` ternary initializer. */
     printOptMarketTernary(init: any): string | undefined;
+    /** ral-48c: `await this.loadOutcome (..)` in a `Value` place: the answer boxed once after the `.await`. */
+    printOptOutcomeAwaitBox(node: any, identation: number): string | undefined;
     /** `return x` in an `Option<Market>` method. */
     printOptMarketReturnValue(exp: any): string;
     private rustOptMarketBoxing;
@@ -2020,6 +2040,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `i64`/`f64`, which the `Value` match would not compile against. */
     isRustValueIndexKey(node: Node): boolean;
     /** Strips `( )`, `as T` and `!` wrappers. */
+    /** The first ancestor of `node` that is not a parenthesis / `as` / non-null wrapper. */
+    rustSkipWrappersUp(node: any): any;
     rustSkipWrappers(node: any): any;
     /** The parameter declaration behind a receiver when its *annotation* proves
      *  a plain dict; undefined otherwise (no proof → keep the helper). */
@@ -2714,6 +2736,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedDictDecisions;
     rustBorrowedDictLocal(declaration: any): boolean;
     private rustBorrowedPending;
+    /** ral-49a: an alias refused while its source was open: no decision derived from that refusal is cached. */
+    private rustSbAliasReask;
     rustBorrowedDictLocalUncached(declaration: any): boolean;
     /** `'dict' | 'list'` for a local that holds the shared container and lends it to every read, else undefined. */
     rustBorrowedLocalKind(declaration: any): 'dict' | 'list' | undefined;
@@ -3141,6 +3165,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustHandlerTableLocals;
     rustHandlerTableLocal(declaration: any): boolean;
     rustHandlerTableLocalUncached(declaration: any): boolean;
+    rustHandlerTableValue(expr: any, write: boolean): boolean;
+    /** The `Option<String>` text of a handler value accepted by `rustHandlerTableValue`. */
+    printHandlerTableValue(expr: any): string;
     /** `this.safeValue (table, k)` of a base-tier `safeValue` over a handler table. */
     rustHandlerTableRead(expr: any): boolean;
     private rustSubscriptionMethodFields;
