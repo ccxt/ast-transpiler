@@ -11620,6 +11620,36 @@ describe('ral-45h: a nil-started hash local is not a hash of any text', () => {
     });
 });
 
+describe('ral-47h: a handler hash led by its dispatch key', () => {
+    const base: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: any, limit: any): any { return limit; }\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport type Int = number | undefined;\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    trades: Dictionary<ArrayCache> = {};\n    newUpdates: boolean = true;\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    safeValue (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterBySinceLimit (array: object[] | undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return [];\n    }\n}\n",
+    };
+    const venue = "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchTrades (symbol: string, since: any = undefined, limit: any = undefined) {\n        const messageHash = 'trade' + ':' + symbol;\n        const trades = await this.watch ('wss://x', messageHash, {}, messageHash);\n        if (this.newUpdates) {\n            limit = trades.getLimit (symbol, limit);\n        }\n        return this.filterBySinceLimit (trades, since, limit);\n    }\n    handleTrades (client: Client, message: any) {\n        const channel = this.safeString (message, 'topic');\n        const symbol = this.safeString (message, 's');\n        let stored = this.trades[symbol];\n        if (stored === undefined) {\n            stored = new ArrayCache (10);\n            this.trades[symbol] = stored;\n        }\n        stored.append (message);\n        client.resolve (stored, channel + ':' + symbol);\n    }\n    handleBalance (client: Client, message: any) {\n        const channel = this.safeString (message, 'topic');\n        client.resolve (message, channel + ':' + 'all');\n    }\n    handleMessage (client: Client, message: any) {\n        const methods: any = {\n            'trade': this.handleTrades,\n            'wallet': this.handleBalance,\n        };\n        const topic = this.safeString (message, 'topic');\n        const method = this.safeValue (methods, topic);\n        if (method !== undefined) {\n            method.call (this, client, message);\n        }\n    }\nSPARE}\n";
+    const emit = (spare: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-watch47h-'));
+        const files = { ...base, 'ts/src/pro/venue.ts': venue.replace ('SPARE', spare) };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        try {
+            return transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    };
+    test('a channel read off the dispatched message holds only the dispatch keys: the trade watch is an optional cache', () => {
+        const out = emit ('');
+        expect(out).toMatch(/let mut trades: Option<crate::pro::cache::Cache> = self\.watch\([\s\S]*?\)\.await\.into\(\);/);
+    });
+    test('negative: a handler reached another way keeps the hash open and the watch a Value', () => {
+        const out = emit ('    handleOther (client: Client, message: any) {\n        this.handleBalance (client, { \'topic\': \'trade\' });\n    }\n');
+        expect(out).toMatch(/let mut trades: Value = self\.watch\(/);
+    });
+});
+
 describe('ral-46h: a typed OHLCVsBySymbol result read twice by key', () => {
     let out = '';
     beforeAll(() => {

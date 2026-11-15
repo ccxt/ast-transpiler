@@ -22948,6 +22948,10 @@ export class RustTranspiler extends BaseTranspiler {
         // literal-led watch hash meets; its later writes join below
         const nilStart = declaration.initializer === undefined || this.rustWsCacheUndefined(declaration.initializer);
         if (declaration.initializer === undefined && !this.rustLocalReassigned(declaration)) return any;
+        // ral-47h: `const ch = this.safeString (message, 'f')` in a handler reached only through the venue's
+        // `methods[this.safeString (message, 'f')]` dispatch holds one of the handler's dispatch keys
+        const dispatched = this.rustWsDispatchKeyPatterns(declaration);
+        if (dispatched !== undefined) return dispatched;
         const keyed = declaration.initializer === undefined ? undefined : this.rustWsSubscriptionKeyRead(declaration.initializer);
         if (keyed !== undefined && !this.rustLocalReassigned(declaration)) {
             // a hash read back from a subscription field: every value the venue class writes under that key
@@ -22987,6 +22991,95 @@ export class RustTranspiler extends BaseTranspiler {
         } finally {
             seen.delete(declaration);
         }
+    }
+
+    /** ral-47h: the dispatch keys a handler local `const x = this.safeString (message, 'f')` can hold, or undefined.
+     *  Proof: x is never reassigned; `message` is the handler's unwritten second parameter; the handler is a method of a
+     *  ws venue class whose every `this.<handler>` mention is a value of the one `const methods = { 'k': this.h, .. }`
+     *  literal of `handleMessage (client, message)`; that literal is read only by `this.safeValue (methods, K)` with
+     *  K an unwritten `const K = this.safeString (message, 'f')` (same field, handleMessage's unwritten `message`),
+     *  and the result is an unwritten local used only as `m.call (this, client, message)`. */
+    rustWsDispatchKeyPatterns(declaration: any): Array<Array<string | null>> | undefined {
+        const init: any = declaration.initializer === undefined ? undefined : this.rustStripWrappers(declaration.initializer);
+        const fieldRead = (x: any, msg: any): string | undefined => {
+            x = x === undefined ? undefined : this.rustStripWrappers(x);
+            if (!isCallExpression(x) || !isPropertyAccessExpression(x.expression) || x.expression.expression.kind !== SyntaxKind.ThisKeyword
+                || String(x.expression.name.text) !== 'safeString' || x.arguments.length !== 2 || !isStringLiteralLikeNode(x.arguments[1])) return undefined;
+            const m: any = this.rustStripWrappers(x.arguments[0]);
+            return isIdentifier(m) && this.rustDeclarationOfIdentifier(m) === msg ? String(x.arguments[1].text) : undefined;
+        };
+        if (init === undefined || this.rustLocalReassigned(declaration) || (declaration.parent as any)?.kind !== SyntaxKind.VariableDeclarationList
+            || !((declaration.parent as any).flags & NodeFlags.Const)) return undefined;
+        const handler: any = findAncestor(declaration, isFunctionLike);
+        if (handler === undefined || !isMethodDeclaration(handler) || !isIdentifier(handler.name) || handler.parameters.length < 2) return undefined;
+        const msgParam: any = handler.parameters[1];
+        const field = fieldRead(init, msgParam);
+        if (field === undefined || this.rustWsParamWritten(handler, msgParam)) return undefined;
+        const cls: any = handler.parent;
+        if (!isClassDeclaration(cls)) return undefined;
+        const name = String(handler.name.text);
+        const keys: string[] = [];
+        let ok = true;
+        let table: any;
+        this.rustWalkScope(cls, (n: any) => {
+            if (!ok) return RUST_WALK_STOP;
+            if (!isPropertyAccessExpression(n) || n.expression.kind !== SyntaxKind.ThisKeyword || String(n.name.text) !== name) return;
+            const pa: any = n.parent;
+            const lit: any = pa?.parent;
+            if (pa?.kind !== SyntaxKind.PropertyAssignment || pa.initializer !== n || !isStringLiteralLikeNode(pa.name) || !isObjectLiteralExpression(lit)
+                || (table !== undefined && table !== lit)) { ok = false; return RUST_WALK_STOP; }
+            table = lit;
+            keys.push(String(pa.name.text));
+            return undefined;
+        });
+        if (!ok || table === undefined || keys.length === 0) return undefined;
+        const td: any = table.parent;
+        const dispatcher: any = findAncestor(table, isFunctionLike);
+        if (!isVariableDeclaration(td) || td.initializer !== table || !isIdentifier(td.name) || !((td.parent as any)?.flags & NodeFlags.Const)
+            || dispatcher === undefined || !isMethodDeclaration(dispatcher) || !isIdentifier(dispatcher.name) || String(dispatcher.name.text) !== 'handleMessage'
+            || dispatcher.parent !== cls || dispatcher.parameters.length !== 2) return undefined;
+        const dClient: any = dispatcher.parameters[0];
+        const dMsg: any = dispatcher.parameters[1];
+        if (this.rustWsParamWritten(dispatcher, dMsg)) return undefined;
+        // every value of the literal is a `this.h` mention (no spread / computed key)
+        for (const pr of Array.from(table.properties) as any[]) {
+            if (pr.kind !== SyntaxKind.PropertyAssignment || !isStringLiteralLikeNode(pr.name)) return undefined;
+        }
+        const refOf = (x: any) => { x = this.rustStripWrappers(x); return isIdentifier(x) ? this.rustDeclarationOfIdentifier(x) : undefined; };
+        for (const r of this.rustScopeNameNodes(dispatcher, String(td.name.text)) as any[]) {
+            if (r === td.name || !isIdentifier(r)) continue;
+            if (this.rustDeclarationOfIdentifier(r) !== td) return undefined;
+            const call: any = this.rustStripWrappers(r).parent;
+            if (!isCallExpression(call) || call.arguments[0] !== r || call.arguments.length !== 2 || !isPropertyAccessExpression(call.expression)
+                || call.expression.expression.kind !== SyntaxKind.ThisKeyword || String(call.expression.name.text) !== 'safeValue') return undefined;
+            const kd: any = refOf(call.arguments[1]);
+            if (kd === undefined || !isVariableDeclaration(kd) || this.rustLocalReassigned(kd) || !((kd.parent as any)?.flags & NodeFlags.Const)
+                || fieldRead(kd.initializer, dMsg) !== field) return undefined;
+            const md: any = call.parent;
+            if (!isVariableDeclaration(md) || md.initializer !== call || !isIdentifier(md.name) || this.rustLocalReassigned(md)) return undefined;
+            for (const u of this.rustScopeNameNodes(dispatcher, String(md.name.text)) as any[]) {
+                if (u === md.name || !isIdentifier(u) || this.rustDeclarationOfIdentifier(u) !== md) continue;
+                const up: any = u.parent;
+                if (isBinaryExpression(up) && up.left === u && (up.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken || up.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken)) continue;
+                const c: any = up?.parent;
+                if (!isPropertyAccessExpression(up) || up.expression !== u || String(up.name.text) !== 'call' || !isCallExpression(c) || c.expression !== up
+                    || c.arguments.length !== 3 || c.arguments[0].kind !== SyntaxKind.ThisKeyword || refOf(c.arguments[1]) !== dClient || refOf(c.arguments[2]) !== dMsg) return undefined;
+            }
+        }
+        return keys.map((k) => [ k ]);
+    }
+
+    /** Whether a parameter is written in its function (assignment, ++/--, destructuring target). */
+    rustWsParamWritten(fn: any, param: any): boolean {
+        if (!isIdentifier(param.name)) return true;
+        for (const r of this.rustScopeNameNodes(fn, String(param.name.text)) as any[]) {
+            if (!isIdentifier(r) || r === param.name || this.rustDeclarationOfIdentifier(r) !== param) continue;
+            const p: any = r.parent;
+            if (isBinaryExpression(p) && p.left === r && rustIsAssignmentOperator(p.operatorToken.kind)) return true;
+            if ((isPrefixUnaryExpression(p) || p?.kind === SyntaxKind.PostfixUnaryExpression) && p.operand === r) return true;
+            if (isArrayLiteralExpression(p) || isShorthandPropertyAssignment(p)) return true;
+        }
+        return false;
     }
 
     /** `this.safeString (sub, 'k')` reads field k; `this.safeString (list, i)` / `list[i]` over `const list = this.safeList (sub, 'k', ..)`
