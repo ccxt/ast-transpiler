@@ -1210,6 +1210,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** vg: `Object.keys (x)` (never a ws client handle's key list) or a non-empty literal of string literals: only strings. */
     rustExactStrListInit(init: any): boolean;
     rustInArrayNeedle(node: any): boolean;
+    /** ral-50e: the `key` parameter (slot 1) of the generated base `safeDict`: prints `impl Into<crate::Value>` and binds
+     *  `let mut key: Value = key.into();` (every `Value` argument still passes; a number local passes unboxed). */
+    rustSafeDictKeyParam(param: any): boolean;
+    /** ral-50e: a local read only as base `safeDict` keys (its `any` checker type comes from an `any` operand such as
+     *  `response.length`): an `i64` the printer proved passes there as the Int its box held, so the checker's `any` is moot. */
+    rustSafeDictKeyOnlyLocal(declaration: any): boolean;
+    /** ral-50e: `n` is the key (argument 1) of `this.safeDict (x, n, ..)` resolving to the generated base body, outside the test crate. */
+    rustSafeDictKeyArg(n: any): boolean;
     /** xd: `n` is the only argument of `this.iso8601 (n)` outside the test crate (hand-written `iso8601(ts: impl Into<Value>)`). */
     rustIso8601Arg(n: any): boolean;
     /** Identifier hook: a `box` use converts with the standard `From` impls (scalars are `Copy`). */
@@ -1704,6 +1712,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustMarketEmptyDefaultRead(call: any): boolean;
     /** ral-49c: `m as any` (in parentheses or not) as a call argument: the same whole-value hand-off of `m`. */
     rustMarketValueUseThroughCast(n: any): boolean;
+    /** ral-50c: `d[k] = m`: the record stored whole into a map (its raw, an `Arc` bump). */
+    rustMarketStoreUse(n: any): boolean;
     /** A whole-value hand-off: a call argument, an array element, a dict value or a returned value. */
     rustMarketValueUse(n: any): boolean;
     rustMarketLocalKind(declaration: any): false | 'struct' | 'opt' | 'call' | 'smkt';
@@ -1770,6 +1780,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_OPT_MARKET_RETURNS;
     rustReturnsOptMarket(node: any): boolean;
     private static readonly RUST_OPT_OUTCOME_RETURNS;
+    private static readonly RUST_OPT_OUTCOME_BY_NAME;
+    /** ral-50c: prediction venue methods that answer the outcome record (overrides of `fetchOutcome`, predictfun `outcomeForToken`). */
+    private static readonly RUST_OPT_OUTCOME_VENUE_RETURNS;
     /** ral-48c: `outcome` / `safeOutcome` / `loadOutcome` of the prediction base class, declared with the outcome record. */
     rustReturnsOptOutcome(node: any): boolean;
     /** ral-48c: `await this.loadOutcome (..)` is the call itself for the `Option<Market>` proofs. */
@@ -1782,6 +1795,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueReturnsOptMarket(node: any): boolean;
     /** `this.getMarketFromSymbols (..)` resolving to the typed base method (or a venue `rustVenueReturnsOptMarket` one). */
     rustIsOptMarketCall(init: any): boolean;
+    /** ral-50c: `super.fetchOutcome (s)` in a prediction venue override declared with the outcome record (`super_fetch_outcome` answers `Option<Market>`). */
+    rustSuperFetchOutcome(call: any): boolean;
+    /** ral-50c: `c ? this.outcome (s) : {}` (either arm order): the outcome arm. Its local only takes key reads, where `None` reads as `{}` did. */
+    rustOptOutcomeEmptyTernary(init: any): any;
     /** `c ? undefined : this.market (s)` (either arm order): the `this.market` arm. */
     rustOptMarketTernary(init: any): any;
     /** ral-45c: `c ? this.safeMarket (..) : market` (a lent market slot) or `c ? this.safeMarket (..) : undefined` (either arm
@@ -1794,6 +1811,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     printOptSafeMarketTernary(init: any): string | undefined;
     /** `(if c { None } else { Some(market) })` for an `Option<Market>` ternary initializer. */
     printOptMarketTernary(init: any): string | undefined;
+    /** ral-50c: `(if c { self.outcome(s) } else { None })` for a `{}`-armed outcome ternary. */
+    printOptOutcomeEmptyTernary(init: any): string | undefined;
     /** ral-48c: `await this.loadOutcome (..)` in a `Value` place: the answer boxed once after the `.await`. */
     printOptOutcomeAwaitBox(node: any, identation: number): string | undefined;
     /** `return x` in an `Option<Market>` method. */
@@ -1806,6 +1825,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustMarketAliasWriteSource(n: any): any;
     /** The `Option<Market>` local an alias write `m = s` stores the struct local `s` into. */
     rustMarketAliasTargetOf(n: any): any;
+    /** ral-50c: `m = market` as its own statement, `market` a lent `Option<&Market>` parameter: stores `market.cloned()`. */
+    rustIsSlotParamWriteOf(n: any): boolean;
+    /** ral-50c: `d[m['k']]`: a literal-key read of the local used as another map's key (read through `KeyRead`, a `Value`). */
+    rustOptMarketKeyAsKey(n: any): boolean;
     /** `m = undefined` as its own statement. */
     rustIsNullWriteOf(n: any): boolean;
     /** A later `m = this.market (y)` on a struct local (`Some(..)` on an `Option<Market>` one). */
@@ -2302,6 +2325,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The `__destr_tmp` line keeps the 400-char budget with the slot unwrap and the lent self default (`Value::from(&x)`). */
     private rustStrSlotLineMemo;
     rustStrSlotLineFits(write: any): boolean;
+    /** ral-50f: the typed destructure line of a string slot write would newly cross 400 chars: the short head keeps it under. */
+    rustStrSlotShortHead(write: any, printed: string): boolean;
     /** Some write of the initialised local is a string tuple slot (`rustStrSlotWrite`). */
     rustStrSlotWrites(declaration: any): boolean;
     /** ral-45d: the local's own box as an argument of its string slot write (`[x, p] = this.m (.., x)`): it boxes the value the local
@@ -2793,6 +2818,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** pb: the base `handleUntilOption (k, x, p)` of a statement `[ x, q ] = ..` writing slot 0 back into `x` (base
      *  `handleUntilOption` returns its own `request` argument as slot 0, so the map moves through it). */
     rustUntilSelfCall(n: any, declaration: any): any;
+    /** ral-50b: a statement `n = this.handleUntilOption (k, n, p)` (the two-slot list written whole into a reuse literal). */
+    rustUntilListWrite(n: any, declaration: any): boolean;
+    private static readonly RUST_UNTIL_LIST_WRITE;
+    /** ral-50b: after the list write the local is only an `extend` head (the empty-map equivalence holds nowhere else). */
+    rustUntilListUsesExtendOnly(n: any, declaration: any): boolean;
     rustUntilSelfWrite(n: any, declaration: any): boolean;
     /** pb: `x` as the `request` operand of such a write-back call. */
     rustUntilSelfArg(n: any, declaration: any): boolean;
@@ -2878,6 +2908,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-48b: the boxed local's write is already a native insert (asked while the local's kind is pending, i.e. the
      *  untyped view): that write is not a helper row, and its source proof is the native-insert rule's, not this one. */
     rustAeoBoxedNative(n: any): boolean;
+    /** ral-50b: `n[<integer literal>] = v` (statement, one level, `=`). */
+    rustListIndexLiteralWrite(n: any): boolean;
     /** ral-48b: `n['k'] = v` (statement, literal non-digit key) whose value does not read `n`. */
     rustAeoTargetWrite(n: any): boolean;
     /** The source statement of a box (`Value::Dict(x)`, +13 chars) leaves the printed line within 400 chars. */
@@ -3007,6 +3039,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */
     printOptContainerNullTest(left: any, right: any, op: any): string | undefined;
     rustBorrowedListUse(node: any): boolean;
+    /** ral-50i: `n` is arg 0 of a base any-key reader call in a non-test source (the dict-bearer lend). */
+    rustBearerReaderLend(n: any): boolean;
     /** A base hand-written reader (`safeString`, `safeValue2`, `safeIntegerN`, ..) with any key. */
     rustBorrowedAnyKeyReader(call: any): boolean;
     private static readonly RUST_BY_REF_GENERATED_READERS;
@@ -3044,6 +3078,12 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  passes `omit` unchanged, and `into_dict()` would turn it into an empty map. */
     /** ral-41h: the one operand of `this.keysort (x)` is a proven map (the same head proof `omit` takes). */
     rustKeysortOfDict(call: any): boolean;
+    /** ral-50a: `t[1]` read off a `const t = this.handle*AndParams (m, ..)` tuple (base helper, PARAMS_SLOT_ARG) whose params
+     *  argument is a proven map (a typed / helper-proven params parameter, a handed slot map or a settled Dict local): the
+     *  base answers `[x, m]` or `[x, omit (m, k)]`, a map on every path. */
+    rustHandleTupleMapSlotRead(rhs: any): boolean;
+    /** ral-50a: a destructured `handle*AndParams` slot already handed as a map (`requestParams = paramsIsMargin`). */
+    rustHandedSlotIdentifier(rhs: any): boolean;
     rustOmitOfDict(init: any): boolean;
     /** `this.deepExtend (m, p, ..)` whose every operand is a proven map: a tag-free literal, a built map, an omit of a
      *  proven map, or the `params` of a typed unified method. The runtime then merges map into map on every path. */
