@@ -4438,8 +4438,11 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustScalarTry(declaration): string | null {
         if (isBindingElement(declaration)) {
-            if (this.rustScalarSeeding) return 'ostr';
+            // ral-44f: an exact Int / Bool slot (`Option<i64>` / `Option<bool>`, Copy) joins with its own kind
+            const copy = this.rustExactCopySlotSeed(declaration);
+            if (this.rustScalarSeeding) return copy ?? 'ostr';
             try {
+                if (copy !== undefined) return this.rustExactSlotKindUncached(declaration) ?? null;
                 return this.rustStrSlotKind(declaration, this.rustEnclosingFunction(declaration)) ?? null;
             } catch (e) {
                 return null;
@@ -13834,6 +13837,33 @@ export class RustTranspiler extends BaseTranspiler {
         return decision ?? undefined;
     }
 
+    /** ral-44f: `oint` / `obool` for a `const [ a, .. ] = this.m (..)` slot the checker types number / boolean whose producer
+     *  is exact at that index (`rustExactSlotCallee`, never the loose `f64` form), else undefined. Syntactic on the producer. */
+    rustExactCopySlotSeed(element: any): string | undefined {
+        const pattern: any = element?.parent;
+        const owner: any = pattern?.parent;
+        if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || owner === undefined || !isVariableDeclaration(owner) || owner.initializer === undefined
+            || element.initializer !== undefined || element.dotDotDotToken !== undefined || !isIdentifier(element.name)) return undefined;
+        const checked = this.rustSlotPrimitiveKind(element);
+        if (checked !== 'number' && checked !== 'boolean') return undefined;
+        const want = checked === 'number' ? 'int' : 'bool';
+        return this.rustExactSlotCallee(owner.initializer, pattern.elements.indexOf(element), want) ? (want === 'int' ? 'oint' : 'obool') : undefined;
+    }
+
+    /** ral-44f: `n` is the whole source of `let t = n` / `t = n;` (statement), `t` another local of the same function the joint
+     *  scalar solve currently types `kind` (an `Option<i64>` / `Option<bool>` copy of the slot). */
+    rustCopySlotAliasTarget(n: any, kind: string, element: any): boolean {
+        let top: any = n;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const parent: any = top.parent;
+        let target: any;
+        if (isVariableDeclaration(parent) && parent.initializer === top && isIdentifier(parent.name)) target = parent;
+        else if (isBinaryExpression(parent) && parent.right === top && parent.operatorToken.kind === SyntaxKind.EqualsToken
+            && isIdentifier(parent.left) && parent.parent?.kind === SyntaxKind.ExpressionStatement) target = this.rustDeclaredNode(parent.left);
+        if (target === undefined || target === element || !isVariableDeclaration(target) || this.rustEnclosingFunction(target) !== this.rustEnclosingFunction(n)) return false;
+        return this.rustScalarDecisions.get(target) === kind;
+    }
+
     private rustExactSlotKindUncached(element: any): string | undefined {
         const pattern: any = element.parent;
         const owner: any = pattern?.parent;
@@ -13857,11 +13887,17 @@ export class RustTranspiler extends BaseTranspiler {
         let nativeUses = 0;
         let boxes = 0;
         this.rustExactSlotDecisions.set(element, kind); // uses that read the slot itself see the trial kind
+        const joined = !loose && this.rustScalarSolving.has(scope) && this.rustSlotJoinsSolve(element);
+        const previous = this.rustScalarDecisions.get(element);
+        if (joined) this.rustScalarDecisions.set(element, kind);
         let ok = false;
         try {
             ok = this.rustLocalUsesAll(element, String(element.name.text), true, (n: any) => {
                 if (this.rustDeclaredNode(n) !== element) return true;
                 if (this.rustEnclosingFunction(n) !== scope) return false;
+                // ral-44f: the whole source of `let t = n` / `t = n;` with `t` a local the joint solve types this kind: the
+                // Copy slot is copied into it (no box, no clone), however `t` is written later
+                if (joined && this.rustCopySlotAliasTarget(n, kind, element)) { this.rustScalarUseForms.set(n, 'native'); nativeUses++; return true; }
                 const form = this.rustScalarUseForm(n, kind);
                 this.rustScalarUseForms.set(n, form);
                 if (form === undefined || form === 'xbox' || form === 'err' || form === 'key' || form === 'okey' || form === 'targ') return false;
@@ -13877,6 +13913,7 @@ export class RustTranspiler extends BaseTranspiler {
             });
         } finally {
             this.rustExactSlotDecisions.set(element, null);
+            if (joined) this.rustScalarDecisions.set(element, previous);
         }
         // an `Option<i64>` / `Option<bool>` slot is `Copy`: one only handed back to `Value` slots boxes there
         return ok && (nativeUses > 0 || boxes > 0) ? kind : undefined;
@@ -25724,7 +25761,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (owner === undefined || !isVariableDeclaration(owner) || owner.initializer === undefined || !this.rustNativeListSource(owner.initializer)) return false;
         const scope: any = this.rustEnclosingFunction(owner);
         if (scope === undefined || isSourceFile(scope) || scope.kind !== SyntaxKind.MethodDeclaration) return false;
-        if (this.rustSlotPrimitiveKind(element) !== 'string' || this.rustTupleSlotKind(element) !== undefined) return false;
+        if ((this.rustSlotPrimitiveKind(element) !== 'string' && this.rustExactCopySlotSeed(element) === undefined) || this.rustTupleSlotKind(element) !== undefined) return false;
         let alias = false;
         this.rustLocalUsesAll(element, String(element.name.text), false, (n: any) => {
             let top: any = n;

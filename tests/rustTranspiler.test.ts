@@ -16332,3 +16332,25 @@ describe('ral-44g: a ternary whose arms are {} or a base safeDict with a {} defa
         expect(out).toMatch(/let mut network: Value = /);
     });
 });
+
+describe('ral-44f: a local copied from an exact Bool / Int tuple slot and later overwritten with a literal', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Bool = boolean | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    handleOptionAndParams (params: object, methodName: Str, optionName: string, defaultValue: any = undefined): [any, Dict] { return [ defaultValue, params ]; }\n    checkOptionBool (m: Str, o: string, v: any): Bool { return v; }\n    checkOptionInteger (m: Str, o: string, v: any): Int { return v; }\n    handleOptionBoolAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const [ value, newParams ] = this.handleOptionAndParams (params, methodName, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), newParams ];\n    }\n    handleOptionIntegerAndParams (params: object, methodName: Str, optionName: string, defaultValue: Int = undefined): [Int, Dict] {\n        const [ value, newParams ] = this.handleOptionAndParams (params, methodName, optionName, defaultValue);\n        return [ this.checkOptionInteger (methodName, optionName, value), newParams ];\n    }\n    async fetchX (p: Dict): Promise<any> { return {}; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchTickers (symbols: string[] = undefined, params = {}) {\n        const [ hip3Option, paramsHip3 ] = this.handleOptionBoolAndParams (params, 'fetchTickers', 'hip3', false);\n        let hip3 = hip3Option;\n        if (symbols !== undefined) {\n            hip3 = true;\n        }\n        if (hip3) {\n            return await this.fetchX (paramsHip3);\n        }\n        return await this.fetchX (params);\n    }\n    async createOrder (symbol: string, params = {}) {\n        const [ expiryOption, rest ] = this.handleOptionIntegerAndParams (params, 'createOrder', 'orderExpiry', 0);\n        let expiry = expiryOption;\n        if (symbol === 'x') {\n            expiry = -1;\n        }\n        const request: Dict = { 'e': expiry };\n        return await this.fetchX (this.extend2 (request, rest));\n    }\n    extend2 (a: Dict, b: Dict): Dict { return a; }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-44f-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('slot and alias are decided together as Option<bool> / Option<i64>', () => {
+        const text = out();
+        expect(text).toContain('let mut hip3Option: Option<bool> = ');
+        expect(text).toContain('let mut hip3: Option<bool> = hip3Option;');
+        expect(text).toContain('hip3 = Some(true);');
+        expect(text).toContain('let mut expiryOption: Option<i64> = ');
+        expect(text).toContain('let mut expiry: Option<i64> = expiryOption;');
+        expect(text).toContain('expiry = Some(-1);');
+    });
+});
