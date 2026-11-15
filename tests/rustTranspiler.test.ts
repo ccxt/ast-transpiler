@@ -18557,3 +18557,114 @@ describe('ral-54x bitstamp: a Precise compare local is a bool', () => {
         expect(out).toContain('.as_bool().unwrap_or(false);');
     });
 });
+
+describe('ral-54h: snapshot proofs for findMessageHashes elements, hash parameters and subscription-field lists', () => {
+    const base: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    futures: any = {};\n    subscriptions: any = {};\n    resolve (result: any, messageHash: string): any { return result; }\n    future (messageHash: string): any { return undefined; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport default class Exchange {\n    positions: ArrayCache = undefined;\n    safeList (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    async watchMultiple (url: string, messageHashes: string[], message: any = undefined, subscribeHashes: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    findMessageHashes (client: any, element: string): string[] { return []; }\n    cleanUnsubscription (client: any, subHash: string, unsubHash: string, subHashIsPrefix = false) {}\n}\n",
+    };
+    const head = "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchPositions (client: Client) {\n        const cache = this.positions;\n        if (cache === undefined) {\n            const snapshot = await client.future ('fetchPositionsSnapshot');\n            return snapshot;\n        }\n        return cache;\n    }\n    loadSnapshot (client: Client, messageHash: string) {\n        this.positions = new ArrayCache ();\n        const cache = this.positions;\n        if (messageHash in client.futures) {\n            const future = client.futures[messageHash];\n            future.resolve (cache);\n        }\n    }\n";
+    const emit = (body: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-54h-'));
+        const files = { ...base, 'ts/src/pro/venue.ts': head + body + '}\n' };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        try {
+            return transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    };
+    const found = (arg: string) => "    handlePositions (client: Client, message: any, accountType: string) {\n        const messageHashes = this.findMessageHashes (client, " + arg + ");\n        for (let i = 0; i < messageHashes.length; i++) {\n            client.resolve ([ message ], messageHashes[i]);\n        }\n    }\n";
+    test('a findMessageHashes element over a composed element text cannot meet the literal future hash', () => {
+        expect(emit (found ("accountType + ':positions::'"))).toContain('let mut snapshot: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: a composed element text the future hash can contain keeps the snapshot a Value', () => {
+        expect(emit (found ("accountType + 'Snapshot'"))).toContain('let mut snapshot: Value = ');
+    });
+    const unsub = (list: string) => "    async unWatchThing (url: string, sym: string) {\n        const unSubHashes: string[] = [];\n        unSubHashes.push ('unsubscribe::' + sym);\n        return await this.subscribeFor (url, unSubHashes, { 'messageHashes': " + list + " });\n    }\n    async subscribeFor (url: string, hashes: string[], subscription: any) {\n        return await this.watchMultiple (url, hashes, {}, hashes, subscription);\n    }\n    handleUnsub (client: Client, subscription: any) {\n        const messageHashes = this.safeList (subscription, 'messageHashes', []);\n        for (let i = 0; i < messageHashes.length; i++) {\n            const unSubHash = this.safeString (messageHashes, i);\n            this.cleanUnsubscription (client, undefined, unSubHash);\n        }\n    }\n";
+    test('a subscription-field list built in a caller and handed through a read-only list parameter has known elements', () => {
+        expect(emit (unsub ('unSubHashes'))).toContain('let mut snapshot: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: a field list whose elements are unknown keeps the snapshot a Value', () => {
+        expect(emit (unsub ('[ url ]'))).toContain('let mut snapshot: Value = ');
+    });
+    const param = (call: string) => "    async unWatchThing (url: string, sym: string) {\n        const hashes = [ 'unsubscribe::' + sym ];\n        const subscription = { 'messageHashes': hashes };\n        " + call + "\n        return await this.watchMultiple (url, hashes, {}, hashes, subscription);\n    }\n    handleUnsub (client: Client, subscription: any) {\n        const messageHashes = this.safeList (subscription, 'messageHashes', []);\n        for (let i = 0; i < messageHashes.length; i++) {\n            this.cleanUnsubscription (client, undefined, messageHashes[i]);\n        }\n    }\n";
+    test('a list[i] element read of a subscription field takes the field\'s element patterns', () => {
+        expect(emit (param (''))).toContain('let mut snapshot: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: the same element read when the field also takes an unknown list keeps the snapshot a Value', () => {
+        expect(emit (param ("const other = { 'messageHashes': this.safeList (subscription, 'x') };"))).toContain('let mut snapshot: Value = ');
+    });
+    const scalar = (arg: string) => "    async unWatchThing (url: string, sym: string) {\n        return await this.unSubscribe (url, " + arg + ");\n    }\n    async unSubscribe (url: string, messageHash: string) {\n        const subscription = { 'messageHashes': [ messageHash ] };\n        return await this.watch (url, messageHash, {}, messageHash, subscription);\n    }\n    handleUnsub (client: Client, subscription: any) {\n        const messageHashes: string[] = this.safeList (subscription, 'messageHashes', []);\n        for (let i = 0; i < messageHashes.length; i++) {\n            this.cleanUnsubscription (client, undefined, messageHashes[i]);\n        }\n    }\n";
+    test('a hash parameter in a field list takes every caller\'s argument', () => {
+        expect(emit (scalar ("'unsubscribe::' + sym"))).toContain('let mut snapshot: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: a caller passing an unknown hash keeps the snapshot a Value', () => {
+        expect(emit (scalar ('sym'))).toContain('let mut snapshot: Value = ');
+    });
+});
+
+describe('ral-54h: a safeValue read of client.futures keyed by a string parameter is a Flight', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/ws/Client.ts': 'export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    resolve (result: any, messageHash: string): any { return result; }\n}\n',
+        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport default class Exchange {\n    safeValue (obj: any, key: any, d: any = undefined): any { return obj[key] ?? d; }\n    spawn (method: any, ...args: any[]): any { return undefined; }\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n" +
+            "    watchIt (client: Client) {\n        this.spawn (this.loadSnapshot, client, 'h');\n        this.spawn (this.loadOther, client, 'h');\n    }\n" +
+            "    async loadSnapshot (client: Client, messageHash: string) {\n        const future = this.safeValue (client.futures, messageHash);\n        if (future !== undefined) {\n            future.resolve (true);\n        }\n    }\n" +
+            "    async loadOther (client: Client, otherHash: string) {\n        otherHash = otherHash + 'x';\n        const future = this.safeValue (client.futures, otherHash);\n        if (future !== undefined) {\n            future.resolve (true);\n        }\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-54h-flight-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the parameter key is lent by reference', () => {
+        expect(out).toMatch(/fn loadSnapshot[\s\S]*let mut future: crate::pro::ws_client::Flight = __ch\.get_future\(&messageHash\);/);
+        expect(out).toContain('if ((future != crate::pro::ws_client::Flight::default())) {');
+    });
+    test('negative: a reassigned parameter key keeps the local a Value', () => {
+        expect(out).toMatch(/fn loadOther[\s\S]*let mut future: Value = /);
+    });
+});
+
+describe('ral-54h: book locals of one name in sibling blocks are proven each on its own', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/OrderBook.ts": "export class WsOrderBook {\n    cache: any[] = [];\n    constructor (snapshot: any = {}, depth: any = undefined) {}\n    limit () { return this; }\n    reset (snapshot: any = {}) {}\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { WsOrderBook } from './ws/OrderBook.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    orderbooks: Dictionary<WsOrderBook> = {};\n    orderBook (snapshot = {}, depth = 100): WsOrderBook { return new WsOrderBook (snapshot, depth); }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n" +
+            "    handleBook (client: Client, message: any, symbol: string, type: string) {\n        if (type === 'snapshot') {\n            const orderbook = this.orderbooks[symbol];\n            orderbook.reset (message);\n            client.resolve (orderbook, 'book');\n        } else if (type === 'update') {\n            const orderbook = this.orderbooks[symbol];\n            orderbook['timestamp'] = 1;\n            client.resolve (orderbook, 'book');\n        }\n    }\n" +
+            "    handleBookDiff (client: Client, message: any, symbol: string) {\n        if (!(symbol in this.orderbooks)) {\n            this.orderbooks[symbol] = this.orderBook ({}, 10);\n        }\n        const orderBook = this.orderbooks[symbol];\n        orderBook['timestamp'] = 1;\n        client.resolve (orderBook, 'book');\n    }\n" +
+            "    handleOther (client: Client, message: any, symbol: string, type: string) {\n        const orderbook = this.orderbooks[symbol];\n        if (type === 'snapshot') {\n            const orderbook = this.orderbooks[symbol];\n            orderbook.reset (message);\n        }\n        client.resolve (orderbook, 'book');\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-54h-book-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('if / else-if siblings: both are optional books', () => {
+        const body = out.slice (out.indexOf ('fn handleBook'), out.indexOf ('fn handleOther'));
+        expect(body.match(/let mut orderbook: Option<crate::pro::order_book::Book> = self\.orderbooks\.at\(/g)?.length).toBe(2);
+    });
+    test('a local named like a base method (`this.orderBook (..)` is a property name, no binding) stays an optional book', () => {
+        expect(out).toContain('let mut orderBook: Option<crate::pro::order_book::Book> = self.orderbooks.at(');
+    });
+    test('negative: a nested binding (one block holds the other) keeps the outer local a Value', () => {
+        const body = out.slice (out.indexOf ('fn handleOther'));
+        expect(body).toMatch(/let mut orderbook: Value = /);
+    });
+});
