@@ -8363,6 +8363,9 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-56f: the read inside the value of `this.F[k] = this.m (this.F[k])` (rustFieldBucketReread): the value is bound
         // before the insert, so the borrowed read never overlaps the `&mut self.F` write
         if (this.rustFieldBucketRereadUse(wrapped, up)) return 'frd';
+        // ral-57f: the bucket of a two-level READ `this.F[k][k2]` (no write, update, delete or deeper link): the bucket prints
+        // as the borrowed field read above and the outer key reads it like any other Value
+        if (this.rustFieldBucketChainRead(up)) return 'frd';
         if (!isBinaryExpression(write) || write.left !== up || write.operatorToken.kind !== SyntaxKind.EqualsToken
             || write.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
         // the value operand must not read the key local (the insert takes it by name)
@@ -8872,7 +8875,8 @@ export class RustTranspiler extends BaseTranspiler {
         const lkind = isIdentifier(last) ? this.rustScalarLocalOf(last)?.kind : undefined;
         const lname = isIdentifier(last) ? super.printIdentifier(last) : '';
         const lastText = isStringLiteral(last) ? `${JSON.stringify(String(last.text))}.to_string()`
-            : this.rustScalarUseForms.get(last) !== 'nkey' ? undefined : lkind === 'str' ? `${lname}.to_string()` : lkind === 'ostr' ? `${lname}.as_deref().unwrap_or("null").to_string()` : undefined;
+            : this.rustScalarUseForms.get(last) !== 'nkey' ? (lkind === undefined && isIdentifier(last) && /^[A-Za-z_]\w*$/.test(lname) ? `crate::runtime::stringify_param(&${lname})` : undefined)
+                : lkind === 'str' ? `${lname}.to_string()` : lkind === 'ostr' ? `${lname}.as_deref().unwrap_or("null").to_string()` : undefined;
         if (lastText === undefined) return undefined;
         // borrow safety of the printed insert only (the key's type is decided on the AST by rustNestedFieldUpperKeyUse): a value
         // whose print borrows `self` is bound before `&mut self.F` is taken
@@ -8882,7 +8886,7 @@ export class RustTranspiler extends BaseTranspiler {
         const insert = bound ? `{ let __be_tmp = ${value}; ${chain} }` : chain;
         // the entry form is shorter than the ccxt bf03 text it replaces (`stringify_param(&k)`); 10 chars of headroom for renames
         if (insert.split('\n').some((l) => l.length + 10 > 400)) {
-            const lastKey = isStringLiteral(last) ? `Value::Str(${JSON.stringify(String(last.text))}.into())` : `Value::from(${lname}${lkind === 'str' ? '.as_str()' : '.as_deref()'})`;
+            const lastKey = isStringLiteral(last) ? `Value::Str(${JSON.stringify(String(last.text))}.into())` : lkind === undefined ? lname : `Value::from(${lname}${lkind === 'str' ? '.as_str()' : '.as_deref()'})`;
             return `add_element_to_object(get_value_mut(&mut self.${field}, &Value::from(${uname}${ukind === 'str' ? '.as_str()' : '.as_deref()'})), &${lastKey}, ${value})`;
         }
         return insert;
@@ -9174,6 +9178,19 @@ export class RustTranspiler extends BaseTranspiler {
         const call: any = access?.parent;
         return isPropertyAccessExpression(access) && access.expression === n && RustTranspiler.RUST_BORROW_STR_METHODS.has(String(access.name.text))
             && isCallExpression(call) && call.expression === access;
+    }
+
+    /** ral-57f: `bucket` (`this.F[k]`) is the receiver of a plain two-level read `this.F[k][k2]` that is no assignment
+     *  target, update, delete or deeper chain link, in a non-test source. */
+    rustFieldBucketChainRead(bucket: any): boolean {
+        if (this.rustTestTierSource(bucket)) return false;
+        const outer: any = bucket.parent;
+        if (!isElementAccessExpression(outer) || outer.expression !== bucket) return false;
+        const up: any = outer.parent;
+        if (up === undefined || (isElementAccessExpression(up) && up.expression === outer) || isPropertyAccessExpression(up)
+            || up.kind === SyntaxKind.DeleteExpression || isPrefixUnaryExpression(up) || up.kind === SyntaxKind.PostfixUnaryExpression) return false;
+        if (isBinaryExpression(up) && up.left === outer && rustIsAssignmentOperator(up.operatorToken.kind)) return false;
+        return this.isNativeAccessPositionSafe(outer) && !this.isNativeWriteTargetBase(outer) && !this.isNativeWriteTargetBase(bucket);
     }
 
     /** ral-56f: `read` (`this.F[k]`) is an argument of a `this.` call that is the whole value of the statement write
@@ -16061,6 +16078,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (!this.isProvenListExpression(receiverNode) && !this.arrReadLocal(receiverNode)) return undefined;
             return this.printNativeListIndex(receiverText, index, receiverNode);
         }
+        // ral-57f: a typed `frd` key (the bucket of a two-level read) reads the field with its own borrowed key text
+        const fieldKeyRead = isElementAccessExpression(keyNode.parent) && (keyNode.parent as any).argumentExpression === keyNode ? this.printFieldKeyRead(keyNode.parent) : undefined;
+        if (fieldKeyRead !== undefined) return fieldKeyRead;
         const dictRead = this.rustBearerDictDynamicRead(receiverText, receiverNode, keyNode) ?? this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode) ?? this.printNativeThisFieldDynamicMapAccess(receiverText, receiverNode, keyNode)
             ?? this.rustDynamicRead(receiverText, receiverNode, keyNode) ?? this.rustFieldDynamicRead(receiverText, receiverNode, keyNode)
             ?? this.rustLocalDictRead(receiverText, receiverNode, keyNode);
