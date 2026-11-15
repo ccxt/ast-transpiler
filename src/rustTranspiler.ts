@@ -5364,11 +5364,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     // ── byte buffers (rustBytesProducer / rustBytesSlot / rustBytesLocal) ──
-    // The hand-written producers of a TS `Uint8Array` return `crate::value::Bytes` (the `Value::Arr` of byte
+    // The hand-written producers of a TS `Uint8Array` (ethEncodeStructuredData included) return `crate::value::Bytes` (the `Value::Arr` of byte
     // ints behind a typed handle) and the byte parameters of the hand-written consumers take `impl Into<Value>`.
     // A producer call boxes once (`Value::from`, a move of the shared list) unless it sits in a consumer's byte
     // slot; a local written only from producers holds the handle and lends it (`&x`, an `Arc` bump, no copy).
-    private static readonly RUST_BYTES_PRODUCERS = new Set([ 'encode', 'base16ToBinary', 'base64ToBinary', 'base58ToBinary', 'binaryConcat', 'numberToBE', 'stringToBinary' ]);
+    private static readonly RUST_BYTES_PRODUCERS = new Set([ 'encode', 'ethEncodeStructuredData', 'base16ToBinary', 'base64ToBinary', 'base58ToBinary', 'binaryConcat', 'numberToBE', 'stringToBinary' ]);
     private static readonly RUST_BYTES_SLOTS: { [name: string]: number[] } = {
         hmac: [ 0, 1 ], hash: [ 0 ], isBinaryMessage: [ 0 ], decode: [ 0 ], binaryToBase16: [ 0 ], binaryToBase64: [ 0 ], binaryToBase58: [ 0 ], binaryToString: [ 0 ], binaryLength: [ 0 ], binaryConcat: [ 0 ], urlencodeBase64: [ 0 ],
     };

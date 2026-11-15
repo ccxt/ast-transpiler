@@ -16183,3 +16183,34 @@ describe('ral-43b lift 3: a typed string needle of indexOf on a string-typed Val
         expect(out).not.toContain('.zip(k.as_deref())');
     });
 });
+
+describe('ral-44e: ethEncodeStructuredData is a byte producer, its locals hold crate::value::Bytes', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    privateKey: string = '';\n"
+        + "    hash (request: any, hash: any, digest: string = 'hex'): any { return ''; }\n"
+        + "    ethEncodeStructuredData (domain: any, messageTypes: any, messageData: any): Uint8Array { return new Uint8Array (); }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    signMessage (message: any, privateKey: string): string { return this.hash (message, 'keccak', 'hex'); }\n"
+        + "    signIt (domain: Dict, types: Dict, request: Dict): string {\n        const msg = this.ethEncodeStructuredData (domain, types, request);\n        return this.signMessage (msg, this.privateKey);\n    }\n"
+        + "    digestIt (domain: Dict, types: Dict, request: Dict): string {\n        const encoded = this.ethEncodeStructuredData (domain, types, request);\n        return '0x' + this.hash (encoded, 'keccak', 'hex');\n    }\n"
+        + "    leaked (domain: Dict, types: Dict, request: Dict): number {\n        const raw = this.ethEncodeStructuredData (domain, types, request);\n        return raw.length;\n    }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-44e-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('the encoded local is Bytes, shared into a venue signer and lent to hash', () => {
+        const text = out();
+        expect(text).toMatch(/let mut msg: crate::value::Bytes = self\.ethEncodeStructuredData\(/);
+        expect(text).toMatch(/self\.signMessage\(Value::from\(&msg\)/);
+        expect(text).toMatch(/let mut encoded: crate::value::Bytes = self\.ethEncodeStructuredData\(/);
+        expect(text).toMatch(/self\.hash\(&encoded, /);
+    });
+    test('negative: a byte local read outside the byte slots and hand-offs keeps its Value box', () => {
+        const text = out();
+        expect(text).toMatch(/let mut raw: Value = Value::from\(self\.ethEncodeStructuredData\(/);
+    });
+});
