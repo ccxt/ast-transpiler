@@ -14319,12 +14319,12 @@ export class RustTranspiler extends BaseTranspiler {
     // ── string fields of a typed market local as scalar seeds (rustMarketFieldScalar) ──
     /** `m['symbol']` / `m.id` off a loaded `crate::types::Market` local: the field's own `String` / `Option<String>`
      *  (the boxed read cloned the same field), so a local initialised from it is a typed string. */
-    rustMarketFieldScalar(node: any): { kind: string, text: string } | undefined {
+    rustMarketFieldScalar(node: any, placed = true): { kind: string, text: string } | undefined {
         if (node === undefined || !(isElementAccessExpression(node) || isPropertyAccessExpression(node))) return undefined;
         // only as a `const`/`let` initializer: a write into another (nil-declared) local keeps that rule's decision
         let top: any = node;
         while (top.parent !== undefined && (isParenthesizedExpression(top.parent) || top.parent.kind === SyntaxKind.AsExpression)) top = top.parent;
-        if (!isVariableDeclaration(top.parent) || top.parent.initializer !== top) return undefined;
+        if (placed && !(isVariableDeclaration(top.parent) && top.parent.initializer === top) && !this.rust57kMarketTernaryArm(top)) return undefined;
         const currency = this.rustCurrencyLocalOf(node.expression);
         if (currency !== undefined) {
             // lf: `c['code']` off a `crate::types::Currency` record read off its own map as the optional string the box held
@@ -14360,6 +14360,30 @@ export class RustTranspiler extends BaseTranspiler {
         if (field !== undefined) return { kind: 'str', text: `${recv}.${field}.clone()` };
         const optField = RustTranspiler.RUST_MARKET_OPT_STR_FIELDS[key];
         return optField !== undefined ? { kind: 'ostr', text: `${recv}.${optField}.as_deref().map(str::to_owned)` } : undefined;
+    }
+
+    /** ral-57k: an arm of `x = c ? m['quote'] : m['base']` (a statement write into an initialised local, kucoin parseTrade
+     *  `feeCurrency`) whose other arm is a field read of the same kind off the same typed market local: the ternary is that
+     *  one kind, each arm the very `key_read` the boxed form printed (`None` where it held Null). */
+    rust57kMarketTernaryArm(top: any): boolean {
+        const cond: any = top?.parent;
+        if (cond === undefined || !isConditionalExpression(cond) || (cond.whenTrue !== top && cond.whenFalse !== top)) return false;
+        let ctop: any = cond;
+        while (isParenthesizedExpression(ctop.parent)) ctop = ctop.parent;
+        const write: any = ctop.parent;
+        if (!isBinaryExpression(write) || write.right !== ctop || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const target: any = this.unwrapParens(write.left);
+        const local: any = isIdentifier(target) ? this.rustDeclaredNode(target) : undefined;
+        if (local === undefined || !isVariableDeclaration(local) || local.initializer === undefined || this.literalKindOfNode(local.initializer) === 'null') return false;
+        const strip = (e: any) => { let x: any = e; while (x !== undefined && (isParenthesizedExpression(x) || x.kind === SyntaxKind.AsExpression)) x = x.expression; return x; };
+        const a: any = strip(cond.whenTrue);
+        const b: any = strip(cond.whenFalse);
+        if (!(isElementAccessExpression(a) || isPropertyAccessExpression(a)) || !(isElementAccessExpression(b) || isPropertyAccessExpression(b))) return false;
+        const ra: any = this.unwrapParens(a.expression);
+        const rb: any = this.unwrapParens(b.expression);
+        if (!isIdentifier(ra) || !isIdentifier(rb) || this.rustDeclaredNode(ra) === undefined || this.rustDeclaredNode(ra) !== this.rustDeclaredNode(rb)) return false;
+        const ka = this.rustMarketFieldScalar(a, false)?.kind;
+        return ka !== undefined && ka === this.rustMarketFieldScalar(b, false)?.kind;
     }
 
     /** A read off a struct local: a listed field natively, any other key off `raw`; `asBool` for a condition slot. */

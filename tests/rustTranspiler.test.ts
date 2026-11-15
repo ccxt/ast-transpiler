@@ -19733,3 +19733,22 @@ describe('ral-57f: the bucket of a two-level READ this.F[k][k2] lends a String u
         for (const line of out.split('\n')) expect(line.length).toBeLessThanOrEqual(400);
     });
 });
+
+describe('ral-57k: a ternary of two same-kind field reads off one safeMarket record written into a safeCurrencyCode local (kucoin parseTrade feeCurrency)', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; base: string; quote: string; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    safeMarket (marketId: Str = undefined, market: Market = undefined, delimiter: Str = undefined): MarketInterface { return { 'symbol': marketId } as MarketInterface; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('both arms read the record as optional strings, so the local is Option<String>', () => {
+        const out = write ('57k-fee-ternary', "import Exchange from './base/Exchange.js';\nimport type { Dict, Market } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTrade (trade: Dict, market: Market = undefined): Dict {\n        const marketResolved = this.safeMarket (this.safeString (trade, 'symbol'), market, '-');\n        const side = this.safeString (trade, 'side');\n        let feeCurrency = this.safeCurrencyCode (this.safeString (trade, 'feeCurrency'));\n        if (feeCurrency === undefined) {\n            feeCurrency = (side === 'sell') ? marketResolved['quote'] : marketResolved['base'];\n        }\n        return { 'currency': feeCurrency };\n    }\n}\n");
+        expect(out).toContain('let mut feeCurrency: Option<String> = ');
+        expect(out).toContain('crate::value::KeyRead::key_read(&&marketResolved, "quote").as_str().map(str::to_owned) } else { crate::value::KeyRead::key_read(&&marketResolved, "base").as_str().map(str::to_owned) }');
+    });
+    test('negative: an arm of another kind keeps the local Value', () => {
+        const out = write ('57k-fee-ternary-neg', "import Exchange from './base/Exchange.js';\nimport type { Dict, Market } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTrade (trade: Dict, market: Market = undefined): Dict {\n        const marketResolved = this.safeMarket (this.safeString (trade, 'symbol'), market, '-');\n        const side = this.safeString (trade, 'side');\n        let feeCurrency = this.safeCurrencyCode (this.safeString (trade, 'feeCurrency'));\n        if (feeCurrency === undefined) {\n            feeCurrency = (side === 'sell') ? marketResolved['quote'] : this.hold (trade);\n        }\n        return { 'currency': feeCurrency };\n    }\n}\n");
+        expect(out).toContain('let mut feeCurrency: Value = ');
+    });
+});
