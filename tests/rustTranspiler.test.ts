@@ -12896,7 +12896,8 @@ describe('ral-sb: boxed typed values', () => {
     test('a parseToInt local read as a slice bound keeps Option<i64> and boxes there (Value::from of a Copy, no clone)', () => {
         const out = write ('sb-pti', "    m (s: any, q: string) {\n        const quoteLength = this.parseToInt (-1 * q.length);\n        const baseId = s.slice (0, quoteLength);\n        return this.hold (baseId);\n    }\n");
         expect(out).toContain('let mut quoteLength: Option<i64> = self.parseToInt(');
-        expect(out).toContain('Value::from(quoteLength)');
+        // ral-44b: the Option<i64> end bound now prints straight into looseSlice's match (no box)
+        expect(out).toContain(', quoteLength) {');
         expect(out).not.toContain('quoteLength.clone()');
     });
     test('a parseToInt local read by toString() displays its box (format! of Value::from, the Display the Value had)', () => {
@@ -16352,5 +16353,31 @@ describe('ral-44f: a local copied from an exact Bool / Int tuple slot and later 
         expect(text).toContain('let mut expiryOption: Option<i64> = ');
         expect(text).toContain('let mut expiry: Option<i64> = expiryOption;');
         expect(text).toContain('expiry = Some(-1);');
+    });
+});
+
+describe('ral-44b lift 1: an Int / Option<i64> local bound of slice on a Value receiver prints straight into the match', () => {
+    const t44 = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, '44b-slice-bound');
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n" +
+        "    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue (body));
+        return t44.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('i64 bounds stay i64 and print as the match operands', () => {
+        const out = run ("    m (id: Str) {\n        const s = 0;\n        let e = 3;\n        if (id.length === 8) {\n            e = 4;\n        }\n        const x = id.slice (s, e);\n        return this.hold (x);\n    }\n");
+        expect(out).toContain('let mut e: i64 = 3;');
+        expect(out).toContain(', s, Some(e)) {');
+    });
+    test('an Option<i64> bound keeps Option<i64> (start unwrap_or(0), end as is)', () => {
+        const out = run ("    m (o: Dict, h: Str) {\n        const a = this.safeInteger (o, 'a');\n        const b = this.safeInteger (o, 'b');\n        return this.hold (h.slice (a, b));\n    }\n");
+        expect(out).toContain('let mut a: Option<i64> = ');
+        expect(out).toContain(', a.unwrap_or(0), b) {');
     });
 });

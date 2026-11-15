@@ -6980,6 +6980,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustStrMethodArgNative(n, kind)) return 'native';
         // ral-43b: the typed string needle of `recv.indexOf(needle)` on a string-typed `Value` receiver (printNativeStringIndexOfString)
         if (this.rust43bValueRecvFindNeedle(n, kind)) return 'native';
+        // ral-44b: an Int / Option<i64> bound of `recv.slice(a, b)` on a `Value` receiver prints straight into looseSlice's match
+        if (this.rust44bValueRecvSliceBound(n, kind)) return 'native';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
         }
@@ -16486,7 +16488,36 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printSliceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return this.rustStrLocalSliceText(node) ?? this.printNativeStringSlice(node, name) ?? this.looseSlice(name, parsedArg, parsedArg2 ?? 'Value::Null');
+        return this.rustStrLocalSliceText(node) ?? this.printNativeStringSlice(node, name) ?? this.looseSlice(name, parsedArg, parsedArg2 ?? 'Value::Null', this.rust44bSliceBounds(node));
+    }
+
+    /** ral-44b: `n` is a bound (argument 0 or 1) of `recv.slice(..)` whose receiver is no typed string local (looseSlice prints
+     *  it), `n` an Int / Option<i64> local (not a ws key): the bound reads as the i64 / Option<i64> the helper's looseI64 match
+     *  would have produced from the `Int` / `Null` box (start: `None` is 0; end: `None` is the length). */
+    rust44bValueRecvSliceBound(n, kind: string): boolean {
+        if (kind !== 'int' && kind !== 'oint') return false;
+        const call: any = n.parent;
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.name.text !== 'slice') return false;
+        const idx = call.arguments.indexOf(n);
+        if (idx < 0 || idx > 1 || call.arguments.length > 2) return false;
+        const recv: any = this.rustStripWrappers(call.expression.expression);
+        if (isIdentifier(recv) && (this.rustScalarLocalOf(recv) !== undefined || this.rustScalarIdentifierKind(recv) !== undefined || this.rustStringLocalIdentifierIsTyped(recv))) return false;
+        if (this.rustScalarStrMethod(call) !== undefined) return false;
+        return !this.rust41bWsKeyLocal(n);
+    }
+
+    /** ral-44b: the typed (i64 / Option<i64>) text of each slice bound that rust44bValueRecvSliceBound admitted. */
+    rust44bSliceBounds(node): Array<string | undefined> {
+        const call: any = this.unwrapParens(node);
+        if (call === undefined || !isCallExpression(call)) return [];
+        return call.arguments.map((a: any, i: number) => {
+            if (!isIdentifier(a)) return undefined;
+            const typed = this.rustScalarLocalOf(a);
+            if (typed === undefined || this.rustScalarUseForms.get(a) !== 'native' || !this.rust44bValueRecvSliceBound(a, typed.kind)) return undefined;
+            const name = super.printIdentifier(a);
+            if (i === 0) return typed.kind === 'int' ? name : `${name}.unwrap_or(0)`;
+            return typed.kind === 'int' ? `Some(${name})` : name;
+        });
     }
 
     printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
@@ -28113,12 +28144,12 @@ export class RustTranspiler extends BaseTranspiler {
         return `(${variant}, __b, __e) => match (${len}) { __l => match (${bound('__b')}, match __e { None => __l, Some(__k) => ${bound('__k')} }) { (__i, __j) => if __i <= __j { ${take} } else { ${empty} } } }`;
     }
 
-    looseSlice(name: string, start: string, end: string): string {
+    looseSlice(name: string, start: string, end: string, typed: Array<string | undefined> = []): string {
         const str = this.looseSliceArm('Value::Str(__sv)', '__sv.chars().count() as i64',
             'Value::Str(__sv.chars().skip(__i as usize).take((__j - __i) as usize).collect::<String>().into())', 'Value::Str(String::new().into())');
         const arr = this.looseSliceArm('Value::Arr(__a)', '__a.len() as i64',
             'Value::Array(__a[__i as usize..__j as usize].to_vec())', 'Value::Array(vec![])');
-        return `(match (&(${name}), ${this.looseI64OrZero(start)}, ${this.looseI64(end)}) { ${str}, ${arr}, _ => Value::Null })`;
+        return `(match (&(${name}), ${typed[0] ?? this.looseI64OrZero(start)}, ${typed[1] ?? this.looseI64(end)}) { ${str}, ${arr}, _ => Value::Null })`;
     }
 
     looseIndexOf(name: string, needle: string): string {
