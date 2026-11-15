@@ -17017,3 +17017,27 @@ describe('ral-47d: nil-declared string locals that alias each other are solved t
         expect(out).toContain('let mut buyLeverage: Value = Value::Null;');
     });
 });
+
+describe('ral-47f: a string handle*AndParams slot read in place by a concat whose printed line is already over 400 chars', () => {
+    const src = (lit: string) =>
+        'class E {\n' +
+        '    handleOptionStringAndParams(params: any, methodName: string, optionName: string, defaultValue?: string): [string, any] { return [defaultValue, params]; }\n' +
+        '    hold(x: any): any { return x; }\n' +
+        '    run(params: any, market: any) {\n' +
+        "        const [ interval, paramsInterval ] = this.handleOptionStringAndParams (params, 'watchOrders', 'interval', 'raw');\n" +
+        `        const channel = '${lit}' + this.hold (market) + '.' + interval;\n` +
+        '        return this.hold ([ channel, paramsInterval ]);\n' +
+        '    }\n' +
+        '}';
+    test('is Option<String> when the Value-operand line is already over the budget (split by build/ either way)', () => {
+        const output = transpiler.transpileRust(src('y'.repeat(420))).content;
+        expect(output).toMatch(/let mut interval: Option<String> = /);
+        expect(output).toContain('interval.as_deref().unwrap_or("null")');
+    });
+    test('never makes a line under the budget cross 400 chars', () => {
+        for (let n = 230; n < 260; n += 3) {
+            const lines = transpiler.transpileRust(src('y'.repeat(n))).content.split('\n');
+            expect(lines.filter((l: string) => l.length > 400)).toEqual([]);
+        }
+    });
+});
