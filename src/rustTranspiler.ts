@@ -4553,7 +4553,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (isPrefixUnaryExpression(node) && node.operator === SyntaxKind.ExclamationToken) return this.rustBoolLeafLogical(node);
         if (this.rustSbJoinShape(node)) return true;
         if (isIdentifier(node) || isConditionalExpression(node) || this.rustScalarStrMethod(node, true) !== undefined || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node)) return true;
-        if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustVenueTypedCall(node) !== undefined) return true;
+        if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustIdString(node) || this.rustVenueTypedCall(node) !== undefined) return true;
         if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && isIdentifier(node.expression);
         if (isElementAccessExpression(node)) return isIdentifier(node.expression);
         if (isCallExpression(node) && isIdentifier(node.expression) && RustTranspiler.RUST_STR_RUNTIME_FREE.has(String(node.expression.text))) return true;
@@ -4713,7 +4713,11 @@ export class RustTranspiler extends BaseTranspiler {
         // rd: a clock / nonce string whose copying boxes all sit at lending slots lends there (`Value::from(x.as_str())`: the
         // one copy the `Value` clone made); one handed only to moving boxes is stored and boxed back (D11)
         const clockInit: any = this.unwrapParens(declaration.initializer);
-        const clockLent = kind === 'str' && this.rustClockString(clockInit) && !this.rustStrNoLend && (copied > 0 ? this.rustReaderLendBoxes(declaration) : handOff)
+        // ral-46c: an `n.toString()` string of an `i64` (a request id) read natively (a ws hash slot) and stored into a
+        // container takes the same lend: each copying box sits where the `Value` form cloned it (literal value, dict write,
+        // element, self-call argument), so `Value::from(x.as_str())` costs that copy; a box-only one stays `Value`
+        const idLent = kind === 'str' && typedUses > 0 && copied > 0 && this.rustIdString(clockInit);
+        const clockLent = kind === 'str' && (this.rustClockString(clockInit) || idLent) && !this.rustStrNoLend && (copied > 0 ? this.rustReaderLendBoxes(declaration) : handOff)
             && !this.rustConcatWithNilLocal(declaration);
         if (clockLent && copied > 0) this.rustStrLentLocals.add(declaration);
         // tc: a `randomBytes` string (it was an `Option<String>` lent at its copying boxes) keeps lending there instead of cloning
@@ -4988,6 +4992,8 @@ export class RustTranspiler extends BaseTranspiler {
         const cast = this.rustStrCastCall(node); if (cast !== undefined) return this.rustScalarValueKind(cast, fresh) === 'ostr' ? 'ostr' : undefined;
         if (fresh && this.rustClockString(node)) return 'str';
         if (fresh && this.rustNumParamToString(node)) return 'str';
+        // ral-46c: `this.requestId().toString()` of an all-`int` venue method is the `i64`'s decimal text
+        if (fresh && this.rustIdString(node) && !this.rustIntToStringShape(node)) return 'str';
         if (fresh && this.rustSbJoinShape(node)) return 'str';
         if (this.rustArithCombinator(node)) return this.rustArithCallKind(node);
         if (fresh && isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.PlusToken
@@ -5615,6 +5621,15 @@ export class RustTranspiler extends BaseTranspiler {
         return isCallExpression(node) && isPropertyAccessExpression(node.expression) && node.expression.name.text === 'randomBytes' && this.rustStrRuntimeCall(node);
     }
 
+    /** ral-46c: `n.toString()` of an `i64` scalar local, or `this.requestId().toString()` of a venue method every
+     *  declaration of which returns `int` (rustVenueIntCall, or the typed `-> i64` return rustBaseTypedReturnKind proves): the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
+    rustIdString(node): boolean {
+        if (node === undefined || !isCallExpression(node) || node.arguments.length !== 0 || !isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'toString') return false;
+        const recv: any = this.unwrapParens(node.expression.expression);
+        return this.rustIntToStringShape(node) || this.rustVenueIntCall(recv)
+            || (isCallExpression(recv) && isPropertyAccessExpression(recv.expression) && recv.expression.expression.kind === SyntaxKind.ThisKeyword && this.rustBaseTypedReturnKind(recv) === 'int');
+    }
+
     /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
     rustClockString(node): boolean {
         if (!isCallExpression(node) || node.arguments.length !== 0 || !isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'toString') return false;
@@ -6232,7 +6247,7 @@ export class RustTranspiler extends BaseTranspiler {
                 && !(form === 'key' && trial === 'ostr')
                 && !(form === 'box' && this.rustElementReadScalarKind(this.unwrapParens(declaration.initializer)) !== undefined && this.rustScalarSelfArgBox(n))
                 && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && this.rustScalarSelfArgBox(n) && this.rustFormatLendLocal(declaration))
-                && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && this.rustClockString(this.unwrapParens(declaration.initializer)) && this.rustLendSlot(n))
+                && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && (this.rustClockString(this.unwrapParens(declaration.initializer)) || this.rustIdString(this.unwrapParens(declaration.initializer))) && this.rustLendSlot(n))
                 // ud: a reader string boxed at a lending slot lends there (the one copy the `Value` clone made)
                 && !(form === 'box' && !this.rustStrNoLend && this.rustUdReaderStr(declaration.initializer) && this.rustLendSlot(n) && this.rustUdLent.add(declaration))) return false;
             // ral-43b: a string concat operand prints inside the concat's own `format!` (native Display of the typed local:
@@ -8355,7 +8370,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (caseRecv !== undefined) return `${caseRecv}.as_str().map(str::${String(caseCallee.name.text) === 'toUpperCase' ? 'to_uppercase' : 'to_lowercase'})`;
         const text = this.printNode(node, 0).trim();
         if (this.rustClockCall(node)) return kind === 'int' || kind === 'oint' ? wrap(`${text}.as_i64().unwrap_or_default()`) : undefined;
-        const clock: any = base === 'str' && this.rustClockString(node) && isPropertyAccessExpression(node.expression) ? node.expression.expression : undefined;
+        const clock: any = base === 'str' && (this.rustClockString(node) || (this.rustIdString(node) && !this.rustIntToStringShape(node))) && isPropertyAccessExpression(node.expression) ? node.expression.expression : undefined;
         if (clock !== undefined && this.rustNonceCall(this.unwrapParens(clock))) return wrap(`format!("{}", ${this.printNode(this.unwrapParens(clock), 0).trim()})`);
         if (clock !== undefined) return wrap(`format!("{}", ${this.rustScalarNativeText('int', clock)})`);
         // ral-45g: `p.toString()` of a `number` parameter: the String the `format!` box held

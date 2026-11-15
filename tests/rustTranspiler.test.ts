@@ -16685,3 +16685,20 @@ describe('ral-45b lift 2: `x += <string>` on a nil-declared Option<String> local
         expect(out).toContain('let mut id: Value = Value::Null;');
     });
 });
+
+describe('ral-46c: a request-id string stored into a container', () => {
+    test('an i64 request id\'s toString () read at ws hash slots and stored into a literal is a String lent at the store', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-46c');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n    options: any = {};\n    urls: any = {};\n    hold (x: any): any { return x; }\n    requestId (): int { return 1; }\n    extend (...a: any[]): any { return a[0]; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str, int } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    requestId (): int {\n        return 1;\n    }\n    async fetchA (params: Dict = {}) {\n        const url = this.safeString (this.urls, 'ws', '');\n        const requestId = this.requestId ();\n        const messageHash = requestId.toString ();\n        const message = { 'id': messageHash, 'method': 'depth' };\n        return await this.watch (url, messageHash, message, messageHash);\n    }\n    async fetchB (params: Dict = {}) {\n        const url = this.safeString (this.urls, 'ws', '');\n        const messageHash = this.requestId ().toString ();\n        const request = this.extend ({ 'oid': messageHash }, params);\n        return await this.watch (url, messageHash, request, messageHash);\n    }\n    async fetchC (params: Dict = {}) {\n        const url = this.safeString (this.urls, 'ws', '');\n        const requestId = this.requestId ().toString ();\n        const request = { 'id': requestId, 'type': 'subscribe' };\n        return await this.watch (url, url, request, url);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+        // local id, then `this.requestId ().toString ()` of an `int` venue method: one String each, lent at the store
+        expect(out).toContain('let mut messageHash: String = format!("{}", requestId);');
+        expect(out).toContain('m.insert("id".to_string(), Value::from(messageHash.as_str()));');
+        expect(out).toContain('let mut messageHash: String = format!("{}", self.requestId());');
+        expect(out).toContain('m.insert("oid".to_string(), Value::from(messageHash.as_str()));');
+        expect(out).not.toContain('let mut messageHash: Value');
+    });
+});
