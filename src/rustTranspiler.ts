@@ -16178,13 +16178,31 @@ export class RustTranspiler extends BaseTranspiler {
         return slots === 0 || others;
     }
 
-    /** The destructuring statement keeps the 400-char line budget with the slot's `== Some(true)` read. */
+    /** The destructuring statement keeps the 400-char line budget with the slot's bool read.
+     *  ral-46f: measured on the open print of the write with the bool slot read swapped in (was a length estimate that
+     *  refused every write over 380 chars although the printed block line is split after `; ` by build/ `splitLongRustLines`). */
+    private rustBoolSlotLineMemo = new WeakMap<any, boolean>();
     rustBoolSlotLineLong(n: any): boolean {
         const write: any = n.parent.parent;
-        let depth = 0;
-        for (let up: any = write.parent; up !== undefined; up = up.parent) if (isBlock(up)) depth++;
-        const slots = write.left.elements.reduce((sum: number, e: any) => sum + e.getText().length + 48, 0);
-        return depth * 4 + 72 + this.printNode(write.right, 0).trim().length + slots + 24 > 380;
+        const known = this.rustBoolSlotLineMemo.get(write);
+        if (known !== undefined) return known;
+        this.rustBoolSlotLineMemo.set(write, true);
+        let long = true;
+        try {
+            const column = write.getStart() - String(write.getSourceFile().text).lastIndexOf('\n', write.getStart()) - 1;
+            // the open print reads every slot as `Value`; a bool slot appends `.as_bool() == Some(true)` (24 chars) to its piece
+            const slots = new Set<string>(write.left.elements.filter((e: any) => isIdentifier(e) && this.rustScalarUseForms.get(e) === 'bslot').map((e: any) => String(e.text)));
+            const text = this.printNode(write, 0);
+            // the ccxt line splitter (build/ `splitLongRustLines`) breaks an over-long block line after `; ` (budget 360 + one indent):
+            // a slot statement keeps the budget when every `; `-separated piece fits there, as the parent's open line already does
+            const pieces = text.split('\n').flatMap((l: string) => l.trim().split('; '))
+                .map((p: string) => p.length + ([ ...slots ].some((name: string) => p.startsWith(`${name} = __destr_tmp`)) ? 24 : 0));
+            long = column + 4 + Math.max(...pieces) > 360;
+        } catch (e) {
+            long = true;
+        }
+        this.rustBoolSlotLineMemo.set(write, long);
+        return long;
     }
 
     // ── typed list index by an `i64` counter (rustI64IndexText) ──
@@ -19534,6 +19552,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isBinaryExpression(up) || up.left !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         let rhs: any = this.rustSkipWrappers(up.right);
         if (rhs?.kind === SyntaxKind.AwaitExpression) rhs = this.rustSkipWrappers(rhs.expression);
+        if (rhs !== undefined && isIdentifier(rhs) && rhs.text !== n.text) return this.rustEndpointAliasWrite(up) !== undefined;
         if (rhs === undefined || !isCallExpression(rhs) || String(up.getText()).split('\n')[0].length > 240) return false;
         const names = (x: any): boolean => (isIdentifier(x) && x.text === n.text) || (x.forEachChild(names) ?? false);
         if (names(rhs)) return false;
@@ -19567,10 +19586,26 @@ export class RustTranspiler extends BaseTranspiler {
             && this.rustBorrowedSourceKind(call) === 'api' && this.rustDeclaredEndpointKind(call) === 'dict';
     }
 
+    /** ral-46f: `x = y as Dict` whose previous statement in the same block is `y = await this.<endpoint> (..)` of a REST endpoint
+     *  declared `Promise<Dict>` (`rustReuseEndpointWrite`): `y` definitely holds that parsed response, so the write prints
+     *  `x = y.clone().into_dict()` (the form a declared-endpoint write prints; a non-map answer is the empty map there too).
+     *  Answers the endpoint write. */
+    rustEndpointAliasWrite(write: any): any {
+        const statement: any = write?.parent;
+        const source: any = this.rustSkipWrappers(write?.right);
+        if (statement?.kind !== SyntaxKind.ExpressionStatement || source === undefined || !isIdentifier(source) || !isBlock(statement.parent)) return undefined;
+        const index = statement.parent.statements.indexOf(statement);
+        const previous: any = index > 0 ? statement.parent.statements[index - 1] : undefined;
+        const producer: any = previous?.kind === SyntaxKind.ExpressionStatement ? previous.expression : undefined;
+        if (producer === undefined || !isBinaryExpression(producer) || producer.operatorToken.kind !== SyntaxKind.EqualsToken || !isIdentifier(producer.left)
+            || producer.left.text !== source.text || this.rustDeclaredNode(producer.left) !== this.rustDeclaredNode(source)) return undefined;
+        return this.rustReuseEndpointWrite(producer.right) ? producer : undefined;
+    }
+
     /** The producer of a reuse write builds from untagged operands only: `extend` / `omit` operands proven plain
      *  (`rustUntaggedMapOperand`), `indexBy` / `groupBy` fresh maps, a REST `safeDict` read off a local (parsed JSON). */
     rustReuseProducerUntagged(n: any, rhs: any): boolean {
-        if (this.rustReuseEndpointWrite(n.parent.right)) return true;
+        if (this.rustReuseEndpointWrite(n.parent.right) || this.rustEndpointAliasWrite(n.parent) !== undefined) return true;
         const method = String(rhs.expression?.name?.text ?? '');
         if (method === 'indexBy' || method === 'groupBy') return true;
         if (method === 'extend') return Array.from(rhs.arguments).every((a: any) => this.rustUntaggedMapOperand(a));
@@ -19748,6 +19783,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration === undefined || !this.rustExtendReuseLocals.has(declaration) || !this.rustPrintedBorrowed.has(declaration)
             || !(this.rustSelfExtendWrite(left, declaration) || this.rustSelfMergeWrite(left, declaration) || this.rustReuseProducerWrites.has(left.parent))) return undefined;
         const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
+        // ral-46f: an endpoint alias (`x = y as Dict`) moves `y` only at its last use, else reads a copy of the Arc
+        const source: any = this.rustSkipWrappers(right);
+        if (source !== undefined && isIdentifier(source) && this.rustEndpointAliasWrite(left.parent) !== undefined) {
+            const sourceDeclaration: any = this.rustDeclaredNode(source);
+            const moved = sourceDeclaration !== undefined && this.rustLocalLastUse(source, sourceDeclaration);
+            return `${name} = ${this.printNode(right, 0).trim()}${moved ? '' : '.clone()'}.into_dict()`;
+        }
         return `${name} = ${this.printNode(right, 0).trim()}.into_dict()`;
     }
 
