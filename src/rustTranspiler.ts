@@ -24619,7 +24619,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (fn === undefined) return undefined;
         let split: any;
         let writes = 0;
-        for (const r of this.rustScopeNameNodes(fn, String(declaration.name.text)) as any[]) {
+        for (const r of this.rustScopeNameNodes(fn, String(declaration.name.text))) {
             if (!isIdentifier(r) || r === declaration.name || this.rustDeclarationOfIdentifier(r) !== declaration) continue;
             const p: any = r.parent;
             if ((isPrefixUnaryExpression(p) || p?.kind === SyntaxKind.PostfixUnaryExpression) && p.operand === r) return undefined;
@@ -26279,7 +26279,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(p) && p.operatorToken.kind === SyntaxKind.EqualsToken && p.right === r && isIdentifier(p.left) && p.parent?.kind === SyntaxKind.ExpressionStatement) target = this.rustDeclarationOfIdentifier(p.left);
         else if (isVariableDeclaration(p) && p.initializer === r && isIdentifier(p.name)) target = p;
         if (depth > 3 || target === undefined || !isVariableDeclaration(target) || !isIdentifier(target.name) || findAncestor(target, isFunctionLike) !== scope) return false;
-        for (const n of this.rustScopeNameNodes(scope, String(target.name.text)) as any[]) {
+        for (const n of this.rustScopeNameNodes(scope, String(target.name.text))) {
             if (!isIdentifier(n) || n === target.name || (isPropertyAccessExpression(n.parent) && n.parent.name === n)) continue;
             if (this.rustDeclarationOfIdentifier(n) !== target) return false;
             const up: any = n.parent;
@@ -26971,7 +26971,7 @@ export class RustTranspiler extends BaseTranspiler {
         while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
         for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
             if (n === node || n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) continue;
-            if (n === (scope as any).name && (scope as any).kind === SyntaxKind.MethodDeclaration) continue;
+            if (isMethodDeclaration(scope) && n === scope.name) continue;
             const symbol = this.rustSymbolOf(n);
             if (symbol !== undefined && symbol !== own) continue;
             if (n.pos >= statement.pos && n.end <= statement.end) return false;
@@ -28142,7 +28142,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-56a: the bare-argument measure holds only when every sibling slot is a typed nil-slot write (a boxed `let b = true`
         // slot keeps the long head, which the measure does not cover)
         const ownMeasured = own !== undefined && firstLine.includes(own);
-        if (!(write.left.elements as any).every((el: any) => isIdentifier(el) && (this.rustNilSlotWrite(el) || handedSlot(el) || (el !== n && (ownMeasured || budget - short <= 400) && boolSlot(el))))) return false;
+        if (!write.left.elements.every((el: any) => isIdentifier(el) && (this.rustNilSlotWrite(el) || handedSlot(el) || (el !== n && (ownMeasured || budget - short <= 400) && boolSlot(el))))) return false;
         if (!ownMeasured && budget - short > 400) {
             let typed = true;
             // a `let b = true|false` sibling read only as a condition (`if (b)`, `!b`, `a && b`) keeps its typed slot in the
@@ -28168,7 +28168,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return ok;
             };
             try {
-                typed = (write.left.elements as any).every((el: any) => el === n || (!boolSlot(el) && this.rustNilSlotWrite(el)) || condOnly(el));
+                typed = write.left.elements.every((el: any) => el === n || (!boolSlot(el) && this.rustNilSlotWrite(el)) || condOnly(el));
             } catch (e) {
                 typed = false;
             }
