@@ -17173,3 +17173,19 @@ describe('ral-48d: an optional map rewritten by omit of itself and lent to omit 
         expect(out).toContain('query = self.omit(&query, ');
     });
 });
+
+describe('ral-48a: a never-null safeDict local rewritten only as `x = this.extend (x, ..)` stays a plain Dict', () => {
+    test('`entry = this.extend (entry, ..)` on `safeDict (data, i, {})` moves the map through the head and takes it back', () => {
+        const dir = path.join (rustFixtureRoot, 'extend-self-48a');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k] ?? d; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    extend (...args: any[]): Dict { return Object.assign ({}, ...args); }\n    omit (x: any, k: any): Dict { return x; }\n    handleOptionBoolAndParams (p: Dict, m: string, n: string, d: boolean = false): [ boolean, Dict ] { return [ d, p ]; }\n    async privatePostA (p: Dict = {}): Promise<Dict> { return p; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    entries (data: any, cursor: Str) {\n        const result = [];\n        for (let i = 0; i < data.length; i++) {\n            let entry = this.safeDict (data, i, {});\n            if (cursor !== undefined) {\n                entry = this.extend (entry, { 'cursor': cursor });\n            }\n            result.push (entry);\n        }\n        return result;\n    }\n    nullable (data: any, cursor: Str) {\n        let row = this.safeDict (data, 0);\n        if (cursor !== undefined) {\n            row = this.extend (row, { 'cursor': cursor });\n        }\n        return row;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut entry: crate::value::Dict = self\.safeDict\(/);
+        expect(out).toMatch(/entry = self\.extend\(entry, &\[Value::Map\([\s\S]*?\)\]\)\.into_dict\(\);/);
+        expect(out).toContain('result.push(Value::Dict(entry));');
+        expect(out).not.toContain('entry.clone()');
+        // negative: a safeDict with no default can be Null: it keeps the box (or the optional form), never the plain Dict
+        expect(out).not.toMatch(/let mut row: crate::value::Dict = /);
+    });
+});
