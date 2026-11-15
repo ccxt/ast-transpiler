@@ -205,7 +205,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
     | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -217,10 +217,10 @@ export interface RustMethodSignature {
 // The typed parameter kinds a dispatch arm decodes from `args[i]` and a forwarder from its `Value` slot.
 const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist', 'optmarket', 'optcurrency' ]);
 // a native return a by-name arm boxes back to `Value`
-const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct' ]);
+const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptstruct', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct' ]);
 
 // the native returns of the typed-return base methods, boxed back with `Value::from` in each arm they had as `-> Value`
-const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool' ]);
+const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptstruct' ]);
 
 export const rustDispatch = {
     isTyped: (kind: string): boolean => RUST_DISPATCH_TYPED_KINDS.has(kind),
@@ -310,7 +310,7 @@ export const rustDispatch = {
     result(call: string, isTyped: boolean | string | undefined): string {
         const ret = isTyped === true ? 'typed' : isTyped === false || isTyped === undefined ? 'value' : isTyped;
         switch (ret) {
-        case 'typed': case 'ostr': case 'struct': return `crate::types::IntoRaw::into_raw(${call})`;
+        case 'typed': case 'ostr': case 'struct': case 'keptstruct': return `crate::types::IntoRaw::into_raw(${call})`;
         case 'oint': case 'keptostr': case 'keptint': case 'keptstr': case 'keptbool': case 'int': case 'string': case 'bool': return `crate::Value::from(${call})`;
         case 'dict': return `crate::Value::Dict(${call})`;
         case 'list': return `crate::Value::Arr(${call})`;
@@ -11008,6 +11008,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (ret === 'ostr' && this.rustBaseNativeStrMethod(node)) ret = 'keptostr';
         // mh1: a venue method that printed `-> Value` (with a by-name arm) until its `: Str` return was spelled keeps that arm
         if (ret === 'ostr' && this.rustVenueKeptStrArm(node)) ret = 'keptostr';
+        // ral-43e: a venue `Market` record producer keeps every by-name arm it had as `-> Value` (ws handler arm too)
+        if (ret === 'struct' && returnType === 'crate::types::Market' && isMethodDeclaration(node) && isIdentifier(node.name) && String(node.name.text) !== 'safeMarket') ret = 'keptstruct';
         this.rustSignatureTable.set(node, {
             file: node.getSourceFile?.(),
             name: this.toSnakeCaseName(name),
@@ -28642,11 +28644,49 @@ export class RustTranspiler extends BaseTranspiler {
     /** A method declared `safeMarket (..): MarketInterface` with a body in `ts/src` (base or venue). */
     rustReturnsMarket(node: any): boolean {
         if (node === undefined || node.kind !== SyntaxKind.MethodDeclaration || node.body === undefined || !isIdentifier(node.name)) return false;
-        if (String(node.name.text) !== 'safeMarket' || !isClassDeclaration(node.parent)) return false;
+        if (!isClassDeclaration(node.parent)) return false;
         const file = String(node.getSourceFile?.()?.fileName ?? '');
         if (!/ts[/]src[/]/.test(file) || /ts[/]src[/](?:pro[/])?test[/]/.test(file)) return false;
         const ret: any = node.type;
+        if (String(node.name.text) !== 'safeMarket') return this.rustVenueReturnsMarket(node, file);
         return ret?.kind === SyntaxKind.TypeReference && isIdentifier(ret.typeName) && String(ret.typeName.text) === 'MarketInterface';
+    }
+
+    private rustVenueMarketDecisions = new WeakMap<any, boolean>();
+
+    /** ral-43e: a venue (not base-tier) method declared `Market` / `MarketInterface`, not async, whose every return is a
+     *  `safeMarket` record (the call itself or a `const` struct local bound to it): it hands the struct back as is. */
+    rustVenueReturnsMarket(node: any, file: string): boolean {
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(file) || /ts[/]src[/]base[/]/.test(file)) return false;
+        const ret: any = node.type;
+        if (ret?.kind !== SyntaxKind.TypeReference || !isIdentifier(ret.typeName) || !/^(?:Market|MarketInterface)$/.test(String(ret.typeName.text))) return false;
+        if ((node.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.AsyncKeyword || m.kind === SyntaxKind.OverrideKeyword)) return false;
+        let decision = this.rustVenueMarketDecisions.get(node);
+        if (decision !== undefined) return decision;
+        this.rustVenueMarketDecisions.set(node, true); // greatest fixpoint: a return of a local decided under this assumption
+        let ok = true;
+        let returns = 0;
+        const visit = (n: any): void => {
+            if (!ok || n === undefined) return;
+            if (n !== node && isFunctionLike(n)) return;
+            if (isReturnStatement(n)) {
+                returns++;
+                const inner: any = n.expression === undefined ? undefined : this.unwrapParens(n.expression);
+                if (inner === undefined) { ok = false; return; }
+                if (this.rustIsSafeMarketCall(inner)) return;
+                if (isIdentifier(inner)) {
+                    const declaration: any = this.rustDeclarationOfIdentifier(inner);
+                    if (declaration?.kind === SyntaxKind.VariableDeclaration && (declaration.parent.flags & NodeFlags.Const) !== 0 && this.rustIsSafeMarketCall(declaration.initializer)) return;
+                }
+                ok = false;
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        try { node.body.forEachChild(visit); } catch (e) { ok = false; }
+        decision = ok && returns > 0;
+        this.rustVenueMarketDecisions.set(node, decision);
+        return decision;
     }
 
     /** The `market` parameter of a base market-slot reader, read only by key readers, null tests or `Value` hand-offs. */
@@ -28930,8 +28970,10 @@ export class RustTranspiler extends BaseTranspiler {
         const call: any = this.rustSkipWrappers(init);
         if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression)) return false;
         const recv = call.expression.expression.kind;
-        if ((recv !== SyntaxKind.ThisKeyword && recv !== SyntaxKind.SuperKeyword) || String(call.expression.name.text) !== 'safeMarket') return false;
+        if (recv !== SyntaxKind.ThisKeyword && recv !== SyntaxKind.SuperKeyword) return false;
         let declaration: any = this.rustScalarCallee(call);
+        // ral-43e: a venue record producer (`rustVenueReturnsMarket`) hands back the same struct
+        if (String(call.expression.name.text) !== 'safeMarket') return declaration !== undefined && isMethodDeclaration(declaration) && declaration.body !== undefined && this.rustReturnsMarket(declaration);
         if (declaration !== undefined && isMethodDeclaration(declaration) && declaration.body === undefined && isClassDeclaration(declaration.parent)) {
             declaration = Array.from(declaration.parent.members).find((m: any) => isMethodDeclaration(m) && m.body !== undefined && isIdentifier(m.name) && String(m.name.text) === 'safeMarket');
         }
@@ -28954,6 +28996,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustDictKeyReadUse(n)) return true;
             // `m['symbol']` keying another lookup reads the struct's own field (a `Value` key either way)
             if (this.rustMarketKeyOfLookup(n)) return true;
+            // ral-43e: handed back whole from a market-returning venue method
+            if (isReturnStatement(up) && up.expression === n && this.rustReturnsMarket(findAncestor(up.parent, isFunctionLike))) return true;
             // `safeMarket` always hands back a record: a null test of it is constant
             if (this.rustIsNullTestOf(n) && this.rustNullTestIsCondition(n)) return true;
             if (!isCallExpression(up) || up.expression === n) return false;
@@ -29016,8 +29060,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A `safeMarket` call whose result goes to a `Value` place: the typed result boxed once. */
     printSafeMarketCallBox(node: any, identation: number): string | undefined {
-        if (this.rustSafeMarketBoxing.has(node) || !isPropertyAccessExpression(node.expression) || String(node.expression.name.text) !== 'safeMarket') return undefined;
-        const typed = this.rustIsSafeMarketCall(node) || (this.rustCallsTestExchange(node) && this.rustCalleeIsRuntimeBase(node));
+        if (this.rustSafeMarketBoxing.has(node) || !isPropertyAccessExpression(node.expression)) return undefined;
+        const named = String(node.expression.name.text) === 'safeMarket';
+        const typed = this.rustIsSafeMarketCall(node) || (named && this.rustCallsTestExchange(node) && this.rustCalleeIsRuntimeBase(node));
         if (!typed || this.rustSafeMarketCallNative(node)) return undefined;
         this.rustSafeMarketBoxing.add(node);
         try {

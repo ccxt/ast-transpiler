@@ -16013,3 +16013,32 @@ describe('ral-43g: a venue tuple result whose every return is an array literal i
         expect(out).toMatch(/let mut enabled: Value = /);
     });
 });
+
+describe('ral-43e: a venue method returning a safeMarket record prints crate::types::Market', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; id: string }\nexport type Market = MarketInterface | undefined;\n"
+        + "export default class Exchange {\n    safeMarket (marketId: Str = undefined, market: Market = undefined, delimiter: Str = undefined, marketType: Str = undefined): MarketInterface { return { 'symbol': marketId, 'id': marketId } as any; }\n"
+        + "    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    handle (m: Market = undefined): string { return 'x'; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Market, MarketInterface } from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    marketOf (message: Dict): Market {\n        const marketId = this.safeString (message, 's');\n        const market = this.safeMarket (marketId, undefined, undefined, 'spot');\n        return market;\n    }\n"
+        + "    looseOf (message: Dict): MarketInterface {\n        return message as MarketInterface;\n    }\n"
+        + "    handleIt (message: Dict): string {\n        const market = this.marketOf (message);\n        const symbol = market['symbol'];\n        const loose = this.looseOf (message);\n        this.handle (loose);\n    }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-43e-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('the producer returns the struct and its caller holds it typed and lends it', () => {
+        const text = out();
+        expect(text).toMatch(/pub fn marketOf\(&self, [^)]*\) -> crate::types::Market \{/);
+        expect(text).toMatch(/let mut market: crate::types::Market = self\.marketOf\(/);
+    });
+    test('negative: a cast return proves nothing, the local stays Value', () => {
+        const text = out();
+        expect(text).toMatch(/pub fn looseOf\(&self, [^)]*\) -> Value \{/);
+        expect(text).toMatch(/let mut loose: Value = self\.looseOf\(/);
+    });
+});
