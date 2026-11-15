@@ -22366,7 +22366,115 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
             || String(init.expression.name.text) !== 'safeValue' || init.arguments.length !== 2) return false;
         const callee: any = this.rustScalarCallee(init);
-        return callee !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile().fileName)) && this.rustHandlerTable(this.rustSkipWrappers(init.arguments[0]));
+        if (callee === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile().fileName))) return false;
+        return this.rustHandlerTable(this.rustSkipWrappers(init.arguments[0])) || this.rustSubscriptionMethodField(init);
+    }
+
+    // ral-48h: `this.safeValue (sub, 'method')` where every `'method'` field the venue writes (object literal entries and
+    // `x['method'] = v`, in the reading file and in every program file whose class extends that class) is a `this.<method>`
+    // reference (lowered to its name string) or a string-typed value: the read is a handler name, another string or `Null`.
+    private rustSubscriptionMethodFields = new Map<any, boolean>();
+
+    rustSubscriptionMethodField(call: any): boolean {
+        const key: any = this.rustSkipWrappers(call.arguments[1]);
+        if (key === undefined || !isStringLiteralLikeNode(key) || String(key.text) !== 'method') return false;
+        const sf: any = call.getSourceFile();
+        if (!RustTranspiler.RUST_PRO_TIER_FILE.test(String(sf.fileName))) return false;
+        let known = this.rustSubscriptionMethodFields.get(sf);
+        if (known === undefined) {
+            this.rustSubscriptionMethodFields.set(sf, false); // re-entrancy guard
+            try {
+                known = this.rustSubscriptionMethodFieldUncached(call);
+            } catch (e) {
+                known = false;
+            }
+            this.rustSubscriptionMethodFields.set(sf, known);
+        }
+        return known;
+    }
+
+    rustSubscriptionMethodFieldUncached(call: any): boolean {
+        const cls: any = findAncestor(call, isClassDeclaration);
+        if (cls === undefined || cls.name === undefined) return false;
+        const files: any[] = [ call.getSourceFile() ];
+        const program: any = this.getProgram();
+        const extendsRe = new RegExp('\\bextends\\s+' + String(cls.name.text) + '\\b');
+        for (const fileName of (program.getSourceFileNames?.() ?? []) as string[]) {
+            const other: any = program.getSourceFile(fileName);
+            if (other !== undefined && other !== files[0] && extendsRe.test(String(other.text ?? ''))) files.push(other);
+        }
+        const checker: any = this.getChecker();
+        const seen = new Set<any>();
+        const valueOk = (v: any): boolean => {
+            v = this.rustSkipWrappers(v);
+            if (v === undefined) return false;
+            if (isConditionalExpression(v)) return valueOk(v.whenTrue) && valueOk(v.whenFalse);
+            if (this.literalKindOfNode(v) === 'null') return true;
+            // a local or method parameter that only ever holds such values (htx `subscribePublic (.., method: any)`)
+            if (isIdentifier(v)) {
+                const d: any = this.rustDeclarationOfIdentifier(v);
+                if (d === undefined || d.name === v || seen.has(d) || seen.size > 16) return false;
+                seen.add(d);
+                if (isVariableDeclaration(d)) {
+                    if (d.initializer === undefined || !valueOk(d.initializer)) return false;
+                    const fn: any = this.rustEnclosingFunction(d);
+                    if (fn === undefined) return false;
+                    let ok = true;
+                    const visit = (n: any) => {
+                        if (!ok) return;
+                        if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(this.unwrapParens(n.left))
+                            && this.rustDeclarationOfIdentifier(this.unwrapParens(n.left)) === d && !valueOk(n.right)) ok = false;
+                        n.forEachChild(visit);
+                    };
+                    fn.forEachChild(visit);
+                    return ok;
+                }
+                if (isParameterDeclaration(d) && isMethodDeclaration(d.parent) && isIdentifier(d.parent.name) && findAncestor(d.parent, isClassDeclaration) === cls) {
+                    if (d.initializer !== undefined && !valueOk(d.initializer)) return false;
+                    const index = d.parent.parameters.indexOf(d);
+                    const name = String(d.parent.name.text);
+                    if (this.rustWsParamWritten(d.parent, d)) return false;
+                    let calls = 0;
+                    for (const file of files) {
+                        for (const n of this.rustScopeIndex(file).nodes as any[]) {
+                            if (isPropertyAccessExpression(n) && n.expression.kind === SyntaxKind.ThisKeyword && String(n.name.text) === name) {
+                                const up: any = n.parent;
+                                if (!isCallExpression(up) || up.expression !== n) return false;
+                                if (up.arguments.length > index && !valueOk(up.arguments[index])) return false;
+                                calls++;
+                            }
+                        }
+                    }
+                    return calls > 0;
+                }
+                return false;
+            }
+            if (isPropertyAccessExpression(v) && v.expression.kind === SyntaxKind.ThisKeyword) {
+                const member: any = symbolValueDeclaration(checker.getSymbolAtLocation(v.name));
+                if (member !== undefined && isMethodDeclaration(member)) return true;
+            }
+            if (isStringLiteralLikeNode(v)) return true;
+            return this.isStringOrNullishType(this.typeOfNodeIfAny(v)) && this.isStringLikeType(this.typeOfNodeIfAny(v));
+        };
+        let writes = 0;
+        for (const file of files) {
+            for (const n of this.rustScopeIndex(file).nodes as any[]) {
+                if (n.kind === SyntaxKind.ShorthandPropertyAssignment && String(n.name.text) === 'method') return false;
+                if (n.kind === SyntaxKind.PropertyAssignment && (isStringLiteralLikeNode(n.name) || isIdentifier(n.name)) && String(n.name.text) === 'method') {
+                    if (!valueOk(n.initializer)) return false;
+                    writes++;
+                }
+                if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken) {
+                    const left: any = this.unwrapParens(n.left);
+                    if (isElementAccessExpression(left) && isStringLiteralLikeNode(left.argumentExpression) && String(left.argumentExpression.text) === 'method') {
+                        if (!valueOk(n.right)) return false;
+                        writes++;
+                    }
+                    if (isPropertyAccessExpression(left) && String(left.name.text) === 'method') return false;
+                }
+            }
+        }
+        return writes > 0;
     }
 
     printHandlerTableLocalWrite(left: any, right: any): string | undefined {

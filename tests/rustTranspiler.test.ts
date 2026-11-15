@@ -11620,6 +11620,35 @@ describe('ral-45h: a nil-started hash local is not a hash of any text', () => {
     });
 });
 
+describe('ral-48h: a subscription method field the venue writes only as handler names', () => {
+    const base: Record<string, string> = {
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    subscriptions: any = {};\n}\n",
+        "ts/src/base/Exchange.ts": "export default class Exchange {\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    safeValue (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    safeDict (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n",
+    };
+    const venue = "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n    async watchBook (symbol: string, params = {}) {\n        let method: any = this.handleBookSubscription;\n        if (symbol === 'x') {\n            method = undefined;\n        }\n        return await this.subscribePublic ('u', symbol, method);\n    }\n    async watchOther (symbol: string, params = {}) {\n        return await this.subscribePublic ('u', symbol, undefined);\n    }\n    async subscribePublic (url: string, hash: string, method: any = undefined) {\n        const subscription: any = { 'id': '1', 'kind': (hash === 'y') ? 'SUBSCRIBE' : 'UNSUBSCRIBE' };\n        if (method !== undefined) {\n            subscription['method'] = method;\n        }\n        return await this.watch (url, hash, { 'method': 'SUBSCRIBE' }, hash, subscription);\n    }\n    handleBookSubscription (client: Client, message: any, subscription: any) {\n        return message;\n    }\n    handleSubscriptionStatus (client: Client, message: any) {\n        const subscription = this.safeDict (client.subscriptions, this.safeString (message, 'id'));\n        const method = this.safeValue (subscription, 'method');\n        if (method !== undefined) {\n            method.call (this, client, message, subscription);\n        }\n        return message;\n    }\nSPARE}\n";
+    const emit = (spare: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-method48h-'));
+        const files = { ...base, 'ts/src/pro/venue.ts': venue.replace ('SPARE', spare) };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        try {
+            return transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    };
+    test('every method write is a handler, a string or undefined (also through a parameter): the read is an Option<String>', () => {
+        const out = emit ('');
+        expect(out).toMatch(/let mut method: Option<String> = self\.safe_?[vV]alue(?:_k)?\(.*"method".*\.as_str\(\)\.map\(str::to_owned\);/);
+    });
+    test('negative: a method field written from an any-typed value keeps the read a Value', () => {
+        const out = emit ('    watchMore (x: any) {\n        const s: any = { \'method\': x[\'k\'] };\n        return s;\n    }\n');
+        expect(out).toMatch(/let mut method: Value = self\.safe_?[vV]alue/);
+    });
+});
+
 describe('ral-47h: a handler hash led by its dispatch key', () => {
     const base: Record<string, string> = {
         "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: any, limit: any): any { return limit; }\n}\n",
