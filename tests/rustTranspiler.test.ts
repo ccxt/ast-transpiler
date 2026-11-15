@@ -19752,3 +19752,87 @@ describe('ral-57k: a ternary of two same-kind field reads off one safeMarket rec
         expect(out).toContain('let mut feeCurrency: Value = ');
     });
 });
+
+describe('ral-57i: a built list handed to a this-call in a then-branch whose only later reads sit in the else-branch', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    json (o: any, p: any = undefined): string { return ''; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (flag: boolean, spot: boolean, d: Dict) {\n" + body + "    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const body = (tail: string) => "        const ids: string[] = [];\n        for (let i = 0; i < 3; i++) {\n            const id = this.safeString (d, i, '');\n            ids.push (id);\n        }\n        const request: Dict = {};\n        if (spot) {\n            request['k'] = ids.join (',');\n        } else {\n            if (flag) {\n                request['a'] = this.json (ids);\n            } else {\n                request['b'] = ids;\n            }\n        }\n" + tail + "        return request;\n";
+    test('the this-call argument moves the list (no clone)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-57i-branch-move', body (''))).content;
+        expect(out).toContain('let mut ids: crate::value::List = ');
+        expect(out).toMatch(/json\w*\(&?Value::Arr\(ids\)\)/);
+        expect(out).not.toContain('Value::Arr(ids.clone())');
+    });
+    test('a read after the if keeps the clone', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-57i-branch-move-neg', body ("        request['c'] = ids.length;\n"))).content;
+        expect(out).not.toMatch(/json\w*\(&?Value::Arr\(ids\)\)/);
+    });
+});
+
+describe('ral-57i: a built list cut by a base arraySlice of itself', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    arraySlice (array: any, first: any, second: Int = undefined) {\n        if (second === undefined) {\n            return array.slice (first);\n        }\n        return array.slice (first, second);\n    }\n    keep (o: Dict): Dict { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (d: Dict, limit: Int = undefined) {\n" + body + "    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('`x = this.arraySlice (x, 0, limit)` keeps x a List', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-57i-slice', "        let bids = this.safeList (d, 'bids', []);\n        if (limit !== undefined) {\n            const n = bids.length;\n            if (limit < n) {\n                bids = this.arraySlice (bids, 0, limit);\n            }\n        }\n        return this.keep ({\n            'bids': bids,\n        });\n")).content;
+        expect(out).toContain('let mut bids: crate::value::List');
+        expect(out).toMatch(/bids = self\.(array_slice|arraySlice)\(Value::Arr\(bids\)/);
+    });
+    test('a slice of another list stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-57i-slice-neg', "        let bids = this.safeList (d, 'bids', []);\n        const asks = this.safeList (d, 'asks', []);\n        if (limit !== undefined) {\n            const n = bids.length;\n            if (limit < n) {\n                bids = this.arraySlice (asks, 0, limit);\n            }\n        }\n        return this.keep ({\n            'bids': bids,\n        });\n")).content;
+        expect(out).not.toContain('let mut bids: crate::value::List');
+    });
+});
+
+describe('ral-57i: a base plural parser overridden only in another venue family', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport interface Trade { amount: any }\nexport default class Exchange {\n    parseTrades (trades: List, market: any = undefined): Trade[] { return []; }\n    keep (o: Dict): Dict { return o; }\n}\n";
+    const other = "import Exchange from './base/Exchange.js';\nimport type { List, Trade } from './base/Exchange.js';\nexport default class other extends Exchange {\n    parseTrades (trades: List, market: any = undefined): Trade[] {\n        return trades;\n    }\n}\n";
+    const body = "        let trades: Trade[] = [];\n        if (events.length > 0) {\n            const executions: Dict[] = [];\n            for (let i = 0; i < events.length; i++) {\n                executions.push (events[i]);\n            }\n            trades = this.parseTrades (executions);\n        }\n        const n = trades.length;\n        return this.keep ({ 'trades': trades, 'n': n });\n";
+    const write = (name: string, own: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/other.ts'), other);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, List, Trade } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (events: any[]) {\n" + body + "    }\n" + own + "}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('the venue local reassigned from the base parser is a List', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-57i-parser-family', '')).content;
+        expect(out).toContain('let mut trades: crate::value::List');
+    });
+    test('an override in the venue family keeps the local Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-57i-parser-family-neg', "    parseTrades (trades: List, market: any = undefined): Trade[] {\n        return trades;\n    }\n")).content;
+        expect(out).not.toContain('let mut trades: crate::value::List');
+    });
+});
+
+describe('ral-57i: a built list aliased into a plain Value local at its last use', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, tail: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (d: Dict, spot: boolean) {\n        let rows: Dict[] = this.safeList (d, 'list', []);\n        if (spot) {\n            const kept: Dict[] = [];\n            for (let i = 0; i < rows.length; i++) {\n                if (this.safeString (rows[i], 'k') !== undefined) {\n                    kept.push (rows[i]);\n                }\n            }\n            rows = kept;\n" + tail + "        }\n        return this.keep (rows);\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('the accumulator moves into the alias (typed List)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-57i-alias', '')).content;
+        expect(out).toContain('let mut kept: crate::value::List');
+        expect(out).toContain('rows = Value::Arr(kept);');
+    });
+    test('a later read of the accumulator keeps it Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-57i-alias-neg', "            this.keep (kept);\n")).content;
+        expect(out).not.toContain('let mut kept: crate::value::List');
+    });
+});
