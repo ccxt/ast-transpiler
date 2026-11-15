@@ -21989,6 +21989,20 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
     }
 
+    /** ral-51a: `this.handleRouteAndParams (m, params)` typed by name: a venue member of the enclosing class declared
+     *  `handleRouteAndParams (methodName: string, params: Dict = {}): Dict` answers the (route-omitted) params map. */
+    rustRouteParamsDictCall(init: any): boolean {
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(init.expression.name.text);
+        if (!RustTranspiler.RUST_ROUTE_PARAMS_DICT.has(name) || this.rustTestTierSource(init)) return false;
+        let cls: any = init.parent;
+        while (cls !== undefined && cls.kind !== SyntaxKind.ClassDeclaration) cls = cls.parent;
+        const member: any = cls?.members?.find((m: any) => m.kind === SyntaxKind.MethodDeclaration && String(m.name?.text) === name);
+        return member !== undefined && String(member.type?.getText?.() ?? '') === 'Dict';
+    }
+
+    private static readonly RUST_ROUTE_PARAMS_DICT: Set<string> = new Set(['handleRouteAndParams']);
+
     /** ral-50a: a destructured `handle*AndParams` slot already handed as a map (`requestParams = paramsIsMargin`). */
     rustHandedSlotIdentifier(rhs: any): boolean {
         if (rhs === undefined || !isIdentifier(rhs) || this.rustTestTierSource(rhs)) return false;
@@ -25946,7 +25960,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (nilSlot) {
                 if (this.rustBorrowedLocalKind(declaration) !== undefined || this.rustNilMapLocal(declaration) || this.rustOptListLocal(declaration)
                     || this.rustCurrencyLocalKind(declaration) !== false) return false;
-            } else if (!this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_SOURCES) && !this.rustDictTernaryInit(init) || this.rustBorrowedDictLocal(declaration)) return false;
+            } else if (!this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_SOURCES) && !this.rustDictTernaryInit(init)
+                // ral-51a: `const p: Dict = t[1]` of a never-rebound `const t = this.handle*AndParams (m, ..)` lent a proven map
+                && !this.rustHandleTupleMapSlotRead(init) && !this.rustRouteParamsDictCall(init) || this.rustBorrowedDictLocal(declaration)) return false;
             if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration)
                 || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false
                 || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;

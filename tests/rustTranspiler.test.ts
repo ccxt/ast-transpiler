@@ -17807,3 +17807,38 @@ describe('ral-51k: ternary initializers whose two arms share a kind', () => {
         expect(out).toMatch(/let mut x: Value = /);
     });
 });
+
+describe('ral-51a: a params local declared from slot 1 of a base handle*AndParams tuple stays a Dict', () => {
+    const emit = (): string => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-51a-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    async privatePostA (p: any = {}): Promise<any> { return p; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleParamString (params: Dict, paramName: string, defaultValue: Str = undefined): [Str, Dict] {\n        const value = this.safeString (params, paramName, defaultValue);\n        if (value !== undefined) {\n            params = this.omit (params, paramName);\n        }\n        return [ value, params ];\n    }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async withdraw (code: string, amount: number, address: string, tag: Str = undefined, params: Dict = {}) {\n        const tagAndParams = this.handleParamString (params, 'tag');\n        const tagWithdrawTag: Str = tagAndParams[0];\n        const paramsWithdrawTag: Dict = tagAndParams[1];\n        const request: Dict = { 'asset': code, 'tag': tagWithdrawTag };\n        return await this.privatePostA (this.extend (request, paramsWithdrawTag));\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['withdraw'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('bitbank withdraw: `const p: Dict = t[1]` declares a Dict lent by reference', () => {
+        const out = emit();
+        expect(out).toContain('let mut paramsWithdrawTag: crate::value::Dict = ');
+        expect(out).not.toContain('paramsWithdrawTag.clone()');
+    });
+});
+
+describe('ral-51a: handleRouteAndParams results typed by name from the venue member declared `: Dict`', () => {
+    const emit = (ret: string): string => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-51a2-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    async privateGetA (p: any = {}): Promise<any> { return p; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchTransfers (code: Str = undefined, since: Int = undefined, limit: Int = undefined, params: Dict = {}) {\n        const paramsResolved = this.handleRouteAndParams ('fetchTransfers', params);\n        const until = this.safeInteger (paramsResolved, 'until');\n        const paramsOmitted = (until !== undefined) ? this.omit (paramsResolved, 'until') : paramsResolved;\n        const request: Dict = { 'code': code };\n        return await this.privateGetA (this.extend (request, paramsOmitted));\n    }\n    handleRouteAndParams (methodName: string, params: Dict = {})" + ret + " {\n        return this.omit (params, 'route');\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('a `: Dict` member makes the result local a Dict', () => {
+        const out = emit(': Dict');
+        expect(out).toContain('let mut paramsResolved: crate::value::Dict = ');
+    });
+    test('guard: an undeclared member return keeps the local Value', () => {
+        const out = emit('');
+        expect(out).toContain('let mut paramsResolved: Value = ');
+    });
+});
