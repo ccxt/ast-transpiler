@@ -18299,7 +18299,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (!/^safe(?:Dict|List)(?:2|N)?$/.test(String(callee.name.text))) return false;
         const last: any = this.rustSkipWrappers(init.arguments[init.arguments.length - 1]);
         const base = /2$/.test(String(callee.name.text)) ? 3 : 2;
-        return init.arguments.length === base + 1 && (kind === 'list' ? isArrayLiteralExpression(last) : this.rustPlainDictLiteral(last));
+        if (init.arguments.length !== base + 1) return false;
+        if (kind === 'list' ? isArrayLiteralExpression(last) : this.rustPlainDictLiteral(last)) return true;
+        // ral-43d: the default is a plain (never-null) Dict local: `safeDict` answers the map read or that map
+        return kind === 'map' && this.rustNeverNullDictLocalArg(last);
+    }
+
+    /** An identifier whose local prints a plain `Dict` (borrowed dict route, not the optional form). */
+    rustNeverNullDictLocalArg(node: any): boolean {
+        if (!isIdentifier(node)) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.name === node) return false;
+        return this.rustBorrowedLocalKind(declaration) === 'dict' && !this.rustOptContainerLocals.has(declaration);
     }
 
     /** How a non-read use boxes: an argument of a plain `Value` slot of a `this.` method, the value of an object
@@ -18446,6 +18457,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (from === undefined && !nilDeclared && declaration.initializer !== undefined && this.rustWsWatchResultKind(declaration.initializer) === 'dict') from = 'dict';
         // ral-ze: a watch result whose every matching resolve passes a proven list holds that list (`.await.into_list()`)
         if (from === undefined && !nilDeclared && declaration.initializer !== undefined && this.rustWsWatchResultKind(declaration.initializer) === 'list') from = 'list';
+        // ral-43d: a base `toArray` / `arrayConcat` result (a `Value::Arr` on every path) handed whole to a lent list slot
+        const alwaysList = from === undefined && !nilDeclared && init !== undefined && this.rustAlwaysListProducer(init);
+        if (alwaysList) from = 'list';
         let sbMapWrites = 0;
         if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
@@ -19652,8 +19666,10 @@ export class RustTranspiler extends BaseTranspiler {
      *  value, so the shared handle moves in boxed once (`Value::Dict(x)` / `Value::Arr(x)`), exactly the value the boxed
      *  `x` held. A target with its own typed rule stays out (its write proof reads its sources). */
     rustValueLocalWriteHandOff(n: any): boolean {
-        const up: any = n.parent;
-        if (!isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(up.left)) return false;
+        // ral-43d: `y = x as T` is the same write as `y = x` (`as` prints nothing)
+        const wrapped: any = isAsExpression(n.parent) && n.parent.expression === n ? n.parent : n;
+        const up: any = wrapped.parent;
+        if (!isBinaryExpression(up) || up.right !== wrapped || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(up.left)) return false;
         const own: any = this.rustDeclarationOfIdentifier(n);
         const target: any = this.rustDeclarationOfIdentifier(up.left);
         if (own === undefined || own === n || own.name === n || target === undefined || target === own || target.name === up.left || !isVariableDeclaration(target)) return false;
@@ -24723,6 +24739,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** A base `safeDict*` / `safeList*` read with an empty literal default: a container on every path. */
     rustLentContainerSource(init: any): boolean {
         if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression)) return false;
+        // ral-43d: base `toArray` / `arrayConcat` answer a `Value::Arr` on every path (rustAlwaysListProducer)
+        if (this.rustAlwaysListProducer(init)) return true;
         const name = String(init.expression.name.text);
         const kind = /^safeDict(?:2|N)?$/.test(name) ? 'map' : (/^safeList(?:2|N)?$/.test(name) ? 'list' : undefined);
         return kind !== undefined && this.rustContainerInitNeverNull(init, kind) && this.rustBorrowedSourceKind(init) === (kind === 'map' ? 'dict' : 'list');

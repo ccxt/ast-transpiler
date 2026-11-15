@@ -15949,3 +15949,40 @@ describe('ral-43a: a logical over literal comparisons of a typed local is a bool
         expect(out).toContain('Value::Bool(swap)');
     });
 });
+
+describe('ral-43d: generated base-method parameters typed from their ts declarations', () => {
+    const run = (base: string, body: string, file = 'ts/src/venue.ts') => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-43d-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, file)).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    const dictBase = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o[k] ?? d; }\n    safeString (o: any, k: any, d: string = undefined): string { return o[k] ?? d; }\n    METHODS_MARKER () {}\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    parseOrder (order: Dict, market: any = undefined): any { return order; }\n}\n";
+    test('a safeDict whose default is a plain Dict local is a Dict and is lent whole to the venue parseOrder', () => {
+        const out = run(dictBase, "    override parseOrder (order: Dict, market: any = undefined): any { return order['id']; }\n    m (response: any): any {\n        const data = this.safeDict (response, 'data', {});\n        const order = this.safeDict (data, 'order', data) as Dict;\n        return this.parseOrder (order);\n    }\n");
+        expect(out).toMatch(/let mut order: crate::value::Dict = .*\.into_dict\(\);/);
+        expect(out).toMatch(/self\.parseOrder\(&order, /);
+    });
+    test('a safeDict whose default is a parameter (may be anything) stays Value', () => {
+        const out = run(dictBase, "    override parseOrder (order: Dict, market: any = undefined): any { return order['id']; }\n    m (response: any, fallback: any): any {\n        const order = this.safeDict (response, 'order', fallback) as Dict;\n        return this.parseOrder (order);\n    }\n");
+        expect(out).toMatch(/let mut order: Value = /);
+    });
+    const listBase = "export type List = any[];\nexport default class Exchange {\n    toArray (o: any): any[] { return Object.values (o); }\n    METHODS_MARKER () {}\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    parseTrades (trades: List, market: any = undefined): any[] { return trades; }\n}\n";
+    test('a base toArray result handed whole to a plural parse* list slot is a List lent as `&x`', () => {
+        const out = run(listBase, "    m (response: any): any {\n        const rows = this.toArray (response);\n        return this.parseTrades (rows);\n    }\n");
+        expect(out).toMatch(/let mut rows: crate::value::List = self\.toArray\(.*\)\.into_list\(\);/);
+        expect(out).toMatch(/self\.parseTrades\(&rows/);
+    });
+    test('a toArray result also written into stays Value', () => {
+        const out = run(listBase, "    m (response: any): any {\n        const rows = this.toArray (response);\n        rows[0] = 1;\n        return this.parseTrades (rows);\n    }\n");
+        expect(out).toMatch(/let mut rows: Value = /);
+    });
+    test('`y = x as Dict` of a {}-defaulted safeDict into a Value local hands the Dict over once, like `y = x`', () => {
+        const out = run(dictBase, "    m (response: any, c: boolean): any {\n        const data = this.safeDict (response, 'data', {});\n        let result: Dict = {};\n        if (c) {\n            result = response;\n        } else {\n            result = data as Dict;\n        }\n        return this.safeString (result, 'id');\n    }\n");
+        expect(out).toMatch(/let mut data: crate::value::Dict = /);
+        expect(out).toMatch(/result = Value::Dict\(data\);/);
+    });
+});
