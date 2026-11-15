@@ -27259,7 +27259,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const up: any = n.parent;
                 if (isBinaryExpression(up) && up.left === n) {
                     return up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
-                        && (this.rustBuiltListSelfWrapWrite(up, declaration) || this.rustBuiltListWriteSource(up.right) || this.rustDeclaredArrayCallWriteSource(up.right) || this.rustOverloadListCallWriteSource(up.right) || this.rustTypedCoreListCallWriteSource(up.right) || this.rustBuiltHelperListWriteSource(up.right) || this.rustBuiltListSelfSort(up, name) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== undefined || this.rustDefaultedAliasMove(up) !== undefined) && String(up.parent.getText()).split('\n')[0].length <= 200;
+                        && (this.rustBuiltListSelfWrapWrite(up, declaration) || this.rustBuiltListWriteSource(up.right) || this.rustDeclaredArrayCallWriteSource(up.right) || this.rustOverloadListCallWriteSource(up.right) || this.rustTypedCoreListCallWriteSource(up.right) || this.rustBuiltHelperListWriteSource(up.right) || this.rustBuiltListSelfSort(up, name) || this.rustArrayGuardedMove(up) || this.rustArrayGuardedTernary(up.right) || this.rustSelfDefaultedListRead(up.right, declaration) || this.rustOptListGuardedMove(up) !== undefined || this.rustDefaultedAliasMove(up) !== undefined) && String(up.parent.getText()).split('\n')[0].length <= 200;
                 }
                 if (isElementAccessExpression(up) && up.expression === n) {
                     natives++;
@@ -27524,8 +27524,10 @@ export class RustTranspiler extends BaseTranspiler {
     /** `x = this.m(.., x, ..)` naming `x` only there and on the left: the old list moves into the call before the write. */
     rustBuiltListSelfWriteArg(n: any, name: string): boolean {
         const call: any = n.parent;
-        const write: any = call?.parent;
-        if (!isBinaryExpression(write) || write.right !== call || write.operatorToken.kind !== SyntaxKind.EqualsToken
+        let write: any = call?.parent;
+        // ral-58i: `x = this.safeList (o, k, x) as T` (a type assertion around the self write) is the same write
+        while (write !== undefined && (isAsExpression(write) || isParenthesizedExpression(write) || isNonNullExpression(write))) write = write.parent;
+        if (!isBinaryExpression(write) || this.rustSkipWrappers(write.right) !== call || write.operatorToken.kind !== SyntaxKind.EqualsToken
             || !isIdentifier(write.left) || write.left.text !== name || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         let count = 0;
         const visit = (m: any) => { if (m.kind === SyntaxKind.Identifier && m.text === name) count++; m.forEachChild?.(visit); };
@@ -27802,6 +27804,46 @@ export class RustTranspiler extends BaseTranspiler {
 
     private rustArrayGuardedCopies = new WeakSet<any>();
 
+    /** ral-58i: `x = this.safeList (o, k, x)` (safeList / safeList2 / safeListN of the base tier) with the list local itself as
+     *  the default: the base body answers the read value only when it is an array and the default otherwise, so both paths
+     *  hold a `Value::Arr` (the declared `any[]` overload for an array default says the same). */
+    rustSelfDefaultedListRead(right: any, declaration: any): boolean {
+        const init: any = this.rustSkipWrappers(right);
+        const callee: any = init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) ? init.expression : undefined;
+        if (callee === undefined || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const method = String(callee.name.text);
+        const keys = method === 'safeList2' ? 3 : (method === 'safeList' || method === 'safeListN' ? 2 : 0);
+        const last: any = keys > 0 && init.arguments.length === keys + 1 ? this.rustSkipWrappers(init.arguments[keys]) : undefined;
+        if (last === undefined || !isIdentifier(last) || !this.rustIdentifierRefersToDeclaration(last, declaration)) return false;
+        const target: any = this.rustScalarCallee(init);
+        return target !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(target.getSourceFile().fileName));
+    }
+
+    /** ral-58i: `c ? y : [ .. ]` where `c` is `Array.isArray (y)` or a const local initialised to it, `y` a const local or
+     *  parameter of the same function and the other branch a list source: both paths answer a `Value::Arr`, so the
+     *  printed ternary's `.into_list()` moves exactly that list (no other variant to lose). */
+    rustArrayGuardedTernary(right: any): boolean {
+        const rhs: any = this.rustSkipWrappers(right);
+        if (rhs === undefined || !isConditionalExpression(rhs)) return false;
+        const y: any = this.rustSkipWrappers(rhs.whenTrue);
+        if (y === undefined || !isIdentifier(y) || !this.rustBuiltListWriteSource(rhs.whenFalse)) return false;
+        let test: any = this.rustSkipWrappers(rhs.condition);
+        if (test !== undefined && isIdentifier(test)) {
+            const flag: any = this.rustDeclarationOfIdentifier(test);
+            if (flag === undefined || flag.name === test || !isVariableDeclaration(flag) || (flag.parent?.flags & NodeFlags.Const) === 0) return false;
+            if (this.rustEnclosingFunction(flag) !== this.rustEnclosingFunction(rhs)) return false;
+            test = this.rustSkipWrappers(flag.initializer);
+        }
+        if (test === undefined || !isCallExpression(test) || test.arguments.length !== 1 || !this.rustIsArrayIsArrayCallee(test)) return false;
+        const tested: any = this.rustSkipWrappers(test.arguments[0]);
+        if (tested === undefined || !isIdentifier(tested)) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(y);
+        if (declaration === undefined || declaration.name === y || this.rustDeclarationOfIdentifier(tested) !== declaration) return false;
+        if (!(isVariableDeclaration(declaration) && (declaration.parent?.flags & NodeFlags.Const) !== 0) && !isParameterDeclaration(declaration)) return false;
+        if (isParameterDeclaration(declaration) && this.rustLocalIsReassigned(declaration, String(y.text))) return false;
+        return this.rustEnclosingFunction(declaration) === this.rustEnclosingFunction(rhs);
+    }
+
     /** ral-52i: `id` names a plain `Value` local or parameter of its own function (no typed local form). */
     rustPlainValueBinding(id: any): boolean {
         const declaration: any = this.rustDeclarationOfIdentifier(id);
@@ -27980,7 +28022,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (tested === undefined || !(other?.kind === SyntaxKind.UndefinedKeyword || (isIdentifier(other) && other.text === 'undefined') || other?.kind === SyntaxKind.NullKeyword)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(y);
         if (declaration === undefined || declaration.name === y || !isVariableDeclaration(declaration) || this.rustDeclarationOfIdentifier(tested) !== declaration) return undefined;
-        if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(write) || this.rustLocalIsReassigned(declaration, String(y.text))) return undefined;
+        if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(write)) return undefined;
+        // ral-58i: a nil-declared optional list is written before the guard only (its writes are its list sources)
+        if (this.rustLocalIsReassigned(declaration, String(y.text)) && !(this.rustOptListNilInit(declaration) && this.rustWritesAllBefore(declaration, write) && this.rustOptListLocal(declaration))) return undefined;
         if (!this.rustLocalLastUse(y, declaration) && !this.rustGuardedBranchLastUse(y, declaration, guard)) return undefined;
         // a plain `Value` local read by a `[]`-defaulted `safeList*` is always an Arr: `y.into_list()` moves it exactly
         if (this.rustDefaultedListValue(declaration, y)) return declaration;
@@ -28077,7 +28121,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (/[\\/]test[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return false;
         let init: any = this.rustSkipWrappers(declaration.initializer);
         if (init?.kind === SyntaxKind.AwaitExpression) init = this.rustSkipWrappers(init.expression);
-        if (!this.rustOptListSource(init)) return false;
+        // ral-58i: a nil-declared `let x: NullableList = undefined` whose every write is a list source holds `None` until written
+        const nil = this.rustOptListNilInit(declaration);
+        if (!nil && !this.rustOptListSource(init)) return false;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
@@ -28088,6 +28134,7 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
         const boxes: [any, 'clone' | 'move' | 'lend'][] = [];
         let natives = 0;
+        let writes = 0;
         const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
@@ -28100,7 +28147,9 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
-                return up.parent?.kind === SyntaxKind.ExpressionStatement && (this.rustOptListSource(up.right) || this.rustOptListLiteralWrite(up.right));
+                if (nil) writes++;
+                return up.parent?.kind === SyntaxKind.ExpressionStatement && (this.rustOptListSource(up.right) || this.rustOptListLiteralWrite(up.right)
+                    || (nil && this.rustDefaultedListRead(this.rustSkipWrappers(up.right))));
             }
             if (isCallExpression(up) && up.arguments.length === 1 && up.arguments[0] === at && this.rustIsArrayIsArrayCallee(up)) {
                 natives++;
@@ -28137,7 +28186,7 @@ export class RustTranspiler extends BaseTranspiler {
             return extra !== undefined;
         });
         // D11: a list that is only handed on is held too (the handle box replaces the Value box).
-        if (!safe) return false;
+        if (!safe || (nil && (writes === 0 || natives === 0))) return false;
         // The only read inside a `return` statement moves the list (nothing runs after it).
         const finals = new Map<any, number>();
         for (const [n] of boxes) {
@@ -28194,8 +28243,17 @@ export class RustTranspiler extends BaseTranspiler {
         return `${this.rustOptListName(node)}.as_deref().map(Vec::as_slice).unwrap_or_default()`;
     }
 
+    /** ral-58i: `let x: T = undefined` / `let x: T;` (one `let` declarator, nil or no initializer). */
+    rustOptListNilInit(declaration: any): boolean {
+        const list: any = declaration.parent;
+        if ((list?.flags & NodeFlags.Const) !== 0) return false;
+        const init: any = declaration.initializer === undefined ? undefined : this.rustSkipWrappers(declaration.initializer);
+        return init === undefined || (isIdentifier(init) && init.text === 'undefined') || init.kind === SyntaxKind.NullKeyword;
+    }
+
     printOptListDeclaration(declaration: any, varName: string, indent: string): string | undefined {
         if (!this.rustOptListLocal(declaration)) return undefined;
+        if (this.rustOptListNilInit(declaration)) return `${indent}let mut ${varName}: Option<crate::value::List> = None`;
         return `${indent}let mut ${varName}: Option<crate::value::List> = ${this.printNode(declaration.initializer, 0).trim()}.into_opt_list()`;
     }
 

@@ -20095,3 +20095,55 @@ describe('ral-58a: a proven-map local rewritten only by an omit of itself stays 
         expect(out).toContain('let mut query: Value = self.omit(');
     });
 });
+
+describe('ral-58i: list reassignments proven by an Array.isArray ternary or a self-defaulted base safeList', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    keep (o: any): any { return o; }\n    async rows (): Promise<any> { return []; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async m (flag: boolean) {\n" + body + "    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const ternary = (test: string) => "        let rows: Dict[] = [];\n        if (flag) {\n            const response = await this.rows ();\n            const isList = Array.isArray (response);\n            rows = (" + test + ") ? response : [];\n        }\n        for (let i = 0; i < rows.length; i++) {\n            this.keep (rows[i]);\n        }\n        return 1;\n";
+    test('a ternary guarded by a const Array.isArray flag keeps the list typed', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-58i-tern', ternary ('isList'))).content;
+        expect(out).toContain('let mut rows: crate::value::List');
+        expect(out).toMatch(/rows = \(if .*\{ response(\.clone\(\))? \} else \{ Value::from\(vec!\[\]\) \}\)\.into_list\(\);/);
+    });
+    test('a ternary guarded by another test stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-58i-tern-neg', ternary ('flag'))).content;
+        expect(out).not.toContain('let mut rows: crate::value::List');
+    });
+    const selfDefault = (dflt: string) => "        let types = [ 'spot', 'swap' ];\n        const o = this.safeDict (this.options, 'fetchMarkets');\n        if (o !== undefined) {\n            types = this.safeList (o, 'types', " + dflt + ");\n        }\n        for (let i = 0; i < types.length; i++) {\n            this.keep (this.safeString (types, i));\n        }\n        return 1;\n";
+    test('a base safeList defaulted to the list itself keeps it typed and moves it as the default', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-58i-self', selfDefault ('types'))).content;
+        expect(out).toContain('let mut types: crate::value::List');
+        expect(out).toContain('&[Value::Arr(types)]).into_list()');
+    });
+    test('a safeList defaulted to another local stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-58i-self-neg', "        const other = this.keep (1);\n" + selfDefault ('other'))).content;
+        expect(out).not.toContain('let mut types: crate::value::List');
+    });
+});
+
+describe('ral-58i: a nil-declared optional list written only from list sources', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type NullableList = any[] | undefined;\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    parseTrades (o: any[]): any[] { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, extra: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, NullableList } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (d: Dict, flag: boolean) {\n        let rows: NullableList = undefined;\n        if (flag) {\n            rows = this.safeList (d, 'a', []);\n        } else {\n            rows = [ this.safeDict (d, 'b', {}) ];\n        }\n" + extra + "        let rowsList: Dict[] = [];\n        if (rows !== undefined) {\n            rowsList = rows;\n        }\n        return this.parseTrades (rowsList);\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('the nil-declared local is an Option List and its guarded alias a List', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-58i-nil', '')).content;
+        expect(out).toContain('let mut rows: Option<crate::value::List> = None');
+        expect(out).toContain('.into_opt_list();');
+        expect(out).toContain('if (rows.is_some())');
+    });
+    test('a write from an untyped source keeps it Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-58i-nil-neg', "        rows = this.keep (d);\n")).content;
+        expect(out).not.toContain('let mut rows: Option<crate::value::List>');
+    });
+});
