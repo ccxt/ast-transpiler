@@ -16103,7 +16103,8 @@ export class RustTranspiler extends BaseTranspiler {
             return this.printNativeListIndex(receiverText, index, receiverNode);
         }
         // ral-57f: a typed `frd` key (the bucket of a two-level read) reads the field with its own borrowed key text
-        const fieldKeyRead = isElementAccessExpression(keyNode.parent) && (keyNode.parent as any).argumentExpression === keyNode ? this.printFieldKeyRead(keyNode.parent) : undefined;
+        const keyParent: any = keyNode.parent;
+        const fieldKeyRead = isElementAccessExpression(keyParent) && keyParent.argumentExpression === keyNode ? this.printFieldKeyRead(keyParent) : undefined;
         if (fieldKeyRead !== undefined) return fieldKeyRead;
         const dictRead = this.rustBearerDictDynamicRead(receiverText, receiverNode, keyNode) ?? this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode) ?? this.printNativeThisFieldDynamicMapAccess(receiverText, receiverNode, keyNode)
             ?? this.rustDynamicRead(receiverText, receiverNode, keyNode) ?? this.rustFieldDynamicRead(receiverText, receiverNode, keyNode)
