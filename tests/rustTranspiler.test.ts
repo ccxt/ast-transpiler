@@ -17299,3 +17299,32 @@ describe('ral-48c prediction outcome accessors', () => {
         expect(out).not.toContain('FromRaw>::from_raw(outcomeObj');
     });
 });
+
+describe('ral-49h: a guarded handler-table read (aster / modetrade / xt ternary) and a handler reference rewrite', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n";
+    const client = "export default class Client {\n    resolve (v: any, h: string | undefined = undefined): void {}\n}\n";
+    const pro = "import Exchange from '../base/Exchange';\nimport type { Dict } from '../base/Exchange';\nimport Client from '../base/ws/Client';\nexport default class venue extends Exchange {\n    handleA (client: Client, message: Dict) {}\n    handleB (client: Client, message: Dict) {}\n    handleMessage (client: Client, message: Dict) {\n        const methods: Dict = {\n            'a': this.handleA,\n            'b': this.handleB,\n        };\n        const event = this.safeString (message, 'e');\n        let method = (event === undefined) ? undefined : this.safeValue (methods, event);\n        if (event === 'b') {\n            method = this.handleB;\n        }\n        if (method !== undefined) {\n            method.call (this, client, message);\n        }\n    }\n    handleOther (client: Client, message: Dict) {\n        const table: Dict = {\n            'a': this.handleA,\n        };\n        const key = this.safeString (message, 'k');\n        const other = (key === undefined) ? undefined : this.safeValue (table, key);\n        if (other !== undefined) {\n            other.call (this, client, message);\n        }\n        const keys = Object.keys (table);\n        for (let i = 0; i < keys.length; i++) {\n            const k = keys[i];\n            if (key === k) {\n                const byKey = table[k];\n                byKey.call (this, client, message);\n            }\n        }\n        const loose = (key === undefined) ? undefined : this.safeValue (message, key);\n        if (loose !== undefined) {\n            loose.call (this, client, message);\n        }\n    }\n}\n";
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral49h-ws');
+        fs.mkdirSync (path.join (dir, 'ts/src/base/ws'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/base/ws/Client.ts'), client);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), pro);
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    });
+    test('the guarded read is Option<String> with a None arm and the reference rewrite keeps it', () => {
+        expect(out).toMatch(/let mut method: Option<String> = \(if [^\n]*\{ None \} else \{ self\.safe_?[vV]alue\(&methods[^\n]*\.as_str\(\)\.map\(str::to_owned\) \}\)/);
+        expect(out).toMatch(/\n\s*method = [^\n]*\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out).toMatch(/let mut other: Option<String> = \(if /);
+        expect(out).toContain('method.is_some()');
+    });
+    test('a table also read by Object.keys and table[k] stays a handler table: the element read is Option<String>', () => {
+        expect(out).toMatch(/let mut other: Option<String> = \(if /);
+        expect(out).toMatch(/let mut byKey: Option<String> = [^\n]*\.as_str\(\)\.map\(str::to_owned\);/);
+    });
+    test('a guarded read of a non-table map stays a Value', () => {
+        expect(out).toMatch(/let mut loose: Value = /);
+    });
+});
