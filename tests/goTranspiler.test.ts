@@ -11757,6 +11757,20 @@ describe ('goPrinterHooks', () => {
             expect (print ({})).toContain ('hedged any');
         });
     });
+
+    describe('go unifiedNullableInt64Params', () => {
+        const SRC = 'type Int = number | undefined;\nclass Exchange {\n    toRlp (value: Int): string {\n        if (value === undefined) { throw new Error (\'x\'); }\n        if (value === 0) { return \'\'; }\n        return \'x\';\n    }\n}\n';
+        const print = (table: any): string => new Transpiler ({ 'verbose': false, 'go': { 'unifiedNullableInt64Params': table, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo (SRC).content;
+        test('a tabled nullable Int param prints *int64 and a dereferenced zero compare', () => {
+            const out = print ({ 'toRlp': [ 0 ] });
+            expect (out).toContain ('value *int64');
+            expect (out).toContain ('*value == 0');
+            expect (out).not.toMatch (/if value == 0 /);
+        });
+        test('an absent table keeps the boxed any param', () => {
+            expect (print ({})).toContain ('value any');
+        });
+    });
 });
 
 describe ('goGeneralParamRules', () => {
