@@ -18480,3 +18480,30 @@ describe('ral-54f: a params alias rewritten by a venue [Str, Dict] destructure w
         expect(out).toMatch(/paramsInstType = __destr_tmp\.get\(1\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\)/);
     });
 });
+
+describe('ral-54a: params aliases of a proven helper params and destructure boxes within the line budget', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any, y: any = undefined): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    omit (x: any, k: any): any { return x; }\n    extend (...args: any[]): any { return args[0]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    isPostOnly (isMarketOrder: boolean, exchangeSpecificParam: any, params: Dict = {}): boolean {\n        return this.hold (params, isMarketOrder);\n    }\n    handleTimeInForce (params: Dict = {}): Str {\n        return this.safeString (params, 'timeInForce');\n    }\n    handlePostOnly (isMarketOrder: boolean, exchangeSpecificPostOnlyOption: boolean, params: Dict = {}): [boolean, Dict] {\n        return [ this.hold (params, isMarketOrder), this.omit (params, 'postOnly') ];\n    }\n    handleHedgedAndParams (params: object, paramName: string, defaultValue: Str = undefined): [Str, Dict] {\n        return [ this.hold (params, paramName), this.omit (params, paramName) ];\n    }\n}\n";
+    const mk = (name: string, venue: string): string => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const helper = (caller: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    orderRequest (symbol: string, contract: boolean, params: Dict = {}): Dict {\n        const [ hedged, paramsHedged ] = this.handleHedgedAndParams (params, 'hedged');\n        let query = params;\n        if (contract) {\n            query = paramsHedged;\n        }\n        const p = this.safeString (query, 'posSide');\n        const isPostOnly = this.isPostOnly (false, false, query);\n        const queryOmitted: Dict = this.omit (query, [ 'postOnly', 'triggerPrice' ]);\n        return this.extend ({ 'symbol': symbol, 'p': p, 'h': hedged, 'po': isPostOnly }, queryOmitted);\n    }\n    async createThing (symbol: string, params: Dict = {}) {\n        return this.hold (this.orderRequest (symbol, true, " + caller + "));\n    }\n}\n";
+    test('`let query = params` of a helper params proven a map by every caller is a shared Dict alias', () => {
+        const out = mk ('r54a-helper-alias', helper ("this.omit (params, 'x')"));
+        expect(out).toContain('let mut query: crate::value::Dict = params.into_dict();');
+        expect(out).toContain('let mut queryOmitted: crate::value::Dict = self.omit(&query, &["postOnly", "triggerPrice"], &[]).into_dict();');
+    });
+    test('guard: a helper whose caller hands an any keeps the Value alias', () => {
+        const out = mk ('r54a-helper-alias-neg', helper ('body').replace ('createThing (symbol: string, params: Dict = {})', 'createThing (symbol: string, body: any)'));
+        expect(out).toContain('let mut query: Value = params');
+    });
+    const spot = (pad: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    spotRequest (symbol: string, type: string, params: Dict = {}): Dict {\n        let query: Dict = this.omit (params, 'clientOrderId');\n        let postOnly = false;\n        [ postOnly, query ] = this.handlePostOnly (type === 'market', postOnly, query" + pad + ");\n        const timeInForce = this.handleTimeInForce (query);\n        const triggerPrice = this.safeString (query, 'triggerPrice');\n        query = this.omit (query, 'cost');\n        return this.extend ({ 'symbol': symbol, 'tif': timeInForce, 'tp': triggerPrice, 'po': postOnly }, query);\n    }\n    async createThing (symbol: string, params: Dict = {}) {\n        return this.hold (this.spotRequest (symbol, 'limit', this.omit (params, 'x')));\n    }\n}\n";
+    test('a handed omit local boxed into a destructure write that fits the line budget stays Dict', () => {
+        const out = mk ('r54a-destr-box', spot (''));
+        expect(out).toContain('let mut query: crate::value::Dict = self.omit(');
+        expect(out).toContain('self.handleTimeInForce(&[Value::from(&query)])');
+    });
+});
