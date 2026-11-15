@@ -16609,3 +16609,54 @@ describe('ral-45f: a declaration-initialised alias of a nullable safeDict const 
         expect(t2).toContain('let mut out: Value = ');
     });
 });
+
+describe('ral-45b lift 1: a nil-declared string local whose other writes are its own slice stays Option<String>', () => {
+    const t45 = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, '45b-self-slice');
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue (body));
+        return t45.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('createAuthToken uri: concat write, indexOf bound, self slice', () => {
+        const out = run ("    tok (url: string, method: Str = undefined, e = false): any {\n        let uri: Str = undefined;\n        if (url !== '') {\n            uri = method + ' ' + url;\n            const quesPos = uri.indexOf ('?');\n            if (quesPos > 0) {\n                uri = uri.slice (0, quesPos);\n            }\n        }\n        const request: Dict = {};\n        if (uri !== undefined) {\n            request['uri'] = uri;\n        }\n        return request;\n    }\n");
+        expect(out).toContain('let mut uri: Option<String> = None;');
+        expect(out).toContain('let mut quesPos: i64 = ');
+        expect(out).toContain('uri = (if let Some(__s) = uri.as_deref() { Some(');
+    });
+    test('a literal self slice', () => {
+        const out = run ("    m (url: string): any {\n        let s: Str = undefined;\n        if (url !== '') {\n            s = 'G ' + url;\n            s = s.slice (0, 3);\n        }\n        return s;\n    }\n");
+        expect(out).toContain('let mut s: Option<String> = None;');
+        expect(out).toContain('s = (if let Some(__s) = s.as_deref() { Some(');
+    });
+});
+
+describe('ral-45b lift 2: `x += <string>` on a nil-declared Option<String> local appends natively', () => {
+    const t45 = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, '45b-opt-append');
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue (body));
+        return t45.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('an appended hash handed on stays Option<String>', () => {
+        const out = run ("    m (t: Str, side: Str): any {\n        let id: Str = undefined;\n        if (t !== undefined) {\n            id = 'a' + t;\n            if (side !== undefined) {\n                id += '-' + side;\n            }\n        }\n        return this.hold (id);\n    }\n");
+        expect(out).toContain('let mut id: Option<String> = None;');
+        expect(out).toContain('id = Some(format!("{}{}", id.as_deref().unwrap_or("null"), ');
+    });
+    test('returned from a Str method it keeps Value (the method keeps -> Option<String>)', () => {
+        const out = run ("    m (t: Str, side: Str): Str {\n        let id: Str = undefined;\n        if (t !== undefined) {\n            id = 'a' + t;\n            if (side !== undefined) {\n                id += '-' + side;\n            }\n        }\n        return id;\n    }\n");
+        expect(out).toContain('-> Option<String> {');
+        expect(out).toContain('let mut id: Value = Value::Null;');
+    });
+});
