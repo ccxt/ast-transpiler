@@ -392,6 +392,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_NIL_SCALAR_NATIVE_FORMS;
     /** `ostr|oint|onum` for an empty local the scalar rule types, else undefined. */
     rustNilScalarKind(declaration: any): string | undefined;
+    /** ral-45b: the local has a `x = x.slice(..)` / case self write or a `x += ..` append (the forms lift 1 / 2 admit). */
+    rust45bUsesNewForm(declaration: any, scope: any, name: string): boolean;
+    /** ral-45b: `return x;` of the local in a method whose declared return is a string type. */
+    rust45bReturnedFromStrMethod(declaration: any, scope: any, name: string): boolean;
+    /** ral-45b: `x.slice(..)` / case of the declared local itself, in a shape whose `Option<String>`
+     *  receiver form maps `None` to `None` (the boxed helper gives `Null` for a `Null` receiver too). */
+    rust45bSelfStrWrite(rhs: any, declaration: any): boolean;
     /** za: kind of the scalar arm of `c ? <scalar> : x` / `c ? x : <scalar>` where the other arm is the written local itself. */
     rustNilSelfArmTernaryKind(rhs: any, declaration: any): string | undefined;
     rustNilScalarHandOff(declaration: any, scope: any, kind: string, boxed: any[]): boolean;
@@ -468,6 +475,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Native type text of a parameter in the emitted signature. */
     rustParamType(param: any): string;
     rustBoolParamUseAccepted(node: any): boolean;
+    /** ral-45e: the call's `at`-th argument lands in an OPTIONAL venue `boolean` parameter the callee binds
+     *  `let p: bool = get_arg(optional_args, i, ..).is_truthy()`: a native bool local re-boxes as `Value::Bool(x)` there,
+     *  and the callee applies the same truthiness the old `Value` box got. */
+    rustOptionalBoolArgumentSlot(call: any, params: any, at: number): boolean;
+    /** The argument is a local the PRINTER declares `bool` from a bool expression (comparison / logical); literal and
+     *  alias locals are narrowed later by ccxt narrowBoolLocals, which boxes their uses itself. */
+    rustOptionalBoolArgLocal(a: any): boolean;
+    /** An argument in an optional native-`bool` slice slot: a bool local the printer still prints bare is boxed once
+     *  (a scalar bool local already prints its own `Value::Bool(x)`). */
+    rustOptionalBoolSlotArgText(call: any, params: any, at: number, a: any): string;
     /** Parameter declarations of a call's resolved callee, when the checker has them. */
     rustCalleeParams(call: any): any[] | undefined;
     /** `bool` text for an argument in a native-`bool` parameter slot. */
@@ -742,6 +759,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSumShape(node: any): boolean;
     /** A cast, clock-string or `sum` local must earn a native use, and a string one never copies where the `Value` moved. */
     rustNewShapeCostly(init: any, typedUses: number, copied: number): boolean;
+    /** ral-45g: `p.toString()` (no radix) of a parameter the checker types `number`: the printer already boxes
+     *  `format!("{}", p)` (the decimal text `Display` gives the `Int` / `Float` box), so the local holds that String. */
+    rustNumParamToString(node: any): boolean;
     /** `n.toString()` of an `i64` scalar local. */
     rustIntToStringShape(node: any): boolean;
     rustStrCastCall(node: any): any;
@@ -1709,6 +1729,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustIsOptMarketCall(init: any): boolean;
     /** `c ? undefined : this.market (s)` (either arm order): the `this.market` arm. */
     rustOptMarketTernary(init: any): any;
+    /** ral-45c: `c ? this.safeMarket (..) : market` (a lent market slot) or `c ? this.safeMarket (..) : undefined` (either arm
+     *  order): the `safeMarket` arm and the other one. `safeMarket` never answers Null, the slot is `Option<&Market>`. */
+    rustOptSafeMarketTernary(init: any): {
+        arm: any;
+        other: any;
+    } | undefined;
+    /** `(if c { Some(self.safe_market(..)) } else { market.cloned() })` for the ternary above. */
+    printOptSafeMarketTernary(init: any): string | undefined;
     /** `(if c { None } else { Some(market) })` for an `Option<Market>` ternary initializer. */
     printOptMarketTernary(init: any): string | undefined;
     /** `return x` in an `Option<Market>` method. */
@@ -2211,6 +2239,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A bare counter use that is an argument of a `this.m(..)` call or the value of an `x[k] = i` write. */
     rustI64BoxedUse(id: any): boolean;
     rustBoolSlotWrite(n: any): boolean;
+    rustStrSlotWrite(n: any): boolean;
+    /** The `__destr_tmp` line keeps the 400-char budget with the slot unwrap and the lent self default (`Value::from(&x)`). */
+    private rustStrSlotLineMemo;
+    rustStrSlotLineFits(write: any): boolean;
+    /** Some write of the initialised local is a string tuple slot (`rustStrSlotWrite`). */
+    rustStrSlotWrites(declaration: any): boolean;
+    /** ral-45d: the local's own box as an argument of its string slot write (`[x, p] = this.m (.., x)`): it boxes the value the local
+     *  holds before the slot is read back, lent (`Value::from(&x)`, `From<&Option<String>>`: `None` is the Null, `Some` the Str). */
+    rustStrSlotSelfDefault(n: any): boolean;
     rustBoolSlotUsesOk(declaration: any): boolean;
     /** The destructuring statement keeps the 400-char line budget with the slot's `== Some(true)` read. */
     rustBoolSlotLineLong(n: any): boolean;
@@ -2643,6 +2680,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOptAliasSourceKind(rhs: any, fn: any): 'dict' | 'list' | undefined;
     /** The source side: `t = n` (statement) whose target `t` holds the optional form of n's kind through rustOptAliasSourceKind. */
     rustOptAliasTargetUse(n: any, declaration: any, fn: any): boolean;
+    /** ral-45f: the source side of `let t = n` whose target holds the optional form through the initialised alias rule. */
+    rustOptAliasInitTargetUse(n: any, declaration: any, fn: any): boolean;
     private rustBorrowedIndexReads;
     /** `Promise.all ([..])` (an array literal operand): runtime `promise_all` hands its operand back, so it is always a list. */
     rustPromiseAllListKind(call: any): 'list' | undefined;
@@ -2772,6 +2811,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  proves a map element) in a REST or prediction venue file: the list comes from a parsed response (no ws subscription,
      *  cache or book tag), and the row's copy is written exactly as the boxed copy was (the list is never written back). */
     rustElementKeyWriteOk(n: any, init: any): boolean;
+    /** ral-45c: `row['k'] = v` on `const row = d[k]` of a `Dictionary<Dict>` local `d` read from an untagged REST map, in a REST
+     *  or prediction venue file. Write-back proof: `d` is never read again after the row is taken (its only other uses are its
+     *  declaration and an `Object.keys (d)` ahead of the row's loop), so the map the boxed `add_element_to_object` left unchanged
+     *  in `d` is never observed; the row's copy-on-write insert is exactly the boxed one (an untagged map, no store route). */
+    rustDictRowKeyWriteBackOk(n: any, init: any): boolean;
     rustBuiltKeyWriteLineOk(n: any, extra?: number): boolean;
     rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean;
     rustDictElementSource(init: any): boolean;
@@ -2861,6 +2905,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-44g: `c ? a : b` where each arm is an empty map literal `{}` or a base map producer call (`safeDict` with a literal `{}`
      *  default, extend / omit): every path answers a map, so the local is a map producer. An `undefined` arm keeps Value. */
     rustMapTernaryInit(init: any): boolean;
+    /** ral-45g: `c ? undefined : <src>` / `c ? <src> : undefined` where `<src>` is a base map source the optional form takes
+     *  (`safeDict` with no / nullish / `{}` default, extend / omit): Null on one path, that map (or its Null) on the other. */
+    rustOptMapTernaryInit(init: any): boolean;
     rustDictTernaryCall(call: any): boolean;
     private rustNilResponseLocals;
     /** The container kind of a write to a borrowed local; an endpoint write to an empty `let` counts as a map. */
@@ -2963,6 +3010,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBorrowedSourceKind(call: any): 'dict' | 'list' | 'api' | undefined;
     private static readonly RUST_SAFE_VALUE_KEY_SOURCES;
     rustSafeValueKeyReadSource(call: any): boolean;
+    /** ral-45g: `c ? a : b` whose arms are each a local / parameter, a numeric-index row, an empty map literal or a ral-qa
+     *  `safeValue` source: whatever kind each arm holds, a string-key read of a non-map answers Null exactly as the empty map
+     *  `into_dict()` leaves, so under ral-qa's use rule (literal-key base reads only) the typed local is observably identical.
+     *  No arm names ws client state nor a market / currency table. */
+    rustKeyReadTernarySource(init: any): boolean;
     /** ral-42g: `xs[i]` (a numeric index) where `xs` is a local or parameter the checker types as a list (`T[]`, never a tuple, an
      *  ArrayCache or an order book side) outside the test tier: the row a counter loop binds. Read only at literal string keys (the
      *  ral-qa use rule), a non-map row (Null, list, scalar, out of range) reads Null there exactly as the empty map `into_dict()`
@@ -3141,6 +3193,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustWsWatchKinds;
     private rustWsHashEnv;
     private rustWsFollowed;
+    /** The hash text of a Null hash (`stringify_param(Null)`): a literal no watch spells. */
+    private static readonly RUST_WS_NIL_HASH;
     /** The hash patterns of `n`: segments are literal text or `null` (any text). */
     rustWsHashPatterns(n: any, depth: number, seen: Set<Node>): Array<Array<string | null>>;
     /** `this.safeString (sub, 'k')` reads field k; `this.safeString (list, i)` / `list[i]` over `const list = this.safeList (sub, 'k', ..)`
