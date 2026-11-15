@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-DSH7DNKY.js";
+} from "./chunk-O5MZOAMZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -51577,6 +51577,13 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // scoped regens must agree). A same-class reference is the shape that would
     // force a function pointer instead of the printed call.
     this.rustValueReferencedMethods = /* @__PURE__ */ new Map();
+    // ── ral-47e: literal-seeded bool locals rewritten from a Market flag ──
+    // `let x: Bool = false; .. x = m['contract']; .. x = true;` where `m` is a typed market local (a loaded struct or an
+    // `Option<Market>`): every write is a bool literal or the market's own `bool` flag (`None` reads `false`, as the
+    // truthiness of the old Null box did), every read a condition, an `=== / !== true|false` test or a native /
+    // optional native-`bool` venue slot. Printed `let mut x: bool` by the printer itself (never left to ccxt
+    // narrowBoolLocals, whose regex only matches `: Value = Value::Bool(` declarations).
+    this.rustMarketFlagBoolDecisions = /* @__PURE__ */ new Map();
     // ── owned map parameters ──────────────────────────────────────────────────
     // A `Dict`-annotated parameter whose body only takes map operations and whose every call site passes a typed
     // dict bearer prints `&mut IndexMap`, so its writes are plain `.insert` with no per-site `Arc::make_mut` guard.
@@ -52308,7 +52315,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return this.rustTupleSlotKind(declaration) === "bool";
     if (declaration?.kind !== SyntaxKind7.VariableDeclaration)
       return false;
-    if (this.rustBoolDeclaredLocals.has(declaration))
+    if (this.rustBoolDeclaredLocals.has(declaration) || this.rustMarketFlagBoolLocal(declaration))
       return true;
     const initializer = declaration.initializer;
     if (initializer === void 0 || declaration.name?.kind !== SyntaxKind7.Identifier)
@@ -53563,6 +53570,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return `{ let ${tmpName} = ${rhs}.into_list(); ${assignments}; }`;
       return `{ ${head}; ${assignments}; }`;
     }
+    const flagWrite = isAssign && isIdentifier3(left) ? this.printMarketFlagBoolWrite(left, right) : void 0;
+    if (flagWrite !== void 0)
+      return flagWrite;
     const bookWrite = isAssign ? this.printWsBookMetaWrite(left, right) ?? this.printWsBookMapWrite(left, right) ?? this.printWsBookLocalWrite(left, right) : void 0;
     if (bookWrite !== void 0)
       return bookWrite;
@@ -53831,6 +53841,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) {
       const arms = this.printDictTernaryArms(declaration.initializer, identation);
       return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + ".into_dict()"}`;
+    }
+    if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
+      this.rustBoolDeclaredLocals.add(declaration);
+      return `${indent}let mut ${varName}: bool = ${this.unwrapParens(declaration.initializer).kind === SyntaxKind7.TrueKeyword ? "true" : "false"}`;
     }
     const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
     if (boolValue !== void 0) {
@@ -54266,6 +54280,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         write = this.rustNilSelfArmTernaryKind(rhs, declaration);
       if (write === void 0 && this.rust45bSelfStrWrite(rhs, declaration))
         write = "ostr";
+      if (write === void 0 && this.rustScalarSeeding && this.rustNilStrPartner(rhs, declaration, scope))
+        write = "ostr";
       joined = this.rustScalarJoinKinds(joined, write);
       if (joined === void 0)
         return void 0;
@@ -54305,6 +54321,22 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (boxed.length > 0)
       this.rustScalarGuarded.add(declaration);
     return kind;
+  }
+  /** ral-47d: `rhs` names another nil-declared (`let y: Str = undefined`) string local of the same function. */
+  rustNilStrPartner(rhs, declaration, scope) {
+    if (rhs === void 0 || !isIdentifier3(rhs) || rhs.text === "undefined")
+      return false;
+    const partner = this.rustDeclaredNode(rhs);
+    if (partner === void 0 || partner === declaration || !isVariableDeclaration3(partner) || !isIdentifier3(partner.name))
+      return false;
+    if (this.rustEnclosingFunction(partner) !== scope || partner.type === void 0)
+      return false;
+    if (partner.initializer !== void 0 && this.literalKindOfNode(this.unwrapParens(partner.initializer)) !== "null")
+      return false;
+    const list = partner.parent;
+    if (list?.kind !== SyntaxKind7.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & NodeFlags4.Const) !== 0)
+      return false;
+    return this.primitiveKindOfType(this.typeOfNodeIfAny(partner.name)) === "string";
   }
   /** ral-45b: the local has a `x = x.slice(..)` / case self write or a `x += ..` append (the forms lift 1 / 2 admit). */
   rust45bUsesNewForm(declaration, scope, name) {
@@ -54593,8 +54625,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return t.length;
       return t.length + '.as_deref().unwrap_or("null")'.length;
     };
-    const longest = Math.max(...this.printNode(statement, 0).split("\n").map(width));
-    return column + longest <= 400;
+    const declaration = isIdentifier3(n) ? this.rustDeclaredNode(n) : void 0;
+    const slot = declaration?.kind === SyntaxKind7.BindingElement && !this.rustTestTierSource(declaration);
+    const lines = this.printNode(statement, 0).split("\n");
+    return lines.every((l) => column + width(l) <= 400 || slot && column + l.trim().length > 400);
   }
   /** A write that decodes a `Value` result (a call, or a ternary over one). */
   rustNilDecodedWrite(rhs) {
@@ -55003,7 +55037,97 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (inner === void 0 || !isIdentifier3(inner))
       return false;
     const declaration = this.rustDeclaredNode(inner);
+    if (declaration !== void 0 && this.rustMarketFlagBoolLocal(declaration))
+      return true;
     return declaration !== void 0 && isVariableDeclaration3(declaration) && declaration.initializer !== void 0 && this.rustNodeIsBoolExpression(declaration.initializer) && this.literalKindOfNode(this.unwrapParens(declaration.initializer)) !== "boolean";
+  }
+  rustMarketFlagBoolLocal(declaration) {
+    if (declaration === void 0 || !isVariableDeclaration3(declaration) || !isIdentifier3(declaration.name))
+      return false;
+    let decision = this.rustMarketFlagBoolDecisions.get(declaration);
+    if (decision === void 0) {
+      this.rustMarketFlagBoolDecisions.set(declaration, false);
+      try {
+        decision = this.rustMarketFlagBoolLocalUncached(declaration);
+      } catch (e) {
+        decision = false;
+      }
+      this.rustMarketFlagBoolDecisions.set(declaration, decision);
+    }
+    return decision;
+  }
+  rustMarketFlagText(right) {
+    const inner = this.unwrapParens(right);
+    if (inner === void 0)
+      return void 0;
+    if (inner.kind === SyntaxKind7.TrueKeyword)
+      return "true";
+    if (inner.kind === SyntaxKind7.FalseKeyword)
+      return "false";
+    if (!(isElementAccessExpression4(inner) || isPropertyAccessExpression3(inner)))
+      return void 0;
+    return this.rustMarketBoolFlagRead(inner.expression);
+  }
+  /** ral-46e / ne / 47e: THE market `bool` flag read (one decision for initialisers and literal-seeded flag writes):
+   *  off an `Option<Market>` local `matches!(m, Some(Market { f: true, .. }))` (`None` reads `false`, no closure),
+   *  off a loaded struct local its own field `(m).f`; anything else undefined. */
+  rustMarketBoolFlagRead(receiver) {
+    const key = this.rustMarketReadKey(receiver);
+    if (key === void 0 || !_RustTranspiler.RUST_MARKET_BOOL_FIELDS.has(key))
+      return void 0;
+    const optMarket = this.rustOptMarketLocalOf(receiver);
+    if (optMarket !== void 0)
+      return `matches!(${this.printNode(optMarket.name, 0)}, Some(crate::types::Market { ${key}: true, .. }))`;
+    const declaration = this.rustTypedMarketLocalOf(receiver);
+    if (declaration === void 0 || this.rustMarketLocalKind(declaration) !== "struct")
+      return void 0;
+    return `(${this.printNode(declaration.name, 0)}).${key}`;
+  }
+  rustMarketFlagBoolLocalUncached(declaration) {
+    const init = this.unwrapParens(declaration.initializer);
+    if (init === void 0 || init.kind !== SyntaxKind7.TrueKeyword && init.kind !== SyntaxKind7.FalseKeyword)
+      return false;
+    const list = declaration.parent;
+    if (list === void 0 || !(list.flags & NodeFlags4.Let) || list.declarations?.length !== 1)
+      return false;
+    const name = String(declaration.name.text);
+    let flagWrites = 0;
+    const ok = this.rustLocalUsesAll(declaration, name, true, (n) => {
+      if (this.rustEnclosingFunction(n) !== this.rustEnclosingFunction(declaration))
+        return false;
+      const parent = n.parent;
+      if (isBinaryExpression5(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind7.EqualsToken) {
+        if (parent.parent?.kind !== SyntaxKind7.ExpressionStatement)
+          return false;
+        const text = this.rustMarketFlagText(parent.right);
+        if (text === void 0)
+          return false;
+        if (text !== "true" && text !== "false")
+          flagWrites++;
+        return true;
+      }
+      if (isBinaryExpression5(parent) && parent.left === n && (parent.operatorToken.kind === SyntaxKind7.EqualsEqualsEqualsToken || parent.operatorToken.kind === SyntaxKind7.ExclamationEqualsEqualsToken)) {
+        const lit = this.unwrapParens(parent.right);
+        return (lit?.kind === SyntaxKind7.TrueKeyword || lit?.kind === SyntaxKind7.FalseKeyword) && this.rustIdentifierUseIsCondition(parent);
+      }
+      if (this.rustIdentifierUseIsCondition(n))
+        return true;
+      const call = parent;
+      if (call?.kind !== SyntaxKind7.CallExpression)
+        return false;
+      const at = Array.from(call.arguments).indexOf(n);
+      const params = at < 0 ? void 0 : this.rustCalleeParams(call);
+      return params !== void 0 && this.rustOptionalBoolArgumentSlot(call, params, at);
+    });
+    return ok && flagWrites > 0;
+  }
+  /** `x = m['contract']` / `x = true` into a `rustMarketFlagBoolLocal`. */
+  printMarketFlagBoolWrite(left, right) {
+    const declaration = this.rustDeclaredNode(left);
+    if (declaration === void 0 || declaration.name === left || !this.rustMarketFlagBoolLocal(declaration))
+      return void 0;
+    const text = this.rustMarketFlagText(right);
+    return text === void 0 ? void 0 : `${this.printNode(left, 0).trim()} = ${text}`;
   }
   /** An argument in an optional native-`bool` slice slot: a bool local the printer still prints bare is boxed once
    *  (a scalar bool local already prints its own `Value::Bool(x)`). */
@@ -55066,7 +55190,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       if (declaration?.kind === SyntaxKind7.Parameter && this.rustParamPrintsBool(declaration)) {
         return this.printNode(inner, 0).trim();
       }
-      if (declaration?.kind === SyntaxKind7.VariableDeclaration && this.getRustBoolLocalInitializer(declaration, this.printNode(inner, 0)) !== void 0) {
+      if (declaration?.kind === SyntaxKind7.VariableDeclaration && (this.rustMarketFlagBoolLocal(declaration) || this.getRustBoolLocalInitializer(declaration, this.printNode(inner, 0)) !== void 0)) {
         return this.printNode(inner, 0).trim();
       }
       return void 0;
@@ -60222,7 +60346,8 @@ ${indent}let mut ${varName}: ${_RustTranspiler.RUST_SCALAR_TYPES[kind]} = ${spli
   }
   /** `s += v` with `v` a string-typed `Value` (not a `+` chain): `Display` is the text the `add` helper concatenates. */
   rustStrPushValueText(target, right, dry) {
-    if (isBinaryExpression5(right) || this.literalKindOfNode(right) !== void 0 || this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== "string" || !this.printsValueExpression(right))
+    const anyToString = isCallExpression6(right) && right.arguments.length === 0 && isPropertyAccessExpression3(right.expression) && String(right.expression.name.text) === "toString" && isIdentifier3(right.expression.expression) && (this.typeOfNodeIfAny(right.expression.expression)?.flags & TypeFlags6.Any) !== 0;
+    if (isBinaryExpression5(right) || this.literalKindOfNode(right) !== void 0 || !anyToString && this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== "string" || !this.printsValueExpression(right))
       return void 0;
     if (this.rustScalarHasTypedOperand(right) || new RegExp(`\\b${String(target.text)}\\b`).test(String(right.getText())))
       return void 0;
@@ -64055,10 +64180,8 @@ ${i1}}`;
     }
     const optMarket = this.rustOptMarketLocalOf(node.expression);
     if (optMarket !== void 0) {
-      const optKey = this.rustMarketReadKey(node.expression);
-      if (optKey === void 0 || !_RustTranspiler.RUST_MARKET_BOOL_FIELDS.has(optKey))
-        return void 0;
-      return { kind: "bool", text: `matches!(${this.printNode(optMarket.name, 0)}, Some(crate::types::Market { ${optKey}: true, .. }))` };
+      const flag = this.rustMarketBoolFlagRead(node.expression);
+      return flag === void 0 ? void 0 : { kind: "bool", text: flag };
     }
     const declaration = this.rustTypedMarketLocalOf(node.expression);
     const localKind = declaration === void 0 ? false : this.rustMarketLocalKind(declaration);
@@ -64074,7 +64197,7 @@ ${i1}}`;
     }
     const recv = `(${this.printNode(declaration.name, 0)})`;
     if (_RustTranspiler.RUST_MARKET_BOOL_FIELDS.has(key))
-      return { kind: "bool", text: `${recv}.${key}` };
+      return { kind: "bool", text: this.rustMarketBoolFlagRead(node.expression) ?? `${recv}.${key}` };
     if (_RustTranspiler.RUST_MARKET_OPT_BOOL_FIELDS.has(key))
       return { kind: "obool", text: `${recv}.${key}` };
     const field = _RustTranspiler.RUST_MARKET_STR_FIELDS[key];
@@ -68187,7 +68310,7 @@ ${this.getIden(identation)}}`;
   rustSubscriptionPresenceFlag(declaration, parsedValue) {
     const init = this.unwrapParens(declaration?.initializer);
     if (!isIdentifier3(declaration?.name) || !isCallExpression6(init) || !isPropertyAccessExpression3(init.expression) || init.expression.expression.kind !== SyntaxKind7.ThisKeyword || init.expression.name.text !== "safeValue" || init.arguments.length !== 2)
-      return false;
+      return this.rustNullTestOnlyFlag(declaration);
     if (!/^self\.safe(?:_v|V)alue(?:_k)?\((?:(?:\(client\)|__ch|client)\.subscriptions\.clone\(\)|client\.subscriptions), [^;\n]*, &\[\]\)$/.test(parsedValue))
       return this.rustNullTestOnlyFlag(declaration);
     const fn = this.rustEnclosingFunction(declaration);
@@ -72519,8 +72642,8 @@ ${iden}}`;
       return false;
     const d = this.rustDeclarationOfIdentifier(head);
     if (d === void 0 || d === head || d.name === head)
-      return this.rustTypedParamsParam(d);
-    return this.rustTypedParamsParam(d) || this.rustHandedDictLocal(d) || this.rustBorrowedLocalKind(d) === "dict" && !this.rustOptContainerLocals.has(d);
+      return this.rustProvenMapParam(d);
+    return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || this.rustBorrowedLocalKind(d) === "dict" && !this.rustOptContainerLocals.has(d);
   }
   rustOmitOfDict(init) {
     if (!this.rustBaseCallNamed(init, _RustTranspiler.RUST_HANDED_DICT_OMIT) || init.arguments.length !== 2)
@@ -72536,8 +72659,8 @@ ${iden}}`;
       return false;
     const d = this.rustDeclarationOfIdentifier(head);
     if (d === void 0 || d === head || d.name === head)
-      return this.rustTypedParamsParam(d);
-    return this.rustTypedParamsParam(d) || this.rustHandedDictLocal(d) || this.rustBorrowedLocalKind(d) === "dict" && !this.rustOptContainerLocals.has(d);
+      return this.rustProvenMapParam(d);
+    return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || this.rustBorrowedLocalKind(d) === "dict" && !this.rustOptContainerLocals.has(d);
   }
   /** `this.deepExtend (m, p, ..)` whose every operand is a proven map: a tag-free literal, a built map, an omit of a
    *  proven map, or the `params` of a typed unified method. The runtime then merges map into map on every path. */
@@ -72682,6 +72805,56 @@ ${iden}}`;
       return this.rustSignParamsProvenMap(fn) && !this.rustLocalIsReassigned(d, String(d.name.text));
     return slot !== void 0 && String(slot.rustType).startsWith("impl Into<crate::Params>") && !this.rustLocalIsReassigned(d, String(d.name.text));
   }
+  /** ONE params-map proof for an omit / keysort head (and so for 46g's slot-1 write-back, which takes the handed map
+   *  whose omit head this proves): a typed unified method's `params` (rustTypedParamsParam) or, ral-47g, a venue
+   *  `*Request` helper's `params` proven a map by every in-file caller (rustHelperParamsProvenMap). */
+  rustProvenMapParam(d) {
+    return this.rustTypedParamsParam(d) || this.rustHelperParamsProvenMap(d);
+  }
+  /** ral-47g: the trailing `params: Dict = {}` of a venue's own helper (createOrderRequest and the like), never
+   *  reassigned, not an override, whose every caller in the venue file, its pro file and each subclass that inherits
+   *  it passes a map or leaves it out (the `{}` default): the `sign` caller proof keyed on the helper name. A dynamic
+   *  `this[m] (..)` / `callDynamically` call, an extra argument or any unproven argument fails the venue closed. */
+  rustHelperParamsProvenMap(d) {
+    if (d?.kind !== SyntaxKind7.Parameter || d.name?.kind !== SyntaxKind7.Identifier || d.type === void 0 || String(d.type.getText()) !== "Dict")
+      return false;
+    if (d.initializer === void 0 || !isObjectLiteralExpression4(d.initializer) || d.initializer.properties.length !== 0)
+      return false;
+    const fn = d.parent;
+    if (fn?.kind !== SyntaxKind7.MethodDeclaration || !isIdentifier3(fn.name) || this.rustTestTierSource(d) || isClassExpression2(fn.parent))
+      return false;
+    const at = Array.from(fn.parameters).indexOf(d);
+    if (at !== fn.parameters.length - 1 || (fn.modifiers ?? []).some((x) => x.kind === SyntaxKind7.OverrideKeyword))
+      return false;
+    const name = String(fn.name.text);
+    if (!/^[a-z][A-Za-z0-9]*Request$/.test(name) || this.rustLocalIsReassigned(d, String(d.name.text)))
+      return false;
+    const file = String(fn.getSourceFile().fileName).replace(/\\/g, "/");
+    const m = /^(.*ts\/src\/)((?:prediction\/)?[a-z0-9]+)\.ts$/.exec(file);
+    if (m === null)
+      return false;
+    const key = m[1] + m[2] + "#" + name + "#" + at;
+    const hit = _RustTranspiler.RUST_SIGN_MAP_PROOF.get(key);
+    if (hit !== void 0)
+      return hit;
+    _RustTranspiler.RUST_SIGN_MAP_PROOF.set(key, false);
+    let ok = false;
+    try {
+      ok = this.rustHelperHasCaller(m[1], m[2], name) && this.rustSignParamsProofUncached(m[1], m[2], { name, at });
+    } catch (e) {
+      ok = false;
+    }
+    _RustTranspiler.RUST_SIGN_MAP_PROOF.set(key, ok);
+    return ok;
+  }
+  /** The helper is called by name somewhere in its venue or pro file and is not a base Exchange method. */
+  rustHelperHasCaller(root, venue, name) {
+    const base = root + "base/Exchange.ts";
+    if (fs3.existsSync(base) && new RegExp("^ {4}(?:async )?" + name + " \\(", "m").test(fs3.readFileSync(base, "utf8")))
+      return false;
+    const call = new RegExp("this\\." + name + " \\(");
+    return [venue, "pro/" + venue].some((rel) => fs3.existsSync(root + rel + ".ts") && call.test(fs3.readFileSync(root + rel + ".ts", "utf8")));
+  }
   /** A venue `sign (path, api, method, params)` whose `params` is a map on every path. `params` reaches `sign` only
    *  through `fetch2` (from `request`, every implicit endpoint and the venue's own direct calls); the base declares
    *  it `Dict`, but a list body passes through untouched (`omit` hands a list back, and `into_dict()` would empty
@@ -72709,7 +72882,7 @@ ${iden}}`;
     _RustTranspiler.RUST_SIGN_MAP_PROOF.set(key, ok);
     return ok;
   }
-  rustSignParamsProofUncached(root, venue) {
+  rustSignParamsProofUncached(root, venue, target) {
     const api = _RustTranspiler.rustSignProofApi ??= new tsSync2.API({ cwd: process.cwd() });
     const dirs = venue.startsWith("prediction/") ? ["prediction/"] : ["", "pro/"];
     const parsed = /* @__PURE__ */ new Map();
@@ -72758,7 +72931,7 @@ ${iden}}`;
         seen.add(r);
         if (r === venue)
           return true;
-        if (!r.startsWith("pro/") && ownMethod(classOf(parse(r)), "sign") !== void 0)
+        if (!r.startsWith("pro/") && ownMethod(classOf(parse(r)), target?.name ?? "sign") !== void 0)
           return false;
         r = parentOf(r);
       }
@@ -72774,10 +72947,15 @@ ${iden}}`;
       for (const mm of fs3.readFileSync(a, "utf8").matchAll(/^ {4}([A-Za-z0-9]+) \(params/gm))
         names.add(mm[1]);
     };
-    for (let r = venue; r !== void 0; r = parentOf(r))
-      abstractOf(r);
-    if (names.size === 2)
-      return false;
+    if (target !== void 0) {
+      names.clear();
+      names.add(target.name);
+    } else {
+      for (let r = venue; r !== void 0; r = parentOf(r))
+        abstractOf(r);
+      if (names.size === 2)
+        return false;
+    }
     const thisCall = (n) => n !== void 0 && isCallExpression6(n) && isPropertyAccessExpression3(n.expression) && n.expression.expression.kind === SyntaxKind7.ThisKeyword;
     const builders = /* @__PURE__ */ new Set(["extend", "deepExtend", "keysort", "ordered"]);
     const declaredDict = (sf, rel, name) => {
@@ -72856,14 +73034,17 @@ ${iden}}`;
         if (!ok)
           return;
         if (isElementAccessExpression4(n) && n.expression.kind === SyntaxKind7.ThisKeyword && isCallExpression6(n.parent) && n.parent.expression === n) {
-          const dyn = this.r40hDynNames(n);
+          const dyn = target !== void 0 ? void 0 : this.r40hDynNames(n);
           if (dyn === void 0 || !dyn.every((x) => names.has(x)) || n.parent.arguments.length !== 1 || !isMap(sf, rel, n.parent.arguments[0], 0))
             ok = false;
         } else if (thisCall(n) && String(n.expression.name.text) === "callDynamically")
           ok = false;
         else if (thisCall(n) && names.has(String(n.expression.name.text))) {
           const callee = String(n.expression.name.text);
-          if (!isMap(sf, rel, callee === "request" || callee === "fetch2" ? n.arguments[3] : n.arguments[0], 0))
+          const arg = target !== void 0 ? n.arguments[target.at] : callee === "request" || callee === "fetch2" ? n.arguments[3] : n.arguments[0];
+          if (target !== void 0 && n.arguments.length > target.at + 1)
+            ok = false;
+          else if (!isMap(sf, rel, arg, 0))
             ok = false;
         }
         n.forEachChild?.(visit);
@@ -74321,6 +74502,9 @@ ${iden}}`;
     const nilStart = declaration.initializer === void 0 || this.rustWsCacheUndefined(declaration.initializer);
     if (declaration.initializer === void 0 && !this.rustLocalReassigned(declaration))
       return any;
+    const dispatched = this.rustWsDispatchKeyPatterns(declaration);
+    if (dispatched !== void 0)
+      return dispatched;
     const keyed = declaration.initializer === void 0 ? void 0 : this.rustWsSubscriptionKeyRead(declaration.initializer);
     if (keyed !== void 0 && !this.rustLocalReassigned(declaration)) {
       seen.add(declaration);
@@ -74364,6 +74548,114 @@ ${iden}}`;
     } finally {
       seen.delete(declaration);
     }
+  }
+  /** ral-47h: the dispatch keys a handler local `const x = this.safeString (message, 'f')` can hold, or undefined.
+   *  Proof: x is never reassigned; `message` is the handler's unwritten second parameter; the handler is a method of a
+   *  ws venue class whose every `this.<handler>` mention is a value of the one `const methods = { 'k': this.h, .. }`
+   *  literal of `handleMessage (client, message)`; that literal is read only by `this.safeValue (methods, K)` with
+   *  K an unwritten `const K = this.safeString (message, 'f')` (same field, handleMessage's unwritten `message`),
+   *  and the result is an unwritten local used only as `m.call (this, client, message)`. */
+  rustWsDispatchKeyPatterns(declaration) {
+    const init = declaration.initializer === void 0 ? void 0 : this.rustStripWrappers(declaration.initializer);
+    const fieldRead = (x, msg) => {
+      x = x === void 0 ? void 0 : this.rustStripWrappers(x);
+      if (!isCallExpression6(x) || !isPropertyAccessExpression3(x.expression) || x.expression.expression.kind !== SyntaxKind7.ThisKeyword || String(x.expression.name.text) !== "safeString" || x.arguments.length !== 2 || !isStringLiteralLikeNode4(x.arguments[1]))
+        return void 0;
+      const m = this.rustStripWrappers(x.arguments[0]);
+      return isIdentifier3(m) && this.rustDeclarationOfIdentifier(m) === msg ? String(x.arguments[1].text) : void 0;
+    };
+    if (init === void 0 || this.rustLocalReassigned(declaration) || declaration.parent?.kind !== SyntaxKind7.VariableDeclarationList || !(declaration.parent.flags & NodeFlags4.Const))
+      return void 0;
+    const handler = findAncestor(declaration, isFunctionLike);
+    if (handler === void 0 || !isMethodDeclaration5(handler) || !isIdentifier3(handler.name) || handler.parameters.length < 2)
+      return void 0;
+    const msgParam = handler.parameters[1];
+    const field = fieldRead(init, msgParam);
+    if (field === void 0 || this.rustWsParamWritten(handler, msgParam))
+      return void 0;
+    const cls = handler.parent;
+    if (!isClassDeclaration4(cls))
+      return void 0;
+    const name = String(handler.name.text);
+    const keys = [];
+    let ok = true;
+    let table;
+    this.rustWalkScope(cls, (n) => {
+      if (!ok)
+        return RUST_WALK_STOP;
+      if (!isPropertyAccessExpression3(n) || n.expression.kind !== SyntaxKind7.ThisKeyword || String(n.name.text) !== name)
+        return;
+      const pa = n.parent;
+      const lit = pa?.parent;
+      if (pa?.kind !== SyntaxKind7.PropertyAssignment || pa.initializer !== n || !isStringLiteralLikeNode4(pa.name) || !isObjectLiteralExpression4(lit) || table !== void 0 && table !== lit) {
+        ok = false;
+        return RUST_WALK_STOP;
+      }
+      table = lit;
+      keys.push(String(pa.name.text));
+      return void 0;
+    });
+    if (!ok || table === void 0 || keys.length === 0)
+      return void 0;
+    const td = table.parent;
+    const dispatcher = findAncestor(table, isFunctionLike);
+    if (!isVariableDeclaration3(td) || td.initializer !== table || !isIdentifier3(td.name) || !(td.parent?.flags & NodeFlags4.Const) || dispatcher === void 0 || !isMethodDeclaration5(dispatcher) || !isIdentifier3(dispatcher.name) || String(dispatcher.name.text) !== "handleMessage" || dispatcher.parent !== cls || dispatcher.parameters.length !== 2)
+      return void 0;
+    const dClient = dispatcher.parameters[0];
+    const dMsg = dispatcher.parameters[1];
+    if (this.rustWsParamWritten(dispatcher, dMsg))
+      return void 0;
+    for (const pr of Array.from(table.properties)) {
+      if (pr.kind !== SyntaxKind7.PropertyAssignment || !isStringLiteralLikeNode4(pr.name))
+        return void 0;
+    }
+    const refOf = (x) => {
+      x = this.rustStripWrappers(x);
+      return isIdentifier3(x) ? this.rustDeclarationOfIdentifier(x) : void 0;
+    };
+    for (const r of this.rustScopeNameNodes(dispatcher, String(td.name.text))) {
+      if (r === td.name || !isIdentifier3(r))
+        continue;
+      if (this.rustDeclarationOfIdentifier(r) !== td)
+        return void 0;
+      const call = this.rustStripWrappers(r).parent;
+      if (!isCallExpression6(call) || call.arguments[0] !== r || call.arguments.length !== 2 || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword || String(call.expression.name.text) !== "safeValue")
+        return void 0;
+      const kd = refOf(call.arguments[1]);
+      if (kd === void 0 || !isVariableDeclaration3(kd) || this.rustLocalReassigned(kd) || !(kd.parent?.flags & NodeFlags4.Const) || fieldRead(kd.initializer, dMsg) !== field)
+        return void 0;
+      const md = call.parent;
+      if (!isVariableDeclaration3(md) || md.initializer !== call || !isIdentifier3(md.name) || this.rustLocalReassigned(md))
+        return void 0;
+      for (const u of this.rustScopeNameNodes(dispatcher, String(md.name.text))) {
+        if (u === md.name || !isIdentifier3(u) || this.rustDeclarationOfIdentifier(u) !== md)
+          continue;
+        const up = u.parent;
+        if (isBinaryExpression5(up) && up.left === u && (up.operatorToken.kind === SyntaxKind7.ExclamationEqualsEqualsToken || up.operatorToken.kind === SyntaxKind7.EqualsEqualsEqualsToken))
+          continue;
+        const c = up?.parent;
+        if (!isPropertyAccessExpression3(up) || up.expression !== u || String(up.name.text) !== "call" || !isCallExpression6(c) || c.expression !== up || c.arguments.length !== 3 || c.arguments[0].kind !== SyntaxKind7.ThisKeyword || refOf(c.arguments[1]) !== dClient || refOf(c.arguments[2]) !== dMsg)
+          return void 0;
+      }
+    }
+    return keys.map((k) => [k]);
+  }
+  /** Whether a parameter is written in its function (assignment, ++/--, destructuring target). */
+  rustWsParamWritten(fn, param) {
+    if (!isIdentifier3(param.name))
+      return true;
+    for (const r of this.rustScopeNameNodes(fn, String(param.name.text))) {
+      if (!isIdentifier3(r) || r === param.name || this.rustDeclarationOfIdentifier(r) !== param)
+        continue;
+      const p = r.parent;
+      if (isBinaryExpression5(p) && p.left === r && rustIsAssignmentOperator(p.operatorToken.kind))
+        return true;
+      if ((isPrefixUnaryExpression3(p) || p?.kind === SyntaxKind7.PostfixUnaryExpression) && p.operand === r)
+        return true;
+      if (isArrayLiteralExpression4(p) || isShorthandPropertyAssignment2(p))
+        return true;
+    }
+    return false;
   }
   /** `this.safeString (sub, 'k')` reads field k; `this.safeString (list, i)` / `list[i]` over `const list = this.safeList (sub, 'k', ..)`
    *  reads an element of field k. Undefined for any other shape. */
@@ -75602,92 +75894,99 @@ ${iden}}`;
         st = st.parent;
       return st !== void 0 && String(st.getText()).split("\n")[0].length <= 160;
     };
-    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
-      if (this.rustIdentifierIsPropertyName(n))
-        return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
-      if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
+    const ownNameSkip = this.rustOwnNameSkip;
+    this.rustOwnNameSkip = true;
+    let safe;
+    try {
+      safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+        if (this.rustIdentifierIsPropertyName(n))
+          return !(n.parent?.kind === SyntaxKind7.ShorthandPropertyAssignment && n.parent.name === n);
+        if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn)
+          return false;
+        const up = n.parent;
+        if (isBinaryExpression5(up) && up.left === n) {
+          return up.operatorToken.kind === SyntaxKind7.EqualsToken && up.parent?.kind === SyntaxKind7.ExpressionStatement && (this.rustBuiltListWriteSource(up.right) || this.rustBuiltListSelfSort(up, name) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== void 0 || this.rustDefaultedAliasMove(up) !== void 0) && String(up.parent.getText()).split("\n")[0].length <= 200;
+        }
+        if (isElementAccessExpression4(up) && up.expression === n) {
+          natives++;
+          return !(isElementAccessExpression4(up.parent) && up.parent.expression === up) && this.rustReadBearerElementUse(up, "list");
+        }
+        if (isPropertyAccessExpression3(up) && up.expression === n) {
+          const member = String(up.name.text);
+          natives++;
+          if (member === "push")
+            return this.rustVecPushShape(up.parent, name);
+          const use = up.parent;
+          return member === "length" && use?.kind !== SyntaxKind7.PrefixUnaryExpression && use?.kind !== SyntaxKind7.PostfixUnaryExpression && !(isBinaryExpression5(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
+        }
+        if (isCallExpression6(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
+          natives++;
+          return true;
+        }
+        if (isReturnStatement4(up) && up.expression === n) {
+          boxes.push([n, "move"]);
+          return true;
+        }
+        if (up?.kind === SyntaxKind7.AsExpression && up.expression === n && isReturnStatement4(up.parent) && up.parent.expression === up) {
+          boxes.push([n, "move"]);
+          return true;
+        }
+        const hashSlot = this.rustWatchHashListSlot(up, n);
+        if (hashSlot !== void 0) {
+          boxes.push([n, hashSlot]);
+          return true;
+        }
+        if (this.rustLentWsSettleSlot(up, n)) {
+          boxes.push([n, this.rustLocalLastUse(n, declaration) ? "move" : "lend"]);
+          handOffs++;
+          return true;
+        }
+        const lentSlot = this.rustBuiltListLentHelperSlot(up, n);
+        if (lentSlot !== void 0) {
+          const move = lentSlot !== "inArray" && (this.rustLocalLastUse(n, declaration) || lentSlot === "arrayConcat" && this.rustBuiltListSelfWriteArg(n, name));
+          boxes.push([n, move ? "move" : "lend"]);
+          handOffs++;
+          return true;
+        }
+        if (this.rustBuiltListPromiseAllOperand(up, n)) {
+          if (!this.rustLocalLastUse(n, declaration) || !short(n))
+            return false;
+          boxes.push([n, "move"]);
+          handOffs++;
+          return true;
+        }
+        if (isCallExpression6(up) && up.expression !== n && !this.rustTestTierSource(up) && (this.rustLentListSlot(up, n) || this.rustLentVenueSlot(up, n) !== void 0)) {
+          boxes.push([n, "lend"]);
+          handOffs++;
+          return true;
+        }
+        if (up?.kind === SyntaxKind7.PropertyAssignment && up.initializer === n && this.rustLocalLastUse(n, declaration) && short(n)) {
+          boxes.push([n, "move"]);
+          handOffs++;
+          return true;
+        }
+        if (isBinaryExpression5(up) && up.right === n && up.operatorToken.kind === SyntaxKind7.EqualsToken && up.parent?.kind === SyntaxKind7.ExpressionStatement && (isElementAccessExpression4(up.left) || isPropertyAccessExpression3(up.left)) && this.rustLocalKeyPlace(up.left, n) && short(n)) {
+          boxes.push([n, "move"]);
+          handOffs++;
+          return true;
+        }
+        if (up?.kind === SyntaxKind7.PropertyAssignment && up.initializer === n && short(n) && this.rustBuiltListFrozenAfter(n, declaration, name)) {
+          boxes.push([n, "clone"]);
+          handOffs++;
+          return true;
+        }
+        if (isCallExpression6(up) && up.expression !== n && up.arguments.some((a) => a === n)) {
+          const callee = up.expression;
+          if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || !short(n) || _RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.text))) || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n)))
+            return false;
+          boxes.push([n, this.rustLocalLastUse(n, declaration) || this.rustBuiltListSelfWriteArg(n, name) ? "move" : "clone"]);
+          return true;
+        }
         return false;
-      const up = n.parent;
-      if (isBinaryExpression5(up) && up.left === n) {
-        return up.operatorToken.kind === SyntaxKind7.EqualsToken && up.parent?.kind === SyntaxKind7.ExpressionStatement && (this.rustBuiltListWriteSource(up.right) || this.rustBuiltListSelfSort(up, name) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== void 0 || this.rustDefaultedAliasMove(up) !== void 0) && String(up.parent.getText()).split("\n")[0].length <= 200;
-      }
-      if (isElementAccessExpression4(up) && up.expression === n) {
-        natives++;
-        return !(isElementAccessExpression4(up.parent) && up.parent.expression === up) && this.rustReadBearerElementUse(up, "list");
-      }
-      if (isPropertyAccessExpression3(up) && up.expression === n) {
-        const member = String(up.name.text);
-        natives++;
-        if (member === "push")
-          return this.rustVecPushShape(up.parent, name);
-        const use = up.parent;
-        return member === "length" && use?.kind !== SyntaxKind7.PrefixUnaryExpression && use?.kind !== SyntaxKind7.PostfixUnaryExpression && !(isBinaryExpression5(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
-      }
-      if (isCallExpression6(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
-        natives++;
-        return true;
-      }
-      if (isReturnStatement4(up) && up.expression === n) {
-        boxes.push([n, "move"]);
-        return true;
-      }
-      if (up?.kind === SyntaxKind7.AsExpression && up.expression === n && isReturnStatement4(up.parent) && up.parent.expression === up) {
-        boxes.push([n, "move"]);
-        return true;
-      }
-      const hashSlot = this.rustWatchHashListSlot(up, n);
-      if (hashSlot !== void 0) {
-        boxes.push([n, hashSlot]);
-        return true;
-      }
-      if (this.rustLentWsSettleSlot(up, n)) {
-        boxes.push([n, this.rustLocalLastUse(n, declaration) ? "move" : "lend"]);
-        handOffs++;
-        return true;
-      }
-      const lentSlot = this.rustBuiltListLentHelperSlot(up, n);
-      if (lentSlot !== void 0) {
-        const move = lentSlot !== "inArray" && (this.rustLocalLastUse(n, declaration) || lentSlot === "arrayConcat" && this.rustBuiltListSelfWriteArg(n, name));
-        boxes.push([n, move ? "move" : "lend"]);
-        handOffs++;
-        return true;
-      }
-      if (this.rustBuiltListPromiseAllOperand(up, n)) {
-        if (!this.rustLocalLastUse(n, declaration) || !short(n))
-          return false;
-        boxes.push([n, "move"]);
-        handOffs++;
-        return true;
-      }
-      if (isCallExpression6(up) && up.expression !== n && !this.rustTestTierSource(up) && (this.rustLentListSlot(up, n) || this.rustLentVenueSlot(up, n) !== void 0)) {
-        boxes.push([n, "lend"]);
-        handOffs++;
-        return true;
-      }
-      if (up?.kind === SyntaxKind7.PropertyAssignment && up.initializer === n && this.rustLocalLastUse(n, declaration) && short(n)) {
-        boxes.push([n, "move"]);
-        handOffs++;
-        return true;
-      }
-      if (isBinaryExpression5(up) && up.right === n && up.operatorToken.kind === SyntaxKind7.EqualsToken && up.parent?.kind === SyntaxKind7.ExpressionStatement && (isElementAccessExpression4(up.left) || isPropertyAccessExpression3(up.left)) && this.rustLocalKeyPlace(up.left, n) && short(n)) {
-        boxes.push([n, "move"]);
-        handOffs++;
-        return true;
-      }
-      if (up?.kind === SyntaxKind7.PropertyAssignment && up.initializer === n && short(n) && this.rustBuiltListFrozenAfter(n, declaration, name)) {
-        boxes.push([n, "clone"]);
-        handOffs++;
-        return true;
-      }
-      if (isCallExpression6(up) && up.expression !== n && up.arguments.some((a) => a === n)) {
-        const callee = up.expression;
-        if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || !short(n) || _RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.text))) || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n)))
-          return false;
-        boxes.push([n, this.rustLocalLastUse(n, declaration) || this.rustBuiltListSelfWriteArg(n, name) ? "move" : "clone"]);
-        return true;
-      }
-      return false;
-    });
+      });
+    } finally {
+      this.rustOwnNameSkip = ownNameSkip;
+    }
     if (!safe || natives === 0 && (handOffs === 0 || handOffs + boxes.filter(([b]) => isReturnStatement4(b.parent) || b.parent?.kind === SyntaxKind7.AsExpression && isReturnStatement4(b.parent.parent)).length !== boxes.length || boxes.some(([, form]) => form === "clone")))
       return false;
     for (const [n, form] of boxes)
@@ -79300,6 +79599,11 @@ ${this.getIden(identation)}}`;
         const name = this.printNode(inner, 0).trim();
         return op === SyntaxKind7.EqualsEqualsToken || op === SyntaxKind7.EqualsEqualsEqualsToken ? name : `!${name}`;
       }
+    }
+    const flagDecl = inner !== void 0 && isIdentifier3(inner) ? this.rustDeclaredNode(inner) : void 0;
+    if (flagDecl !== void 0 && flagDecl.name !== inner && this.rustMarketFlagBoolLocal(flagDecl)) {
+      const name = this.printNode(inner, 0).trim();
+      return (op === SyntaxKind7.EqualsEqualsToken || op === SyntaxKind7.EqualsEqualsEqualsToken) === (literal2.kind === SyntaxKind7.TrueKeyword) ? name : `!${name}`;
     }
     if (inner === void 0 || !isIdentifier3(inner) && !isCallExpression6(inner) || !this.printsValueExpression(inner) || isCallExpression6(inner) && this.rustCallPrintsBool(inner) || this.rustBoolMemberLocal(inner) || this.rustNativeBoolLocal(inner) || !this.rustBoolValue(inner)) {
       return void 0;

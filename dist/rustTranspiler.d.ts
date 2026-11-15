@@ -392,6 +392,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_NIL_SCALAR_NATIVE_FORMS;
     /** `ostr|oint|onum` for an empty local the scalar rule types, else undefined. */
     rustNilScalarKind(declaration: any): string | undefined;
+    /** ral-47d: `rhs` names another nil-declared (`let y: Str = undefined`) string local of the same function. */
+    rustNilStrPartner(rhs: any, declaration: any, scope: any): boolean;
     /** ral-45b: the local has a `x = x.slice(..)` / case self write or a `x += ..` append (the forms lift 1 / 2 admit). */
     rust45bUsesNewForm(declaration: any, scope: any, name: string): boolean;
     /** ral-45b: `return x;` of the local in a method whose declared return is a string type. */
@@ -482,6 +484,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The argument is a local the PRINTER declares `bool` from a bool expression (comparison / logical); literal and
      *  alias locals are narrowed later by ccxt narrowBoolLocals, which boxes their uses itself. */
     rustOptionalBoolArgLocal(a: any): boolean;
+    private rustMarketFlagBoolDecisions;
+    rustMarketFlagBoolLocal(declaration: any): boolean;
+    rustMarketFlagText(right: any): string | undefined;
+    /** ral-46e / ne / 47e: THE market `bool` flag read (one decision for initialisers and literal-seeded flag writes):
+     *  off an `Option<Market>` local `matches!(m, Some(Market { f: true, .. }))` (`None` reads `false`, no closure),
+     *  off a loaded struct local its own field `(m).f`; anything else undefined. */
+    rustMarketBoolFlagRead(receiver: any): string | undefined;
+    rustMarketFlagBoolLocalUncached(declaration: any): boolean;
+    /** `x = m['contract']` / `x = true` into a `rustMarketFlagBoolLocal`. */
+    printMarketFlagBoolWrite(left: any, right: any): string | undefined;
     /** An argument in an optional native-`bool` slice slot: a bool local the printer still prints bare is boxed once
      *  (a scalar bool local already prints its own `Value::Bool(x)`). */
     rustOptionalBoolSlotArgText(call: any, params: any, at: number, a: any): string;
@@ -3015,6 +3027,17 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  rebound by `get_arg(.., Value::Map({}))`, so it is always a map (`From<Value> for Params` drops a non-map, and
      *  the empty set's `Value::Null` takes the `{}` default). A list body only reaches untyped `sign` / `request`. */
     rustTypedParamsParam(d: any): boolean;
+    /** ONE params-map proof for an omit / keysort head (and so for 46g's slot-1 write-back, which takes the handed map
+     *  whose omit head this proves): a typed unified method's `params` (rustTypedParamsParam) or, ral-47g, a venue
+     *  `*Request` helper's `params` proven a map by every in-file caller (rustHelperParamsProvenMap). */
+    rustProvenMapParam(d: any): boolean;
+    /** ral-47g: the trailing `params: Dict = {}` of a venue's own helper (createOrderRequest and the like), never
+     *  reassigned, not an override, whose every caller in the venue file, its pro file and each subclass that inherits
+     *  it passes a map or leaves it out (the `{}` default): the `sign` caller proof keyed on the helper name. A dynamic
+     *  `this[m] (..)` / `callDynamically` call, an extra argument or any unproven argument fails the venue closed. */
+    rustHelperParamsProvenMap(d: any): boolean;
+    /** The helper is called by name somewhere in its venue or pro file and is not a base Exchange method. */
+    rustHelperHasCaller(root: string, venue: string, name: string): boolean;
     private static readonly RUST_SIGN_MAP_PROOF;
     private static rustSignProofApi;
     /** A venue `sign (path, api, method, params)` whose `params` is a map on every path. `params` reaches `sign` only
@@ -3026,7 +3049,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  declared `Dict`, or a local whose every write is one of these. Any list literal, any dynamic `this[name] (..)`
      *  / `callDynamically` call, or anything else unproven fails the venue (fail closed). */
     rustSignParamsProvenMap(fn: any): boolean;
-    rustSignParamsProofUncached(root: string, venue: string): boolean;
+    rustSignParamsProofUncached(root: string, venue: string, target?: {
+        name: string;
+        at: number;
+    }): boolean;
     /** ral-40h: the method names a dynamic `this[m]` can hold, read syntactically: `const m = 'a' + k + 'b'` where `k` is
      *  `const k = this.safeString (L, ..)` over a `const L = { .. }` literal whose every value is a string literal (a
      *  missing key leaves `k` undefined, which the venue throws on before the call), or `m` itself a string literal. */
@@ -3225,6 +3251,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_WS_NIL_HASH;
     /** The hash patterns of `n`: segments are literal text or `null` (any text). */
     rustWsHashPatterns(n: any, depth: number, seen: Set<Node>): Array<Array<string | null>>;
+    /** ral-47h: the dispatch keys a handler local `const x = this.safeString (message, 'f')` can hold, or undefined.
+     *  Proof: x is never reassigned; `message` is the handler's unwritten second parameter; the handler is a method of a
+     *  ws venue class whose every `this.<handler>` mention is a value of the one `const methods = { 'k': this.h, .. }`
+     *  literal of `handleMessage (client, message)`; that literal is read only by `this.safeValue (methods, K)` with
+     *  K an unwritten `const K = this.safeString (message, 'f')` (same field, handleMessage's unwritten `message`),
+     *  and the result is an unwritten local used only as `m.call (this, client, message)`. */
+    rustWsDispatchKeyPatterns(declaration: any): Array<Array<string | null>> | undefined;
+    /** Whether a parameter is written in its function (assignment, ++/--, destructuring target). */
+    rustWsParamWritten(fn: any, param: any): boolean;
     /** `this.safeString (sub, 'k')` reads field k; `this.safeString (list, i)` / `list[i]` over `const list = this.safeList (sub, 'k', ..)`
      *  reads an element of field k. Undefined for any other shape. */
     rustWsSubscriptionKeyRead(init: any): {
