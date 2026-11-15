@@ -1110,7 +1110,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (counterTest !== undefined) return counterTest.startsWith('Value::Bool(') ? counterTest.slice('Value::Bool('.length, -1) : counterTest;
         const presence = this.printPresenceFlagTest(left, right, op); if (presence !== undefined) return presence;
         const nilLocal = this.printRustNilLocalEquality(left, right, op); if (nilLocal !== undefined) return nilLocal;
-        const bookTest = this.printWsBookNullTest(left, right, op); if (bookTest !== undefined) return bookTest;
+        const bookTest = this.printWsBookNullTest(left, right, op) ?? this.printWsFlightNullTest(left, right); if (bookTest !== undefined) return bookTest;
         const mapTest = this.printWsCacheMapNullTest(left, right, op); if (mapTest !== undefined) return mapTest;
         const cacheTest = this.printWsCacheNullTest(left, right, op) ?? this.printFilterRowsNullTest(left, right, op); if (cacheTest !== undefined) return cacheTest;
         const optContainer = this.printOptContainerNullTest(left, right, op) ?? this.printOptListNullTest(left, right, op) ?? this.printNilMapNullTest(left, right, op); if (optContainer !== undefined) return optContainer;
@@ -23384,7 +23384,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustWsFlightSource(init: any): boolean {
         const node: any = init === undefined ? undefined : this.unwrapParens(init);
         if (node === undefined) return false;
-        if (isCallExpression(node)) return isPropertyAccessExpression(node.expression) && isIdentifier(node.expression.expression) && this.rustWsFlightCall(node);
+        if (isCallExpression(node)) return (isPropertyAccessExpression(node.expression) && isIdentifier(node.expression.expression) && this.rustWsFlightCall(node)) || this.rustWsFlightSafeRead(node) !== undefined;
         if (!isElementAccessExpression(node) || this.isNativeWriteTargetBase(node)) return false;
         const access = this.rustClientHandleAccess(node.expression);
         return access !== undefined && !access.write && access.key === 'futures' && isIdentifier(node.argumentExpression);
@@ -23403,7 +23403,9 @@ export class RustTranspiler extends BaseTranspiler {
                     const settle = isPropertyAccessExpression(p) && p.expression === n && isCallExpression(p.parent) && p.parent.expression === p
                         && (p.name.text === 'resolve' || p.name.text === 'reject');
                     uses++;
-                    return (p?.kind === SyntaxKind.AwaitExpression && p.expression === n) || settle;
+                    // `this.safeValue(client.futures, k)` may be absent: its null test reads the handle's hash
+                    const test = this.rustWsFlightSafeRead(this.unwrapParens(declaration.initializer)) !== undefined && this.rustWsFlightNullTestOf(n) !== undefined;
+                    return (p?.kind === SyntaxKind.AwaitExpression && p.expression === n) || settle || test;
                 }) && uses > 0;
             }
             this.rustWsFlightLocals.set(declaration, known);
@@ -23411,8 +23413,46 @@ export class RustTranspiler extends BaseTranspiler {
         return known;
     }
 
+    /** `this.safeValue(client.futures, k)` on the planned handle with a literal or string-local key: the access and key. */
+    rustWsFlightSafeRead(node: any): { access: any, key: any } | undefined {
+        if (node === undefined || !isCallExpression(node) || node.arguments.length !== 2 || !isPropertyAccessExpression(node.expression)
+            || node.expression.expression.kind !== SyntaxKind.ThisKeyword || String(node.expression.name.text) !== 'safeValue' || !this.rustCalleeIsRuntimeBase(node)) return undefined;
+        const access = this.rustClientHandleAccess(this.unwrapParens(node.arguments[0]));
+        if (access === undefined || access.write || access.key !== 'futures') return undefined;
+        const key: any = this.unwrapParens(node.arguments[1]);
+        if (!((isStringLiteral(key) && !(key.text in this.StringLiteralReplacements)) || this.rustWsStrKey(key))) return undefined;
+        return { access, key };
+    }
+
+    /** `x === undefined` / `x !== undefined` on a flight local read through `safeValue`: whether it is the `!==` form. */
+    rustWsFlightNullTestOf(n: any): boolean | undefined {
+        let up: any = n;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        const p: any = up.parent;
+        if (p === undefined || !isBinaryExpression(p) || !this.isEqualityOp(p.operatorToken.kind)) return undefined;
+        const other = p.left === up ? p.right : p.left;
+        if (!this.rustWsCacheUndefined(other)) return undefined;
+        const op = p.operatorToken.kind;
+        return op === SyntaxKind.ExclamationEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken;
+    }
+
+    /** The null test of a flight local read through `safeValue`: an absent entry reads as the empty `Flight::default()`. */
+    printWsFlightNullTest(left: any, right: any): string | undefined {
+        const l: any = this.unwrapParens(left);
+        const r: any = this.unwrapParens(right);
+        const subject = this.rustWsCacheUndefined(r) ? l : (this.rustWsCacheUndefined(l) ? r : undefined);
+        if (subject === undefined || !isIdentifier(subject)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(subject);
+        if (declaration === undefined || !this.rustWsFlightLocal(declaration) || this.rustWsFlightSafeRead(this.unwrapParens(declaration.initializer)) === undefined) return undefined;
+        const ne = this.rustWsFlightNullTestOf(subject);
+        if (ne === undefined) return undefined;
+        return `(${super.printIdentifier(subject)} ${ne ? '!=' : '=='} ${RustTranspiler.RUST_FLIGHT_TYPE}::default())`;
+    }
+
     printWsFlightLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined {
         if (!this.rustWsFlightLocal(declaration)) return undefined;
+        const read = this.rustWsFlightSafeRead(this.unwrapParens(declaration.initializer));
+        if (read !== undefined) return `${indent}let mut ${varName}: ${RustTranspiler.RUST_FLIGHT_TYPE} = ${this.rustClientHandleReceiver(read.access.plan, false)}.get_future(${this.rustWsKeyText(read.key)})`;
         return `${indent}let mut ${varName}: ${RustTranspiler.RUST_FLIGHT_TYPE} = ${this.printNode(declaration.initializer, 0).trim()}`;
     }
 

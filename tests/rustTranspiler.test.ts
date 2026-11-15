@@ -17910,3 +17910,29 @@ describe('ral-51x: an optional string boxed into a map literal handed to a self 
         expect(out).toContain('let mut quote: Value = ');
     });
 });
+describe('ral-52x W1: a safeValue read of client.futures with a literal key is a Flight', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/ws/Client.ts': 'export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    resolve (result: any, messageHash: string): any { return result; }\n}\n',
+        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport default class Exchange {\n    safeValue (obj: any, key: any, d: any = undefined): any { return obj[key] ?? d; }\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n" +
+            "    handleAuth (client: Client, message: any) {\n        const future = this.safeValue (client.futures, 'authenticated');\n        if (future !== undefined) {\n            future.resolve (true);\n        }\n    }\n" +
+            "    handleOther (client: Client, message: any) {\n        const future = this.safeValue (client.futures, 'authenticated');\n        return future;\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-52x-w1-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('null-tested and settled: Flight read through the handle, presence on its hash', () => {
+        expect(out).toContain('let mut future: crate::pro::ws_client::Flight = __ch.get_future("authenticated")');
+        expect(out).toContain('if ((future != crate::pro::ws_client::Flight::default())) {');
+    });
+    test('negative: a local handed back whole stays Value', () => {
+        expect(out).toMatch(/fn handleOther[\s\S]*let mut future: Value = /);
+    });
+});
