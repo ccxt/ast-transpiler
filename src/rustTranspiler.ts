@@ -2251,6 +2251,8 @@ export class RustTranspiler extends BaseTranspiler {
             const keyStrs = keys.map((k, at) => (at < keys.length - 1 ? this.rustI64HelperKeyText(k) : undefined) ?? this.printNode(k, 0));
             for (const key of keyStrs.slice(0, -1)) acc = `get_value_mut(${acc}, &${key})`;
             const rhs = this.printNode(right, 0);
+            // ral-48b: a typed map local (`Dict` / `Option<Dict>`) written through the runtime helper (`impl AddTarget`)
+            if (keyStrs.length === 1 && this.rustAeoWrites.has(node)) return `add_element_to_object(${acc}, &${keyStrs[0]}, ${this.rustOwnedArgText(right, rhs.trim())})`;
             const nestedKeyWrite = keyStrs.length > 1 ? this.printNestedFieldKeyWrite(left, acc, ((owned) => owned.startsWith('\u0004') ? owned : RustTranspiler.cloneIfBareLocal(owned))(this.rustOwnedArgText(right, rhs.trim()))) : undefined; if (nestedKeyWrite !== undefined) return nestedKeyWrite;
             const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) ?? this.printReuseDynamicKeyWrite(left, right, rhs) ?? this.printNilMapKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
             const slotNested = keyStrs.length > 1 ? this.printSlotNestedInsert(left, right, this.rustOwnedArgText(right, rhs.trim())) : undefined; if (slotNested !== undefined) return slotNested;
@@ -19271,6 +19273,7 @@ export class RustTranspiler extends BaseTranspiler {
         let optAliasWrites = 0;
         const boxedElementUses: any[] = [];
         const indexReadUses: any[] = [];
+        const aeoWriteUses: any[] = [];
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
@@ -19364,6 +19367,10 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustUntilHeadKeyWrite(n) !== undefined && (extendReuse ? this.rustExtendReuseKeyWriteOk(n, declaration) : init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) === 'dict' || this.rustBuiltMapKeyWriteOk(n, init)))) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
             // ral-wf: a dynamic-key write on a reuse literal (untagged operands only): the helper's tag routes cannot fire
             if (extendReuse && this.rustReuseDynamicKeyWrite(n, declaration)) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
+            // ral-48b: `x['k'] = v` (statement, one level, literal key, the value not reading x) on a held map: the runtime
+            // `add_element_to_object` takes the typed map itself (`impl AddTarget for Dict / Option<Dict>`) and runs the very tag
+            // hooks (book meta, ws subscriptions, cache buckets) the boxed `Value::Dict` arm ran; `None` skips as `Null` did
+            if (!extendReuse && !sbAlias && this.rustAeoTargetWrite(n) && !this.rustAeoBoxedNative(n)) return aeoWriteUses.push(n) > 0 && ++reads > 0;
             const handed = () => (optAliasInit && this.rustLocalStoreHandOff(n) && !this.rustScalarInNestedWrite(n, true) && ++optionalBoxes > 0
                 || this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0
                 || this.rustBuiltReturnBoxUse(n, init, extendReuse) && ++defaultedBoxes > 0 || this.rustOptReaderBoxUse(n, init) && ++optionalBoxes > 0
@@ -19490,7 +19497,13 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-vf: a `safeDict` result shares the response's Arc; a key write copies on write in both forms (the helper's
         // `Arc::make_mut` too), and a store-read source is refused above, so no tagged write is lost
         if (init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) !== undefined && boxedElementUses.some((n: any) => !this.rustBoxLineOk(n))) return undefined;
-        if (keyWrites > 0) this.rustMutableBuiltLocals.add(declaration);
+        // ral-48b: helper writes need a map on every path (a list receiver wrote an index there); each line stays within 400
+        if (aeoWriteUses.length > 0 && (from !== 'dict' || aeoWriteUses.some((n: any) => !this.rustBuiltKeyWriteLineOk(n, 30)))) return undefined;
+        // the plain form turns a Null source into the empty map, where the boxed write was skipped: only a never-null source
+        if (aeoWriteUses.length > 0 && !optional && !(init !== undefined && (this.rustLentContainerSource(init)
+            || (isCallExpression(init) && this.rustBuiltReturnSourceKind(init) === 'dict')))) return undefined;
+        if (keyWrites > 0 && aeoWriteUses.length === 0) this.rustMutableBuiltLocals.add(declaration);
+        for (const n of aeoWriteUses) this.rustAeoWrites.add(n.parent.parent);
         // ral-ua: an all-declared `Promise<List>` optional list (never null-tested) reads its length through the slice (0 for `None`)
         const declaredListOnly = nilDeclared && from === 'list' && !mixed && nullTests === 0 && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes;
         if (castLengths > 0 && !declaredListOnly) return undefined;
@@ -20239,6 +20252,30 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustMutableBuiltLocals = new WeakSet<any>();
+
+    /** ral-48b: statement writes `x['k'] = v` printed as `add_element_to_object(&mut x, ..)` on a typed map local. */
+    private rustAeoWrites = new WeakSet<any>();
+
+    /** ral-48b: the boxed local's write is already a native insert (asked while the local's kind is pending, i.e. the
+     *  untyped view): that write is not a helper row, and its source proof is the native-insert rule's, not this one. */
+    rustAeoBoxedNative(n: any): boolean {
+        const access: any = n.parent;
+        try {
+            const key = this.printNode(access.argumentExpression, 0);
+            return (this.printNativeDictInsert(n, access.argumentExpression, key, 'x') ?? this.rustNativeDictInsert(n, access.argumentExpression, key, 'x')) !== undefined;
+        } catch (e) {
+            return true;
+        }
+    }
+
+    /** ral-48b: `n['k'] = v` (statement, literal non-digit key) whose value does not read `n`. */
+    rustAeoTargetWrite(n: any): boolean {
+        if (this.rustUntilHeadKeyWrite(n) === undefined) return false;
+        const write: any = n.parent.parent;
+        const name = String(n.text);
+        const reads = (x: any): boolean => (isIdentifier(x) && String(x.text) === name) || (x.forEachChild(reads) ?? false);
+        return !reads(write.right);
+    }
 
     /** The source statement of a box (`Value::Dict(x)`, +13 chars) leaves the printed line within 400 chars. */
     rustBoxLineOk(n: any): boolean {

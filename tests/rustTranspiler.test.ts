@@ -17124,3 +17124,18 @@ describe('ral-47c: a built list local named after its own method', () => {
         expect(out).not.toContain('let mut fetchMarkets: Value');
     });
 });
+
+describe('ral-48b: add_element_to_object on a typed map local (impl AddTarget)', () => {
+    test('a tagged subscription read null-tested and written at a literal key is an Option<Dict> that keeps the runtime write (ws hooks)', () => {
+        const dir = path.join (rustFixtureRoot, 'ral48b-aeo-target');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeInteger (o: any, k: any, d: number = undefined): number { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    tag (client: any, ts: number): number {\n        const sub = this.safeDict (client.subscriptions, 'ohlcv');\n        if (sub === undefined) {\n            return undefined;\n        }\n        const limit = this.safeInteger (sub, 'limit');\n        sub['nonce'] = ts;\n        return limit;\n    }\n    selfread (client: any): number {\n        const sub = this.safeDict (client.subscriptions, 'ohlcv');\n        if (sub === undefined) {\n            return undefined;\n        }\n        const limit = this.safeInteger (sub, 'limit');\n        sub['nonce'] = sub['limit'];\n        return limit;\n    }\n}\n");
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        const t = out.slice(out.indexOf('fn tag'), out.indexOf('fn selfread'));
+        expect(t).toContain('let mut sub: Option<crate::value::Dict> =');
+        expect(t).toContain('add_element_to_object(&mut sub, &Value::Str("nonce".into())');
+        const r = out.slice(out.indexOf('fn selfread'));
+        expect(r).toContain('let mut sub: Value =');
+    });
+});
