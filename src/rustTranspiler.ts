@@ -23587,6 +23587,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(init)) return this.rustBuiltListLocal(declaration);
         // ral-ra: a reassigned `[]`-defaulted `safeList*` read whose every write is a list producer is a built list too
         if (this.rustDefaultedListRead(init) && isIdentifier(declaration.name) && this.rustLocalIsReassigned(declaration, String(declaration.name.text))) return this.rustBuiltListLocal(declaration);
+        // ral-56s: a reassigned base `arrayConcat (a, b)` initializer whose every write is a list producer is a built list too
+        if (this.rustBuiltListConcatInit(init) && isIdentifier(declaration.name) && this.rustLocalIsReassigned(declaration, String(declaration.name.text))) return this.rustBuiltListLocal(declaration);
         if (!this.rustLentListSource(init)) return false;
         // a defaulted read boxes its shared handle only when it also has a length or index read
         const defaulted = this.rustDefaultedListRead(init);
@@ -26308,7 +26310,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1 || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
         if (/[\\/]test[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return false;
         const init: any = declaration.initializer;
-        const read = init !== undefined && this.rustDefaultedListRead(this.rustSkipWrappers(init));
+        // ral-56s: a base `arrayConcat (a, b)` initializer answers a `Value::Arr` on every path, like a `[]`-defaulted read
+        const read = init !== undefined && (this.rustDefaultedListRead(this.rustSkipWrappers(init)) || this.rustBuiltListConcatInit(this.rustSkipWrappers(init)));
         if (init === undefined || !read && (!isArrayLiteralExpression(init) || init.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement))) return false;
         const type: any = this.typeOfNodeIfAny(read ? init : declaration.name);
         if (type === undefined || !this.getChecker().isArrayType(type)) return false;
@@ -26427,6 +26430,13 @@ export class RustTranspiler extends BaseTranspiler {
                     handOffs++;
                     return true;
                 }
+                // ral-56s: copied whole into another nil-declared `Value` local (`info = x`, statement): the `Value` box was
+                // `x.clone()` (an Arc bump); `Value::Arr(x.clone())` is the same bump (later writes to `x` copy-on-write as before)
+                if (this.rustBuiltListValueAliasWrite(n, declaration) && short(n)) {
+                    boxes.push([n, 'clone']);
+                    handOffs++;
+                    return true;
+                }
                 if (isCallExpression(up) && up.expression !== n && up.arguments.some((a: any) => a === n)) {
                     const callee: any = up.expression;
                     if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || !short(n)
@@ -26450,6 +26460,31 @@ export class RustTranspiler extends BaseTranspiler {
         if (!safe || (natives === 0 && (handOffs === 0 || handOffs + boxes.filter(([b]) => isReturnStatement(b.parent) || (b.parent?.kind === SyntaxKind.AsExpression && isReturnStatement(b.parent.parent))).length !== boxes.length || boxes.some(([, form]) => form === 'clone')))) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         this.rustBuiltLists.add(declaration);
+        return true;
+    }
+
+    /** ral-56s: a base `this.arrayConcat (a, b)` (two operands, non-test tier): always a `Value::Arr`. */
+    rustBuiltListConcatInit(init: any): boolean {
+        if (init === undefined || !isCallExpression(init) || init.arguments.length !== 2 || !isPropertyAccessExpression(init.expression)
+            || init.expression.expression.kind !== SyntaxKind.ThisKeyword || String(init.expression.name.text) !== 'arrayConcat') return false;
+        return this.rustAlwaysListProducer(init);
+    }
+
+    /** ral-56s: `t = x` (statement) where `t` is a nil-declared (`let t: T = undefined` / `let t;`) local of the same function
+     *  that no rule types (it prints `Value`), so the write takes the boxed list. */
+    rustBuiltListValueAliasWrite(n: any, declaration: any): boolean {
+        const up: any = n.parent;
+        if (!isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(up.left)) return false;
+        const t: any = this.rustDeclarationOfIdentifier(up.left);
+        if (t === undefined || t === declaration || !isVariableDeclaration(t) || t.name === up.left || !isIdentifier(t.name)) return false;
+        if (this.rustEnclosingFunction(t) !== this.rustEnclosingFunction(declaration)) return false;
+        const list: any = t.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1 || (list.flags & NodeFlags.Const) !== 0) return false;
+        const init: any = t.initializer === undefined ? undefined : this.rustSkipWrappers(t.initializer);
+        if (init !== undefined && !(isIdentifier(init) && init.text === 'undefined') && init.kind !== SyntaxKind.NullKeyword) return false;
+        // the target must print `Value`: ask every typing rule that can take a nil-declared local
+        if (this.rustBorrowedPending.has(t) || this.rustBorrowedLocalKind(t) !== undefined || this.rustNilLocalKind(t) !== undefined || this.rustScalarLocalKind(t) !== undefined
+            || this.rustLentListLocal(t) || this.rustVecLocalIsTyped(t) || this.rustDictLocalIsTyped(t) || this.rustReadBearerKindOfDeclaration(t) !== false) return false;
         return true;
     }
 

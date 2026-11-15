@@ -19180,3 +19180,32 @@ describe('ral-55x K1: a safeString id inserted as a map key only under its own !
         expect(out).toContain('uniqueResult.insert(id.as_deref().unwrap_or(\"null\").to_string(), ');
     });
 });
+
+describe('ral-56s: arrayConcat accumulators held by an alias write or an arrayConcat initializer', () => {
+    const write = (dir: string, body: string) => {
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type NullableList = any[] | undefined;\nexport default class Exchange {\n    balance: any = {};\n    safeString (o: any, k: any, d: any = undefined): string { return o[k]; }\n    safeList (o: any, k: any, d: any = undefined): any[] { return o[k]; }\n    toArray (o: any): any[] { return Object.values (o); }\n    arrayConcat (a: any[], b: any[]): any[] { return a.concat (b); }\n    parseWsBalance (b: any) { return b; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, NullableList } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+    };
+    test('a list accumulator copied whole into a nil-declared Value local (`info = rawBalances`) is a List; the copy boxes `Value::Arr(x.clone())`', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-56s-alias');
+        write (dir, "    f (message: Dict, topic: string): any {\n        let info: NullableList = undefined;\n        let rawBalances: any[] = [];\n        if (topic === 'a') {\n            const data = this.safeList (message, 'data', []);\n            for (let i = 0; i < data.length; i++) {\n                const B = this.safeList (data[i], 'B', []);\n                rawBalances = this.arrayConcat (rawBalances, B);\n            }\n            info = rawBalances;\n        }\n        if (topic === 'b') {\n            info = this.safeList (message, 'data', []);\n        }\n        for (let i = 0; i < rawBalances.length; i++) {\n            this.parseWsBalance (rawBalances[i]);\n        }\n        this.balance['info'] = info;\n        return info;\n    }\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut rawBalances: crate::value::List = ');
+        expect(out).toContain('info = Value::Arr(rawBalances.clone());');
+        expect(out).toContain('let mut info: Value = Value::Null;');
+    });
+    test('an `arrayConcat (a, b)` initializer reassigned from arrayConcat and read by length / index is a List', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-56s-init');
+        write (dir, "    f (a: any, b: any, c: any): any {\n        let markets: Dict[] = this.arrayConcat (this.toArray (a), this.toArray (b));\n        markets = this.arrayConcat (markets, this.toArray (c));\n        const result = [];\n        for (let i = 0; i < markets.length; i++) {\n            const market = markets[i];\n            result.push (this.safeString (market, 'id'));\n        }\n        return result;\n    }\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut markets: crate::value::List = self\.arrayConcat\(.*\)\.into_list\(\);/);
+        expect(out).toMatch(/markets = self\.arrayConcat\(Value::Arr\(markets\), .*\)\.into_list\(\);/);
+    });
+    test('negative: an `arrayConcat` initializer also reassigned from a non-list read stays Value', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-56s-init-neg');
+        write (dir, "    f (a: any, b: any, c: any): any {\n        let markets: any[] = this.arrayConcat (this.toArray (a), this.toArray (b));\n        markets = c['x'];\n        return markets.length;\n    }\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).not.toContain('let mut markets: crate::value::List');
+    });
+});
