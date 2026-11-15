@@ -24999,7 +24999,10 @@ export class RustTranspiler extends BaseTranspiler {
             const init: any = decl.initializer === undefined ? undefined : this.rustSkipWrappers(decl.initializer);
             // ral-yc: an awaited venue result of this container kind (rustVenueContainerReturnKind) is held typed: lent too
             return init === undefined || isCallExpression(init) || isArrayLiteralExpression(init) || isObjectLiteralExpression(init) || this.literalKindOfNode(init) === 'null'
-                || (init.kind === SyntaxKind.AwaitExpression && isCallExpression(this.rustSkipWrappers(init.expression)) && this.rustVenueContainerReturnKind(this.rustSkipWrappers(init.expression)) !== undefined);
+                || (init.kind === SyntaxKind.AwaitExpression && isCallExpression(this.rustSkipWrappers(init.expression)) && this.rustVenueContainerReturnKind(this.rustSkipWrappers(init.expression)) !== undefined)
+                // ral-45a: an awaited implicit endpoint declared `Promise<Dict>` / `Promise<List>` of this slot's kind (held
+                // typed by rustDeclaredEndpointKind) is handed whole: lent too, so the caller boxes nothing
+                || (init.kind === SyntaxKind.AwaitExpression && isCallExpression(this.rustSkipWrappers(init.expression)) && this.rustDeclaredEndpointKind(this.rustSkipWrappers(init.expression)) === kind);
         };
         // ral-tf: a hash / topic list slot binds only where a caller holds a list that is not already a `Vec` (which boxes anyway)
         const hashList = RustTranspiler.RUST_LENT_HASH_LIST_METHODS.has(name) && this.rustScalarListTypeNode(type);

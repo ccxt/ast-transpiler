@@ -16005,6 +16005,23 @@ describe('ral-43a: a declared endpoint answer read natively and handed on whole 
     });
 });
 
+describe('ral-45a: a declared Promise<List> endpoint answer handed whole to a per-venue list slot is lent', () => {
+    test('parseBalanceList (response: Dict[]) takes impl Into<crate::Value> and the held List is lent as &response', () => {
+        const dir = path.join (rustFixtureRoot, 'r45a-endpoint-venue-list');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    privateGetAccounts (params = {}): Promise<List> { return this.hold (params); }\n    privateGetAny (params = {}): Promise<Dict | List> { return this.hold (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends venueApi {\n    parseBalanceList (response: Dict[]): Dict {\n        const result: Dict = { 'info': response };\n        for (let i = 0; i < response.length; i++) {\n            const balance = this.safeDict (response, i, {});\n            const code = this.safeString (balance, 'code');\n            result[code] = balance;\n        }\n        return result;\n    }\n    async fetchBalance (params: Dict = {}) {\n        const response = await this.privateGetAccounts (params);\n        return this.parseBalanceList (response);\n    }\n    async fetchOther (params: Dict = {}) {\n        const other = await this.privateGetAny (params);\n        return this.parseBalanceList (other);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('fn parseBalanceList(&self, response: impl Into<crate::Value>)');
+        expect(out).toContain('let mut response: crate::value::List = ');
+        expect(out).toContain('self.parseBalanceList(&response)');
+        // negative: a Dict | List answer keeps its box
+        expect(out).not.toContain('let mut other: crate::value::List = ');
+    });
+});
+
 describe('ral-43a: a logical over bool scalar locals is a bool local boxed once at its sink', () => {
     test('`swap || future` and `!swap` over native bool locals print bool and box at the literal value', () => {
         const dir = path.join (rustFixtureRoot, 'r43a-bool-logical');
