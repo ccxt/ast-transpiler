@@ -4844,7 +4844,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' ? !this.rustErrMsgMoves(n, declaration) : !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'parg' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -4903,7 +4903,10 @@ export class RustTranspiler extends BaseTranspiler {
         // a reader-default string re-boxed anywhere but a moving `return` would copy where the `Value` moved
         const readerTouched = this.rustReaderDefaultTouched(declaration);
         // a reader string copied at a box is lent there (`Value::from(x.as_deref())`: the copy the `Value` clone made)
-        const readerLent = readerTouched && strKind && boxed > 0 && copied > 0 && !this.rustStrNoLend && this.rustReaderLendBoxes(declaration);
+        // ral-56f: an `Option<String>` reader local in a non-test source also lends at native options-field insert keys
+        // (rustPlainFieldInsertKey: the printer owns the key text) and at copies into a jointly decided string local
+        const readerLent = readerTouched && strKind && boxed > 0 && copied > 0 && !this.rustStrNoLend
+            && (this.rustReaderLendBoxes(declaration) || (kind === 'ostr' && !this.rustTestTierSource(declaration) && this.rustReaderLendBoxes(declaration, true, false, true)));
         if (readerTouched && strKind && ((boxed > 0 && copied > 0 && !readerLent) || this.rustReaderStrHandedOn(declaration))) return undefined;
         if (readerLent) this.rustStrLentLocals.add(declaration);
         // ud: a local seeded from a venue override of a native-`Str` base method never copies where the `Value` moved
@@ -4924,7 +4927,7 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustStrLentLocals.add(declaration);
         }
         // a keyed optional string whose copying boxes all sit where the `Value` cloned is lent there instead
-        const keyLent = !this.rustStrNoLend && this.rustScalarOptKeyCostly(declaration, kind) && this.rustReaderLendBoxes(declaration, true);
+        const keyLent = !this.rustStrNoLend && this.rustScalarOptKeyCostly(declaration, kind) && (this.rustReaderLendBoxes(declaration, true) || (readerLent && kind === 'ostr' && !this.rustTestTierSource(declaration) && this.rustReaderLendBoxes(declaration, true, false, true)));
         if (this.rustScalarOptKeyCostly(declaration, kind) && !keyLent) return undefined;
         if (keyLent) this.rustStrLentLocals.add(declaration);
         // a market-field string boxed before its last use copies the field where the `Value` was shared
@@ -5041,13 +5044,14 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Every non-moving box of the string is a slot where the `Value` form cloned it (a `this.`/`super.` argument,
      *  an object-literal value, a dict write or an array element), so lending there adds no copy. */
-    rustReaderLendBoxes(declaration, nativeKeys = false, preciseSlots = false): boolean {
+    rustReaderLendBoxes(declaration, nativeKeys = false, preciseSlots = false, copyDecls = false): boolean {
         let ok = true;
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
             const form = this.rustScalarUseForms.get(n);
             // a native insert key borrows the local (`as_deref`); a helper-write key would copy it
             // ral-53i: likewise a key of the two-level bearer's own bucket seed / insert (rustNestedBearerWriteKey: one key text either way)
-            if (form === 'err' || (form === 'key' && !(nativeKeys && (this.rustScalarInsertKeyUse(n) || this.rustNestedBearerKeySlot(n) || this.rustPlainFieldInsertKey(n))))) ok = false;
+            // ral-56f: in the copy-decl mode only the printer-owned options-field insert key lends (rustPlainFieldInsertKey)
+            if (form === 'err' || (form === 'key' && !(nativeKeys && (copyDecls ? this.rustPlainFieldInsertKey(n) : (this.rustScalarInsertKeyUse(n) || this.rustNestedBearerKeySlot(n) || this.rustPlainFieldInsertKey(n)))))) ok = false;
             if (form !== 'box' && form !== 'xbox') return true;
             const up: any = n.parent;
             if (isReturnStatement(up) || this.rustLocalLastUse(n, declaration)) return true;
@@ -5055,7 +5059,10 @@ export class RustTranspiler extends BaseTranspiler {
                 && (up.expression.expression.kind === SyntaxKind.ThisKeyword || up.expression.expression.kind === SyntaxKind.SuperKeyword);
             const precise = preciseSlots && isCallExpression(up) && up.expression !== n && isPropertyAccessExpression(up.expression)
                 && isIdentifier(up.expression.expression) && String(up.expression.expression.text) === 'Precise';
-            const slot = selfArg || precise || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n) || this.rustDictWriteValue(n)
+            // ral-56f: `const y = x` into a string candidate of the same function decided with the local (rustStrHandOffDecided
+            // `solved`): the typed copy is the copy the `Value` clone made (binance pro keepAliveListenKey `urlType = type`)
+            const copyDecl = copyDecls && isVariableDeclaration(up) && up.initializer === n && this.rustStrHandOffDecided(n, n, declaration).solved;
+            const slot = selfArg || precise || copyDecl || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n) || this.rustDictWriteValue(n)
                 || (isArrayLiteralExpression(up) && !(isBinaryExpression(up.parent) && up.parent.left === up));
             if (!slot) ok = false;
             return true;
@@ -7662,6 +7669,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-53i: k1 / k2 of `x[k1][k2] = v` on a typed two-level local map: the printer's own
         // `entry(k1).or_default().insert(k2, ..)` takes the key text (rustNestedBearerWriteKey), no ccxt pass reads it
         if ((kind === 'str' || kind === 'ostr') && this.rustUdNestedBearerKey(n)) return 'key';
+        // ral-56f: the one upper key of `this.balance|options[k][k2] = v` whose bucket entry the printer prints itself
+        if ((kind === 'str' || kind === 'ostr') && this.rustNestedFieldUpperKeyUse(n)) return 'ukey';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -8248,11 +8257,18 @@ export class RustTranspiler extends BaseTranspiler {
             return 'key';
         }
         if (this.rustOkeyReadUse(wrapped)) return 'frd';
+        // ral-56f: the read inside the value of `this.F[k] = this.m (this.F[k])` (rustFieldBucketReread): the value is bound
+        // before the insert, so the borrowed read never overlaps the `&mut self.F` write
+        if (this.rustFieldBucketRereadUse(wrapped, up)) return 'frd';
         if (!isBinaryExpression(write) || write.left !== up || write.operatorToken.kind !== SyntaxKind.EqualsToken
             || write.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
         // the value operand must not read the key local (the insert takes it by name)
         // wg: unless the key is a borrowed element (`Option<&str>` is Copy: the value reads it, the insert builds the owned key)
         if (new RegExp(`\\b${String(n.text)}\\b`).test(String(write.right.getText()))) {
+            // ral-56f: `this.F[k] = this.m (this.F[k])` (the value only reads the same field bucket; the printer binds the value
+            // first, `{ let __be_tmp = ..; .. insert(<k text>, __be_tmp) }`), for a key that is the upper key of the field's
+            // two-level writes (rustNestedFieldUpperKeyUse): k is read, never written, by the value
+            if (this.rustFieldBucketReread(n, up, write.right)) return 'key';
             if (!this.rustBorrowStrElemShape(this.rustDeclaredNode(n))) return undefined;
             this.rustWgKeyReadInValue.add(n);
         }
@@ -8663,6 +8679,24 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustSafeStrNoDefaultKey(upper.argumentExpression);
     }
 
+    /** ral-56f: `n` is the one upper key of a statement write `this.F[n][k2] = v` (F balance / options, non-test) whose last
+     *  key is a string literal or an `nkey` local and whose value never names `n`: printNestedFieldKeyWrite prints the
+     *  bucket entry (`entry(<n key text>).or_insert(Null)`) and the insert itself, so no ccxt pass reads a boxed `&n`. */
+    rustNestedFieldUpperKeyUse(n: any): boolean {
+        const keyNode = this.rustKeyWrapped(n);
+        const upper: any = keyNode.parent;
+        if (!isElementAccessExpression(upper) || upper.argumentExpression !== keyNode || !isPropertyAccessExpression(upper.expression)) return false;
+        // an int37 upper key keeps 54k's own entry form (rustNestedFieldEntryKey, `stringify_param(&k1)`): one key path
+        if (this.rustSafeStrNoDefaultKey(keyNode) !== undefined) return false;
+        const access: any = upper.parent;
+        if (!isElementAccessExpression(access) || access.expression !== upper || !this.rustNestedFieldChain(access)) return false;
+        const write: any = access.parent;
+        if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const last: any = this.rustSkipWrappers(access.argumentExpression);
+        if (!isStringLiteral(last) && !(isIdentifier(last) && this.rustNestedFieldKeyUse(last))) return false;
+        return !new RegExp(`\\b${String(n.text)}\\b`).test(String(write.right.getText()));
+    }
+
     /** `this.F[..]['lit'] = n` (statement): the value slot of a nested plain-field insert. */
     rustNestedFieldValueUse(n: any): boolean {
         const write: any = n.parent;
@@ -8674,6 +8708,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Assignment hook: the r05 insert of a nested plain-field write keyed by a typed string local. */
     printNestedFieldKeyWrite(left: any, acc: string, value: string): string | undefined {
+        const upperTyped = this.printNestedFieldUpperKeyWrite(left, acc, value);
+        if (upperTyped !== undefined) return upperTyped;
         const key: any = this.rustSkipWrappers(left.argumentExpression);
         if (!isIdentifier(key) || this.rustScalarUseForms.get(key) !== 'nkey') return undefined;
         const kind = this.rustScalarLocalOf(key)?.kind;
@@ -8691,6 +8727,36 @@ export class RustTranspiler extends BaseTranspiler {
             : `if let Value::Dict(__r05d) = ${acc} { std::sync::Arc::make_mut(__r05d).insert(${keyText}, ${value}); }`;
         // over the line budget ccxt's r05 keeps the helper: lend the key to it (`From<Option<&str>>`, the one allocation)
         if (insert.split('\n')[0].length + 40 > 400) return `add_element_to_object(${acc}, &Value::from(${name}${kind === 'str' ? '.as_str()' : '.as_deref()'}), ${value})`;
+        return insert;
+    }
+
+    /** ral-56f: the bucket entry of a `ukey` upper key (rustNestedFieldUpperKeyUse), keyed by the local's own text (the
+     *  string `stringify_param` made of the boxed local, `"null"` for `None`); a value reading `self` is bound first. Over
+     *  the line budget the helper chain takes the key as a `Value` (`From<Option<&str>>`, the one allocation). */
+    printNestedFieldUpperKeyWrite(left: any, acc: string, value: string): string | undefined {
+        const upperAccess: any = left.expression;
+        const upper: any = isElementAccessExpression(upperAccess) ? this.rustSkipWrappers(upperAccess.argumentExpression) : undefined;
+        if (upper === undefined || !isIdentifier(upper) || this.rustScalarUseForms.get(upper) !== 'ukey') return undefined;
+        const ukind = this.rustScalarLocalOf(upper)?.kind;
+        const uname = super.printIdentifier(upper);
+        const field = String(upperAccess.expression.name.text);
+        if ((ukind !== 'str' && ukind !== 'ostr') || acc !== `get_value_mut(&mut self.${field}, &${uname})`) return undefined;
+        const upperText = ukind === 'str' ? `${uname}.to_string()` : `${uname}.as_deref().unwrap_or("null").to_string()`;
+        const last: any = this.rustSkipWrappers(left.argumentExpression);
+        const lkind = isIdentifier(last) ? this.rustScalarLocalOf(last)?.kind : undefined;
+        const lname = isIdentifier(last) ? super.printIdentifier(last) : '';
+        const lastText = isStringLiteral(last) ? `${JSON.stringify(String(last.text))}.to_string()`
+            : this.rustScalarUseForms.get(last) !== 'nkey' ? undefined : lkind === 'str' ? `${lname}.to_string()` : lkind === 'ostr' ? `${lname}.as_deref().unwrap_or("null").to_string()` : undefined;
+        if (lastText === undefined) return undefined;
+        const bound = /\bself\b/.test(value);
+        const chain = `if let Value::Dict(__bf03d0) = &mut self.${field} { let __bf03e1 = std::sync::Arc::make_mut(__bf03d0).entry(${upperText}).or_insert(Value::Null); `
+            + `if let Value::Dict(__r05d) = __bf03e1 { std::sync::Arc::make_mut(__r05d).insert(${lastText}, ${bound ? '__be_tmp' : value}); } }`;
+        const insert = bound ? `{ let __be_tmp = ${value}; ${chain} }` : chain;
+        // the entry form is shorter than the ccxt bf03 text it replaces (`stringify_param(&k)`); 10 chars of headroom for renames
+        if (insert.split('\n').some((l) => l.length + 10 > 400)) {
+            const lastKey = isStringLiteral(last) ? `Value::Str(${JSON.stringify(String(last.text))}.into())` : `Value::from(${lname}${lkind === 'str' ? '.as_str()' : '.as_deref()'})`;
+            return `add_element_to_object(get_value_mut(&mut self.${field}, &Value::from(${uname}${ukind === 'str' ? '.as_str()' : '.as_deref()'})), &${lastKey}, ${value})`;
+        }
         return insert;
     }
 
@@ -8982,6 +9048,44 @@ export class RustTranspiler extends BaseTranspiler {
             && isCallExpression(call) && call.expression === access;
     }
 
+    /** ral-56f: `read` (`this.F[k]`) is an argument of a `this.` call that is the whole value of the statement write
+     *  `this.F[k] = this.m (.., this.F[k], ..)` whose key admits the bucket reread. */
+    rustFieldBucketRereadUse(wrapped: any, read: any): boolean {
+        const call: any = read.parent;
+        if (!isCallExpression(call) || !call.arguments.includes(read) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const write: any = call.parent;
+        if (!isBinaryExpression(write) || write.right !== call || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const target: any = write.left;
+        if (!isElementAccessExpression(target) || String(target.expression.getText()) !== String(read.expression.getText())) return false;
+        const tkey: any = this.rustSkipWrappers(target.argumentExpression);
+        return isIdentifier(tkey) && String(tkey.text) === String(this.rustSkipWrappers(wrapped).text) && this.rustFieldBucketReread(tkey, target, call);
+    }
+
+    /** ral-56f: every read of `k` in `value` is `this.F[k]` on the written field (no write of `k`), and some other use of
+     *  `k` is a two-level upper key of the same field (rustNestedFieldUpperKeyUse). Non-test sources. */
+    rustFieldBucketReread(n: any, access: any, value: any): boolean {
+        if (this.rustTestTierSource(n) || !isPropertyAccessExpression(access.expression)) return false;
+        const field = String(access.expression.getText());
+        const key = String(n.text);
+        let ok = true;
+        const visit = (m: any) => {
+            if (!ok) return;
+            if (isIdentifier(m) && String(m.text) === key) {
+                const a: any = this.rustKeyWrapped(m).parent;
+                if (!isElementAccessExpression(a) || a.argumentExpression !== this.rustKeyWrapped(m) || String(a.expression.getText()) !== field
+                    || (isBinaryExpression(a.parent) && a.parent.left === a)) ok = false;
+            }
+            m.forEachChild?.(visit);
+        };
+        visit(value);
+        if (!ok) return false;
+        const declaration: any = this.rustDeclaredNode(n);
+        if (declaration === undefined || !isVariableDeclaration(declaration)) return false;
+        let upper = false;
+        this.rustLocalUsesAll(declaration, key, false, (u: any) => { if (this.rustNestedFieldUpperKeyUse(u)) upper = true; return true; });
+        return upper;
+    }
+
     /** wg: field-write keys whose write value also reads the key (admitted only for a borrowed element). */
     private rustWgKeyReadInValue = new WeakSet<any>();
 
@@ -9196,7 +9300,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'parg' && this.rustInArrayNeedle(node)) return `&${super.printIdentifier(node)}`;
         // zd: a cache-constructor size boxes the `Copy` integer itself, so no argument pass clones a bare name there
         if ((form === 'box' || form === 'targ') && (local.kind === 'int' || local.kind === 'oint') && this.rustCacheCtorLimitArg(node, local.kind)) return `Value::from(${super.printIdentifier(node)})`;
-        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'parg') return super.printIdentifier(node);
+        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg') return super.printIdentifier(node);
         if (form === 'err') return this.rustErrMsgMoves(node, local.declaration) ? super.printIdentifier(node) : `${super.printIdentifier(node)}.clone()`;
         if (form === 'inbox') return local.kind === 'ostr' ? `Value::from(&${super.printIdentifier(node)})` : `Value::from(${super.printIdentifier(node)}.as_str())`;
         if (form !== 'box' && form !== 'xbox') return undefined;
