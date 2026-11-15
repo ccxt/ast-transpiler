@@ -19299,6 +19299,9 @@ export class RustTranspiler extends BaseTranspiler {
                 if (sbAlias && this.rustParamsAliasWrite(rhs, declaration) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
                 writes++;
                 if (this.literalKindOfNode(rhs) === 'null') return ++nullWrites > 0;
+                // ral-48d: `x = this.omit (x, k)` keeps the container's kind (Null stays Null, a map stays a map; the optional
+                // map is lent to `impl OmitSource for &Option<Dict>` and taken back with `into_opt_dict()`)
+                if (nilDeclared && String(fn?.name?.text ?? '') !== 'sign' && this.rustHandedSelfOmit(rhs, declaration) && this.rustOmitLineFits(rhs) && String(rhs.getText()).split('\n')[0].length <= 240) return true;
                 // ral-yh: a `safeDict*` / `safeList*` local rewritten only with its own kind: a tag-free map literal / a list
                 // literal, or a base builder that answers that container on every path (`arrayConcat`, `filterBy`, `extend`, ..)
                 if (!nilDeclared && (from === 'dict' || from === 'list') && this.rustSameKindRewrite(rhs, from)) return String(rhs.getText()).split('\n')[0].length <= 240;
@@ -19973,6 +19976,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustLentEndpointSlot(call, arg, from)) return true;
         if (this.rustLentWsSettleSlot(call, arg)) return true;
         if (RustTranspiler.RUST_LIST_TELLING_SLOTS.has(String(call.expression?.name?.text ?? '')) && init !== undefined && this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_OMIT) && !this.rustOmitOfDict(init)) return false;
+        // ral-48d: `sign`'s params may carry a list body, which `omit` hands through and `into_opt_dict()` would read as None
+        if (String(call.expression?.name?.text ?? '') === 'omit' && init !== undefined && this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_OMIT) && !this.rustOmitOfDict(init)
+            && String(this.rustEnclosingFunction(call)?.name?.text ?? '') === 'sign') return false;
         return this.rustLentHelperSlot(call, arg, from) && RustTranspiler.RUST_LENT_OPTIONAL_HELPERS.has(String(call.expression.name.text));
     }
 
@@ -19985,7 +19991,10 @@ export class RustTranspiler extends BaseTranspiler {
     // (`sign`'s `params`) still lends there; `json` keeps its own never-null guard.
     private static readonly RUST_LIST_TELLING_SLOTS = new Set([ 'isEmpty' ]);
 
-    private static readonly RUST_LENT_OPTIONAL_HELPERS = new Set([ 'toArray', 'arrayConcat', 'json', 'urlencode', 'rawencode', 'urlencodeNested', 'urlencodeWithArrayRepeat', 'isEmpty' ]);
+    private static readonly RUST_LENT_OPTIONAL_HELPERS = new Set([ 'toArray', 'arrayConcat', 'json', 'urlencode', 'rawencode', 'urlencodeNested', 'urlencodeWithArrayRepeat', 'isEmpty',
+        // ral-48d: `omit` takes an optional map lent (`impl OmitSource for &Option<Dict>`): `None` answers `Value::Null`
+        // exactly as the boxed Null passed through, `Some(m)` drops keys from the shared map (copy-on-write)
+        'omit' ]);
 
     /** `this.parseX (x as Dict, ..)`: the assertion only retypes the TS side, the argument lands in the same lent slot. */
     rustLentAsHandOff(asArg: any, init: any, from: 'dict' | 'list' | 'api' | undefined, endpoint: boolean, nilDeclared: boolean): boolean {
@@ -20003,12 +20012,20 @@ export class RustTranspiler extends BaseTranspiler {
     /** Every never-null lent use of an optional local lands in a slot that also takes the optional form. */
     rustLentOptionalOk(declaration: any, name: string, fn: any, init: any, from: 'dict' | 'list' | 'api' | undefined): boolean {
         if (from !== 'dict' && from !== 'list') return false;
+        // ral-48d: a proven-map initialiser stays on the handed plain-map rule (ral-ra)
+        const provenInit = this.rustHandedDictLocal(declaration);
+        const unprovenOmit = init !== undefined && this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_OMIT) && !this.rustOmitOfDict(init);
         return this.rustLocalUsesAll(declaration, name, false, (n: any) => {
             if (this.rustIdentifierIsPropertyName(n) || !this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return true;
             const up: any = n.parent;
             if (isAsExpression(up)) return true;
             if (!isCallExpression(up) || !Array.from(up.arguments).includes(n)) return true;
             if (this.rustLentResponseSlot(up, n) || this.rustLentEndpointSlot(up, n, from) || this.rustLentWsSettleSlot(up, n)) return true;
+            // ral-48d: the sole extra operand of a base `extend` takes the optional map lent too (ral-40a MergeOperands)
+            if (from === 'dict' && this.rustOptExtendOperandUse(n) && !provenInit) return true;
+            // ral-48d never-list guard: an omit of an unproven head (a list body passes through) never reaches a slot that
+            // tells a list from the empty map, and never inside `sign` (whose params may be a list body)
+            if ((unprovenOmit || String(fn?.name?.text ?? '') === 'sign') && (RustTranspiler.RUST_LIST_TELLING_SLOTS.has(String((up as any).expression?.name?.text ?? '')) || String(fn?.name?.text ?? '') === 'sign')) return false;
             return !this.rustLentHelperSlot(up, n, from) || RustTranspiler.RUST_LENT_OPTIONAL_HELPERS.has(String(up.expression.name.text));
         });
     }

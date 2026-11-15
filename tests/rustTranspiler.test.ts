@@ -17159,3 +17159,17 @@ describe('ral-48e: a []-defaulted safeList local written row by row is a held Li
         expect(text).toContain('let mut both: Value =');
     });
 });
+
+describe('ral-48d: an optional map rewritten by omit of itself and lent to omit / extend', () => {
+    test('a nil-declared safeDict local rewritten `p = this.omit (p, k)` and lent to extend is Option<Dict>; an omit of an unproven params lent to omit is Option<Dict> outside sign', () => {
+        const dir = path.join (rustFixtureRoot, 'r48d-omit-optional');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any, y: any = undefined): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o; }\n    omit (x: any, k: any): any { return x; }\n    extend (...args: any[]): any { return args[0]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchThing (id: string, params = {}) {\n        let params2 = undefined;\n        params2 = this.safeDict (this.hold (params), 1, {});\n        const c = this.safeString (params2, 'c');\n        if (c !== undefined) {\n            params2 = this.omit (params2, 'c');\n        }\n        return this.hold (this.extend ({ 'id': id }, params2));\n    }\n    async cancelThing (id: string, params: any = {}) {\n        let query = this.omit (params, [ 'a', 'b' ]);\n        const c = this.safeString (query, 'c');\n        if (c !== undefined) {\n            query = this.omit (query, [ 'c' ]);\n        }\n        return this.hold (this.extend ({ 'id': id }, query));\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut params2: Option<crate::value::Dict> = None;');
+        expect(out).toContain('params2 = self.omit(&params2, ');
+        expect(out).toContain('let mut query: Option<crate::value::Dict> = self.omit(');
+        expect(out).toContain('query = self.omit(&query, ');
+    });
+});
