@@ -7606,10 +7606,30 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.InKeyword && parent.left === n) {
             return this.rustFieldKeyReceiver(this.rustStripWrappers(parent.right)) !== undefined ? 'fin' : undefined;
         }
-        if (!isElementAccessExpression(parent) || parent.argumentExpression !== n || this.rustFieldKeyReceiver(parent.expression) === undefined) return undefined;
-        const write: any = parent.parent;
-        if (this.rustOkeyReadUse(n)) return 'frd';
-        if (!isBinaryExpression(write) || write.left !== parent || write.operatorToken.kind !== SyntaxKind.EqualsToken
+        // ral-46b: a key written `this.f[k as string]` / `this.f[(k)]` (or tested `(k as string) in this.f`) is `k` itself:
+        // the cast and parens print nothing, so the typed key reads, tests and inserts exactly as the bare one
+        const wrapped: any = this.rustKeyWrapped(n);
+        const up: any = wrapped.parent;
+        if (wrapped !== n && isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.InKeyword && up.left === wrapped) {
+            return this.rustFieldKeyReceiver(this.rustStripWrappers(up.right)) !== undefined ? 'fin' : undefined;
+        }
+        if (!isElementAccessExpression(up) || up.argumentExpression !== wrapped) return undefined;
+        const write: any = up.parent;
+        // ral-46b: a checker dict-shaped field (`fundingRates: Dictionary<FundingRate>`) takes the same native insert
+        // (rustDictShapedFieldInsert: `if let Value::Dict(__d) = &mut self.f { .. insert(<key text>, ..) }`), so a typed key
+        // is a plain insert key there; its reads and `in` tests keep the boxed key
+        if (this.rustFieldKeyReceiver(up.expression) === undefined) {
+            if (!this.rustDictShapedFieldInsert(up.expression) || !isBinaryExpression(write) || write.left !== up || write.operatorToken.kind !== SyntaxKind.EqualsToken
+                || write.parent?.kind !== SyntaxKind.ExpressionStatement || new RegExp(`\\b${String(n.text)}\\b`).test(String(write.right.getText()))) return undefined;
+            // a no-default safeString-family reader is retyped after printing by the ccxt `_opt` reader pass (see ya): leave it there
+            const source: any = this.rustDeclaredNode(n);
+            const init: any = source !== undefined && isVariableDeclaration(source) ? this.unwrapParens(source.initializer) : undefined;
+            const reader = init !== undefined && isCallExpression(init) ? this.rustNilSelfHelperName(init) : undefined;
+            if (reader !== undefined && RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(reader) && init.arguments.length <= (RustTranspiler.RUST_SAFE_STRING_KEY_ARGS[reader] ?? 2)) return undefined;
+            return 'key';
+        }
+        if (this.rustOkeyReadUse(wrapped)) return 'frd';
+        if (!isBinaryExpression(write) || write.left !== up || write.operatorToken.kind !== SyntaxKind.EqualsToken
             || write.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
         // the value operand must not read the key local (the insert takes it by name)
         // wg: unless the key is a borrowed element (`Option<&str>` is Copy: the value reads it, the insert builds the owned key)
@@ -7622,7 +7642,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Element-access hook: `this.f[k]` read with a typed string key. */
     printFieldKeyRead(node: any): string | undefined {
-        const key: any = node.argumentExpression;
+        const key: any = this.rustSkipWrappers(node.argumentExpression);
         if (!isIdentifier(key) || this.rustScalarUseForms.get(key) !== 'frd') return undefined;
         const kind = this.rustScalarLocalOf(key)?.kind;
         const field = this.rustFieldKeyReceiver(node.expression);
@@ -7677,7 +7697,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (form === 'fin' && this.rustWsBookKeyOf(n) && isCallExpression(this.rustWsBookKeyParent(n))) return true;
             // so is a `safeValue (this.<cache map>, k)` key (trades, positionsByType)
             if (form === 'fin' && isCallExpression(this.rustWsBookKeyParent(n)) && this.rustWsCacheMapLookup(this.rustWsBookKeyParent(n)) && this.rustWsCacheMapField(this.rustWsBookKeyParent(n).arguments[0])) return true;
-            if (form === 'fin' || form === 'frd' || (form === 'key' && this.rustFieldKeyReceiver(n.parent?.expression) !== undefined)) field = true;
+            if (form === 'fin' || form === 'frd' || (form === 'key' && this.rustFieldKeyReceiver(this.rustKeyWrapped(n).parent?.expression) !== undefined)) field = true;
             // rf: a native insert key takes the key text (`as_deref().unwrap_or("null").to_string()`), the one allocation
             // `stringify_param` made for the boxed key: no copy where the `Value` moved
             else if (form === 'key' && RustTranspiler.RUST_PRO_TIER_FILE.test(String(n.getSourceFile().fileName)) && this.rustLiteralKeyReceiver(n) && this.rustScalarInsertKeyUse(n)) return true;
@@ -10044,7 +10064,9 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = isIdentifier(key) && this.rustScalarUseForms.get(key) === 'key' ? this.rustScalarLocalOf(key)?.kind : undefined;
         if (kind === 'ostr') return this.rustScalarOptKeyText(key);
         // a field insert copies the key text like the `stringify_param` it replaces (one allocation either way)
-        if (kind === 'str' && this.rustFieldKeyReceiver(key.parent?.expression) !== undefined) return `${super.printIdentifier(key)}.to_string()`;
+        // ral-46b: likewise a dict-shaped field insert (`fundingRates`): the same native insert, the same one key allocation
+        const keyField: any = this.rustKeyWrapped(key).parent?.expression;
+        if (kind === 'str' && (this.rustFieldKeyReceiver(keyField) !== undefined || this.rustDictShapedFieldInsert(keyField))) return `${super.printIdentifier(key)}.to_string()`;
         return kind === 'str' ? `${super.printIdentifier(key)}.clone()` : undefined;
     }
 

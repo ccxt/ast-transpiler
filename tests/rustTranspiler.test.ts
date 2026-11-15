@@ -16732,3 +16732,47 @@ describe('ral-46a lift 1: a string local initialised from `incrementingNonce().t
         expect(out).toContain('let mut randomPart: Value');
     });
 });
+
+describe('ral-46b lift 1: a string local keying a plain cache field through `k as string` keeps its type', () => {
+    const t46 = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, '46b-cast-field-key');
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    tickers: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    parseWsTicker (x: any): Dict { return x; }\n    resolve (x: any, h: string): void { }\n}\n";
+    const venue = (body: string) => "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), venue (body));
+        return t46.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    test('cast key on insert and read, then a concat', () => {
+        const out = run ("    handleTicker (channel: string, raw: any) {\n        const ticker = this.parseWsTicker (raw);\n        const symbol = this.safeString (ticker, 'symbol', '');\n        this.tickers[(symbol as string)] = ticker;\n        const messageHash = channel + ':' + symbol;\n        this.resolve (this.tickers[symbol as string], messageHash);\n    }\n");
+        expect(out).toContain('let mut symbol: String = ');
+        expect(out).not.toContain('let mut symbol: Value');
+        expect(out).not.toContain('stringify_param(&symbol)');
+    });
+});
+
+describe('ral-46b lift 2: a string local keying a dict-shaped field insert (`fundingRates`) keeps its type', () => {
+    const t46 = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, '46b-dict-field-key');
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    fundingRates: Dictionary<Dict> = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    resolve (x: any, h: string): void { }\n}\n";
+    const venue = (body: string) => "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), venue (body));
+        return t46.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    test('insert key then a concat', () => {
+        const out = run ("    handleFundingRate (fundingRate: Dict) {\n        const symbol = this.safeString (fundingRate, 'symbol', '');\n        this.fundingRates[symbol] = fundingRate;\n        const messageHash = 'fundingrate:' + symbol;\n        this.resolve (fundingRate, messageHash);\n    }\n");
+        expect(out).toContain('let mut symbol: String = ');
+        expect(out).not.toContain('stringify_param(&symbol)');
+        expect(out).toContain('insert(symbol.to_string(), ');
+    });
+});
