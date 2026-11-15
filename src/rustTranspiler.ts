@@ -9887,8 +9887,21 @@ export class RustTranspiler extends BaseTranspiler {
         let top: any = node;
         while (isParenthesizedExpression(top.parent)) top = top.parent;
         const call: any = top.parent;
-        return call !== undefined && isCallExpression(call) && call.arguments.length === 1 && call.arguments[0] === top && isPropertyAccessExpression(call.expression)
-            && isIdentifier(call.expression.expression) && call.expression.expression.text === 'Math' && call.expression.name.text === 'ceil';
+        if (!(call !== undefined && isCallExpression(call) && call.arguments.length === 1 && call.arguments[0] === top && isPropertyAccessExpression(call.expression)
+            && isIdentifier(call.expression.expression) && call.expression.expression.text === 'Math' && call.expression.name.text === 'ceil')) return false;
+        // RAL-INT-64: one ceil-division mechanism. The `Option<f64>` class is only for a `const b = Math.ceil (x / y)` that a for
+        // counter is ordered against (rust56nCeilCounterCompare); any other ceil-division const (prediction `requiredCalls`
+        // beside a parseToInt bound) stays the landed ral-55e number-box partner (rust55eCeilDivInit)
+        const d: any = call.parent;
+        if (d === undefined || !isVariableDeclaration(d) || d.initializer === undefined || this.unwrapParens(d.initializer) !== call || !this.rust56nCeilDivConst(d) || !isIdentifier(d.name)) return false;
+        let counterCompares = 0;
+        this.rustLocalUsesAll(d, String(d.name.text), false, (n: any) => {
+            let cmp: any = n.parent;
+            while (isParenthesizedExpression(cmp)) cmp = cmp.parent;
+            if (this.rust56nCeilCounterCompare(cmp)?.bound === n) counterCompares++;
+            return true;
+        });
+        return counterCompares > 0;
     }
 
     /** 51k: `a % b` over int literals / `int` / `oint` locals with a non-literal divisor (a parseToInt answer, a const int):
