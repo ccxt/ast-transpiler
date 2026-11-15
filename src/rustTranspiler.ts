@@ -8875,7 +8875,7 @@ export class RustTranspiler extends BaseTranspiler {
         const lkind = isIdentifier(last) ? this.rustScalarLocalOf(last)?.kind : undefined;
         const lname = isIdentifier(last) ? super.printIdentifier(last) : '';
         const lastText = isStringLiteral(last) ? `${JSON.stringify(String(last.text))}.to_string()`
-            : this.rustScalarUseForms.get(last) !== 'nkey' ? (lkind === undefined && isIdentifier(last) && /^[A-Za-z_]\w*$/.test(lname) ? `crate::runtime::stringify_param(&${lname})` : undefined)
+            : this.rustScalarUseForms.get(last) !== 'nkey' ? (lkind === undefined && isIdentifier(last) && this.rustPlainValueBinding(last) ? `crate::runtime::stringify_param(&${this.unCamelCaseIfNeeded(this.ReservedKeywordsReplacements[last.text] ?? last.text)})` : undefined)
                 : lkind === 'str' ? `${lname}.to_string()` : lkind === 'ostr' ? `${lname}.as_deref().unwrap_or("null").to_string()` : undefined;
         if (lastText === undefined) return undefined;
         // borrow safety of the printed insert only (the key's type is decided on the AST by rustNestedFieldUpperKeyUse): a value
