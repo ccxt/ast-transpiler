@@ -2191,6 +2191,10 @@ export class RustTranspiler extends BaseTranspiler {
         const { left, right } = node;
         const op = node.operatorToken.kind;
         const isAssign = op === SyntaxKind.EqualsToken;
+        // ral-56w: the split statement of a watched cache local declares the fresh list local (rustWsCacheListSplit)
+        if (isAssign && isIdentifier(left) && this.rustWsCacheUses.get(left) === 'split') {
+            return `let mut ${super.printIdentifier(left)}: crate::value::List = ${this.printNode(right, 0).trim()}.into_list()`;
+        }
         // Array destructuring reassignment: [a, b] = expr → bind once, reassign each
         if (isAssign && left.kind === SyntaxKind.ArrayLiteralExpression) {
             const tmpName = '__destr_tmp';
@@ -24642,7 +24646,42 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_CACHE_METHODS = new Set([ 'append', 'getLimit', 'clear', 'hashmap' ]);
     private rustWsCacheFields = new WeakMap<Node, boolean>();
     private rustWsCacheLocals = new WeakMap<Node, 'opt' | 'cache' | null>();
-    private rustWsCacheUses = new WeakMap<Node, 'bare' | 'box' | 'test' | 'len'>();
+    private rustWsCacheUses = new WeakMap<Node, 'bare' | 'box' | 'test' | 'len' | 'split' | 'llen' | 'lret'>();
+
+    /** ral-56w: the one statement `x = this.filterBy* (x, ..)` of an optional cache local `x` (a watch result) whose
+     *  base filter answers a list on every path, at the declaration's own block level, `x` named once in the call:
+     *  it prints as a fresh `crate::value::List` local of the same name (a Rust shadow), so the cache local before it
+     *  and the list after it are two typed locals. Undefined when there is no such statement or a second write. */
+    rustWsCacheListSplit(declaration: any): any {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return undefined;
+        const stmt: any = declaration.parent?.parent;
+        const block: any = stmt?.parent;
+        if (stmt?.kind !== SyntaxKind.VariableStatement || block === undefined || !isBlock(block)) return undefined;
+        const fn: any = this.rustEnclosingFunction(declaration);
+        if (fn === undefined) return undefined;
+        let split: any;
+        let writes = 0;
+        for (const r of this.rustScopeNameNodes(fn, String(declaration.name.text)) as any[]) {
+            if (!isIdentifier(r) || r === declaration.name || this.rustDeclarationOfIdentifier(r) !== declaration) continue;
+            const p: any = r.parent;
+            if ((isPrefixUnaryExpression(p) || p?.kind === SyntaxKind.PostfixUnaryExpression) && p.operand === r) return undefined;
+            if (!isBinaryExpression(p) || p.left !== r || !rustIsAssignmentOperator(p.operatorToken.kind)) continue;
+            writes++;
+            const call: any = this.unwrapParens(p.right);
+            if (p.operatorToken.kind !== SyntaxKind.EqualsToken || p.parent?.kind !== SyntaxKind.ExpressionStatement || p.parent.parent !== block) return undefined;
+            if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+            const method = String(call.expression.name.text);
+            if (!method.startsWith('filterBy') || this.rustBaseFilterReturnKind(call, method) !== 'list') return undefined;
+            const first: any = this.unwrapParens(call.arguments[0]);
+            if (first === undefined || !isIdentifier(first) || this.rustDeclarationOfIdentifier(first) !== declaration) return undefined;
+            let named = 0;
+            const visit = (x: any) => { if (isIdentifier(x) && this.rustDeclarationOfIdentifier(x) === declaration) named++; x.forEachChild?.(visit); };
+            visit(call);
+            if (named !== 1) return undefined;
+            split = p;
+        }
+        return writes === 1 ? split : undefined;
+    }
 
     /** `this.F` for a base field declared `ArrayCache | undefined`. */
     rustWsCacheField(node: any): boolean {
@@ -24744,9 +24783,19 @@ export class RustTranspiler extends BaseTranspiler {
             const kind = slot ? (this.rustWsTupleCacheSlot(declaration) ? 'opt' : undefined)
                 : init === undefined ? undefined : (this.rustWsCacheField(init) || this.rustWsCacheOptSource(init, false) || this.rustWsWatchResultKind(init) === 'cache' ? 'opt' : (this.rustWsCacheCtor(init) ? 'cache' : undefined));
             if (kind !== undefined && (slot || (list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1))) {
-                const forms = new Map<Node, 'bare' | 'box' | 'test' | 'len'>();
+                const forms = new Map<Node, 'bare' | 'box' | 'test' | 'len' | 'split' | 'llen' | 'lret'>();
+                const split: any = kind === 'opt' && !slot ? this.rustWsCacheListSplit(declaration) : undefined;
                 const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
                     const p: any = n.parent;
+                    if (split !== undefined && n === split.left) { forms.set(n, 'split'); return true; }
+                    // ral-56w: after the split statement the name reads the list local: only `.length` and `return x`
+                    if (split !== undefined && n.pos >= split.parent.end) {
+                        if (this.rustEnclosingFunction(n) !== this.rustEnclosingFunction(declaration)) return false;
+                        if (isPropertyAccessExpression(p) && p.expression === n && String(p.name.text) === 'length' && !this.isNativeWriteTargetBase(p)
+                            && !(isBinaryExpression(p.parent) && p.parent.left === p)) { forms.set(n, 'llen'); return true; }
+                        if (isReturnStatement(p) && p.expression === n) { forms.set(n, 'lret'); return true; }
+                        return false;
+                    }
                     if ((isPropertyAccessExpression(p) || p?.kind === SyntaxKind.PropertyAssignment) && p.name === n) return true;
                     if (kind === 'opt' && isBinaryExpression(p) && this.isEqualityOp(p.operatorToken.kind) && this.rustWsCacheUndefined(p.left === n ? p.right : p.left)) { forms.set(n, 'test'); return true; }
                     if (this.rustWsCacheMethodReceiver(n) || this.rustWsCacheLocalWrite(n, kind === 'opt')) { forms.set(n, 'bare'); return true; }
@@ -24834,6 +24883,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printWsCacheLength(node: any): string | undefined {
         const recv: any = node.expression;
+        if (isIdentifier(recv) && this.rustWsCacheUses.get(recv) === 'llen') return this.printNativeLength(node, super.printIdentifier(recv));
         if (!isIdentifier(recv) || this.rustWsCacheUses.get(recv) !== 'len') return undefined;
         return `Value::Int(CacheSlot::size(&${super.printIdentifier(recv)}))`;
     }
@@ -24858,8 +24908,9 @@ export class RustTranspiler extends BaseTranspiler {
     /** A use of a typed cache local: the handle itself, or boxed once at a `Value` hand-off. */
     printWsCacheLocalUse(node: any): string | undefined {
         const form = this.rustWsCacheUses.get(node);
-        if (form === undefined || form === 'test' || form === 'len') return undefined;
+        if (form === undefined || form === 'test' || form === 'len' || form === 'split' || form === 'llen') return undefined;
         const name = super.printIdentifier(node);
+        if (form === 'lret') return `Value::Arr(${name})`;
         if (form === 'bare') return name;
         return `Value::from(&${name})`;
     }

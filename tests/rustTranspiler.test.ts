@@ -15069,7 +15069,7 @@ describe('zd: a reader integer that sizes `this.<field> = new ArrayCache*(limit)
         fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
         fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    orders: any = undefined;\n    myTrades: any = undefined;\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k] ?? d; }\n}\n");
         fs.writeFileSync(path.join(root, 'ts/src/base/ws/Cache.ts'), "export class ArrayCache { constructor (maxSize: any = undefined) {} }\nexport class ArrayCacheBySymbolById extends ArrayCache {}\n");
-        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport { ArrayCacheBySymbolById } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    handleOrders (message: any) {\n        if (this.orders === undefined) {\n            const limit = this.safeInteger (this.options, 'ordersLimit', 1000);\n            this.orders = new ArrayCacheBySymbolById (limit);\n        }\n        if (this.myTrades === undefined) {\n            const limit = this.safeInteger (this.options, 'tradesLimit', 1000);\n            this.myTrades = new ArrayCacheBySymbolById (limit);\n        }\n        return message;\n    }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    handleOrders (message: any) {\n        if (this.orders === undefined) {\n            const limit = this.safeInteger (this.options, 'ordersLimit', 1000);\n            this.orders = new ArrayCacheBySymbolById (limit);\n        }\n        if (this.myTrades === undefined) {\n            const limit = this.safeInteger (this.options, 'tradesLimit', 1000);\n            this.myTrades = new ArrayCacheBySymbolById (limit);\n        }\n        return message;\n    }\n}\n");
         const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
         expect(out).not.toMatch(/let mut limit: Value = /);
         expect((out.match(/let mut limit: i64 = /g) ?? []).length).toBe(2);
@@ -18821,6 +18821,35 @@ describe('ral-54w: a watched tuple slot whose every matching resolve passes a ca
     });
     test('negative: a second resolve under the hash passes a non-cache at the slot, so the slot stays a Value', () => {
         expect(out).toMatch(/let mut candles: Value = get_value\(/);
+    });
+});
+
+describe('ral-56w: a watched cache local reassigned once from a base list filter splits into a fresh list local', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/OrderBook.ts": "export class WsOrderBook {\n    cache: any[] = [];\n    constructor (snapshot: any = {}, depth: any = undefined) {}\n    limit () { return this; }\n    reset (snapshot: any = {}) {}\n}\n",
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: any, limit: any): any { return limit; }\n}\nexport class ArrayCacheBySymbolById extends ArrayCache {}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { WsOrderBook } from './ws/OrderBook.js';\nimport { ArrayCache, ArrayCacheBySymbolById } from './ws/Cache.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport type Int = number | undefined;\nexport default class Exchange {\n    orderbooks: Dictionary<WsOrderBook> = {};\n    orders: ArrayCacheBySymbolById | undefined = undefined;\n    newUpdates: boolean = true;\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    toArray (o: any): any[] { return []; }\n    arraySlice (a: any[], n: any, m: any = undefined): any[] { return a; }\n    filterBySymbolSinceLimit (array: object[] | undefined, symbol: string = undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        if (array === undefined) {\n            return [];\n        }\n        const result = this.toArray (array);\n        return this.arraySlice (result, 0, limit);\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchOrders (symbol: string = undefined, since: any = undefined, limit: any = undefined, params = {}) {\n        const messageHash = 'orders';\n        let orders = await this.watch ('wss://x', messageHash, {}, messageHash);\n        let limitResolved = limit;\n        if (this.newUpdates) {\n            limitResolved = orders.getLimit (symbol, limit);\n        }\n        orders = this.filterBySymbolSinceLimit (orders, symbol, since, limitResolved);\n        const numOrders: number = orders.length;\n        if (numOrders === 0) {\n            return await this.watchOrders (symbol, since, limitResolved, params);\n        }\n        return orders;\n    }\n    async watchTwice (symbol: string = undefined) {\n        let trades = await this.watch ('wss://x', 'orders', {}, 'orders');\n        trades = this.filterBySymbolSinceLimit (trades, symbol, undefined, undefined);\n        trades = this.filterBySymbolSinceLimit (trades, symbol, undefined, undefined);\n        return trades;\n    }\n    handleOrders (client: Client, message: any) {\n        const stored = new ArrayCache (10);\n        stored.append (message);\n        client.resolve (stored, 'orders');\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-watch56w-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('cache local before the filter, typed list local after it', () => {
+        expect(out).toMatch(/let mut orders: Option<crate::pro::cache::Cache> = /);
+        expect(out).toMatch(/let mut orders: crate::value::List = self\.filterBySymbolSinceLimit\(&orders, [^\n]*\)\.into_list\(\);/);
+        expect(out).toMatch(/let mut numOrders: i64 = orders\.len\(\) as i64;/);
+        expect(out).toMatch(/return Value::Arr\(orders\);/);
+    });
+    test('negative: a second filter write keeps the local boxed', () => {
+        expect(out).toMatch(/let mut trades: Value = /);
     });
 });
 
