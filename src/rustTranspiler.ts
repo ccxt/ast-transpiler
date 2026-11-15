@@ -19617,6 +19617,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (sbAlias && this.rustOmitOfDict(rhs) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
                 // ral-44c: a params alias also rewritten as `y = this.omit (y, ..)` (its own map) or `y = this.extend (maps..)`
                 if (sbAlias && this.rustParamsAliasWrite(rhs, declaration) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
+                // ral-50a: `y = t[1]` of a never-rebound `const t = this.handle*AndParams (m, ..)` (base helper) lent a proven map
+                if (sbAlias && (this.rustHandleTupleMapSlotRead(rhs) || this.rustHandedSlotIdentifier(rhs)) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
                 writes++;
                 if (this.literalKindOfNode(rhs) === 'null') return ++nullWrites > 0;
                 // ral-48d: `x = this.omit (x, k)` keeps the container's kind (Null stays Null, a map stays a map; the optional
@@ -20225,6 +20227,9 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(left);
         if (declaration === undefined || !this.rustSbAliasWrites.has(node) || !this.rustPrintedBorrowed.has(declaration) || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
         const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
+        // ral-50a: a handed slot map is already a Dict (moved, as the boxed write moved it)
+        const slot: any = this.rustSkipWrappers(right);
+        if (this.rustHandedSlotIdentifier(slot)) return `${name} = ${super.transformIdentifier(slot, this.ReservedKeywordsReplacements[slot.text] ?? slot.text)}`;
         return `${name} = ${this.printNode(right, 0).trim()}.into_dict()`;
     }
 
@@ -21782,6 +21787,35 @@ export class RustTranspiler extends BaseTranspiler {
         const d: any = this.rustDeclarationOfIdentifier(head);
         if (d === undefined || d === head || d.name === head) return this.rustProvenMapParam(d);
         return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+    }
+
+    /** ral-50a: `t[1]` read off a `const t = this.handle*AndParams (m, ..)` tuple (base helper, PARAMS_SLOT_ARG) whose params
+     *  argument is a proven map (a typed / helper-proven params parameter, a handed slot map or a settled Dict local): the
+     *  base answers `[x, m]` or `[x, omit (m, k)]`, a map on every path. */
+    rustHandleTupleMapSlotRead(rhs: any): boolean {
+        if (rhs === undefined || !isElementAccessExpression(rhs) || !isIdentifier(rhs.expression) || this.rustTestTierSource(rhs)) return false;
+        const idx: any = this.rustSkipWrappers(rhs.argumentExpression);
+        if (idx === undefined || !isNumericLiteral(idx) || String(idx.text) !== '1') return false;
+        const t: any = this.rustDeclaredNode(rhs.expression);
+        if (t === undefined || !isVariableDeclaration(t) || !isIdentifier(t.name) || !(t.parent?.flags & NodeFlags.Const)) return false;
+        const call: any = this.rustSkipWrappers(t.initializer);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const index = RustTranspiler.PARAMS_SLOT_ARG[String(call.expression.name.text)];
+        if (index === undefined || !this.rustCalleeIsBase(call)) return false;
+        const head: any = this.rustSkipWrappers(call.arguments[index]);
+        if (head === undefined) return call.arguments.length <= index;
+        if (isObjectLiteralExpression(head)) return head.properties.length === 0;
+        if (!isIdentifier(head)) return false;
+        const d: any = this.rustDeclarationOfIdentifier(head);
+        if (d === undefined || d === head || d.name === head) return this.rustProvenMapParam(d);
+        return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+    }
+
+    /** ral-50a: a destructured `handle*AndParams` slot already handed as a map (`requestParams = paramsIsMargin`). */
+    rustHandedSlotIdentifier(rhs: any): boolean {
+        if (rhs === undefined || !isIdentifier(rhs) || this.rustTestTierSource(rhs)) return false;
+        const d: any = this.rustDeclaredNode(rhs);
+        return d !== undefined && d.kind === SyntaxKind.BindingElement && !this.rustHandedPending.has(d) && this.rustHandedDictLocal(d);
     }
 
     rustOmitOfDict(init: any): boolean {

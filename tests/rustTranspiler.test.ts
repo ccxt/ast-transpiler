@@ -17559,3 +17559,22 @@ describe('ral-50h: a subscription method field written from a const string tuple
         expect(emit ('ral50h-slot-any', 'handleOptionAndParams')).toMatch(/let mut method: Value = [^\n]*"method"/);
     });
 });
+
+describe('ral-50a: a params alias rewritten from slot 1 of a base handle*AndParams tuple stays a Dict', () => {
+    const emit = (): string => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-50a-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Bool = boolean | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString2 (o: any, k: any, k2: any, d: Str = undefined): Str { return o; }\n    safeNumber (o: any, k: any, d: any = undefined): any { return o; }\n    safeBool2 (o: any, k: any, k2: any, d: Bool = undefined): Bool { return o; }\n    async privatePostA (p: any = {}): Promise<any> { return p; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionBoolAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const value = this.safeBool2 (params, optionName, methodName, defaultValue);\n        const paramsOmitted = (value !== undefined) ? this.omit (params, optionName) : params;\n        return [ value, paramsOmitted ];\n    }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async createOrder (symbol: string, type: string, side: string, amount: number, price: number = undefined, params: Dict = {}): Promise<any> {\n        const request: Dict = { 'symbol': symbol };\n        const [ cost, paramsCost ] = this.handleOptionBoolAndParams (params, 'createOrder', 'cost', false);\n        const requiresPriceAndParams = this.handleOptionBoolAndParams (paramsCost, 'createOrder', 'createMarketBuyOrderRequiresPrice', true);\n        let paramsMarket = paramsCost;\n        if (side === 'buy') {\n            paramsMarket = requiresPriceAndParams[1];\n        }\n        return await this.privatePostA (this.extend (request, paramsMarket));\n    }\n    async cancelAllOrders (symbol: Str = undefined, params: Dict = {}): Promise<any> {\n        const request: Dict = { 'symbol': symbol };\n        let requestParams: Dict = params;\n        if (symbol === undefined) {\n            const [ isMargin, paramsIsMargin ] = this.handleOptionBoolAndParams (params, 'cancelAllOrders', 'isMargin', false);\n            requestParams = paramsIsMargin;\n        }\n        return await this.privatePostA (this.extend (request, requestParams));\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['createOrder', 'cancelAllOrders'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('`y = t[1]` of a never-rebound tuple lent a proven map, and `y = slot` of a handed destructured slot', () => {
+        const out = emit();
+        expect(out).toContain('let mut paramsMarket: crate::value::Dict = ');
+        expect(out).toMatch(/paramsMarket = requiresPriceAndParams[^\n]*\.into_dict\(\);/);
+        expect(out).toContain('let mut requestParams: crate::value::Dict = ');
+        expect(out).toMatch(/requestParams = paramsIsMargin(\.clone\(\))?;/);
+        expect(out).not.toContain('requestParams.clone()');
+    });
+});
