@@ -209,6 +209,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Same native truthiness for a bare `Value`-boxed identifier of boolean type. Prints the bool-tuple
      *  truthiness text (`x.as_bool() == Some(true)`) so the typed-locals pass keeps rewriting it byte-identically. */
     printNativeIdentifierTruthiness(node: any): string | undefined;
+    /** ral-42f: a local whose box only ever holds a `Value::Bool` or `Null`: declared with `true` / `false` / `undefined`, written
+     *  at least once as slot 0 of `[x, p] = this.handleOptionBoolAndParams(2)(..)` (`checkOptionBool`: Bool or undefined), every
+     *  other write one of those literals or a `&&` / `||` (printed `Value::Bool(..)`).
+     *  In a printer bool slot (`let x: bool = ..` / `Value::Bool(..)`) `x.as_bool() == Some(true)` answers what `is_true(&x)` did
+     *  for both (the ccxt rustNativeBoolEquals pass printed the same text after the fact). */
+    rustBoolLiteralOnlyLocal(node: any): boolean;
+    /** ral-42f: `x = a && b;` (statement) whose `&&` / `||` has a bool-literal-only local operand: the printer boxes the logical
+     *  itself (`x = Value::Bool(..)`, the box the ccxt bool-assignment regex added keyed on the leading `is_true`). */
+    rustBoolLiteralLogicalStore(node: any): boolean;
     literalKindOfNode(node: any): string;
     printsValueExpression(node: any): boolean;
     callExpressionName(node: any): string;
@@ -753,6 +762,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  declares `k` a string (a unified `Ticker` / `Trade` / `Order` row): the `Option<String>` the boxed read held
      *  (a non-string slot reads as `None`, like the lf / md market-field rule), only as a `const`/`let` initializer. */
     rustRowFieldStrText(node: any): string | undefined;
+    /** ral-42g: `xs[i]` whose list is a `string[]` / `Strings` parameter rustStrListParam proves (base-declared or every call site). */
+    rustStrListParamElement(init: any): boolean;
     /** `xs[i]` over a typed list parameter (the source the element-read rule admits from a parameter). */
     rustListParamElement(init: any): boolean;
     /** The local's last use is the whole right side of a statement `y = x;`: the boxed local moves there,
@@ -908,6 +919,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  ral-qd: a venue `parse*` string result lends like any other venue string (`Value::from(x.as_deref())`
      *  at each copying box: the copy the `Value` clone made). */
     rustOdExcludedCallee(init: any): boolean;
+    /** ral-42a: an identifier the checker types exactly `undefined` at this read (narrowed by an `=== undefined` guard). */
+    rustNarrowedUndefined(value: any): boolean;
     /** `x = E; return x;`: the returned local holds what the statement right before the return wrote. */
     rustVenueReturnSource(ret: any): any;
     /** An override whose hidden base method and every venue declaration of the name declare its own return type. */
@@ -1369,6 +1382,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `let x: T = self.f(..(Value::from(vec![..])));` (the list moves: `Vec<Value>`), `let x: T = (match R.get("k") {..` (the
      *  lookup borrows: `Option<&Value>`), `let x: T = (match (&(Value::from(self.parseToInt(..))), ..` (`Option<i64>`, moved into the box). */
     rustSplitLongLine(line: string, nth: number, after?: string): string | undefined;
+    /** 42b: `format!("{}..{}", .., Value::Str(format!("{}..{}", a, b).into()), ..)` -> one `format!` with the inner arguments spliced in
+     *  place. Only all-`{}` format strings (no literal text, no `{:?}`); the inner box is exactly one balanced `format!` slot. */
+    rustFlattenConcatChain(line: string): string;
     rustSplitLongLines(text: string, names: string[]): string;
     /** `m[k] = v` with `k` a `String` local whose single-key write prints a native insert. */
     rustScalarInsertKeyUse(n: any): boolean;
@@ -1443,6 +1459,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarExpressionUseForm(n: any, kind: string): string | undefined;
     /** `(x as string).split(..)` on a string local: the split prints from the local itself (`rustStrLocalSplitText`). */
     rustCastSplitRecv(cast: any): boolean;
+    /** 42b: the `(x as string).indexOf("lit") >= 0` call of a scalar contains test. */
+    rust42bCastContainsTest(call: any): boolean;
     /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
     private static readonly RUST_CACHE_CTORS;
     /** An integer local as the size argument of `new ArrayCache*(limit)`: passed natively (`i64` / `Option<i64>` into `impl Into<Value>`). */
@@ -2250,6 +2268,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printTrimCall(node: any, identation: any, name?: any): string;
     printJoinCall(node: any, identation: any, name?: any, parsedArg?: any): string;
+    /** ral-42f: `parts.join('-')` where `parts` is a never-reassigned local `this.arraySlice(<string[] local>, ..)`: every element is a
+     *  `Value::Str`, so the helper's stringify is the identity (the form ccxt rustStringNatives printed after the fact). */
+    printStrSliceJoin(node: any): string | undefined;
     printSplitCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printConcatCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToFixedCall(node: any, identation: any, name?: any, parsedArg?: any): string;
@@ -2883,6 +2904,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBorrowedSourceKind(call: any): 'dict' | 'list' | 'api' | undefined;
     private static readonly RUST_SAFE_VALUE_KEY_SOURCES;
     rustSafeValueKeyReadSource(call: any): boolean;
+    /** ral-42g: `xs[i]` (a numeric index) where `xs` is a local or parameter the checker types as a list (`T[]`, never a tuple, an
+     *  ArrayCache or an order book side) outside the test tier: the row a counter loop binds. Read only at literal string keys (the
+     *  ral-qa use rule), a non-map row (Null, list, scalar, out of range) reads Null there exactly as the empty map `into_dict()`
+     *  leaves; the local owns its map (an Arc bump of the row), so nothing borrows the list while it lives. */
+    rustListRowKeyReadSource(init: any): boolean;
     /** `this.safeX (o, '<k>'[, d])`: a base by-reference reader whose container is `o`, at a literal non-index string key. */
     rustSafeValueKeyReaderUse(n: any): boolean;
     private rustVenueContainerDecisions;
@@ -3489,6 +3515,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `ostr` for a string slot read through the scalar forms: tests, `format!` concats, string methods, typed
      *  writes, and boxes (alias, ternary arm, `Value` slots) that re-box through `From`; needs one native use. */
     rustStrSlotKind(element: any, scope: any): string | undefined;
+    /** 42i: `n` (through parens) is a direct element of an array literal: the list boxes each element itself, so the
+     *  local the list is written to never takes this slot's type. */
+    rustStrSlotListElement(n: any): boolean;
     /** zi: `n` is an arm of `c ? a : b`, the whole initializer of a local the joint solve currently types `Option<String>`
      *  (or `String`), and the other arm prints as that kind too: the target is decided with the slot, never left `Value`. */
     rustStrSlotTernaryArmJoined(n: any, element: any): boolean;

@@ -844,6 +844,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     unifiedBoolParams: {
         [method: string]: number[];
     };
+    unifiedNullableInt64Params: {
+        [method: string]: number[];
+    };
     uncalledStringParams: {
         [method: string]: number[];
     };
