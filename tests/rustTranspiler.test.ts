@@ -17386,3 +17386,21 @@ describe('ral-49e: an element of a map local\'s own Object.keys list keys that m
         expect(out).toMatch(/let mut key: Value = /);
     });
 });
+
+describe('ral-49i: a sign reader default read off the urls api map by a literal key the describe() literal writes as a string', () => {
+    const write = (name: string, url: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    urls: { api: Dict, www: Str } = undefined;\n    describe (): any { return {}; }\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k] ?? d; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    describe (): any {\n        return {\n            'urls': {\n                'api': {\n                    'venue': " + url + ",\n                },\n            },\n        };\n    }\n    sign (path: string, api: string[] = [ 'venue' ]) {\n        const apiGroup: string = api[0];\n        const baseUrls = this.urls['api'];\n        const baseUrl = this.safeString (baseUrls, apiGroup, baseUrls['venue'] as string);\n        const url = baseUrl + '/' + path;\n        return this.hold (url);\n    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a string-literal urls entry makes the default a string: the local is an Option<String>', () => {
+        const out = write ('49i-url', "'https://api.venue.com'");
+        expect(out).toContain('let mut baseUrl: Option<String> = ');
+    });
+    test('negative: a non-literal urls entry keeps the local Value', () => {
+        const out = write ('49i-urln', "this.hold ('https://api.venue.com')");
+        expect(out).toContain('let mut baseUrl: Value = ');
+    });
+});

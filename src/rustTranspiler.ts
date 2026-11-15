@@ -6064,10 +6064,59 @@ export class RustTranspiler extends BaseTranspiler {
             if (same) kind = pk;
         }
         // wd: a venue method already printed `-> Option<String>` is a string-or-Null default as it stands
-        if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && (this.rustReaderFallbackChecked(fallback) === 'string' || this.rustVenueStrCall(fallback) || this.rustOptionsElemKind(fallback) === 'ostr')) ? 'ostr' : undefined;
+        if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && (this.rustReaderFallbackChecked(fallback) === 'string' || this.rustVenueStrCall(fallback) || this.rustOptionsElemKind(fallback) === 'ostr' || this.rust49iUrlsLitDefault(fallback, args[0]))) ? 'ostr' : undefined;
         if (intBase !== undefined) return kind === 'int' || kind === 'oint' ? 'oint' : undefined;
         if (numBase !== undefined) return kind !== undefined || this.rustReaderFallbackChecked(fallback) === 'number' ? 'onum' : undefined;
         return fresh && (kind === 'bool' || kind === 'obool' || (kind === undefined && this.rustReaderFallbackChecked(fallback) === 'boolean')) ? 'obool' : undefined;
+    }
+
+    /** ral-49i: a `sign` reader default `m['<lit>']` (or `m['<lit>'] as string`) where `m` is the reader's own receiver, a
+     *  never-written `const m = this.urls['api']` (rustUrlsMapEntry) of the same function, and every venue file of the family
+     *  writes `'<lit>'` only as a string literal (the describe() urls literal; checked by rustOptionsElemKind's scan of
+     *  literal `'<lit>': v` writes): the default the runtime reader hands back unconverted is a `Str` or `Null`. */
+    rust49iUrlsLitDefault(fallback: any, receiver: any): boolean { return this.rust49iUrlsLitDefaultX(fallback, receiver); }
+    rust49iUrlsLitDefaultX(fallback: any, receiver: any): boolean {
+        let node: any = this.unwrapParens(fallback);
+        if (node !== undefined && node.kind === SyntaxKind.AsExpression) node = this.unwrapParens(node.expression);
+        if (node === undefined || !isElementAccessExpression(node) || !isIdentifier(node.expression) || !isStringLiteral(this.unwrapParens(node.argumentExpression))) return false;
+        const recv: any = this.unwrapParens(receiver);
+        if (recv === undefined || !isIdentifier(recv) || String(recv.text) !== String(node.expression.text)) return false;
+        const declaration: any = this.rustDeclaredNode(node.expression);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined || (declaration.parent?.flags & NodeFlags.Const) === 0) return false;
+        let init: any = this.unwrapParens(declaration.initializer);
+        if (init !== undefined && init.kind === SyntaxKind.AsExpression) init = this.unwrapParens(init.expression);
+        if (!this.rustUrlsMapEntry(init) || String(this.rustSkipWrappers(init.argumentExpression).text) !== 'api') return false;
+        if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(node)) return false;
+        const key = String(this.unwrapParens(node.argumentExpression).text);
+        const file = String(node.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        const at = file.lastIndexOf('/ts/src/');
+        if (at < 0 || !/^[A-Za-z_]\w*$/.test(key)) return false;
+        const root = file.slice(0, at) + '/ts/src';
+        const rel = file.slice(at + '/ts/src/'.length);
+        if (rel.startsWith('base/') || rel.startsWith('test/')) return false;
+        const { familyOf } = this.rustVenueFamilies(root);
+        const family = familyOf.get(rel);
+        if (family === undefined) return false;
+        let writes = 0;
+        for (const [ r, f ] of familyOf.entries()) {
+            if (f !== family) continue;
+            const text = fs.readFileSync(`${root}/${r}`, 'utf8');
+            if (/this\.urls\s*(?:\[[^\]]*\]\s*)*=(?!=)/.test(text)) return false;
+            // only the describe() `'urls': { .. }` literal: its `api` / `test` maps (setSandboxMode swaps `test` in)
+            const at2 = text.indexOf("'urls': {");
+            if (at2 < 0) continue;
+            let depth = 0; let end = at2 + "'urls': ".length;
+            for (; end < text.length; end++) { const c = text[end]; if (c === '{') depth++; else if (c === '}' && --depth === 0) break; }
+            const urls = text.slice(at2, end + 1);
+            for (const m of urls.matchAll(new RegExp(`['"]${key}['"]\\s*:\\s*([^,}\\n]*)`, 'g'))) {
+                writes++;
+                // a string literal value first (its own `//` is no comment), else the value with a trailing comment cut
+                const raw = m[1].trim().replace(/[;,]\s*$/, '');
+                const v = /^'[^'\\]*'$/.test(raw) || /^"[^"\\]*"$/.test(raw) ? raw : raw.replace(/\s*\/\/.*$/, '').replace(/[;,]\s*$/, '');
+                if (!(v === 'undefined' || /^'[^'\\]*'$/.test(v) || /^"[^"\\]*"$/.test(v))) return false;
+            }
+        }
+        return writes > 0;
     }
 
     /** zd: `this.options['k']` as a reader default, where every write of key `k` over the venue family (describe()
