@@ -4969,7 +4969,8 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
             const form = this.rustScalarUseForms.get(n);
             // a native insert key borrows the local (`as_deref`); a helper-write key would copy it
-            if (form === 'err' || (form === 'key' && !(nativeKeys && this.rustScalarInsertKeyUse(n)))) ok = false;
+            // ral-53i: likewise a key of the two-level bearer's own bucket seed / insert (rustNestedBearerWriteKey: one key text either way)
+            if (form === 'err' || (form === 'key' && !(nativeKeys && (this.rustScalarInsertKeyUse(n) || this.rustNestedBearerKeySlot(n))))) ok = false;
             if (form !== 'box' && form !== 'xbox') return true;
             const up: any = n.parent;
             if (isReturnStatement(up) || this.rustLocalLastUse(n, declaration)) return true;
@@ -7404,6 +7405,9 @@ export class RustTranspiler extends BaseTranspiler {
         // `entry(..).or_default().insert(k2, ..)` (no ccxt pass reads it): a Copy number boxes, a string moves at its last use
         if (this.rustUdNestedBearerValue(n) && ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum')
             || ((kind === 'str' || kind === 'ostr') && this.rustLocalLastUse(n, this.rustDeclaredNode(n))))) return 'box';
+        // ral-53i: k1 / k2 of `x[k1][k2] = v` on a typed two-level local map: the printer's own
+        // `entry(k1).or_default().insert(k2, ..)` takes the key text (rustNestedBearerWriteKey), no ccxt pass reads it
+        if ((kind === 'str' || kind === 'ostr') && this.rustUdNestedBearerKey(n)) return 'key';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -8246,6 +8250,43 @@ export class RustTranspiler extends BaseTranspiler {
         const outer: any = write.left;
         if (!isElementAccessExpression(outer) || !isElementAccessExpression(outer.expression)) return false;
         return this.rustNestedDictBearerDeclaration(outer.expression.expression) !== undefined;
+    }
+
+    /** ral-53i: `n` is k1 or k2 of a statement `x[k1][k2] = v` with `x` a typed two-level local map (`rustNestedBearerInsert`). */
+    rustUdNestedBearerKey(n: any): boolean {
+        const keyNode: any = this.rustKeyWrapped(n);
+        const access: any = keyNode.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== keyNode) return false;
+        const outer: any = isElementAccessExpression(access.parent) && access.parent.expression === access ? access.parent : access;
+        if (!isElementAccessExpression(outer.expression)) return false;
+        const write: any = outer.parent;
+        if (!isBinaryExpression(write) || write.left !== outer || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        if (outer.expression.expression.kind === SyntaxKind.ElementAccessExpression) return false;
+        return this.rustNestedDictBearerDeclaration(outer.expression.expression) !== undefined;
+    }
+
+    /** ral-53i: `key` is k1 of a statement bucket seed `x[k1] = {}` or k1 / k2 of a statement write `x[k1][k2] = v` with `x`
+     *  a plain identifier (syntax only: the two-level bearer prints these through rustNestedBearerWriteKey). */
+    rustNestedWriteKeyPosition(key: any): boolean {
+        const keyNode: any = this.rustKeyWrapped(key);
+        const access: any = keyNode.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== keyNode) return false;
+        const outer: any = isElementAccessExpression(access.parent) && access.parent.expression === access ? access.parent : access;
+        const write: any = outer.parent;
+        if (!isBinaryExpression(write) || write.left !== outer || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        if (outer === access) {
+            const seed: any = this.rustSkipWrappers(write.right);
+            return isIdentifier(access.expression) && isObjectLiteralExpression(seed) && seed.properties.length === 0;
+        }
+        return isElementAccessExpression(outer.expression) && isIdentifier(outer.expression.expression);
+    }
+
+    /** ral-53i: `n` keys a bucket seed `x[n] = {}` or a write `x[k1][k2] = v` of a typed two-level local map `x`. */
+    rustNestedBearerKeySlot(n: any): boolean {
+        if (this.rustUdNestedBearerKey(n)) return true;
+        if (!this.rustNestedWriteKeyPosition(n)) return false;
+        const access: any = this.rustKeyWrapped(n).parent;
+        return isIdentifier(access.expression) && this.rustNestedDictBearerDeclaration(access.expression) !== undefined;
     }
 
     rustScalarInNestedWrite(n, boxUse?: boolean): boolean {
@@ -19317,8 +19358,12 @@ export class RustTranspiler extends BaseTranspiler {
         const key: any = this.rustSkipWrappers(keyNode);
         if (key === undefined) return false;
         if (isStringLiteralLikeNode(key)) return RustTranspiler.rustBearerKeyTextOk(String((key as any).text));
-        if (!isIdentifier(key) || !this.rustKeyIsProvenString(key) || this.rustStringLocalIdentifierIsTyped(key)) return false;
+        // ral-53i: a typed string key in a bucket seed / two-level write position prints its own key text there
+        if (!isIdentifier(key) || !this.rustKeyIsProvenString(key) || (this.rustStringLocalIdentifierIsTyped(key) && !this.rustNestedWriteKeyPosition(key))) return false;
         if (this.rustNodeIsKeyUnsafePlace(String((key as any).text)) && !this.rustBookMetaPlaceOnLiteral(key)) return false;
+        // ral-53i: a string scalar key (typed, or still being decided) in a bucket seed / two-level write position: that
+        // write prints the key through rustNestedBearerWriteKey (its own insert key text, or stringify_param of the box)
+        if (this.rustNestedWriteKeyPosition(key) && ['str', 'ostr'].includes(this.rustScalarLocalOf(key)?.kind)) return true;
         return /^[A-Za-z_][A-Za-z0-9_]*$/.test(this.printNode(key, 0).trim());
     }
 
@@ -25777,7 +25822,17 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(rhs)) return (!rhs.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement || (isIdentifier(this.rustSkipWrappers(e)) && !this.rustBuiltListMovedElement(e)))
             && (!rhs.elements.some((e: any) => isIdentifier(this.rustSkipWrappers(e))) || this.rustBuiltListMovedLiteral(rhs) !== undefined))
             || this.rustBuiltListBoxedLiteral(rhs) !== undefined;
-        return this.rustAlwaysListProducer(rhs) || this.rustDefaultedListRead(rhs) || this.rustDeclaredListProducer(rhs);
+        return this.rustAlwaysListProducer(rhs) || this.rustDefaultedListRead(rhs) || this.rustDeclaredListProducer(rhs) || this.rustVenueListWriteSource(rhs);
+    }
+
+    /** ral-53i: `[await] this.m (..)` whose venue declaration the printer's typed-return table (rustVenueContainerReturnKind)
+     *  proves a never-null list (`Dict[]` / `any[]` / `List` / `Record[]` / literal tuple, the same type in the whole venue
+     *  family, no override): the call prints `-> Value` holding a `Value::Arr`, so `.into_list()` moves exactly that list. */
+    rustVenueListWriteSource(rhs: any): boolean {
+        const call: any = rhs?.kind === SyntaxKind.AwaitExpression ? this.rustSkipWrappers(rhs.expression) : rhs;
+        if (call === undefined || !isCallExpression(call) || this.rustTestTierSource(call)) return false;
+        const kind = this.rustVenueContainerReturnKind(call);
+        return kind !== undefined && kind.kind === 'list' && !kind.nullable;
     }
 
     /** ral-yf: `await this.<endpoint> (..)` whose abstract declaration spells `Promise<List>` (a non-list answer reads as the

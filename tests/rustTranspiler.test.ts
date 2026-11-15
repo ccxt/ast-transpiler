@@ -13277,7 +13277,8 @@ describe('ud: a reader number written whole into a two-level local map (missing 
         fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (rows: any[]) {\n        const fees = {};\n        for (let i = 0; i < rows.length; i++) {\n            const code = this.safeString (rows[i], 'c');\n            const net = this.safeString (rows[i], 'n');\n            const fee = this.safeNumber (rows[i], 'f');\n            fees[code] = {};\n            fees[code][net] = fee;\n        }\n        return { 'withdraw': fees };\n    }\n}\n");
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut fee: Option<f64> = ');
-        expect(out).toContain('.or_default().insert(crate::runtime::stringify_param(&net), Value::from(fee));');
+        // ral-53i: the string keys of the printer's own two-level insert now take the key form (was stringify_param of the box)
+        expect(out).toContain('.or_default().insert(net.as_deref().unwrap_or("null").to_string(), Value::from(fee));');
         expect(out).not.toContain('fee.clone()');
     });
 });
@@ -18269,5 +18270,39 @@ describe('ral-53n: an alias whose initializer and every write are never-null con
     test('guard: an alias of a nullable read (no default) keeps Value', () => {
         const out = run("    c (raw: Dict, one: boolean) {\n        const o1 = this.safeDict (raw, 'outcomeOne');\n        const o2 = this.safeDict (raw, 'outcomeTwo', {});\n        let own: Dict = o2;\n        if (one) {\n            own = o1;\n        }\n        return this.safeString (own, 'p');\n    }\n");
         expect(out).toMatch(/let mut own: Value/);
+    });
+});
+
+describe('ral-53i: string keys of a typed two-level local map insert', () => {
+    test('`m[code][networkCode] = fee` on a two-level bearer types both keys and prints them in the printer\'s own insert', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-53i-nkey');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): string { return networkId; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o[k]; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] { return o[k]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fees (coins: Dict[]) {\n        const withdrawFees: Dict = {};\n        for (let i = 0; i < coins.length; i++) {\n            const entry = this.safeDict (coins, i);\n            const currencyId = this.safeString (entry, 'coin');\n            const code = this.safeCurrencyCode (currencyId);\n            const networkList: Dict[] = this.safeList (entry, 'networkList', []);\n            if (code !== undefined) {\n                withdrawFees[code] = {};\n            }\n            for (let j = 0; j < networkList.length; j++) {\n                const networkEntry = this.safeDict (networkList, j);\n                const networkId = this.safeString (networkEntry, 'network');\n                const networkCode = this.networkIdToCode (networkId, code);\n                const fee = this.safeNumber (networkEntry, 'withdrawFee');\n                if ((code !== undefined) && (networkCode !== undefined)) {\n                    withdrawFees[code][networkCode] = fee;\n                }\n            }\n        }\n        return { 'withdraw': withdrawFees };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).not.toContain('let mut code: Value');
+        expect(out).not.toContain('stringify_param(&code)');
+        expect(out).toMatch(/withdrawFees\.entry\([^;]*\)\.or_default\(\)\.insert\(/);
+    });
+});
+
+describe('ral-53i: a list local reassigned whole from a venue call the typed-return table proves a list', () => {
+    const write = (dir: string, ret: string) => {
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): string { return o[k]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchRows (params: Dict = {}): " + ret + " {\n        return [ params ];\n    }\n    async m (flag: boolean) {\n        let rows = [];\n        if (flag) {\n            rows = await this.fetchRows ();\n        }\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            out.push (this.safeString (rows[i], 'id'));\n        }\n        return out;\n    }\n}\n");
+    };
+    test('`rows = await this.fetchRows ()` with `Promise<Dict[]>` types the list and moves the answer out', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-53i-list');
+        write (dir, 'Promise<Dict[]>');
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut rows: crate::value::List = ');
+        expect(out).toMatch(/rows = self\.fetchRows\([^;]*\)\.await\.into_list\(\);/);
+    });
+    test('a callee declared `Promise<any>` proves nothing: the local stays Value', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-53i-list-any');
+        write (dir, 'Promise<any>');
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).not.toContain('let mut rows: crate::value::List');
     });
 });
