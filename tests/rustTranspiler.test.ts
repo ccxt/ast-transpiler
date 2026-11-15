@@ -17250,3 +17250,28 @@ describe('ral-48f: a string handle*AndParams slot aliased whole into a declared 
         expect(output).not.toMatch(/let mut rate: Value/);
     });
 });
+
+describe('ral-48i: a networkIdToCode key into an enumerated map or the last key of a chained bearer write', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): Str { return networkId; }\n    safeString (o: any, k: any): Str { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a key into a map later enumerated with Object.keys is an Option<String> (no copy)', () => {
+        const out = write ('48i-enum', "    m (chains: any[], code: Str) {\n        const networks: Dict = {};\n        for (let j = 0; j < chains.length; j++) {\n            const networkId = this.safeString (chains[j], 'name');\n            const networkCode = this.networkIdToCode (networkId, code);\n            if (networkCode !== undefined) {\n                networks[networkCode] = {\n                    'id': networkId,\n                    'network': networkCode,\n                };\n            }\n        }\n        const keys = Object.keys (networks);\n        return this.hold ([ keys.length, networks ]);\n    }\n");
+        expect(out).toContain('let mut networkCode: Option<String> = ');
+        expect(out).toContain('.insert(networkCode.as_deref().unwrap_or("null").to_string(), ');
+        expect(out).not.toContain('networkCode.clone()');
+    });
+    test('the last key of `result[\'networks\'][k] = v` on a typed map is an Option<String>', () => {
+        const out = write ('48i-chain', "    m (entries: any[], code: Str) {\n        const result: Dict = { 'networks': {} };\n        for (let j = 0; j < entries.length; j++) {\n            const networkCode = this.networkIdToCode (this.safeString (entries[j], 'network'), code);\n            if (networkCode !== undefined) {\n                result['networks'][networkCode] = { 'fee': entries[j] };\n            }\n        }\n        return this.hold (result);\n    }\n");
+        expect(out).toContain('let mut networkCode: Option<String> = ');
+        expect(out).toContain('.insert(networkCode.as_deref().unwrap_or("null").to_string(), ');
+    });
+    test('negative: a chained key written inside its own value stays a Value', () => {
+        const out = write ('48i-chainw', "    m (entries: any[], code: Str) {\n        const result: Dict = { 'networks': {} };\n        for (let j = 0; j < entries.length; j++) {\n            let networkCode = this.networkIdToCode (this.safeString (entries[j], 'network'), code);\n            result['networks'][networkCode] = { 'n': (networkCode = 'x') };\n            this.hold (networkCode);\n        }\n        return this.hold (result);\n    }\n");
+        expect(out).toContain('let mut networkCode: Value = ');
+    });
+});

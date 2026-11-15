@@ -7182,6 +7182,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
         if (kind === 'ostr' && this.rustScalarOptKeyUse(n)) return 'key';
+        // ral-48i: a `networkIdToCode` result as the last key of `x['lit'][k] = v` on a typed map bearer (rustBearerChainedWrite)
+        if (kind === 'ostr' && this.rust48iChainKeyUse(n)) return 'key';
         // an optional-string local keys a proven map read or an `in` test natively (a `None` key misses, as the `Null` did)
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         // ral-yg: an element key into the base-declared `this.urls['<lit>']` map reads it by the borrowed key
@@ -10198,6 +10200,23 @@ export class RustTranspiler extends BaseTranspiler {
         return !written;
     }
 
+    /** ral-48i: `x['lit'][k] = v` with `k` a `networkIdToCode` local and `x` a typed one-level map bearer: the chained write
+     *  prints `if let Value::Dict(__d) = x.entry(\"lit\"..).or_default() { make_mut(__d).insert(<key>, v) }`, whose key is the
+     *  `stringify_param` text of the boxed local (`\"null\"` for `None`, as rustScalarOptKeyText prints). The key is taken before
+     *  the value, so a value that only reads the key is fine (rustTbKeyReadOnlyInValue). */
+    rust48iChainKeyUse(n: any): boolean {
+        if (!isIdentifier(n)) return false;
+        const keyNode = this.rustKeyWrapped(n);
+        const access: any = keyNode.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== keyNode || !isElementAccessExpression(access.expression)) return false;
+        const hop: any = access.expression;
+        if (!isStringLiteral(this.rustSkipWrappers(hop.argumentExpression)) || !isIdentifier(hop.expression)) return false;
+        const write: any = access.parent;
+        if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        if (this.rustDictBearerDeclaration(hop.expression) === undefined) return false;
+        return this.rustTbKeyReadOnlyInValue(n, write.right);
+    }
+
     /** tb: `this.networkIdToCode (..)` (the base typed `Str` reader of a network id). */
     rustTbNetworkCodeInit(init: any): boolean {
         const call: any = init === undefined ? undefined : this.unwrapParens(init);
@@ -10253,7 +10272,9 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-yg: an element-read key (`const k = parsed['symbol']`, S73) inserted into a plain literal map that is only
             // enumerated afterwards: the insert takes the key text (`None` keys as "null", exactly `stringify_param(&Null)`)
             // and the map's own key iterator reads the same keys (a map also read by key keeps the boxed key: its bearer rule leans on it)
-            if (enumerated) return !keyRead && isElementAccessExpression(this.rustSkipWrappers(local.initializer)) && this.rustScalarInsertKeyUse(n);
+            // ral-48i: likewise a `networkIdToCode` result (tb's key-before-value proof is in rustScalarInsertKeyUse)
+            if (enumerated) return !keyRead && (isElementAccessExpression(this.rustSkipWrappers(local.initializer)) || this.rustTbNetworkCodeInit(local.initializer))
+                && this.rustScalarInsertKeyUse(n);
             return this.rustBearerWriteKeyOk(n, name) || this.rustScalarInsertKeyUse(n);
         }
         return this.rustScalarInsertKeyUse(n);
