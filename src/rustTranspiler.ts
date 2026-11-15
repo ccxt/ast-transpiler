@@ -4881,6 +4881,8 @@ export class RustTranspiler extends BaseTranspiler {
         if ((this.rustVenueInitializer(node) || this.rustNilVenueWrite(node)) && this.rustVenueStrCall(node)) return 'ostr';
         if (fresh && this.rustVenueInitializer(node) && this.rustVenueIntCall(node)) return 'int';
         if (fresh && this.rustVenueInitializer(node) && this.rustVenueTypedCall(node) !== undefined) return this.rustVenueTypedCall(node);
+        // ral-41a: the whole right side of a write into a nil-declared local, from a venue `Num` parse helper (`Float` or `Null`)
+        if (fresh && this.rustNilVenueWrite(node) && this.rustVenueTypedCall(node) === 'onum') return 'onum';
         const declaration: any = this.rustScalarCallee(node);
         if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return undefined;
         const readerKind = this.rustReaderDefaultKind(name, args, fresh); if (readerKind !== undefined) return readerKind;
@@ -6511,7 +6513,9 @@ export class RustTranspiler extends BaseTranspiler {
             declared = promised;
         }
         const name = declared.kind === SyntaxKind.TypeReference && isIdentifier(declared.typeName) ? String(declared.typeName.text) : '';
-        const kind = declared.kind === SyntaxKind.StringKeyword || name === 'Str' ? 'ostr' : (declared.kind === SyntaxKind.BooleanKeyword ? 'bool' : (name === 'int' ? 'int' : undefined));
+        // ral-41a: a sync `Num` helper every return of which is `undefined` or a base `parseNumber` of a string (`Float` or `Null`)
+        const numHelper = name === 'Num' && !this.isAsyncFunction(declaration);
+        const kind = declared.kind === SyntaxKind.StringKeyword || name === 'Str' ? 'ostr' : (declared.kind === SyntaxKind.BooleanKeyword ? 'bool' : (name === 'int' ? 'int' : (numHelper ? 'onum' : undefined)));
         if (kind === undefined) return undefined;
         const expected = kind === 'ostr' ? 'string' : (kind === 'bool' ? 'boolean' : 'number');
         let ok = declaration.body.statements.length > 0;
@@ -6520,6 +6524,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (isReturnStatement(n)) {
                 const value: any = this.unwrapParens(n.expression);
                 const nullish = value === undefined || this.literalKindOfNode(value) === 'null';
+                if (kind === 'onum') { if (!nullish && !this.rustParseNumberStrCall(value)) ok = false; n.forEachChild(visit); return; }
                 const type: any = nullish ? undefined : this.getCheckedTypeOf(this.rustVenueReturnSource(n) ?? value);
                 // `any` proves nothing; only a `Str` return may be absent
                 if (nullish ? kind !== 'ostr' : (type === undefined || (type.flags & TypeFlags.Any) !== 0 || this.primitiveKindOfType(type) !== expected
@@ -6569,6 +6574,7 @@ export class RustTranspiler extends BaseTranspiler {
         const text = this.printNode(this.unwrapParens(expr), 0).trim();
         if (kind === 'ostr') return `${text}.as_str().map(str::to_owned)`;
         if (kind === 'bool') return `${text}.as_bool().unwrap_or_default()`;
+        if (kind === 'onum') return `${text}.as_f64()`;
         return `${text}.as_i64().unwrap_or_default()`;
     }
 
@@ -10017,6 +10023,8 @@ export class RustTranspiler extends BaseTranspiler {
             while (isParenthesizedExpression(top.parent)) top = top.parent;
             const call: any = top.parent;
             if (isCallExpression(call) && call.expression !== top && this.rustWsWatchSlot(call, call.arguments.indexOf(top))) return 'targ';
+            // ral-41a: `parseInt (x as string)` of an optional string local reads it in place (`x.as_deref()`, runtime parse_int's own match)
+            if (kind === 'ostr' && this.rustParseIntOfOptStr(call, top)) return 'native';
         }
         if (isParenthesizedExpression(parent) || parent.kind === SyntaxKind.AsExpression) {
             const outer = this.rustScalarUseForm(parent, kind);
@@ -15103,6 +15111,12 @@ export class RustTranspiler extends BaseTranspiler {
     /** `parseInt(x)` / `parseFloat(x)` with a single checker-proven string argument
      *  become the runtime helper's own match with native `str::parse`; every other
      *  argument shape keeps the helper call the ccxt post-pass rewrites. */
+    /** ral-41a: `parseInt (x as string)` whose one argument is the cast `top` of an `Option<String>` local. */
+    rustParseIntOfOptStr(call: any, top: any): boolean {
+        return call !== undefined && isCallExpression(call) && isIdentifier(call.expression) && String(call.expression.text) === 'parseInt'
+            && call.arguments.length === 1 && call.arguments[0] === top;
+    }
+
     printNativeParseCall(node: CallExpression): string | undefined {
         const callee = node.expression;
         if (!isIdentifier(callee)) return undefined;
@@ -15110,6 +15124,11 @@ export class RustTranspiler extends BaseTranspiler {
         const helper = RustTranspiler.RUST_PARSE_HELPERS[name];
         if (helper === undefined) return undefined;
         if (node.arguments.length !== 1) return undefined; // radix / unknown arity
+        // ral-41a: an `Option<String>` local read through `as string`: runtime parse_int on its box is the `Str` arm or `Null`
+        const optLocal: any = name === 'parseInt' ? this.rustStrCastLocal(node.arguments[0]) : undefined;
+        if (optLocal !== undefined && this.rustScalarIdentifierKind(optLocal) === 'ostr') {
+            return `(match ${super.printIdentifier(optLocal)}.as_deref() { Some(__parse_s) => __parse_s.trim().parse::<i64>().map(Value::Int).unwrap_or(Value::Null), None => Value::Null })`;
+        }
         const arg = node.arguments[0];
         const type = this.getCheckedTypeOf(arg);
         if (type === undefined || !this.isStringType(type.flags)) return undefined;
