@@ -8450,15 +8450,29 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         const name = new RegExp(`\\b(?:${String(n.text)}|this)\\b`);
         // int37: an upper key read by a safeString* reader with no default (may be undefined) keeps the helper chain:
-        // `get_value_mut(.., &k)` sent that local back to Value (bullish handleBalance tradingAccountId)
+        // `get_value_mut(.., &k)` sent that local back to Value (bullish handleBalance tradingAccountId).
+        // ral-54k: unless it is the one upper hop: printNestedFieldKeyWrite then prints the bucket entry itself
         for (let up: any = access.expression; isElementAccessExpression(up); up = up.expression) {
-            const k: any = this.rustSkipWrappers(up.argumentExpression);
-            const kd: any = isIdentifier(k) ? this.rustDeclaredNode(k) : undefined;
-            const ki: any = kd !== undefined && isVariableDeclaration(kd) ? this.rustSkipWrappers(kd.initializer) : undefined;
-            if (ki !== undefined && isCallExpression(ki) && isPropertyAccessExpression(ki.expression) && ki.expression.expression.kind === SyntaxKind.ThisKeyword
-                && /^safeString/.test(String(ki.expression.name.text)) && ki.arguments.length < 3) return false;
+            if (this.rustNestedFieldEntryKey(access) !== undefined) break;
+            if (this.rustSafeStrNoDefaultKey(up.argumentExpression) !== undefined) return false;
         }
         return !name.test(String(write.right.getText())) && !name.test(String(access.expression.getText()).replace(/^this\./, ''));
+    }
+
+    /** int37: `k` is a local read by a `this.safeString*` reader with no default (may be undefined); its identifier. */
+    rustSafeStrNoDefaultKey(key: any): any {
+        const k: any = this.rustSkipWrappers(key);
+        const kd: any = isIdentifier(k) ? this.rustDeclaredNode(k) : undefined;
+        const ki: any = kd !== undefined && isVariableDeclaration(kd) ? this.rustSkipWrappers(kd.initializer) : undefined;
+        return ki !== undefined && isCallExpression(ki) && isPropertyAccessExpression(ki.expression) && ki.expression.expression.kind === SyntaxKind.ThisKeyword
+            && /^safeString/.test(String(ki.expression.name.text)) && ki.arguments.length < 3 ? k : undefined;
+    }
+
+    /** ral-54k: `this.F[k1][n]` (exactly one upper hop) with `k1` such an int37 key: the upper key, else undefined. */
+    rustNestedFieldEntryKey(access: any): any {
+        const upper: any = access.expression;
+        if (!isElementAccessExpression(upper) || !isPropertyAccessExpression(upper.expression)) return undefined;
+        return this.rustSafeStrNoDefaultKey(upper.argumentExpression);
     }
 
     /** `this.F[..]['lit'] = n` (statement): the value slot of a nested plain-field insert. */
@@ -8478,7 +8492,15 @@ export class RustTranspiler extends BaseTranspiler {
         const name = super.printIdentifier(key);
         const keyText = kind === 'str' ? `${name}.to_string()` : kind === 'ostr' ? `${name}.as_deref().unwrap_or("null").to_string()` : undefined;
         if (keyText === undefined) return undefined;
-        const insert = `if let Value::Dict(__r05d) = ${acc} { std::sync::Arc::make_mut(__r05d).insert(${keyText}, ${value}); }`;
+        // ral-54k: with an int37 upper key (one hop) print the bucket entry ccxt's plain-dict pass makes of the r05 insert
+        // (`entry(stringify_param(&k1)).or_insert(Null)`, get_value_mut's own key lowering): the upper key's box text is then
+        // `stringify_param(&k1)`, which ccxt's narrowStrNullLocals narrows, so no pass reads a boxed `&code` key any more
+        const upper: any = this.rustNestedFieldEntryKey(left);
+        const field: string = upper !== undefined ? String(left.expression.expression.name.text) : '';
+        const insert = upper !== undefined && acc === `get_value_mut(&mut self.${field}, &${super.printIdentifier(upper)})`
+            ? `if let Value::Dict(__bf03d0) = &mut self.${field} { let __bf03e1 = std::sync::Arc::make_mut(__bf03d0).entry(crate::runtime::stringify_param(&${super.printIdentifier(upper)})).or_insert(Value::Null); `
+                + `if let Value::Dict(__r05d) = __bf03e1 { std::sync::Arc::make_mut(__r05d).insert(${keyText}, ${value}); } }`
+            : `if let Value::Dict(__r05d) = ${acc} { std::sync::Arc::make_mut(__r05d).insert(${keyText}, ${value}); }`;
         // over the line budget ccxt's r05 keeps the helper: lend the key to it (`From<Option<&str>>`, the one allocation)
         if (insert.split('\n')[0].length + 40 > 400) return `add_element_to_object(${acc}, &Value::from(${name}${kind === 'str' ? '.as_str()' : '.as_deref()'}), ${value})`;
         return insert;
@@ -10722,6 +10744,27 @@ export class RustTranspiler extends BaseTranspiler {
         }).join('\n');
     }
 
+    /** ral-54k: map local `name` is read (not written) by the key local `key` somewhere (`m[key]` outside an assignment target). */
+    rustMapReadByLocal(declaration: any, name: string, key: any): boolean {
+        let read = false;
+        this.rustLocalUsesAll(declaration, name, false, (u) => {
+            const access: any = u.parent;
+            if (isElementAccessExpression(access) && access.expression === u && !(isBinaryExpression(access.parent) && access.parent.left === access)) {
+                const k: any = this.rustSkipWrappers(access.argumentExpression);
+                if (isIdentifier(k) && this.rustDeclaredNode(k) === key) read = true;
+            }
+            return true;
+        });
+        return read;
+    }
+
+    /** ral-54k: `this.safeCurrencyCode (..)` (base reader, `string` return). */
+    rustSafeCurrencyCodeInit(init: any): boolean {
+        const call: any = this.rustSkipWrappers(init);
+        return call !== undefined && isCallExpression(call) && isPropertyAccessExpression(call.expression)
+            && call.expression.expression.kind === SyntaxKind.ThisKeyword && String(call.expression.name.text) === 'safeCurrencyCode';
+    }
+
     /** `m[k] = v` with `k` a `String` local whose single-key write prints a native insert. */
     rustScalarInsertKeyUse(n): boolean {
         const keyNode = this.rustKeyWrapped(n);
@@ -10839,6 +10882,10 @@ export class RustTranspiler extends BaseTranspiler {
             // enumerated afterwards: the insert takes the key text (`None` keys as "null", exactly `stringify_param(&Null)`)
             // and the map's own key iterator reads the same keys (a map also read by key keeps the boxed key: its bearer rule leans on it)
             // ral-48i: likewise a `networkIdToCode` result (tb's key-before-value proof is in rustScalarInsertKeyUse)
+            // ral-54k: a `safeCurrencyCode` result (an owned `Option<String>`, never a borrowed element read) keys the insert by
+            // its own text even when the enumerated map is also read by key afterwards (htx fetchBalance `subResult[code]`):
+            // the later reads key by other locals and the map's keys are the same strings either way
+            if (enumerated && keyRead && this.rustSafeCurrencyCodeInit(local.initializer) && !this.rustMapReadByLocal(declaration, name, local)) return this.rustScalarInsertKeyUse(n);
             if (enumerated) return !keyRead && (isElementAccessExpression(this.rustSkipWrappers(local.initializer)) || this.rustTbNetworkCodeInit(local.initializer))
                 && this.rustScalarInsertKeyUse(n);
             return this.rustBearerWriteKeyOk(n, name) || this.rustScalarInsertKeyUse(n);

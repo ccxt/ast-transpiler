@@ -12915,10 +12915,11 @@ describe('int37: nested this.balance insert under a local upper key keeps that l
         fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: any = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeCurrencyCode (c: Str, x: any = undefined): string { return c; }\n    account (): any { return {}; }\n}\n");
         fs.writeFileSync (path.join (dir, 'ts/src/venue10.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue10 extends Exchange {\n    bal (head: any, rows: any[]) {\n        const acct = this.safeString (head, 'acct');\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            const currencyId = this.safeString (row, 'a');\n            const code = this.safeCurrencyCode (currencyId);\n            const account = this.account ();\n            if (code !== undefined) {\n                this.balance[acct][code] = account;\n            }\n        }\n    }\n}\n");
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue10.ts')).content;
-        // the nkey insert would print the upper key through get_value_mut(.., &acct) and send that local back to Value
-        // on bullish handleBalance (tradingAccountId); with a local upper key the helper chain stays and `code` is not nkey
-        expect(out).not.toContain('__r05d).insert(code');
-        expect(out).toContain('let mut code: Value = ');
+        // the nkey insert must not print the upper key through get_value_mut(.., &acct) (that sent bullish handleBalance
+        // tradingAccountId back to Value); ral-54k: it prints the bucket entry keyed `stringify_param(&acct)` instead
+        expect(out).not.toContain('get_value_mut(&mut self.balance, &acct)');
+        expect(out).toContain('.entry(crate::runtime::stringify_param(&acct)).or_insert(Value::Null)');
+        expect(out).toContain('let mut code: Option<String> = ');
     });
 });
 
@@ -18742,5 +18743,37 @@ describe('ral-54n: safeInteger locals ordered against a number Value or each oth
     test('guard: a safeInteger default that is not an integer literal keeps the Value', () => {
         const out = run("    a (options: Dict, n: number, d: any) {\n        const batchSize = this.safeInteger (options, 'batchSize', d);\n        if (n >= batchSize) {\n            return 1;\n        }\n        return 0;\n    }\n");
         expect(out).toMatch(/let mut batchSize: Value = /);
+    });
+});
+
+describe('ral-54k: nested-write keys (bucket entry under an int37 upper key; safeCurrencyCode key of an enumerated map)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: Dict = {};\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict | undefined { return o; }\n    safeList (o: any, k: any, d: any = undefined): any[] | undefined { return o; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    account (): Dict { return {}; }\n    hold (x: any, y: any = undefined, z: any = undefined): any { return x; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const bullish = (reader: string) => "    handleBalance (message: Dict) {\n        const tradingAccountId = this.safeString (message, 'tradingAccountId');\n        const data = this.safeDict (message, 'data', {});\n        const account = this.account ();\n        const code = " + reader + " (this.safeString (data, 'assetSymbol'));\n        if ((tradingAccountId !== undefined) && (code !== undefined)) {\n            this.balance[tradingAccountId][code] = account;\n        }\n        this.hold (tradingAccountId);\n    }\n";
+    test('bullish: `this.balance[t][code] = v` with t a no-default safeString local prints the bucket entry and types code', () => {
+        const out = write ('54k-bullish', bullish ('this.safeCurrencyCode'));
+        expect(out).toContain('let mut code: Option<String> = ');
+        expect(out).toContain('if let Value::Dict(__bf03d0) = &mut self.balance { let __bf03e1 = std::sync::Arc::make_mut(__bf03d0).entry(crate::runtime::stringify_param(&tradingAccountId)).or_insert(Value::Null); if let Value::Dict(__r05d) = __bf03e1 { std::sync::Arc::make_mut(__r05d).insert(code.as_deref().unwrap_or("null").to_string(), ');
+        expect(out).not.toContain('crate::runtime::stringify_param(&code)');
+    });
+    const htx = (reader: string) => "    parse (balances: Dict[]) {\n        const subResult: Dict = {};\n        for (let j = 0; j < balances.length; j++) {\n            const balance = balances[j];\n            const code = " + reader + " (this.safeString (balance, 'currency'));\n            if (code !== undefined) {\n                subResult[code] = this.hold (balance, code, subResult);\n            }\n        }\n        const subCodes = Object.keys (subResult);\n        const out = [];\n        for (let k = 0; k < subCodes.length; k++) {\n            out.push (subResult[subCodes[k]]);\n        }\n        return out;\n    }\n";
+    test('htx: a safeCurrencyCode key of an enumerated map also read by key is an Option<String> local', () => {
+        const out = write ('54k-htx', htx ('this.safeCurrencyCode'));
+        expect(out).toContain('let mut code: Option<String> = ');
+        expect(out).toContain('.insert(code.as_deref().unwrap_or("null").to_string(), ');
+    });
+    test('negative: a safeCurrencyCode key that also reads the map back by itself keeps the local Value (digifinex)', () => {
+        const out = write ('54k-htx-self', htx ('this.safeCurrencyCode').replace ('subResult[code] = this.hold (balance, code, subResult);', 'subResult[code] = this.hold (balance, code, subResult);\n                this.hold (subResult[code]);'));
+        expect(out).toMatch(/let mut code: Value = self/);
+    });
+    test('negative: a hold() key of the same map keeps the local Value', () => {
+        const out = write ('54k-htx-neg', htx ('this.hold'));
+        expect(out).toMatch(/let mut code: Value = /);
     });
 });
