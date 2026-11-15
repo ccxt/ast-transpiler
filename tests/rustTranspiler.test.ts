@@ -17842,3 +17842,33 @@ describe('ral-51a: handleRouteAndParams results typed by name from the venue mem
         expect(out).toContain('let mut paramsResolved: Value = ');
     });
 });
+
+describe('ral-51f: a string-literal-seeded handle*AndParams slot 0 takes the short temp head when a boxed params slot 1 stays Value', () => {
+    const src = (name: string, option = 'accountTypeOptionNameThatIsAlsoQuiteLongAndLonger') =>
+        'class E {\n' +
+        '    handleOptionStringAndParams(params: any, methodName: string, optionName: string, defaultValue?: string): [string, any] { return [defaultValue, params]; }\n' +
+        '    hold(x: any): any { return x; }\n' +
+        '    run(params: any, other: any) {\n' +
+        "        let accountType = 'main';\n" +
+        '        let paramsRequestWithAVeryLongName: any = params;\n' +
+        "        [ accountType, paramsRequestWithAVeryLongName ] = this.handleOptionStringAndParams(params, '" + name + "', '" + option + "', accountType);\n" +
+        '        this.hold(paramsRequestWithAVeryLongName);\n' +
+        '        paramsRequestWithAVeryLongName = other;\n' +
+        "        if (accountType === 'contract') {\n" +
+        '            return this.hold(paramsRequestWithAVeryLongName);\n' +
+        '        }\n' +
+        '        return this.hold(accountType);\n' +
+        '    }\n' +
+        '}';
+    test('types slot 0 Option<String>, binds the temp with into_list() and keeps every line under 400', () => {
+        const output = transpiler.transpileRust(src('ffffff')).content;
+        expect(output).not.toMatch(/let mut accountType: Value/);
+        expect(output).toMatch(/let __destr_tmp = [^;]*\.into_list\(\); accountType = [^;]*; paramsRequestWithAVeryLongName = __destr_tmp\.get\(1\)\.cloned\(\)\.unwrap_or\(Value::Null\)/);
+        expect(output.split('\n').every((l: string) => l.length <= 400)).toBe(true);
+    });
+    test('a short line keeps the Vec<Value> head', () => {
+        const output = transpiler.transpileRust(src('m', 'a')).content;
+        expect(output).not.toMatch(/let mut accountType: Value/);
+        expect(output).toContain('let __destr_tmp: Vec<Value> = ');
+    });
+});

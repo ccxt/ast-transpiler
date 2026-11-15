@@ -2209,7 +2209,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (nativeList && typedSlots.every((t) => t !== undefined) && this.rustShortDestrHeads.has(node)) return `{ let ${tmpName} = ${rhs}.into_list(); ${assignments}; }`;
             // ral-50f: a string slot's unwrap that takes the typed line over 400 binds the short head instead (the line-fit
             // estimate taken on the open print can run a few chars short of the final one)
-            if (nativeList && typedSlots.every((t) => t !== undefined) && this.rustStrSlotShortHead(node, `{ ${head}; ${assignments}; }`)) return `{ let ${tmpName} = ${rhs}.into_list(); ${assignments}; }`;
+            // ral-51f: a boxed slot >= 1 (a `Dict` params slot left Value) reads `.get(i).cloned()` through the moved list's deref just as well;
+            // only slot 0 is matched by ccxt's `Vec<Value>` temp passes (rustDestrTmpBoolHead), so it alone must print typed
+            if (nativeList && this.rustStrSlotShortHeadSlots(node, typedSlots, `{ ${head}; ${assignments}; }`) && this.rustStrSlotShortHead(node, `{ ${head}; ${assignments}; }`)) return `{ let ${tmpName} = ${rhs}.into_list(); ${assignments}; }`;
             return `{ ${head}; ${assignments}; }`;
         }
         const flagWrite = isAssign && isIdentifier(left) ? this.printMarketFlagBoolWrite(left, right) : undefined; if (flagWrite !== undefined) return flagWrite;
@@ -16718,6 +16720,16 @@ export class RustTranspiler extends BaseTranspiler {
         }
         this.rustStrSlotLineMemo.set(write, fits);
         return fits;
+    }
+
+    /** ral-51f: the short head of a string slot write: every slot typed, or slot 0 typed with the boxed rest outside the test tier. */
+    rustStrSlotShortHeadSlots(write: any, typedSlots: (string | undefined)[], head: string): boolean {
+        if (typedSlots.every((t) => t !== undefined)) return true;
+        if (typedSlots[0] === undefined || this.rustTestTierSource(write) || /(?:^|[\\/])ts[\\/]src[\\/]test[\\/]/.test(String(write.getSourceFile().fileName))) return false;
+        // only a typed line that is itself over 400 (never one within the slack): a boxed slot keeps its long head otherwise
+        let depth = 0;
+        for (let up: any = write; up !== undefined && !isFunctionLike(up); up = up.parent) if (isBlock(up)) depth++;
+        return (depth + 1) * 4 + head.length > 400;
     }
 
     /** ral-50f: the typed destructure line of a string slot write would newly cross 400 chars: the short head keeps it under. */
