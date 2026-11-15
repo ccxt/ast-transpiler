@@ -4472,7 +4472,8 @@ export class RustTranspiler extends BaseTranspiler {
         const node: any = this.unwrapParens(init);
         if (node === undefined) return false;
         if (this.literalKindOfNode(node) !== undefined || this.rustScalarIntLiteral(node) !== undefined || this.rustScalarFloatLiteral(node) !== undefined) return true;
-        if (isBinaryExpression(node)) return RustTranspiler.RUST_SCALAR_ARITH_OPS.has(node.operatorToken.kind);
+        if (isBinaryExpression(node)) return RustTranspiler.RUST_SCALAR_ARITH_OPS.has(node.operatorToken.kind) || this.rustBoolLeafLogical(node);
+        if (isPrefixUnaryExpression(node) && node.operator === SyntaxKind.ExclamationToken) return this.rustBoolLeafLogical(node);
         if (this.rustSbJoinShape(node)) return true;
         if (isIdentifier(node) || isConditionalExpression(node) || this.rustScalarStrMethod(node, true) !== undefined || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node)) return true;
         if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustVenueTypedCall(node) !== undefined) return true;
@@ -4904,6 +4905,9 @@ export class RustTranspiler extends BaseTranspiler {
         const marketField = fresh ? this.rustMarketFieldScalar(node) : undefined; if (marketField !== undefined) return marketField.kind;
         // a comparison over reader / literal operands that already prints as a native `bool`
         if (fresh && isBinaryExpression(node) && RustTranspiler.COMPARISON_OPS.has(node.operatorToken.kind) && this.rustBoolCompareSeed(node)) return 'bool';
+        // ral-43a: `a || b` / `a && b` / `!a` whose every leaf is a same-function local: `bool` when each leaf is a `bool`
+        // scalar local (the solver's current decision; JS hands back a boolean operand, so the Rust logical is that value)
+        if (fresh && this.rustBoolLeafLogical(node) && this.rustBoolNativeText(node) !== undefined) return 'bool';
         const cast = this.rustStrCastCall(node); if (cast !== undefined) return this.rustScalarValueKind(cast, fresh) === 'ostr' ? 'ostr' : undefined;
         if (fresh && this.rustClockString(node)) return 'str';
         if (fresh && this.rustSbJoinShape(node)) return 'str';
@@ -9017,6 +9021,31 @@ export class RustTranspiler extends BaseTranspiler {
             return isBinaryExpression(inner) && this.isLogicalOp(inner.operatorToken.kind) && (owns(inner.left) || owns(inner.right));
         };
         return owns(node) ? this.rustBoolNativeText(node) : undefined;
+    }
+
+    /** ral-43a: `!x` / `x || y` / `x && y` (nested, parenthesised) whose leaves are identifiers of locals declared in the
+     *  same function (never a parameter or a member): the shape the bool seed above reads through the solver. */
+    rustBoolLeafLogical(expr: any): boolean {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined) return false;
+        const leaf = (n: any): boolean => {
+            const inner: any = this.unwrapParens(n);
+            if (isIdentifier(inner)) {
+                const d: any = this.rustDeclaredNode(inner);
+                return d !== undefined && isVariableDeclaration(d) && d.name !== inner && this.rustEnclosingFunction(d) === this.rustEnclosingFunction(node);
+            }
+            if (isPrefixUnaryExpression(inner)) return inner.operator === SyntaxKind.ExclamationToken && leaf(inner.operand);
+            // `x === 'lit'` / `x !== undefined` over such a local: the comparison's native text decides (rustBoolNativeText)
+            if (isBinaryExpression(inner) && this.isEqualityOp(inner.operatorToken.kind)) {
+                const l: any = this.unwrapParens(inner.left);
+                const r: any = this.unwrapParens(inner.right);
+                const lit = (n: any) => this.literalKindOfNode(n) === 'string' || this.literalKindOfNode(n) === 'null';
+                return (leaf(l) && lit(r)) || (lit(l) && leaf(r));
+            }
+            return isBinaryExpression(inner) && this.isLogicalOp(inner.operatorToken.kind) && leaf(inner.left) && leaf(inner.right);
+        };
+        if (isPrefixUnaryExpression(node)) return node.operator === SyntaxKind.ExclamationToken && leaf(node.operand);
+        return isBinaryExpression(node) && this.isLogicalOp(node.operatorToken.kind) && leaf(node);
     }
 
     /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
@@ -18543,7 +18572,11 @@ export class RustTranspiler extends BaseTranspiler {
             const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0
                 || this.rustBuiltReturnBoxUse(n, init, extendReuse) && ++defaultedBoxes > 0 || this.rustOptReaderBoxUse(n, init) && ++optionalBoxes > 0
                 || this.rustOptionalParamsSlot(up, n) && (from === 'dict' || from === 'api' && this.rustDeclaredEndpointKind(init) === 'dict') && ++paramsBoxes > 0
-                || nilDeclared && this.rustDeclaredEndpointBoxUse(n) && ++endpointBoxes > 0) && boxedElementUses.push(n) > 0;
+                || nilDeclared && this.rustDeclaredEndpointBoxUse(n) && ++endpointBoxes > 0
+                // ral-43a: a declared `Promise<Dict>` / `Promise<List>` endpoint answer (plain form, read natively) handed on
+                // whole as an object-literal value or the return: the box gives back the declared container (the same
+                // invariant the plain form's reads take); an optional local refuses it below (defaulted box)
+                || endpoint && from !== 'api' && !nilDeclared && this.rustDeclaredEndpointWholeBox(n) && ++defaultedBoxes > 0) && boxedElementUses.push(n) > 0;
             const asArg: any = isAsExpression(up) && up.expression === n && isCallExpression(up.parent) && Array.from(up.parent.arguments).includes(up) ? up : undefined;
             if (asArg !== undefined && this.rustLentAsHandOff(asArg, init, from, endpoint, nilDeclared)) return ++lentResponses > 0 && ++reads > 0 && (this.rustLentAsNullable(init, nilDeclared, endpoint) ? ++lentNullable > 0 : true);
             // ral-40a: the sole extra operand of a base `extend` takes the optional map lent (`&[&x]`, MergeOperands for
@@ -20256,6 +20289,14 @@ export class RustTranspiler extends BaseTranspiler {
     rustListPassthroughCallee(call: any, method: string): boolean {
         const member: any = this.rustScalarCallee(call);
         return member !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(member.getSourceFile?.()?.fileName ?? '')) && !this.rustVenueReturnTypesHas(call, method);
+    }
+
+    /** ral-43a: `{ 'k': x }` (a plain object literal, not a destructuring target) or `return x` of a held endpoint answer. */
+    rustDeclaredEndpointWholeBox(n: any): boolean {
+        const up: any = n.parent;
+        if (up === undefined || this.rustScalarInNestedWrite(n, true)) return false;
+        if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n && isObjectLiteralExpression(up.parent) && !this.rustInDestructureWrite(n);
+        return isReturnStatement(up) && up.expression === n;
     }
 
     // ── rustDeclaredEndpointBoxUse (ral-ld): a declared-endpoint optional container handed on whole ──
