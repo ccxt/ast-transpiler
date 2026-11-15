@@ -7292,6 +7292,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustHandedPending.has(source)) { this.rustSbAliasDeferred.add(init.parent); return false; }
             return this.rustHandedDictLocal(source);
         }
+        // ral-53a: a handed `c ? <map> : <map>` local (decided first; asked from inside its own decision, re-asked once it settles)
+        if (source !== undefined && isVariableDeclaration(source) && this.rustHandedTernaryLocal(source) && this.rustHandedDictLocal(source)) return true;
+        if (source !== undefined && isVariableDeclaration(source) && this.rustHandedPending.has(source)) { if (isVariableDeclaration(init.parent) && init.parent.initializer === init) this.rustSbAliasDeferred.add(init.parent); return false; }
         // ral-40h: a container alias asked from inside its source's open decision is re-asked once the source settles
         if (source !== undefined && isVariableDeclaration(source) && this.rustBorrowedPending.has(source) && this.rustContainerAliasAsking.has(init)) { this.rustSbAliasDeferred.add(init.parent); return false; }
         // ral-44c: `let y = params` of a typed unified method's never-rebound `params` (a map on every path, `Into<Params>`)
@@ -20189,6 +20192,9 @@ export class RustTranspiler extends BaseTranspiler {
                 || this.rustBuiltReturnBoxUse(n, init, extendReuse) && ++defaultedBoxes > 0 || this.rustOptReaderBoxUse(n, init) && ++optionalBoxes > 0
                 || this.rustOptionalParamsSlot(up, n) && (from === 'dict' || from === 'api' && this.rustDeclaredEndpointKind(init) === 'dict') && ++paramsBoxes > 0
                 || nilDeclared && this.rustDeclaredEndpointBoxUse(n) && ++endpointBoxes > 0
+                // ral-53a: a shared-map alias handed whole to a plain `Value` slot of a `this.` method (an endpoint argument): the
+                // box re-wraps the very map the `Value` alias held (`Value::Dict(x)` at the last use, else `Value::from(&x)`)
+                || sbAlias && !nilDeclared && this.rustSbAliasValueSlot(n) && ++defaultedBoxes > 0
                 // one endpoint-declaration proof for a non-nil plain local (ral-43a / ral-44a / ral-44d): a declared `Promise<Dict>` /
                 // `Promise<List>` answer (plain form, read natively) handed on whole boxes once and gives back the declared container
                 // (an optional local refuses it below: defaulted box); a declared Dict answer used as its own safeDict default stays Dict
@@ -22286,6 +22292,19 @@ export class RustTranspiler extends BaseTranspiler {
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
         return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+    }
+
+    /** ral-53a: a plain `Value` argument slot of a `this.` method (not extend / omit, not a lent slot, no loop between). */
+    rustSbAliasValueSlot(n: any): boolean {
+        const up: any = n.parent;
+        if (up === undefined || !isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || this.rustScalarInNestedWrite(n, true)) return false;
+        const callee = String(up.expression.name.text);
+        if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(n);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !this.rustAliasInitOutsideLoop(up, declaration)) return false;
+        return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && !this.rustLentParamsSlot(up, n) && !this.rustOptionalParamsSlot(up, n)
+            && this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
     }
 
     // ── rustDeclaredEndpointBoxUse (ral-ld): a declared-endpoint optional container handed on whole ──
@@ -27883,6 +27902,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(up) && isReturnStatement(up.parent) && this.rustNilSlotDictCandidate(declaration)) return true;
         // wi: the params slot of a destructure handed back whole in the returned tuple: moved there (its last use)
         if (isArrayLiteralExpression(up) && isReturnStatement(up.parent) && declaration?.kind === SyntaxKind.BindingElement && declaration.parent?.elements?.indexOf(declaration) === 1) return true;
+        // ral-53a: a `c ? <map> : <map>` local read whole as the initializer of a further single `let y = x` (same function, no loop
+        // in between) that no typed rule claims: y keeps its `Value` box (`Value::from(&x)`, or `Value::Dict(x)` at the last use)
+        if (isVariableDeclaration(up) && up.initializer === n && isVariableDeclaration(declaration) && this.rustHandedTernaryLocal(declaration)
+            && this.rustEnclosingFunction(up) === this.rustEnclosingFunction(declaration) && this.rustAliasInitOutsideLoop(up, declaration)) return this.rustSlotTargetStaysValue(up);
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression)
             || (up.expression.expression.kind !== SyntaxKind.ThisKeyword && up.expression.expression.kind !== SyntaxKind.SuperKeyword)) return false;
         const callee = String(up.expression.name.text);
@@ -27891,6 +27914,15 @@ export class RustTranspiler extends BaseTranspiler {
         // the `impl Into<crate::Params>` slot of a typed unified call takes the boxed map as it took the `Value` local
         if (this.rustTypedParamsSlot(up, Array.from(up.arguments).indexOf(n))) return true;
         return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+    }
+
+    /** ral-53a: no loop or closure between the source's declaration and the alias declaration. */
+    rustAliasInitOutsideLoop(alias: any, declaration: any): boolean {
+        for (let p: any = alias.parent; p !== undefined && !(p.pos <= declaration.pos && declaration.end <= p.end); p = p.parent) {
+            if (isFunctionLike(p) || p.kind === SyntaxKind.ForStatement || p.kind === SyntaxKind.ForOfStatement || p.kind === SyntaxKind.ForInStatement
+                || p.kind === SyntaxKind.WhileStatement || p.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
     }
 
     /** No loop or closure between the destructure and this use: a box there copies the slot once. */
