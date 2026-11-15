@@ -16980,3 +16980,27 @@ describe('ral-46f: a `{}` reuse literal written `x = y as Dict` right after `y` 
         expect(out).toMatch(/let mut data: Value = /);
     });
 });
+
+describe('ral-47d: nil-declared string locals that alias each other are solved together', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o[k1]; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    async privatePostX (p: any = {}): Promise<any> { return p; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-47d-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    const body = (other: string) => "    async m (params = {}) {\n        let sellLeverage: Str = undefined;\n        let buyLeverage: Str = undefined;\n        const leverage = this.safeString (params, 'leverage');\n        if (leverage === undefined) {\n            sellLeverage = this.safeString2 (params, 'sell_leverage', 'sellLeverage');\n            buyLeverage = " + other + ";\n            if (buyLeverage === undefined) {\n                buyLeverage = sellLeverage;\n            }\n            if (sellLeverage === undefined) {\n                sellLeverage = buyLeverage;\n            }\n        } else {\n            sellLeverage = leverage;\n            buyLeverage = leverage;\n        }\n        const request: Dict = { 'buyLeverage': buyLeverage, 'sellLeverage': sellLeverage };\n        return await this.privatePostX (request);\n    }\n";
+    test('bybit setMarginMode sellLeverage / buyLeverage both print Option<String>', () => {
+        const out = run(body("this.safeString2 (params, 'buy_leverage', 'buyLeverage')"));
+        expect(out).toContain('let mut sellLeverage: Option<String> = None;');
+        expect(out).toContain('let mut buyLeverage: Option<String> = None;');
+        expect(out).toContain('if (buyLeverage.is_none()) {');
+    });
+    test('guard: a partner written from a non-string source keeps both Value', () => {
+        const out = run(body("this.safeValue (params, 'buy_leverage')"));
+        expect(out).toContain('let mut sellLeverage: Value = Value::Null;');
+        expect(out).toContain('let mut buyLeverage: Value = Value::Null;');
+    });
+});

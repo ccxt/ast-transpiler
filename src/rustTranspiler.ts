@@ -2869,6 +2869,10 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-45b: `x = x.slice(..)` / `x.toLowerCase()` keeps x's own optional string (the native
             // forms map `None` through), so the self write adds no kind of its own
             if (write === undefined && this.rust45bSelfStrWrite(rhs, declaration)) write = 'ostr';
+            // ral-47d: `x = y` between two nil-declared string locals of the function (bybit sellLeverage / buyLeverage):
+            // neither seeds before the other, so while the solver seeds assume the partner's optional string; the later
+            // passes re-prove the write against the partner's settled decision (a partner left `Value` drops both)
+            if (write === undefined && this.rustScalarSeeding && this.rustNilStrPartner(rhs, declaration, scope)) write = 'ostr';
             joined = this.rustScalarJoinKinds(joined, write);
             if (joined === undefined) return undefined;
         }
@@ -2904,6 +2908,18 @@ export class RustTranspiler extends BaseTranspiler {
         // boxed uses are checked against the printed method lines
         if (boxed.length > 0) this.rustScalarGuarded.add(declaration);
         return kind;
+    }
+
+    /** ral-47d: `rhs` names another nil-declared (`let y: Str = undefined`) string local of the same function. */
+    rustNilStrPartner(rhs: any, declaration: any, scope: any): boolean {
+        if (rhs === undefined || !isIdentifier(rhs) || rhs.text === 'undefined') return false;
+        const partner: any = this.rustDeclaredNode(rhs);
+        if (partner === undefined || partner === declaration || !isVariableDeclaration(partner) || !isIdentifier(partner.name)) return false;
+        if (this.rustEnclosingFunction(partner) !== scope || partner.type === undefined) return false;
+        if (partner.initializer !== undefined && this.literalKindOfNode(this.unwrapParens(partner.initializer)) !== 'null') return false;
+        const list: any = partner.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & NodeFlags.Const) !== 0) return false;
+        return this.primitiveKindOfType(this.typeOfNodeIfAny(partner.name)) === 'string';
     }
 
     /** ral-45b: the local has a `x = x.slice(..)` / case self write or a `x += ..` append (the forms lift 1 / 2 admit). */
