@@ -18344,3 +18344,59 @@ describe('ral-53k: kind unification (Option<Dict> string key arm, marketCodes op
         expect(out).toMatch(/let mut code: Value = /);
     });
 });
+
+describe('ral-53h: a snapshot awaited from client.future (h) takes the kind of its resolves', () => {
+    const base: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: any, limit: any): any { return limit; }\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    futures: any = {};\n    resolve (result: any, messageHash: string): any { return result; }\n    future (messageHash: string): any { return undefined; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport type Int = number | undefined;\nexport default class Exchange {\n    positions: ArrayCache = undefined;\n    newUpdates: boolean = true;\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    findMessageHashes (client: any, element: string): string[] { return []; }\n    filterByArray (objects: any, key: any, values: any = undefined, indexed = true): any { return objects; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    isEmpty (x: any): boolean {\n        return x === undefined;\n    }\n}\n",
+    };
+    const venue = "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchPositions (client: Client) {\n        const cache = this.positions;\n        if (cache === undefined) {\n            const snapshot = await client.future ('fetchPositionsSnapshot');\n            return snapshot;\n        }\n        return cache;\n    }\n    loadSnapshot (client: Client, messageHash: string) {\n        this.positions = new ArrayCache ();\n        const cache = this.positions;\n        if (messageHash in client.futures) {\n            const future = client.futures[messageHash];\n            future.resolve (cache);\n        }\n    }\n    handlePositions (client: Client, message: any) {\n        const rows = [ message ];\n        const messageHashes = this.findMessageHashes (client, 'positions::');\n        for (let i = 0; i < messageHashes.length; i++) {\n            const messageHash = messageHashes[i];\n            const positions = this.filterByArray (rows, 'symbol', [], false);\n            if (!this.isEmpty (positions)) {\n                client.resolve (positions, messageHash);\n            }\n        }\n    }\nSPARE}\n";
+    const emit = (spare: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-flight53h-'));
+        const files = { ...base, 'ts/src/pro/venue.ts': venue.replace ('SPARE', spare) };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        try {
+            return transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    };
+    test('a findMessageHashes element resolve cannot meet the literal future hash: the snapshot is an optional cache', () => {
+        const out = emit ('');
+        expect(out).toContain('let mut snapshot: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: a findMessageHashes literal the future hash contains keeps the snapshot a Value', () => {
+        const out = emit ('    handleOther (client: Client, message: any) {\n        const hashes = this.findMessageHashes (client, \'Snapshot\');\n        client.resolve ([ message ], hashes[0]);\n    }\n');
+        expect(out).toContain('let mut snapshot: Value = ');
+    });
+    test('negative: a findMessageHashes list that is rebound keeps the snapshot a Value', () => {
+        const out = emit ('    handleOther (client: Client, message: any) {\n        let hashes = this.findMessageHashes (client, \'x::\');\n        hashes = [ message ];\n        client.resolve ([ message ], hashes[0]);\n    }\n');
+        expect(out).toContain('let mut snapshot: Value = ');
+    });
+});
+
+describe('ral-53h: a const list of handler references read by index', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n";
+    const client = "export default class Client {\n    resolve (v: any, h: string | undefined = undefined): void {}\n}\n";
+    const pro = "import Exchange from '../base/Exchange';\nimport type { Dict } from '../base/Exchange';\nimport Client from '../base/ws/Client';\nexport default class venue extends Exchange {\n    handleA (client: Client, message: Dict) {}\n    handleB (client: Client, message: Dict) {}\n    handleMessage (client: Client, message: Dict) {\n        const handlers = [ this.handleA, this.handleB ];\n        for (let j = 0; j < handlers.length; j++) {\n            const handler = handlers[j];\n            handler.call (this, client, message);\n        }\n    }\n    handleOther (client: Client, message: Dict) {\n        const others = [ this.handleA, this.handleB ];\n        others.push (message);\n        for (let j = 0; j < others.length; j++) {\n            const other = others[j];\n            other.call (this, client, message);\n        }\n    }\n}\n";
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral53h-list');
+        fs.mkdirSync (path.join (dir, 'ts/src/base/ws'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/base/ws/Client.ts'), client);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), pro);
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    });
+    test('an element of a read-only list of this.<method> references is Option<String>', () => {
+        expect(out).toMatch(/let mut handler: Option<String> = [^\n]*\.as_str\(\)\.map\(str::to_owned\);/);
+    });
+    test('negative: a list that is also pushed to keeps the element a Value', () => {
+        expect(out).toMatch(/let mut other: Value = /);
+    });
+});

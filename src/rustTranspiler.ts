@@ -23566,6 +23566,8 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.name === node) return false;
         const literal: any = this.rustSkipWrappers(declaration.initializer);
+        // ral-53h: luno `const handlers = [ this.handleOrderBook, this.handleTrades ]` read as `handlers[j]` / `handlers.length`
+        if (literal !== undefined && isArrayLiteralExpression(literal)) return this.rustHandlerList(declaration, literal);
         if (literal === undefined || !isObjectLiteralExpression(literal) || literal.properties.length === 0) return false;
         for (const p of literal.properties as any) {
             if (p.kind !== SyntaxKind.PropertyAssignment) return false;
@@ -23592,6 +23594,23 @@ export class RustTranspiler extends BaseTranspiler {
             const use: any = up.parent;
             return (isVariableDeclaration(use) && use.initializer === up)
                 || (isBinaryExpression(use) && use.right === up && use.operatorToken.kind === SyntaxKind.EqualsToken);
+        });
+    }
+
+    /** ral-53h: a never-rebound const list literal of `this.<method>` references, only read by `xs[i]` (as a declaration
+     *  initializer) and `xs.length`: an element read is a handler name, or Null past the end. */
+    rustHandlerList(declaration: any, literal: any): boolean {
+        if (literal.elements.length === 0 || !(declaration.parent?.flags & NodeFlags.Const)) return false;
+        for (const v of literal.elements as any) {
+            if (!isPropertyAccessExpression(v) || v.expression.kind !== SyntaxKind.ThisKeyword) return false;
+            const member: any = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(v.name));
+            if (member === undefined || !isMethodDeclaration(member)) return false;
+        }
+        return this.rustBlockLocalUsesAll(declaration, String(declaration.name.text), (n: any) => {
+            const up: any = n.parent;
+            if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length' && !this.isNativeWriteTargetBase(up)) return true;
+            if (up?.kind !== SyntaxKind.ElementAccessExpression || up.expression !== n || this.isNativeWriteTargetBase(up)) return false;
+            return isVariableDeclaration(up.parent) && up.parent.initializer === up;
         });
     }
 
@@ -24379,7 +24398,7 @@ export class RustTranspiler extends BaseTranspiler {
     // cache field, a cache-map read, a cache constructor or a typed cache local). A hash that is not built from
     // literals and locals of the method, a class with ws subclasses or a ws parent, or any other resolve under a
     // matching hash fails the proof and the local stays `Value`.
-    private rustWsResolveTables = new WeakMap<Node, Array<{ pats: Array<Array<string | null>>, kind: string }> | null>();
+    private rustWsResolveTables = new WeakMap<Node, Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string }> | null>();
     private rustWsWatchKinds = new WeakMap<Node, 'book' | 'cache' | 'dict' | 'list' | null>();
     // wrapper parameter -> the caller's argument (and the caller's own bindings) while a wrapper hash is read
     private rustWsHashEnv: Map<Node, { arg: any, env: Map<Node, any> | undefined }> | undefined = undefined;
@@ -24405,6 +24424,11 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.PlusToken) return cross(this.rustWsHashPatterns(n.left, depth + 1, seen), this.rustWsHashPatterns(n.right, depth + 1, seen));
         if (isConditionalExpression(n)) return [ ...this.rustWsHashPatterns(n.whenTrue, depth + 1, seen), ...this.rustWsHashPatterns(n.whenFalse, depth + 1, seen) ].slice(0, 16);
+        // ral-53h: an element of `this.findMessageHashes (client, 'lit')` is a futures key containing 'lit'
+        if (isElementAccessExpression(n) && this.rustWsFoundRefine) {
+            const lit = this.rustWsFoundHashesLiteral(n.expression);
+            return lit === undefined ? any : [[ null, lit, null ]];
+        }
         if (isCallExpression(n)) {
             // ral-ye: `this.safeString (list, i, d)` reads an element of a hash list (or its literal default)
             if (isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword && String(n.expression.name.text) === 'safeString'
@@ -24809,8 +24833,48 @@ export class RustTranspiler extends BaseTranspiler {
         return false;
     }
 
+    /** ral-53h: set while the resolve table builds its `rpats` (read only by `await client.future (h)`; watch calls keep `pats`). */
+    private rustWsFoundRefine = false;
+
+    /** ral-53h: the literal of a never-rebound `const xs = this.findMessageHashes (client, 'lit')` local that is only read
+     *  (`xs[i]`, `xs.length`); the base method keeps the futures keys whose text contains 'lit'. */
+    rustWsFoundHashesLiteral(list: any): string | undefined {
+        const id: any = this.rustStripWrappers(list);
+        if (!isIdentifier(id)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(id);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || !(declaration.parent?.flags & NodeFlags.Const)) return undefined;
+        const init: any = this.rustStripWrappers(declaration.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(init.expression.name.text) !== 'findMessageHashes' || init.arguments.length !== 2 || !isStringLiteralLikeNode(init.arguments[1])) return undefined;
+        const callee: any = this.rustScalarCallee(init);
+        if (callee === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile?.()?.fileName ?? ''))) return undefined;
+        const lit = String(init.arguments[1].text);
+        if (lit === '') return undefined;
+        const scope: any = findAncestor(declaration, isFunctionLike);
+        if (scope === undefined) return undefined;
+        for (const r of this.rustScopeNameNodes(scope, String(declaration.name.text)) as any[]) {
+            if (!isIdentifier(r) || r === declaration.name || (isPropertyAccessExpression(r.parent) && r.parent.name === r)) continue;
+            if (this.rustDeclarationOfIdentifier(r) !== declaration) return undefined;
+            const up: any = r.parent;
+            if (isPropertyAccessExpression(up) && up.expression === r && String(up.name.text) === 'length' && !this.isNativeWriteTargetBase(up)) continue;
+            if (isElementAccessExpression(up) && up.expression === r && !this.isNativeWriteTargetBase(up) && !isDeleteExpression(up.parent)) continue;
+            return undefined;
+        }
+        return lit;
+    }
+
+    rustWsRefinedHashPatterns(hash: any): Array<Array<string | null>> {
+        const save = this.rustWsFoundRefine;
+        this.rustWsFoundRefine = true;
+        try {
+            return this.rustWsHashPatterns(hash, 0, new Set());
+        } finally {
+            this.rustWsFoundRefine = save;
+        }
+    }
+
     /** Every resolve of the ws class with its hash patterns and kind; null when the class has ws relatives. */
-    rustWsResolveTable(cls: any): Array<{ pats: Array<Array<string | null>>, kind: string }> | null {
+    rustWsResolveTable(cls: any): Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string }> | null {
         let table = this.rustWsResolveTables.get(cls);
         if (table !== undefined) return table;
         table = [];
@@ -24836,7 +24900,7 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-ye: a fixed-kind resolve (cleanUnsubscription's `true`) reads its hash per caller too
             const sites = site !== undefined ? this.rustWsHelperCallSites(cls, site, [ hash, x ]) : undefined;
             if (sites === undefined) {
-                table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), kind: kind ?? kindOf(x) });
+                table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(x) });
                 return;
             }
             // a helper's parameter stands for each caller's argument: one entry per call site
@@ -24845,7 +24909,7 @@ export class RustTranspiler extends BaseTranspiler {
                 this.rustWsHashEnv = env;
                 try {
                     const bound = (e: any) => { const d: any = e !== undefined && isIdentifier(this.rustStripWrappers(e)) ? this.rustDeclarationOfIdentifier(this.rustStripWrappers(e)) : undefined; return d !== undefined && env.has(d) ? env.get(d)!.arg : e; };
-                    table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), kind: kind ?? kindOf(bound(x)) });
+                    table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(bound(x)) });
                 } finally {
                     this.rustWsHashEnv = save;
                 }
@@ -25000,7 +25064,9 @@ export class RustTranspiler extends BaseTranspiler {
         const awaited: any = this.unwrapParens(init);
         if (awaited?.kind !== SyntaxKind.AwaitExpression) return undefined;
         const call: any = this.unwrapParens(awaited.expression);
-        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        // ral-53h: `await client.future (h)` on the runtime handle awaits the same resolves as a watch of hash h
+        const flight = isCallExpression(call) && this.rustWsFlightCall(call) && call.arguments.length === 1;
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || (!flight && call.expression.expression.kind !== SyntaxKind.ThisKeyword)) return undefined;
         const known = this.rustWsWatchKinds.get(call);
         if (known !== undefined) return known ?? undefined;
         this.rustWsWatchKinds.set(call, null);
@@ -25012,7 +25078,7 @@ export class RustTranspiler extends BaseTranspiler {
         let hashes: Array<Array<string | null>> | undefined;
         try {
             this.rustWsHashEnv = undefined;
-            hashes = this.rustWsAwaitedHashes(call, cls, 0);
+            hashes = flight ? this.rustWsHashPatterns(this.rustStripWrappers(call.arguments[0]), 0, new Set()) : this.rustWsAwaitedHashes(call, cls, 0);
         } finally {
             this.rustWsHashEnv = save;
         }
@@ -25021,7 +25087,7 @@ export class RustTranspiler extends BaseTranspiler {
         let matched = 0;
         let none = false;
         for (const r of table) {
-            if (!r.pats.some((rp) => hashes!.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
+            if (!((flight ? r.rpats : undefined) ?? r.pats).some((rp) => hashes!.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
             if (r.kind === 'none') { none = true; continue; }
             if (r.kind !== 'book' && r.kind !== 'cache' && r.kind !== 'dict' && r.kind !== 'list') return undefined;
             if (kind !== undefined && kind !== r.kind) return undefined;
