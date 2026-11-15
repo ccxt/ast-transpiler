@@ -20266,7 +20266,8 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false
             || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return undefined;
         // The typed declaration line must stay within the 400-char line budget.
-        if (declaration.initializer !== undefined && String(declaration.initializer.getText()).split('\n')[0].length > 240) return undefined;
+        // ral-55a: or a literal-key `omit` whose printed declaration line fits (a long key list prints about as wide as its TS)
+        if (declaration.initializer !== undefined && String(declaration.initializer.getText()).split('\n')[0].length > 240 && !this.rustOmitDeclLineFits(declaration)) return undefined;
         let reads = 0;
         let nullTests = 0;
         let writes = 0;
@@ -23331,6 +23332,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustBorrowedLocalKind(declaration) !== undefined || this.rustLentListLocal(declaration) || this.rustReaderTables.has(declaration)
             || this.rustSafeMarketLocalOf(node) !== undefined || this.rustMarketSlotParamOf(node) !== undefined || this.rustTypedMarketLocalOf(node) !== undefined
             || this.rustCurrencySlotParamOf(node) !== undefined || this.rustCurrencyLocalOf(node) !== undefined) return `&${text}`;
+        // ral-55a: a reassigned handed map (ral-ra) lent to the any-key reader its decision admitted
+        if (isVariableDeclaration(declaration) && !this.rustTestTierSource(call) && this.rustHandedDictLocal(declaration) && this.rustLocalIsReassigned(declaration, String((declaration.name as any).text))) return `&${text}`;
         // ral-50i: a literal-built dict bearer lent to the reader
         if (this.rustBearerReaderLend(node) && this.rustDictBearerDeclaration(node) !== undefined) return `&${text}`;
         if (this.rustMarketStoreElementOf(node) !== undefined) return `&*${text}`;
@@ -26993,7 +26996,7 @@ export class RustTranspiler extends BaseTranspiler {
                 || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false
                 || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
             // The typed declaration line must stay within the 400-char line budget.
-            if (!nilSlot && String(declaration.initializer.getText()).split('\n')[0].length > 240) return false;
+            if (!nilSlot && String(declaration.initializer.getText()).split('\n')[0].length > 240 && !this.rustOmitDeclLineFits(declaration)) return false;
         }
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
@@ -27032,7 +27035,9 @@ export class RustTranspiler extends BaseTranspiler {
             }
             const ok = (call.arguments[0] === n && this.rustBorrowedDictReader(call) !== undefined)
                 || (call.arguments[0] === n && call.arguments.length === 2 && this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_OMIT))
-                || this.rustHandedDictExtendOperand(call) === n || this.rustLentParamsSlot(call, n) || this.rustExtendHeadUse(n);
+                || this.rustHandedDictExtendOperand(call) === n || this.rustLentParamsSlot(call, n) || this.rustExtendHeadUse(n)
+                // ral-55a: a reassigned handed map read by a hand-written any-key reader (`safeString2 (x, 'a', 'b')`) is lent
+                || (rewritten && call.arguments[0] === n && !this.rustTestTierSource(call) && this.rustBorrowedAnyKeyReader(call));
             if (ok) uses++;
             // an optional-slice hand-off boxes the shared map back, so it only rides along with a by-reference use
             const boxed = this.rustOptionalParamsSlot(call, n) || this.rustHandedSlotBoxUse(n, declaration);
@@ -27059,8 +27064,31 @@ export class RustTranspiler extends BaseTranspiler {
     rustHandedMapInit(declaration: any): boolean {
         if (!isVariableDeclaration(declaration)) return false;
         const init: any = this.rustSkipWrappers(declaration.initializer);
+        if (init !== undefined && this.rustOmitOfDict(init) && this.rustOmitDeclLineFits(declaration)) return true;
         return init !== undefined && (this.rustBaseCallNamed(init, RustTranspiler.RUST_ALWAYS_MAP_HELPERS) || (this.rustOmitOfDict(init) && this.rustOmitLineFits(init)))
             && String(declaration.initializer.getText()).split('\n')[0].length <= 240;
+    }
+
+    /** ral-55a: `let x: Dict = this.omit (y, [ 'a', .. ])` (identifier head, literal keys, one line): the typed declaration
+     *  `let mut x: crate::value::Dict = self.omit(&y, &["a", ..], &[]).into_dict();` measured as printed, indent included,
+     *  stays within the 400-char line budget (the TS-text 240-char guess refuses a long key list that prints narrower). */
+    rustOmitDeclLineFits(declaration: any): boolean {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        if (init === undefined || !isCallExpression(init) || !this.rustOmitLiteralKeys(init) || String(init.getText()).includes('\n')) return false;
+        const head: any = this.rustSkipWrappers(init.arguments[0]);
+        if (head === undefined || !isIdentifier(head)) return false;
+        let depth = 0;
+        for (let up: any = declaration.parent; up !== undefined; up = up.parent) if (isBlock(up)) depth++;
+        const keys = (init.arguments[1] as any).elements.map((e: any) => JSON.stringify(String(e.text))).join(', ');
+        const line = `let mut ${declaration.name.text}: crate::value::Dict = self.omit(&${head.text}, &[${keys}], &[]).into_dict();`;
+        return depth * 4 + line.length <= 400;
+    }
+
+    /** ral-55a: a plain `let x = <map>` (rustHandedMapInit) that is reassigned in its function. */
+    rustHandedReassignedMap(declaration: any): boolean {
+        return isVariableDeclaration(declaration) && isIdentifier(declaration.name) && !this.rustNilSlotDictCandidate(declaration) && this.rustHandedMapInit(declaration)
+            && this.rustLocalIsReassigned(declaration, String(declaration.name.text));
     }
 
     /** `n = <map>` as a statement: an always-map helper, an omit of `n` itself, or an omit of a proven map. */
@@ -27178,9 +27206,11 @@ export class RustTranspiler extends BaseTranspiler {
         let depth = 0;
         for (let up: any = statement; up !== undefined && !isFunctionLike(up); up = up.parent) if (isBlock(up)) depth++;
         let width = 0;
+        let firstLine = '';
         try {
             // class body + method body + nested blocks: the method's own block is counted by the loop, the impl adds one level
-            width = (depth + 1) * 4 + String(this.printNode(statement, 0)).trim().split('\n')[0].length;
+            firstLine = String(this.printNode(statement, 0)).trim().split('\n')[0];
+            width = (depth + 1) * 4 + firstLine.length;
         } catch (e) {
             return false;
         }
@@ -27204,8 +27234,18 @@ export class RustTranspiler extends BaseTranspiler {
         // sa: a destructure over a native list whose slots all print typed binds the temp `= X.into_list()` instead of
         // `: Vec<Value> = X.as_array().cloned().unwrap_or_default()` (41 chars shorter); the print falls back when a slot stays boxed
         const short = ': Vec<Value>'.length + '.as_array().cloned().unwrap_or_default()'.length - '.into_list()'.length;
-        if (write === undefined || !isBinaryExpression(write) || !isArrayLiteralExpression(write.left) || !this.rustNativeListSource(write.right) || budget - short > 400) return false;
-        if (!(write.left.elements as any).every((el: any) => isIdentifier(el) && this.rustNilSlotWrite(el))) return false;
+        // ral-55a: the handed map's own slot-1 write is measured exactly: its argument `x.clone()` prints `&x` (-7), its slot read
+        // takes `.into_dict()` (+12) and no `Value::Dict()` box
+        const own = isIdentifier(n) ? `${String(n.text)}.clone()` : undefined;
+        const exact = own === undefined || !firstLine.includes(own) ? undefined : width + reserve + '.into_dict()'.length - (own.length - String(n.text).length - 1) - short;
+        if (write === undefined || !isBinaryExpression(write) || !isArrayLiteralExpression(write.left) || !this.rustNativeListSource(write.right) || (budget - short > 400 && !(exact !== undefined && exact <= 400 && this.rustDictSlotOfWrite(n)))) return false;
+        // ral-55a: or the handed map's own slot-1 write (ral-46g) beside a `let b = true|false` boolean slot (printed `.as_bool() == Some(true)`)
+        const boolSlot = (el: any): boolean => {
+            const d: any = this.rustDeclaredNode(el);
+            return d !== undefined && isVariableDeclaration(d) && d.initializer !== undefined && (d.initializer.kind === SyntaxKind.TrueKeyword || d.initializer.kind === SyntaxKind.FalseKeyword);
+        };
+        const handedSlot = (el: any): boolean => el === n && (write.left as any).elements.indexOf(el) === 1 && this.rustDictSlotOfWrite(el);
+        if (!(write.left.elements as any).every((el: any) => isIdentifier(el) && (this.rustNilSlotWrite(el) || handedSlot(el) || (el !== n && boolSlot(el))))) return false;
         this.rustShortDestrHeads.add(write);
         return true;
     }
@@ -28356,10 +28396,12 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustHandedSlotBoxUse(n: any, declaration: any): boolean {
         const up: any = n.parent;
-        if ((declaration?.kind !== SyntaxKind.BindingElement && !this.rustHandedTernaryLocal(declaration) && !this.rustNilSlotDictCandidate(declaration)) || up === undefined || this.rustScalarInNestedWrite(n, true)) return false;
+        if ((declaration?.kind !== SyntaxKind.BindingElement && !this.rustHandedTernaryLocal(declaration) && !this.rustNilSlotDictCandidate(declaration) && !this.rustHandedReassignedMap(declaration)) || up === undefined || this.rustScalarInNestedWrite(n, true)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
         // an element of a returned tuple literal (`return [ a, p ]`): the map boxes into the list
         if (isArrayLiteralExpression(up) && isReturnStatement(up.parent) && this.rustNilSlotDictCandidate(declaration)) return true;
+        // ral-55a: a reassigned handed map (ral-ra, initialiser and every write a map) handed back in the returned tuple: moved there
+        if (isArrayLiteralExpression(up) && isReturnStatement(up.parent) && this.rustHandedReassignedMap(declaration)) return true;
         // wi: the params slot of a destructure handed back whole in the returned tuple: moved there (its last use)
         if (isArrayLiteralExpression(up) && isReturnStatement(up.parent) && declaration?.kind === SyntaxKind.BindingElement && declaration.parent?.elements?.indexOf(declaration) === 1) return true;
         // ral-53a: a `c ? <map> : <map>` local read whole as the initializer of a further single `let y = x` (same function, no loop
@@ -28400,7 +28442,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(node)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         const local = declaration !== undefined && isVariableDeclaration(declaration) && declaration.name !== node
-            && (this.rustDictTernaryArmPlace(node, declaration) || ((this.rustHandedTernaryLocal(declaration) || this.rustNilSlotDictCandidate(declaration)) && this.rustHandedSlotBoxUse(node, declaration)));
+            && (this.rustDictTernaryArmPlace(node, declaration) || ((this.rustHandedTernaryLocal(declaration) || this.rustNilSlotDictCandidate(declaration) || this.rustHandedReassignedMap(declaration)) && this.rustHandedSlotBoxUse(node, declaration)));
         if (!local && (declaration?.kind !== SyntaxKind.BindingElement || declaration.name === node || !(this.rustHandedSlotBoxUse(node, declaration) || this.rustMutableSlotUse(node, declaration) === 'box'))) return undefined;
         if (!this.rustHandedDictLocal(declaration)) return undefined;
         return this.rustLocalLastUse(node, declaration) ? `Value::Dict(${text})` : `Value::from(&${text})`;

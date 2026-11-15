@@ -18900,3 +18900,31 @@ describe('ral-55n: postfix counters ordered against a number Value or used as an
         expect(out).toMatch(/let mut i: Value = Value::Int\(0\);/);
     });
 });
+
+describe('ral-55a: long literal-key omit declarations and reassigned handed maps', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    omit (x: any, k: any): any { return x; }\n    extend (...args: any[]): any { return args[0]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionBoolAndParams (params: object, methodName: string, optionName: string, defaultValue: boolean = undefined): [boolean, Dict] {\n        return [ this.safeString (params, optionName) === 'x', this.omit (params, optionName) ];\n    }\n}\n";
+    const mk = (name: string, venue: string): string => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const okx = "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    createOrderRequest (symbol: string, quote: boolean, params: Dict = {}): Dict {\n        const request: Dict = { 'instId': symbol };\n        const [ po, paramsPostOnly ] = this.handleOptionBoolAndParams (params, 'createOrder', 'postOnly');\n        let orderParams: Dict = this.omit (paramsPostOnly, KEYS);\n        const tgtCcy = this.safeString (orderParams, 'tgtCcy', 'base_ccy');\n        if (quote) {\n            const [ requiresPrice, paramsRequiresPrice ] = this.handleOptionBoolAndParams (orderParams, 'createOrder', 'createMarketBuyOrderRequiresPrice', true);\n            orderParams = this.omit (paramsRequiresPrice, [ 'cost', 'sz' ]);\n            request['px'] = requiresPrice;\n        }\n        request['tgtCcy'] = tgtCcy;\n        return this.extend (request, orderParams);\n    }\n}\n";
+    test('a 17-key omit declaration measured as printed stays Dict through a handle*AndParams lend', () => {
+        const out = mk ('r55a-okx', okx.replace ('KEYS', "[ 'currency', 'ccy', 'marginMode', 'timeInForce', 'stopPrice', 'triggerPrice', 'clientOrderId', 'stopLossPrice', 'takeProfitPrice', 'slOrdPx', 'tpOrdPx', 'margin', 'stopLoss', 'takeProfit', 'trailingPercent', 'trailingAmount', 'trailingPrice' ]"));
+        expect(out).toContain('let mut orderParams: crate::value::Dict = self.omit(&paramsPostOnly, &["currency", ');
+        expect(out).toContain('self.handleOptionBoolAndParams(&orderParams, ');
+    });
+    test('guard: an omit declaration printed over 400 chars keeps Value', () => {
+        const out = mk ('r55a-okx-neg', okx.replace ('KEYS', "[ 'k00abcdefghijklmnopqrstuvwxyz', 'k01abcdefghijklmnopqrstuvwxyz', 'k02abcdefghijklmnopqrstuvwxyz', 'k03abcdefghijklmnopqrstuvwxyz', 'k04abcdefghijklmnopqrstuvwxyz', 'k05abcdefghijklmnopqrstuvwxyz', 'k06abcdefghijklmnopqrstuvwxyz', 'k07abcdefghijklmnopqrstuvwxyz', 'k08abcdefghijklmnopqrstuvwxyz', 'k09abcdefghijklmnopqrstuvwxyz', 'k10abcdefghijklmnopqrstuvwxyz', 'k11abcdefghijklmnopqrstuvwxyz', 'k12abcdefghijklmnopqrstuvwxyz', 'k13abcdefghijklmnopqrstuvwxyz', 'k14abcdefghijklmnopqrstuvwxyz', 'k15abcdefghijklmnopqrstuvwxyz' ]"));
+        expect(out).toContain('let mut orderParams: Value = ');
+    });
+    test('a reassigned handed map: any-key reader lent, slot write taken back, moved into the returned tuple', () => {
+        const out = mk ('r55a-polo', "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    orderRequest (symbol: string, market: boolean, params: Dict = {}): any {\n        const result: Dict = { 'symbol': symbol };\n        const [ po, query ] = this.handleOptionBoolAndParams (params, 'createOrder', 'postOnly');\n        let queryOmitted: Dict = this.omit (query, [ 'postOnly', 'triggerPrice', 'stopPrice' ]);\n        if (market) {\n            let createMarketBuyOrderRequiresPrice = true;\n            [ createMarketBuyOrderRequiresPrice, queryOmitted ] = this.handleOptionBoolAndParams (queryOmitted, 'createOrder', 'requiresPrice', true);\n            const cost = this.safeNumber (queryOmitted, 'cost');\n            queryOmitted = this.omit (queryOmitted, 'cost');\n            result['cost'] = cost;\n            result['req'] = createMarketBuyOrderRequiresPrice;\n        }\n        const clientOrderId = this.safeString2 (queryOmitted, 'clientOrderId', 'clOrdId');\n        if (clientOrderId !== undefined) {\n            result['clientOid'] = clientOrderId;\n            queryOmitted = this.omit (queryOmitted, [ 'clientOrderId', 'clOrdId' ]);\n        }\n        return [ result, queryOmitted ];\n    }\n}\n");
+        expect(out).toContain('let mut queryOmitted: crate::value::Dict = self.omit(&query, &["postOnly", "triggerPrice", "stopPrice"], &[]).into_dict();');
+        expect(out).toContain('self.safeString2(&queryOmitted, ');
+        expect(out).toContain('self.handleOptionBoolAndParams(&queryOmitted, ');
+        expect(out).toContain('Value::from(vec![Value::Map(result), Value::Dict(queryOmitted)])');
+    });
+});
