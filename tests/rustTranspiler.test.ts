@@ -19645,3 +19645,52 @@ describe('ral-57x K1: a literal-seeded string accumulator returned from a method
         expect(out).toContain('return Some(newString);');
     });
 });
+
+describe('ral-57e: a for-counter product read as a safeDict key and as a this.sum (k, 1) key operand is i64', () => {
+    const run = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    id: string;\n    safeDict (dictionary: any, key: IndexType, defaultValue: Dict = undefined): Dict | undefined { return defaultValue; }\n    sum (...args: any[]): any { return args[0]; }\n    pick (a: any, b: any): any { return a; }\n}\nexport type IndexType = number | string;\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const venue = (init: string, second: string) => "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    rows (responses: any[], n: number): any[] {\n        const out = [];\n        for (let i = 0; i < n; i++) {\n            const priceIndex = " + init + ";\n            const a = this.safeDict (responses, priceIndex);\n            const b = this.safeDict (responses, " + second + ");\n            out.push (this.pick (a, b));\n        }\n        return out;\n    }\n}\n";
+    test('priceIndex = i * 2 is i64', () => {
+        const a = run ('ral57e-prod-a', venue ('i * 2', 'this.sum (priceIndex, 1)'));
+        expect(a).toContain('let mut priceIndex: i64 = (i * 2);');
+        expect(a).toContain('Value::Int((priceIndex + 1))');
+    });
+    test('a sum with a non-literal second operand keeps priceIndex Value', () => {
+        const b = run ('ral57e-prod-b', venue ('i * 2', 'this.sum (priceIndex, responses[0])'));
+        expect(b).toContain('let mut priceIndex: Value = ');
+    });
+});
+
+describe('ral-57e: a side level read only for a literal-key part holds the list; the part borrows', () => {
+    const build = (name: string, tail: string) => {
+        const files: Record<string, string> = {
+            'ts/src/base/ws/OrderBookSide.ts': "export class OrderBookSide extends Array {\n    store (price: any, size: any) {}\n    storeArray (delta: any) {}\n}\n",
+            'ts/src/base/ws/OrderBook.ts': "import { OrderBookSide } from './OrderBookSide.js';\nexport class OrderBook {\n    bids: OrderBookSide;\n    asks: OrderBookSide;\n    constructor (snapshot: any = {}, depth: any = undefined) {}\n}\n",
+            'ts/src/base/Exchange.ts': "import { OrderBook } from './ws/OrderBook.js';\nexport default class Exchange {\n    orderbooks: { [key: string]: OrderBook } = {};\n    hold (x: any): any { return x; }\n}\n",
+            'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    checksumOf (symbol: string): string {\n        const orderbook = this.orderbooks[symbol];\n        const storedBids = orderbook['bids'];\n        const bidsLength = storedBids.length;\n        const payload: string[] = [];\n        for (let i = 0; i < 25; i++) {\n            if (i < bidsLength) {\n                const bidLevel = storedBids[i];\n                const bidParts = bidLevel[2];\n" + tail + "            }\n        }\n        return payload.join (':');\n    }\n}\n",
+        };
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-57e-' + name + '-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const out = new Transpiler({ 'verbose': false }).transpileRustByPath (path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+        return out;
+    };
+    test('bidLevel is a List and bidParts a borrowed &Value', () => {
+        const out = build ('a', "                payload.push (bidParts[0]);\n                payload.push (bidParts[1]);\n");
+        expect(out).toContain('let bidLevel: crate::value::List = storedBids.level(&Value::Int(i)).into_list();');
+        expect(out).toContain('let bidParts: &Value = bidLevel.get(2).unwrap_or(&Value::Null);');
+    });
+    test('a part handed on whole keeps both Value', () => {
+        const out = build ('b', "                payload.push (bidParts);\n");
+        expect(out).toContain('let mut bidLevel: Value = ');
+        expect(out).toContain('let mut bidParts: Value = ');
+    });
+});

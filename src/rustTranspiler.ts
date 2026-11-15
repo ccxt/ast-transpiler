@@ -2462,6 +2462,8 @@ export class RustTranspiler extends BaseTranspiler {
         const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printHandlerTableLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) ?? this.printWsFlightLocalDeclaration(declaration, varName, indent) ?? this.printWsCacheLocalDeclaration(declaration, varName, indent) : undefined;
         if (scalarDecl !== undefined) return scalarDecl;
         const parsedValue = this.printNode(declaration.initializer, identation).trim();
+        const sideLevel = node.declarations.length === 1 ? this.printRust57eSideLevel(declaration, parsedValue, indent, varName) : undefined;
+        if (sideLevel !== undefined) return sideLevel;
         if (node.declarations.length === 1 && this.rustSubscriptionPresenceFlag(declaration, parsedValue)) return `${indent}let ${varName}: bool = ${parsedValue} != Value::Null`;
         if (declaration.initializer.kind === SyntaxKind.NewExpression) {
             return `${indent}let mut ${varName} = ${parsedValue}`;
@@ -2524,6 +2526,88 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // A callee returning `Option<String>` into a boxed local keeps the box.
         return `${indent}let mut ${varName}: Value = ${nativeStr ? this.rustNativeStrValueBox(parsedValue) : parsedValue}`;
+    }
+
+    /** ral-57e: `const lvl = side[i]` off an order-book side handle (`Side::level` hands out the stored level, an `Arr` built
+     *  by `storeArray` / `store`, or `Null` out of range), read only as `const parts = lvl[K]` (numeric literal K) where
+     *  `parts` is itself read only at numeric literal keys. `lvl` holds the list (`into_list()`: the same `Arr`, an empty
+     *  list for `Null`), and `parts` borrows its element (`lvl.get(K).unwrap_or(&Value::Null)`): the same element
+     *  `get_value` cloned, `Null` where it answered `Null`. */
+    printRust57eSideLevel(declaration: any, parsedValue: string, indent: string, varName: string): string | undefined {
+        if (this.rust57eSideLevelLocal(declaration)) return `${indent}let ${varName}: crate::value::List = ${parsedValue}.into_list()`;
+        const init: any = this.rustSkipWrappers(declaration?.initializer);
+        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression)) return undefined;
+        const owner: any = this.rustDeclarationOfIdentifier(init.expression);
+        if (owner === undefined || owner.name === init.expression || !this.rust57eSideLevelLocal(owner)) return undefined;
+        const key: any = this.rustSkipWrappers(init.argumentExpression);
+        return `${indent}let ${varName}: &Value = ${super.printIdentifier(init.expression)}.get(${Number(key.text)}).unwrap_or(&Value::Null)`;
+    }
+
+    private rust57eSideLevels = new WeakMap<any, boolean>();
+
+    rust57eSideLevelLocal(declaration: any): boolean {
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration) return false;
+        let decision = this.rust57eSideLevels.get(declaration);
+        if (decision === undefined) {
+            this.rust57eSideLevels.set(declaration, false); // re-entrancy guard
+            try {
+                decision = this.rust57eSideLevelLocalUncached(declaration);
+            } catch (e) {
+                decision = false;
+            }
+            this.rust57eSideLevels.set(declaration, decision);
+        }
+        return decision;
+    }
+
+    rust57eSideLevelLocalUncached(declaration: any): boolean {
+        if (!this.rust57eConstElementOf(declaration) || this.rustTestTierSource(declaration)) return false;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        if (!this.rustBookSideLocalOf(init.expression)) return false;
+        let uses = 0;
+        const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            const up: any = n.parent;
+            if (!isElementAccessExpression(up) || up.expression !== n) return false;
+            const key: any = this.rustSkipWrappers(up.argumentExpression);
+            if (key === undefined || !isNumericLiteral(key) || !Number.isInteger(Number(key.text)) || Number(key.text) < 0) return false;
+            let top: any = up;
+            while (top.parent !== undefined && isParenthesizedExpression(top.parent)) top = top.parent;
+            const child: any = top.parent;
+            if (!isVariableDeclaration(child) || child.initializer !== top || !this.rust57eConstElementOf(child) || !this.rust57eLiteralReadOnly(child)) return false;
+            uses++;
+            return true;
+        });
+        return ok && uses > 0;
+    }
+
+    /** `const e = x[k]` (one const declarator, identifier receiver, same function). */
+    rust57eConstElementOf(declaration: any): boolean {
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || !isIdentifier(declaration.name)) return false;
+        const list: any = declaration.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & NodeFlags.Const) === 0) return false;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        return init !== undefined && isElementAccessExpression(init) && isIdentifier(init.expression);
+    }
+
+    /** Every use of the local is the receiver of an rvalue element read at a numeric literal key (no write-back bind). */
+    rust57eLiteralReadOnly(declaration: any): boolean {
+        const written = (n: any): boolean => {
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return true;
+            return isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up) || isDeleteExpression(up);
+        };
+        let uses = 0;
+        const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            const up: any = n.parent;
+            if (!isElementAccessExpression(up) || up.expression !== n || written(up)) return false;
+            const key: any = this.rustSkipWrappers(up.argumentExpression);
+            if (key === undefined || !isNumericLiteral(key)) return false;
+            if (isElementAccessExpression(up.parent) && up.parent.expression === up && written(up.parent)) return false;
+            if (this.isWriteBackBindRead(up)) return false;
+            uses++;
+            return true;
+        });
+        return ok && uses > 0;
     }
 
     // ── nil-declared locals (`let x: T = undefined`) ─────────────────────────
@@ -9202,6 +9286,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustElemInsertKey(n)) return true;
             // ral-53e: the whole key of a plain element read `xs[n]` boxes there as well (`Value::from(n)`)
             if (this.rust53eElemReadKey(n)) { keys++; return true; }
+            if (this.rust57eSumKeyOperand(n)) return true;
             if (!this.rustSafeDictKeyArg(n)) return false;
             keys++;
             return true;
@@ -9247,6 +9332,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node === undefined) return false;
         if (isBinaryExpression(node)) {
             const op = node.operatorToken.kind;
+            if (op === SyntaxKind.AsteriskToken) return this.rust57eCounterProduct(node, declaration);
             return (op === SyntaxKind.PlusToken || op === SyntaxKind.MinusToken) && this.rustCounterArithInit(node.left, declaration) && this.rustCounterArithInit(node.right, declaration);
         }
         if (this.rustScalarIntLiteral(node) !== undefined) return true;
@@ -9256,9 +9342,30 @@ export class RustTranspiler extends BaseTranspiler {
         return target !== undefined && target !== declaration && this.rustEnclosingFunction(target) === this.rustEnclosingFunction(declaration) && this.rustScalarLocalOf(node)?.kind === 'int';
     }
 
+    /** ral-57e: `j * <int literal>` (either order) over a `for (let j = <int>; ..; j++)` counter only the step writes
+     *  (rustValueIntCounter, always an `Int`): the
+     *  printer already spells it `(j * k)` on the `i64` counter, the `Int` the runtime product of two Ints answers. */
+    rust57eCounterProduct(node: any, declaration: any): boolean {
+        const l: any = this.unwrapParens(node.left);
+        const r: any = this.unwrapParens(node.right);
+        const lit = (x: any) => this.rustScalarIntLiteral(x) !== undefined;
+        const ctr = (x: any) => isIdentifier(x) && this.rustValueIntCounter(x);
+        return (ctr(l) && lit(r)) || (lit(l) && ctr(r));
+    }
+
+    /** ral-57e: `n` is an operand of a base `this.sum (n, <int literal>)` that is itself a base `safeDict` key: with `n` an
+     *  `i64` the sum prints as the native `i64` add (rustArithCallKind 'int') and boxes once into the key slot as the Int
+     *  the runtime `sum` of two Ints answers. */
+    rust57eSumKeyOperand(n: any): boolean {
+        const call: any = n?.parent;
+        if (!isCallExpression(call) || !this.rustSumShape(call) || call.arguments.length !== 2) return false;
+        const other: any = call.arguments[0] === n ? call.arguments[1] : (call.arguments[1] === n ? call.arguments[0] : undefined);
+        return other !== undefined && this.rustScalarIntLiteral(this.unwrapParens(other)) !== undefined && this.rustSafeDictKeyArg(call);
+    }
+
     rustCounterArithHasCounter(expr: any, declaration: any): boolean {
         const node: any = this.unwrapParens(expr);
-        if (isBinaryExpression(node)) return this.rustCounterArithHasCounter(node.left, declaration) || this.rustCounterArithHasCounter(node.right, declaration);
+        if (isBinaryExpression(node)) return (node.operatorToken.kind === SyntaxKind.AsteriskToken && this.rust57eCounterProduct(node, declaration)) || this.rustCounterArithHasCounter(node.left, declaration) || this.rustCounterArithHasCounter(node.right, declaration);
         return isIdentifier(node) && this.rustCounterLoopOf(node, declaration) !== undefined;
     }
 
