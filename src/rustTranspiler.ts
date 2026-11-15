@@ -8739,9 +8739,9 @@ export class RustTranspiler extends BaseTranspiler {
         const lastText = isStringLiteral(last) ? `${JSON.stringify(String(last.text))}.to_string()`
             : this.rustScalarUseForms.get(last) !== 'nkey' ? undefined : lkind === 'str' ? `${lname}.to_string()` : lkind === 'ostr' ? `${lname}.as_deref().unwrap_or("null").to_string()` : undefined;
         if (lastText === undefined) return undefined;
-        // the value reads `self` when its TS node reads `this` (decided from the AST, not from the printed value text)
-        const readsThis = (x: any): boolean => x.kind === SyntaxKind.ThisKeyword || (x.forEachChild(readsThis) ?? false);
-        const bound = isBinaryExpression(left.parent) && left.parent.left === left ? readsThis(left.parent.right) : true;
+        // borrow safety of the printed insert only (the key's type is decided on the AST by rustNestedFieldUpperKeyUse): a value
+        // whose print borrows `self` is bound before `&mut self.F` is taken
+        const bound = /\bself\b/.test(value);
         const chain = `if let Value::Dict(__bf03d0) = &mut self.${field} { let __bf03e1 = std::sync::Arc::make_mut(__bf03d0).entry(${upperText}).or_insert(Value::Null); `
             + `if let Value::Dict(__r05d) = __bf03e1 { std::sync::Arc::make_mut(__r05d).insert(${lastText}, ${bound ? '__be_tmp' : value}); } }`;
         const insert = bound ? `{ let __be_tmp = ${value}; ${chain} }` : chain;
