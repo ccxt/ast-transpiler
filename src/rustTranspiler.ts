@@ -5956,10 +5956,22 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isVariableDeclaration(owner) && !listParam && !this.rustOptListParamRead(node)) return undefined;
         const tupleBool = this.rustExactBoolTupleRead(node, owner); if (tupleBool !== undefined) return tupleBool;
         const listType: any = this.typeOfNodeIfAny(node.expression);
+        if (listType !== undefined && this.rustConstTupleStrSlotRead(node, owner, listType)) return 'ostr';
         if (listType === undefined || !this.getChecker().isArrayType(listType)) return undefined;
         if (this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'string') return 'ostr';
         // xg: a declaration's `xs[i]` off an untyped / `any[]` local list whose every write is a push of a string proves a string
         return this.rustAnyStrPushElem(node) ? 'ostr' : undefined;
+    }
+
+    /** ral-53f: `const t = this.m (..); const x = t[0]` where `t` is a const tuple local (a declared `[string, Str, Dict]`
+     *  return, e.g. binance pro `resolveAuthType`) and the literal-index slot is declared `string`: the read is the slot's
+     *  string or undefined. Non-test sources only. */
+    rustConstTupleStrSlotRead(node: any, owner: any, listType: any): boolean {
+        if (!isVariableDeclaration(owner) || this.rustTestTierSource(node) || !this.getChecker().isTupleType(listType)) return false;
+        if (owner.parent === undefined || (owner.parent.flags & NodeFlags.Const) === 0) return false;
+        const index: any = this.unwrapParens(node.argumentExpression);
+        if (index === undefined || index.kind !== SyntaxKind.NumericLiteral) return false;
+        return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'string';
     }
 
     /** xg: the element read prints straight off the list place (`xs.get(..).and_then(Value::as_str)..`), never a helper read
@@ -27691,7 +27703,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (plus && !this.rustNilOptStrConcatUse(n)) return false;
                 const form = plus ? 'concat' : this.rustScalarUseForm(n, 'ostr');
                 this.rustScalarUseForms.set(n, form);
-                if (form === undefined || form === 'err' || form === 'key' || form === 'okey' || form === 'targ' || form === 'kin') return false;
+                // ral-53f: a ws `watch` url / hash / message-hash slot reads the string slot in place (`x.as_deref()`)
+                if (form === undefined || form === 'err' || form === 'key' || form === 'okey' || (form === 'targ' && !this.rustWsKeyUse(n)) || form === 'kin') return false;
                 const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
                 if (push !== undefined && isCallExpression(push)) return false;
                 if ((form === 'box' || form === 'xbox') && !this.rustSlotUseOutsideLoop(n, element)) return false;
@@ -27705,7 +27718,8 @@ export class RustTranspiler extends BaseTranspiler {
                 // a box feeding another local's write or initializer would make that local's own typing depend on this slot
                 const feeds: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(m.left)) || isVariableDeclaration(m));
                 // 42i: an element of an array literal is boxed into that list on its own, whatever the target's type
-                if (feeds !== undefined && !isStatement(feeds) && (form === 'box' || form === 'xbox') && !this.rustStrSlotListElement(n)) return false;
+                if (feeds !== undefined && !isStatement(feeds) && (form === 'box' || form === 'xbox') && !this.rustStrSlotListElement(n)
+                    && !this.rustStrSlotBoxIsNotValueOf(n, feeds)) return false;
                 if (RustTranspiler.RUST_NIL_SCALAR_NATIVE_FORMS.has(form) || form === 'write') nativeUses++;
                 else if ((form === 'box' || form === 'xbox') && !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, element))) copies++;
                 return true;
@@ -27759,6 +27773,32 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(ternary)) return false;
         const kind = this.rustScalarDecisions.get(declaration);
         return (kind === 'str' || kind === 'ostr') && this.rustLocalLastUse(other, declaration) && this.rustSlotUseOutsideLoop(other, declaration);
+    }
+
+    /** ral-53f: a box that is a call argument or an object-literal value below another local's initializer / write
+     *  (`safeDict (this.options, type, {})`, `extend ({ 'type': type }, ..)`), never that local's value itself (not reached
+     *  through parentheses, ternary arms or `||` / `&&` / `??` operands only): the target's typing does not read the slot. */
+    rustStrSlotBoxIsNotValueOf(n: any, feeds: any): boolean {
+        let top: any = n;
+        for (;;) {
+            const up: any = top.parent;
+            if (up === undefined || up === feeds) return false;
+            if (isParenthesizedExpression(up) || (isConditionalExpression(up) && up.condition !== top)
+                || (isBinaryExpression(up) && [SyntaxKind.BarBarToken, SyntaxKind.AmpersandAmpersandToken, SyntaxKind.QuestionQuestionToken].includes(up.operatorToken.kind))) { top = up; continue; }
+            if (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken) return false;
+            return ((isCallExpression(up) && up.arguments.includes(top))
+                || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === top)) && this.rustStrSlotBoxLineFits(n);
+        }
+    }
+
+    /** ral-53f: the boxed read (`x.clone().map(Value::from).unwrap_or(Value::Null)`) keeps every printed line of its
+     *  statement within 400 chars, so the guarded body never boxes a neighbouring typed local back to make room. */
+    rustStrSlotBoxLineFits(n: any): boolean {
+        const statement: any = findAncestor(n, (a: any) => isStatement(a));
+        if (statement === undefined || isBlock(statement)) return false;
+        const column = statement.getStart() - String(statement.getSourceFile().text).lastIndexOf('\n', statement.getStart()) - 1;
+        const grow = '.clone().map(Value::from).unwrap_or(Value::Null)'.length;
+        return this.printNode(statement, 0).split('\n').every((l: string) => column + l.trim().length + grow <= 400);
     }
 
     /** pb: a checker-string slot of a native tuple in a method, read whole as the initializer or the statement write of
