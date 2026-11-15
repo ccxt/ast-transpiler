@@ -6601,9 +6601,25 @@ export class RustTranspiler extends BaseTranspiler {
             // nor when it feeds a write to another local (ccxt passes read that write's printed source)
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
-                && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration) && !this.rustScalarCacheFieldCtor(n, write)) return false;
+                && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration) && !this.rustScalarCacheFieldCtor(n, write)
+                && !this.rustScalarSumOperandWrite(n, write)) return false;
         }
         return true;
+    }
+
+    /** ral-53s: a direct operand of a base `this.sum (a, b)` that is the whole source of a write to another local
+     *  (`endTime = this.sum (startTime, oneWeek)`): with this operand typed the call keeps its own combinator kind
+     *  (`rustArithCallKind`), so the write prints the same native combinator text the other operands decide, and the
+     *  written local's own rules read that call, never this operand's box. */
+    rustScalarSumOperandWrite(n: any, write: any): boolean {
+        if (write.operatorToken?.kind !== SyntaxKind.EqualsToken || !isIdentifier(this.unwrapParens(write.left)) || this.rustTestTierSource(n)) return false;
+        const call: any = this.unwrapParens(write.right);
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(call.expression.name.text) !== 'sum' || call.arguments.length < 2) return false;
+        if (!Array.from(call.arguments).some((a: any) => this.unwrapParens(a) === n)) return false;
+        const kind = this.rustScalarDecisions.get(this.rustDeclaredNode(n));
+        if (kind !== 'int' && kind !== 'num') return false;
+        return this.rustScalarUseForms.get(n) === 'native' && this.rustArithCallKind(call) !== undefined;
     }
 
     /** zd: the size argument of `this.<field> = new ArrayCache*(limit)`: the written place is a ws cache field, not a
