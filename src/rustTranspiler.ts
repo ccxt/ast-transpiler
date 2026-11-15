@@ -11729,7 +11729,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // ral-44c: `let m = market` of a lent `Option<&Market>` parameter starts as the owned copy (`market.cloned()`)
         const fromSlot = this.rustMarketSlotParamOf(this.rustSkipWrappers(declaration.initializer)) !== undefined && (declaration.parent.flags & NodeFlags.Const) === 0;
-        const fromOpt = this.rustIsOptMarketCall(declaration.initializer) || this.rustOptMarketTernary(declaration.initializer) !== undefined || fromSlot;
+        const fromOpt = this.rustIsOptMarketCall(declaration.initializer) || this.rustOptMarketTernary(declaration.initializer) !== undefined || fromSlot
+            || this.rustOptSafeMarketTernary(declaration.initializer) !== undefined;
         const empty = declaration.initializer === undefined || this.literalKindOfNode(declaration.initializer) === 'null' || fromOpt;
         if (!empty && !this.rustIsTypedMarketCall(declaration.initializer)) return false;
         if (empty && !fromOpt && ((declaration.parent.flags & NodeFlags.Const) !== 0 || this.rustNilLocalKind(declaration) !== undefined)) return false;
@@ -12233,6 +12234,38 @@ export class RustTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    /** ral-45c: `c ? this.safeMarket (..) : market` (a lent market slot) or `c ? this.safeMarket (..) : undefined` (either arm
+     *  order): the `safeMarket` arm and the other one. `safeMarket` never answers Null, the slot is `Option<&Market>`. */
+    rustOptSafeMarketTernary(init: any): { arm: any, other: any } | undefined {
+        const cond: any = init === undefined ? undefined : this.unwrapParens(init);
+        if (cond === undefined || cond.kind !== SyntaxKind.ConditionalExpression) return undefined;
+        const t: any = this.unwrapParens(cond.whenTrue);
+        const f: any = this.unwrapParens(cond.whenFalse);
+        const otherOk = (o: any) => this.literalKindOfNode(o) === 'null' || this.rustMarketSlotParamOf(this.rustSkipWrappers(o)) !== undefined;
+        const smkt = (a: any) => isCallExpression(this.rustSkipWrappers(a)) && this.rustIsSafeMarketCall(a);
+        if (smkt(t) && otherOk(f)) return { arm: t, other: f };
+        if (smkt(f) && otherOk(t)) return { arm: f, other: t };
+        return undefined;
+    }
+
+    /** `(if c { Some(self.safe_market(..)) } else { market.cloned() })` for the ternary above. */
+    printOptSafeMarketTernary(init: any): string | undefined {
+        const tern = this.rustOptSafeMarketTernary(init);
+        if (tern === undefined) return undefined;
+        const cond: any = this.unwrapParens(init);
+        const call: any = this.rustSkipWrappers(tern.arm);
+        this.rustSafeMarketBoxing.add(call);
+        let some: string;
+        try {
+            some = `Some(${this.printCallExpression(call, 0).trim()})`;
+        } finally {
+            this.rustSafeMarketBoxing.delete(call);
+        }
+        const other = this.literalKindOfNode(tern.other) === 'null' ? 'None' : `${super.printIdentifier(this.rustSkipWrappers(tern.other))}.cloned()`;
+        const armTrue = this.unwrapParens(cond.whenTrue) === tern.arm;
+        return `(if ${this.printCondition(cond.condition, 0)} { ${armTrue ? some : other} } else { ${armTrue ? other : some} })`;
+    }
+
     /** `(if c { None } else { Some(market) })` for an `Option<Market>` ternary initializer. */
     printOptMarketTernary(init: any): string | undefined {
         const arm = this.rustOptMarketTernary(init);
@@ -12400,7 +12433,7 @@ export class RustTranspiler extends BaseTranspiler {
             const slot: any = this.rustSkipWrappers(declaration.initializer);
             const init = this.rustIsOptMarketCall(declaration.initializer) ? this.printNode(declaration.initializer, 0).trim()
                 : this.rustMarketSlotParamOf(slot) !== undefined ? `${super.printIdentifier(slot)}.cloned()`
-                    : (this.printOptMarketTernary(declaration.initializer) ?? 'None');
+                    : (this.printOptMarketTernary(declaration.initializer) ?? this.printOptSafeMarketTernary(declaration.initializer) ?? 'None');
             return `${indent}let mut ${varName}: Option<crate::types::Market> = ${init}`;
         }
         if (kind === 'call') {
@@ -19757,7 +19790,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustElementKeyWriteOk(n: any, init: any): boolean {
         const key = this.rustUntilHeadKeyWrite(n);
         if (key === undefined || key.startsWith('__') || init === undefined || !isElementAccessExpression(init) || this.rustUrlsMapEntry(init)) return false;
-        if (!this.rustDictElementSource(init) || !this.getChecker().isArrayType(this.typeOfNodeIfAny(init.expression))) return false;
+        if (!this.rustDictElementSource(init)) return false;
+        if (!this.getChecker().isArrayType(this.typeOfNodeIfAny(init.expression))) return this.rustDictRowKeyWriteBackOk(n, init);
         if (!/(?:^|[\\/])ts[\\/]src[\\/](?:prediction[\\/])?[^\\/]+\.ts$/.test(String(n.getSourceFile?.()?.fileName ?? ''))) return false;
         const list: any = this.rustDeclarationOfIdentifier(init.expression);
         if (list === undefined || !isVariableDeclaration(list as any)) return false;
@@ -19765,6 +19799,33 @@ export class RustTranspiler extends BaseTranspiler {
         if (source === undefined || this.rustInitReadsTaggedStore(source)) return false;
         // the row must print straight off the list (a typed list's `.get(i)` or a literal index), never through `get_value`
         return isNumericLiteral(this.rustSkipWrappers(init.argumentExpression)) || this.rustReadBearerKindOfDeclaration(list) === 'list' || this.rustBorrowedLocalKind(list) === 'list' || this.rustVecLocalIsTyped(list);
+    }
+
+    /** ral-45c: `row['k'] = v` on `const row = d[k]` of a `Dictionary<Dict>` local `d` read from an untagged REST map, in a REST
+     *  or prediction venue file. Write-back proof: `d` is never read again after the row is taken (its only other uses are its
+     *  declaration and an `Object.keys (d)` ahead of the row's loop), so the map the boxed `add_element_to_object` left unchanged
+     *  in `d` is never observed; the row's copy-on-write insert is exactly the boxed one (an untagged map, no store route). */
+    rustDictRowKeyWriteBackOk(n: any, init: any): boolean {
+        if (!isIdentifier(init.expression) || !this.rustDictOfDictsLocal(init.expression)) return false;
+        if (!/(?:^|[\\/])ts[\\/]src[\\/](?:prediction[\\/])?[^\\/]+\.ts$/.test(String(n.getSourceFile?.()?.fileName ?? ''))) return false;
+        const owner: any = this.rustDeclaredNode(init.expression);
+        if (owner === undefined || !isVariableDeclaration(owner) || (owner.parent.flags & NodeFlags.Const) === 0) return false;
+        const source: any = this.rustSkipWrappers(owner.initializer);
+        if (source === undefined || !isCallExpression(source) || this.rustInitReadsTaggedStore(source) || !this.rustBorrowedDictSource(source)) return false;
+        const rowDecl: any = init.parent;
+        if (!isVariableDeclaration(rowDecl) || rowDecl.initializer === undefined || this.rustSkipWrappers(rowDecl.initializer) !== init) return false;
+        const fn: any = this.rustEnclosingFunction(owner);
+        if (fn === undefined || this.rustEnclosingFunction(rowDecl) !== fn) return false;
+        const loop: any = findAncestor(rowDecl, (a: any) => a === fn || a.kind === SyntaxKind.ForStatement || a.kind === SyntaxKind.ForOfStatement || a.kind === SyntaxKind.ForInStatement || a.kind === SyntaxKind.WhileStatement);
+        const loopStart = loop === undefined || loop === fn ? rowDecl.getStart() : loop.getStart();
+        return this.rustLocalUsesAll(owner, String(init.expression.text), true, (u: any) => {
+            if (u === init.expression) return true;
+            if (this.rustEnclosingFunction(u) !== fn) return false;
+            const call: any = u.parent;
+            return u.getStart() < loopStart && isCallExpression(call) && call.arguments.length === 1 && call.arguments[0] === u
+                && isPropertyAccessExpression(call.expression) && isIdentifier(call.expression.expression) && String(call.expression.expression.text) === 'Object'
+                && String(call.expression.name.text) === 'keys';
+        });
     }
 
     rustBuiltKeyWriteLineOk(n: any, extra = 0): boolean {
