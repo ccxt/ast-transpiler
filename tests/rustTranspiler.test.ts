@@ -17893,3 +17893,20 @@ describe('ral-51i: a literal-key read of the receiver inside a chained write val
         expect(out).toContain('let mut result: Value = ');
     });
 });
+describe('ral-51x: an optional string boxed into a map literal handed to a self call pushed whole keeps its type', () => {
+    const write = (name: string, pushed: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k] ?? d; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    safeMarketStructure (market: Dict = undefined): any { return market; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseRows (markets: any[]): any[] {\n        const result = [];\n        for (let i = 0; i < markets.length; i++) {\n            const market = markets[i];\n            const quoteId = this.safeString (market, 'quote');\n            const quote = this.safeCurrencyCode (quoteId);\n            if (quote === undefined) {\n                continue;\n            }\n            result.push (" + pushed + ");\n        }\n        for (let j = 0; j < markets.length; j++) {\n            const quote = this.safeCurrencyCode (this.safeString (markets[j], 'q'));\n            if (quote === undefined) {\n                continue;\n            }\n            result.push (" + pushed + ");\n        }\n        return result;\n    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a map literal argument of a self call pushed whole: the local is an Option<String>', () => {
+        const out = write ('51x-push', "this.safeMarketStructure ({ 'symbol': quote + '/USD', 'quote': quote })");
+        expect(out).toContain('let mut quote: Option<String> = ');
+    });
+    test('negative: the local pushed bare keeps the local Value', () => {
+        const out = write ('51x-pushn', "quote");
+        expect(out).toContain('let mut quote: Value = ');
+    });
+});

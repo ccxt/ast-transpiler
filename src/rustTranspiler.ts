@@ -6466,7 +6466,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (form === 'concat' && (trial === 'str' || trial === 'ostr')) continue;
             // a `.push(..)` argument: ccxt's native-push pass keys on the boxed operand text
             const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
-            if (push !== undefined && isCallExpression(push) && !this.rustCopyPushPairElement(n, push, trial)) return false;
+            if (push !== undefined && isCallExpression(push) && !this.rustCopyPushPairElement(n, push, trial) && !this.rustPushSelfCallArgUse(n, push, trial)) return false;
             // nor when it feeds a write to another local (ccxt passes read that write's printed source)
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
@@ -6486,6 +6486,19 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = this.rustScalarDecisions.get(this.rustDeclaredNode(n));
         const form = this.rustScalarUseForms.get(n);
         return this.rustCacheCtorLimitArg(n, kind) && (form === 'targ' || form === 'box');
+    }
+
+    /** ral-51x: an optional string boxed as a property value of a map literal handed to a `this.m(..)` call that is the one
+     *  argument of `xs.push (..)` (`result.push (this.safeMarketStructure ({ 'quote': quote }))`): the pushed source prints
+     *  `self.m(..)`, so ccxt's native-push pass reads that call's text and never this operand's box. */
+    rustPushSelfCallArgUse(n: any, push: any, kind: string | undefined): boolean {
+        if ((kind !== 'ostr' && kind !== 'str') || this.rustTestTierSource(n) || push.arguments.length !== 1) return false;
+        const call: any = this.unwrapParens(push.arguments[0]);
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const up: any = n.parent;
+        if (up?.kind !== SyntaxKind.PropertyAssignment || up.initializer !== n || !isObjectLiteralExpression(up.parent)) return false;
+        const form = this.rustScalarUseForms.get(n);
+        return (form === 'box' || form === 'xbox') && this.isNodeInsideNode(n, call) && call.arguments.some((a: any) => this.isNodeInsideNode(n, a));
     }
 
     /** 40d: a Copy number that is a direct element of the array literal pushed whole (`rows.push ([ price, amount ])`):
