@@ -20544,7 +20544,18 @@ export class RustTranspiler extends BaseTranspiler {
         const up: any = n.parent;
         if (up === undefined || this.rustScalarInNestedWrite(n, true)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n && isObjectLiteralExpression(up.parent) && !this.rustInDestructureWrite(n);
-        return isReturnStatement(up) && up.expression === n;
+        if (isReturnStatement(up)) return up.expression === n;
+        // ral-44a: the other whole-value sinks a never-null defaulted container already boxes at (rustDefaultedContainerBoxUse):
+        // `m['k'] = x` on another local at x's last use, `this.f[..] = x`, `rows.push (x)` / `m[k] = x` into an untagged local
+        // store, an array literal element, a plain `Value` slot of a `this.` method. The box re-wraps the declared container.
+        if (up.kind === SyntaxKind.ArrayLiteralExpression) return !this.rustInDestructureWrite(n);
+        if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
+            && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left)) && (this.rustThisRootedPlace(up.left) || this.rustLocalKeyPlace(up.left, n))) return true;
+        if (this.rustLocalStoreHandOff(n)) return true;
+        if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const callee = String(up.expression.name.text);
+        if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
+        return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
     }
 
     // ── rustDeclaredEndpointBoxUse (ral-ld): a declared-endpoint optional container handed on whole ──

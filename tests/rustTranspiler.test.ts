@@ -15954,6 +15954,10 @@ describe('ral-43a: a declared endpoint answer read natively and handed on whole 
         expect(out).toContain('let mut response: crate::value::Dict = ');
         expect(out).toContain('Value::Dict(response)');
     });
+    test('ral-44a: a Promise<Dict> answer read by key and stored at a local key / handed to a this. method is a held Dict', () => {
+        const out = run ('r44a-endpoint-sinks', "    async fetchOrder (id: string, params: Dict = {}) {\n        const response = await this.publicGetMap (params);\n        const status = this.safeString (response, 'status');\n        const order: Dict = { 'id': id, 'status': status };\n        order['info'] = response;\n        return order;\n    }\n    async fetchBalance (params: Dict = {}) {\n        const response = await this.publicGetMap (params);\n        const code = this.safeString (response, 'code');\n        return this.hold ([ code, response ]);\n    }\n");
+        expect(out.split('let mut response: crate::value::Dict = ').length - 1).toBe(2);
+    });
     test('negative: a Dict | List answer stays boxed', () => {
         const out = run ('r43a-endpoint-any', "    async fetchStatus (params: Dict = {}) {\n        const response = await this.publicGetAny (params);\n        const status = this.safeString (response, 'status');\n        return { 'status': status, 'info': response };\n    }\n");
         expect(out).not.toContain('let mut response: crate::value::Dict = ');
