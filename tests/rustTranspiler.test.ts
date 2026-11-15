@@ -19897,3 +19897,33 @@ describe('ral-57w: a prediction venue (ts/src/prediction/) reads its own ws reso
         expect(out).toContain('let mut trades: Value = ');
     });
 });
+
+describe('ral-58e: an element of a read-only typed Vec local read only at literal keys borrows (&Value)', () => {
+    const build = (name: string, body: string) => {
+        const files: Record<string, string> = {
+            'ts/src/base/types.ts': "export type List = Array<any>;\nexport type Dict = { [key: string]: any };\n",
+            'ts/src/base/Exchange.ts': "import type { Dict, List } from './types.js';\nexport default class Exchange {\n    safeList (d: Dict, k: string, v: any = undefined): List { return v; }\n    safeValue (d: Dict, k: string, v: any = undefined): any { return v; }\n}\n",
+            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict, List } from './base/types.js';\nexport default class venue extends Exchange {\n    costOf (config: Dict, params: Dict = {}) {\n        const limit = params['limit'];\n        const byLimit: List = this.safeList (config, 'byLimit', []);\n        for (let i = 0; i < byLimit.length; i++) {\n            const entry = byLimit[i];\n" + body + "        }\n        return this.safeValue (config, 'cost', 1);\n    }\n}\n",
+        };
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-58e-' + name + '-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const out = new Transpiler({ 'verbose': false }).transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+        return out;
+    };
+    test('entry borrows the element', () => {
+        const out = build ('a', "            if (limit <= entry[0]) {\n                return entry[1];\n            }\n");
+        expect(out).toContain('let entry: &Value = byLimit.get(i as usize).unwrap_or(&Value::Null);');
+    });
+    test('an element handed on whole stays an owned Value', () => {
+        const out = build ('b', "            return entry;\n");
+        expect(out).not.toContain('let entry: &Value');
+    });
+    test('an element read at a string key stays an owned Value', () => {
+        const out = build ('c', "            return entry['price'];\n");
+        expect(out).not.toContain('let entry: &Value');
+    });
+});

@@ -2464,6 +2464,8 @@ export class RustTranspiler extends BaseTranspiler {
         const parsedValue = this.printNode(declaration.initializer, identation).trim();
         const sideLevel = node.declarations.length === 1 ? this.printRust57eSideLevel(declaration, parsedValue, indent, varName) : undefined;
         if (sideLevel !== undefined) return sideLevel;
+        const borrowedElem = node.declarations.length === 1 ? this.printRust58eBorrowedElement(declaration, indent, varName) : undefined;
+        if (borrowedElem !== undefined) return borrowedElem;
         if (node.declarations.length === 1 && this.rustSubscriptionPresenceFlag(declaration, parsedValue)) return `${indent}let ${varName}: bool = ${parsedValue} != Value::Null`;
         if (declaration.initializer.kind === SyntaxKind.NewExpression) {
             return `${indent}let mut ${varName} = ${parsedValue}`;
@@ -2541,6 +2543,73 @@ export class RustTranspiler extends BaseTranspiler {
         if (owner === undefined || owner.name === init.expression || !this.rust57eSideLevelLocal(owner)) return undefined;
         const key: any = this.rustSkipWrappers(init.argumentExpression);
         return `${indent}let ${varName}: &Value = ${super.printIdentifier(init.expression)}.get(${Number(key.text)}).unwrap_or(&Value::Null)`;
+    }
+
+    /** ral-58e: `const e = xs[k]` where `xs` is a typed `Vec<Value>` local of the same function (rustVecLocalDeclarationOf)
+     *  that no earlier container arm claims (read bearer, opt list, lent list, param shadow), so its element read is the
+     *  slice read `xs.get(K).cloned().unwrap_or(Value::Null)`. When `xs` is only read and every use of `e` is the receiver of
+     *  an rvalue element read at a numeric literal key, `e` borrows the element instead
+     *  (`xs.get(K).unwrap_or(&Value::Null)`): the same element, `Null` where the clone was `Null`. Decided on the AST and the
+     *  printer's own Vec decision; nothing is read back from printed text. */
+    printRust58eBorrowedElement(declaration: any, indent: string, varName: string): string | undefined {
+        const arm = this.rust58eBorrowedElementArm(declaration);
+        if (arm === undefined) return undefined;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        const key: any = this.rustSkipWrappers(init.argumentExpression);
+        const recv = this.printNode(init.expression, 0).trim();
+        let index: string;
+        if (isNumericLiteral(key)) index = String(Number(key.text));
+        else if (this.rustI64CounterUse(key)) index = `${String(key.text)} as usize`;
+        else if (arm === 'bearer') index = `${this.printNode(key, 0).trim()}.as_i64().unwrap_or(-1) as usize`;
+        else index = this.rustI64IndexText(key, this.printNode(key, 0).trim());
+        return `${indent}let ${varName}: &Value = ${recv}.get(${index}).unwrap_or(&Value::Null)`;
+    }
+
+    rust58eBorrowedElementLocal(declaration: any): boolean {
+        return this.rust58eBorrowedElementArm(declaration) !== undefined;
+    }
+
+    /** Which arm of printNativeContainerAccess prints `xs[k]` as a slice read: a read-only list bearer, or a typed Vec local. */
+    rust58eBorrowedElementArm(declaration: any): 'bearer' | 'vec' | undefined {
+        if (!this.rust57eConstElementOf(declaration) || this.rustTestTierSource(declaration)) return undefined;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        const receiver: any = init.expression;
+        const key: any = this.rustSkipWrappers(init.argumentExpression);
+        if (key === undefined) return undefined;
+        if (!isNumericLiteral(key) && !isIdentifier(key)) return undefined;
+        if (isNumericLiteral(key) && (!Number.isInteger(Number(key.text)) || Number(key.text) < 0)) return undefined;
+        // the printer's element-read decision for `xs[k]` (printNativeContainerAccess, in its order)
+        let arm: 'bearer' | 'vec' | undefined;
+        const bearer = this.rustReadBearerKind(receiver);
+        if (bearer !== undefined) {
+            if (bearer !== 'list' || !this.rustReadBearerKeyOk('list', key)) return undefined;
+            arm = 'bearer';
+        } else {
+            if (this.printOptListElement(receiver, key) !== undefined || this.rustLentListUse(receiver) || this.rustParamShadowOf(receiver) !== undefined) return undefined;
+            if (this.rustVecLocalDeclarationOf(receiver) === undefined) return undefined;
+            if (!isNumericLiteral(key) && (!this.isRustValueIndexKey(key) || this.isWriteBackBindRead(init))) return undefined;
+            arm = 'vec';
+        }
+        const owner: any = this.rustDeclarationOfIdentifier(receiver);
+        if (owner === undefined || !isVariableDeclaration(owner) || !isIdentifier((owner as any).name)) return undefined;
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined || this.rustEnclosingFunction(owner) !== scope) return undefined;
+        const readOnly = (n: any): boolean => {
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return false;
+            return !(isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up) || isDeleteExpression(up));
+        };
+        // the list: read only (element reads and .length; no write, no method call), so the borrow cannot conflict
+        const listOk = this.rustLocalUsesAll(owner, String((owner as any).name.text), true, (n: any) => {
+            if (n === (owner as any).name) return true;
+            if (!readOnly(n)) return false;
+            const up: any = n.parent;
+            if (isElementAccessExpression(up) && up.expression === n) return readOnly(up);
+            if (isPropertyAccessExpression(up) && up.expression === n) return String(up.name.text) === 'length';
+            return false;
+        });
+        // the element: numeric literal keys only (a string key goes through the generic KeyRead, no &&Value: krakenfutures E0277)
+        return listOk && this.rust57eLiteralReadOnly(declaration) ? arm : undefined;
     }
 
     private rust57eSideLevels = new WeakMap<any, boolean>();
