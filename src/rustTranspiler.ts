@@ -2431,8 +2431,6 @@ export class RustTranspiler extends BaseTranspiler {
         const scalarDecl = node.declarations.length === 1 ? this.printRustScalarLocalDeclaration(declaration, varName, indent) ?? this.printHandlerTableLocalDeclaration(declaration, varName, indent) ?? this.printWsUrlLocalDeclaration(declaration, varName, indent) ?? this.printWsFlightLocalDeclaration(declaration, varName, indent) ?? this.printWsCacheLocalDeclaration(declaration, varName, indent) : undefined;
         if (scalarDecl !== undefined) return scalarDecl;
         const parsedValue = this.printNode(declaration.initializer, identation).trim();
-        const borrowedElem = node.declarations.length === 1 ? this.printRust56eBorrowedElement(declaration, parsedValue, indent, varName) : undefined;
-        if (borrowedElem !== undefined) return borrowedElem;
         if (node.declarations.length === 1 && this.rustSubscriptionPresenceFlag(declaration, parsedValue)) return `${indent}let ${varName}: bool = ${parsedValue} != Value::Null`;
         if (declaration.initializer.kind === SyntaxKind.NewExpression) {
             return `${indent}let mut ${varName} = ${parsedValue}`;
@@ -2495,62 +2493,6 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // A callee returning `Option<String>` into a boxed local keeps the box.
         return `${indent}let mut ${varName}: Value = ${nativeStr ? this.rustNativeStrValueBox(parsedValue) : parsedValue}`;
-    }
-
-    /** ral-56e: `const e = xs[i]` where `xs` already prints as a typed list (`xs.get(K).cloned().unwrap_or(Value::Null)`)
-     *  and every use of `e` is the receiver of an rvalue element read `e[k]`: the element is borrowed out of the list
-     *  (`xs.get(K).unwrap_or(&Value::Null)`), so the copy goes. Reading `e[k]` through `&Value` is the same runtime read
-     *  (`get_value` takes `&Value`; a missing row is the same Null). The list must not be written anywhere in the
-     *  method, so the borrow cannot conflict. */
-    printRust56eBorrowedElement(declaration: any, parsedValue: string, indent: string, varName: string): string | undefined {
-        const m = /^([A-Za-z_][A-Za-z0-9_]*)\.get\((.+)\)\.cloned\(\)\.unwrap_or\(Value::Null\)$/.exec(parsedValue);
-        if (m === null || !this.rust56eBorrowedElementLocal(declaration)) return undefined;
-        return `${indent}let ${varName}: &Value = ${m[1]}.get(${m[2]}).unwrap_or(&Value::Null)`;
-    }
-
-    rust56eBorrowedElementLocal(declaration: any): boolean {
-        if (declaration?.kind !== SyntaxKind.VariableDeclaration || !isIdentifier(declaration.name) || this.rustTestTierSource(declaration)) return false;
-        const list: any = declaration.parent;
-        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & NodeFlags.Const) === 0) return false;
-        const init: any = this.rustSkipWrappers(declaration.initializer);
-        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression)) return false;
-        const receiver: any = init.expression;
-        const owner: any = this.rustDeclarationOfIdentifier(receiver);
-        if (owner === undefined || !isVariableDeclaration(owner) || !isIdentifier((owner as any).name)) return false;
-        const scope = this.rustEnclosingFunction(declaration);
-        if (scope === undefined || this.rustEnclosingFunction(owner) !== scope) return false;
-        const readOnly = (n: any): boolean => {
-            const up: any = n.parent;
-            if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return false;
-            if (isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up) || isDeleteExpression(up)) return false;
-            return true;
-        };
-        // the list itself: read only (no whole write, no element write, no method call that may mutate it)
-        const listOk = this.rustLocalUsesAll(owner, String((owner as any).name.text), true, (n: any) => {
-            if (n === (owner as any).name) return true;
-            if (!readOnly(n)) return false;
-            const up: any = n.parent;
-            if (isElementAccessExpression(up) && up.expression === n) return readOnly(up);
-            if (isPropertyAccessExpression(up) && up.expression === n) return String(up.name.text) === 'length';
-            return false;
-        });
-        if (!listOk) return false;
-        // the element: only the receiver of rvalue element reads at a literal or number key
-        let uses = 0;
-        const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
-            const up: any = n.parent;
-            if (!isElementAccessExpression(up) || up.expression !== n || !readOnly(up)) return false;
-            const key: any = this.rustSkipWrappers(up.argumentExpression);
-            // a numeric literal key prints `get_value(&e, &Value::Int(k))`, whose concrete `&Value` slot deref-coerces `&&Value`;
-            // a string key prints through the generic `KeyRead`, which does not (krakenfutures E0277)
-            if (key === undefined || !isNumericLiteral(key)) return false;
-            if (isElementAccessExpression(up.parent) && up.parent.expression === up && !readOnly(up.parent)) return false;
-            // ccxt's writeBackIndexedMutations writes a mutated bind back into its container: keep that container owned
-            if (this.isWriteBackBindRead(up)) return false;
-            uses++;
-            return true;
-        });
-        return ok && uses > 0;
     }
 
     // ── nil-declared locals (`let x: T = undefined`) ─────────────────────────

@@ -19239,25 +19239,6 @@ describe('ral-56s: arrayConcat accumulators held by an alias write or an arrayCo
     });
 });
 
-describe('ral-56e: an element read out of a List element borrows the element (&Value)', () => {
-    const run = (name: string, venue: string) => {
-        const dir = path.join (rustFixtureRoot, name);
-        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
-        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    id: string;\n    safeList (o: any, k: any, d: any = undefined): any[] { return d; }\n    safeString (o: any, k: any, d: any = undefined): string { return d; }\n}\n");
-        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
-        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
-    };
-    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    costOf (config: Dict, params: Dict): any {\n        const limit = params['limit'];\n        const byLimit: List = this.safeList (config, 'byLimit', []);\n        for (let i = 0; i < byLimit.length; i++) {\n" + body + "        }\n        return 1;\n    }\n}\n";
-    test('an element read only as an element-read receiver is a borrowed &Value', () => {
-        const a = run ('ral56e-elem-a', venue ("            const entry = byLimit[i];\n            if (limit <= entry[0]) {\n                return entry[1];\n            }\n"));
-        expect(a).toContain('let entry: &Value = ');
-    });
-    test('an element handed on whole stays Value', () => {
-        const b = run ('ral56e-elem-b', venue ("            const entry = byLimit[i];\n            if (limit <= entry[0]) {\n                return entry;\n            }\n"));
-        expect(b).toContain('let mut entry: Value = ');
-    });
-});
-
 describe('ral-56e: a literal-index element of a venue number[] list built from int counters is Option<i64>', () => {
     const run = (name: string, venue: string) => {
         const dir = path.join (rustFixtureRoot, name);
@@ -19272,17 +19253,6 @@ describe('ral-56e: a literal-index element of a venue number[] list built from i
     });
     test('a list that also pushes a non-counter keeps index Value', () => {
         expect(run ('ral56e-intlist-b', venue ('channels.length'))).toContain('let mut index: Value = ');
-    });
-});
-
-describe('ral-56e: a borrowed element is read only at numeric literal keys', () => {
-    test('a string-key read keeps the element Value (generic KeyRead takes no &&Value)', () => {
-        const dir = path.join (rustFixtureRoot, 'ral56e-elem-c');
-        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
-        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    id: string;\n    safeList (o: any, k: any, d: any = undefined): any[] { return d; }\n}\n");
-        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    costOf (config: Dict): any {\n        const trades: List = this.safeList (config, 'trades', []);\n        let total = 0;\n        for (let i = 0; i < trades.length; i++) {\n            const currentTrade = trades[i];\n            total = total + currentTrade['cost'];\n        }\n        return total;\n    }\n}\n");
-        const c = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
-        expect(c).not.toContain('let currentTrade: &Value');
     });
 });
 
