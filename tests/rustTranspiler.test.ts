@@ -16309,3 +16309,26 @@ describe('ral-44d: a declared Promise<Dict> endpoint response used as its own sa
         expect(out).toMatch(/let mut response: Value = /);
     });
 });
+
+describe('ral-44g: a ternary whose arms are {} or a base safeDict with a {} default is a map producer', () => {
+    const mk = (init: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-44g-ternary-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): any { return o; }\n    safeString (o: any, k: any, d: any = undefined): any { return o; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    pick (networks: any, code: any = undefined) {\n        const network = " + init + ";\n        return this.safeString (network, 'id');\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('{} / safeDict(.., {}) arms: crate::value::Dict read by reference', () => {
+        const out = mk("(code === undefined) ? {} : this.safeDict (networks, code, {})");
+        expect(out).toContain('let mut network: crate::value::Dict = ');
+        expect(out).toContain('}).into_dict();');
+    });
+    test('negative: an undefined arm keeps Value', () => {
+        const out = mk("(code === undefined) ? undefined : this.safeDict (networks, code)");
+        expect(out).toMatch(/let mut network: Value = /);
+    });
+});

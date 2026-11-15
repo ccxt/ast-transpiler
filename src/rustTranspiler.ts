@@ -18639,6 +18639,11 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-43d: a base `toArray` / `arrayConcat` result (a `Value::Arr` on every path) handed whole to a lent list slot
         const alwaysList = from === undefined && !nilDeclared && init !== undefined && this.rustAlwaysListProducer(init);
         if (alwaysList) from = 'list';
+        // ral-44g: `c ? {} : this.safeDict (..)` (each arm an empty map literal or a base map producer) holds a map on every
+        // path: the printed if-expression answers `Value::Dict` (or the Null a missing safeDict reads, which `into_dict()` turns into
+        // the empty map the other arm already is), so the uses below are checked exactly as for a plain producer
+        const mapTernary = from === undefined && !nilDeclared && init !== undefined && this.rustMapTernaryInit(init);
+        if (mapTernary) from = 'dict';
         let sbMapWrites = 0;
         if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
@@ -20288,6 +20293,26 @@ export class RustTranspiler extends BaseTranspiler {
         const t = arm(node.whenTrue); const f = arm(node.whenFalse);
         if (t === undefined || f === undefined) return undefined;
         return `(if ${this.printCondition(node.condition, 0)} { ${t} } else { ${f} })`;
+    }
+
+    /** ral-44g: `c ? a : b` where each arm is an empty map literal `{}` or a base map producer call (`safeDict` with a literal `{}`
+     *  default, extend / omit): every path answers a map, so the local is a map producer. An `undefined` arm keeps Value. */
+    rustMapTernaryInit(init: any): boolean {
+        const node: any = this.rustSkipWrappers(init);
+        if (node === undefined || !isConditionalExpression(node)) return false;
+        const arm = (x: any): boolean => {
+            const a: any = this.rustSkipWrappers(x);
+            if (a === undefined) return false;
+            if (isObjectLiteralExpression(a)) return a.properties.length === 0;
+            if (!isCallExpression(a)) return false;
+            if (this.rustDictTernaryCall(a)) return true;
+            const callee: any = a.expression;
+            if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || String(callee.name.text) !== 'safeDict') return false;
+            const args: any[] = Array.from(a.arguments ?? []);
+            const dflt: any = args.length === 3 ? this.rustSkipWrappers(args[2]) : undefined;
+            return dflt !== undefined && isObjectLiteralExpression(dflt) && dflt.properties.length === 0 && this.rustBorrowedSourceKind(a) === 'dict';
+        };
+        return arm(node.whenTrue) && arm(node.whenFalse);
     }
 
     rustDictTernaryCall(call: any): boolean {
