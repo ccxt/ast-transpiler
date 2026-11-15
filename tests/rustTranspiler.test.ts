@@ -17484,3 +17484,32 @@ describe('ral-50b: index write on a never-null list local (impl AddTarget for Li
         expect(nul).toContain('let mut orders: Value =');
     });
 });
+
+describe('ral-50f: a string-literal-seeded handle*AndParams slot whose typed destructure line only fits with the short temp head', () => {
+    const long = 'ffffffffffffffffffff';
+    const src = (name: string, option = 'accountTypeOptionNameThatIsAlsoQuiteLong') =>
+        'class E {\n' +
+        '    handleOptionStringAndParams(params: any, methodName: string, optionName: string, defaultValue?: string): [string, any] { return [defaultValue, params]; }\n' +
+        '    hold(x: any): any { return x; }\n' +
+        '    run(params: any) {\n' +
+        "        let accountType = 'main';\n" +
+        '        let paramsRequest = undefined;\n' +
+        "        [ accountType, paramsRequest ] = this.handleOptionStringAndParams(params, '" + name + "', '" + option + "', accountType);\n" +
+        "        if (accountType === 'contract') {\n" +
+        '            return this.hold(paramsRequest);\n' +
+        '        }\n' +
+        '        return this.hold(accountType);\n' +
+        '    }\n' +
+        '}';
+    test('types the local Option<String> and binds the temp with into_list() to keep the line under 400', () => {
+        const output = transpiler.transpileRust(src(long)).content;
+        expect(output).not.toMatch(/let mut accountType: Value/);
+        expect(output).toMatch(/let __destr_tmp = [^;]*\.into_list\(\); accountType = /);
+        expect(output.split('\n').every((l: string) => l.length <= 400)).toBe(true);
+    });
+    test('a short line keeps the Vec<Value> head', () => {
+        const output = transpiler.transpileRust(src('m', 'a')).content;
+        expect(output).not.toMatch(/let mut accountType: Value/);
+        expect(output).toContain('let __destr_tmp: Vec<Value> = ');
+    });
+});

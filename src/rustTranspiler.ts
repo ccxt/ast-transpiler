@@ -2207,6 +2207,9 @@ export class RustTranspiler extends BaseTranspiler {
             // sa: every slot typed (no boxed slot read left for ccxt's `Vec<Value>` temp passes): `Value::into_list` moves the
             // list out (an empty list for anything else), exactly `.as_array().cloned().unwrap_or_default()` without the copy
             if (nativeList && typedSlots.every((t) => t !== undefined) && this.rustShortDestrHeads.has(node)) return `{ let ${tmpName} = ${rhs}.into_list(); ${assignments}; }`;
+            // ral-50f: a string slot's unwrap that takes the typed line over 400 binds the short head instead (the line-fit
+            // estimate taken on the open print can run a few chars short of the final one)
+            if (nativeList && typedSlots.every((t) => t !== undefined) && this.rustStrSlotShortHead(node, `{ ${head}; ${assignments}; }`)) return `{ let ${tmpName} = ${rhs}.into_list(); ${assignments}; }`;
             return `{ ${head}; ${assignments}; }`;
         }
         const flagWrite = isAssign && isIdentifier(left) ? this.printMarketFlagBoolWrite(left, right) : undefined; if (flagWrite !== undefined) return flagWrite;
@@ -16528,11 +16531,32 @@ export class RustTranspiler extends BaseTranspiler {
             const length = column + Math.max(...this.printNode(write, 0).split('\n').map((l: string) => l.trim().length));
             // the open print boxes the self default as `x.clone()` (8 chars longer than `Value::from(&x)` minus `x`): only the unwrap is added
             fits = length + '.as_str().map(str::to_owned)'.length <= 400;
+            // ral-50f: a destructure over a native list whose slots all print typed binds the temp `= X.into_list()` (sa's short
+            // head, 41 chars shorter than `: Vec<Value> = X.as_array().cloned().unwrap_or_default()`): the unwrap fits there
+            // (16 chars of slack: the open print can run shorter than the final line)
+            const short = ': Vec<Value>'.length + '.as_array().cloned().unwrap_or_default()'.length - '.into_list()'.length;
+            if (!fits && length + '.as_str().map(str::to_owned)'.length - short + 16 <= 400 && !this.rustTestTierSource(write)
+                && (write.left.elements as any).every((el: any) => isIdentifier(el) && this.rustNilSlotWrite(el))) {
+                this.rustShortDestrHeads.add(write);
+                fits = true;
+            }
         } catch (e) {
             fits = false;
         }
         this.rustStrSlotLineMemo.set(write, fits);
         return fits;
+    }
+
+    /** ral-50f: the typed destructure line of a string slot write would newly cross 400 chars: the short head keeps it under. */
+    rustStrSlotShortHead(write: any, printed: string): boolean {
+        if (this.rustTestTierSource(write) || !(write.left.elements as any).some((el: any) => isIdentifier(el) && this.rustScalarUseForms.get(el) === 'slot'
+            && this.rustScalarLocalOf(el)?.kind === 'ostr')) return false;
+        let depth = 0;
+        for (let up: any = write; up !== undefined && !isFunctionLike(up); up = up.parent) if (isBlock(up)) depth++;
+        const width = (depth + 1) * 4 + printed.length;
+        const short = ': Vec<Value>'.length + '.as_array().cloned().unwrap_or_default()'.length - '.into_list()'.length;
+        // the ccxt build/ passes and the settled lends can still lengthen the line a little: keep 16 chars of slack
+        return width + 16 > 400 && width - short <= 400;
     }
 
     /** Some write of the initialised local is a string tuple slot (`rustStrSlotWrite`). */
