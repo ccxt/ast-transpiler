@@ -7448,6 +7448,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(parent)) return parent.left === n && this.rustClientHandleIsInTest(parent);
         if (!isElementAccessExpression(parent) || parent.argumentExpression !== n) return false;
         const access = this.rustClientHandleAccess(parent.expression);
+        // ral-51s: the key of a `client.subscriptions[k] = v` statement (printed by printClientHandleSubscriptionWrite)
+        const up: any = parent.parent;
+        if (isBinaryExpression(up) && up.left === parent && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement) return access?.key === 'subscriptions' && access.write;
         if (isDeleteExpression(parent.parent)) return access?.key === 'subscriptions' && parent.parent.parent?.kind === SyntaxKind.ExpressionStatement;
         return !this.isNativeWriteTargetBase(parent) && access !== undefined && !access.write && RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key] !== undefined;
     }
@@ -7732,7 +7735,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (access === undefined || access.key !== 'subscriptions') return undefined;
         const value = this.printNode(right, 0).trim();
         const moved = /^[A-Za-z_][A-Za-z0-9_]*$/.test(value) && value !== 'self' && value !== 'true' && value !== 'false' ? `${value}.clone()` : value;
-        return `${this.rustClientHandleReceiver(access.plan, false)}.add_subscription(&${this.printNode(left.argumentExpression, 0).trim()}, ${moved})`;
+        // ral-51s: a string local key is lent as its str (`add_subscription` takes `impl ValueKey`)
+        const key = this.rustWsStrKey(left.argumentExpression) ? this.rustWsKeyText(left.argumentExpression) : `&${this.printNode(left.argumentExpression, 0).trim()}`;
+        return `${this.rustClientHandleReceiver(access.plan, false)}.add_subscription(${key}, ${moved})`;
     }
 
     /** A bare use of a local declared as the handle hands the `Value` handle on. */

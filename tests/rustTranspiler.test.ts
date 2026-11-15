@@ -17612,3 +17612,30 @@ describe('ral-50e: a number local keying base safeDict passes unboxed (generated
         expect(out.venue).not.toMatch(/let mut lastIndex: i64/);
     });
 });
+
+describe('ral-51s: a string local keying a client subscription write', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/ws/Client.ts': 'export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    resolve (result: any, messageHash: string): any { return result; }\n    send (message: any): any { return message; }\n}\n',
+        'ts/src/base/ws/WsClient.ts': "import Client from './Client.js';\nexport default class WsClient extends Client {\n}\n",
+        'ts/src/base/Exchange.ts': "import WsClient from './ws/WsClient.js';\nexport default class Exchange {\n    client (url: string): WsClient { return new WsClient (); }\n    safeString (obj: any, key: any, d: any = undefined): string { return obj[key]; }\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n" +
+            "    unSub (url: string, hash: string, topic: string) {\n        const client = this.client (url);\n        const channelId = this.safeString (client.subscriptions, topic, '');\n        const msg = 'unsubscribe:' + channelId;\n        client.subscriptions[msg] = hash;\n        return client.send ({ 'op': 'unsub' });\n    }\n" +
+            "    sub (client: Client, requestId: number, hash: string) {\n        const temp = requestId.toString ();\n        client.subscriptions[temp] = hash;\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-51s-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the key local is a String lent as its str', () => {
+        expect(out).toContain('let mut msg: String = format!(');
+        expect(out).toContain('.add_subscription(msg.as_str(), ');
+        expect(out).toContain('let mut temp: String = ');
+        expect(out).toContain('.add_subscription(temp.as_str(), ');
+    });
+});
