@@ -7383,6 +7383,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-50e: the same local as the key of a statement element write `x[n] = v` boxes there (`Value::from(n)`: the Int the
         // `Value` local held), only for a local whose other reads are all safeDict keys
         if (kind === 'int' && this.rustElemInsertKey(n) && this.rustSafeDictKeyOnlyLocal(this.rustDeclaredNode(n))) return 'box';
+        // ral-53e: an int / Option<i64> local keying a plain element read `xs[k]` boxes there (`Value::from(k)`: the Int / Null the `Value` held)
+        if ((kind === 'int' || kind === 'oint') && this.rust53eElemReadKey(n)) return 'box';
         if ((kind === 'str' || kind === 'ostr') && this.rustWsCacheMapKeyUse(n)) return 'fin';
         if (kind === 'bool' && this.rustScalarBoolLogicalText(this.rustClimbLogicalWrappers(n)) !== undefined) return 'cond';
         if (kind === 'bool' && isPrefixUnaryExpression(parent) && this.rustValueNotOfBoolLocal(parent) !== undefined) return 'cond';
@@ -8694,6 +8696,8 @@ export class RustTranspiler extends BaseTranspiler {
         let keys = 0;
         const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
             if (this.rustElemInsertKey(n)) return true;
+            // ral-53e: the whole key of a plain element read `xs[n]` boxes there as well (`Value::from(n)`)
+            if (this.rust53eElemReadKey(n)) { keys++; return true; }
             if (!this.rustSafeDictKeyArg(n)) return false;
             keys++;
             return true;
@@ -8775,6 +8779,17 @@ export class RustTranspiler extends BaseTranspiler {
         return !this.rustTestTierSource(n) && isCallExpression(call) && call.arguments.length === 1 && call.arguments[0] === n
             && isPropertyAccessExpression(call.expression) && call.expression.expression.kind === SyntaxKind.ThisKeyword
             && String(call.expression.name.text) === 'iso8601';
+    }
+
+    /** ral-53e: `n` is the whole key of an rvalue element read `xs[n]` on a plain local receiver (not a write target, not `delete`, non-test sources). */
+    rust53eElemReadKey(n): boolean {
+        const access: any = n?.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== n || !isIdentifier(access.expression) || this.rustTestTierSource(n)) return false;
+        const up: any = this.rustSkipWrappersUp(access.parent);
+        if (isDeleteExpression(access.parent) || (isBinaryExpression(up) && up.left === access && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment)) return false;
+        if (isElementAccessExpression(up) && up.expression === access) return false;
+        if ((isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up))) return false;
+        return true;
     }
 
     /** Identifier hook: a `box` use converts with the standard `From` impls (scalars are `Copy`). */
@@ -20363,7 +20378,10 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (keyDecl === undefined || !isVariableDeclaration(keyDecl) || !isIdentifier(keyDecl.name) || keyDecl.name === key) return false;
         if (!this.rustValueKeyType(key)) return false;
-        return this.rustScalarLocalOf(key) === undefined && this.rustNilLocalKind(keyDecl) === undefined && !this.rustWsUrlLocal(keyDecl)
+        // ral-53e: an int / Option<i64> local boxed at this key (`Value::from(k)`) keys the read as the Value local did
+        const keyScalar = this.rustScalarLocalOf(key);
+        if ((keyScalar?.kind === 'int' || keyScalar?.kind === 'oint') && this.rust53eElemReadKey(key)) return true;
+        return keyScalar === undefined && this.rustNilLocalKind(keyDecl) === undefined && !this.rustWsUrlLocal(keyDecl)
             && this.rustBorrowedLocalKind(keyDecl) === undefined && !this.rustLentListLocal(keyDecl);
     }
 
