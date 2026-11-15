@@ -16702,3 +16702,33 @@ describe('ral-46c: a request-id string stored into a container', () => {
         expect(out).not.toContain('let mut messageHash: Value');
     });
 });
+
+describe('ral-46a lift 1: a string local initialised from `incrementingNonce().toString()` / `randNumber(n).toString()` is a String', () => {
+    const t46 = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, '46a-int-runtime-string');
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type int = number;\nexport default class Exchange {\n" +
+        "    options: Dict = {};\n    nonce (): int { return 1; }\n    incrementingNonce (): int {\n        return this.nonce ();\n    }\n    randNumber (size: number): number {\n        return size;\n    }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue (body));
+        return t46.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('an incrementingNonce string concatenated and lent to header slots prints format! of the i64', () => {
+        const out = run ("    sign (path: string) {\n        const nonce = this.incrementingNonce ().toString ();\n        const auth = '/api/' + path + nonce;\n        const headers = { 'nonce': nonce, 'auth': auth };\n        return this.hold (headers);\n    }\n");
+        expect(out).not.toContain('let mut nonce: Value');
+        expect(out).toMatch(/let mut nonce: String = format!\("\{\}", self\.incrementingNonce\(\)\);/);
+    });
+    test('a randNumber string read only in a concat is a String', () => {
+        const out = run ("    requestId () {\n        const randomPart = this.randNumber (3).toString ();\n        return this.hold ('x' + randomPart);\n    }\n");
+        expect(out).not.toContain('let mut randomPart: Value');
+        expect(out).toMatch(/let mut randomPart: String = format!\("\{\}", self\.randNumber\(/);
+    });
+    test('negative: a venue override of randNumber keeps the Value', () => {
+        const out = run ("    randNumber (size: number): number {\n        return 4;\n    }\n    requestId () {\n        const randomPart = this.randNumber (3).toString ();\n        return this.hold ('x' + randomPart);\n    }\n");
+        expect(out).toContain('let mut randomPart: Value');
+    });
+});
