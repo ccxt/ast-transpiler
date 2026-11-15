@@ -4620,7 +4620,8 @@ describe('rust typed-receiver native reads', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_value(&currencies, &code)');
+        // ral-41h: the local is held as a List; an any key reads the arm get_value dispatches to (KeyRead::read)
+        expect(output).toContain('crate::value::KeyRead::read(&&currencies, &code)');
         expect(output).not.toContain('currencies.as_map()');
     });
 
@@ -5218,7 +5219,8 @@ describe('native reads on plain-dict locals and Dict parameters', () => {
 
     test('a literal-built local and an account () local read an untyped key natively', () => {
         expect(output).toContain(`let mut viaCode: Value = ${dyn('result', 'code')};`);
-        expect(output).toContain(dyn('account', 'code'));
+        // ral-41h: the account () local is held as a Dict: an untyped key reads KeyRead::read (get_value's Dict arm)
+        expect(output).toContain('crate::value::KeyRead::read(&&account, &code)');
     });
 
     test('a reassigned param, a parse* local and a numeric key keep the helper', () => {
@@ -5344,11 +5346,12 @@ describe('overloaded base safeDict/safeList/safeBool feed the plain-dict and lis
     });
 
     test('a dynamic-key read on an overloaded safeDict local with a {} default is native', () => {
-        expect(output).toContain('let mut found: Value = (if let (Some(__m), Some(__k)) = (byAlt.as_map(), id.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null });');
+        expect(output).toContain('let mut found: Value = crate::value::KeyRead::read(&&byAlt, &id);');
     });
 
     test('a non-plain default and a write-back bind keep get_value', () => {
-        expect(output).toContain('return get_value(&loose, &id);');
+        // ral-41h: loose is held as a Dict (read-only uses: Null and the empty map read alike)
+        expect(output).toContain('return crate::value::KeyRead::read(&&loose, &id);');
         expect(output).toContain('let mut value: Value = get_value(&ledger, &key);');
     });
 
@@ -8105,16 +8108,16 @@ describe ('rustDictRead', () => {
 
         test('a literal key into a proven local prints the native read', () => {
             expect(output).toContain('let mut viaCore: Value = result.as_map().and_then(|__m| __m.get("core")).cloned().unwrap_or(Value::Null);');
-            expect(output).toContain('let mut viaLit: Value = merged.as_map().and_then(|__m| __m.get("core")).cloned().unwrap_or(Value::Null);');
+            expect(output).toContain('let mut viaLit: Value = crate::value::KeyRead::key_read(&&merged, "core");');
         });
 
         test('a dict-only callee local reads a Str-place key closure-free', () => {
-            expect(output).toContain(`let mut viaCode: Value = ${free('merged', 'code')};`);
+            expect(output).toContain('let mut viaCode: Value = crate::value::KeyRead::read(&&merged, &code);');
         });
 
         test('membership: a computed key on a dict-callee local keeps in_op (content unproven)', () => {
-            expect(output).toContain('Value::Bool(in_op(&merged, &code))');
-            expect(output).not.toContain('merged.as_map().is_some_and');
+            // ral-41h: merged is now held as a Dict (computed-key read via KeyRead::read): membership is in_op's Dict arm
+            expect(output).toContain('let mut hasCode: Value = Value::Bool(matches!(&code, Value::Str(__k) if merged.contains_key(__k.as_ref())));');
         });
 
         test('a base runtime-state field reads and tests membership natively', () => {
@@ -15394,5 +15397,53 @@ describe('41d: a reader whose long declaration is held by the 400-char guard spl
     test('a nested reader with a default of its own is not split (the reader stays Value)', () => {
         const out = run("    m (params: any, account: any) {\n        const vault = this.safeString2 (params, 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk', 'jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj', this.safeString (account, 'qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq', 'x'));\n        return this.hold (vault);\n    }\n");
         expect(out).not.toMatch(/__rd_vault/);
+    });
+});
+
+describe('ral-41h: index reads on a held container: chained element reads and parameter / any keys', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: any = {};\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    toArray (o: any): any { return o; }\n    keep (p: any): any { return p; }\n    indexBy (o: any, k: any): any { return o; }\n    inArray (n: any, h: any): boolean { return true; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n";
+    const run = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('an any-typed local keys the read on the held map', () => {
+        const out = run ('r41h-param-key', "    a (config: Dict, params: any) {\n        const type = params['type'];\n        const byType = this.safeDict (config, 'byType', {});\n        if (type in byType) {\n            return byType[type];\n        }\n        return 1;\n    }\n");
+        expect(out).toContain('let mut byType: crate::value::Dict = ');
+        expect(out).toContain('crate::value::KeyRead::read(&&byType, &type_var)');
+    });
+    test('an any-typed parameter keys the read on the held map', () => {
+        const out = run ('r41h-any-key', "    b (account: any) {\n        const accountsByType = this.safeDict (this.options, 'accountsByType', {});\n        if (account in accountsByType) {\n            return accountsByType[account];\n        }\n        return account;\n    }\n");
+        expect(out).toContain('let mut accountsByType: crate::value::Dict = ');
+        expect(out).toContain('crate::value::KeyRead::read(&&accountsByType, &account)');
+    });
+    test('a chained read x[i][k] reads the head off the held list and the rest as get_value did', () => {
+        const out = run ('r41h-chain', "    c (objects: any, key: string | number, values: any) {\n        const objectsValue: any = this.toArray (objects);\n        if (values === undefined) {\n            return this.indexBy (objectsValue, key);\n        }\n        const results: Dict[] = [];\n        for (let i = 0; i < objectsValue.length; i++) {\n            if (this.inArray (objectsValue[i][key], values)) {\n                results.push (objectsValue[i]);\n            }\n        }\n        return results;\n    }\n");
+        expect(out).toContain('let mut objectsValue: crate::value::List = ');
+    });
+    test('negative: a chained element WRITE keeps the box', () => {
+        const out = run ('r41h-chain-write', "    d (objects: any, key: string) {\n        const objectsValue = this.toArray (objects);\n        for (let i = 0; i < objectsValue.length; i++) {\n            objectsValue[i][key] = 1;\n        }\n        return objectsValue;\n    }\n");
+        expect(out).not.toContain('let mut objectsValue: crate::value::List = ');
+    });
+});
+
+describe('ral-41h: keysort of a proven map is a built map', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    keysort (o: any): any { return o; }\n    omit (o: any, k: any): any { return o; }\n    rawencode (o: any): string { return ''; }\n    keep (p: any): any { return p; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n";
+    const run = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('keysort of an inline omit of a literal map holds the sorted Dict', () => {
+        const out = run ('r41h-keysort', "    a (id: string) {\n        const sorted = this.keysort (this.omit ({ 'b': 1, 'a': id }, 'c'));\n        return this.rawencode (sorted);\n    }\n");
+        expect(out).toContain('let mut sorted: crate::value::Dict = ');
+    });
+    test('negative: keysort of an untyped operand stays boxed (a non-map passes through)', () => {
+        const out = run ('r41h-keysort-any', "    b (x: any) {\n        const sorted = this.keysort (x);\n        return this.rawencode (sorted);\n    }\n");
+        expect(out).not.toContain('let mut sorted: crate::value::Dict = ');
     });
 });

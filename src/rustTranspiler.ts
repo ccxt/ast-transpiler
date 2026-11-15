@@ -18355,16 +18355,30 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `x[k]`, read only (no write, call, property or nested element target), with a numeric literal key or a key local
      *  that prints as a `Value` (a literal-initialised counter, or an untyped `let`/`const` of number / string type). */
+    /** ral-41h: a key whose checker type is a string / number, or `any` (a `Value` key reads exactly as `get_value` keyed it:
+     *  `KeyRead::read` on the held map / list is the arm `get_value` dispatches to for every key kind). */
+    rustValueKeyType(key: any): boolean {
+        const type: any = this.typeOfNodeIfAny(key);
+        const prim = this.primitiveKindOfType(type);
+        if (prim === 'number' || prim === 'string') return true;
+        const checked: any = this.getCheckedTypeOf(key);
+        return checked !== undefined && (checked.flags & TypeFlags.Any) !== 0;
+    }
+
     rustBorrowedIndexReadUse(n: any): boolean {
         const up: any = n.parent;
         if (!isElementAccessExpression(up) || up.expression !== n) return false;
-        const use: any = up.parent;
-        if (use === undefined || isDeleteExpression(use) || ((isPropertyAccessExpression(use) || isCallExpression(use) || isElementAccessExpression(use)) && use.expression === up)) return false;
-        if ((isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind)) || use.kind === SyntaxKind.PrefixUnaryExpression || use.kind === SyntaxKind.PostfixUnaryExpression) return false;
-        if (isElementAccessExpression(use) && use.argumentExpression === up) return false;
+        // ral-41h: `x[i]['k']` / `x[i][j]` read on: the head link reads the held container (`KeyRead::read`), the outer
+        // links read that element exactly as `get_value` did on the boxed chain; the WHOLE chain must sit in a read position
+        let top: any = up;
+        while (isElementAccessExpression(top.parent) && top.parent.expression === top) top = top.parent;
+        const use: any = top.parent;
+        if (use === undefined || isDeleteExpression(use) || ((isPropertyAccessExpression(use) || isCallExpression(use)) && use.expression === top)) return false;
+        if ((isBinaryExpression(use) && use.left === top && rustIsAssignmentOperator(use.operatorToken.kind)) || use.kind === SyntaxKind.PrefixUnaryExpression || use.kind === SyntaxKind.PostfixUnaryExpression) return false;
+        if (isElementAccessExpression(use) && use.argumentExpression === top) return false;
         // a primitive local initialised from the element keeps its element-read scalar rule (reads the boxed receiver)
-        if (isVariableDeclaration(use) && use.initializer === up && this.primitiveKindOfType(this.typeOfNodeIfAny(use.name)) !== undefined) return false;
-        if (this.isWriteBackBindRead(up) || !this.isNativeAccessPositionSafe(up)) return false;
+        if (isVariableDeclaration(use) && use.initializer === top && this.primitiveKindOfType(this.typeOfNodeIfAny(use.name)) !== undefined) return false;
+        if (this.isWriteBackBindRead(up) || !this.isNativeAccessPositionSafe(up) || (top !== up && (this.isWriteBackBindRead(top) || !this.isNativeAccessPositionSafe(top)))) return false;
         const key: any = this.rustSkipWrappers(up.argumentExpression);
         if (key === undefined || isStringLiteralLikeNode(key)) return false;
         if (isNumericLiteral(key)) return Number.isInteger(Number(key.text)) && Number(key.text) >= 0;
@@ -18373,9 +18387,13 @@ export class RustTranspiler extends BaseTranspiler {
         const keyDecl: any = this.rustDeclarationOfIdentifier(key);
         // int44 (wh x wg): a string element borrowed off its list keys the read as its box (`Value::from(k)`: the `Str` / Null the Value local held)
         if (keyDecl !== undefined && this.rustBorrowedStrElems.has(keyDecl)) return true;
+        // ral-41h: a string / number parameter printed `Value` keys the read as itself (the box `get_value` took)
+        if (keyDecl !== undefined && isParameterDeclaration(keyDecl) && isIdentifier(keyDecl.name) && keyDecl.dotDotDotToken === undefined
+            && this.rustEnclosingFunction(keyDecl) === this.rustEnclosingFunction(n)) {
+            return this.rustValueKeyType(key) && this.rustParamType(keyDecl) === 'Value' && this.rustScalarParamRead(key) === undefined;
+        }
         if (keyDecl === undefined || !isVariableDeclaration(keyDecl) || !isIdentifier(keyDecl.name) || keyDecl.name === key) return false;
-        const prim = this.primitiveKindOfType(this.typeOfNodeIfAny(key));
-        if (prim !== 'number' && prim !== 'string') return false;
+        if (!this.rustValueKeyType(key)) return false;
         return this.rustScalarLocalOf(key) === undefined && this.rustNilLocalKind(keyDecl) === undefined && !this.rustWsUrlLocal(keyDecl)
             && this.rustBorrowedLocalKind(keyDecl) === undefined && !this.rustLentListLocal(keyDecl);
     }
@@ -19778,6 +19796,9 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-qc: `omit` drops keys from a proven map head (copy-on-write when the head is shared), so it answers a map;
         // its key list prints ~22 chars wider per literal, and the typed line must stay within the 400-char budget
         if (method === 'omit') return !this.rustTestTierSource(call) && this.rustOmitOfDict(call) && this.rustOmitLineFits(call) ? 'dict' : undefined;
+        // ral-41h: base `keysort` rebuilds a map input as a fresh sorted map (exchange_stubs.rs keysort: `Value::Dict(m)` ->
+        // `Value::Map(out)`) and hands any other input back as it came: a map only when its one operand is a proven map
+        if (method === 'keysort') return !this.rustTestTierSource(call) && call.arguments.length === 1 && this.rustCalleeIsRuntimeBase(call) && this.rustKeysortOfDict(call) && this.rustOmitLineFits(call) ? 'dict' : undefined;
         // `sortBy*` hands a non-list input back as it came: a list only when its input is one (the Arr-only proof)
         if (method === 'sortBy' || method === 'sortBy2') return !this.rustTestTierSource(call) && (this.extraArrSource(call) || this.rustSortOfTypedList(call)) ? 'list' : undefined;
         if (/^(?:safe|extend$|deepExtend$|omit$|keysort$|parseJson$|watch|subscribe|unsubscribe|market$|currency$)/.test(method)) return undefined;
@@ -19928,6 +19949,18 @@ export class RustTranspiler extends BaseTranspiler {
     /** A base `this.omit (x, keys)` whose head always holds a map: a literal, a built map (`extend`, ..) or a local that
      *  prints the shared map. A `Dict`-typed parameter is not enough: a list body (`Array.isArray (params)` in `sign`)
      *  passes `omit` unchanged, and `into_dict()` would turn it into an empty map. */
+    /** ral-41h: the one operand of `this.keysort (x)` is a proven map (the same head proof `omit` takes). */
+    rustKeysortOfDict(call: any): boolean {
+        const head: any = this.rustSkipWrappers(call.arguments[0]);
+        if (head === undefined) return false;
+        if (isObjectLiteralExpression(head)) return this.rustPlainDictLiteral(head);
+        if (isCallExpression(head)) return this.rustBuiltReturnSourceKind(head) === 'dict' || this.rustOmitOfDict(head);
+        if (!isIdentifier(head)) return false;
+        const d: any = this.rustDeclarationOfIdentifier(head);
+        if (d === undefined || d === head || d.name === head) return this.rustTypedParamsParam(d);
+        return this.rustTypedParamsParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+    }
+
     rustOmitOfDict(init: any): boolean {
         if (!this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_OMIT) || init.arguments.length !== 2) return false;
         const head: any = this.rustSkipWrappers(init.arguments[0]);
