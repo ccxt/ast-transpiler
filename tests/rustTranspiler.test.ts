@@ -18112,3 +18112,16 @@ describe('ral-52n: an Int-defaulted number reader local handed to a number-typed
         expect(out).toMatch(/let mut price: Value = /);
     });
 });
+
+describe('INT-60: a push on an element read off a borrowed list local stays the native push', () => {
+    test('kraken fetchTrades lastTrade.push keeps the guarded Arc::make_mut push', () => {
+        const dir = path.join (rustFixtureRoot, 'int60-list-elem-push');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string { return o; }\n    safeList (o: any, k: any, d: List = undefined): List { return o; }\n    parseTrades (t: any, m: any = undefined): any { return t; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    ft (result: Dict, id: string) {\n        const trades = this.safeList (result, id, []);\n        const length = trades.length;\n        if (length <= 0) {\n            return [];\n        }\n        const lastTrade = trades[length - 1];\n        const lastTradeId = this.safeString (result, 'last');\n        lastTrade.push (lastTradeId);\n        trades[length - 1] = lastTrade;\n        return this.parseTrades (trades, undefined);\n    }\n}\n");
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut trades: crate::value::List');
+        expect(out).toContain('if let Value::Arr(__a) = &mut lastTrade { std::sync::Arc::make_mut(__a).push(');
+        expect(out).not.toContain('append_to_array(&mut lastTrade');
+    });
+});

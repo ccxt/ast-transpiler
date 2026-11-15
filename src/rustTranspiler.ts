@@ -29720,7 +29720,12 @@ export class RustTranspiler extends BaseTranspiler {
         let root: any = init;
         while (isElementAccessExpression(root.expression)) root = root.expression;
         const base: any = this.rustStripWrappers(root.expression);
-        return base !== undefined && isIdentifier(base) && this.rustDictBearerDeclaration(base) !== undefined;
+        if (base === undefined || !isIdentifier(base)) return false;
+        if (this.rustDictBearerDeclaration(base) !== undefined) return true;
+        // INT-60: an element read off a lent `List` local (`KeyRead::read`) is a plain clone too (52e kraken `lastTrade`)
+        const listDecl: any = init === root ? this.rustDeclarationOfIdentifier(base) : undefined;
+        return listDecl !== undefined && isVariableDeclaration(listDecl) && listDecl.name !== base
+            && (this.rustBorrowedLocalKind(listDecl) === 'list' || this.rustLentListLocal(listDecl));
     }
 
     // `startsWith/endsWith(..) === true|false` compares the runtime fn's bare bool
