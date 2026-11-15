@@ -18420,6 +18420,9 @@ export class RustTranspiler extends BaseTranspiler {
             if ((from === 'dict' || from === 'list') && this.rustLentHelperSlot(up, n, from) && (String(up.expression.name.text) !== 'json' || endpoint || this.rustLentContainerSource(init) || (from === 'dict' && this.rustJsonMapProducer(init)))
                 && !(RustTranspiler.RUST_LIST_TELLING_SLOTS.has(String(up.expression.name.text)) && this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_OMIT) && !this.rustOmitOfDict(init))) return ++lentResponses > 0 && ++reads > 0;
             if (this.rustLentOptionalHandOff(up, n, init, from, nilDeclared)) return ++lentNullable > 0 && ++reads > 0;
+            // ral-42h: a never-null same-class venue container result (ral-yc's declared-return proof) not taken by the optional
+            // hand-off above lends to the same lent slots as a defaulted reader (the plain container, never Null)
+            if (init !== undefined && isCallExpression(init) && this.rustVenueContainerReturnKind(init)?.nullable === false && this.rustLentEndpointSlot(up, n, from)) return ++lentResponses > 0 && ++reads > 0;
             // a lent params slot (`watch` message, a lent `params`) takes the built map by reference, as the handed rule lends it
             if (from === 'dict' && isCallExpression(up) && this.rustLentParamsSlot(up, n) && (extendReuse || init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) === 'dict')) return ++reads > 0;
             // ral-oc: the runtime `jwt(request: impl Into<Value>, ..)` takes the request map lent (an Arc bump)
@@ -18460,7 +18463,11 @@ export class RustTranspiler extends BaseTranspiler {
             || (paramsBoxes === boxedElementUses.length && this.rustOmitOfDict(init))
             // a never-null `safeDict*` / `safeList*` container handed on whole (D11): `into_*` keeps the exact map / list
             || (optionalBoxes === 0 && paramsBoxes === 0 && boxedElementUses.every((u: any) => this.rustDefaultedContainerBoxUse(u, init)))
-            || (optionalBoxes === boxedElementUses.length && nullTests === 0 && writes === 0 && this.rustOptReaderBoxUse(boxedElementUses[0], init)));
+            || (optionalBoxes === boxedElementUses.length && nullTests === 0 && writes === 0 && this.rustOptReaderBoxUse(boxedElementUses[0], init))
+            // ral-42h: a never-null same-class venue container result (ral-yc's declared-return proof) handed on whole: every
+            // use is the box rustBuiltReturnBoxUse already admits for it, so `into_*` keeps the exact map / list (D11)
+            || (optionalBoxes === 0 && paramsBoxes === 0 && this.rustVenueContainerReturnKind(init)?.nullable === false
+                && boxedElementUses.every((u: any) => this.rustBuiltReturnBoxUse(u, init))));
         // a map-list element handed on whole (hg), or an element of a typed `Dict[]` / list-of-lists list (ral-kf): every use
         // is a box of the shared container; the element converts once at the declaration (D11)
         const boxOnly = reads === 0 && boxedElementUses.length > 0 && (this.rustDictElementSource(init) || this.rustListElementSource(init)) && nullTests === 0 && writes === 0;
