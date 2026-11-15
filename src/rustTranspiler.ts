@@ -3624,7 +3624,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustParamPrintsMap(param)) return '&mut indexmap::IndexMap<String, Value>';
         if (this.rustParamPrintsStrVec(param)) return 'Vec<String>';
         if (this.rustParamReadsByReference(param)) return 'impl KeyRead';
-        if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param)) return 'impl Into<crate::Value>';
+        if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param) || this.rustSafeDictKeyParam(param)) return 'impl Into<crate::Value>';
         if (this.rustBookSideParam(param)) return this.rustWsBookPath(param, 'pro::order_book::Side');
         return this.rustVenueStrParamType(param) ?? 'Value';
     }
@@ -4719,7 +4719,8 @@ export class RustTranspiler extends BaseTranspiler {
         // an all-`i64` base `sum` is an `Int` whatever its `any` checker type says; zb: likewise an `Option<i64>` / `f64` /
         // `Option<f64>` combinator (`sum` / `Math.min|max`) whose kind its proven operands give (`any` is only its TS type)
         const combinatorKind = this.rustArithCombinator(this.unwrapParens(declaration.initializer)) ? this.rustArithCallKind(declaration.initializer) : undefined;
-        if (checked !== expected && !boolTested && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(combinatorKind !== undefined && combinatorKind === kind && (kind === 'int' || checked === undefined))) return undefined;
+        if (checked !== expected && !boolTested && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(combinatorKind !== undefined && combinatorKind === kind && (kind === 'int' || checked === undefined))
+            && !(kind === 'int' && checked === undefined && this.rustSafeDictKeyOnlyLocal(declaration))) return undefined;
         const seeded = kind;
         kind = this.rustScalarWidenedKind(declaration, kind);
         const widened = kind !== seeded || this.rustScalarExpressionKind(declaration.initializer) !== undefined;
@@ -7214,6 +7215,12 @@ export class RustTranspiler extends BaseTranspiler {
         // xd: a number local as the one argument of base `iso8601` passes as is (the runtime takes `impl Into<Value>`: an
         // `Option<i64>` / `i64` / `f64` converts to the very Int / Float / Null its box held); the printed call text is unchanged
         if ((kind === 'int' || kind === 'oint' || kind === 'num' || kind === 'onum') && this.rustIso8601Arg(n)) return 'parg';
+        // ral-50e: a number local as the key of base `safeDict` passes as is (its generated `key` takes `impl Into<Value>`: an
+        // `i64` / `Option<i64>` / `f64` converts to the very Int / Null / Float its box held)
+        if ((kind === 'int' || kind === 'oint' || kind === 'num' || kind === 'onum') && this.rustSafeDictKeyArg(n)) return 'parg';
+        // ral-50e: the same local as the key of a statement element write `x[n] = v` boxes there (`Value::from(n)`: the Int the
+        // `Value` local held), only for a local whose other reads are all safeDict keys
+        if (kind === 'int' && this.rustElemInsertKey(n) && this.rustSafeDictKeyOnlyLocal(this.rustDeclaredNode(n))) return 'box';
         if ((kind === 'str' || kind === 'ostr') && this.rustWsCacheMapKeyUse(n)) return 'fin';
         if (kind === 'bool' && this.rustScalarBoolLogicalText(this.rustClimbLogicalWrappers(n)) !== undefined) return 'cond';
         if (kind === 'bool' && isPrefixUnaryExpression(parent) && this.rustValueNotOfBoolLocal(parent) !== undefined) return 'cond';
@@ -8475,6 +8482,44 @@ export class RustTranspiler extends BaseTranspiler {
         const call: any = node?.parent;
         return !this.rustTestTierSource(node) && isCallExpression(call) && call.arguments[0] === node && isPropertyAccessExpression(call.expression)
             && String(call.expression.name.text) === 'inArray' && this.rustBaseTypedReturnKind(call) === 'bool';
+    }
+
+    /** ral-50e: the `key` parameter (slot 1) of the generated base `safeDict`: prints `impl Into<crate::Value>` and binds
+     *  `let mut key: Value = key.into();` (every `Value` argument still passes; a number local passes unboxed). */
+    rustSafeDictKeyParam(param: any): boolean {
+        const method: any = param?.parent;
+        return param?.kind === SyntaxKind.Parameter && isMethodDeclaration(method) && method.body !== undefined && isIdentifier(method.name)
+            && String(method.name.text) === 'safeDict' && method.parameters?.[1] === param && isIdentifier(param.name)
+            && param.initializer === undefined && param.questionToken === undefined
+            && RustTranspiler.RUST_BASE_TIER_FILE.test(String(param.getSourceFile?.()?.fileName ?? '')) && !this.rustMethodReferencedAsValue(method);
+    }
+
+    /** ral-50e: a local read only as base `safeDict` keys (its `any` checker type comes from an `any` operand such as
+     *  `response.length`): an `i64` the printer proved passes there as the Int its box held, so the checker's `any` is moot. */
+    rustSafeDictKeyOnlyLocal(declaration: any): boolean {
+        if (!isIdentifier(declaration?.name)) return false;
+        let keys = 0;
+        const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            if (this.rustElemInsertKey(n)) return true;
+            if (!this.rustSafeDictKeyArg(n)) return false;
+            keys++;
+            return true;
+        });
+        return ok && keys > 0;
+    }
+
+    /** ral-50e: `n` is the key (argument 1) of `this.safeDict (x, n, ..)` resolving to the generated base body, outside the test crate. */
+    rustSafeDictKeyArg(n): boolean {
+        const call: any = n?.parent;
+        if (this.rustTestTierSource(n) || !isCallExpression(call) || call.arguments[1] !== n || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword || String(call.expression.name.text) !== 'safeDict') return false;
+        let declaration: any = this.rustScalarCallee(call);
+        if (declaration === undefined || !isMethodDeclaration(declaration)) return false;
+        if (declaration.body === undefined) {
+            const owner = declaration.parent;
+            declaration = (owner !== undefined && isClassDeclaration(owner) ? Array.from(owner.members) : []).find((m: any) => isMethodDeclaration(m) && m.body !== undefined && isIdentifier(m.name) && String(m.name.text) === 'safeDict');
+        }
+        return declaration !== undefined && this.rustSafeDictKeyParam(declaration.parameters?.[1]);
     }
 
     /** xd: `n` is the only argument of `this.iso8601 (n)` outside the test crate (hand-written `iso8601(ts: impl Into<Value>)`). */
@@ -27075,7 +27120,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string {
-        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p)
+        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p) || this.rustSafeDictKeyParam(p)
             || (this.rustVenueStrParamType(p) !== undefined && !this.rustVenueStrParamUnbound(p)));
         return lent.map((p: any) => {
             const name = this.printNode(p.name, 0);

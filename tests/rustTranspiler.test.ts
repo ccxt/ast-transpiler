@@ -6833,7 +6833,7 @@ describe('generated readers lend their container', () => {
 
     test('a generated reader that only hands its container to by-reference readers takes it by reference', () => {
         const b = base();
-        expect(b).toMatch(/fn safeDict\(&self, dictionaryOrList: impl KeyRead, key: Value/);
+        expect(b).toMatch(/fn safeDict\(&self, dictionaryOrList: impl KeyRead, key: impl Into<crate::Value>/);
         expect(b).toMatch(/fn safeList2\(&self, dictionaryOrList: impl KeyRead, key1: Value/);
         expect(b).toMatch(/fn safeList\(&self, dictionaryOrList: impl KeyRead, key: Value/);
     });
@@ -17576,5 +17576,39 @@ describe('ral-50a: a params alias rewritten from slot 1 of a base handle*AndPara
         expect(out).toContain('let mut requestParams: crate::value::Dict = ');
         expect(out).toMatch(/requestParams = paramsIsMargin(\.clone\(\))?;/);
         expect(out).not.toContain('requestParams.clone()');
+    });
+});
+
+describe('ral-50e: a number local keying base safeDict passes unboxed (generated safeDict key: impl Into<Value>)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (dictionaryOrList: any, key: any, defaultValue: Dict = undefined): Dict | undefined {\n        const value = dictionaryOrList[key];\n        if (value === undefined) {\n            return defaultValue;\n        }\n        return value;\n    }\n    hold (x: any): any { return x; }\n}\n";
+    const run = (body: string, file = 'ts/src/venue.ts') => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-50e-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, file), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            return {
+                venue: t.transpileRustByPath(path.join(root, file)).content,
+                base: t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts')).content,
+            };
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    const body = "    m (rows: any[]) {\n        const length = rows.length;\n        const lastIndex = length - 1;\n        const last = this.safeDict (rows, lastIndex, {});\n        return this.hold (last);\n    }\n";
+    test('coinbase lastIndex: the int local passes as is and the base key binds once', () => {
+        const out = run(body);
+        expect(out.venue).toMatch(/let mut lastIndex: i64 = /);
+        expect(out.venue).toMatch(/self\.safe_?[dD]ict\([^\n]*, lastIndex, /);
+        expect(out.base).toContain('key: impl Into<crate::Value>');
+        expect(out.base).toContain('let mut key: Value = key.into();');
+    });
+    test('bybit lastIndex: the same int local also keys the write-back `rows[lastIndex] = last`', () => {
+        const out = run(body.replace('return this.hold (last);', 'rows[lastIndex] = last;\n        return this.hold (rows);'));
+        expect(out.venue).toMatch(/let mut lastIndex: i64 = /);
+        expect(out.venue).toContain('add_element_to_object(&mut rows, &Value::from(lastIndex), ');
+    });
+    test('guard: a string key local is untouched by the int rule', () => {
+        const out = run(body.replace('const lastIndex = length - 1;', "const lastIndex = 'k' + length.toString ();"));
+        expect(out.venue).not.toMatch(/let mut lastIndex: i64/);
     });
 });
