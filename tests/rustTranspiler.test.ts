@@ -19483,3 +19483,96 @@ describe('ral-56i: a built list local wrapped in itself', () => {
         expect(out).not.toContain('let mut ids: crate::value::List');
     });
 });
+
+describe('ral-56h: a ws subclass of only REST methods keeps the parent resolve table', () => {
+    const base: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    futures: any = {};\n    resolve (result: any, messageHash: string): any { return result; }\n    future (messageHash: string): any { return undefined; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport default class Exchange {\n    positions: ArrayCache = undefined;\n    async fetchTickers (symbols: any = undefined, params: any = {}): Promise<any> { return {}; }\n    extend (a: any, b: any): any { return a; }\n}\n",
+    };
+    const venue = "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchPositions (client: Client) {\n        const cache = this.positions;\n        if (cache === undefined) {\n            const snapshot = await client.future ('fetchPositionsSnapshot');\n            return snapshot;\n        }\n        return cache;\n    }\n    loadSnapshot (client: Client, messageHash: string) {\n        this.positions = new ArrayCache ();\n        const cache = this.positions;\n        if (messageHash in client.futures) {\n            const future = client.futures[messageHash];\n            future.resolve (cache);\n        }\n    }\n}\n";
+    const emit = (child: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-56h-relatives-'));
+        const files = { ...base, 'ts/src/pro/venue.ts': venue, 'ts/src/pro/venuefutures.ts': "import venue from './venue.js';\nexport default class venuefutures extends venue {\n    describe (): any {\n        return {};\n    }\n" + child + "}\n" };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        try {
+            return transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    };
+    test('a subclass adding only a REST override the parent never names: the snapshot is an optional cache', () => {
+        const out = emit ("    async fetchBidsAsks (symbols: any = undefined, params: any = {}): Promise<any> {\n        const request: any = { 'method': 'futuresPublicGetAllTickers' };\n        return await this.fetchTickers (symbols, this.extend (request, params));\n    }\n");
+        expect(out).toContain('let mut snapshot: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: a subclass method that resolves on the client keeps the snapshot a Value', () => {
+        const out = emit ("    handleOther (client: any, message: any) {\n        client.resolve ([ message ], 'fetchPositionsSnapshot');\n    }\n");
+        expect(out).toContain('let mut snapshot: Value = ');
+    });
+    test('negative: a subclass override of a method the parent ws file calls keeps the snapshot a Value', () => {
+        const out = emit ("    loadSnapshot (c: any, h: string) {\n        return [ h ];\n    }\n");
+        expect(out).toContain('let mut snapshot: Value = ');
+    });
+});
+
+describe('ral-56h: a list parameter read only through this.safeString (p, i, ..) keeps its callers\' hash patterns', () => {
+    const base: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    futures: any = {};\n    subscriptions: any = {};\n    resolve (result: any, messageHash: string): any { return result; }\n    future (messageHash: string): any { return undefined; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport default class Exchange {\n    positions: ArrayCache = undefined;\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    safeList (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    safeDict (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    cleanUnsubscription (client: any, subHash: string, unsubHash: string) {}\n    async watchMultiple (url: string, messageHashes: string[], message: any = undefined, subscribeHashes: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n",
+    };
+    const venue = "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchPositions (client: Client) {\n        const cache = this.positions;\n        if (cache === undefined) {\n            const snapshot = await client.future ('fetchPositionsSnapshot');\n            return snapshot;\n        }\n        return cache;\n    }\n    loadSnapshot (client: Client, messageHash: string) {\n        this.positions = new ArrayCache ();\n        const cache = this.positions;\n        if (messageHash in client.futures) {\n            const future = client.futures[messageHash];\n            future.resolve (cache);\n        }\n    }\n    async unSub (url: string, messageHashes: string[], subHashes: string[]) {\n        for (let i = 0; i < subHashes.length; i++) {\n            const h = this.safeString (subHashes, i, '');\nUSE        }\n        return await this.watchMultiple (url, messageHashes, undefined, subHashes);\n    }\n    async unWatchThing (url: string) {\n        const messageHashes: string[] = [];\n        messageHashes.push ('unsubscribe:thing');\n        const subscription = { 'messageHashes': messageHashes };\n        return await this.unSub (url, messageHashes, messageHashes);\n    }\n    handleSubscriptionStatus (client: Client, message: any) {\n        const subscription = this.safeDict (client.subscriptions, 'x');\n        const messageHashes = this.safeList (subscription, 'messageHashes', []);\n        for (let i = 0; i < messageHashes.length; i++) {\n            const messageHash = this.safeString (messageHashes, i);\n            this.cleanUnsubscription (client, 'a', messageHash);\n        }\n    }\n}\n";
+    const emit = (use: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-56h-safestr-'));
+        const files = { ...base, 'ts/src/pro/venue.ts': venue.replace ('USE', use) };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        try {
+            return transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    };
+    test('the unsubscribe hash list is literal-led: the cleanUnsubscription cannot meet the snapshot hash', () => {
+        expect(emit ('')).toContain('let mut snapshot: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: a list parameter that is also pushed to keeps the snapshot a Value', () => {
+        expect(emit ("            subHashes.push (h);\n")).toContain('let mut snapshot: Value = ');
+    });
+});
+
+describe('ral-56h: request-id echoes through requestId (url), const copies, and parse* structure ids; list copies read only', () => {
+    const base: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    futures: any = {};\n    subscriptions: any = {};\n    resolve (result: any, messageHash: string): any { return result; }\n    future (messageHash: string): any { return undefined; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport default class Exchange {\n    positions: ArrayCache = undefined;\n    options: any = {};\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    safeList (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    safeDict (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n    cleanUnsubscription (client: any, subHash: string, unsubHash: string) {}\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    async watchMultiple (url: string, messageHashes: string[], message: any = undefined, subscribeHashes: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n}\n",
+    };
+    const venue = "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    requestId (url: string): number {\n        return 1;\n    }\n    async watchPositions (client: Client) {\n        const cache = this.positions;\n        if (cache === undefined) {\n            const snapshot = await client.future ('fetchPositionsSnapshot');\n            return snapshot;\n        }\n        return cache;\n    }\n    loadSnapshot (client: Client, messageHash: string) {\n        this.positions = new ArrayCache ();\n        const cache = this.positions;\n        if (messageHash in client.futures) {\n            const future = client.futures[messageHash];\n            future.resolve (cache);\n        }\n    }\n    async fetchThing (url: string) {\n        const requestId = this.requestId (url);\n        const messageHash = requestId.toString ();\n        const message = { 'id': messageHash };\n        return await this.watch (url, messageHash, message, messageHash);\n    }\n    handleThing (client: Client, message: any) {\n        const messageHash = this.safeString (message, 'id');\n        client.resolve ({ 'a': 1 }, messageHash);\n    }\n    parseThing (raw: any): any {\n        const id = this.safeString (raw, 't');\n        return { 'id': id };\n    }\n    async unWatchThing (url: string, isUnsub: boolean) {\n        const unsubHashes: string[] = [];\n        unsubHashes.push ('unsubscribe::thing');\n        let hashes = [ 'thing' ];\n        if (isUnsub) {\n            const subscription = { 'messageHashes': unsubHashes };\n            hashes = unsubHashes;\nUSE        }\n        return await this.watchMultiple (url, hashes, undefined, hashes);\n    }\n    handleSubscriptionStatus (client: Client, message: any) {\n        const subscription = this.safeDict (client.subscriptions, 'x');\n        const messageHashes = this.safeList (subscription, 'messageHashes', []);\n        for (let i = 0; i < messageHashes.length; i++) {\n            const messageHash = this.safeString (messageHashes, i);\n            this.cleanUnsubscription (client, 'a', messageHash);\n        }\n    }\nSPARE}\n";
+    const emit = (use: string, spare: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-56h-reqid-'));
+        const files = { ...base, 'ts/src/pro/venue.ts': venue.replace ('USE', use).replace ('SPARE', spare) };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        try {
+            return transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    };
+    test('both unknown-hash resolves proven (digits id echo, literal-led unsubscribe list): the snapshot is an optional cache', () => {
+        expect(emit ('', '')).toContain('let mut snapshot: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: an async method writing a non-requestId id keeps the snapshot a Value', () => {
+        expect(emit ('', "    async sendOther (url: string, h: string) {\n        return await this.watch (url, h, { 'id': h }, h);\n    }\n")).toContain('let mut snapshot: Value = ');
+    });
+    test('negative: a list copy that is pushed to keeps the snapshot a Value', () => {
+        expect(emit ("            hashes.push (url);\n", '')).toContain('let mut snapshot: Value = ');
+    });
+});
