@@ -434,6 +434,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  those displays as the JS concat does (Str text, Null `null`). */
     rustNilConcatPartner(other: any): boolean;
     rustNilOptStrConcatUse(n: any): boolean;
+    /** ral-56x K1: a `+` partner that is itself a concat (or a `.toString()`) the printer already prints as a boxed `Value::Str(format!(..))`
+     *  (always a `Str`, never `Null`), so the optional string joins the same `format!` with its `as_deref().unwrap_or("null")` text. */
+    rust56xFormatPartner(other: any): boolean;
     /** The `as_deref().unwrap_or("null")` read of a concat operand keeps its statement within the 400-char line budget. */
     rustOptStrConcatFits(n: any): boolean;
     /** A write that decodes a `Value` result (a call, or a ternary over one). */
@@ -640,7 +643,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrLendSites(declaration: any): boolean;
     /** Every non-moving box of the string is a slot where the `Value` form cloned it (a `this.`/`super.` argument,
      *  an object-literal value, a dict write or an array element), so lending there adds no copy. */
-    rustReaderLendBoxes(declaration: any, nativeKeys?: boolean, preciseSlots?: boolean): boolean;
+    rustReaderLendBoxes(declaration: any, nativeKeys?: boolean, preciseSlots?: boolean, copyDecls?: boolean): boolean;
     /** Test tier: every non-moving box of the string is a by-value `Value` argument / element of a call (the
      *  harness helpers take `Value`), where the `Value` form printed `x.clone()`: lending there costs that copy. */
     rustTestLendBoxes(declaration: any): boolean;
@@ -813,6 +816,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  printed off the temp list exactly as the destructured slot 0 (`.and_then(Value::as_str).map(str::to_owned)`). */
     rustInlineHandleStrSlot(node: any): boolean;
     rustElementReadScalarKind(node: any): string | undefined;
+    /** ral-56e: `const xs = this.m (..)` where `m` is a method of the same class declared `number[]` whose body builds
+     *  one `const r: number[] = []` filled only by `r.push (i)` of a plain int for-counter and answers `return r`; a
+     *  declaration's literal-index `xs[k]` is then an `Int` or (out of range) `Null`: `Option<i64>`. Non-test sources. */
+    rust56eIntListVenueElem(node: any, owner: any): boolean;
     /** ral-53f: `const t = this.m (..); const x = t[0]` where `t` is a const tuple local (a declared `[string, Str, Dict]`
      *  return, e.g. binance pro `resolveAuthType`) and the literal-index slot is declared `string`: the read is the slot's
      *  string or undefined. Non-test sources only. */
@@ -953,6 +960,29 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  already accepted with its own form (box / native / arg). */
     rustScalarFeedsElementWrite(n: any, write: any): boolean;
     rustScalarCounterCond(node: any, name: string): string | undefined;
+    /** One decided-bound mechanism for a parseToInt `Option<i64>` for-bound `n` (the oint kind already decided):
+     *  ral-55e: its other uses meet typed arithmetic partners (rust55ePtiTypedPartners); ral-56n: or `j` is a `Value::Int`
+     *  counter of this very ordered for-condition (paradex pro `j < numInGroup`). `is_less_than(Int(j), n)` is the `as f64`
+     *  compare of `Some`, false on `None`. */
+    rustDecidedOintBound(cond: any, n: any): boolean;
+    /** ral-56n: `cond` is `i OP n` of `for (let i = <int>; ..; i++)` (a `Value::Int` counter) and `n` a const whose initializer is
+     *  a ternary of two identifiers (each arm an `i64` local by its own decision). */
+    rust56nTernaryCounterBound(cond: any, n: any): boolean;
+    /** ral-56n: `const b = Math.ceil (x / y)` (whole initializer of a const). */
+    rust56nCeilDivConst(d: any): boolean;
+    /** ral-56n: an ordered compare (not equality) of a `for` `Value::Int` counter (int-literal start, `++` / `--` its only write)
+     *  and a `Math.ceil` division const: the two operands, else undefined. */
+    rust56nCeilCounterCompare(node: any): {
+        counter: any;
+        bound: any;
+    } | undefined;
+    /** ral-56n: `is_less_than` & co. compare both `as_f64` payloads, false for a `Null` side: the `Some` payload against the
+     *  counter's f64 (`(i as f64)` for an `i64`, `i.as_f64().unwrap_or(NAN)` for the `Value::Int` counter). */
+    rust56nCeilCompareText(node: any, ceil: {
+        counter: any;
+        bound: any;
+    }, counterText: string): string;
+    print56nCeilCompare(node: any): string | undefined;
     rustScalarCounterPlan(node: any, name: string): {
         cond: string;
     } | undefined;
@@ -1190,6 +1220,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-55k: `n` is the whole right side of a statement `x['a']['b'] = n` with `x` a typed one-level map bearer and both keys
      *  plain string literals (rustBearerChainedWrite prints the two-level guarded native insert). */
     rustBearerLitChainValue(n: any): boolean;
+    /** ral-56k: `n` is a key of a statement `x[k1][k2][k3..] = v` (three or more keys) with `x` a typed one-level map bearer
+     *  (rustBearerChainedWrite's deep form): 'first' for k1, 'later' for any other key, else undefined. */
+    rustDeepBearerChainKey(n: any): 'first' | 'later' | undefined;
     /** ral-53i: `n` is k1 or k2 of a statement `x[k1][k2] = v` with `x` a typed two-level local map (`rustNestedBearerInsert`). */
     rustUdNestedBearerKey(n: any): boolean;
     /** ral-53i: `key` is k1 of a statement bucket seed `x[k1] = {}` or k1 / k2 of a statement write `x[k1][k2] = v` with `x`
@@ -1212,10 +1245,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSafeStrNoDefaultKey(key: any): any;
     /** ral-54k: `this.F[k1][n]` (exactly one upper hop) with `k1` such an int37 key: the upper key, else undefined. */
     rustNestedFieldEntryKey(access: any): any;
+    /** ral-56f: `n` is the one upper key of a statement write `this.F[n][k2] = v` (F balance / options, non-test) whose last
+     *  key is a string literal or an `nkey` local and whose value never names `n`: printNestedFieldKeyWrite prints the
+     *  bucket entry (`entry(<n key text>).or_insert(Null)`) and the insert itself, so no ccxt pass reads a boxed `&n`. */
+    rustNestedFieldUpperKeyUse(n: any): boolean;
     /** `this.F[..]['lit'] = n` (statement): the value slot of a nested plain-field insert. */
     rustNestedFieldValueUse(n: any): boolean;
     /** Assignment hook: the r05 insert of a nested plain-field write keyed by a typed string local. */
     printNestedFieldKeyWrite(left: any, acc: string, value: string): string | undefined;
+    /** ral-56f: the bucket entry of a `ukey` upper key (rustNestedFieldUpperKeyUse), keyed by the local's own text (the
+     *  string `stringify_param` made of the boxed local, `"null"` for `None`); a value reading `self` is bound first. Over
+     *  the line budget the helper chain takes the key as a `Value` (`From<Option<&str>>`, the one allocation). */
+    printNestedFieldUpperKeyWrite(left: any, acc: string, value: string): string | undefined;
     /** `this.f` (one level, no element read in between). */
     rustThisFieldTarget(node: any): boolean;
     /** `n` is (inside) an argument of a call that lies within `root`, the call itself not being `n`. */
@@ -1267,6 +1308,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BORROW_STR_METHODS;
     /** wg: `k.m (..)` with `m` a pure string method (reads the receiver, returns a fresh value). */
     rustBorrowStrMethodRecv(n: any): boolean;
+    /** ral-56f: `read` (`this.F[k]`) is an argument of a `this.` call that is the whole value of the statement write
+     *  `this.F[k] = this.m (.., this.F[k], ..)` whose key admits the bucket reread. */
+    rustFieldBucketRereadUse(wrapped: any, read: any): boolean;
+    /** ral-56f: every read of `k` in `value` is `this.F[k]` on the written field (no write of `k`), and some other use of
+     *  `k` is a two-level upper key of the same field (rustNestedFieldUpperKeyUse). Non-test sources. */
+    rustFieldBucketReread(n: any, access: any, value: any): boolean;
     /** wg: field-write keys whose write value also reads the key (admitted only for a borrowed element). */
     private rustWgKeyReadInValue;
     rustWgKeyReadInValueUse(declaration: any): boolean;
@@ -1283,6 +1330,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-50e: a local read only as base `safeDict` keys (its `any` checker type comes from an `any` operand such as
      *  `response.length`): an `i64` the printer proved passes there as the Int its box held, so the checker's `any` is moot. */
     rustSafeDictKeyOnlyLocal(declaration: any): boolean;
+    /** ral-56n: every read of the local is a bound (argument 0 / 1) of a loose `Value` slice (rust44bValueRecvSliceBound), where
+     *  an `i64` reads as the `Int` box the helper's looseI64 match took (paradex pro sbeReadAddress `next = i + 1`). */
+    rust56nSliceBoundOnlyLocal(declaration: any): boolean;
+    /** ral-56n: a loop counter read as a bound of a loose `Value` slice (the typed bound text is `i` / `Some(i)`). */
+    rust56nCounterSliceBound(n: any): boolean;
+    /** ral-56n: `x = i` as a whole statement into another local (boxed `Value::Int(i)` or the bare i64 of an int local). */
+    rust56nCounterPlainCopy(n: any): boolean;
     /** ral-51e: `+` / `-` over int literals, `i64` scalar locals and the counter of an enclosing `for (let j = <int>; j < <i64 local>; j++)`
      *  whose body never writes it (the counter the loop prints as an `i64`; while the scope solves it is not registered yet). */
     rustCounterArithInit(expr: any, declaration: any): boolean;
@@ -1398,6 +1452,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarLengthRecv(node: any, params?: boolean): any;
     /** Non-optional numeric operand kind (`int|num`), optional (`oint|onum`), or undefined. */
     rustScalarNumericKind(node: any): string | undefined;
+    /** ral-56n: `node` (parentheses skipped) is the one argument of `Math.ceil (..)`. */
+    rust56nCeilDivisionArg(node: any): boolean;
     /** 51k: `a % b` over int literals / `int` / `oint` locals with a non-literal divisor (a parseToInt answer, a const int):
      *  an `Option<i64>` (`mod_val` answers `Int(a % b)`, `Null` for a zero or `Null` operand). */
     rust51kLitModKind(node: any): string | undefined;
@@ -2751,6 +2807,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  Null key, and a bearer never holds the empty key, so `""` reads Null too. Never a write-back bind (ccxt's
      *  write-back pass reads only the `as_str()` form). */
     rustBearerTypedStrReadKey(access: any): string | undefined;
+    /** ral-56k: `const b = m[k]; b.push (v);` with `m` a map-literal local, `k` a plain identifier key and `b` never reassigned and
+     *  not mutated again by the statement after the push. The printer prints the push AND the write-back insert itself (arrPush),
+     *  so the bind no longer leans on ccxt's write-back pass (which reads only the boxed `k.as_str()` text). */
+    rustOwnedWriteBackPushBind(access: any): boolean;
     /** ral-xf: `const x = m[k]` mutated by the next statement, where `m` is a map-literal local and `k` a plain
      *  identifier key: the printer's native read (`m.get(k.as_str().unwrap_or("")).cloned()..`) is a form ccxt's
      *  write-back pass (`writeBackIndexedMutations`) and push pass (`rustVecPushInline`) read as the same get. */
@@ -3406,6 +3466,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustWsCacheFields;
     private rustWsCacheLocals;
     private rustWsCacheUses;
+    /** ral-56w: the one statement `x = this.filterBy* (x, ..)` of an optional cache local `x` (a watch result) whose
+     *  base filter answers a list on every path, at the declaration's own block level, `x` named once in the call:
+     *  it prints as a fresh `crate::value::List` local of the same name (a Rust shadow), so the cache local before it
+     *  and the list after it are two typed locals. Undefined when there is no such statement or a second write. */
+    rustWsCacheListSplit(declaration: any): any;
     /** `this.F` for a base field declared `ArrayCache | undefined`. */
     rustWsCacheField(node: any): boolean;
     /** `new ArrayCache*(..)` of a class declared in `base/ws/Cache.ts`. */
@@ -3582,6 +3647,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustWsWsParents;
     /** A pro venue that extends (through its abstract shim) another pro venue, or that another pro venue extends. */
     rustWsHasWsRelatives(file: string, at: number): boolean;
+    /** ral-56h: the resolve table across a ws class and its ws subclass (kucoin + kucoinfutures) equals the parent's
+     *  own table when the subclass adds no resolve and changes no ws path: every method of the subclass other than
+     *  `describe` / `describeData` is a REST-only method (no client, future, resolve, reject, spawn, delay, watch,
+     *  subscribe or handler token in its text, no field declaration) that the parent ws file never calls or names. */
+    rustWsRestOnlyChild(path: string, parentFile: string): boolean;
     /** A ws subclass whose only methods are `describe` / `describeData` adds no handler and no resolve. */
     rustWsDescribeOnly(path: string): boolean;
     /** The proven kind of an `await this.watch|watchMultiple (..)` initializer, else undefined. */
@@ -3603,6 +3673,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The patterns of a watchMultiple hash list: an array literal, a wrapper parameter bound to one, or a list local
      *  initialised from a literal that only grows by `x.push (h)` statements and is read only as a watch argument. */
     rustWsHashListPatterns(harg: any, depth: number): Array<Array<string | null>> | undefined;
+    /** ral-56h: `x = r` / `let x = r` in `scope` where x is a local of that method whose every other use is a rebinding
+     *  (`x = ..`), a hash-list argument of `this.watch|watchMultiple`, `x.length`, a plain element read or another such copy:
+     *  the copy never grows or rewrites the list r names. */
+    rustWsListAliasReadOnly(r: any, scope: any, depth: number): boolean;
     private static readonly RUST_BOOK_TYPE;
     private static readonly RUST_BOOK_MAP_TYPE;
     private static readonly RUST_BOOK_CTORS;
@@ -3682,6 +3756,19 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsSubscriptionWriteValue(n: any): boolean;
     private rustBuiltLists;
     rustBuiltListLocal(declaration: any): boolean;
+    /** RAL-INT-64: `node` sits in the `then` branch of an `if` whose `else` branch holds every later read of the local (and
+     *  nothing after the `if` reads it); no loop or function lies between that `if` and the declaration. The two branches
+     *  never both run, so `node` is the last read on its path. */
+    rustLastUseBeforeElseOnly(node: any, declaration: any): boolean;
+    /** ral-56s: a base `this.arrayConcat (a, b)` (two operands, non-test tier): always a `Value::Arr`. */
+    rustBuiltListConcatInit(init: any): boolean;
+    /** ral-56s: `t = x` (statement) where `t` is a nil-declared (`let t: T = undefined` / `let t;`) local of the same function
+     *  that no rule types (it prints `Value`), so the write takes the boxed list. */
+    rustBuiltListValueAliasWrite(n: any, declaration: any): boolean;
+    /** ral-56i: `x` as the only element of `x = [ x ]`, an expression statement writing the same list local. */
+    rustBuiltListSelfWrap(n: any, declaration: any): boolean;
+    /** ral-56i: the whole write `x = [ x ]` of a built-list local (printed `x = Arc::new(vec![Value::Arr(x)])`). */
+    rustBuiltListSelfWrapWrite(write: any, declaration: any): boolean;
     /** ral-tf: no later statement of the function pushes to or writes the list, and the use is in no loop or closure. */
     rustBuiltListFrozenAfter(node: any, declaration: any, name: string): boolean;
     /** `this.inArray (needle, x)` (haystack), `this.arrayConcat (a, b)` (either operand) on the base helpers, or the row of a
