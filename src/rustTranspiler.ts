@@ -2382,7 +2382,8 @@ export class RustTranspiler extends BaseTranspiler {
                 ? `${indent}let ${syntheticName}: Vec<Value> = ${this.printNode(declaration.initializer, 0)}.as_array().cloned().unwrap_or_default();\n`
                 : `${indent}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};\n`;
             const untypedRead = (idx: number) => (nativeList ? this.printTypedVecElementRead(syntheticName, idx) : `get_value(&${syntheticName}, &Value::Int(${idx}))`);
-            const lines = parsedElements.map((e, idx) => this.printRustTupleSlotLocal(declaration.name.elements[idx], e, syntheticName, idx, nativeList, indent)
+            const lines = parsedElements.map((e, idx) => this.printWsTupleCacheSlot(declaration.name.elements[idx], e, untypedRead(idx), nativeList, indent)
+                ?? this.printRustTupleSlotLocal(declaration.name.elements[idx], e, syntheticName, idx, nativeList, indent)
                 ?? this.printRustHandedDictSlot(declaration.name.elements[idx], e, untypedRead(idx), indent)
                 ?? this.printPromiseAllListSlot(declaration.name.elements[idx], e, untypedRead(idx), indent) ?? `${indent}let mut ${e}: Value = ${untypedRead(idx)}`);
             return head + lines.join(';\n');
@@ -24165,14 +24166,16 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** 'opt' for a local bound to a typed field, 'cache' for one bound to a constructor; undefined when it stays `Value`. */
     rustWsCacheLocal(declaration: any): 'opt' | 'cache' | undefined {
-        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return undefined;
+        const slot = declaration?.kind === SyntaxKind.BindingElement && isIdentifier(declaration.name);
+        if (declaration === undefined || (!slot && !isVariableDeclaration(declaration)) || !isIdentifier(declaration.name)) return undefined;
         let known = this.rustWsCacheLocals.get(declaration);
         if (known === undefined) {
             known = null;
             const list: any = declaration.parent;
             const init: any = this.unwrapParens(declaration.initializer);
-            const kind = init === undefined ? undefined : (this.rustWsCacheField(init) || this.rustWsCacheOptSource(init, false) || this.rustWsWatchResultKind(init) === 'cache' ? 'opt' : (this.rustWsCacheCtor(init) ? 'cache' : undefined));
-            if (kind !== undefined && list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1) {
+            const kind = slot ? (this.rustWsTupleCacheSlot(declaration) ? 'opt' : undefined)
+                : init === undefined ? undefined : (this.rustWsCacheField(init) || this.rustWsCacheOptSource(init, false) || this.rustWsWatchResultKind(init) === 'cache' ? 'opt' : (this.rustWsCacheCtor(init) ? 'cache' : undefined));
+            if (kind !== undefined && (slot || (list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1))) {
                 const forms = new Map<Node, 'bare' | 'box' | 'test' | 'len'>();
                 const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
                     const p: any = n.parent;
@@ -24195,6 +24198,53 @@ export class RustTranspiler extends BaseTranspiler {
         return known ?? undefined;
     }
 
+    /** ral-54w: a slot of `const [ a, b, c ] = await this.m (..)` (a proven watch, see rustWsWatchResultKind) where every
+     *  resolve that can match the awaited hash passes an array literal (or an unreassigned local bound to one) whose
+     *  element at the slot's index is a cache: the slot holds that cache. Any other matching resolve (another kind,
+     *  a value read through a helper parameter, a Null settle, an unknown hash) leaves the slot `Value`. */
+    rustWsTupleCacheSlot(element: any): boolean {
+        const pattern: any = element.parent;
+        const declaration: any = pattern?.parent;
+        if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || declaration === undefined || !isVariableDeclaration(declaration) || declaration.name !== pattern) return false;
+        if (element.dotDotDotToken !== undefined || element.initializer !== undefined || (declaration.parent as any)?.declarations?.length !== 1) return false;
+        const index = pattern.elements.indexOf(element);
+        const awaited: any = this.unwrapParens(declaration.initializer);
+        if (index < 0 || awaited?.kind !== SyntaxKind.AwaitExpression || this.isTestSource(declaration)) return false;
+        const call: any = this.unwrapParens(awaited.expression);
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const cls: any = findAncestor(call, isClassDeclaration);
+        const table = cls === undefined ? null : this.rustWsResolveTable(cls);
+        if (table === null) return false;
+        const save = this.rustWsHashEnv;
+        let hashes: Array<Array<string | null>> | undefined;
+        try {
+            this.rustWsHashEnv = undefined;
+            hashes = this.rustWsAwaitedHashes(call, cls, 0);
+        } finally {
+            this.rustWsHashEnv = save;
+        }
+        if (hashes === undefined || hashes.length === 0 || hashes.some((p) => p.every((s) => s === null))) return false;
+        const tuple = (x: any): any => {
+            let v: any = this.rustStripWrappers(x);
+            if (v !== undefined && isIdentifier(v)) {
+                const d: any = this.rustDeclarationOfIdentifier(v);
+                if (d === undefined || !isVariableDeclaration(d) || !isIdentifier(d.name) || this.rustLocalReassigned(d)) return undefined;
+                v = this.rustStripWrappers(d.initializer);
+            }
+            return v !== undefined && isArrayLiteralExpression(v) ? v : undefined;
+        };
+        let matched = 0;
+        for (const r of table) {
+            if (!r.pats.some((rp) => hashes!.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
+            const t = r.kind === 'list' && r.value !== undefined ? tuple(r.value) : undefined;
+            const e: any = t?.elements[index];
+            if (e === undefined || e.kind === SyntaxKind.SpreadElement || t.elements.some((x: any) => x.kind === SyntaxKind.SpreadElement)) return false;
+            if (this.rustWsResolvedKind(e) !== 'cache') return false;
+            matched++;
+        }
+        return matched > 0;
+    }
+
     /** `x.length` read on an optional cache local: the slot's own `size()`. */
     rustWsCacheLengthRead(n: any): boolean {
         const p: any = n.parent;
@@ -24205,6 +24255,12 @@ export class RustTranspiler extends BaseTranspiler {
         const recv: any = node.expression;
         if (!isIdentifier(recv) || this.rustWsCacheUses.get(recv) !== 'len') return undefined;
         return `Value::Int(CacheSlot::size(&${super.printIdentifier(recv)}))`;
+    }
+
+    /** ral-54w: a watched tuple's cache slot: the runtime's marker test converts the slot once. */
+    printWsTupleCacheSlot(element: any, printedName: string, read: string, nativeList: boolean, indent: string): string | undefined {
+        if (nativeList || element?.kind !== SyntaxKind.BindingElement || this.rustWsCacheLocal(element) !== 'opt') return undefined;
+        return `${indent}let mut ${printedName}: Option<crate::${RustTranspiler.RUST_CACHE_TYPE}> = ${read}.into()`;
     }
 
     printWsCacheLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined {
@@ -24614,11 +24670,13 @@ export class RustTranspiler extends BaseTranspiler {
     // cache field, a cache-map read, a cache constructor or a typed cache local). A hash that is not built from
     // literals and locals of the method, a class with ws subclasses or a ws parent, or any other resolve under a
     // matching hash fails the proof and the local stays `Value`.
-    private rustWsResolveTables = new WeakMap<Node, Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string }> | null>();
+    private rustWsResolveTables = new WeakMap<Node, Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string, value?: any }> | null>();
     private rustWsWatchKinds = new WeakMap<Node, 'book' | 'cache' | 'dict' | 'list' | null>();
     // wrapper parameter -> the caller's argument (and the caller's own bindings) while a wrapper hash is read
     private rustWsHashEnv: Map<Node, { arg: any, env: Map<Node, any> | undefined }> | undefined = undefined;
     private rustWsFollowed = new Set<Node>();
+    // set while rustWsAwaitedHashes follows a wrapper with a `return undefined` path
+    private rustWsWrapperNil = false;
     /** The hash text of a Null hash (`stringify_param(Null)`): a literal no watch spells. */
     private static readonly RUST_WS_NIL_HASH = 'null';
 
@@ -25098,7 +25156,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** Every resolve of the ws class with its hash patterns and kind; null when the class has ws relatives. */
-    rustWsResolveTable(cls: any): Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string }> | null {
+    rustWsResolveTable(cls: any): Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string, value?: any }> | null {
         let table = this.rustWsResolveTables.get(cls);
         if (table !== undefined) return table;
         table = [];
@@ -25124,7 +25182,7 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-ye: a fixed-kind resolve (cleanUnsubscription's `true`) reads its hash per caller too
             const sites = site !== undefined ? this.rustWsHelperCallSites(cls, site, [ hash, x ]) : undefined;
             if (sites === undefined) {
-                table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(x) });
+                table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(x), value: kind === undefined ? x : undefined });
                 return;
             }
             // a helper's parameter stands for each caller's argument: one entry per call site
@@ -25299,17 +25357,22 @@ export class RustTranspiler extends BaseTranspiler {
         const table = cls === undefined ? null : this.rustWsResolveTable(cls);
         if (table === null) return undefined;
         const save = this.rustWsHashEnv;
+        const saveNil = this.rustWsWrapperNil;
         let hashes: Array<Array<string | null>> | undefined;
+        let wrapperNil = false;
         try {
             this.rustWsHashEnv = undefined;
+            this.rustWsWrapperNil = false;
             hashes = flight ? this.rustWsHashPatterns(this.rustStripWrappers(call.arguments[0]), 0, new Set()) : this.rustWsAwaitedHashes(call, cls, 0);
+            wrapperNil = this.rustWsWrapperNil;
         } finally {
             this.rustWsHashEnv = save;
+            this.rustWsWrapperNil = saveNil;
         }
         if (hashes === undefined || hashes.length === 0 || hashes.some((p) => p.every((s) => s === null))) return undefined;
+        let none = wrapperNil;
         let kind: 'book' | 'cache' | 'dict' | 'list' | undefined;
         let matched = 0;
-        let none = false;
         for (const r of table) {
             if (!((flight ? r.rpats : undefined) ?? r.pats).some((rp) => hashes!.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
             if (r.kind === 'none') { none = true; continue; }
@@ -25344,7 +25407,17 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustWalkScope(declaration.body, (n: any) => {
             if (n !== declaration.body && isFunctionLike(n)) return RUST_WALK_SKIP;
             if (!isReturnStatement(n)) return;
-            const awaited: any = this.unwrapParens(n.expression);
+            let awaited: any = this.unwrapParens(n.expression);
+            // ral-54w: `return undefined` settles Null (an absent book / cache only); `return r` of an unreassigned
+            // `const r = await this.m (..)` returns that await
+            if (awaited === undefined || awaited.kind === SyntaxKind.UndefinedKeyword || (isIdentifier(awaited) && awaited.text === 'undefined')) {
+                this.rustWsWrapperNil = true;
+                return;
+            }
+            if (isIdentifier(awaited)) {
+                const d: any = this.rustDeclarationOfIdentifier(awaited);
+                if (d !== undefined && isVariableDeclaration(d) && isIdentifier(d.name) && findAncestor(d, isFunctionLike) === declaration && !this.rustLocalReassigned(d)) awaited = this.unwrapParens(d.initializer);
+            }
             const c: any = awaited?.kind === SyntaxKind.AwaitExpression ? this.unwrapParens(awaited.expression) : undefined;
             if (c === undefined || !isCallExpression(c) || !isPropertyAccessExpression(c.expression) || c.expression.expression.kind !== SyntaxKind.ThisKeyword) {
                 other = true;
