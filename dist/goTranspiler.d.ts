@@ -1619,6 +1619,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsBareStringOperand(node: any): boolean;
     goDeclaredContainerOperand(node: any): string | undefined;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+    goParseToNumericBoxCompare(local: any, localText: string, other: any, otherText: string, isEq: boolean): string | undefined;
     goNativeNumericEqualityKind(left: any, leftText: string, right: any, rightText: string): string | undefined;
     goOperandNumericKind(node: any, printedText: string): string | undefined;
     goLiteralTypedLocalKind(node: any): string | undefined;
