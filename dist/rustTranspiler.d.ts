@@ -133,6 +133,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVirtualDispatch: Record<string, string[]>;
     /** Virtual base methods whose overrides call `super.X()`: the base body prints as `X_non_virtual`. */
     rustNonVirtualShims: Set<string>;
+    /** ccxt error classes with a subclass (`errorHierarchy`): `e instanceof K` on a caught error walks the hierarchy. */
+    rustErrorClassesWithSubclasses: Set<string>;
     constructor(config?: {});
     initConfig(): void;
     quotedStringLiteral(text: string): string;
@@ -962,6 +964,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** sb: the alias declaration shares its source's Arc (`Value::from(&x).into_dict()`, the bump the `Value` alias made). */
     rustSbDictAliasDecl(declaration: any): boolean;
     private rustSbAliasDeferred;
+    /** ral-44c: the aliased parameter is read again after the alias declaration (or the alias sits in a loop): the
+     *  alias copies the Arc; otherwise the parameter moves into it, as the boxed alias did at its last use. */
+    rustParamReadAfter(declaration: any): boolean;
+    /** ral-44c: write forms of a params alias that answer a map on every path: `omit` of the alias itself, or `extend`
+     *  whose every operand is a proven untagged map (`extend` answers `Value::Map`). */
+    rustParamsAliasWrite(rhs: any, declaration: any): boolean;
+    /** ral-44c: `let y = params` of a typed unified method's `params`: the alias takes the map behind the boxed parameter
+     *  (`params.clone().into_dict()`, the same Arc bump the boxed alias paid); the parameter itself stays readable. */
+    rustParamsAliasDecl(declaration: any): boolean;
     rustAssignmentOpKind(op: any): boolean;
     /** ral-ua: `acc += x` (statement) with `acc` a checker-string local the solve leaves boxed (its decision is not taken
      *  during seeding: the join is assumed, then re-checked) and `x` a `string | undefined`, within the 400-char line. */
@@ -1897,6 +1908,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_EXACT_INT_PRODUCERS;
     private static readonly RUST_EXACT_BOOL_PRODUCERS;
     rustExactSlotKind(element: any): string | undefined;
+    /** ral-44f: `oint` / `obool` for a `const [ a, .. ] = this.m (..)` slot the checker types number / boolean whose producer
+     *  is exact at that index (`rustExactSlotCallee`, never the loose `f64` form), else undefined. Syntactic on the producer. */
+    rustExactCopySlotSeed(element: any): string | undefined;
+    /** ral-44f: `n` is the whole source of `let t = n` / `t = n;` (statement), `t` another local of the same function the joint
+     *  scalar solve currently types `kind` (an `Option<i64>` / `Option<bool>` copy of the slot). */
+    rustCopySlotAliasTarget(n: any, kind: string, element: any): boolean;
     private rustExactSlotKindUncached;
     private static readonly RUST_HANDWRITTEN_SLOT_KINDS;
     /** 41i: the primitive (`number` / `string`) slot `at` of `init` holds on every path when the checker only says `any`:
@@ -2288,9 +2305,27 @@ export declare class RustTranspiler extends BaseTranspiler {
     printReverseCall(node: any, identation: any, name?: any): string;
     printPopCall(node: any, identation: any, name?: any): string;
     printSliceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
+    /** ral-44b: `n` is a bound (argument 0 or 1) of `recv.slice(..)` whose receiver is no typed string local (looseSlice prints
+     *  it), `n` an Int / Option<i64> local (not a ws key): the bound reads as the i64 / Option<i64> the helper's looseI64 match
+     *  would have produced from the `Int` / `Null` box (start: `None` is 0; end: `None` is the length). */
+    rust44bValueRecvSliceBound(n: any, kind: string): boolean;
+    /** ral-44b: the typed (i64 / Option<i64>) text of each slice bound that rust44bValueRecvSliceBound admitted. */
+    rust44bSliceBounds(node: any): Array<string | undefined>;
     printReplaceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceAllCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printThrowStatement(node: any, identation: any): string;
+    rustCaughtErrorMemo: WeakMap<object, boolean>;
+    rustCaughtErrorBinding(catchClause: any): boolean;
+    rustCaughtErrorBindingProof(catchClause: any): boolean;
+    rustCaughtErrorSink(n: any): boolean;
+    rustCaughtErrorClassName(node: any): string | undefined;
+    /** `e instanceof K` over a typed caught binding. */
+    printCaughtErrorInstanceOf(node: any): string | undefined;
+    rustPresenceFlagLocals: WeakSet<object>;
+    rustSubscriptionPresenceFlag(declaration: any, parsedValue: string): boolean;
+    /** `X === undefined` / `X !== undefined` that is the whole `if` condition (parens allowed): '==' / '!='. */
+    rustPresenceTest(n: any): string | undefined;
+    printPresenceFlagTest(left: any, right: any, op: any): string | undefined;
     rustCatchBindingIsRead(block: Node, name: string): boolean;
     printTryStatement(node: any, identation: any): string;
     printReturnStatement(node: any, identation: any): string;
@@ -2634,6 +2669,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A statement `n = <map producer>` whose right side does not name `n`. */
     rustReuseMapProducerWrite(n: any): boolean;
     private static readonly RUST_REUSE_SAFE_DICT;
+    /** ral-44d: `n` is the default (third) operand of a base `safeDict (o, k, n)`: the `&[Value]` default slot takes the box
+     *  (`Value::from(&n)`, the Arc bump the `.clone()` paid), and `safeDict` hands that very map back when the key misses. */
+    rustSafeDictDefaultUse(n: any): boolean;
+    /** ral-44d: `await this.<endpoint> (..)` of a REST endpoint declared `Promise<Dict>`: the declared-endpoint initialiser
+     *  already prints `.await.into_dict()`, so the same write into a reuse literal replaces the owned map with the parsed
+     *  response (parsed JSON carries no runtime tag). */
+    rustReuseEndpointWrite(right: any): boolean;
     /** The producer of a reuse write builds from untagged operands only: `extend` / `omit` operands proven plain
      *  (`rustUntaggedMapOperand`), `indexBy` / `groupBy` fresh maps, a REST `safeDict` read off a local (parsed JSON). */
     rustReuseProducerUntagged(n: any, rhs: any): boolean;
@@ -2816,6 +2858,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `let x: crate::value::Dict = if c { a } else { b }` with each arm native: a base `extend`/`omit` result unboxed
      *  once, a moved handed slot as is. Only when an arm is such a slot; other ternaries keep the boxed if-expression. */
     printDictTernaryArms(init: any, identation: number): string | undefined;
+    /** ral-44g: `c ? a : b` where each arm is an empty map literal `{}` or a base map producer call (`safeDict` with a literal `{}`
+     *  default, extend / omit): every path answers a map, so the local is a map producer. An `undefined` arm keeps Value. */
+    rustMapTernaryInit(init: any): boolean;
     rustDictTernaryCall(call: any): boolean;
     private rustNilResponseLocals;
     /** The container kind of a write to a borrowed local; an endpoint write to an empty `let` counts as a map. */
@@ -3834,7 +3879,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     looseI64(expr: string): string;
     looseI64OrZero(expr: string): string;
     looseSliceArm(variant: string, len: string, take: string, empty: string): string;
-    looseSlice(name: string, start: string, end: string): string;
+    looseSlice(name: string, start: string, end: string, typed?: Array<string | undefined>): string;
     looseIndexOf(name: string, needle: string): string;
     looseStrCase(name: string, method: string): string;
     private rustVenueStrDecisions;
