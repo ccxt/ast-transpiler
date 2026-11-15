@@ -4947,6 +4947,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && this.rustBoolLeafLogical(node) && this.rustBoolNativeText(node) !== undefined) return 'bool';
         const cast = this.rustStrCastCall(node); if (cast !== undefined) return this.rustScalarValueKind(cast, fresh) === 'ostr' ? 'ostr' : undefined;
         if (fresh && this.rustClockString(node)) return 'str';
+        if (fresh && this.rustNumParamToString(node)) return 'str';
         if (fresh && this.rustSbJoinShape(node)) return 'str';
         if (this.rustArithCombinator(node)) return this.rustArithCallKind(node);
         if (fresh && isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.PlusToken
@@ -5605,6 +5606,16 @@ export class RustTranspiler extends BaseTranspiler {
         const node: any = this.unwrapParens(init);
         if (this.rustStrCastCall(node) === undefined && !this.rustClockString(node) && !this.rustSumShape(node) && !this.rustIntToStringShape(node)) return false;
         return typedUses === 0 || copied > 0;
+    }
+
+    /** ral-45g: `p.toString()` (no radix) of a parameter the checker types `number`: the printer already boxes
+     *  `format!("{}", p)` (the decimal text `Display` gives the `Int` / `Float` box), so the local holds that String. */
+    rustNumParamToString(node): boolean {
+        if (node === undefined || !isCallExpression(node) || node.arguments.length !== 0 || !isPropertyAccessExpression(node.expression) || String(node.expression.name.text) !== 'toString') return false;
+        const recv: any = this.unwrapParens(node.expression.expression);
+        if (recv === undefined || !isIdentifier(recv) || this.rustTestTierSource(node)) return false;
+        const d: any = this.rustDeclaredNode(recv);
+        return d !== undefined && isParameterDeclaration(d) && d.type !== undefined && d.questionToken === undefined && d.initializer === undefined && this.primitiveKindOfType(this.typeOfNodeIfAny(recv)) === 'number';
     }
 
     /** `n.toString()` of an `i64` scalar local. */
@@ -8307,6 +8318,11 @@ export class RustTranspiler extends BaseTranspiler {
         const clock: any = base === 'str' && this.rustClockString(node) && isPropertyAccessExpression(node.expression) ? node.expression.expression : undefined;
         if (clock !== undefined && this.rustNonceCall(this.unwrapParens(clock))) return wrap(`format!("{}", ${this.printNode(this.unwrapParens(clock), 0).trim()})`);
         if (clock !== undefined) return wrap(`format!("{}", ${this.rustScalarNativeText('int', clock)})`);
+        // ral-45g: `p.toString()` of a `number` parameter: the String the `format!` box held
+        if (base === 'str' && this.rustNumParamToString(node)) {
+            const boxed = text.match(/^Value::Str\((format!\(.*\))\.into\(\)\)$/s);
+            return boxed !== null ? wrap(boxed[1]) : wrap(`${text}.as_str().unwrap_or_default().to_string()`);
+        }
         const fallback: any = node.arguments[node.arguments.length - 1];
         const defaulted = this.rustScalarValueKind(node, true) === base;
         if (kind === 'int' && this.rustVenueParseToInt(node) && this.rustBaseTypedReturnKind(node) === 'oint') return `${this.rustBaseTypedBareText(node)}.unwrap_or_default()`;
@@ -18808,7 +18824,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (extendReuse) from = 'dict';
         // ral-qa: a base `safeValue*` result read only at string keys: every non-map value (Null included) reads Null at
         // a string key exactly as the empty map `into_dict()` leaves, so the local holds the shared map
-        const keyReadOnly = from === undefined && !nilDeclared && init !== undefined && this.rustSafeValueKeyReadSource(init);
+        const keyReadOnly = from === undefined && !nilDeclared && init !== undefined && (this.rustSafeValueKeyReadSource(init) || this.rustKeyReadTernarySource(init));
         if (keyReadOnly) from = 'dict';
         // ral-42g: a row `xs[i]` of a checker list (counter-loop binding) read only at literal string keys: the same invariant
         const elemKeyReadOnly = from === undefined && !nilDeclared && init !== undefined && this.rustListRowKeyReadSource(init);
@@ -18828,6 +18844,10 @@ export class RustTranspiler extends BaseTranspiler {
         // the empty map the other arm already is), so the uses below are checked exactly as for a plain producer
         const mapTernary = from === undefined && !nilDeclared && init !== undefined && this.rustMapTernaryInit(init);
         if (mapTernary) from = 'dict';
+        // ral-45g: `c ? undefined : this.safeDict (..)` (one arm `undefined`, the other a source the optional form already takes)
+        // answers Null or that source's map: the local holds `Option<Dict>` (`(if c { Value::Null } else { .. }).into_opt_dict()`)
+        const optTernary = from === undefined && !nilDeclared && init !== undefined && this.rustOptMapTernaryInit(init);
+        if (optTernary) from = 'dict';
         let sbMapWrites = 0;
         if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
@@ -19063,7 +19083,7 @@ export class RustTranspiler extends BaseTranspiler {
         // a nullable source lent whole keeps Null apart from an empty container: the optional form
         // ral-zg: a sibling-admitted map row handed on whole keeps Null apart from the empty map (the optional form)
         const zgRow = this.rustZgSiblingRows.has(declaration) && boxedElementUses.length > 0;
-        const optional = nilDeclared || nullTests > 0 || writes > 0 || lentNullable > 0 || optionalBoxes > 0 || zgRow || elementKeyWrites > 0;
+        const optional = nilDeclared || nullTests > 0 || writes > 0 || lentNullable > 0 || optionalBoxes > 0 || zgRow || elementKeyWrites > 0 || optTernary;
         if (jwtLends > 0 && optional) return undefined;
         // ral-40h: an alias takes the plain container only (an optional one would copy at the box)
         if (aliasBoxes > 0 && (optional || reads === 0 && aliasBoxes === boxedElementUses.length)) return undefined;
@@ -19094,7 +19114,7 @@ export class RustTranspiler extends BaseTranspiler {
         for (const n of indexReadUses) this.rustBorrowedIndexReads.add(n.parent);
         if (optional) {
             // Null stays distinct from an empty container: the local holds `Option<Dict>` / `Option<List>`.
-            if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !((zgRow || elementKeyWrites > 0) && this.rustDictElementSource(init)) && !this.rustOptContainerSourceOk(init, from))) return undefined;
+            if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !((zgRow || elementKeyWrites > 0) && this.rustDictElementSource(init)) && !optTernary && !this.rustOptContainerSourceOk(init, from))) return undefined;
             this.rustOptContainerLocals.add(declaration);
         }
         for (const n of boxedElementUses) this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) || (n.parent?.kind === SyntaxKind.ConditionalExpression && this.rustOwnedLastUse(n, declaration)) ? 'move' : 'share');
@@ -20527,6 +20547,20 @@ export class RustTranspiler extends BaseTranspiler {
         return arm(node.whenTrue) && arm(node.whenFalse);
     }
 
+    /** ral-45g: `c ? undefined : <src>` / `c ? <src> : undefined` where `<src>` is a base map source the optional form takes
+     *  (`safeDict` with no / nullish / `{}` default, extend / omit): Null on one path, that map (or its Null) on the other. */
+    rustOptMapTernaryInit(init: any): boolean {
+        const node: any = this.rustSkipWrappers(init);
+        if (node === undefined || !isConditionalExpression(node)) return false;
+        const t: any = this.rustSkipWrappers(node.whenTrue);
+        const f: any = this.rustSkipWrappers(node.whenFalse);
+        const isNil = (x: any): boolean => x !== undefined && this.literalKindOfNode(x) === 'null';
+        const src = (x: any): boolean => x !== undefined && isCallExpression(x) && isPropertyAccessExpression(x.expression)
+            && x.expression.expression.kind === SyntaxKind.ThisKeyword && /^safeDict2?$|^extend$|^deepExtend$|^omit$/.test(String(x.expression.name.text))
+            && this.rustBorrowedSourceKind(x) === 'dict' && this.rustOptContainerSourceOk(x, 'dict');
+        return (isNil(t) && src(f)) || (src(t) && isNil(f));
+    }
+
     rustDictTernaryCall(call: any): boolean {
         const callee: any = call.expression;
         if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
@@ -21283,6 +21317,28 @@ export class RustTranspiler extends BaseTranspiler {
         // the receiver chain names no ws client state nor a market / currency table
         const names = (x: any): boolean => (isPropertyAccessExpression(x) && /^(?:markets|markets_by_id|currencies|currencies_by_id|clients|futures|subscriptions|orderbooks|cache)$/.test(String(x.name.text))) || (x.forEachChild(names) ?? false);
         return !names(call.arguments[0]);
+    }
+
+    /** ral-45g: `c ? a : b` whose arms are each a local / parameter, a numeric-index row, an empty map literal or a ral-qa
+     *  `safeValue` source: whatever kind each arm holds, a string-key read of a non-map answers Null exactly as the empty map
+     *  `into_dict()` leaves, so under ral-qa's use rule (literal-key base reads only) the typed local is observably identical.
+     *  No arm names ws client state nor a market / currency table. */
+    rustKeyReadTernarySource(init: any): boolean {
+        const node: any = this.rustSkipWrappers(init);
+        if (node === undefined || !isConditionalExpression(node) || this.rustTestTierSource(node)) return false;
+        const names = (x: any): boolean => (isPropertyAccessExpression(x) && /^(?:markets|markets_by_id|currencies|currencies_by_id|clients|futures|subscriptions|orderbooks|cache)$/.test(String(x.name.text))) || (x.forEachChild(names) ?? false);
+        const arm = (x: any): boolean => {
+            const a: any = this.rustSkipWrappers(x);
+            if (a === undefined || names(a)) return false;
+            if (isIdentifier(a)) { const d: any = this.rustDeclaredNode(a); return d !== undefined && (isVariableDeclaration(d) || isParameterDeclaration(d)); }
+            if (isObjectLiteralExpression(a)) return a.properties.length === 0;
+            if (isElementAccessExpression(a) && isIdentifier(a.expression)) {
+                const key: any = this.rustSkipWrappers(a.argumentExpression);
+                return key !== undefined && (isNumericLiteral(key) || this.primitiveKindOfType(this.typeOfNodeIfAny(key)) === 'number') && !this.rustWsCacheMapLike(a.expression);
+            }
+            return isCallExpression(a) && this.rustSafeValueKeyReadSource(a);
+        };
+        return arm(node.whenTrue) && arm(node.whenFalse);
     }
 
     /** ral-42g: `xs[i]` (a numeric index) where `xs` is a local or parameter the checker types as a list (`T[]`, never a tuple, an
