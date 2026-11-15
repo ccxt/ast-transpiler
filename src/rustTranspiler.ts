@@ -10385,17 +10385,43 @@ export class RustTranspiler extends BaseTranspiler {
         // re-entrantly from here and cached early: ws `tickers` locals fell back to Value in the probe)
         const recv: any = read.expression;
         const d: any = this.rustDeclaredNode(recv);
-        if (d === undefined || d === recv || d.name === recv || !isParameterDeclaration(d)) return false;
+        if (d === undefined || d === recv || d.name === recv) return false;
+        // ral-49e: or a local map read by an element of its own `Object.keys (m)` list (`const k = keys[i]; m[k]`)
+        const ownKeys = !isParameterDeclaration(d) && this.rustOwnKeysElementKey(recv, n);
+        if (!isParameterDeclaration(d) && !ownKeys) return false;
         const t: any = this.getChecker().getTypeAtLocation(recv);
-        if (t === undefined || (t.flags & TypeFlags.Any) === 0) return false;
+        if (!ownKeys && (t === undefined || (t.flags & TypeFlags.Any) === 0)) return false;
         const up: any = read.parent;
         if (up === undefined || (isElementAccessExpression(up) && up.expression === read) || up.kind === SyntaxKind.DeleteExpression
             || isPrefixUnaryExpression(up) || up.kind === SyntaxKind.PostfixUnaryExpression) return false;
         if (isBinaryExpression(up) && up.left === read && rustIsAssignmentOperator(up.operatorToken.kind)) return false;
-        if (!this.isNativeAccessPositionSafe(read) || this.isNativeWriteTargetBase(read) || this.isWriteBackBindRead(read)) return false;
+        if (!this.isNativeAccessPositionSafe(read) || this.isNativeWriteTargetBase(read) || (this.isWriteBackBindRead(read) && !(ownKeys && this.rustOwnKeysTypedRowRead(read)))) return false;
         return !this.isTestSource(recv) && this.rustMapParamDeclaration(recv) === undefined && this.rustOkeyKind(recv, read) === undefined
             && this.rustReadBearerKind(recv) === undefined && this.rustParamShadowOf(recv) === undefined && !this.rustLentListUse(recv)
             && this.printOptListElement(recv, n) === undefined;
+    }
+
+    /** ral-49e: the read's checker type is a declared record (`Dictionary<Dict>` receiver): its bind prints as the held
+     *  `Option<Dict>` form, which ccxt's `Value`-bind write-back pass never matched, so the borrowed key changes no write-back. */
+    rustOwnKeysTypedRowRead(read: any): boolean {
+        const t: any = this.typeOfNodeIfAny(read);
+        return t !== undefined && (t.flags & TypeFlags.Any) === 0 && this.primitiveKindOfType(t) === undefined;
+    }
+
+    /** ral-49e: `k` is `const k = keys[i]` where `keys` is `const keys = Object.keys (m)` and `m` is the receiver's own
+     *  declaration (a local of the same function): every key the list holds is a key `m` had when listed. */
+    rustOwnKeysElementKey(recv: any, key: any): boolean {
+        if (!isIdentifier(key) || !isIdentifier(recv) || this.rustTestTierSource(key)) return false;
+        const kd: any = this.rustDeclaredNode(key);
+        const init: any = kd !== undefined && isVariableDeclaration(kd) ? this.unwrapParens(kd.initializer) : undefined;
+        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression)) return false;
+        const ld: any = this.rustDeclaredNode(init.expression);
+        const call: any = ld !== undefined && isVariableDeclaration(ld) ? this.unwrapParens(ld.initializer) : undefined;
+        if (call === undefined || !isCallExpression(call) || call.arguments.length !== 1 || call.expression.getText().replace(/\s+/g, '') !== 'Object.keys') return false;
+        const arg: any = this.unwrapParens(call.arguments[0]);
+        const md: any = this.rustDeclaredNode(recv);
+        return isIdentifier(arg) && md !== undefined && isVariableDeclaration(md) && this.rustDeclaredNode(arg) === md
+            && this.rustEnclosingFunction(md) === this.rustEnclosingFunction(key);
     }
 
     /** ral-yg: `this.urls['<lit>'][k]` read only (no write, chain link, delete or update) where `this.urls['<lit>']` is the
@@ -30793,3 +30819,4 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustBoolArgumentText(arg, identation);
     }
 }
+

@@ -17363,3 +17363,26 @@ describe('ral-49a: a shared-map alias asked while its source is still deciding i
         expect(out).not.toContain('paramsOrder.clone()');
     });
 });
+
+describe('ral-49e: an element of a map local\'s own Object.keys list keys that map as a borrowed string', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-49e-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Dictionary } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    const body = (decl: string) => "    m (response: any) {\n        const ledger" + decl + " = this.safeDict (response, 'ledger', {});\n        const keys = Object.keys (ledger);\n        const items = [];\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const value = ledger[key];\n            value['id'] = key;\n            items.push (value);\n        }\n        return this.hold (items);\n    }\n";
+    test('kraken fetchLedger: the key borrows off the list and reads the Dictionary<Dict> row', () => {
+        const out = run(body(': Dictionary<Dict>'));
+        expect(out).toContain('let mut key: Option<&str> = keys.get(i as usize).and_then(Value::as_str);');
+        expect(out).toContain('get_value(&ledger, key.as_deref())');
+    });
+    test('guard: an untyped row read (a Value bind ccxt writes back) keeps the Value key', () => {
+        const out = run(body(': Dict'));
+        expect(out).toContain('fn m');
+        expect(out).toMatch(/let mut key: Value = /);
+    });
+});
