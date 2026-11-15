@@ -2591,7 +2591,7 @@ export class RustTranspiler extends BaseTranspiler {
             arm = 'vec';
         }
         const owner: any = this.rustDeclarationOfIdentifier(receiver);
-        if (owner === undefined || !isVariableDeclaration(owner) || !isIdentifier((owner as any).name)) return undefined;
+        if (owner === undefined || !isVariableDeclaration(owner) || !isIdentifier(owner.name)) return undefined;
         const scope = this.rustEnclosingFunction(declaration);
         if (scope === undefined || this.rustEnclosingFunction(owner) !== scope) return undefined;
         const readOnly = (n: any): boolean => {
@@ -2600,8 +2600,8 @@ export class RustTranspiler extends BaseTranspiler {
             return !(isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up) || isDeleteExpression(up));
         };
         // the list: read only (element reads and .length; no write, no method call), so the borrow cannot conflict
-        const listOk = this.rustLocalUsesAll(owner, String((owner as any).name.text), true, (n: any) => {
-            if (n === (owner as any).name) return true;
+        const listOk = this.rustLocalUsesAll(owner, String(owner.name.text), true, (n: any) => {
+            if (n === owner.name) return true;
             if (!readOnly(n)) return false;
             const up: any = n.parent;
             if (isElementAccessExpression(up) && up.expression === n) return readOnly(up);
@@ -16761,7 +16761,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isCallExpression(node)) return undefined;
         const callee = this.rustShadowSafeCallee(node);
         if (callee === undefined) return undefined;
-        const args: any[] = (node as any).arguments ?? [];
+        const args: any[] = Array.from(node.arguments ?? []);
         if (args.length < 2 || args.length > 3) return undefined;
         const shadow = this.rustParamShadowOf(args[0]);
         if (shadow === undefined || shadow.kind !== RUST_PARAM_SHADOWS.MAP) return undefined;
@@ -16778,7 +16778,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustValueBorrowsSelf(node: any): boolean {
         if (node === undefined) return false;
         if (node.kind === SyntaxKind.ThisKeyword || node.kind === SyntaxKind.SuperKeyword) return true;
-        if (this.rustShadowSafeReadOf(node) !== undefined) return ((node as any).arguments ?? []).some((a: any) => this.rustValueBorrowsSelf(a));
+        if (this.rustShadowSafeReadOf(node) !== undefined) return (node.arguments ?? []).some((a: any) => this.rustValueBorrowsSelf(a));
         let found = false;
         node.forEachChild((c: any) => { if (!found && this.rustValueBorrowsSelf(c)) found = true; });
         return found;
@@ -25978,15 +25978,17 @@ export class RustTranspiler extends BaseTranspiler {
         const literal = (e: any): boolean => {
             const v: any = this.rustStripWrappers(e);
             const d: any = v !== undefined && isIdentifier(v) ? this.rustDeclarationOfIdentifier(v) : undefined;
-            const lit: any = d !== undefined && isVariableDeclaration(d) && isIdentifier(d.name) && !!((d.parent as any)?.flags & NodeFlags.Const) ? this.rustStripWrappers(d.initializer) : undefined;
+            const lit: any = d !== undefined && isVariableDeclaration(d) && isIdentifier(d.name) && !!(d.parent?.flags & NodeFlags.Const) ? this.rustStripWrappers(d.initializer) : undefined;
             if (lit === undefined || !isObjectLiteralExpression(lit)) return false;
-            for (const p of Array.from(lit.properties as any) as any[]) {
+            const props: any[] = Array.from(lit.properties);
+            for (const p of props) {
                 if (p.kind !== SyntaxKind.PropertyAssignment || !(isStringLiteralLikeNode(p.name) || isIdentifier(p.name))) return false;
                 if (String(p.name.text) === guard && p.initializer.kind !== SyntaxKind.TrueKeyword) return false;
             }
             const scope: any = findAncestor(d, isFunctionLike);
             if (scope === undefined) return false;
-            for (const r of this.rustScopeNameNodes(scope, String(d.name.text)) as any[]) {
+            const refs: any[] = this.rustScopeNameNodes(scope, String(d.name.text));
+            for (const r of refs) {
                 if (!isIdentifier(r) || r === d.name || this.rustDeclarationOfIdentifier(r) !== d) continue;
                 const c: any = r.parent;
                 if (!isCallExpression(c) || c.arguments[4] !== r || !isPropertyAccessExpression(c.expression) || c.expression.expression.kind !== SyntaxKind.ThisKeyword
@@ -26019,7 +26021,7 @@ export class RustTranspiler extends BaseTranspiler {
         const values: any[] = [];
         let unknown = false;
         // ral-58w: under a guard key only the literals that set it to `true` can be the read dict
-        const guarded = (lit: any) => guard === undefined || (isObjectLiteralExpression(lit) && Array.from(lit.properties as any).some((p: any) => p.kind === SyntaxKind.PropertyAssignment
+        const guarded = (lit: any) => guard === undefined || (isObjectLiteralExpression(lit) && Array.from<any>(lit.properties).some((p: any) => p.kind === SyntaxKind.PropertyAssignment
             && (isStringLiteralLikeNode(p.name) || isIdentifier(p.name)) && String(p.name.text) === guard && p.initializer.kind === SyntaxKind.TrueKeyword));
         this.rustWalkScope(cls, (n: any) => {
             if (n.kind === SyntaxKind.PropertyAssignment && isStringLiteralLikeNode(n.name) && String(n.name.text) === key) { if (guarded(n.parent)) values.push(n.initializer); }
