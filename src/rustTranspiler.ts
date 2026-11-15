@@ -6762,6 +6762,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (boundKind === 'num') return `(${name} as f64) ${operator} ${super.printIdentifier(bound)}`;
         // tb: an `Option<i64>` parseToInt bound: `is_less_than(Int, Null)` is false, `Some` orders as f64 like the helper
         if (boundKind === 'oint' && this.rustTbCounterBound(cond, bound, 'oint') !== undefined) return `matches!(${super.printIdentifier(bound)}, Some(__b) if (${name} as f64) ${operator} (__b as f64))`;
+        // ral-55e: a parseToInt bound that is already decided `Option<i64>` (its other uses meet typed arithmetic partners):
+        // the same `matches!` test, the counter's own i64 plan unchanged
+        if (boundKind === 'oint' && this.rustTbParseToIntInit(this.rustDeclaredNode(bound)) && this.rust55ePtiTypedPartners(this.rustDeclaredNode(bound))) return `matches!(${super.printIdentifier(bound)}, Some(__b) if (${name} as f64) ${operator} (__b as f64))`;
         const refs = (n: any): boolean => (isIdentifier(n) && n.text === name) || (n.forEachChild(refs) ?? false);
         if (refs(right) || !this.printsValueExpression(left) || !this.printsValueExpression(this.orderedComparisonOperand(right))) return undefined;
         if (this.printRustScalarBinary(cond) !== undefined || this.rustScalarOwnsOperand(left) || this.rustScalarOwnsOperand(right)) return undefined;
@@ -9638,9 +9641,25 @@ export class RustTranspiler extends BaseTranspiler {
      *  (`now - limit * duration`: `limit` holds only `Int` or `Null`, so the Option arm equals the helper's). */
     rustArithSideKind(node): string | undefined {
         const own = this.rustScalarNumericKind(node); if (own !== undefined) return own;
+        // ral-55e: a base call of the typed-return table answering an integer (`this.parseToInt (..)` -> `Option<i64>`)
+        const typed = this.rustArithTypedIntCall(node); if (typed !== undefined) return typed;
         // integer parameters only: an `f64` side re-prints value writes a ccxt build/ pass keys on (kalshi `filled`: cow_guard +1)
         const param = this.rustArithParamKind(node);
         return param === 'int' || param === 'oint' ? param : undefined;
+    }
+
+    /** ral-55e: `this.parseToInt (..)` (a base method of the typed-return table, no venue override) as an arithmetic side:
+     *  the runtime answers `Option<i64>` (`Int` or `Null`), exactly what the boxed helper operand held. */
+    rustArithTypedIntCall(node: any): string | undefined {
+        const inner: any = this.unwrapParens(node);
+        if (inner === undefined || !isCallExpression(inner) || !isPropertyAccessExpression(inner.expression) || inner.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (String(inner.expression.name.text) !== 'parseToInt' || inner.arguments.length !== 1 || !this.rustCalleeIsRuntimeBase(inner) || this.rustVenueReturnTypesHas(inner, 'parseToInt')) return undefined;
+        return this.rustBaseTypedReturnKind(inner) === 'oint' ? 'oint' : undefined;
+    }
+
+    /** ral-55e: a binary initializer with a typed parseToInt side (`time * this.parseToInt (x)`). */
+    rustArithTypedIntSide(node: any): boolean {
+        return isBinaryExpression(node) && (this.rustArithTypedIntCall(node.left) !== undefined || this.rustArithTypedIntCall(node.right) !== undefined);
     }
 
     /** zb: the numeric kind of an unwritten typed-signature parameter read (`oint` / `onum` / `int` / `num`), else undefined. */
@@ -11187,7 +11206,29 @@ export class RustTranspiler extends BaseTranspiler {
         if (d === undefined || !isVariableDeclaration(d)) return d !== undefined && isParameterDeclaration(d);
         // ral-54e: a `const k = <int literal>` local is an `i64` decided by nothing else (no later write, no other source)
         if ((d.parent?.flags & NodeFlags.Const) !== 0 && this.rustScalarIntLiteral(this.unwrapParens(d.initializer)) !== undefined && this.rustScalarLocalOf(inner)?.kind === 'int') return true;
+        // ral-55e: a `const s = a * this.parseToInt (..)` local decided `int` / `oint` from typed arithmetic (prediction
+        // `step`): its kind is settled by its own initializer, never by the parseToInt local it meets
+        if ((d.parent?.flags & NodeFlags.Const) !== 0 && isBinaryExpression(this.unwrapParens(d.initializer)) && this.rustArithTypedIntSide(this.unwrapParens(d.initializer))
+            && [ 'int', 'oint' ].includes(this.rustScalarLocalOf(inner)?.kind ?? '')) return true;
+        // ral-55e: a `const r = Math.ceil (a / b)` local (prediction `requiredCalls`): the division keeps it a number box
+        // whose own decision never reads the parseToInt local it is compared with
+        if ((d.parent?.flags & NodeFlags.Const) !== 0 && this.rust55eCeilDivInit(d)) return true;
         return this.rustTbParseToIntInit(d) || d.parent?.parent?.kind === SyntaxKind.ForStatement;
+    }
+
+    /** ral-55e: a parseToInt local whose every partner is one the 55e arms admit (a typed parseToInt-product const, a
+     *  `Math.ceil` division const) or a for counter / literal: checked by the ub partner walk itself. */
+    rust55ePtiTypedPartners(d: any): boolean {
+        return d !== undefined && this.rustUbPtiPartnersDecided(d);
+    }
+
+    /** ral-55e: `Math.ceil (<x> / <y>)` as a declaration's whole initializer. */
+    rust55eCeilDivInit(d: any): boolean {
+        const init: any = this.unwrapParens(d?.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !isIdentifier(init.expression.expression)
+            || init.expression.expression.text !== 'Math' || String(init.expression.name.text) !== 'ceil' || init.arguments.length !== 1) return false;
+        const arg: any = this.unwrapParens(init.arguments[0]);
+        return isBinaryExpression(arg) && arg.operatorToken.kind === SyntaxKind.SlashToken;
     }
 
     /** ub: a parseToInt local whose partner uses are all ordered / equality tests the solver prints with both operands
