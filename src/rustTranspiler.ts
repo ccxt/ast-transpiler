@@ -4921,7 +4921,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustPreciseCompareCall(node)) return true;
         if (isIdentifier(node) || isConditionalExpression(node) || this.rustScalarStrMethod(node, true) !== undefined || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node)) return true;
         if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustIdString(node) || this.rustVenueTypedCall(node) !== undefined) return true;
-        if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && (isIdentifier(node.expression) || this.rustSelfRootedLengthRecv(node.expression));
+        if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && (isIdentifier(node.expression) || this.rustSelfRootedLengthRecv(node.expression) || this.rustLocalRootedLengthRecv(node.expression));
         if (isElementAccessExpression(node)) return isIdentifier(node.expression) || this.rustInlineHandleStrSlot(node);
         if (isCallExpression(node) && isIdentifier(node.expression) && RustTranspiler.RUST_STR_RUNTIME_FREE.has(String(node.expression.text))) return true;
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustScalarReceiver(node.expression.expression)) return false;
@@ -6194,7 +6194,7 @@ export class RustTranspiler extends BaseTranspiler {
     // so the local is an `i64` exactly; the string-local `.length` stays the expression rule's.
     rustListLengthInit(node): boolean {
         if (node === undefined || !isPropertyAccessExpression(node) || !isIdentifier(node.name) || node.name.text !== 'length') return false;
-        if (!isIdentifier(node.expression)) return this.rustSelfRootedLengthRecv(node.expression);
+        if (!isIdentifier(node.expression)) return this.rustSelfRootedLengthRecv(node.expression) || this.rustLocalRootedLengthRecv(node.expression);
         return this.checkerOrUndefined() !== undefined && this.rustScalarLengthRecv(node) === undefined;
     }
 
@@ -6209,6 +6209,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (t === undefined) return false;
         const prim = this.primitiveKindOfType(t);
         return prim !== 'string' && !(t.flags & TypeFlags.StringLike);
+    }
+
+    // ral-58n: `orderbook.cache.length` (a property chain off a local or parameter) prints `get_array_length(&..)` or a native
+    // `len()`, an `Int` for every receiver; a string-typed receiver or an order-book side keeps its own length rule
+    rustLocalRootedLengthRecv(recv): boolean {
+        if (this.checkerOrUndefined() === undefined || !isPropertyAccessExpression(recv)) return false;
+        let n: any = recv;
+        while (isPropertyAccessExpression(n) && isIdentifier(n.name)) n = n.expression;
+        if (!isIdentifier(n) || this.rustIsOrderBookSide(recv)) return false;
+        const t: any = this.typeOfNodeIfAny(recv);
+        if (t === undefined) return false;
+        return this.primitiveKindOfType(t) !== 'string' && !(t.flags & TypeFlags.StringLike);
     }
 
     rustListLengthText(node): string {
@@ -10809,7 +10821,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration === undefined || (!isVariableDeclaration(declaration) && declaration.kind !== SyntaxKind.Parameter)) return undefined;
         // a nil-declared partner may be typed by its own rule later: leave it to that rule
         if (isVariableDeclaration(declaration) && (declaration.initializer === undefined || this.literalKindOfNode(this.unwrapParens(declaration.initializer)) === 'null')) return undefined;
-        if (this.primitiveKindOfType(this.typeOfNodeIfAny(partner)) !== form[0] || this.primitiveKindOfType(this.typeOfNodeIfAny(self)) !== form[0]) return undefined;
+        // ral-58n: an `i64` local initialised from a list length is `Int` whatever its receiver's checker type (`any` there):
+        // its box answered `Some(n as f64)` to `as_f64()`, the very payload the typed side prints
+        const selfDecl: any = kind === 'int' ? this.rustDeclaredNode(self) : undefined;
+        const lengthSelf = selfDecl !== undefined && isVariableDeclaration(selfDecl) && (selfDecl.parent?.flags & NodeFlags.Const) !== 0
+            && this.rustListLengthInit(this.unwrapParens(selfDecl.initializer));
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(partner)) !== form[0] || (!lengthSelf && this.primitiveKindOfType(this.typeOfNodeIfAny(self)) !== form[0])) return undefined;
         if (dry) return '_';
         return `(${form[1](super.printIdentifier(self))} ${sign} ${super.printIdentifier(partner)}.${RustTranspiler.PAYLOAD_ACCESSORS[form[0]]}())`;
     }
@@ -17788,7 +17805,8 @@ export class RustTranspiler extends BaseTranspiler {
                 step = `if let Value::Int(${bind}) = &mut ${counter.name} { *${bind} ${counter.sign}= 1; }`;
             }
             if (typed && counter !== undefined && bound !== undefined) {
-                initStr = initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
+                initStr = counter.start !== undefined ? `${this.getIden(identation + 1)}let mut ${counter.name}: i64 = ${super.printIdentifier(counter.start)};\n`
+                    : initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
                 condStr = typeof bound === 'object' ? bound.cond : `${counter.name} < (${bound}.len() as i64)`;
                 step = `${counter.name} += 1;`;
             }
@@ -17800,7 +17818,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // `for (let i = <int>; …; i++)` over a `Value` counter: when the incrementor is the only write
     // to `i` the payload is always `Value::Int`, so the step bumps it in place (no 5-arm match).
-    rustIntCounter(node, initStr: string, incrStr: string): { name: string, sign: '+' | '-', literal: string, symbol: any } | undefined {
+    rustIntCounter(node, initStr: string, incrStr: string): { name: string, sign: '+' | '-', literal: string, symbol: any, start?: any } | undefined {
         const init: any = node.initializer;
         const incr: any = node.incrementor;
         if (init?.kind !== SyntaxKind.VariableDeclarationList || init.declarations.length !== 1 || !(init.flags & NodeFlags.BlockScoped)) return undefined;
@@ -17809,7 +17827,10 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(declaration.name.text);
         // The declaration must print as the boxed int literal the Int payload relies on.
         const printed = new RegExp(`^let mut ${name}: Value = Value::Int\\((-?\\d+)\\);$`).exec(initStr.trim());
-        if (printed === null) return undefined;
+        // ral-58n: or an identifier initializer the printer types `i64` (polymarket `i = startIndex`), the counter itself left a
+        // `Value` by every typed-local rule: its box is `Value::Int(start)`, and the `i64` copy taken at the loop head is that number
+        const startNode: any = printed === null ? this.rust58nI64CounterStart(declaration) : undefined;
+        if (printed === null && startNode === undefined) return undefined;
         const sign = [ '+', '-' ].find((s) => incrStr.trim() === `${name} = ${this.printNativeNumeric(s === '+' ? SyntaxKind.PlusToken : SyntaxKind.MinusToken, name, 'Value::Int(1)')}`) as '+' | '-' | undefined;
         if (sign === undefined) return undefined;
         const symbol = this.rustSymbolOf(declaration.name);
@@ -17819,7 +17840,16 @@ export class RustTranspiler extends BaseTranspiler {
             if (n.kind === SyntaxKind.VariableDeclaration && this.rustBindsName(n, name)) return undefined;
             if (n.kind === SyntaxKind.Identifier && this.rustSymbolOf(n) === symbol && this.rustIdentifierIsWritten(n)) return undefined;
         }
-        return { name, sign, literal: printed[1], symbol };
+        return printed !== null ? { name, sign, literal: printed[1], symbol } : { name, sign, literal: '', symbol, start: startNode };
+    }
+
+    /** ral-58n: the start identifier of a `for (let i = x; ..)` counter when `x` is a local the scalar rule decided `int`
+     *  and the counter's own declaration is no typed local (it prints `Value::from(x)`, an `Int`), else undefined. */
+    rust58nI64CounterStart(declaration: any): any {
+        const src: any = declaration.initializer === undefined ? undefined : this.unwrapParens(declaration.initializer);
+        if (src === undefined || !isIdentifier(src) || this.rustScalarLocalOf(src)?.kind !== 'int') return undefined;
+        if (this.rustScalarLocalKind(declaration) !== undefined || this.rustNilLocalKind(declaration) !== undefined) return undefined;
+        return src;
     }
 
     /** True when the identifier is (part of) an assignment target, a `++`/`--` operand or a `for-in/of` head. */

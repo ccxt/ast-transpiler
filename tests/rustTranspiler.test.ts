@@ -19927,3 +19927,29 @@ describe('ral-58e: an element of a read-only typed Vec local read only at litera
         expect(out).not.toContain('let entry: &Value');
     });
 });
+
+describe('ral-58n: number locals (length of a property-chain receiver, counter started from an i64 local)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport class OrderBook { cache: any[] = []; nonce: Int = undefined; }\nexport default class Exchange {\n    options: Dict = {};\n    orderbooks: Dict = {};\n    sum (a: any, b: any): any { return a; }\n    hold (x: any): any { return x; }\n    handleOption (m: string, k: string, d: any = undefined): any { return d; }\n    safeInteger (o: any, k: any, d: any = undefined): number | undefined { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-58n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange, { OrderBook } from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('kucoin pro handleOrderBook: the length of `orderbook.cache` is i64 and meets a number Value through its f64 payload', () => {
+        const out = run("    handleBook (symbol: string, data: Dict) {\n        const orderbook = this.orderbooks[symbol];\n        const cacheLength = orderbook.cache.length;\n        const snapshotDelay: Int = this.handleOption ('watchOrderBook', 'snapshotDelay', 5);\n        if (cacheLength === snapshotDelay) {\n            this.hold (data);\n        }\n        (orderbook.cache as any[]).push (data);\n    }\n");
+        expect(out).toMatch(/let mut cacheLength: i64 = /);
+        expect(out).toContain('(Some(cacheLength as f64) == snapshotDelay.as_f64())');
+    });
+    test('polymarket fetchOutcomes: a counter started from an i64 local is i64 (decided on the initializer node)', () => {
+        const out = run("    a (tokenIds: string[]): any {\n        const out = [];\n        const tokenIdsLength = tokenIds.length;\n        const chunkSize = this.safeInteger (this.options, 'fetchOutcomesBatchSize', 50);\n        let startIndex = 0;\n        while (startIndex < tokenIdsLength) {\n            let endIndex = this.sum (startIndex, chunkSize);\n            if (endIndex > tokenIdsLength) {\n                endIndex = tokenIdsLength;\n            }\n            const chunk: string[] = [];\n            for (let i = startIndex; i < endIndex; i++) {\n                chunk.push (tokenIds[i]);\n            }\n            out.push (chunk);\n            startIndex = this.sum (startIndex, chunkSize);\n        }\n        return out;\n    }\n");
+        expect(out).toContain('let mut i: i64 = startIndex;');
+        expect(out).not.toContain('Value::from(startIndex)');
+    });
+    test('guard: a counter started from a Value local stays Value', () => {
+        const out = run("    b (tokenIds: string[], s: any): any {\n        const chunk: string[] = [];\n        for (let i = s; i < tokenIds.length; i++) {\n            chunk.push (tokenIds[i]);\n        }\n        return chunk;\n    }\n");
+        expect(out).not.toContain('let mut i: i64 = s;');
+    });
+});
