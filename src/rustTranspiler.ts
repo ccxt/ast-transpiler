@@ -10833,6 +10833,21 @@ export class RustTranspiler extends BaseTranspiler {
             && call.expression.expression.kind === SyntaxKind.ThisKeyword && String(call.expression.name.text) === 'safeCurrencyCode';
     }
 
+    /** sd / ral-55f (one key path): the written value of `m[k] = v` assigns or steps the key local `k` itself. */
+    rustInsertValueRewritesKey(key: string, value: any): boolean {
+        let rewrites = false;
+        const visit = (m: any) => {
+            if (rewrites) return;
+            if (isIdentifier(m) && String(m.text) === key && ((isBinaryExpression(m.parent) && m.parent.left === m
+                && m.parent.operatorToken.kind >= SyntaxKind.FirstAssignment && m.parent.operatorToken.kind <= SyntaxKind.LastAssignment)
+                || ((isPrefixUnaryExpression(m.parent) || isPostfixUnaryExpression(m.parent))
+                    && (m.parent.operator === SyntaxKind.PlusPlusToken || m.parent.operator === SyntaxKind.MinusMinusToken)))) rewrites = true;
+            m.forEachChild?.(visit);
+        };
+        visit(value);
+        return rewrites;
+    }
+
     /** `m[k] = v` with `k` a `String` local whose single-key write prints a native insert. */
     rustScalarInsertKeyUse(n): boolean {
         const keyNode = this.rustKeyWrapped(n);
@@ -10844,16 +10859,7 @@ export class RustTranspiler extends BaseTranspiler {
         const key = String(n.text);
         // sd: the key is evaluated before the value (JS and Rust alike), so a value that only reads the key is fine;
         // one that writes it (`m[k] = (k = ..)`, `k++`) keeps the helper
-        let rewrites = false;
-        const visit = (m: any) => {
-            if (rewrites) return;
-            if (isIdentifier(m) && String(m.text) === key && ((isBinaryExpression(m.parent) && m.parent.left === m
-                && m.parent.operatorToken.kind >= SyntaxKind.FirstAssignment && m.parent.operatorToken.kind <= SyntaxKind.LastAssignment)
-                || ((isPrefixUnaryExpression(m.parent) || isPostfixUnaryExpression(m.parent))
-                    && (m.parent.operator === SyntaxKind.PlusPlusToken || m.parent.operator === SyntaxKind.MinusMinusToken)))) rewrites = true;
-            m.forEachChild?.(visit);
-        };
-        visit(write.right);
+        const rewrites = this.rustInsertValueRewritesKey(key, write.right);
         if (rewrites && !this.rustTbKeyReadOnlyInValue(n, write.right)) return false;
         return (this.rustBearerDictInsert(base, n, key, 'x') ?? this.rustMapParamDictInsert(base, n, key, 'x')
             ?? this.printNativeDictInsert(base, n, key, 'x') ?? this.rustNativeDictInsert(base, n, key, 'x')) !== undefined;
@@ -11026,18 +11032,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (receiver === undefined || !receiver.isField || !this.rustReceiverStaysDict(access.expression, receiver)) return false;
         const write: any = access.parent;
         if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
-        const key = String(n.text);
-        let rewrites = false;
-        const visit = (m: any) => {
-            if (rewrites) return;
-            if (isIdentifier(m) && String(m.text) === key && ((isBinaryExpression(m.parent) && m.parent.left === m
-                && m.parent.operatorToken.kind >= SyntaxKind.FirstAssignment && m.parent.operatorToken.kind <= SyntaxKind.LastAssignment)
-                || ((isPrefixUnaryExpression(m.parent) || isPostfixUnaryExpression(m.parent))
-                    && (m.parent.operator === SyntaxKind.PlusPlusToken || m.parent.operator === SyntaxKind.MinusMinusToken)))) rewrites = true;
-            m.forEachChild?.(visit);
-        };
-        visit(write.right);
-        return !rewrites;
+        return !this.rustInsertValueRewritesKey(String(n.text), write.right);
     }
 
     rustScalarOptKeyText(key): string {
@@ -20616,7 +20611,7 @@ export class RustTranspiler extends BaseTranspiler {
         // whole to a `handle*` optional params slot (bitget pro watchOrders `paramsInstType` -> handleMarginModeAndParams): a
         // map on every path, boxed once (`Value::from(&x)` / `Value::Dict(x)`); non-test sources, each box line within 400
         const sbSlotParamsBoxOnly = sbAlias && sbMapWrites > 0 && reads === 0 && writes === 0 && nullTests === 0 && paramsBoxes > 0
-            && paramsBoxes === boxedElementUses.length && this.rustSbSlotAliasNonTest(declaration) && boxedElementUses.every((u: any) => this.rustBoxLineOk(u));
+            && paramsBoxes === boxedElementUses.length && !this.rustTestTierSource(declaration) && boxedElementUses.every((u: any) => this.rustBoxLineOk(u));
         if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !endpointBoxOnly && !optAliasBoxOnly && !sbSlotParamsBoxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || (indexLikeReads > 0 && !this.rustUrlsMapEntry(init))))
             || (this.rustListElementSource(init) && (nullTests > 0 || lengths > 0))) return undefined;
@@ -21053,12 +21048,6 @@ export class RustTranspiler extends BaseTranspiler {
     /** sb: `y = self.omit(&x, ..).into_dict()` for a shared-map alias (`omit` of a proven map answers `Value::Map`: the Arc moves back). */
     private rustSbAliasWrites = new WeakSet<any>();
     private rustSbAliasSlotWrites = new WeakSet<any>();
-    /** ral-55f: the alias sits outside ts/src/test (the slot rules apply to non-test sources only). */
-    rustSbSlotAliasNonTest(declaration: any): boolean {
-        const source: any = declaration?.getSourceFile?.()?.fileName;
-        return typeof source === 'string' && !/[\\/]test[\\/]/.test(source);
-    }
-
     /** ral-54f: a slot write accepted by the shared-map alias rule, printed typed only when the alias printed as the map. */
     rustSbAliasSlotWriteOf(element: any): boolean {
         if (!isIdentifier(element) || !this.rustSbAliasSlotWrites.has(element)) return false;
