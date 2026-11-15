@@ -16585,3 +16585,27 @@ describe('ral-45g: `code.toString()` of a number parameter seeds a String local'
         expect(mk('code: int = undefined')).not.toContain('let mut codeAsString: String');
     });
 });
+
+describe('ral-45f: a declaration-initialised alias of a nullable safeDict const holds Option<Dict> (latoken mergedCurrency)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    extend (...args: any[]): any { return Object.assign ({}, ...args); }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    safeList (o: any, k: any, d: List = undefined): List | undefined { return o; }\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    merge (rows: any, byId: Dict) {\n        const merged: List = [];\n        for (let i = 0; i < 3; i++) {\n            const raw = this.safeDict (rows, i);\n            const entry = this.safeDict (byId, this.safeString (raw, 'id'), {});\n            const extra = this.safeList (entry, 'extra');\n            let out = raw;\n            if (extra !== undefined) {\n                out = this.extend (raw, { 'extra': extra });\n            }\n            merged.push (out);\n        }\n        return this.hold (merged);\n    }\n    returned (rows: any) {\n        const raw = this.safeDict (rows, 0);\n        let out = raw;\n        return this.hold (out);\n    }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-45f-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('source and alias hold Option<Dict>; the extend write and the push box take the optional map', () => {
+        const text = out();
+        const t1 = text.slice(text.indexOf('fn merge'), text.indexOf('fn returned'));
+        expect(t1).toContain('let mut raw: Option<crate::value::Dict> = ');
+        expect(t1).toContain('let mut out: Option<crate::value::Dict> = raw.clone();');
+        expect(t1).toMatch(/out = self\.extend\(raw, [\s\S]*\.into_opt_dict\(\);/);
+        expect(t1).toContain('merged.push(out.map_or(Value::Null, Value::Dict));');
+        // negative: an alias handed to a plain Value slot (not a local store) keeps the box
+        const t2 = text.slice(text.indexOf('fn returned'));
+        expect(t2).toContain('let mut out: Value = ');
+    });
+});

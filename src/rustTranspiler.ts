@@ -18848,6 +18848,14 @@ export class RustTranspiler extends BaseTranspiler {
         // answers Null or that source's map: the local holds `Option<Dict>` (`(if c { Value::Null } else { .. }).into_opt_dict()`)
         const optTernary = from === undefined && !nilDeclared && init !== undefined && this.rustOptMapTernaryInit(init);
         if (optTernary) from = 'dict';
+        // ral-45f: `let t = s` (a plain `let`, one declarator) of a `const s = this.safeDict* (..)` with no default in the same
+        // function: the declaration-initialised alias holds the same optional container (43f's syntactic source proof)
+        const optAliasInit = from === undefined && !nilDeclared && allSlot === undefined && init !== undefined && isIdentifier(init)
+            && (list.flags & NodeFlags.Const) === 0 && list.parent?.kind === SyntaxKind.VariableStatement
+            && this.rustOptAliasSourceKind(init, this.rustEnclosingFunction(declaration)) !== undefined;
+        if (optAliasInit) from = this.rustOptAliasSourceKind(init, this.rustEnclosingFunction(declaration));
+        // int53: 45g optional ternary and 45f declaration-initialised alias are one optional-map initializer (43f form)
+        const optMapInit = optTernary || optAliasInit;
         let sbMapWrites = 0;
         if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
@@ -18982,7 +18990,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustUntilHeadKeyWrite(n) !== undefined && (extendReuse ? this.rustExtendReuseKeyWriteOk(n, declaration) : init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) === 'dict' || this.rustBuiltMapKeyWriteOk(n, init)))) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
             // ral-wf: a dynamic-key write on a reuse literal (untagged operands only): the helper's tag routes cannot fire
             if (extendReuse && this.rustReuseDynamicKeyWrite(n, declaration)) return keyWriteUses.push(n) > 0 && ++keyWrites > 0 && ++reads > 0;
-            const handed = () => (this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0
+            const handed = () => (optAliasInit && this.rustLocalStoreHandOff(n) && !this.rustScalarInNestedWrite(n, true) && ++optionalBoxes > 0
+                || this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0
                 || this.rustBuiltReturnBoxUse(n, init, extendReuse) && ++defaultedBoxes > 0 || this.rustOptReaderBoxUse(n, init) && ++optionalBoxes > 0
                 || this.rustOptionalParamsSlot(up, n) && (from === 'dict' || from === 'api' && this.rustDeclaredEndpointKind(init) === 'dict') && ++paramsBoxes > 0
                 || nilDeclared && this.rustDeclaredEndpointBoxUse(n) && ++endpointBoxes > 0
@@ -19015,6 +19024,8 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-43f: the source of `t = x` whose target holds the optional form of the same kind: the alias shares x's handle
             // (counted as a nullable lend: the source keeps Null apart from the empty map, so it takes the optional form too)
             if (this.rustOptAliasTargetUse(n, declaration, fn)) return ++lentNullable > 0 && ++reads > 0;
+            // ral-45f: the source of `let t = x` whose target holds the optional form through the initialised alias rule
+            if (this.rustOptAliasInitTargetUse(n, declaration, fn)) return ++lentNullable > 0 && ++reads > 0;
             // ral-40h: `const|let y = x` of a container local (phase 1): the alias takes the container whole
             if (this.rustContainerAliasInit(n, declaration)) return ++aliasBoxes > 0 && boxedElementUses.push(n) > 0;
             if (!isCallExpression(up) || up.arguments[0] !== n) return handed();
@@ -19071,7 +19082,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (endpointBoxes > 0 && !endpointBoxOnly) return undefined;
         // ral-qa: only string-key reads (no null test, write, length, box or lend could tell a non-map from the empty map)
         if ((keyReadOnly || elemKeyReadOnly) && (!safe || plainReads === 0 || plainReads !== reads || nullTests + writes + lengths + indexLikeReads + boxedElementUses.length + lentResponses + lentNullable + keySets + keyWrites + extendHeads + jwtLends > 0)) return undefined;
-        if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !endpointBoxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
+        const optAliasBoxOnly = optAliasInit && optionalBoxes > 0 && optionalBoxes === boxedElementUses.length;
+        if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !endpointBoxOnly && !optAliasBoxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || (indexLikeReads > 0 && !this.rustUrlsMapEntry(init))))
             || (this.rustListElementSource(init) && (nullTests > 0 || lengths > 0))) return undefined;
         // ral-kc: a declared endpoint answering off its declared shape is `None` in the optional form: a null test would tell it apart
@@ -19083,7 +19095,7 @@ export class RustTranspiler extends BaseTranspiler {
         // a nullable source lent whole keeps Null apart from an empty container: the optional form
         // ral-zg: a sibling-admitted map row handed on whole keeps Null apart from the empty map (the optional form)
         const zgRow = this.rustZgSiblingRows.has(declaration) && boxedElementUses.length > 0;
-        const optional = nilDeclared || nullTests > 0 || writes > 0 || lentNullable > 0 || optionalBoxes > 0 || zgRow || elementKeyWrites > 0 || optTernary;
+        const optional = nilDeclared || nullTests > 0 || writes > 0 || lentNullable > 0 || optionalBoxes > 0 || zgRow || elementKeyWrites > 0 || optMapInit;
         if (jwtLends > 0 && optional) return undefined;
         // ral-40h: an alias takes the plain container only (an optional one would copy at the box)
         if (aliasBoxes > 0 && (optional || reads === 0 && aliasBoxes === boxedElementUses.length)) return undefined;
@@ -19094,7 +19106,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (optional && boxedElementUses.length > 0 && (this.rustWsFieldRead(init) !== undefined || defaultedBoxes > 0)) return undefined;
         if (endpointBoxes > 0 && endpointBoxes !== boxedElementUses.length) return undefined;
         // a nullable reader result boxed whole keeps Null apart from the map: only the optional form prints that box
-        if (optionalBoxes > 0 && (boxedElementUses.length !== optionalBoxes || nilDeclared || writes > 0 || from !== 'dict')) return undefined;
+        if (optionalBoxes > 0 && (boxedElementUses.length !== optionalBoxes || nilDeclared || (writes > 0 && !optAliasInit) || from !== 'dict')) return undefined;
         // a `handle*` params slot takes a `Value`: the map boxes there (the plain form only, its map is never Null)
         if (paramsBoxes > 0 && (optional || from !== 'dict')) return undefined;
         const onlySafeDictWrites = keyWrites > 0 && safeDictKeyWrites === keyWrites && keySets === 0;
@@ -19114,7 +19126,7 @@ export class RustTranspiler extends BaseTranspiler {
         for (const n of indexReadUses) this.rustBorrowedIndexReads.add(n.parent);
         if (optional) {
             // Null stays distinct from an empty container: the local holds `Option<Dict>` / `Option<List>`.
-            if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !((zgRow || elementKeyWrites > 0) && this.rustDictElementSource(init)) && !optTernary && !this.rustOptContainerSourceOk(init, from))) return undefined;
+            if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !((zgRow || elementKeyWrites > 0) && this.rustDictElementSource(init)) && !optMapInit && !this.rustOptContainerSourceOk(init, from))) return undefined;
             this.rustOptContainerLocals.add(declaration);
         }
         for (const n of boxedElementUses) this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) || (n.parent?.kind === SyntaxKind.ConditionalExpression && this.rustOwnedLastUse(n, declaration)) ? 'move' : 'share');
@@ -19156,6 +19168,14 @@ export class RustTranspiler extends BaseTranspiler {
         const t: any = this.rustDeclarationOfIdentifier(up.left);
         if (t === undefined || t === declaration || !isVariableDeclaration(t) || t.name === up.left || this.rustBorrowedPending.has(t)) return false;
         return this.rustBorrowedLocalKind(t) === this.rustOptAliasSourceKind(n, fn) && this.rustOptContainerLocals.has(t);
+    }
+
+    /** ral-45f: the source side of `let t = n` whose target holds the optional form through the initialised alias rule. */
+    rustOptAliasInitTargetUse(n: any, declaration: any, fn: any): boolean {
+        const t: any = n.parent;
+        if (t === undefined || !isVariableDeclaration(t) || t.initializer !== n || t === declaration || !isIdentifier(t.name) || this.rustBorrowedPending.has(t)) return false;
+        const kind = this.rustOptAliasSourceKind(n, fn);
+        return kind !== undefined && this.rustBorrowedLocalKind(t) === kind && this.rustOptContainerLocals.has(t);
     }
 
     // ── ral-wh: index / variable-key reads on held Dict / List locals (rustBorrowedIndexReadUse) ──
@@ -20626,6 +20646,12 @@ export class RustTranspiler extends BaseTranspiler {
         const type = kind === 'list' ? 'crate::value::List' : 'crate::value::Dict';
         const init: any = this.rustSkipWrappers(declaration.initializer);
         if (init === undefined || this.literalKindOfNode(init) === 'null') return `${indent}let mut ${varName}: Option<${type}> = None`;
+        // ral-45f: an initialised alias of an optional source of the same kind takes it as is (moved at its last use, else an Arc bump)
+        const src = this.rustOptContainerOf(init);
+        if (src !== undefined && src.kind === kind && this.rustPrintedOptional.has(src.declaration)) {
+            const s = super.transformIdentifier(init, this.ReservedKeywordsReplacements[init.text] ?? init.text);
+            return `${indent}let mut ${varName}: Option<${type}> = ${this.rustOwnedLastUse(init, src.declaration) ? s : `${s}.clone()`}`;
+        }
         return `${indent}let mut ${varName}: Option<${type}> = ${this.rustWsFieldGetText(init, true) ?? this.printNode(declaration.initializer, 0).trim()}.into_opt_${kind}()`;
     }
 
