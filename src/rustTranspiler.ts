@@ -6147,6 +6147,10 @@ export class RustTranspiler extends BaseTranspiler {
                 && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && this.rustClockString(this.unwrapParens(declaration.initializer)) && this.rustLendSlot(n))
                 // ud: a reader string boxed at a lending slot lends there (the one copy the `Value` clone made)
                 && !(form === 'box' && !this.rustStrNoLend && this.rustUdReaderStr(declaration.initializer) && this.rustLendSlot(n) && this.rustUdLent.add(declaration))) return false;
+            // ral-43b: a string concat operand prints inside the concat's own `format!` (native Display of the typed local:
+            // the bare `String`, or `as_deref().unwrap_or("null")` = the Display of the `Null` box): no boxed operand text
+            // reaches a push / write pass, and the concat is a `String` whatever this local's type
+            if (form === 'concat' && (trial === 'str' || trial === 'ostr')) continue;
             // a `.push(..)` argument: ccxt's native-push pass keys on the boxed operand text
             const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
             if (push !== undefined && isCallExpression(push) && !this.rustCopyPushPairElement(n, push, trial)) return false;
@@ -6924,6 +6928,8 @@ export class RustTranspiler extends BaseTranspiler {
             && parent.expression.expression.kind === SyntaxKind.ThisKeyword && isIdentifier(parent.expression.argumentExpression)) return 'box';
         // 41b: a bound / needle / operand of a string method its typed receiver prints natively
         if (this.rustStrMethodArgNative(n, kind)) return 'native';
+        // ral-43b: the typed string needle of `recv.indexOf(needle)` on a string-typed `Value` receiver (printNativeStringIndexOfString)
+        if (this.rust43bValueRecvFindNeedle(n, kind)) return 'native';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxSlotOk(parent, parent.arguments.indexOf(n)) || this.rustWsClientCallArg(parent, kind) ? 'box' : this.rustScalarExpressionUseForm(n, kind);
         }
@@ -8356,6 +8362,9 @@ export class RustTranspiler extends BaseTranspiler {
         const recvKind = this.rustScalarIdentifierKind(recv) ?? (params ? this.rustScalarParamRead(recv)?.kind : undefined);
         // `n.toString()` of an `i64` local: `format!("{}", n)`, the decimal text `Display` gives the `Int` box
         if (recvKind === 'int' && method === 'toString') return { recv, recvKind, method, kind: 'str' };
+        // ral-43b: `n.toString()` of an `Option<i64>` local displays its box (`format!("{}", Value::from(n))`: the Display the
+        // `Value` local printed, `Int` or `Null` alike), so the receiver is a plain read of the Copy integer
+        if (recvKind === 'oint' && method === 'toString' && this.rustScalarLocalOf(recv) !== undefined && !this.rust43bInPlusEquals(call)) return { recv, recvKind, method, kind: 'str' };
         if (recvKind !== 'str' && recvKind !== 'ostr') return undefined;
         if (shape === 'affix') return { recv, recvKind, method, kind: 'bool' };
         // 41b: the new forms read a typed string local receiver only (a parameter read keeps the old paths)
@@ -9465,6 +9474,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (method.recvKind === 'ostr') return wrap(`${name}.as_deref().map(str::${fn})`);
             if (method.method === 'trim') return wrap(`${name}.trim().to_string()`);
             if (method.method === 'toString' && method.recvKind === 'int') return wrap(`format!("{}", ${name})`);
+            if (method.method === 'toString' && method.recvKind === 'oint') return wrap(`format!("{}", Value::from(${name}))`);
             if (method.method === 'toString') {
                 const local = this.rustScalarLocalOf(method.recv);
                 // an equality operand is only borrowed by `==`: the text itself, no copy
@@ -26226,11 +26236,39 @@ export class RustTranspiler extends BaseTranspiler {
         return `Value::str(format!("{:.*}", ${digits}, ${receiver}.as_f64().unwrap_or(0.0)))`;
     }
 
+    /** ral-43b: `call` sits in the right side of a `+=` (the typed `String` target's push_str join keys on the old operand
+     *  text, bitget / bybit `channel += limit.toString ()` went back to `Value` in gate 14163): keep the old path there. */
+    rust43bInPlusEquals(call: any): boolean {
+        const top: any = findAncestor(call, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.PlusEqualsToken));
+        return top !== undefined && isBinaryExpression(top) && this.isNodeInsideNode(call, top.right);
+    }
+
+    /** ral-43b: `n` is the only argument of `recv.indexOf(n)`, a typed string local (not a ws key), and `recv` is a string-typed
+     *  `Value` place (a plain identifier / property chain that is no typed local): the needle reads as `Option<&str>` in the
+     *  `zip` find, `-1` when either side is not a string, exactly the helper's answer for the `Str` / `Null` the box held. */
+    rust43bValueRecvFindNeedle(n, kind: string): boolean {
+        if (kind !== 'str' && kind !== 'ostr') return false;
+        const call: any = n.parent;
+        if (call === undefined || !isCallExpression(call) || call.arguments.length !== 1 || call.arguments[0] !== n || !isPropertyAccessExpression(call.expression)
+            || call.expression.name.text !== 'indexOf') return false;
+        const recv: any = call.expression.expression;
+        const plain = (x: any): boolean => isIdentifier(x) || (isPropertyAccessExpression(x) && isIdentifier(x.name) && plain(x.expression));
+        if (!plain(recv) || this.primitiveKindOfType(this.typeOfNodeIfAny(recv)) !== 'string') return false;
+        if (isIdentifier(recv) && (this.rustStringLocalIdentifierIsTyped(recv) || this.rustScalarLocalOf(recv) !== undefined || this.rustScalarIdentifierKind(recv) !== undefined)) return false;
+        return !this.rust41bWsKeyLocal(n);
+    }
+
     // `x.indexOf(y)` with a proven-string needle: `-1` when either side is not a `Str` (byte index).
     printNativeStringIndexOfString(node, receiverText: string): string | undefined {
         const receiver = this.rustNativeStringReceiver(node, receiverText);
         if (receiver === undefined || node.arguments?.length !== 1) return undefined;
         const needle = node.arguments[0];
+        // ral-43b: a typed string local needle lends its text (`Option<&str>`)
+        const typed = isIdentifier(needle) ? this.rustScalarLocalOf(needle) : undefined;
+        if (typed !== undefined && this.rustScalarUseForms.get(needle) === 'native' && this.rust43bValueRecvFindNeedle(needle, typed.kind)) {
+            const name = super.printIdentifier(needle);
+            return `Value::Int(${receiver}.as_str().zip(${typed.kind === 'str' ? `Some(${name}.as_str())` : `${name}.as_deref()`}).and_then(|(__s, __n)| __s.find(__n)).map(|__i| __i as i64).unwrap_or(-1))`;
+        }
         if (!isIdentifier(needle) || this.primitiveKindOfType(this.typeOfNodeIfAny(needle)) !== 'string') return undefined;
         if (!this.isDeclaredValueIdentifier(needle) || this.rustStringLocalIdentifierIsTyped(needle)) return undefined;
         const needleText = this.printNode(needle, 0).trim();

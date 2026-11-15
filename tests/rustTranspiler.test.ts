@@ -16065,3 +16065,86 @@ describe('ral-43f: a nil-declared dict written only from nullable safeDict const
         expect(text).not.toMatch(/let mut loose: Option</);
     });
 });
+
+describe('ral-43b lift 1: a string concat operand in a sibling-twin block keeps the typed local (native Display in the format!)', () => {
+    const t43 = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, '43b-concat-op');
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n" +
+        "    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue (body));
+        return t43.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const loop = (stmt: string) => "            for (let i = 0; i < symbols.length; i++) {\n                const symbol = symbols[i];\n                " + stmt + "\n                this.hold (symbol);\n            }\n";
+    const twins = (stmt: string) => "    m (symbols: string[], f: boolean) {\n        const hashes = [];\n        if (f) {\n" + loop (stmt) + "        } else {\n" + loop (stmt) + "        }\n        return this.hold (hashes);\n    }\n";
+    test('a pushed concat operand prints its Display (`as_deref().unwrap_or("null")`, what the Null box displayed)', () => {
+        const out = run (twins ("hashes.push ('trade::' + symbol);"));
+        expect((out.match(/let mut symbol: Option<String> = symbols\.get\(i as usize\)\.and_then\(Value::as_str\)\.map\(str::to_owned\);/g) ?? []).length).toBe(2);
+        expect(out).toContain('hashes.push(Value::Str(format!("{}{}", "trade::", symbol.as_deref().unwrap_or("null")).into()));');
+        expect(out).not.toContain('let mut symbol: Value');
+    });
+    test('negative: a bare push of the twin keeps the old decision (the push pass reads the boxed operand)', () => {
+        const out = run (twins ("hashes.push (symbol);"));
+        expect(out).toContain('let mut symbol: Value');
+    });
+});
+
+describe('ral-43b lift 2: `n.toString()` of an Option<i64> local displays its box', () => {
+    const t43 = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, '43b-oint-tostring');
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n" +
+        "    safeInteger (o: any, k: any, d: any = undefined): number | undefined { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue (body));
+        return t43.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a safeInteger local read by toString() keeps Option<i64> and prints format! of Value::from (Int or Null, the Display the Value had)', () => {
+        const out = run ("    m (o: Dict) {\n        let method = 'sub';\n        const limit = this.safeInteger (o, 'limit');\n        if (limit !== undefined) {\n            method = method + 'Depth' + limit.toString ();\n        }\n        return this.hold (method);\n    }\n");
+        expect(out).toContain('let mut limit: Option<i64> = ');
+        expect(out).toContain('format!("{}", Value::from(limit))');
+    });
+    test('negative: a `+=` operand keeps the typed String target (its join reads the old operand)', () => {
+        const out = run ("    m (o: Dict) {\n        let channel = 'books';\n        const limit = this.safeInteger (o, 'limit');\n        if (limit !== undefined) {\n            channel += limit.toString ();\n        }\n        return this.hold (channel);\n    }\n");
+        expect(out).toContain('let mut channel: String = ');
+    });
+    test('negative: an Option<i64> toString() with an argument (radix) is not taken', () => {
+        const out = run ("    m (o: Dict) {\n        const limit = this.safeInteger (o, 'limit');\n        return this.hold (limit.toString (16));\n    }\n");
+        expect(out).not.toContain('format!("{}", Value::from(limit))');
+    });
+});
+
+
+describe('ral-43b lift 3: a typed string needle of indexOf on a string-typed Value receiver', () => {
+    const t43 = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    const root = path.join (rustFixtureRoot, '43b-find-needle');
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n" +
+        "    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    let n = 0;
+    const run = (body: string) => {
+        const dir = path.join (root, String (n++));
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue (body));
+        return t43.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('the needle keeps Option<String> and lends as_deref() to the zip find', () => {
+        const out = run ("    m (o: Dict, url: string) {\n        const spotUrl = this.safeString (o, 'spot');\n        const isSpot = (spotUrl !== undefined) && (url.indexOf (spotUrl) === 0);\n        return this.hold (isSpot);\n    }\n");
+        expect(out).toContain('let mut spotUrl: Option<String> = ');
+        expect(out).toContain('.zip(spotUrl.as_deref()).and_then(|(__s, __n)| __s.find(__n))');
+    });
+    test('negative: a needle whose receiver is a typed string local keeps the 41b path', () => {
+        const out = run ("    m (o: Dict) {\n        const hay = this.safeString (o, 'h');\n        const k = this.safeString (o, 'k');\n        return this.hold (hay.indexOf (k));\n    }\n");
+        expect(out).not.toContain('.zip(k.as_deref())');
+    });
+});
