@@ -15103,6 +15103,35 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustStatementMutatesLocal(siblings[at + 1], name);
     }
 
+    /** ral-52e: `const e = xs[k]; e['f'] = v; ..; xs[k] = e;` -- the bind is followed only by top-level writes on `e` and then the
+     *  source's own write-back at the same receiver and key text, so a cloned element read writes the same element back. */
+    rustExplicitWriteBackBind(read: any): boolean {
+        const declaration: any = read.parent;
+        if (!isIdentifier(declaration.name) || !isElementAccessExpression(read) || !isIdentifier(read.expression)) return false;
+        const name = String(declaration.name.text);
+        const recv = String(read.expression.text);
+        const keyText = String(read.argumentExpression.getText());
+        let statement: any = declaration;
+        while (statement !== undefined && !isStatement(statement)) statement = statement.parent;
+        if (statement?.kind !== SyntaxKind.VariableStatement || statement.declarationList.declarations.length !== 1) return false;
+        const siblings: any[] = statement?.parent?.statements ?? [];
+        let i = siblings.indexOf(statement) + 1;
+        let writes = 0;
+        for (; i < siblings.length; i++) {
+            const st: any = siblings[i];
+            const e: any = st.kind === SyntaxKind.ExpressionStatement ? st.expression : undefined;
+            if (e === undefined || !isBinaryExpression(e) || e.operatorToken.kind !== SyntaxKind.EqualsToken || !isElementAccessExpression(e.left)) return false;
+            if (isIdentifier(e.left.expression) && String(e.left.expression.text) === name && !isElementAccessExpression(e.left.argumentExpression)) {
+                if (String(e.right.getText()).includes(recv)) return false;
+                writes++;
+                continue;
+            }
+            return writes > 0 && isIdentifier(e.left.expression) && String(e.left.expression.text) === recv && String(e.left.argumentExpression.getText()) === keyText
+                && isIdentifier(e.right) && String(e.right.text) === name;
+        }
+        return false;
+    }
+
     /** yb: the ccxt write-back pass (`writeBackIndexedMutations`) only fires when the line right after the bind is a top-level
      *  element / property write or push on the bound local; any other next statement (an `if`, a plain reassignment) leaves
      *  the bind alone, so its counter key may print boxed (`get_value(&xs, &Value::Int(i))`, the same helper call and value). */
@@ -20218,10 +20247,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (isElementAccessExpression(use) && use.argumentExpression === top) return false;
         // a primitive local initialised from the element keeps its element-read scalar rule (reads the boxed receiver)
         if (isVariableDeclaration(use) && use.initializer === top && this.primitiveKindOfType(this.typeOfNodeIfAny(use.name)) !== undefined) return false;
-        if (this.isWriteBackBindRead(up) || !this.isNativeAccessPositionSafe(up) || (top !== up && (this.isWriteBackBindRead(top) || !this.isNativeAccessPositionSafe(top)))) return false;
+        if ((this.isWriteBackBindRead(up) && !(top === up && this.rustExplicitWriteBackBind(up))) || !this.isNativeAccessPositionSafe(up) || (top !== up && (this.isWriteBackBindRead(top) || !this.isNativeAccessPositionSafe(top)))) return false;
         const key: any = this.rustSkipWrappers(up.argumentExpression);
         if (key === undefined || isStringLiteralLikeNode(key)) return false;
         if (isNumericLiteral(key)) return Number.isInteger(Number(key.text)) && Number(key.text) >= 0;
+        // ral-52e: `xs[n - 1]` over i64 scalar locals and integer literals keys the read as the `Value::Int` box get_value took
+        if (isBinaryExpression(key)) return this.rustListIndexIntKey(key);
         if (!isIdentifier(key)) return false;
         if (this.isRustValueIndexKey(key)) return true;
         const keyDecl: any = this.rustDeclarationOfIdentifier(key);
@@ -20911,7 +20942,22 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isElementAccessExpression(access) || access.expression !== n || !isBinaryExpression(write) || write.left !== access
             || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         const key: any = this.rustSkipWrappers(access.argumentExpression);
-        return key !== undefined && key.kind === SyntaxKind.NumericLiteral && /^\d+$/.test(String(key.text)) && String(write.getText()).split('\n')[0].length <= 240;
+        return key !== undefined && this.rustListIndexIntKey(key) && String(write.getText()).split('\n')[0].length <= 240;
+    }
+
+    /** ral-52e: a list index key proved i64: an integer literal, or `+` / `-` over integer literals and i64 scalar locals (at least one literal). */
+    rustListIndexIntKey(key: any, top = true): boolean {
+        const node: any = this.rustSkipWrappers(key);
+        if (node === undefined) return false;
+        if (node.kind === SyntaxKind.NumericLiteral) return /^\d+$/.test(String(node.text));
+        if (top) {
+            if (!isBinaryExpression(node)) return false;
+        }
+        if (isBinaryExpression(node)) {
+            const op = node.operatorToken.kind;
+            return (op === SyntaxKind.PlusToken || op === SyntaxKind.MinusToken) && this.rustListIndexIntKey(node.left, false) && this.rustListIndexIntKey(node.right, false);
+        }
+        return isIdentifier(node) && this.rustScalarLocalOf(node)?.kind === 'int';
     }
 
     /** ral-48b: `n['k'] = v` (statement, literal non-digit key) whose value does not read `n`. */

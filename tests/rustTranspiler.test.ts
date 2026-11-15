@@ -18009,3 +18009,20 @@ describe('ral-52a: an alias of a shared-map alias is decided on its own (the fir
         expect(out).not.toContain('let mut paramsOmitted: crate::value::Dict');
     });
 });
+
+describe('ral-52e: list index write at an i64 expression key (kraken addPaginationCursorToResult)', () => {
+    test('data[dataLength - 1] = last keeps data a typed list; a Value key stays Value', () => {
+        const dir = path.join (rustFixtureRoot, 'ral52e-int-key');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string { return o; }\n    safeList (o: any, k: any, d: List = undefined): List { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    cursorA (result: Dict): List {\n        const cursor = this.safeString (result, 'next_cursor');\n        const data = this.safeList (result, 'withdrawals', []);\n        const dataLength = data.length;\n        if (cursor !== undefined && dataLength > 0) {\n            const last = data[dataLength - 1];\n            last['next_cursor'] = cursor;\n            data[dataLength - 1] = last;\n        }\n        return data;\n    }\n    cursorC (result: Dict): List {\n        const data = this.safeList (result, 'withdrawals', []);\n        const last = data[0];\n        last['x'] = 1;\n        data[0] = last;\n        return data;\n    }\n    cursorD (result: Dict): List {\n        const data = this.safeList (result, 'withdrawals', []);\n        const n = data.length;\n        const e = data[n - 1];\n        data[n - 1] = e;\n        return data;\n    }\n    cursorE (result: Dict): List {\n        const data = this.safeList (result, 'withdrawals', []);\n        const n = data.length;\n        const e = data[n - 1];\n        e['x'] = 1;\n        return data;\n    }\n    cursorB (result: Dict, k: any): List {\n        const data = this.safeList (result, 'withdrawals', []);\n        data[k] = 1;\n        return data;\n    }\n}\n");
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        const a = out.slice(out.indexOf('fn cursorA'), out.indexOf('fn cursorC'));
+        expect(a).not.toContain('let mut data: Value');
+        expect(a).toContain('add_element_to_object(&mut data, &Value::Int((dataLength - 1)), last);');
+        const b = out.slice(out.indexOf('fn cursorB'));
+        expect(b).toContain('let mut data: Value');
+        // a bind mutated with no write-back keeps the boxed write-back pass
+        expect(out.slice(out.indexOf('fn cursorE'), out.indexOf('fn cursorB'))).toContain('let mut data: Value');
+    });
+});
