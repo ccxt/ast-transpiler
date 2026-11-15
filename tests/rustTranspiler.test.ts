@@ -19582,3 +19582,24 @@ describe('ral-56x K1: a nil-declared string local joined to a concat partner', (
         expect(out).toContain('signPath.as_deref().unwrap_or(\"null\")');
     });
 });
+
+describe('RAL-INT-64: a built list json-stringified in the then branch whose later read is only in the else branch moves', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    json (o: any): string { return ''; }\n    fetchX (r: Dict): any { return r; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (flag: boolean, spot: boolean, ids: string[]) {\n" + body + "    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const body = (elseRead: string) => "        const request: Dict = {};\n        const parsedIds: string[] = [];\n        for (let i = 0; i < ids.length; i++) {\n            const id = this.safeString (ids, i, '');\n            parsedIds.push (id);\n        }\n        if (spot) {\n            request['a'] = parsedIds.join (',');\n        } else {\n            if (flag) {\n                request['b'] = this.json (parsedIds);\n            } else {\n                " + elseRead + "\n            }\n        }\n        return this.fetchX (request);\n";
+    test('json operand with its only later read in the else branch is moved, not cloned', () => {
+        const out = transpiler.transpileRustByPath (write ('int64-json-else', body ("request['c'] = parsedIds;"))).content;
+        expect(out).toContain('let mut parsedIds: crate::value::List = ');
+        expect(out).not.toContain('parsedIds.clone()');
+    });
+    test('a read after the if keeps the clone', () => {
+        const out = transpiler.transpileRustByPath (write ('int64-json-after', body ("request['c'] = 1;").replace ("        return this.fetchX (request);\n", "        request['d'] = parsedIds;\n        return this.fetchX (request);\n"))).content;
+        expect(out).not.toMatch(/json_stringify\(&Value::Arr\(parsedIds\)\)/);
+    });
+});

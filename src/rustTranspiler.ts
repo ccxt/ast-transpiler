@@ -26916,7 +26916,10 @@ export class RustTranspiler extends BaseTranspiler {
                     if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || !short(n)
                         || RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.text)))
                         || !this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n))) return false;
-                    boxes.push([n, this.rustLocalLastUse(n, declaration) || this.rustBuiltListSelfWriteArg(n, name) ? 'move' : 'clone']);
+                    // RAL-INT-64 (56i bingx parsedIds): a `this.json (x)` operand whose later reads all sit in the `else` branch of the
+                    // `if` holding it is the last use on its own path, so it moves (json_stringify only reads it)
+                    const jsonBranchLast = this.rustIsJsonOperand(n) && this.rustLastUseBeforeElseOnly(n, declaration);
+                    boxes.push([n, this.rustLocalLastUse(n, declaration) || this.rustBuiltListSelfWriteArg(n, name) || jsonBranchLast ? 'move' : 'clone']);
                     return true;
                 }
                 return false;
@@ -26934,6 +26937,37 @@ export class RustTranspiler extends BaseTranspiler {
         if (!safe || (natives === 0 && (handOffs === 0 || handOffs + boxes.filter(([b]) => isReturnStatement(b.parent) || (b.parent?.kind === SyntaxKind.AsExpression && isReturnStatement(b.parent.parent))).length !== boxes.length || boxes.some(([, form]) => form === 'clone')))) return false;
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         this.rustBuiltLists.add(declaration);
+        return true;
+    }
+
+    /** RAL-INT-64: `node` sits in the `then` branch of an `if` whose `else` branch holds every later read of the local (and
+     *  nothing after the `if` reads it); no loop or function lies between that `if` and the declaration. The two branches
+     *  never both run, so `node` is the last read on its path. */
+    rustLastUseBeforeElseOnly(node: any, declaration: any): boolean {
+        let branch: any = node;
+        while (branch.parent !== undefined && !(branch.parent.kind === SyntaxKind.IfStatement && branch.parent.thenStatement === branch)) {
+            if (isFunctionLike(branch.parent) || branch.parent === declaration.parent) return false;
+            branch = branch.parent;
+        }
+        const ifs: any = branch.parent;
+        if (ifs === undefined || ifs.elseStatement === undefined) return false;
+        const own = this.rustSymbolOf(node);
+        const scope = this.rustEnclosingFunction(declaration);
+        if (own === undefined || scope === undefined) return false;
+        let statement: any = node;
+        while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
+            if (n === node || n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) continue;
+            if (n === (scope as any).name && (scope as any).kind === SyntaxKind.MethodDeclaration) continue;
+            const symbol = this.rustSymbolOf(n);
+            if (symbol !== undefined && symbol !== own) continue;
+            if (n.pos >= statement.pos && n.end <= statement.end) return false;
+            if (n.pos > node.pos && !(n.pos >= ifs.elseStatement.pos && n.end <= ifs.elseStatement.end)) return false;
+        }
+        for (let up: any = node.parent; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
         return true;
     }
 
