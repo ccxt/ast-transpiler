@@ -4653,7 +4653,10 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // an element of a typed list parameter keeps the 400-char guard and never copies at a box
         // and never feeds another local's write (typing it flips that local's own decision and its method's return)
-        if (this.rustListParamElement(declaration.initializer) && (copied > 0 || (boxed > 0 && typedUses === 0) || this.rustScalarFeedsWrite(declaration))) return undefined;
+        // ral-42g: an element of a `string[]` / `Strings` parameter proven a string list (rustStrListParam) is a string or Null in
+        // every row: its copying boxes copy exactly what the `Value` clone copied; it still never feeds another local's write
+        const strParamElem = this.rustListParamElement(declaration.initializer) && this.rustStrListParamElement(declaration.initializer);
+        if (this.rustListParamElement(declaration.initializer) && (strParamElem ? this.rustScalarFeedsWrite(declaration) : (copied > 0 || (boxed > 0 && typedUses === 0) || this.rustScalarFeedsWrite(declaration)))) return undefined;
         if (this.rustListParamElement(declaration.initializer) && boxed > 0) this.rustScalarGuarded.add(declaration);
         // a non-element local admitted by a map-key read or `in` test must not copy where the `Value` moved
         if (copied > 0 && kind === 'ostr' && !this.rustElementReadScalarKind(this.unwrapParens(declaration.initializer)) && this.rustScalarKeyedLocal(declaration)) return undefined;
@@ -5731,6 +5734,16 @@ export class RustTranspiler extends BaseTranspiler {
             return `${this.rustTestTierSource(node) ? 'ccxt' : 'crate'}::value::KeyRead::key_read(&&${super.printIdentifier(node.expression)}, "${this.escapeRustStringLiteral(String(node.argumentExpression.text))}").as_str().map(str::to_owned)`;
         }
         return undefined;
+    }
+
+    /** ral-42g: `xs[i]` whose list is a `string[]` / `Strings` parameter rustStrListParam proves (base-declared or every call site). */
+    rustStrListParamElement(init: any): boolean {
+        const node: any = this.unwrapParens(init);
+        const owner: any = node !== undefined && isElementAccessExpression(node) && isIdentifier(node.expression) ? this.rustDeclaredNode(node.expression) : undefined;
+        if (owner === undefined || !isParameterDeclaration(owner) || !this.rustStrListParam(owner, 0)) return false;
+        // the element read prints straight off the list (`xs.get(i)..` / `xs.as_array()..`), never through `get_value` (paradex trap)
+        const text = this.rustScalarNativeText('ostr', node);
+        return text !== undefined && text.startsWith(`${super.printIdentifier(node.expression)}.`) && !text.includes('get_value');
     }
 
     /** `xs[i]` over a typed list parameter (the source the element-read rule admits from a parameter). */
@@ -18361,6 +18374,9 @@ export class RustTranspiler extends BaseTranspiler {
         // a string key exactly as the empty map `into_dict()` leaves, so the local holds the shared map
         const keyReadOnly = from === undefined && !nilDeclared && init !== undefined && this.rustSafeValueKeyReadSource(init);
         if (keyReadOnly) from = 'dict';
+        // ral-42g: a row `xs[i]` of a checker list (counter-loop binding) read only at literal string keys: the same invariant
+        const elemKeyReadOnly = from === undefined && !nilDeclared && init !== undefined && this.rustListRowKeyReadSource(init);
+        if (elemKeyReadOnly) from = 'dict';
         // sb: `const y = x` of a typed shared-map local holds the same map (`Value::from(&x).into_dict()` shares the Arc, no copy)
         const sbAlias = from === undefined && !nilDeclared && this.rustSbDictAliasSource(init);
         if (sbAlias) from = 'dict';
@@ -18464,7 +18480,7 @@ export class RustTranspiler extends BaseTranspiler {
                 plainReads++;
                 return true;
             }
-            if (keyReadOnly) return this.rustSafeValueKeyReaderUse(n) && ++plainReads > 0 && ++reads > 0;
+            if (keyReadOnly || elemKeyReadOnly) return this.rustSafeValueKeyReaderUse(n) && ++plainReads > 0 && ++reads > 0;
             // ral-wh: `x[k]` (index or variable key) on the held container reads the arm `get_value` dispatches to
             if ((from === 'dict' || from === 'list') && !extendReuse && !sbAlias && init !== undefined && isCallExpression(init) && this.rustBorrowedIndexReadUse(n)) return indexReadUses.push(n) > 0 && ++reads > 0;
             if (this.rustBorrowedKeySetUse(n)) {
@@ -18571,7 +18587,7 @@ export class RustTranspiler extends BaseTranspiler {
             && !this.rustNilResponseLocals.has(declaration) && boxedElementUses.every((u: any) => this.rustBoxLineOk(u));
         if (endpointBoxes > 0 && !endpointBoxOnly) return undefined;
         // ral-qa: only string-key reads (no null test, write, length, box or lend could tell a non-map from the empty map)
-        if (keyReadOnly && (!safe || plainReads === 0 || plainReads !== reads || nullTests + writes + lengths + indexLikeReads + boxedElementUses.length + lentResponses + lentNullable + keySets + keyWrites + extendHeads + jwtLends > 0)) return undefined;
+        if ((keyReadOnly || elemKeyReadOnly) && (!safe || plainReads === 0 || plainReads !== reads || nullTests + writes + lengths + indexLikeReads + boxedElementUses.length + lentResponses + lentNullable + keySets + keyWrites + extendHeads + jwtLends > 0)) return undefined;
         if (!safe || (reads === 0 && !builtBoxOnly && !boxOnly && !endpointBoxOnly && !this.rustNullTestedDictLocal(init, nullTests, writes)) || mixed || from === undefined
             || ((this.rustNilResponseLocals.has(declaration) || from === 'api' || this.rustDictElementSource(init)) && (nullTests > 0 || lengths > 0 || (indexLikeReads > 0 && !this.rustUrlsMapEntry(init))))
             || (this.rustListElementSource(init) && (nullTests > 0 || lengths > 0))) return undefined;
@@ -20670,6 +20686,23 @@ export class RustTranspiler extends BaseTranspiler {
         // the receiver chain names no ws client state nor a market / currency table
         const names = (x: any): boolean => (isPropertyAccessExpression(x) && /^(?:markets|markets_by_id|currencies|currencies_by_id|clients|futures|subscriptions|orderbooks|cache)$/.test(String(x.name.text))) || (x.forEachChild(names) ?? false);
         return !names(call.arguments[0]);
+    }
+
+    /** ral-42g: `xs[i]` (a numeric index) where `xs` is a local or parameter the checker types as a list (`T[]`, never a tuple, an
+     *  ArrayCache or an order book side) outside the test tier: the row a counter loop binds. Read only at literal string keys (the
+     *  ral-qa use rule), a non-map row (Null, list, scalar, out of range) reads Null there exactly as the empty map `into_dict()`
+     *  leaves; the local owns its map (an Arc bump of the row), so nothing borrows the list while it lives. */
+    rustListRowKeyReadSource(init: any): boolean {
+        if (!isElementAccessExpression(init) || !isIdentifier(init.expression) || this.checkerOrUndefined() === undefined || this.rustTestTierSource(init)) return false;
+        const key: any = this.rustSkipWrappers(init.argumentExpression);
+        if (key === undefined || (!isNumericLiteral(key) && this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== 'number')) return false;
+        const owner: any = this.rustDeclaredNode(init.expression);
+        if (owner === undefined || !(isVariableDeclaration(owner) || isParameterDeclaration(owner))) return false;
+        const listType: any = this.typeOfNodeIfAny(init.expression);
+        if (listType === undefined || !this.getChecker().isArrayType(listType) || this.getChecker().isTupleType(listType) || this.rustWsCacheMapLike(init.expression)) return false;
+        // the list's producer names no ws client state nor a market / currency table (ral-qa's receiver exclusion)
+        const names = (x: any): boolean => (isPropertyAccessExpression(x) && /^(?:markets|markets_by_id|currencies|currencies_by_id|clients|futures|subscriptions|orderbooks|cache)$/.test(String(x.name.text))) || (x.forEachChild(names) ?? false);
+        return !(isVariableDeclaration(owner) && owner.initializer !== undefined && names(owner.initializer));
     }
 
     /** `this.safeX (o, '<k>'[, d])`: a base by-reference reader whose container is `o`, at a literal non-index string key. */
