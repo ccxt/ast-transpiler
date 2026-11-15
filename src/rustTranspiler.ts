@@ -2262,10 +2262,14 @@ export class RustTranspiler extends BaseTranspiler {
             const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) ?? this.printReuseDynamicKeyWrite(left, right, rhs) ?? this.printNilMapKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
             const slotNested = keyStrs.length > 1 ? this.printSlotNestedInsert(left, right, this.rustOwnedArgText(right, rhs.trim())) : undefined; if (slotNested !== undefined) return slotNested;
             // the helper takes the value by move: an owned bare local (`Copy`, last use) is marked, the rest cloned on the file text
-            const helperCall = `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${this.rustOwnedArgText(right, rhs.trim())})`;
+            // ral-55n: a registered `i64` counter as the written key is the `Int` the boxed counter held (marked closed only below,
+            // when this helper write is what prints)
+            const counterKey: any = keyStrs.length === 1 ? this.rustSkipWrappers(keys[0]) : undefined;
+            const counterKeyText = counterKey !== undefined && this.rustI64CounterOperand(counterKey) ? `Value::Int(${String(counterKey.text)})` : undefined;
+            const helperCall = `add_element_to_object(${acc}, &${counterKeyText ?? keyStrs[keyStrs.length - 1]}, ${this.rustOwnedArgText(right, rhs.trim())})`;
             // a nested helper write whose value was read natively binds the value first, like the ccxt hoist did
             const helperWrite = this.rustDictHoistHosts.has(node)
-                ? `{ let __be_tmp = ${rhs}; add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, __be_tmp); }` : helperCall;
+                ? `{ let __be_tmp = ${rhs}; add_element_to_object(${acc}, &${counterKeyText ?? keyStrs[keyStrs.length - 1]}, __be_tmp); }` : helperCall;
             const nestedInsert = keyStrs.length === 2
                 ? (this.rustNestedBearerInsert(baseExpr, keys[0], keyStrs[0], keys[1], keyStrs[1], rhs)
                     ?? this.nestedDictWrite(baseExpr, keys, keyStrs, rhs, helperWrite))
@@ -2280,6 +2284,7 @@ export class RustTranspiler extends BaseTranspiler {
                 ? this.rustBearerChainedWrite(baseExpr, keys, keyStrs, rhs) : undefined;
             if (bearerChain !== undefined) return bearerChain;
             const nativeInsert = keyStrs.length === 1 ? (this.rustBearerDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustMapParamDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.printNativeBookMetaWrite(baseExpr, keys[0], keyStrs[0], rhs) ?? this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs)) : undefined;
+            if (nativeInsert === undefined && counterKeyText !== undefined) this.rustI64CounterUse(counterKey);
             return nativeInsert ?? helperWrite;
         }
         // Rebuilding a typed dict bearer from a plain literal (`x = { .. }`)
@@ -17123,7 +17128,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** rd: `i <op> <int literal>` (either side) over a counter: the `Int` payload compares as the `i64` itself. */
-    rustI64LiteralCompare(id: any): { op: string, literal: string, counterLeft: boolean } | undefined {
+    rustI64LiteralCompare(id: any): { op: string, literal: string, counterLeft: boolean, float?: boolean } | undefined {
         const up: any = id.parent;
         if (!isBinaryExpression(up)) return undefined;
         const kind = up.operatorToken.kind;
@@ -17132,6 +17137,11 @@ export class RustTranspiler extends BaseTranspiler {
         const other: any = this.unwrapParens(up.left === id ? up.right : up.left);
         // an int literal, or an `i64` scalar local (decided by its own uses, printed bare either way)
         const literal = this.rustScalarIntLiteral(other) ?? (isIdentifier(other) && this.rustScalarLocalOf(other)?.kind === 'int' ? super.printIdentifier(other) : undefined);
+        if (literal === undefined && !this.isEqualityOp(kind) && this.rustScalarValueNumber(other)) {
+            // ral-55n: ordered against a number-typed `Value` (paradex pro `i >= start`): the boxed counter compared its `Int`
+            // payload `as_f64()`, which is `i as f64`; the other side keeps its own `as_f64()` read (NaN when not a number)
+            return { op, literal: `${this.printNode(other, 0).trim()}.as_f64().unwrap_or(f64::NAN)`, counterLeft: up.left === id, float: true };
+        }
         return literal === undefined ? undefined : { op, literal, counterLeft: up.left === id };
     }
 
@@ -17141,7 +17151,7 @@ export class RustTranspiler extends BaseTranspiler {
         const id: any = isIdentifier(node.left) && this.rustI64CounterOf(node.left) !== undefined ? node.left : (isIdentifier(node.right) && this.rustI64CounterOf(node.right) !== undefined ? node.right : undefined);
         const cmp = id === undefined ? undefined : this.rustI64LiteralCompare(id);
         if (cmp === undefined || !this.rustI64CounterUse(id)) return undefined;
-        const name = String(id.text);
+        const name = cmp.float ? `(${String(id.text)} as f64)` : String(id.text);
         const text = cmp.counterLeft ? `${name} ${cmp.op} ${cmp.literal}` : `${cmp.literal} ${cmp.op} ${name}`;
         return this.isBooleanPosition(node) ? text : `Value::Bool(${text})`;
     }
