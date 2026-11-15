@@ -15634,3 +15634,31 @@ describe('ral-42h: a never-null venue container result handed on whole is held',
         expect(out).not.toContain('let mut signature: crate::value::Dict = ');
     });
 });
+
+describe('ral-42a: venue `Int` / `Num` method results (declared-return proof)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: any = undefined): Int { return o[k]; }\n    safeNumber (o: any, k: any, d: any = undefined): Num { return o[k]; }\n    parseToInt (n: any): Int { return n; }\n    milliseconds (): number { return 0; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Int, Num } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTs (message: Dict, key: string): Int {\n        const value = this.safeString (message, key);\n        if (value === undefined) {\n            return undefined;\n        }\n        if (value.length > 13) {\n            return this.parseToInt (value.slice (0, 13));\n        }\n        return this.safeInteger (message, key);\n    }\n    parseLoose (message: Dict): Int {\n        return message['x'];\n    }\n    parseNum (value: Str = undefined): Num {\n        if (value === undefined) {\n            return value;\n        }\n        return this.safeNumber ([ value ], 0);\n    }\n    async getNonce (params: Dict = {}): Promise<Num> {\n        return this.safeNumber (params, 'nonce');\n    }\n    async parseTrade (trade: Dict) {\n        const timestamp = this.parseTs (trade, 'timestamp');\n        const loose = this.parseLoose (trade);\n        let expiry = undefined;\n        if (trade['e'] !== undefined) {\n            expiry = this.parseTs (trade, 'e');\n        }\n        const amount = this.parseNum (this.safeString (trade, 'a'));\n        const nonce = await this.getNonce (trade);\n        return { 'timestamp': timestamp, 'loose': loose, 'expiry': expiry, 'amount': amount, 'nonce': nonce };\n    }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-42a-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('an Int method whose returns are proven int / Null types its initialiser and nil-declared write as Option<i64>', () => {
+        const text = out();
+        expect(text).toMatch(/let mut timestamp: Option<i64> = self\.parseTs\(.*\)\.as_i64\(\);/);
+        expect(text).toContain('let mut expiry: Option<i64> = None');
+        expect(text).toMatch(/expiry = self\.parseTs\(.*\)\.as_i64\(\);/);
+        // negative: an `any` element return proves nothing
+        expect(text).toMatch(/let mut loose: Value = self\.parseLoose\(/);
+        // the helpers keep their `-> Value` signatures
+        expect(text).toMatch(/pub fn parseTs\(&self, [^)]*\) -> Value \{/);
+    });
+    test('a Num method returning a narrowed-undefined parameter or a proven Float, sync or awaited, is Option<f64>', () => {
+        const text = out();
+        expect(text).toMatch(/let mut amount: Option<f64> = self\.parseNum\(.*\)\.as_f64\(\);/);
+        expect(text).toMatch(/let mut nonce: Option<f64> = self\.getNonce\(.*\)\.await\.as_f64\(\);/);
+    });
+});
