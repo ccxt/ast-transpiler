@@ -9996,7 +9996,9 @@ export class RustTranspiler extends BaseTranspiler {
                 const test = lk === undefined ? `${value} ${sign} (__p as f64)` : `(__p as f64) ${sign} ${value}`;
                 return `matches!(${text(k, typed)}, Some(__p) if ${test})`;
             }
-            if ((k !== 'int' && k !== 'num') || own === undefined || !this.rustRdOwnInit(own.declaration) || !this.rustScalarValueNumber(other)) return undefined;
+            // ral-54n: also an `i64` `safeInteger*` local with an integer-literal default (40d rustIntReaderLitDefault): the reader
+            // answers an `Int` on every path, so `(x as f64)` is the very `as_f64` payload the boxed local compared with
+            if ((k !== 'int' && k !== 'num') || own === undefined || !(this.rustRdOwnInit(own.declaration) || (k === 'int' && this.rustIntReaderLitDefault(own.declaration))) || !this.rustScalarValueNumber(other)) return undefined;
             if (dry) return '_';
             const mine = k === 'int' ? `(${text(k, typed)} as f64)` : text(k, typed);
             const value = `${this.printNode(other, 0).trim()}.as_f64().unwrap_or(f64::NAN)`;
@@ -10092,6 +10094,13 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarValuePartnerTest(typed, other, kind: string, sign: string, dry: boolean): string | undefined {
         const self: any = this.unwrapParens(typed);
         const partner: any = this.unwrapParens(other);
+        // ral-54n: an `i64` / `Option<i64>` local against a base `safeInteger*` read (a `Value` that is `Int` or `Null`): the boxed
+        // pair compared both `as_f64()` payloads, and the typed side's `as f64` is the very payload its box held (`None` for `Null`)
+        if (isIdentifier(self) && (kind === 'int' || kind === 'oint') && this.rustScalarIdentifierKind(self) !== undefined && this.rustIntReaderCall(partner)) {
+            if (dry) return '_';
+            const name = super.printIdentifier(self);
+            return `(${kind === 'int' ? `Some(${name} as f64)` : `Value::from(${name}).as_f64()`} ${sign} ${this.printNode(partner, 0).trim()}.as_f64())`;
+        }
         if (!isIdentifier(self) || !isIdentifier(partner) || this.rustScalarIdentifierKind(self) === undefined) return undefined;
         const base = kind.startsWith('o') ? kind.slice(1) : kind;
         if ((base !== 'str' && base !== 'int') || this.rustScalarValuePartnerKind(partner) !== base) return this.rustScalarPayloadPartnerTest(self, partner, kind, sign, dry);
@@ -11091,6 +11100,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const base = RustTranspiler.RUST_SCALAR_INT_HELPERS[String(init.expression.name.text)];
         return base !== undefined && init.arguments.length === base + 1 && this.rustScalarIntLiteral(this.unwrapParens(init.arguments[base])) !== undefined;
+    }
+
+    /** ral-54n: `this.safeInteger* (..)` printed as its `Value` (an `Int` or `Null` on every path). */
+    rustIntReaderCall(node: any): boolean {
+        const call: any = this.unwrapParens(node);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const base = RustTranspiler.RUST_SCALAR_INT_HELPERS[String(call.expression.name.text)];
+        // no default (`Null` when absent) or an integer-literal default: never a non-`Int` default
+        return base !== undefined && /^safeInteger/.test(String(call.expression.name.text))
+            && (call.arguments.length === base || (call.arguments.length === base + 1 && this.rustScalarIntLiteral(this.unwrapParens(call.arguments[base])) !== undefined));
     }
 
     /** wi: a tuple slot whose producer builds an exact Int-or-null on every return (`checkOptionInteger`): an `i64` bound too. */

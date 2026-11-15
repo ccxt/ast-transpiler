@@ -18718,3 +18718,29 @@ describe('ral-54e: a parseToInt local stepped through parseToInt (x = parseToInt
         expect(b).toContain('let mut leadingZeros: Value = ');
     });
 });
+
+describe('ral-54n: safeInteger locals ordered against a number Value or each other', () => {
+    const base = "export interface Dict { [key: string]: any }\ntype Int = number | undefined;\nfunction safeInteger (o: any, k: any, $default: number): number;\nfunction safeInteger (o: any, k: any, $default?: number): Int;\nfunction safeInteger (o: any, k: any, $default?: number): Int { return o; }\nexport default class Exchange {\n    safeInteger = safeInteger;\n    hold (x: any): any { return x; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-54n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    const htx = "    b (tick: Dict, orderbook: any, market: Dict) {\n        const prevSeqNum = this.safeInteger (tick, 'prevSeqNum');\n        const orderbookNonce = this.safeInteger (orderbook, 'nonce', 0);\n        if ((prevSeqNum !== undefined) && prevSeqNum > orderbookNonce) {\n            return this.hold (1);\n        }\n        const spot = (market['spot'] === true) && (prevSeqNum === this.safeInteger (orderbook, 'nonce'));\n        return spot;\n    }\n";
+    test('htx `prevSeqNum` / `orderbookNonce` type together; kraken `batchSize` against a number Value', () => {
+        const out = run(htx + "    a (ids: string[], options: Dict, n: number) {\n        const batchSize = this.safeInteger (options, 'batchSize', 20);\n        if (n >= batchSize) {\n            return this.hold (ids);\n        }\n        return 0;\n    }\n");
+        expect(out).toContain('let mut prevSeqNum: Option<i64> = ');
+        expect(out).toContain('let mut orderbookNonce: i64 = ');
+        expect(out).toContain('prevSeqNum > Some(orderbookNonce)');
+        expect(out).toContain('(Value::from(prevSeqNum).as_f64() == ');
+        expect(out).toContain('let mut batchSize: i64 = ');
+        expect(out).toContain('>= (batchSize as f64)');
+    });
+    test('guard: a safeInteger default that is not an integer literal keeps the Value', () => {
+        const out = run("    a (options: Dict, n: number, d: any) {\n        const batchSize = this.safeInteger (options, 'batchSize', d);\n        if (n >= batchSize) {\n            return 1;\n        }\n        return 0;\n    }\n");
+        expect(out).toMatch(/let mut batchSize: Value = /);
+    });
+});
