@@ -21247,8 +21247,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isCallExpression(head)) return this.rustBuiltReturnSourceKind(head) === 'dict' || this.rustOmitOfDict(head);
         if (!isIdentifier(head)) return false;
         const d: any = this.rustDeclarationOfIdentifier(head);
-        if (d === undefined || d === head || d.name === head) return this.rustTypedParamsParam(d);
-        return this.rustTypedParamsParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+        if (d === undefined || d === head || d.name === head) return this.rustTypedParamsParam(d) || this.rustHelperParamsProvenMap(d);
+        return this.rustTypedParamsParam(d) || this.rustHelperParamsProvenMap(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
     }
 
     rustOmitOfDict(init: any): boolean {
@@ -21259,8 +21259,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isCallExpression(head)) return this.rustBuiltReturnSourceKind(head) === 'dict' || this.rustOmitOfDict(head);
         if (!isIdentifier(head)) return false;
         const d: any = this.rustDeclarationOfIdentifier(head);
-        if (d === undefined || d === head || d.name === head) return this.rustTypedParamsParam(d);
-        return this.rustTypedParamsParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+        if (d === undefined || d === head || d.name === head) return this.rustTypedParamsParam(d) || this.rustHelperParamsProvenMap(d);
+        return this.rustTypedParamsParam(d) || this.rustHelperParamsProvenMap(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
     }
 
     /** `this.deepExtend (m, p, ..)` whose every operand is a proven map: a tag-free literal, a built map, an omit of a
@@ -21391,6 +21391,45 @@ export class RustTranspiler extends BaseTranspiler {
         return slot !== undefined && String(slot.rustType).startsWith('impl Into<crate::Params>') && !this.rustLocalIsReassigned(d, String(d.name.text));
     }
 
+    /** ral-47g: the trailing `params: Dict = {}` of a venue's own helper (createOrderRequest and the like), never
+     *  reassigned, not an override, whose every caller in the venue file, its pro file and each subclass that inherits
+     *  it passes a map or leaves it out (the `{}` default): the `sign` caller proof keyed on the helper name. A dynamic
+     *  `this[m] (..)` / `callDynamically` call, an extra argument or any unproven argument fails the venue closed. */
+    rustHelperParamsProvenMap(d: any): boolean {
+        if (d?.kind !== SyntaxKind.Parameter || d.name?.kind !== SyntaxKind.Identifier || d.type === undefined || String(d.type.getText()) !== 'Dict') return false;
+        if (d.initializer === undefined || !isObjectLiteralExpression(d.initializer) || d.initializer.properties.length !== 0) return false;
+        const fn: any = d.parent;
+        if (fn?.kind !== SyntaxKind.MethodDeclaration || !isIdentifier(fn.name) || this.rustTestTierSource(d) || isClassExpression(fn.parent)) return false;
+        const at = Array.from(fn.parameters).indexOf(d);
+        if (at !== fn.parameters.length - 1 || (fn.modifiers ?? []).some((x: any) => x.kind === SyntaxKind.OverrideKeyword)) return false;
+        const name = String(fn.name.text);
+        // request builders only (`*Request`): public venue methods have callers outside the venue that no proof sees
+        if (!/^[a-z][A-Za-z0-9]*Request$/.test(name) || this.rustLocalIsReassigned(d, String(d.name.text))) return false;
+        const file = String(fn.getSourceFile().fileName).replace(/\\/g, '/');
+        const m = /^(.*ts\/src\/)((?:prediction\/)?[a-z0-9]+)\.ts$/.exec(file);
+        if (m === null) return false;
+        const key = m[1] + m[2] + '#' + name + '#' + at;
+        const hit = RustTranspiler.RUST_SIGN_MAP_PROOF.get(key);
+        if (hit !== undefined) return hit;
+        RustTranspiler.RUST_SIGN_MAP_PROOF.set(key, false); // installed first: a throwing proof admits nothing
+        let ok = false;
+        try {
+            ok = this.rustHelperHasCaller(m[1], m[2], name) && this.rustSignParamsProofUncached(m[1], m[2], { name, at });
+        } catch (e) {
+            ok = false;
+        }
+        RustTranspiler.RUST_SIGN_MAP_PROOF.set(key, ok);
+        return ok;
+    }
+
+    /** The helper is called by name somewhere in its venue or pro file and is not a base Exchange method. */
+    rustHelperHasCaller(root: string, venue: string, name: string): boolean {
+        const base = root + 'base/Exchange.ts';
+        if (fs.existsSync(base) && new RegExp('^ {4}(?:async )?' + name + ' \\(', 'm').test(fs.readFileSync(base, 'utf8'))) return false;
+        const call = new RegExp('this\\.' + name + ' \\(');
+        return [ venue, 'pro/' + venue ].some((rel) => fs.existsSync(root + rel + '.ts') && call.test(fs.readFileSync(root + rel + '.ts', 'utf8')));
+    }
+
     private static readonly RUST_SIGN_MAP_PROOF = new Map<string, boolean>();
     private static rustSignProofApi: any;
 
@@ -21420,7 +21459,7 @@ export class RustTranspiler extends BaseTranspiler {
         return ok;
     }
 
-    rustSignParamsProofUncached(root: string, venue: string): boolean {
+    rustSignParamsProofUncached(root: string, venue: string, target?: { name: string, at: number }): boolean {
         const api: any = (RustTranspiler.rustSignProofApi ??= new (tsSync as any).API({ cwd: process.cwd() }));
         const dirs = venue.startsWith('prediction/') ? [ 'prediction/' ] : [ '', 'pro/' ];
         const parsed = new Map<string, any>();
@@ -21459,7 +21498,7 @@ export class RustTranspiler extends BaseTranspiler {
             while (r !== undefined && !seen.has(r)) {
                 seen.add(r);
                 if (r === venue) return true;
-                if (!r.startsWith('pro/') && ownMethod(classOf(parse(r)), 'sign') !== undefined) return false;
+                if (!r.startsWith('pro/') && ownMethod(classOf(parse(r)), target?.name ?? 'sign') !== undefined) return false;
                 r = parentOf(r);
             }
             return false;
@@ -21471,8 +21510,14 @@ export class RustTranspiler extends BaseTranspiler {
             if (!fs.existsSync(a)) return;
             for (const mm of fs.readFileSync(a, 'utf8').matchAll(/^ {4}([A-Za-z0-9]+) \(params/gm)) names.add(mm[1]);
         };
-        for (let r: string | undefined = venue; r !== undefined; r = parentOf(r)) abstractOf(r);
-        if (names.size === 2) return false; // no implicit-endpoint table found: the callers are unknown
+        if (target !== undefined) {
+            // ral-47g: a venue helper's own callers: the helper name only (no request path, no endpoint table)
+            names.clear();
+            names.add(target.name);
+        } else {
+            for (let r: string | undefined = venue; r !== undefined; r = parentOf(r)) abstractOf(r);
+            if (names.size === 2) return false; // no implicit-endpoint table found: the callers are unknown
+        }
         const thisCall = (n: any) => n !== undefined && isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword;
         const builders = new Set<string>([ 'extend', 'deepExtend', 'keysort', 'ordered' ]);
         const declaredDict = (sf: any, rel: string, name: string): boolean => {
@@ -21540,13 +21585,15 @@ export class RustTranspiler extends BaseTranspiler {
                 if (!ok) return;
                 if (isElementAccessExpression(n) && n.expression.kind === SyntaxKind.ThisKeyword && isCallExpression(n.parent) && n.parent.expression === n) {
                     // ral-40h: `this[m] (arg)` whose every name `m` can hold is an implicit endpoint and whose arg is a map
-                    const dyn = this.r40hDynNames(n);
+                    const dyn = target !== undefined ? undefined : this.r40hDynNames(n);
                     if (dyn === undefined || !dyn.every((x) => names.has(x)) || n.parent.arguments.length !== 1 || !isMap(sf, rel, n.parent.arguments[0], 0)) ok = false;
                 }
                 else if (thisCall(n) && String(n.expression.name.text) === 'callDynamically') ok = false;
                 else if (thisCall(n) && names.has(String(n.expression.name.text))) {
                     const callee = String(n.expression.name.text);
-                    if (!isMap(sf, rel, (callee === 'request' || callee === 'fetch2') ? n.arguments[3] : n.arguments[0], 0)) ok = false;
+                    const arg = target !== undefined ? n.arguments[target.at] : (callee === 'request' || callee === 'fetch2') ? n.arguments[3] : n.arguments[0];
+                    if (target !== undefined && n.arguments.length > target.at + 1) ok = false;
+                    else if (!isMap(sf, rel, arg, 0)) ok = false;
                 }
                 n.forEachChild?.(visit);
             };
