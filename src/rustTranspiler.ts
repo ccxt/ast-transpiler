@@ -940,16 +940,66 @@ export class RustTranspiler extends BaseTranspiler {
     /** Same native truthiness for a bare `Value`-boxed identifier of boolean type. Prints the bool-tuple
      *  truthiness text (`x.as_bool() == Some(true)`) so the typed-locals pass keeps rewriting it byte-identically. */
     printNativeIdentifierTruthiness(node): string | undefined {
-        if (!this.isBooleanValueIdentifier(node) || !this.printsValueExpression(node) ||
-            !this.isBooleanOrUndefinedType(this.typeOfNodeIfAny(node)) || !this.isBareBoolEmissionSafe(node)) {
-            return undefined;
+        if (!this.isBooleanValueIdentifier(node) || !this.printsValueExpression(node) || !this.isBooleanOrUndefinedType(this.typeOfNodeIfAny(node))) return undefined;
+        if (!this.isBareBoolEmissionSafe(node)) {
+            // ral-42f: a bool-literal-only local in a printer bool slot reads its box (the text rustNativeBoolEquals printed)
+            if (!this.rustBoolLiteralOnlyLocal(node) || !(this.rustConditionBoolSlot(node) || this.rustBoolLiteralLogicalStore(this.rustClimbLogicalWrappers(node)))) return undefined;
         }
-        const text = `${this.printNode(node, 0)}.as_bool() == Some(true)`;
+        const text = `${this.isBareBoolEmissionSafe(node) ? this.printNode(node, 0) : this.printNode(this.unwrapParens(node), 0).trim()}.as_bool() == Some(true)`;
         let current: any = node;
         while (current.parent !== undefined && isParenthesizedExpression(current.parent)) current = current.parent;
         const negated = current.parent?.kind === SyntaxKind.PrefixUnaryExpression &&
             current.parent.operator === SyntaxKind.ExclamationToken;
         return negated ? `(${text})` : text;
+    }
+
+    /** ral-42f: a local whose box only ever holds a `Value::Bool` or `Null`: declared with `true` / `false` / `undefined`, written
+     *  at least once as slot 0 of `[x, p] = this.handleOptionBoolAndParams(2)(..)` (`checkOptionBool`: Bool or undefined), every
+     *  other write one of those literals or a `&&` / `||` (printed `Value::Bool(..)`).
+     *  In a printer bool slot (`let x: bool = ..` / `Value::Bool(..)`) `x.as_bool() == Some(true)` answers what `is_true(&x)` did
+     *  for both (the ccxt rustNativeBoolEquals pass printed the same text after the fact). */
+    rustBoolLiteralOnlyLocal(node): boolean {
+        const inner: any = this.unwrapParens(node);
+        const declaration: any = inner !== undefined && isIdentifier(inner) ? this.rustDeclaredNode(inner) : undefined;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        const isBoolLiteral = (e: any): boolean => { const x: any = this.unwrapParens(e); return x?.kind === SyntaxKind.TrueKeyword || x?.kind === SyntaxKind.FalseKeyword || this.literalKindOfNode(x) === 'null'; };
+        if (declaration.initializer === undefined || !isBoolLiteral(declaration.initializer)) return false;
+        // a `&&` / `||` written back prints a `Value::Bool` box (a native bool chain in either box form)
+        const isBoolWrite = (e: any): boolean => { const x: any = this.unwrapParens(e); return isBoolLiteral(x) || (isBinaryExpression(x) && this.isLogicalOp(x.operatorToken.kind)); };
+        const boolSlotZero = (lit: any, r: any): boolean => {
+            const call: any = this.unwrapParens(lit.parent.right);
+            return lit.elements[0] === r && isCallExpression(call) && isPropertyAccessExpression(call.expression) && call.expression.expression.kind === SyntaxKind.ThisKeyword
+                && /^handleOptionBoolAndParams2?$/.test(String(call.expression.name.text));
+        };
+        const scope: any = findAncestor(declaration, isFunctionLike);
+        if (scope === undefined) return false;
+        let slotWrite = false;
+        for (const r of this.rustScopeNameNodes(scope, String(declaration.name.text)) as any[]) {
+            if (!isIdentifier(r) || r === declaration.name || this.rustDeclarationOfIdentifier(r) !== declaration) continue;
+            const p: any = r.parent;
+            if (isArrayLiteralExpression(p) && isBinaryExpression(p.parent) && p.parent.left === p && boolSlotZero(p, r)) slotWrite = true;
+            if (isBinaryExpression(p) && p.left === r && rustIsAssignmentOperator(p.operatorToken.kind)
+                && (p.operatorToken.kind !== SyntaxKind.EqualsToken || !isBoolWrite(p.right))) return false;
+            if ((isPrefixUnaryExpression(p) || p?.kind === SyntaxKind.PostfixUnaryExpression) && p.operand === r && p.operator !== SyntaxKind.ExclamationToken) return false;
+            if (isArrayLiteralExpression(p) && isBinaryExpression(p.parent) && p.parent.left === p && !boolSlotZero(p, r)) return false;
+        }
+        // a literal-only local is narrowed to `bool` after printing by ccxt narrowBoolLocals (keyed on its `is_true(&x)` reads):
+        // only a local the destructuring write keeps boxed is taken here
+        return slotWrite;
+    }
+
+    /** ral-42f: `x = a && b;` (statement) whose `&&` / `||` has a bool-literal-only local operand: the printer boxes the logical
+     *  itself (`x = Value::Bool(..)`, the box the ccxt bool-assignment regex added keyed on the leading `is_true`). */
+    rustBoolLiteralLogicalStore(node): boolean {
+        const inner: any = this.unwrapParens(node);
+        if (inner === undefined || !isBinaryExpression(inner) || !this.isLogicalOp(inner.operatorToken.kind)) return false;
+        let top: any = inner;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const store: any = top.parent;
+        if (store === undefined || !isBinaryExpression(store) || store.right !== top || store.operatorToken.kind !== SyntaxKind.EqualsToken
+            || !isIdentifier(store.left) || store.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const operand = (e: any): boolean => { const x: any = this.unwrapParens(e); return isIdentifier(x) && this.rustBoolLiteralOnlyLocal(x); };
+        return operand(inner.left) || operand(inner.right);
     }
 
     // Kind of a literal operand whose printed Value variant is exactly known.
@@ -2272,7 +2322,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (boolLogical !== undefined) return `Value::Bool(${boolLogical})`;
         // A logical expression with a native-compare operand no longer starts with a bool helper: box it.
         if ((op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken)
-            && (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right))) {
+            && (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right) || this.rustBoolLiteralLogicalStore(node))) {
             return `Value::Bool(${this.printLogicalInBooleanContext(node)})`;
         }
         // Binary wrapper functions (is_equal, add, etc.) - add & to both sides
@@ -16108,7 +16158,27 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
-        return this.printOptListJoin(node) ?? this.printLentListJoin(node) ?? this.printStrVecParamJoin(node) ?? this.printVecJoin(node) ?? this.printNativeStringJoin(node, name) ?? `join(&${name}, &${parsedArg})`;
+        return this.printOptListJoin(node) ?? this.printLentListJoin(node) ?? this.printStrVecParamJoin(node) ?? this.printVecJoin(node) ?? this.printNativeStringJoin(node, name)
+            ?? this.printStrSliceJoin(node) ?? `join(&${name}, &${parsedArg})`;
+    }
+
+    /** ral-42f: `parts.join('-')` where `parts` is a never-reassigned local `this.arraySlice(<string[] local>, ..)`: every element is a
+     *  `Value::Str`, so the helper's stringify is the identity (the form ccxt rustStringNatives printed after the fact). */
+    printStrSliceJoin(node): string | undefined {
+        const access: any = node?.expression;
+        if (!isPropertyAccessExpression(access) || !isIdentifier(access.expression) || node.arguments?.length !== 1) return undefined;
+        const literal = this.rustNativeStringLiteralArg(node.arguments[0]);
+        const declaration: any = this.rustDeclaredNode(access.expression);
+        if (literal === undefined || declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || this.rustLocalReassigned(declaration)) return undefined;
+        const init: any = this.unwrapParens(declaration.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(init.expression.name.text) !== 'arraySlice' || init.arguments.length < 1) return undefined;
+        const source: any = this.unwrapParens(init.arguments[0]);
+        const checker: any = this.checkerOrUndefined();
+        const type: any = source !== undefined && isIdentifier(source) ? this.typeOfNodeIfAny(source) : undefined;
+        if (checker === undefined || type === undefined || !checker.isArrayType(type) || this.primitiveKindOfType(checker.getTypeArguments?.(type)?.[0]) !== 'string') return undefined;
+        const name = this.printNode(access.expression, 0).trim();
+        return `Value::str(${name}.as_array().cloned().unwrap_or_default().iter().filter_map(Value::as_str).collect::<Vec<_>>().join("${literal}"))`;
     }
 
     printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
