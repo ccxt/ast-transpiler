@@ -24350,6 +24350,9 @@ export class RustTranspiler extends BaseTranspiler {
         let matched = 0;
         for (const r of table) {
             if (!r.pats.some((rp) => hashes!.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
+            // ral-55w: a Null settle or a plain map (a balance, never a cache / book marker) has no element at the slot:
+            // the slot read is Null either way, which the Option conversion maps to None (TS throws destructuring it)
+            if (r.kind === 'none' || (r.kind === 'dict' && r.plainMap === true)) continue;
             const t = r.kind === 'list' && r.value !== undefined ? tuple(r.value) : undefined;
             const e: any = t?.elements[index];
             if (e === undefined || e.kind === SyntaxKind.SpreadElement || t.elements.some((x: any) => x.kind === SyntaxKind.SpreadElement)) return false;
@@ -24357,6 +24360,16 @@ export class RustTranspiler extends BaseTranspiler {
             matched++;
         }
         return matched > 0;
+    }
+
+    /** ral-55w: a resolved value that is a plain map, never a cache / book marker: a fresh or proven map, or an entry of
+     *  the base `balance` field (balances are plain maps), so a numeric slot read off it is Null. */
+    rustWsPlainMapResolve(x: any): boolean {
+        const n: any = x === undefined ? undefined : this.rustStripWrappers(x);
+        if (n === undefined) return false;
+        if (this.rustWsResolvedMap(n, 0)) return true;
+        const f: any = isElementAccessExpression(n) ? this.rustStripWrappers(n.expression) : n;
+        return isPropertyAccessExpression(f) && f.expression.kind === SyntaxKind.ThisKeyword && String(f.name.text) === 'balance' && this.rustWsCacheFieldDictRead(n);
     }
 
     /** `x.length` read on an optional cache local: the slot's own `size()`. */
@@ -24784,7 +24797,7 @@ export class RustTranspiler extends BaseTranspiler {
     // cache field, a cache-map read, a cache constructor or a typed cache local). A hash that is not built from
     // literals and locals of the method, a class with ws subclasses or a ws parent, or any other resolve under a
     // matching hash fails the proof and the local stays `Value`.
-    private rustWsResolveTables = new WeakMap<Node, Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string, value?: any }> | null>();
+    private rustWsResolveTables = new WeakMap<Node, Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string, value?: any, plainMap?: boolean }> | null>();
     private rustWsWatchKinds = new WeakMap<Node, 'book' | 'cache' | 'dict' | 'list' | null>();
     // wrapper parameter -> the caller's argument (and the caller's own bindings) while a wrapper hash is read
     private rustWsHashEnv: Map<Node, { arg: any, env: Map<Node, any> | undefined }> | undefined = undefined;
@@ -25327,7 +25340,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** Every resolve of the ws class with its hash patterns and kind; null when the class has ws relatives. */
-    rustWsResolveTable(cls: any): Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string, value?: any }> | null {
+    rustWsResolveTable(cls: any): Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string, value?: any, plainMap?: boolean }> | null {
         let table = this.rustWsResolveTables.get(cls);
         if (table !== undefined) return table;
         table = [];
@@ -25353,7 +25366,7 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-ye: a fixed-kind resolve (cleanUnsubscription's `true`) reads its hash per caller too
             const sites = site !== undefined ? this.rustWsHelperCallSites(cls, site, [ hash, x ]) : undefined;
             if (sites === undefined) {
-                table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(x), value: kind === undefined ? x : undefined });
+                table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(x), value: kind === undefined ? x : undefined, plainMap: kind === undefined && this.rustWsPlainMapResolve(x) });
                 return;
             }
             // a helper's parameter stands for each caller's argument: one entry per call site
@@ -25362,7 +25375,7 @@ export class RustTranspiler extends BaseTranspiler {
                 this.rustWsHashEnv = env;
                 try {
                     const bound = (e: any) => { const d: any = e !== undefined && isIdentifier(this.rustStripWrappers(e)) ? this.rustDeclarationOfIdentifier(this.rustStripWrappers(e)) : undefined; return d !== undefined && env.has(d) ? env.get(d)!.arg : e; };
-                    table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(bound(x)) });
+                    table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(bound(x)), plainMap: kind === undefined && this.rustWsPlainMapResolve(bound(x)) });
                 } finally {
                     this.rustWsHashEnv = save;
                 }

@@ -18824,6 +18824,34 @@ describe('ral-54w: a watched tuple slot whose every matching resolve passes a ca
     });
 });
 
+describe('ral-55w: a Null settle or a plain map meeting a watched tuple hash has no slot element, so the cache slot stays optional', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/OrderBook.ts": "export class WsOrderBook {\n    cache: any[] = [];\n    constructor (snapshot: any = {}, depth: any = undefined) {}\n    limit () { return this; }\n    reset (snapshot: any = {}) {}\n}\n",
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: any, limit: any): any { return limit; }\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { WsOrderBook } from './ws/OrderBook.js';\nimport { ArrayCache } from './ws/Cache.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport type Int = number | undefined;\nexport default class Exchange {\n    orderbooks: Dictionary<WsOrderBook> = {};\n    trades: Dictionary<ArrayCache> = {};\n    balance: any = {};\n    newUpdates: boolean = true;\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    orderBook (snapshot = {}, depth = 100): WsOrderBook { return new WsOrderBook (snapshot, depth); }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterBySinceLimit (array: object[] | undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return [];\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchOHLCVForSymbols (symbol: string, timeframe: string, limit: any = undefined) {\n        const messageHash = 'ohlcv:' + symbol + ':' + timeframe;\n        const [ s, tf, stored ] = await this.watch ('wss://x', messageHash, {}, messageHash);\n        let limitResolved = limit;\n        if (this.newUpdates) {\n            limitResolved = stored.getLimit (s, limit);\n        }\n        return this.filterBySinceLimit (stored, undefined, limitResolved, true);\n    }\n    async watchCandles (symbol: string) {\n        const messageHash = 'candles:' + symbol + ':account';\n        const [ s, tf, candles ] = await this.watch ('wss://x', messageHash, {}, messageHash);\n        return this.filterBySinceLimit (candles, undefined, undefined, true);\n    }\n    handleOHLCV (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        const timeframe = this.safeString (message, 't');\n        const stored = new ArrayCache (10);\n        const resolveData = [ symbol, timeframe, stored ];\n        client.resolve (resolveData, 'ohlcv:' + symbol + ':' + timeframe);\n    }\n    handleCandles (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        const stored = new ArrayCache (10);\n        client.resolve ([ symbol, 'x', stored ], 'candles:' + symbol + ':account');\n        client.resolve ([ symbol, 'x', this.orderBook ({}) ], 'candles:' + symbol + ':account');\n    }\n    handleBalance (client: Client, message: any) {\n        const type = this.safeString (message, 'type');\n        client.resolve (undefined, type + ':fetchBalanceSnapshot');\n        client.resolve ({ 'info': message }, type + ':balance');\n        this.balance[type] = { 'info': message };\n        client.resolve (this.balance[type], type + ':account');\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-watch55w-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('balance map / Null settle under a leading-unknown hash do not block the cache slot', () => {
+        expect(out).toMatch(/let mut stored: Option<crate::pro::cache::Cache> = get_value\(&[A-Za-z]+Variable, &Value::Int\(2\)\)\.into\(\);/);
+        expect(out).toMatch(/stored\.getLimit\(/);
+        expect(out).toMatch(/let mut s: Value = get_value\(/);
+    });
+    test('negative: a tuple resolve with a book at the slot still blocks it', () => {
+        expect(out).toMatch(/let mut candles: Value = get_value\(/);
+    });
+});
+
 describe('ral-54w: a venue wrapper returning its awaited local (or undefined) is followed to the watch', () => {
     const files: Record<string, string> = {
         "ts/src/base/ws/OrderBook.ts": "export class WsOrderBook {\n    cache: any[] = [];\n    constructor (snapshot: any = {}, depth: any = undefined) {}\n    limit () { return this; }\n    reset (snapshot: any = {}) {}\n}\n",
