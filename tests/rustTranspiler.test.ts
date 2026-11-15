@@ -17082,3 +17082,32 @@ describe('ral-47i: a safeValueN / safeValue2 result used only by null tests reac
         expect(out).toMatch(/let mut cid: Value = /);
     });
 });
+
+describe('ral-47a: `s += v.toString ()` with an any-typed `v` appends the Display of `to_string_val`', () => {
+    const src = (body: string) =>
+        'class E {\n' +
+        '    hold(x: any): any { return x; }\n' +
+        '    run(value: any[]) {\n' + body + '    }\n' +
+        '}';
+    test('a literal-seeded string local stays a String and push_str-s the any element text', () => {
+        const output = transpiler.transpileRust(src(
+            "        let arrStr = '[';\n" +
+            '        for (let j = 0; j < value.length; j++) {\n' +
+            '            const arrayElement = value[j];\n' +
+            "            if (j > 0) {\n                arrStr += ',';\n            }\n" +
+            '            arrStr += arrayElement.toString ();\n' +
+            '        }\n' +
+            "        arrStr += ']';\n" +
+            '        return this.hold(arrStr);\n')).content;
+        expect(output).toContain('let mut arrStr: String = "[".to_string();');
+        expect(output).toContain('arrStr.push_str(&(to_string_val(&arrayElement)).to_string());');
+    });
+    test('negative: a toString on a number-typed receiver is not taken by this path', () => {
+        const output = transpiler.transpileRust(src(
+            "        let s = '[';\n" +
+            '        const n: number = value.length;\n' +
+            '        s += n.toString ();\n' +
+            '        return this.hold(s);\n')).content;
+        expect(output).not.toContain('(to_string_val(&n)).to_string()');
+    });
+});

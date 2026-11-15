@@ -8881,7 +8881,11 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `s += v` with `v` a string-typed `Value` (not a `+` chain): `Display` is the text the `add` helper concatenates. */
     rustStrPushValueText(target, right, dry: boolean): string | undefined {
-        if (isBinaryExpression(right) || this.literalKindOfNode(right) !== undefined || this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== 'string' || !this.printsValueExpression(right)) return undefined;
+        // ral-47a: `v.toString ()` on an `any` receiver prints `to_string_val(&v)`, always a `Value::Str` (its Display is that text)
+        const anyToString = isCallExpression(right) && right.arguments.length === 0 && isPropertyAccessExpression(right.expression)
+            && String(right.expression.name.text) === 'toString' && isIdentifier(right.expression.expression)
+            && (this.typeOfNodeIfAny(right.expression.expression)?.flags & TypeFlags.Any) !== 0;
+        if (isBinaryExpression(right) || this.literalKindOfNode(right) !== undefined || (!anyToString && this.primitiveKindOfType(this.typeOfNodeIfAny(right)) !== 'string') || !this.printsValueExpression(right)) return undefined;
         if (this.rustScalarHasTypedOperand(right) || new RegExp(`\\b${String(target.text)}\\b`).test(String(right.getText()))) return undefined;
         if (String(right.getText()).includes('\n')) return undefined;
         if (dry) return '_';
