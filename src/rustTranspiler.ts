@@ -11893,15 +11893,17 @@ export class RustTranspiler extends BaseTranspiler {
     ]);
 
     /** `'vec'` for a `Vec<record>` typed result, `'map'` for `Tickers` (`HashMap<String, Ticker>`). */
-    rustTypedResultElemKind(init: any): 'vec' | 'map' | undefined {
+    rustTypedResultElemKind(init: any): 'vec' | 'map' | 'map2' | undefined {
         const ret = this.rustTypedCallResultType(init);
         if (ret === 'crate::types::Tickers') return 'map';
+        // ral-46h: `OHLCVsBySymbol` (symbol -> timeframe -> candles): `KeyRead` answers the symbol's timeframe map
+        if (ret === 'crate::types::OHLCVsBySymbol') return 'map2';
         const m = ret === undefined ? null : /^Vec<crate::types::(\w+)>$/.exec(ret);
         return m !== null && RustTranspiler.RUST_RAW_RECORD_TYPES.has(m[1]) ? 'vec' : undefined;
     }
 
     /** `xs.length`, `xs[i]` (int literal / int-literal counter) on a Vec result, `xs[k]` (a `Value` key) on a map result. */
-    rustTypedResultElemUse(n: any, elem: 'vec' | 'map'): boolean {
+    rustTypedResultElemUse(n: any, elem: 'vec' | 'map' | 'map2'): boolean {
         const parent: any = n.parent;
         if (parent === undefined) return false;
         const up: any = parent.parent;
@@ -11912,7 +11914,8 @@ export class RustTranspiler extends BaseTranspiler {
             return readOnly && this.isValueLengthType(this.typeOfNodeIfAny(n));
         }
         if (!isElementAccessExpression(parent) || parent.expression !== n || !readOnly) return false;
-        if (isElementAccessExpression(up) && up.expression === parent) return false;
+        // ral-46h: `r[s][tf]` on an `OHLCVsBySymbol` result reads the boxed timeframe map; the outer read stays a `Value` read
+        if (isElementAccessExpression(up) && up.expression === parent && !(elem === 'map2' && this.rustTypedResultReadOnlyAt(up))) return false;
         if (isPropertyAccessExpression(up) && up.expression === parent) return false;
         const key: any = this.rustSkipWrappers(parent.argumentExpression);
         if (key === undefined) return false;
@@ -11926,6 +11929,15 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustScalarLocalOf(key) === undefined;
     }
 
+    /** `x` is read only: not written, deleted, updated or called. */
+    rustTypedResultReadOnlyAt(x: any): boolean {
+        const up: any = x.parent;
+        return up !== undefined && !(isBinaryExpression(up) && up.left === x && rustIsAssignmentOperator(up.operatorToken.kind))
+            && up.kind !== SyntaxKind.DeleteExpression && !isPrefixUnaryExpression(up) && up.kind !== SyntaxKind.PostfixUnaryExpression
+            && !(isCallExpression(up) && up.expression === x) && !(isElementAccessExpression(up) && up.expression === x)
+            && !(isPropertyAccessExpression(up) && up.expression === x);
+    }
+
     /** Element-access hook: the native read of a typed result element, boxed through its shared record handle. */
     printTypedResultElemRead(node: any): string | undefined {
         const recv: any = node.expression;
@@ -11935,7 +11947,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (elem === undefined || !this.rustTypedResultElemUse(recv, elem)) return undefined;
         const name = super.printIdentifier(recv);
         const key: any = this.rustSkipWrappers(node.argumentExpression);
-        if (elem === 'map') return `crate::value::KeyRead::read(&&${name}, &${this.printNode(key, 0).trim()})`;
+        if (elem === 'map' || elem === 'map2') return `crate::value::KeyRead::read(&&${name}, &${this.printNode(key, 0).trim()})`;
         return `${name}.get(${this.printTypedResultIndex(key)}).map(crate::Value::from).unwrap_or_default()`;
     }
 
@@ -15764,6 +15776,11 @@ export class RustTranspiler extends BaseTranspiler {
         for (const link of chain) {
             const { expression: receiver, argumentExpression: key } = link;
             // ral-wh: an index / variable-key read on a held Dict / List local: the arm `get_value` takes, by reference
+            // ral-46h: the inner read of `r[s][tf]` on a typed `OHLCVsBySymbol` result reads the symbol's map through `KeyRead`
+            if (link === chain[0] && chain.length > 1) {
+                const typedElem = this.printTypedResultElemRead(link);
+                if (typedElem !== undefined) { acc = typedElem; continue; }
+            }
             if (link === chain[0] && this.rustBorrowedIndexReads.has(link) && isIdentifier(receiver)) {
                 const borrowedKey = isIdentifier(key) && this.rustBorrowedStrElems.has(this.rustDeclarationOfIdentifier(key));
                 acc = `crate::value::KeyRead::read(&&${super.printIdentifier(receiver)}, &${borrowedKey ? `Value::from(${super.printIdentifier(key)})` : (this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0))})`;

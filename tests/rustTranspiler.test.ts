@@ -11618,6 +11618,31 @@ describe('ral-45h: a nil-started hash local is not a hash of any text', () => {
     });
 });
 
+describe('ral-46h: a typed OHLCVsBySymbol result read twice by key', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-46h-ohlcvs');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n" +
+            "    async watchOHLCVForSymbols (symbolsAndTimeframes: string[][], since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any> { return {}; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    async watchOHLCV (symbol: string, timeframe = '1m', since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any[]> {\n" +
+            "        const result = await this.watchOHLCVForSymbols ([ [ symbol, timeframe ] ], since, limit, params);\n        return result[symbol][timeframe];\n    }\n" +
+            "    async watchLast (symbol: string, timeframe = '1m', params: Dict = {}): Promise<any> {\n" +
+            "        const rows = await this.watchOHLCVForSymbols ([ [ symbol, timeframe ] ], undefined, undefined, params);\n        rows[symbol] = {};\n        return rows;\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['watchOHLCVForSymbols'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('r[s][tf] keeps the typed result and reads the symbol through KeyRead', () => {
+        expect(out).toContain('let mut result: crate::types::OHLCVsBySymbol = (match self.watch_ohlcv_for_symbols(');
+        expect(out).toContain('crate::value::KeyRead::read(&&result, &symbol)');
+        expect(out).not.toContain('get_value(&result, &symbol)');
+    });
+    test('negative: a written result stays a Value', () => {
+        expect(out).not.toContain('let mut rows: crate::types::OHLCVsBySymbol');
+    });
+});
+
 describe('dict ternaries and arithmetic with a Value operand', () => {
     let n = 0;
     const run = (body: string) => {
