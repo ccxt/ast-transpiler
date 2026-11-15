@@ -750,8 +750,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueReturnTypesHas(node: any, name: string): boolean;
     /** tc: `this.randomBytes(n)` resolved to the hand-written `-> String` runtime method */
     rustRandomBytesCall(node: any): boolean;
+    /** ral-46c: `n.toString()` of an `i64` scalar local, or `this.requestId().toString()` of a venue method every
+     *  declaration of which returns `int` (rustVenueIntCall, or the typed `-> i64` return rustBaseTypedReturnKind proves): the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
+    rustIdString(node: any): boolean;
     /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
     rustClockString(node: any): boolean;
+    /** ral-46a: `this.incrementingNonce()` / `this.randNumber(n)` of the base runtime (no venue override): the runtime
+     *  answers a bare `i64` (`fn incrementing_nonce(&mut self) -> i64`, `fn rand_number(&self, size: Value) -> i64`), and
+     *  `format!("{}", ..)` of it is the decimal text `to_string_val` gave for the `Int` box. */
+    rust46aIntRuntimeCall(node: any): boolean;
     /** `this.nonce()` where every declaration of the name (base and each override) declares `int`: the trait slot
      *  answers a `Value` holding that `Int`, and `format!("{}", ..)` of it is the decimal text `to_string_val` gives. */
     rustNonceCall(node: any): boolean;
@@ -997,6 +1004,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-ua: `acc += x` (statement) with `acc` a checker-string local the solve leaves boxed (its decision is not taken
      *  during seeding: the join is assumed, then re-checked) and `x` a `string | undefined`, within the 400-char line. */
     rustPlusEqualsJoinOperand(n: any): boolean;
+    /** ral-46d: `n` reads a local declared `const f = m['<opt flag>']` off a loaded market struct (`Option<bool>` field). */
+    rustMarketFlagFieldLocal(n: any): boolean;
     rustScalarUseFormOwn(n: any, kind: string): string | undefined;
     private static readonly RUST_WS_CLIENT_VALUE_METHODS;
     rustWsClientCallArg(call: any, kind: string): boolean;
@@ -1683,9 +1692,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTypedCallResultType(init: any): string | undefined;
     private static readonly RUST_RAW_RECORD_TYPES;
     /** `'vec'` for a `Vec<record>` typed result, `'map'` for `Tickers` (`HashMap<String, Ticker>`). */
-    rustTypedResultElemKind(init: any): 'vec' | 'map' | undefined;
+    rustTypedResultElemKind(init: any): 'vec' | 'map' | 'map2' | undefined;
     /** `xs.length`, `xs[i]` (int literal / int-literal counter) on a Vec result, `xs[k]` (a `Value` key) on a map result. */
-    rustTypedResultElemUse(n: any, elem: 'vec' | 'map'): boolean;
+    rustTypedResultElemUse(n: any, elem: 'vec' | 'map' | 'map2'): boolean;
+    /** `x` is read only: not written, deleted, updated or called. */
+    rustTypedResultReadOnlyAt(x: any): boolean;
     /** Element-access hook: the native read of a typed result element, boxed through its shared record handle. */
     printTypedResultElemRead(node: any): string | undefined;
     printTypedResultIndex(key: any): string;
@@ -1725,7 +1736,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustIsOptMarketWriteOf(n: any): boolean;
     private static readonly RUST_OPT_MARKET_RETURNS;
     rustReturnsOptMarket(node: any): boolean;
-    /** `this.getMarketFromSymbols (..)` resolving to the typed base method. */
+    private rustVenueOptMarketDecisions;
+    /** ral-46e: a venue (not base-tier) method declared `Market`, not async, no override, never referenced by name as a
+     *  value, whose every return is `undefined` or a `safeMarket` record and that returns at least one of each
+     *  (bitstamp `getMarketFromTrade`): `Option<crate::types::Market>`, `None` for the `undefined` return. Its by-name
+     *  arm boxes with `IntoRaw` (`Null` for `None`, the record's `raw` otherwise), the value the `-> Value` method gave. */
+    rustVenueReturnsOptMarket(node: any): boolean;
+    /** `this.getMarketFromSymbols (..)` resolving to the typed base method (or a venue `rustVenueReturnsOptMarket` one). */
     rustIsOptMarketCall(init: any): boolean;
     /** `c ? undefined : this.market (s)` (either arm order): the `this.market` arm. */
     rustOptMarketTernary(init: any): any;
@@ -2249,7 +2266,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  holds before the slot is read back, lent (`Value::from(&x)`, `From<&Option<String>>`: `None` is the Null, `Some` the Str). */
     rustStrSlotSelfDefault(n: any): boolean;
     rustBoolSlotUsesOk(declaration: any): boolean;
-    /** The destructuring statement keeps the 400-char line budget with the slot's `== Some(true)` read. */
+    /** The destructuring statement keeps the 400-char line budget with the slot's bool read.
+     *  ral-46f: measured on the open print of the write with the bool slot read swapped in (was a length estimate that
+     *  refused every write over 380 chars although the printed block line is split after `; ` by build/ `splitLongRustLines`). */
+    private rustBoolSlotLineMemo;
     rustBoolSlotLineLong(n: any): boolean;
     /** The `usize` index text of a `Value` list read: a registered `i64` counter indexes directly. */
     rustI64IndexText(keyNode: any, place: string): string;
@@ -2360,6 +2380,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     printCaughtErrorInstanceOf(node: any): string | undefined;
     rustPresenceFlagLocals: WeakSet<object>;
     rustSubscriptionPresenceFlag(declaration: any, parsedValue: string): boolean;
+    /** ral-46i (B219): a const `this.safeValue* (..)` result (not a ws client table) whose every use is a null test in a
+     *  `bool` place: the presence flag `bool` (`x != Value::Null` once), each test reading the flag. */
+    rustNullTestOnlyFlag(declaration: any): boolean;
     /** `X === undefined` / `X !== undefined` that is the whole `if` condition (parens allowed): '==' / '!='. */
     rustPresenceTest(n: any): string | undefined;
     printPresenceFlagTest(left: any, right: any, op: any): string | undefined;
@@ -2715,6 +2738,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  already prints `.await.into_dict()`, so the same write into a reuse literal replaces the owned map with the parsed
      *  response (parsed JSON carries no runtime tag). */
     rustReuseEndpointWrite(right: any): boolean;
+    /** ral-46f: `x = y as Dict` whose previous statement in the same block is `y = await this.<endpoint> (..)` of a REST endpoint
+     *  declared `Promise<Dict>` (`rustReuseEndpointWrite`): `y` definitely holds that parsed response, so the write prints
+     *  `x = y.clone().into_dict()` (the form a declared-endpoint write prints; a non-map answer is the empty map there too).
+     *  Answers the endpoint write. */
+    rustEndpointAliasWrite(write: any): any;
     /** The producer of a reuse write builds from untagged operands only: `extend` / `omit` operands proven plain
      *  (`rustUntaggedMapOperand`), `indexBy` / `groupBy` fresh maps, a REST `safeDict` read off a local (parsed JSON). */
     rustReuseProducerUntagged(n: any, rhs: any): boolean;
@@ -3439,6 +3467,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustShortDestrHeads: WeakSet<any>;
     /** A nil-declared slot local typed as the map. */
     rustNilSlotDictLocal(declaration: any): boolean;
+    /** ral-46g: the reassigned handed map written at slot 1 of `[ a, x ] = this.handle*AndParams (..)`, else undefined. */
+    rustHandedSlotWriteOf(node: any): any;
     rustNilSlotDictOf(node: any): any;
     /** `[a, b] = this.m (.., n)`: printed as one `__destr_tmp` block line, kept within the line budget by the bare box. */
     rustInDestructureWrite(n: any): boolean;
@@ -4118,7 +4148,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `this.safeMarket (..)` / `super.safeMarket (..)` resolving to a method that returns the typed market. */
     rustIsSafeMarketCall(init: any): boolean;
     /** `const m = this.safeMarket (..)` whose every use reads a key, lends the record, or rewrites it from `safeMarket`. */
-    rustSafeMarketLocalOk(declaration: any): boolean;
+    /** ral-46i: `const a: Market = s` where `s` is a const declared from `this.safeMarket (..)`: the declaration of `s`. */
+    rustSmktAliasSource(declaration: any): any;
+    /** ral-46i: a whole-value hand-off of a `safeMarket` alias that is neither a lent market slot nor a reader's record. */
+    rustSmktAliasValueUse(n: any): boolean;
+    rustSafeMarketLocalOk(declaration: any, alias?: boolean): boolean;
     /** A use of a `safeMarket` struct local. */
     rustSafeMarketLocalOf(node: any): any;
     /** Argument text for a lent market slot: a typed market lends itself, any other value decodes once. */
