@@ -13323,7 +13323,7 @@ export class RustTranspiler extends BaseTranspiler {
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return undefined;
         const name = String(element.name.text);
-        const kind = this.primitiveKindOfType(this.typeOfNodeIfAny(element.name));
+        const kind = this.rustSlotPrimitiveKind(element);
         if (kind !== 'string' && kind !== 'boolean') return undefined;
         let nativeUses = 0;
         let copies = 0;
@@ -13543,7 +13543,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (owner.initializer === undefined || !this.rustNativeListSource(owner.initializer) || this.rustTestTierSource(element)) return undefined;
         const scope: any = this.rustEnclosingFunction(owner);
         if (scope === undefined || isSourceFile(scope) || scope.kind !== SyntaxKind.MethodDeclaration) return undefined;
-        const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(element.name));
+        const checked = this.rustSlotPrimitiveKind(element);
         if (checked === 'string' && this.rustTupleSlotKind(element) === undefined) return this.rustStrSlotKind(element, scope);
         if (checked !== 'number' && checked !== 'boolean') return undefined;
         if (this.rustTupleSlotKind(element) !== undefined) return undefined;
@@ -13582,6 +13582,82 @@ export class RustTranspiler extends BaseTranspiler {
         return ok && (nativeUses > 0 || boxes > 0) ? kind : undefined;
     }
 
+    // 41i: hand-written base producers declared `any[]` (TS reads WASM results typed `any`): the slot kinds every port's
+    // own body builds. TS `[ res.txType, res.txInfo ]`; Go `[]any{txInfo.GetTxType() (uint8), txInfoStr (string)}`; C#
+    // formatSignedLighterTx {TxType (int), TxInfo (string)}; Python `[tx_type, tx_info]`. The Rust stubs panic
+    // (crypto_not_supported) before any slot exists, so the typed read never sees another kind.
+    private static readonly RUST_HANDWRITTEN_SLOT_KINDS: Record<string, string[]> = {
+        lighterSignCancelOrder: [ 'number', 'string' ],
+        lighterSignWithdraw: [ 'number', 'string' ],
+        lighterSignCreateSubAccount: [ 'number', 'string' ],
+        lighterSignCancelAllOrders: [ 'number', 'string' ],
+        lighterSignModifyOrder: [ 'number', 'string' ],
+        lighterSignTransfer: [ 'number', 'string' ],
+        lighterSignUpdateLeverage: [ 'number', 'string' ],
+        lighterSignUpdateMargin: [ 'number', 'string' ],
+    };
+
+    /** 41i: the primitive (`number` / `string`) slot `at` of `init` holds on every path when the checker only says `any`:
+     *  a hand-written base producer from the table above (no venue redeclares it), or a venue-local method whose every
+     *  return is an array literal with, at `at`, a `const` tuple slot of its own body proven the same way (depth-bounded). */
+    rustProducerSlotPrimitive(init: any, at: number, depth = 0): string | undefined {
+        const call: any = this.rustAwaitedCall(init);
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword || at < 0) return undefined;
+        const name = String(call.expression.name.text);
+        let method: any = this.rustCalleeDeclaration(call);
+        if (method !== undefined && method.body === undefined) method = method.parent?.members?.find((m: any) => m.kind === SyntaxKind.MethodDeclaration && m.body !== undefined && m.name?.text === name);
+        if (method === undefined || method.body === undefined || !isBlock(method.body) || !isClassDeclaration(method.parent)) return undefined;
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const root = file.search(/(?:^|\/)ts\/src\//);
+        if (root < 0) return undefined;
+        const srcRoot = file.slice(0, file.indexOf('ts/src/', root)) + 'ts/src';
+        const table = Object.prototype.hasOwnProperty.call(RustTranspiler.RUST_HANDWRITTEN_SLOT_KINDS, name) ? RustTranspiler.RUST_HANDWRITTEN_SLOT_KINDS[name] : undefined;
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(file)) return table !== undefined && !this.rustVenueMethodNames(srcRoot).has(name) ? table[at] : undefined;
+        if (depth > 3 || !this.rustVenueLocalMethod(method, name)) return undefined;
+        let kind: string | undefined;
+        let returns = 0;
+        let all = true;
+        const visit = (node: any) => {
+            if (!all || (node !== method.body && isFunctionLike(node))) return;
+            if (isReturnStatement(node)) {
+                returns++;
+                const list: any = this.unwrapParens(node.expression);
+                const slot: any = list !== undefined && isArrayLiteralExpression(list) && list.elements.length > at ? this.unwrapParens(list.elements[at]) : undefined;
+                const declaration: any = slot !== undefined && isIdentifier(slot) ? this.rustDeclaredNode(slot) : undefined;
+                const pattern: any = declaration?.parent;
+                const owner: any = pattern?.parent;
+                // a returned element the checker already proves `string` / `number` / `boolean`
+                let k: string | undefined = slot === undefined ? undefined : this.primitiveKindOfType(this.typeOfNodeIfAny(slot));
+                if (k === undefined && declaration?.kind === SyntaxKind.BindingElement && pattern?.kind === SyntaxKind.ArrayBindingPattern && isVariableDeclaration(owner) && owner.initializer !== undefined
+                    && (owner.parent.flags & NodeFlags.Const) !== 0 && declaration.initializer === undefined && declaration.dotDotDotToken === undefined
+                    && this.rustEnclosingFunction(owner) === method) {
+                    k = this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) ?? this.rustProducerSlotPrimitive(owner.initializer, pattern.elements.indexOf(declaration), depth + 1);
+                }
+                all = k !== undefined && (kind === undefined || kind === k);
+                kind = k;
+                return;
+            }
+            node.forEachChild(visit);
+        };
+        method.body.forEachChild(visit);
+        // number / string only: a boolean slot keeps the existing bool-slot routes (their printed forms are matched downstream)
+        return all && returns > 0 && (kind === 'number' || kind === 'string') ? kind : undefined;
+    }
+
+    /** The checker's primitive kind of a destructured slot, else the producer-side proof (41i). */
+    rustSlotPrimitiveKind(element: any): string | undefined {
+        const checked = this.primitiveKindOfType(this.typeOfNodeIfAny(element.name));
+        if (checked !== undefined) return checked;
+        const pattern: any = element.parent;
+        const owner: any = pattern?.parent;
+        if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || !isVariableDeclaration(owner) || owner.initializer === undefined) return undefined;
+        try {
+            return this.rustProducerSlotPrimitive(owner.initializer, pattern.elements.indexOf(element));
+        } catch (e) {
+            return undefined;
+        }
+    }
+
     /** The callee builds slot `at` from an exact Int-or-null (`int`) / Bool-or-null (`bool`) producer on every return. */
     rustExactSlotCallee(init: any, at: number, want: string): boolean {
         let call: any = this.rustSkipWrappers(init);
@@ -13591,6 +13667,8 @@ export class RustTranspiler extends BaseTranspiler {
         let method: any = this.rustCalleeDeclaration(call);
         if (method !== undefined && method.body === undefined) method = method.parent?.members?.find((m: any) => m.kind === SyntaxKind.MethodDeclaration && m.body !== undefined && m.name?.text === name);
         if (method === undefined || method.body === undefined || !isBlock(method.body) || !isClassDeclaration(method.parent)) return false;
+        // 41i: a hand-written base producer whose slot the table proves an integer (TS `number`, every port an int)
+        if (want === 'int' && Object.prototype.hasOwnProperty.call(RustTranspiler.RUST_HANDWRITTEN_SLOT_KINDS, name)) return this.rustProducerSlotPrimitive(call, at) === 'number';
         // every declaration of the name is this one (no venue override changes the slot)
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         const root = file.search(/(?:^|\/)ts\/src\//);
@@ -16865,7 +16943,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             // `k in x` — the map's own lookup behind the helper's `Str` test.
             if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.InKeyword
-                && parent.right === n) return this.bearerInOpKeyText(parent.left) !== undefined || this.literalKeyWidened(this.rustLiteralBearerKeyArg(n, parent.left)) || this.rustBearerOptKeyIn(n, parent.left);
+                && parent.right === n) return this.bearerInOpKeyText(parent.left) !== undefined || this.literalKeyWidened(this.rustLiteralBearerKeyArg(n, parent.left)) || this.rustBearerOptKeyIn(n, parent.left) || (this.rustBearerLiteralInKey(parent.left) !== undefined && this.rustUntilRequestLocal(declaration));
             // A rebuilt plain literal keeps the bearer (write side).
             if (this.rustBearerRebuild(n)) return ++rebuilds > 0;
             // A rebuild from a fresh-map producer keeps the map type.
@@ -17693,6 +17771,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (recv === undefined || !isIdentifier(recv) || this.rustDictBearerDeclaration(recv) === undefined) {
             return undefined;
         }
+        // 41i: a literal key reads the map's own lookup (`in_op`'s Dict arm with a `Str` key)
+        const literal = this.rustBearerLiteralInKey(key);
+        if (literal !== undefined) return `Value::Bool(${String(recv.text)}.contains_key(${literal}))`;
         const text = this.bearerInOpKeyText(key) ?? (this.rustLiteralBearerKeyArg(recv, key) !== undefined ? this.printNode(key, 0).trim() : undefined);
         if (text === undefined) return undefined;
         const typedKey = this.rustInKeyTypedText(key);
@@ -17711,6 +17792,27 @@ export class RustTranspiler extends BaseTranspiler {
         if (own === undefined || !isVariableDeclaration(own) || own.initializer === undefined || !isObjectLiteralExpression(this.rustSkipWrappers(own.initializer))) return false;
         if (this.rustKeyScalarDecisionOpen(key)) this.rustBearerSawOpenKey = true;
         return this.rustScalarLocalOf(key)?.kind === 'ostr' && this.rustScalarUseForms.get(key) === 'kin';
+    }
+
+    /** 41i: a map-literal local handed as the request of a base `handleUntilOption`-family call (item scope: the request
+     *  of a tuple producer, typed before its slot; other map literals keep their own rules). */
+    rustUntilRequestLocal(declaration: any): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        let handed = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            const call: any = n.parent;
+            if (isCallExpression(call) && call.arguments[1] === n && this.rustBaseCallNamed(call, RustTranspiler.RUST_REQUEST_TUPLE_HELPERS)) handed = true;
+            return true;
+        });
+        return handed;
+    }
+
+    /** 41i: `'k' in m` with a plain string-literal key a typed map serves (same key rule as a native bearer read):
+     *  the Rust string literal, else undefined. */
+    rustBearerLiteralInKey(key: any): string | undefined {
+        const keyNode: any = this.rustSkipWrappers(key);
+        if (keyNode === undefined || !isStringLiteral(keyNode) || this.isTestSource(keyNode) || !this.rustReadBearerKeyOk('map', keyNode)) return undefined;
+        return this.rustStringLiteralOf(this.printStringLiteral(keyNode));
     }
 
     /** The key half of `bearerInOp`, also used while the receiver's own bearer
@@ -20493,6 +20595,7 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustSafeMarketLocalOf(node) !== undefined || this.rustMarketSlotParamOf(node) !== undefined || this.rustTypedMarketLocalOf(node) !== undefined
             || this.rustCurrencySlotParamOf(node) !== undefined || this.rustCurrencyLocalOf(node) !== undefined) return `&${text}`;
         if (this.rustMarketStoreElementOf(node) !== undefined) return `&*${text}`;
+        if (this.rustUntilHeadReaderUse(node) && this.rustUntilHeadSlot(declaration)) return `&${text}`;
         return this.rustContainerBoxUses.get(node) !== undefined && this.rustReadBearerKind(node) !== undefined ? `&${text}` : undefined;
     }
 
@@ -23822,9 +23925,19 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (this.rustDeclaredNode(n) !== element || this.rustEnclosingFunction(n) !== fn) return false;
             if (this.rustExtendHeadUse(n)) return heads++ >= 0;
+            // 41i: the receiver of a base borrowed-key reader (`this.safeInteger (x, 'k', ..)`): lent `&x` (`impl KeyRead`)
+            if (this.rustUntilHeadReaderUse(n)) return true;
             return this.rustUntilHeadKeyWrite(n) !== undefined;
         });
         return safe && heads > 0;
+    }
+
+    /** 41i: `n` is the first argument of a base borrowed-key reader (`safeInteger` / `safeString` ..) read with a literal key. */
+    rustUntilHeadReaderUse(n: any): boolean {
+        const call: any = n.parent;
+        if (!isCallExpression(call) || call.arguments[0] !== n || !this.rustBorrowedAnyKeyReader(call)) return false;
+        const key: any = this.rustSkipWrappers(call.arguments[1]);
+        return key !== undefined && isStringLiteralLikeNode(key);
     }
 
     /** `x` (moved at its last use) or `&x` for a shared-map local as the head of a base `extend`, else undefined. */
@@ -24940,7 +25053,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (owner === undefined || !isVariableDeclaration(owner) || owner.initializer === undefined || !this.rustNativeListSource(owner.initializer)) return false;
         const scope: any = this.rustEnclosingFunction(owner);
         if (scope === undefined || isSourceFile(scope) || scope.kind !== SyntaxKind.MethodDeclaration) return false;
-        if (this.primitiveKindOfType(this.typeOfNodeIfAny(element.name)) !== 'string' || this.rustTupleSlotKind(element) !== undefined) return false;
+        if (this.rustSlotPrimitiveKind(element) !== 'string' || this.rustTupleSlotKind(element) !== undefined) return false;
         let alias = false;
         this.rustLocalUsesAll(element, String(element.name.text), false, (n: any) => {
             let top: any = n;
@@ -25111,6 +25224,8 @@ export class RustTranspiler extends BaseTranspiler {
             const d: any = this.rustDeclarationOfIdentifier(e);
             if (d === undefined || !isVariableDeclaration(d) || d.name === e || this.rustEnclosingFunction(d) !== declaration) return false;
             const list: any = d.parent;
+            // 41i: or a nil-declared local the printer already holds as the map (`let mut query: crate::value::Dict`)
+            if (this.rustNilSlotDictLocal(d)) return true;
             return list?.kind === SyntaxKind.VariableDeclarationList && (list.flags & NodeFlags.Const) !== 0 && isObjectLiteralExpression(this.rustSkipWrappers(d.initializer));
         };
         const visit = (node: any) => {
