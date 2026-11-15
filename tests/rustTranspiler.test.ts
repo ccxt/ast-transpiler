@@ -18688,3 +18688,33 @@ describe('ral-54s: a typed `let x: Num;` with no initializer joins the scalar so
         expect(out).toContain('let mut bid: Option<f64> = None;');
     });
 });
+
+describe('ral-54e: a for-counter written into an int local keeps it i64', () => {
+    test('index = 0; for (i..) { index = i } read as a safeDict key is i64; a non-counter write stays Value', () => {
+        const dir = path.join (rustFixtureRoot, 'ral54e-counter-write');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeDict (dictionaryOrList: any, key: any, defaultValue: Dict = undefined): Dict | undefined {\n        return dictionaryOrList;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    pickA (rows: any[], network: string) {\n        const length = rows.length;\n        let index = 0;\n        for (let i = 0; i < length; i++) {\n            const n = this.safeString (this.safeDict (rows, i, {}), 'network');\n            if (n === network) {\n                index = i;\n            }\n        }\n        return this.safeDict (rows, index, {});\n    }\n    pickB (rows: any[], other: any) {\n        let index = 0;\n        for (let i = 0; i < rows.length; i++) {\n            index = other;\n        }\n        return this.safeDict (rows, index, {});\n    }\n}\n");
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        const a = out.slice(out.indexOf('fn pickA'), out.indexOf('fn pickB'));
+        expect(a).toContain('let mut index: i64 = 0;');
+        expect(a).not.toContain('index = Value::Int(i)');
+        const b = out.slice(out.indexOf('fn pickB'));
+        expect(b).toContain('let mut index: Value = ');
+    });
+});
+
+describe('ral-54e: a parseToInt local stepped through parseToInt (x = parseToInt (x + 1)) is Option<i64>', () => {
+    test('leadingZeros stepped in a while and added to a const int is Option<i64>; a partner written from another local stays Value', () => {
+        const dir = path.join (rustFixtureRoot, 'ral54e-pti-step');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export default class Exchange {\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o; }\n    parseToInt (n: any): number { return n; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    zerosA (parts: any) {\n        const digits = 5;\n        const decimalPart = this.safeString (parts, 1, '');\n        let leadingZeros = this.parseToInt (0);\n        while ((leadingZeros <= decimalPart.length) && (decimalPart[leadingZeros] === '0')) {\n            leadingZeros = this.parseToInt (leadingZeros + 1);\n        }\n        return leadingZeros + digits;\n    }\n    zerosB (parts: any, other: any) {\n        const decimalPart = this.safeString (parts, 1, '');\n        let leadingZeros = this.parseToInt (0);\n        while ((leadingZeros <= decimalPart.length) && (decimalPart[leadingZeros] === '0')) {\n            leadingZeros = this.parseToInt (other + 1);\n        }\n        return leadingZeros;\n    }\n}\n");
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        const a = out.slice(out.indexOf('fn zerosA'), out.indexOf('fn zerosB'));
+        expect(a).toContain('let mut leadingZeros: Option<i64> = ');
+        expect(a).toContain('Some(__l + 1)');
+        const b = out.slice(out.indexOf('fn zerosB'));
+        expect(b).toContain('let mut leadingZeros: Value = ');
+    });
+});

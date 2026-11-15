@@ -8510,6 +8510,8 @@ export class RustTranspiler extends BaseTranspiler {
         const optional = kind.startsWith('o');
         if (isIdentifier(node) && node.text !== 'undefined') {
             const source = this.rustScalarLocalOf(node)?.kind;
+            // ral-54e: a `for (let i = <int>; ..; i++)` counter read in its own loop (the step its only write) is always an `Int`
+            if (kind === 'int' && depth === 0 && source === undefined && this.rust54eCounterWrite(node)) return true;
             // ya: phase 2 of the solve, a `Value` string local at its last use moves out (`into_opt_string`)
             return source === kind || (optional && source === kind.slice(1)) || (kind === 'ostr' && source === undefined && depth === 0 && this.rustNilValueStrAlias(node));
         }
@@ -8518,6 +8520,15 @@ export class RustTranspiler extends BaseTranspiler {
         // vd: a later write from a venue string method (`status = this.parseStatus (status)`): the same proof the
         // initialiser takes (every venue declaration returns `string` / `Str`), printed through rustVenueStrCallText
         return kind === 'ostr' && value === undefined && this.rustVenueStrCall(node);
+    }
+
+    /** ral-54e: `x = i` (statement write) where `i` is the counter of an enclosing `for (let i = <int>; ..; i++)` that only the
+     *  step writes (rustValueIntCounter: always an `Int`) and the write sits in that loop's body: the `i64` the counter holds. */
+    rust54eCounterWrite(node: any): boolean {
+        if (!isIdentifier(node) || this.rustTestTierSource(node) || !this.rustValueIntCounter(node)) return false;
+        const up: any = this.rustSkipWrappersUp(node.parent);
+        return isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
+            && this.unwrapParens(up.right) === node && isIdentifier(this.unwrapParens(up.left));
     }
 
     /** Plain `Value` argument slots: `this.`/`super.` methods without a native-typed slot, and `Precise.*`. */
@@ -9123,6 +9134,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (local !== undefined && local.kind.startsWith('o') && isIdentifier(alias) && this.literalKindOfNode(alias) === 'null') return `${super.printIdentifier(left)} = \u0004None`;
         if (local !== undefined && isIdentifier(alias) && this.rustNilAliasMoves.has(alias) && this.rustScalarIdentifierKind(alias) === local.kind) return `${super.printIdentifier(left)} = ${super.printIdentifier(alias)}.take()`;
         if (local?.kind === 'ostr' && isIdentifier(alias) && this.rustScalarIdentifierKind(alias) === undefined && this.rustNilValueStrAlias(alias)) return `${super.printIdentifier(left)} = ${super.printIdentifier(alias)}.into_opt_string()`;
+        // ral-54e: a loop counter written into an `i64` local is the `Copy` `i64` itself (owned: never cloned)
+        // (a counter registered `i64` while the body prints is that name; a `Value` counter is always an `Int` box: its payload)
+        if (local?.kind === 'int' && isIdentifier(alias) && this.rustScalarLocalOf(alias) === undefined && this.rust54eCounterWrite(alias)) {
+            const name = super.transformIdentifier(alias, this.ReservedKeywordsReplacements[alias.text] ?? alias.text);
+            return `${super.printIdentifier(left)} = \u0004${this.rustI64CounterUse(alias) ? name : `${name}.as_i64().unwrap_or_default()`}`;
+        }
         const text = local === undefined ? undefined : this.rustScalarNativeText(local.kind, right);
         // nc: a bare `Copy` source (`i64` / `f64` / `bool` or its `Option`) is owned: the alias-source pass must not clone it
         const owned = text !== undefined && isIdentifier(alias) && text === super.printIdentifier(alias) && RustTranspiler.RUST_COPY_SCALAR_KINDS.has(local.kind)
@@ -11101,6 +11118,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(inner)) return !isBinaryExpression(inner) || (this.rustUbPartnerInBucket(inner.left) && this.rustUbPartnerInBucket(inner.right));
         const d: any = this.rustDeclaredNode(inner);
         if (d === undefined || !isVariableDeclaration(d)) return d !== undefined && isParameterDeclaration(d);
+        // ral-54e: a `const k = <int literal>` local is an `i64` decided by nothing else (no later write, no other source)
+        if ((d.parent?.flags & NodeFlags.Const) !== 0 && this.rustScalarIntLiteral(this.unwrapParens(d.initializer)) !== undefined && this.rustScalarLocalOf(inner)?.kind === 'int') return true;
         return this.rustTbParseToIntInit(d) || d.parent?.parent?.kind === SyntaxKind.ForStatement;
     }
 
@@ -11113,6 +11132,7 @@ export class RustTranspiler extends BaseTranspiler {
             let top: any = u;
             while (isParenthesizedExpression(top.parent)) top = top.parent;
             const up: any = top.parent;
+            if (this.rust54ePtiSelfStep(u)) return true;
             if (this.rustIdentifierIsWritten(u) || (isVariableDeclaration(up) && up.initializer === top)) ok = false;
             else if (isBinaryExpression(up) && (RustTranspiler.NATIVE_COMPARISON_OPERATORS[up.operatorToken.kind] === undefined && !this.isEqualityOp(up.operatorToken.kind)
                 && !RustTranspiler.RUST_SCALAR_VALUE_OPERAND_OPS.has(up.operatorToken.kind))) ok = false;
@@ -11122,6 +11142,23 @@ export class RustTranspiler extends BaseTranspiler {
             return true;
         });
         return ok;
+    }
+
+    /** ral-54e: `x = this.parseToInt (x + <int literal>)` (the write target, or the operand inside it): a self step of a
+     *  parseToInt local stays inside the local (no other local meets it), so it does not make the local a partner. */
+    rust54ePtiSelfStep(u: any): boolean {
+        const name = String(u.text);
+        let top: any = u;
+        while (top.parent !== undefined && top.parent.kind !== SyntaxKind.ExpressionStatement) top = top.parent;
+        const write: any = top;
+        if (!isBinaryExpression(write) || write.operatorToken.kind !== SyntaxKind.EqualsToken || !isIdentifier(write.left) || String(write.left.text) !== name) return false;
+        const call: any = this.unwrapParens(write.right);
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(call.expression.name.text) !== 'parseToInt' || call.arguments.length !== 1) return false;
+        const arg: any = this.unwrapParens(call.arguments[0]);
+        return isBinaryExpression(arg) && arg.operatorToken.kind === SyntaxKind.PlusToken && isIdentifier(this.unwrapParens(arg.left))
+            && String(this.unwrapParens(arg.left).text) === name && this.rustScalarIntLiteral(this.unwrapParens(arg.right)) !== undefined
+            && (u === write.left || u === this.unwrapParens(arg.left));
     }
 
     /** tb: `i OP b` as the condition of `for (let i = <int>; ..; i++)` (the step is the counter's only write, so it is always
