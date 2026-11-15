@@ -19287,6 +19287,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (method === 'safeList' || method === 'safeListValue') {
                 return args.length < 3 || isArrayLiteralExpression(this.rustSkipWrappers(args[2])) ? 'list' : undefined;
             }
+            // ral-54i: inside the declared-array write proof only, base `toArray` / `arrayConcat` answer a `Value::Arr` on every path
+            if (this.rustDeclaredArrayProof && this.rustAlwaysListProducer(expr)) return 'list';
             if (this.rustCallBuildsContainer(expr, 'map', depth + 1)) return 'map';
             if (this.rustCallBuildsContainer(expr, 'list', depth + 1)) return 'list';
             return undefined;
@@ -26037,7 +26039,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const up: any = n.parent;
                 if (isBinaryExpression(up) && up.left === n) {
                     return up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
-                        && (this.rustBuiltListWriteSource(up.right) || this.rustBuiltListSelfSort(up, name) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== undefined || this.rustDefaultedAliasMove(up) !== undefined) && String(up.parent.getText()).split('\n')[0].length <= 200;
+                        && (this.rustBuiltListWriteSource(up.right) || this.rustDeclaredArrayCallWriteSource(up.right) || this.rustBuiltListSelfSort(up, name) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== undefined || this.rustDefaultedAliasMove(up) !== undefined) && String(up.parent.getText()).split('\n')[0].length <= 200;
                 }
                 if (isElementAccessExpression(up) && up.expression === n) {
                     natives++;
@@ -26228,6 +26230,46 @@ export class RustTranspiler extends BaseTranspiler {
             && (!rhs.elements.some((e: any) => isIdentifier(this.rustSkipWrappers(e))) || this.rustBuiltListMovedLiteral(rhs) !== undefined))
             || this.rustBuiltListBoxedLiteral(rhs) !== undefined;
         return this.rustAlwaysListProducer(rhs) || this.rustDefaultedListRead(rhs) || this.rustDeclaredListProducer(rhs) || this.rustVenueListWriteSource(rhs);
+    }
+
+    /** ral-54i: `[await] this.m (..)` whose declaration spells an array return (`T[]`, or `Promise<T[]>` awaited here) and whose
+     *  printed body answers a list on every path (rustCallBuildsContainer over its returns; a venue `Promise<Market[]>` by the zf
+     *  table). The callee must not be dispatched virtually, carry a typed signature or be redeclared: a base method no venue
+     *  redeclares, or a venue method with no override whose family spells the same type. Its `-> Value` result then holds a
+     *  `Value::Arr`, so `.into_list()` moves exactly that list. Only a whole reassignment of a built-list local uses it
+     *  (an initializer from such a call keeps its own decision). */
+    private rustDeclaredArrayProof = false;
+
+    rustDeclaredArrayCallWriteSource(right: any): boolean {
+        const rhs: any = this.rustSkipWrappers(right);
+        const awaited = rhs?.kind === SyntaxKind.AwaitExpression;
+        const call: any = awaited ? this.rustSkipWrappers(rhs.expression) : rhs;
+        if (call === undefined || !isCallExpression(call) || this.rustTestTierSource(call) || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(call.expression.name)) return false;
+        const name = String(call.expression.name.text);
+        const declaration: any = this.rustScalarCallee(call);
+        if (declaration === undefined || !isMethodDeclaration(declaration) || declaration.body === undefined || declaration.type === undefined) return false;
+        const async = this.isAsyncFunction(declaration);
+        if (async !== awaited || this.rustVirtualDispatch?.[this.toSnakeCaseName(name)] !== undefined || this.rustTypedUnified.has(name) || this.rustTypedSignature(declaration) !== undefined) return false;
+        const own = String(declaration.type.getText()).replace(/\s+/g, '');
+        if (!(async ? /^Promise<[\w.]+\[\]>$/ : /^[\w.]+\[\]$/).test(own)) return false;
+        const file = String(declaration.getSourceFile?.()?.fileName ?? '');
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(file)) {
+            if (!this.rustListPassthroughCallee(call, name)) return false;
+        } else {
+            const at = file.search(/[/\\]ts[/\\]src[/\\]/);
+            if (at < 0 || /ts[\\/]src[\\/](?:test|abstract)[\\/]/.test(file) || this.getMethodOverride(declaration) !== undefined) return false;
+            const types = this.rustVenueFamilyReturnTypes(file, at, name);
+            if (types === undefined || ![ ...types ].every((t) => t.replace(/\s+/g, '') === own)) return false;
+            if (async && this.rustVenueMarketListMethod(declaration)) return true;
+        }
+        const saved = this.rustDeclaredArrayProof;
+        this.rustDeclaredArrayProof = true;
+        try {
+            return this.rustCallBuildsContainer(call, 'list');
+        } finally {
+            this.rustDeclaredArrayProof = saved;
+        }
     }
 
     /** ral-53i: `[await] this.m (..)` whose venue declaration the printer's typed-return table (rustVenueContainerReturnKind)

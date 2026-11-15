@@ -18777,3 +18777,24 @@ describe('ral-54k: nested-write keys (bucket entry under an int37 upper key; saf
         expect(out).toMatch(/let mut code: Value = /);
     });
 });
+
+describe('ral-54i: a list local reassigned whole from a call whose declared array return the body proves a list', () => {
+    const write = (dir: string, ret: string, body: string) => {
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): string { return o[k]; }\n    arrayConcat (a: any[], b: any[]): any[] { return a.concat (b); }\n    rowsOf (parts: any[]): " + ret + " {\n" + body + "    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (flag: boolean, parts: any[]) {\n        let rows = [];\n        if (flag) {\n            rows = this.rowsOf (parts);\n        }\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            out.push (this.safeString (rows[i], 'id'));\n        }\n        return out;\n    }\n}\n");
+    };
+    test('`rows = this.rowsOf (parts)` declared `any[]` (a base helper) whose every return is an `arrayConcat` accumulator types the list', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-54i-list');
+        write (dir, 'any[]', "        let result: any[] = [];\n        for (let i = 0; i < parts.length; i++) {\n            result = this.arrayConcat (result, parts[i]);\n        }\n        return result;\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut rows: crate::value::List = ');
+        expect(out).toMatch(/rows = self\.rowsOf\([^;]*\)\.into_list\(\);/);
+    });
+    test('a declared `any[]` whose body can answer a non-list proves nothing: the local stays Value', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-54i-list-neg');
+        write (dir, 'any[]', "        return parts[0];\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).not.toContain('let mut rows: crate::value::List');
+    });
+});
