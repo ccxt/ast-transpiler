@@ -4691,7 +4691,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustSbJoinShape(node)) return true;
         if (isIdentifier(node) || isConditionalExpression(node) || this.rustScalarStrMethod(node, true) !== undefined || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node)) return true;
         if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustIdString(node) || this.rustVenueTypedCall(node) !== undefined) return true;
-        if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && isIdentifier(node.expression);
+        if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && (isIdentifier(node.expression) || this.rustSelfRootedLengthRecv(node.expression));
         if (isElementAccessExpression(node)) return isIdentifier(node.expression) || this.rustInlineHandleStrSlot(node);
         if (isCallExpression(node) && isIdentifier(node.expression) && RustTranspiler.RUST_STR_RUNTIME_FREE.has(String(node.expression.text))) return true;
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustScalarReceiver(node.expression.expression)) return false;
@@ -4819,7 +4819,9 @@ export class RustTranspiler extends BaseTranspiler {
         // pd: a box-only alias of a typed numeric / bool parameter is stored and boxed back (D11): the Copy scalar boxes
         // with `Value::from` and no copy, where the `Value` alias cloned the parameter's binding; strings keep the veto
         if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined && !RustTranspiler.RUST_COPY_SCALAR_KINDS.has(kind)) return undefined;
-        if ((boxed > 0 || (expressionUses && !this.rustCompareOnlyNumUses(declaration))) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
+        // ral-52n: a box that is an argument of a `number`-typed parameter reads back through `as_f64()`, so an Int default
+        // and its Float spelling hand the callee the same `f64`
+        if ((boxed > 0 && !this.rustNumParamBoxesOnly(declaration) || (expressionUses && !this.rustCompareOnlyNumUses(declaration))) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
         // a reader-default string re-boxed anywhere but a moving `return` would copy where the `Value` moved
         const readerTouched = this.rustReaderDefaultTouched(declaration);
         // a reader string copied at a box is lent there (`Value::from(x.as_deref())`: the copy the `Value` clone made)
@@ -5908,8 +5910,22 @@ export class RustTranspiler extends BaseTranspiler {
     // `xs.length` of a local or parameter always prints a `Value::Int` (native `len()` or `get_array_length`),
     // so the local is an `i64` exactly; the string-local `.length` stays the expression rule's.
     rustListLengthInit(node): boolean {
-        if (node === undefined || !isPropertyAccessExpression(node) || !isIdentifier(node.name) || node.name.text !== 'length' || !isIdentifier(node.expression)) return false;
+        if (node === undefined || !isPropertyAccessExpression(node) || !isIdentifier(node.name) || node.name.text !== 'length') return false;
+        if (!isIdentifier(node.expression)) return this.rustSelfRootedLengthRecv(node.expression);
         return this.checkerOrUndefined() !== undefined && this.rustScalarLengthRecv(node) === undefined;
+    }
+
+    // ral-52n: `this.orders.length` / `this.options['k'].length` print `get_array_length(&..)`, which answers a
+    // `Value::Int` for every receiver; a receiver whose checker type is string keeps the string-length rule's form
+    rustSelfRootedLengthRecv(recv): boolean {
+        if (this.checkerOrUndefined() === undefined) return false;
+        let n: any = recv;
+        while ((isPropertyAccessExpression(n) && isIdentifier(n.name)) || (isElementAccessExpression(n) && isStringLiteral(n.argumentExpression))) n = n.expression;
+        if (n === recv || n.kind !== SyntaxKind.ThisKeyword) return false;
+        const t: any = this.typeOfNodeIfAny(recv);
+        if (t === undefined) return false;
+        const prim = this.primitiveKindOfType(t);
+        return prim !== 'string' && !(t.flags & TypeFlags.StringLike);
     }
 
     rustListLengthText(node): string {
@@ -6422,6 +6438,31 @@ export class RustTranspiler extends BaseTranspiler {
             return true;
         });
         return ok;
+    }
+
+    /** Every boxed use of the local is a direct argument of a `number`-typed parameter. */
+    rustNumParamBoxesOnly(declaration): boolean {
+        let ok = true;
+        let any = false;
+        this.rustScalarUsesAll(declaration, String(declaration.name.text), (n) => {
+            const form = this.rustScalarUseForms.get(n);
+            if (form !== 'box' && form !== 'xbox' && form !== 'err') return true;
+            any = true;
+            const parent: any = n.parent;
+            if (form !== 'box' || parent === undefined || !isCallExpression(parent) || !this.rustNumParamArg(parent, n)) ok = false;
+            return true;
+        });
+        return ok && any;
+    }
+
+    /** The parameter `arg` binds in `call` is declared `number` (not `int`), so it prints as an `f64`. */
+    rustNumParamArg(call, arg): boolean {
+        const idx = call.arguments.findIndex((a) => this.unwrapParens(a) === arg);
+        let decl: any;
+        try { decl = signatureDeclaration(this.getChecker().getResolvedSignature(call)); } catch (e) { return false; }
+        const p: any = decl?.parameters?.[idx];
+        if (p === undefined || p.type === undefined || p.dotDotDotToken !== undefined) return false;
+        return p.type.kind === SyntaxKind.NumberKeyword;
     }
 
     /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */

@@ -18069,3 +18069,46 @@ describe('ral-52i: an `in`-tested insert key also stored as a literal value of t
         expect(out).not.toContain('let mut networkCode: Value');
     });
 });
+
+describe('ral-52n: length locals whose receiver is a self field', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    orders: any = undefined;\n    name: string = '';\n    hold (x: any): any { return x; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-52n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('krakenfutures `this.orders.length` and binance `this.options[k].length` are i64', () => {
+        const out = run("    a () {\n        const length = this.orders.length;\n        if (length > 0) { this.hold (this.orders); }\n    }\n    b (keys: string[]) {\n        const length = this.options['crossMarginPairsData'].length;\n        if (length === 0) { this.options['crossMarginPairsData'] = keys; }\n    }\n");
+        expect(out).toMatch(/let mut length: i64 = get_array_length\(&[^\n]*orders[^\n]*\)\.as_i64\(\)\.unwrap_or_default\(\);/);
+        expect(out).toMatch(/let mut length: i64 = get_array_length\(&[^\n]*crossMarginPairsData[^\n]*\)\.as_i64\(\)\.unwrap_or_default\(\);/);
+        expect(out).not.toMatch(/let mut length: Value/);
+    });
+    test('guard: a string self field length is not taken by the list rule', () => {
+        const out = run("    c () {\n        const n = this.name.length;\n        return this.hold (n);\n    }\n");
+        expect(out).not.toMatch(/let mut n: i64 = get_array_length/);
+    });
+});
+
+describe('ral-52n: an Int-defaulted number reader local handed to a number-typed parameter', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Num = number | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    // METHODS \n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-52n2-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base.replace('    // METHODS ', "    safeNumber (dictionary: any, key: any, defaultValue: Num = undefined): Num { return defaultValue; }"));
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    const body = "    calc (price: number, amountPrecision: number, maxDecimals: number): number {\n        if (price > 1) { return amountPrecision; }\n        return maxDecimals;\n    }\n    p (market: Dict) {\n        const price = this.safeNumber (market, 'markPx', 0);\n        let pricePrecision = 0;\n        if (price !== undefined) {\n            pricePrecision = this.calc (price, 1, 6);\n        }\n        return pricePrecision;\n    }\n";
+    test('hyperliquid parseMarket `price`: presence test plus a native `number` argument is Option<f64>', () => {
+        const out = run(body);
+        expect(out).toContain('let mut price: Option<f64> = ');
+    });
+    test('guard: handed to an `any` parameter it keeps the Value', () => {
+        const out = run(body.replace('calc (price: number,', 'calc (price: any,'));
+        expect(out).toMatch(/let mut price: Value = /);
+    });
+});
