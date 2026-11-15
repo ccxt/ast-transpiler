@@ -6064,7 +6064,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (same) kind = pk;
         }
         // wd: a venue method already printed `-> Option<String>` is a string-or-Null default as it stands
-        if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && (this.rustReaderFallbackChecked(fallback) === 'string' || this.rustVenueStrCall(fallback) || this.rustOptionsElemKind(fallback) === 'ostr' || this.rust49iUrlsLitDefault(fallback, args[0]))) ? 'ostr' : undefined;
+        if (strBase !== undefined) return kind === 'str' || kind === 'ostr' || (kind === undefined && (this.rustReaderFallbackChecked(fallback) === 'string' || this.rustVenueStrCall(fallback) || this.rustOptionsElemKind(fallback) === 'ostr' || this.rustSignReaderUrlsLitDefault(fallback, args[0]))) ? 'ostr' : undefined;
         if (intBase !== undefined) return kind === 'int' || kind === 'oint' ? 'oint' : undefined;
         if (numBase !== undefined) return kind !== undefined || this.rustReaderFallbackChecked(fallback) === 'number' ? 'onum' : undefined;
         return fresh && (kind === 'bool' || kind === 'obool' || (kind === undefined && this.rustReaderFallbackChecked(fallback) === 'boolean')) ? 'obool' : undefined;
@@ -6074,8 +6074,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  never-written `const m = this.urls['api']` (rustUrlsMapEntry) of the same function, and every venue file of the family
      *  writes `'<lit>'` only as a string literal (the describe() urls literal; checked by rustOptionsElemKind's scan of
      *  literal `'<lit>': v` writes): the default the runtime reader hands back unconverted is a `Str` or `Null`. */
-    rust49iUrlsLitDefault(fallback: any, receiver: any): boolean { return this.rust49iUrlsLitDefaultX(fallback, receiver); }
-    rust49iUrlsLitDefaultX(fallback: any, receiver: any): boolean {
+    rustSignReaderUrlsLitDefault(fallback: any, receiver: any): boolean {
         let node: any = this.unwrapParens(fallback);
         if (node !== undefined && node.kind === SyntaxKind.AsExpression) node = this.unwrapParens(node.expression);
         if (node === undefined || !isElementAccessExpression(node) || !isIdentifier(node.expression) || !isStringLiteral(this.unwrapParens(node.argumentExpression))) return false;
