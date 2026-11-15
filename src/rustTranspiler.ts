@@ -18934,8 +18934,17 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-wf: a read inside the value of a one-key write on the same map (`m[k] = f (m[k])`) is evaluated before the
         // insert takes `&mut m` (rustBearerInsertText binds such a value first)
         // (dynamic keys only: a literal-key self-write is the shared-Dict rule's `key_read` form already)
-        if (!this.isNativeAccessPositionSafe(root) && !isStringLiteralLikeNode(this.rustSkipWrappers(access.argumentExpression))
-            && this.isNativeAccessPositionSafe(root, this.rustBearerSelfWriteHost(root, name))) this.literalSelfWriteHits++;
+        // ral-51i: a literal-key read in the value of a CHAINED write (`m['lit'][k] = { .. m['x'] .. }`) has no shared-Dict
+        // `key_read` form, so it takes the same bind-first rule (rustBearerChainedWrite's `__be_tmp`)
+        const selfHost: any = this.rustBearerSelfWriteHost(root, name);
+        // (never a read of the hop bucket itself: `m['a']['b'] = m['a']` aliases the bucket it writes into)
+        let hop: any = selfHost?.left;
+        while (hop !== undefined && isElementAccessExpression(hop.expression)) hop = hop.expression;
+        const readKey: any = this.rustSkipWrappers(access.argumentExpression);
+        const hopKey: any = hop === undefined || hop === selfHost?.left ? undefined : this.rustSkipWrappers(hop.argumentExpression);
+        const chainedHost = hopKey !== undefined && isStringLiteralLikeNode(readKey) && isStringLiteralLikeNode(hopKey) && String(readKey.text) !== String(hopKey.text);
+        if (!this.isNativeAccessPositionSafe(root) && (chainedHost || !isStringLiteralLikeNode(this.rustSkipWrappers(access.argumentExpression)))
+            && this.isNativeAccessPositionSafe(root, selfHost)) this.literalSelfWriteHits++;
         else if (!this.isNativeAccessPositionSafe(root)) return false;
         if (this.isNativeWriteTargetBase(root)) return false;
         // ccxt's write-back pass matches `get_value` text to write a mutated bind back.
@@ -19093,7 +19102,10 @@ export class RustTranspiler extends BaseTranspiler {
         let up: any = node.parent;
         while (up !== undefined && !isStatement(up) && !isFunctionLike(up)) {
             if (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken && this.isNodeInsideNode(node, up.right)) {
-                const left: any = up.left;
+                // ral-51i: also a chained `m['lit'][k] = {.. m['x'] ..}` (rustBearerChainedWrite binds a value that reads the
+                // receiver first, `{ let __be_tmp = ..; insert }`), so the read runs before the `entry` takes `&mut m`
+                let left: any = up.left;
+                while (isElementAccessExpression(left) && isElementAccessExpression(left.expression) && isStringLiteralLikeNode(this.rustSkipWrappers(left.expression.argumentExpression))) left = left.expression;
                 const ok = isElementAccessExpression(left) && isIdentifier(left.expression) && String(left.expression.text) === name
                     && up.parent?.kind === SyntaxKind.ExpressionStatement;
                 return ok ? up : undefined;

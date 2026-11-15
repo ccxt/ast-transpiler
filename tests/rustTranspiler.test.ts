@@ -17872,3 +17872,24 @@ describe('ral-51f: a string-literal-seeded handle*AndParams slot 0 takes the sho
         expect(output).toContain('let __destr_tmp: Vec<Value> = ');
     });
 });
+
+describe('ral-51i: a literal-key read of the receiver inside a chained write value binds first', () => {
+    const write = (name: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k] ?? d; }\n    safeNumber (o: any, k: any, d: any = undefined): any { return o[k] ?? d; }\n    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): Str { return networkId; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = (value: string) => "    m (fee: any, currency: any): any {\n        const result: Dict = {\n            'info': fee,\n            'withdraw': { 'fee': this.safeNumber (fee, 'withdrawalFee'), 'percentage': false },\n            'deposit': { 'fee': this.safeNumber (fee, 'depositFee'), 'percentage': false },\n            'networks': {},\n        };\n        const networkId = this.safeString (fee, 'network');\n        const networkCode = this.networkIdToCode (networkId, this.safeString (currency, 'code'));\n        if (networkCode !== undefined) {\n            result['networks'][networkCode] = " + value + ";\n        }\n        return result;\n    }\n";
+    test('`m[\'networks\'][k] = { deposit: m[\'deposit\'] }` keeps m an IndexMap with the value bound first', () => {
+        const out = write ('51i-chain', body ("{ 'deposit': result['deposit'], 'withdraw': result['withdraw'] }"));
+        expect(out).toContain('let mut result: indexmap::IndexMap<String, Value> = ');
+        expect(out).toContain('{ let __be_tmp = ');
+        expect(out).toContain('result.get("deposit")');
+    });
+    test('negative: the receiver handed to a method inside the value keeps the box', () => {
+        const out = write ('51i-chainn', body ("{ 'deposit': result['deposit'], 'all': this.hold (result) }"));
+        expect(out).toContain('let mut result: Value = ');
+    });
+});
