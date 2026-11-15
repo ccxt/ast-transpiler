@@ -8878,9 +8878,9 @@ export class RustTranspiler extends BaseTranspiler {
             : this.rustScalarUseForms.get(last) !== 'nkey' ? (lkind === undefined && isIdentifier(last) && this.rustPlainValueBinding(last) ? `crate::runtime::stringify_param(&${this.unCamelCaseIfNeeded(this.ReservedKeywordsReplacements[last.text] ?? last.text)})` : undefined)
                 : lkind === 'str' ? `${lname}.to_string()` : lkind === 'ostr' ? `${lname}.as_deref().unwrap_or("null").to_string()` : undefined;
         if (lastText === undefined) return undefined;
-        // borrow safety of the printed insert only (the key's type is decided on the AST by rustNestedFieldUpperKeyUse): a value
-        // whose print borrows `self` is bound before `&mut self.F` is taken
-        const bound = /\bself\b/.test(value);
+        // borrow safety of the insert (the key's type is decided on the AST by rustNestedFieldUpperKeyUse): a value whose
+        // expression borrows `self` (rustValueBorrowsSelf, from the node) is bound before `&mut self.F` is taken
+        const bound = this.rustValueBorrowsSelf(left.parent?.right);
         const chain = `if let Value::Dict(__bf03d0) = &mut self.${field} { let __bf03e1 = std::sync::Arc::make_mut(__bf03d0).entry(${upperText}).or_insert(Value::Null); `
             + `if let Value::Dict(__r05d) = __bf03e1 { std::sync::Arc::make_mut(__r05d).insert(${lastText}, ${bound ? '__be_tmp' : value}); } }`;
         const insert = bound ? `{ let __be_tmp = ${value}; ${chain} }` : chain;
@@ -16616,9 +16616,10 @@ export class RustTranspiler extends BaseTranspiler {
         return this.printNativeLength(node, shadow.name);
     }
 
-    /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
-     *  runtime helper's exact semantics over `.get(..)`. */
-    printShadowSafeReadCall(node: CallExpression): string | undefined {
+    /** The safe-read name when `this.safe<Type>(x, 'k'[, default])` reads a shadowed dict parameter with an inlinable
+     *  literal key: printShadowSafeReadCall then prints `x.get("k")` and never borrows `self` for the call. */
+    rustShadowSafeReadOf(node: any): string | undefined {
+        if (!isCallExpression(node)) return undefined;
         const callee = this.rustShadowSafeCallee(node);
         if (callee === undefined) return undefined;
         const args: any[] = (node as any).arguments ?? [];
@@ -16629,6 +16630,29 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isStringLiteralLikeNode(key)) return undefined;
         const text = String(key.text);
         if (!this.rustShadowKeyLiteral(text) || this.rustNodeIsKeyUnsafePlace(text)) return undefined;
+        return callee;
+    }
+
+    /** ral-58x: the value expression borrows `self` when printed: it names `this` / `super`, except as the callee of a
+     *  shadow safe read (rustShadowSafeReadOf), which prints a native read of the parameter (its default argument still
+     *  counts). Decided from the node, not from its printed text. */
+    rustValueBorrowsSelf(node: any): boolean {
+        if (node === undefined) return false;
+        if (node.kind === SyntaxKind.ThisKeyword || node.kind === SyntaxKind.SuperKeyword) return true;
+        if (this.rustShadowSafeReadOf(node) !== undefined) return ((node as any).arguments ?? []).some((a: any) => this.rustValueBorrowsSelf(a));
+        let found = false;
+        node.forEachChild((c: any) => { if (!found && this.rustValueBorrowsSelf(c)) found = true; });
+        return found;
+    }
+
+    /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
+     *  runtime helper's exact semantics over `.get(..)`. */
+    printShadowSafeReadCall(node: CallExpression): string | undefined {
+        const callee = this.rustShadowSafeReadOf(node);
+        if (callee === undefined) return undefined;
+        const args: any[] = (node as any).arguments ?? [];
+        const shadow = this.rustParamShadowOf(args[0]);
+        const text = String(args[1].text);
         const fallback = args.length === 3 ? this.printNode(args[2], 0).trim() : 'Value::Null';
         const get = `${shadow.name}.get("${text}")`;
         // The ccxt post-pass strips the `;` of a statement ending in `};`

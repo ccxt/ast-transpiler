@@ -19371,6 +19371,38 @@ describe('ral-56f: a String upper key of two-level this.balance writes prints th
     });
 });
 
+describe('ral-58x: binding the value of a String-upper-key balance insert is decided from the value node, not its printed text', () => {
+    test('a shadow safe read (native `.get`) is not bound; a this-method call is bound; rustValueBorrowsSelf answers from the node', () => {
+        const dir = path.join (rustFixtureRoot, 'ral58x-bind');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: Dict = {};\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeList (o: any, k: any, d: any = undefined): any[] { return o[k]; }\n    safeCurrencyCode (id: Str, c: any = undefined): Str { return id; }\n    safeBalance (b: Dict): Dict { return b; }\n    account (): Dict { return {}; }\n    iso8601 (t: any): Str { return ''; }\n    hold (x: any, h: any = undefined): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleBalance (client: any, message: Dict) {\n        const channel = this.safeString (message, 'e');\n        const data = this.safeList (message, 'B', []);\n        const timestamp = this.safeInteger (message, 'E');\n        let type: Str = 'spot';\n        if (channel === 'contract') {\n            type = 'contract';\n        }\n        if (!(type in this.balance)) {\n            this.balance[type] = {};\n        }\n        this.balance[type]['info'] = this.safeList (message, 'B', []);\n        this.balance[type]['timestamp'] = timestamp;\n        this.balance[type]['datetime'] = this.iso8601 (timestamp);\n        for (let i = 0; i < data.length; i++) {\n            const balance = data[i];\n            const code = this.safeCurrencyCode (this.safeString (balance, 'a'));\n            const account = this.account ();\n            account['free'] = this.safeString (balance, 'f');\n            if (code !== undefined) {\n                this.balance[type][code] = account;\n            }\n        }\n        this.balance[type] = this.safeBalance (this.balance[type]);\n        this.hold (this.balance[type], type + ':balance');\n    }\n}\n");
+        const rt: any = (transpiler as any).rustTranspiler;
+        expect(typeof rt.rustValueBorrowsSelf).toBe('function');
+        const seen: string[] = [];
+        const own = rt.rustValueBorrowsSelf;
+        rt.rustValueBorrowsSelf = function (node: any) {
+            const r = own.call(this, node);
+            if (node?.parent?.right === node) seen.push(`${node.getText()} => ${r}`);
+            return r;
+        };
+        let out = '';
+        try {
+            out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        } finally {
+            rt.rustValueBorrowsSelf = own;
+        }
+        expect(out).toContain('{ let __be_tmp = self.iso8601(');
+        expect(out).not.toContain('get_value_mut(&mut self.balance');
+        expect(seen).toContain('this.iso8601 (timestamp) => true');
+        expect(seen).toContain('timestamp => false');
+        expect(out).toContain('insert("info".to_string(), (match message.get("B")');
+        expect(out).not.toMatch(/let __be_tmp = \(match message\.get\("B"\)/);
+        expect(seen).toContain("this.safeList (message, 'B', []) => false");
+        for (const line of out.split('\n')) expect(line.length).toBeLessThanOrEqual(400);
+    });
+});
+
 describe('ral-56k: safeCurrencyCode bucket key of a map-literal local (printer owns the push and its write-back)', () => {
     const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict | undefined { return o; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    hold (x: any, y: any = undefined, z: any = undefined): any { return x; }\n    depositWithdrawFee (info: any): Dict { return {}; }\n}\n";
     const write = (name: string, body: string) => {
