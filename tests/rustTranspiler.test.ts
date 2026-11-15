@@ -17696,3 +17696,67 @@ describe('ral-51n: length locals of untyped lists and compare-only number reader
         expect(out).toMatch(/let mut contracts: Value = /);
     });
 });
+
+describe('ral-51e: a reversed index `n - j - 1` over an i64 length and an i64 loop counter, read only as base safeDict keys, is an i64', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (dictionaryOrList: any, key: any, defaultValue: Dict = undefined): Dict | undefined {\n        const value = dictionaryOrList[key];\n        if (value === undefined) {\n            return defaultValue;\n        }\n        return value;\n    }\n    hold (x: any): any { return x; }\n}\n";
+    const run = (body: string, file = 'ts/src/venue.ts') => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-51e-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, file), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            return {
+                venue: t.transpileRustByPath(path.join(root, file)).content,
+                base: t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts')).content,
+            };
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    const body = (expr: string, use = "const entry = this.safeDict (rows, index, {});\n            this.hold (entry);") => "    m (response: any) {\n        const rows: any[] = this.hold (response);\n        const length = rows.length;\n        for (let j = 0; j < length; j++) {\n            const index = " + expr + ";\n            " + use + "\n        }\n    }\n";
+    test('base fetchPaginatedCallCursor / apex pro: `length - j - 1` keys safeDict as an i64', () => {
+        const out = run(body('length - j - 1'));
+        expect(out.venue).toMatch(/let mut index: i64 = \(*length - j\)* - 1\)*;/);
+        expect(out.venue).toMatch(/self\.safe_?[dD]ict\([^\n]*, index, /);
+        expect(out.venue).toMatch(/let mut j: i64 = 0;/);
+    });
+    test('lighter jReversed / krakenfutures: `length - 1 - j` too', () => {
+        const out = run(body('length - 1 - j'));
+        expect(out.venue).toMatch(/let mut index: i64 = /);
+    });
+    test('guard: a local also read outside a safeDict key stays Value', () => {
+        const out = run(body('length - j - 1', "const entry = this.safeDict (rows, index, {});\n            this.hold (index);"));
+        expect(out.venue).not.toMatch(/let mut index: i64/);
+    });
+    test('guard: a counter written in the body keeps the local Value', () => {
+        const out = run(body('length - j - 1', "const entry = this.safeDict (rows, index, {});\n            j = j + 1;\n            this.hold (entry);"));
+        expect(out.venue).not.toMatch(/let mut index: i64/);
+    });
+});
+
+describe('ral-51e: a row-written defaulted list handed to a base call at its last use moves its handle (coinspot buyTrades / sellTrades)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (dictionaryOrList: any, key: any, defaultValue: Dict = undefined): Dict | undefined {\n        const value = dictionaryOrList[key];\n        if (value === undefined) {\n            return defaultValue;\n        }\n        return value;\n    }\n    safeList (dictionaryOrList: any, key: any, defaultValue: any[] = undefined): any[] {\n        const value = dictionaryOrList[key];\n        if (value === undefined) {\n            return defaultValue;\n        }\n        return value;\n    }\n    arrayConcat (a: any[], b: any[]) { return a.concat (b); }\n    hold (x: any): any { return x; }\n}\n";
+    const run = (body: string, file = 'ts/src/venue.ts') => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-51e2-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, file), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            return {
+                venue: t.transpileRustByPath(path.join(root, file)).content,
+                base: t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts')).content,
+            };
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    const rows = "        const buyTrades: Dict[] = this.safeList (response, 'buyorders', []);\n        for (let i = 0; i < buyTrades.length; i++) {\n            buyTrades[i]['side'] = 'buy';\n        }\n        const sellTrades: Dict[] = this.safeList (response, 'sellorders', []);\n        for (let i = 0; i < sellTrades.length; i++) {\n            sellTrades[i]['side'] = 'sell';\n        }\n";
+    test('both lists are typed and move into arrayConcat', () => {
+        const out = run("    m (response: any) {\n" + rows + "        const trades = this.arrayConcat (buyTrades, sellTrades);\n        return this.hold (trades);\n    }\n");
+        expect(out.venue).toContain('let mut buyTrades: crate::value::List = ');
+        expect(out.venue).toContain('let mut sellTrades: crate::value::List = ');
+        expect(out.venue).toContain('(Value::Arr(buyTrades), Value::Arr(sellTrades))');
+    });
+    test('guard: a list read again after the hand-off keeps Value', () => {
+        const out = run("    m (response: any) {\n" + rows + "        const trades = this.arrayConcat (buyTrades, sellTrades);\n        return this.hold ([ trades, buyTrades ]);\n    }\n");
+        expect(out.venue).not.toContain('let mut buyTrades: crate::value::List');
+    });
+});
