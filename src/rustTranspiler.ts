@@ -4809,7 +4809,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (boolTested) kind = 'obool';
         // ral-51e: `index = length - j - 1` read only as base safeDict keys, over a loop counter not yet registered while the scope solves
         if (kind === undefined && this.rustCounterArithInit(declaration.initializer, declaration) && this.rustCounterArithHasCounter(declaration.initializer, declaration)
-            && this.rustSafeDictKeyOnlyLocal(declaration)) kind = 'int';
+            && (this.rustSafeDictKeyOnlyLocal(declaration) || this.rust56nSliceBoundOnlyLocal(declaration))) kind = 'int';
         if (kind === undefined || kind === 'null') return undefined;
         if (this.rustSafeStringLocalIsTyped(declaration) || this.rustStringMethodLocalInit(declaration) !== undefined
             || (kind === 'bool' && this.getRustBoolLocalInitializer(declaration, this.printNode(declaration.initializer, 0)) !== undefined)) return undefined;
@@ -6850,6 +6850,9 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarCounterCond(node: any, name: string): string | undefined {
         const cond: any = node?.condition;
         if (cond === undefined || !isBinaryExpression(cond)) return undefined;
+        // ral-56n: a `Math.ceil (a / b)` `Option<f64>` const bound on either side (polymarket `maxPages > p`)
+        const ceil = this.rust56nCeilCounterCompare(cond);
+        if (ceil !== undefined && String(ceil.counter.text) === name && this.rustScalarLocalOf(ceil.bound)?.kind === 'onum') return this.rust56nCeilCompareText(cond, ceil, `(${name} as f64)`);
         const op = cond.operatorToken.kind;
         const operator = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
         const { left, right } = cond as any;
@@ -6859,16 +6862,79 @@ export class RustTranspiler extends BaseTranspiler {
         const boundKind = isIdentifier(bound) ? this.rustScalarLocalOf(bound)?.kind : undefined;
         if (boundKind === 'int') return `${name} ${operator} ${super.printIdentifier(bound)}`;
         if (boundKind === 'num') return `(${name} as f64) ${operator} ${super.printIdentifier(bound)}`;
-        // tb: an `Option<i64>` parseToInt bound: `is_less_than(Int, Null)` is false, `Some` orders as f64 like the helper
-        if (boundKind === 'oint' && this.rustTbCounterBound(cond, bound, 'oint') !== undefined) return `matches!(${super.printIdentifier(bound)}, Some(__b) if (${name} as f64) ${operator} (__b as f64))`;
-        // ral-55e: a parseToInt bound that is already decided `Option<i64>` (its other uses meet typed arithmetic partners):
-        // the same `matches!` test, the counter's own i64 plan unchanged
-        if (boundKind === 'oint' && this.rustTbParseToIntInit(this.rustDeclaredNode(bound)) && this.rust55ePtiTypedPartners(this.rustDeclaredNode(bound))) return `matches!(${super.printIdentifier(bound)}, Some(__b) if (${name} as f64) ${operator} (__b as f64))`;
+        // tb: an `Option<i64>` parseToInt bound: `is_less_than(Int, Null)` is false, `Some` orders as f64 like the helper;
+        // ral-55e / ral-56n: or a parseToInt bound whose `Option<i64>` kind is already decided (rustDecidedOintBound)
+        if (boundKind === 'oint' && (this.rustTbCounterBound(cond, bound, 'oint') !== undefined || this.rustDecidedOintBound(cond, bound))) return `matches!(${super.printIdentifier(bound)}, Some(__b) if (${name} as f64) ${operator} (__b as f64))`;
         const refs = (n: any): boolean => (isIdentifier(n) && n.text === name) || (n.forEachChild(refs) ?? false);
         if (refs(right) || !this.printsValueExpression(left) || !this.printsValueExpression(this.orderedComparisonOperand(right))) return undefined;
         if (this.printRustScalarBinary(cond) !== undefined || this.rustScalarOwnsOperand(left) || this.rustScalarOwnsOperand(right)) return undefined;
         if (!this.rustOrderedOperandsProven(op, left, right) || this.nativeIndexOfLiteralTestText(op, left, right) !== undefined) return undefined;
         return `(${name} as f64) ${operator} ${this.printNode(right, 0)}.as_f64().unwrap_or(f64::NAN)`;
+    }
+
+    /** One decided-bound mechanism for a parseToInt `Option<i64>` for-bound `n` (the oint kind already decided):
+     *  ral-55e: its other uses meet typed arithmetic partners (rust55ePtiTypedPartners); ral-56n: or `j` is a `Value::Int`
+     *  counter of this very ordered for-condition (paradex pro `j < numInGroup`). `is_less_than(Int(j), n)` is the `as f64`
+     *  compare of `Some`, false on `None`. */
+    rustDecidedOintBound(cond: any, n: any): boolean {
+        if (!isIdentifier(n) || !this.rustTbParseToIntInit(this.rustDeclaredNode(n))) return false;
+        if (this.rust55ePtiTypedPartners(this.rustDeclaredNode(n))) return true;
+        if (this.isEqualityOp(cond.operatorToken.kind)) return false;
+        const counter: any = cond.left;
+        if (!isIdentifier(counter)) return false;
+        const d: any = this.rustDeclaredNode(counter);
+        const loop: any = d?.parent?.parent;
+        return d !== undefined && isVariableDeclaration(d) && loop?.kind === SyntaxKind.ForStatement && loop.condition === cond && this.rustValueIntCounter(counter);
+    }
+
+    /** ral-56n: `cond` is `i OP n` of `for (let i = <int>; ..; i++)` (a `Value::Int` counter) and `n` a const whose initializer is
+     *  a ternary of two identifiers (each arm an `i64` local by its own decision). */
+    rust56nTernaryCounterBound(cond: any, n: any): boolean {
+        if (!isBinaryExpression(cond) || this.isEqualityOp(cond.operatorToken.kind) || RustTranspiler.NATIVE_COMPARISON_OPERATORS[cond.operatorToken.kind] === undefined) return false;
+        if (this.unwrapParens(cond.right) !== n || !isIdentifier(n) || !isIdentifier(cond.left)) return false;
+        const d: any = this.rustDeclaredNode(n);
+        if (d === undefined || !isVariableDeclaration(d) || (d.parent?.flags & NodeFlags.Const) === 0 || d.initializer === undefined) return false;
+        const init: any = this.unwrapParens(d.initializer);
+        if (!isConditionalExpression(init)) return false;
+        const arm = (a: any) => { const x: any = this.unwrapParens(a); return isIdentifier(x) && this.rustScalarLocalOf(x)?.kind === 'int'; };
+        if (!arm(init.whenTrue) || !arm(init.whenFalse)) return false;
+        const cd: any = this.rustDeclaredNode(cond.left);
+        const loop: any = cd?.parent?.parent;
+        return cd !== undefined && isVariableDeclaration(cd) && loop?.kind === SyntaxKind.ForStatement && loop.condition === cond && this.rustValueIntCounter(cond.left);
+    }
+
+    /** ral-56n: `const b = Math.ceil (x / y)` (whole initializer of a const). */
+    rust56nCeilDivConst(d: any): boolean {
+        // one ceil-division recogniser: the landed ral-55e rust55eCeilDivInit, on a const declaration
+        return d !== undefined && isVariableDeclaration(d) && (d.parent?.flags & NodeFlags.Const) !== 0 && this.rust55eCeilDivInit(d);
+    }
+
+    /** ral-56n: an ordered compare (not equality) of a `for` `Value::Int` counter (int-literal start, `++` / `--` its only write)
+     *  and a `Math.ceil` division const: the two operands, else undefined. */
+    rust56nCeilCounterCompare(node: any): { counter: any, bound: any } | undefined {
+        if (!isBinaryExpression(node) || this.isEqualityOp(node.operatorToken.kind) || RustTranspiler.NATIVE_COMPARISON_OPERATORS[node.operatorToken.kind] === undefined) return undefined;
+        const l: any = this.unwrapParens(node.left), r: any = this.unwrapParens(node.right);
+        for (const [ counter, bound ] of [ [ l, r ], [ r, l ] ]) {
+            if (isIdentifier(counter) && isIdentifier(bound) && this.rust56nCeilDivConst(this.rustDeclaredNode(bound)) && this.rustValueIntCounter(counter)) return { counter, bound };
+        }
+        return undefined;
+    }
+
+    /** ral-56n: `is_less_than` & co. compare both `as_f64` payloads, false for a `Null` side: the `Some` payload against the
+     *  counter's f64 (`(i as f64)` for an `i64`, `i.as_f64().unwrap_or(NAN)` for the `Value::Int` counter). */
+    rust56nCeilCompareText(node: any, ceil: { counter: any, bound: any }, counterText: string): string {
+        const sign = RustTranspiler.NATIVE_COMPARISON_OPERATORS[node.operatorToken.kind];
+        const counterLeft = this.unwrapParens(node.left) === ceil.counter;
+        const test = counterLeft ? `${counterText} ${sign} __b` : `__b ${sign} ${counterText}`;
+        return `matches!(${super.printIdentifier(ceil.bound)}, Some(__b) if ${test})`;
+    }
+
+    print56nCeilCompare(node: any): string | undefined {
+        const ceil = this.rust56nCeilCounterCompare(node);
+        if (ceil === undefined || this.rustScalarLocalOf(ceil.bound)?.kind !== 'onum') return undefined;
+        const typed = this.rustI64CounterOperand(ceil.counter) && this.rustI64CounterUse(ceil.counter);
+        const text = this.rust56nCeilCompareText(node, ceil, typed ? `(${String(ceil.counter.text)} as f64)` : `${super.printIdentifier(ceil.counter)}.as_f64().unwrap_or(f64::NAN)`);
+        return this.isBooleanPosition(node) ? text : `Value::Bool(${text})`;
     }
 
     rustScalarCounterPlan(node: any, name: string): { cond: string } | undefined {
@@ -8995,6 +9061,37 @@ export class RustTranspiler extends BaseTranspiler {
         return ok && keys > 0;
     }
 
+    /** ral-56n: every read of the local is a bound (argument 0 / 1) of a loose `Value` slice (rust44bValueRecvSliceBound), where
+     *  an `i64` reads as the `Int` box the helper's looseI64 match took (paradex pro sbeReadAddress `next = i + 1`). */
+    rust56nSliceBoundOnlyLocal(declaration: any): boolean {
+        if (!isIdentifier(declaration?.name)) return false;
+        let uses = 0;
+        const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            if (!this.rust44bValueRecvSliceBound(n, 'int')) return false;
+            uses++;
+            return true;
+        });
+        return ok && uses > 0;
+    }
+
+    /** ral-56n: a loop counter read as a bound of a loose `Value` slice (the typed bound text is `i` / `Some(i)`). */
+    rust56nCounterSliceBound(n: any): boolean {
+        const call: any = n?.parent;
+        if (call === undefined || !isCallExpression(call) || call.expression === n || !isPropertyAccessExpression(call.expression) || call.expression.name.text !== 'slice') return false;
+        const idx = call.arguments.indexOf(n);
+        if (idx < 0 || idx > 1 || call.arguments.length > 2) return false;
+        const recv: any = this.rustStripWrappers(call.expression.expression);
+        if (!isIdentifier(recv) || this.rustScalarLocalOf(recv) !== undefined || this.rustScalarIdentifierKind(recv) !== undefined || this.rustStringLocalIdentifierIsTyped(recv)) return false;
+        return this.rustScalarStrMethod(call) === undefined && !this.rust41bWsKeyLocal(n);
+    }
+
+    /** ral-56n: `x = i` as a whole statement into another local (boxed `Value::Int(i)` or the bare i64 of an int local). */
+    rust56nCounterPlainCopy(n: any): boolean {
+        const up: any = n?.parent;
+        return up !== undefined && isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken && up.right === n && isIdentifier(up.left)
+            && up.parent?.kind === SyntaxKind.ExpressionStatement;
+    }
+
     /** ral-51e: `+` / `-` over int literals, `i64` scalar locals and the counter of an enclosing `for (let j = <int>; j < <i64 local>; j++)`
      *  whose body never writes it (the counter the loop prints as an `i64`; while the scope solves it is not registered yet). */
     rustCounterArithInit(expr: any, declaration: any): boolean {
@@ -9034,13 +9131,16 @@ export class RustTranspiler extends BaseTranspiler {
         const cond: any = loop.condition;
         if (cond === undefined || !isBinaryExpression(cond) || cond.operatorToken.kind !== SyntaxKind.LessThanToken || !isIdentifier(cond.left) || String(cond.left.text) !== String(node.text)) return undefined;
         const bound: any = this.unwrapParens(cond.right);
-        if (!isIdentifier(bound) || this.rustScalarLocalOf(bound)?.kind !== 'int') return undefined;
+        // ral-56n: an int-literal bound (paradex pro sbeReadAddress `i < 63`) closes the counter the same way
+        if (this.rustScalarIntLiteral(bound) === undefined && (!isIdentifier(bound) || this.rustScalarLocalOf(bound)?.kind !== 'int')) return undefined;
         const symbol = this.rustSymbolOf(counter.name);
         for (const n of this.rustScopeNameNodes(loop.statement, String(node.text)) as any[]) {
             if (n.kind === SyntaxKind.VariableDeclaration && this.rustBindsName(n, String(node.text))) return undefined;
             if (n.kind === SyntaxKind.Identifier && this.rustSymbolOf(n) === symbol && this.rustIdentifierIsWritten(n)) return undefined;
             // every body read sits in such a key-local initializer, so the loop closes as an `i64` counter (no `Value` re-print)
             if (n.kind === SyntaxKind.Identifier && this.rustSymbolOf(n) === symbol) {
+                // ral-56n: a bare slice bound of a loose `Value` slice and a plain `x = i` statement also print closed
+                if (this.rust56nCounterSliceBound(n) || this.rust56nCounterPlainCopy(n)) continue;
                 let up: any = n.parent;
                 while (up !== undefined && (isBinaryExpression(up) || isParenthesizedExpression(up))) up = up.parent;
                 if (up === undefined || !isVariableDeclaration(up) || up.initializer === undefined || !this.isNodeInsideNode(n, up.initializer)) return undefined;
@@ -9685,6 +9785,15 @@ export class RustTranspiler extends BaseTranspiler {
         return kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum' ? kind : undefined;
     }
 
+    /** ral-56n: `node` (parentheses skipped) is the one argument of `Math.ceil (..)`. */
+    rust56nCeilDivisionArg(node: any): boolean {
+        let top: any = node;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const call: any = top.parent;
+        return call !== undefined && isCallExpression(call) && call.arguments.length === 1 && call.arguments[0] === top && isPropertyAccessExpression(call.expression)
+            && isIdentifier(call.expression.expression) && call.expression.expression.text === 'Math' && call.expression.name.text === 'ceil';
+    }
+
     /** 51k: `a % b` over int literals / `int` / `oint` locals with a non-literal divisor (a parseToInt answer, a const int):
      *  an `Option<i64>` (`mod_val` answers `Int(a % b)`, `Null` for a zero or `Null` operand). */
     rust51kLitModKind(node: any): string | undefined {
@@ -9729,6 +9838,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (op === SyntaxKind.SlashToken) {
                 const a = this.rustScalarNumericKind(node.left);
                 const divisor = this.rustScalarFloatLiteral(node.right);
+                // ral-56n: the sole argument of `Math.ceil` over two typed numeric operands (polymarket `maxPages`, limitless
+                // `cappedPages`): `divide` answers `Float(x / y)`, `Null` for a zero / `Null` divisor, so an `Option<f64>`
+                if (divisor === undefined && numeric(a) && numeric(this.rustScalarNumericKind(node.right)) && this.rust56nCeilDivisionArg(node)) return 'onum';
                 if (!numeric(a) || divisor === undefined || Number(divisor) === 0) return undefined;
                 return a.startsWith('o') ? 'onum' : 'num';
             }
@@ -10523,6 +10635,13 @@ export class RustTranspiler extends BaseTranspiler {
             const one = pats.length === 1;
             return `(if let ${one ? pats[0][0] : `(${pats.map((p) => p[0]).join(', ')})`} = ${one ? pats[0][1] : `(${pats.map((p) => p[1]).join(', ')})`} { if __r != 0 { Some(${l.use} % __r) } else { None } } else { None })`;
         }
+        // ral-56n: the ceil-division argument `a / b` over typed operands: `divide` is `Float(x / y)` unless y is 0.0 or a side is `Null`
+        const slash: any = this.unwrapParens(node);
+        if (isBinaryExpression(slash) && slash.operatorToken.kind === SyntaxKind.SlashToken && this.rustScalarFloatLiteral(slash.right) === undefined) {
+            if (own !== 'onum' || kind !== 'onum') return undefined;
+            const side = (n: any) => { const k = this.rustScalarNumericKind(n); const t = this.rustScalarOperandText(k, n); return k === 'oint' ? `(if let Some(__v) = ${t} { Some(__v as f64) } else { None })` : (k === 'onum' ? t : `Some(${this.rustScalarOperandText('num', n)})`); };
+            return `(if let (Some(__x), Some(__y)) = (${side(slash.left)}, ${side(slash.right)}) { if __y != 0.0 { Some(__x / __y) } else { None } } else { None })`;
+        }
         if (isIdentifier(node)) {
             const name = this.rustI64CounterOperand(node) && this.rustI64CounterUse(node) ? String(node.text) : super.printIdentifier(node);
             if (kind === 'num' && own === 'int') return `(${name} as f64)`;
@@ -10625,6 +10744,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Binary hook: arithmetic/ordered comparisons over typed operands, and `+=`/`-=` on a typed local. */
     printRustScalarBinary(node): string | undefined {
+        const ceilCompare = this.print56nCeilCompare(node); if (ceilCompare !== undefined) return ceilCompare;
         const counterCompare = this.printI64CounterCompare(node); if (counterCompare !== undefined) return counterCompare;
         const tbBound = this.printTbCounterBound(node); if (tbBound !== undefined) return tbBound;
         const op = node.operatorToken.kind;
@@ -11551,6 +11671,11 @@ export class RustTranspiler extends BaseTranspiler {
             if ((RustTranspiler.RUST_SCALAR_ARITH_OPS.has(op) || op === SyntaxKind.PercentToken) && this.rustScalarExpressionKind(parent) !== undefined) return 'native';
             // tb: the bound of its own `for` counter's ordered test prints with the counter, unboxed (`printTbCounterBound`)
             if (this.rustTbCounterBound(parent, n, kind) !== undefined) return 'native';
+            // ral-56n: a ternary of two `i64` locals as the right bound of its own `for` counter's ordered test (prediction
+            // hyperliquid `zi < cappedDecimals`): rustScalarCounterCond prints `zi < capped`, the `Int` payloads ordered as i64
+            if (kind === 'int' && this.rust56nTernaryCounterBound(parent, n)) return 'native';
+            // ral-56n: a `Math.ceil (a / b)` `Option<f64>` const ordered against a `for` counter (print56nCeilCompare)
+            if (kind === 'onum' && this.rust56nCeilCounterCompare(parent) !== undefined) return 'native';
             // the other operand is still a `Value`: the runtime arithmetic reads this one boxed
             // (`Value::from` of a Copy number is the Int / Float / Null the `Value` local held), decided with that operand
             if (this.rustScalarValueOperandUse(parent, n, kind)) return 'xbox';
@@ -17238,7 +17363,8 @@ export class RustTranspiler extends BaseTranspiler {
                 step = `if let Value::Int(${bind}) = &mut ${counter.name} { *${bind} ${counter.sign}= 1; }`;
             }
             if (typed && counter !== undefined && bound !== undefined) {
-                initStr = initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
+                initStr = initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`)
+                    .replace(`let mut ${counter.name}: Value = Value::from(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
                 condStr = typeof bound === 'object' ? bound.cond : `${counter.name} < (${bound}.len() as i64)`;
                 step = `${counter.name} += 1;`;
             }
@@ -17258,8 +17384,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(declaration.name)) return undefined;
         const name = String(declaration.name.text);
         // The declaration must print as the boxed int literal the Int payload relies on.
-        const printed = new RegExp(`^let mut ${name}: Value = Value::Int\\((-?\\d+)\\);$`).exec(initStr.trim());
-        if (printed === null) return undefined;
+        let printed: RegExpExecArray | null = new RegExp(`^let mut ${name}: Value = Value::Int\\((-?\\d+)\\);$`).exec(initStr.trim());
+        // ral-56n: or `Value::from(x)` of an `i64` scalar local (polymarket `i = startIndex`): `Value::from(i64)` is `Value::Int(x)`,
+        // and the `i64` copy taken at the loop head is the same number
+        if (printed === null) {
+            const from = new RegExp(`^let mut ${name}: Value = Value::from\\(([A-Za-z_][A-Za-z0-9_]*)\\);$`).exec(initStr.trim());
+            const src: any = from === null || declaration.initializer === undefined ? undefined : this.unwrapParens(declaration.initializer);
+            if (from === null || src === undefined || !isIdentifier(src) || super.printIdentifier(src) !== from[1] || this.rustScalarLocalOf(src)?.kind !== 'int') return undefined;
+            printed = from;
+        }
         const sign = [ '+', '-' ].find((s) => incrStr.trim() === `${name} = ${this.printNativeNumeric(s === '+' ? SyntaxKind.PlusToken : SyntaxKind.MinusToken, name, 'Value::Int(1)')}`) as '+' | '-' | undefined;
         if (sign === undefined) return undefined;
         const symbol = this.rustSymbolOf(declaration.name);
@@ -17305,7 +17438,8 @@ export class RustTranspiler extends BaseTranspiler {
             const up: any = id.parent;
             const admissible = (isElementAccessExpression(up) && up.argumentExpression === id)
                 || this.rustI64BoxedUse(id) || this.rustI64LiteralCompare(id) !== undefined
-                || (isVariableDeclaration(up) && up.initializer === id)
+                || (isVariableDeclaration(up) && up.initializer === id) || this.rust56nCounterSliceBound(id)
+                || (isBinaryExpression(up) && this.rust56nCeilCounterCompare(up)?.counter === id)
                 // xb: an operand of integer arithmetic / a compare, or `i.toString()`: printed by the scalar rules (else re-printed as `Value`)
                 || (isBinaryExpression(up) && (RustTranspiler.RUST_SCALAR_ARITH_OPS.has(up.operatorToken.kind) || up.operatorToken.kind === SyntaxKind.PercentToken))
                 || (isPropertyAccessExpression(up) && up.expression === id && up.name.text === 'toString' && isCallExpression(up.parent) && up.parent.expression === up);
@@ -18168,6 +18302,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (call === undefined || !isCallExpression(call)) return [];
         return call.arguments.map((a: any, i: number) => {
             if (!isIdentifier(a)) return undefined;
+            // ral-56n: a registered `i64` counter bound is the `Int` the boxed counter held (looseI64 of `Int(i)` is `Some(i)`)
+            if (i < 2 && call.arguments.length <= 2 && this.rustI64CounterOf(a) !== undefined && this.rust56nCounterSliceBound(a) && this.rustI64CounterUse(a)) {
+                return i === 0 ? super.printIdentifier(a) : `Some(${super.printIdentifier(a)})`;
+            }
             const typed = this.rustScalarLocalOf(a);
             if (typed === undefined || this.rustScalarUseForms.get(a) !== 'native' || !this.rust44bValueRecvSliceBound(a, typed.kind)) return undefined;
             const name = super.printIdentifier(a);

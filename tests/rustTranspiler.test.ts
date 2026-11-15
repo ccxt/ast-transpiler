@@ -19256,3 +19256,65 @@ describe('ral-56e: a borrowed element is read only at numeric literal keys', () 
         expect(c).not.toContain('let currentTrade: &Value');
     });
 });
+
+describe('ral-56n: number vetoes (counter arithmetic slice bound, decided Option<i64> bound, Math.ceil division, i64-local counter start)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    sum (a: any, b: any): any { return a; }\n    parseToInt (x: any): number { return x; }\n    hold (x: any): any { return x; }\n    safeInteger (o: any, k: any, d: any = undefined): number | undefined { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-56n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('paradex pro sbeReadAddress: `next = i + 1` read only as a loose slice bound is i64, and so is the counter', () => {
+        const out = run("    sbeReadAddress (frameHex: string, offset: number): string {\n        const first = this.parseToInt (offset);\n        const rawStart = first * 2;\n        const rawEnd = rawStart + 64;\n        const raw = frameHex.slice (rawStart, rawEnd);\n        let start = 63;\n        for (let i = 0; i < 63; i++) {\n            const next = i + 1;\n            if (raw.slice (i, next) !== '0') {\n                start = i;\n                break;\n            }\n        }\n        return '0x' + raw.slice (start, 64);\n    }\n");
+        expect(out).toContain('let mut i: i64 = 0;');
+        expect(out).toContain('let mut next: i64 = (i + 1);');
+        expect(out).toContain('(match (&(raw), i, Some(next))');
+    });
+    test('paradex pro j: a decided Option<i64> parseToInt bound met by other operands keeps the counter i64', () => {
+        const out = run("    sbeReadUint (frameHex: string, offset: number, size: number): number { return 0; }\n    lv (frameHex: string, blockLength: number, frameEnd: number): any {\n        const levels = [];\n        const sides = [ 'BUY', 'SELL' ];\n        let position = this.parseToInt (blockLength + 8);\n        for (let i = 0; i < sides.length; i++) {\n            const entryLength = this.parseToInt (this.sbeReadUint (frameHex, position, 2));\n            const numInGroup = this.parseToInt (this.sbeReadUint (frameHex, position + 2, 2));\n            position = this.parseToInt (position + 4);\n            if ((entryLength < 16) || (this.parseToInt (position + numInGroup * entryLength) > frameEnd)) {\n                return undefined;\n            }\n            for (let j = 0; j < numInGroup; j++) {\n                levels.push ({\n                    'side': sides[i],\n                    'price': position,\n                });\n                position = this.parseToInt (position + entryLength);\n            }\n        }\n        return levels;\n    }\n");
+        expect(out).toContain('let mut j: i64 = 0;');
+        expect(out).toContain('matches!(numInGroup, Some(__b) if (j as f64) < (__b as f64))');
+    });
+    test('polymarket maxPages / limitless cappedPages: a Math.ceil division const is Option<f64> and its counters i64', () => {
+        const out = run("    a (params: Dict = {}): any {\n        const pageSize = this.safeInteger (this.options, 'eventsPageSize', 100);\n        const limit = this.parseToInt (params['limit']);\n        const maxPages = Math.ceil (limit / pageSize);\n        const offsets: number[] = [];\n        for (let p = 1; maxPages > p; p++) {\n            offsets.push (p * pageSize);\n        }\n        return offsets;\n    }\n    b (params: Dict, knownTotal: number): any {\n        const maxMarkets = this.parseToInt (params['limit']);\n        const pageSize = this.safeInteger (this.options, 'marketsPageSize', 25);\n        let page = 1;\n        const request: Dict = {};\n        const cappedPages = Math.ceil (maxMarkets / pageSize);\n        const allPages = this.parseToInt (Math.ceil (knownTotal / pageSize));\n        for (let i = 2; i <= allPages; i++) {\n            if (i > cappedPages) {\n                break;\n            }\n            page = i;\n            request['page'] = page;\n        }\n        return request;\n    }\n");
+        expect(out).toContain('let mut maxPages: Option<f64> = ');
+        expect(out).toContain('if __y != 0.0 { Some(__x / __y) } else { None }');
+        expect(out).toContain('let mut p: i64 = 1;');
+        expect(out).toContain('matches!(maxPages, Some(__b) if __b > (p as f64))');
+        expect(out).toContain('let mut cappedPages: Option<f64> = ');
+        expect(out).toContain('if matches!(cappedPages, Some(__b) if (i as f64) > __b)');
+    });
+    test('guard: an equality against a Math.ceil division const keeps the Value counter', () => {
+        const out = run("    g (params: Dict = {}): any {\n        const pageSize = this.safeInteger (this.options, 'eventsPageSize', 100);\n        const limit = this.parseToInt (params['limit']);\n        const maxPages = Math.ceil (limit / pageSize);\n        const offsets: number[] = [];\n        for (let p = 1; maxPages === p; p++) {\n            offsets.push (p * pageSize);\n        }\n        return offsets;\n    }\n");
+        expect(out).toContain('let mut p: Value = Value::Int(1);');
+    });
+    test('polymarket fetchOutcomes: a counter started from an i64 local (Value::from(startIndex)) is i64', () => {
+        const out = run("    a (tokenIds: string[]): any {\n        const out = [];\n        const tokenIdsLength = tokenIds.length;\n        const chunkSize = this.safeInteger (this.options, 'fetchOutcomesBatchSize', 50);\n        let startIndex = 0;\n        while (startIndex < tokenIdsLength) {\n            let endIndex = this.sum (startIndex, chunkSize);\n            if (endIndex > tokenIdsLength) {\n                endIndex = tokenIdsLength;\n            }\n            const chunk: string[] = [];\n            for (let i = startIndex; i < endIndex; i++) {\n                chunk.push (tokenIds[i]);\n            }\n            out.push (chunk);\n            startIndex = this.sum (startIndex, chunkSize);\n        }\n        return out;\n    }\n");
+        expect(out).toContain('let mut i: i64 = startIndex;');
+        expect(out).toContain('get_value(&tokenIds, &Value::Int(i))');
+    });
+});
+
+describe('ral-56n: a ternary of two i64 locals bounding its own for counter', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type int = number;\nexport default class Exchange {\n    parseToInt (x: any): number { return x; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-56n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('prediction hyperliquid cappedDecimals: `zi < capped` keeps the ternary i64', () => {
+        const out = run("    b (x: number, y: number): string {\n        const m = this.parseToInt (x);\n        const d = this.parseToInt (y);\n        const maxDecimals = 8 - m;\n        let digitsLeft: int = 0;\n        if (d <= 5) {\n            digitsLeft = 5 - d;\n        }\n        const capped = (maxDecimals < digitsLeft) ? maxDecimals : digitsLeft;\n        let zeros = '';\n        for (let zi = 1; zi < capped; zi++) {\n            zeros = zeros + '0';\n        }\n        return zeros;\n    }\n");
+        expect(out).toContain('let mut capped: i64 = (if (maxDecimals < digitsLeft) { maxDecimals } else { digitsLeft });');
+        expect(out).toContain('zi < capped }');
+    });
+    test('guard: an arm that is a number parameter (not an i64 local) keeps the ternary Value', () => {
+        const out = run("    b (x: number, y: any): string {\n        const m = this.parseToInt (x);\n        const maxDecimals = 8 - m;\n        const capped = (maxDecimals < y) ? maxDecimals : y;\n        let zeros = '';\n        for (let zi = 1; zi < capped; zi++) {\n            zeros = zeros + '0';\n        }\n        return zeros;\n    }\n");
+        expect(out).toContain('let mut capped: Value = ');
+    });
+});
