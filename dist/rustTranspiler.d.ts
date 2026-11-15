@@ -870,6 +870,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustUdReaderStr(init: any): boolean;
     /** True when the initializer is a reader this block admits (its kind comes from `rustReaderDefaultKind`). */
     rustReaderDefaultInit(init: any): boolean;
+    /** ral-51n: every use of a number local is a presence test or an operand of a numeric comparison (never boxed, never
+     *  arithmetic): an `Int` reader default read back as `f64` compares exactly as the `Int` did, so no number can change. */
+    rustCompareOnlyNumUses(declaration: any): boolean;
     /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */
     rustReaderIntDefaultNum(init: any): boolean;
     rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
@@ -886,6 +889,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  local, and the hand-written `::new(impl Into<Value>)` boxes an `i64` / `Option<i64>` into the `Value` the boxed
      *  local held (`Value::Int` / `Value::Null`), so no other local's decision reads this one's type. */
     rustScalarCacheFieldCtor(n: any, write: any): boolean;
+    /** ral-51x: an optional string boxed as a property value of a map literal handed to a `this.m(..)` call that is the one
+     *  argument of `xs.push (..)` (`result.push (this.safeMarketStructure ({ 'quote': quote }))`): the pushed source prints
+     *  `self.m(..)`, so ccxt's native-push pass reads that call's text and never this operand's box. */
+    rustPushSelfCallArgUse(n: any, push: any, kind: string | undefined): boolean;
     /** 40d: a Copy number that is a direct element of the array literal pushed whole (`rows.push ([ price, amount ])`):
      *  the element prints `Value::from(x)` (the Int / Float / Null its box held, no copy) inside `Value::from(vec![..])`,
      *  which ccxt's rustVecPushInline (build/rustTranspiler.ts) already treats as a marker-free source whatever the
@@ -999,6 +1006,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** sb: `xs.join(sep)` as a local's initializer: every printed join form is `Value::Str(<String>.into())` (a non-list
      *  receiver joins to `""`, never `Null`), so the local is that `String`. Only at a declaration initializer. */
     rustSbJoinShape(node: any): boolean;
+    /** 51k: the join is one arm of a ternary initializer of a plain identifier whose other arm is a string literal. */
+    rust51kStrTernaryJoin(node: any): boolean;
     /** The `String` inside the printed join, printed at emission only (a print inside a decision perturbs other locals);
      *  any other printed form reads its `Str` back (`join` always answers a `Str`). */
     rustSbJoinText(node: any): string;
@@ -1216,6 +1225,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-50e: a local read only as base `safeDict` keys (its `any` checker type comes from an `any` operand such as
      *  `response.length`): an `i64` the printer proved passes there as the Int its box held, so the checker's `any` is moot. */
     rustSafeDictKeyOnlyLocal(declaration: any): boolean;
+    /** ral-51e: `+` / `-` over int literals, `i64` scalar locals and the counter of an enclosing `for (let j = <int>; j < <i64 local>; j++)`
+     *  whose body never writes it (the counter the loop prints as an `i64`; while the scope solves it is not registered yet). */
+    rustCounterArithInit(expr: any, declaration: any): boolean;
+    rustCounterArithHasCounter(expr: any, declaration: any): boolean;
+    /** The enclosing `for` whose block-scoped counter `node` reads (int-literal start, `j++` / `++j` step, `j < <i64 local>`, never written in the body). */
+    rustCounterLoopOf(node: any, declaration: any): any;
     /** ral-50e: `n` is the key (argument 1) of `this.safeDict (x, n, ..)` resolving to the generated base body, outside the test crate. */
     rustSafeDictKeyArg(n: any): boolean;
     /** xd: `n` is the only argument of `this.iso8601 (n)` outside the test crate (hand-written `iso8601(ts: impl Into<Value>)`). */
@@ -1317,6 +1332,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarLengthRecv(node: any, params?: boolean): any;
     /** Non-optional numeric operand kind (`int|num`), optional (`oint|onum`), or undefined. */
     rustScalarNumericKind(node: any): string | undefined;
+    /** 51k: `a % b` over int literals / `int` / `oint` locals with a non-literal divisor (a parseToInt answer, a const int):
+     *  an `Option<i64>` (`mod_val` answers `Int(a % b)`, `Null` for a zero or `Null` operand). */
+    rust51kLitModKind(node: any): string | undefined;
     /** The exact kind an expression shape yields over typed operands, else undefined. */
     rustScalarExpressionKind(expr: any): string | undefined;
     private static readonly RUST_ALWAYS_INT_CALLS;
@@ -2325,6 +2343,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The `__destr_tmp` line keeps the 400-char budget with the slot unwrap and the lent self default (`Value::from(&x)`). */
     private rustStrSlotLineMemo;
     rustStrSlotLineFits(write: any): boolean;
+    /** ral-51f: the short head of a string slot write: every slot typed, or slot 0 typed with the boxed rest outside the test tier. */
+    rustStrSlotShortHeadSlots(write: any, typedSlots: (string | undefined)[], head: string): boolean;
     /** ral-50f: the typed destructure line of a string slot write would newly cross 400 chars: the short head keeps it under. */
     rustStrSlotShortHead(write: any, printed: string): boolean;
     /** Some write of the initialised local is a string tuple slot (`rustStrSlotWrite`). */
@@ -2354,6 +2374,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustI64BodyIsClosed(body: any, name: string): boolean;
     /** `i < X.length` whose condition printed as a native compare over a native `len()`: the place `X`. */
     rustLengthCounterBound(node: any, counter: string): string | undefined;
+    /** ral-51n: numeric ordering only (an `Int` and a `Float` of one value order the same; equality goes through `is_equal`). */
+    private static readonly RUST_NUM_ORDER_OPS;
     private static readonly COMPARISON_OPS;
     private static readonly NATIVE_COMPARISON_OPERATORS;
     isEqualityOp(op: any): boolean;
@@ -3082,6 +3104,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  argument is a proven map (a typed / helper-proven params parameter, a handed slot map or a settled Dict local): the
      *  base answers `[x, m]` or `[x, omit (m, k)]`, a map on every path. */
     rustHandleTupleMapSlotRead(rhs: any): boolean;
+    /** ral-51a: `this.handleRouteAndParams (m, params)` typed by name: a venue member of the enclosing class declared
+     *  `handleRouteAndParams (methodName: string, params: Dict = {}): Dict` answers the (route-omitted) params map. */
+    rustRouteParamsDictCall(init: any): boolean;
+    private static readonly RUST_ROUTE_PARAMS_DICT;
     /** ral-50a: a destructured `handle*AndParams` slot already handed as a map (`requestParams = paramsIsMargin`). */
     rustHandedSlotIdentifier(rhs: any): boolean;
     rustOmitOfDict(init: any): boolean;
