@@ -334,6 +334,17 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `Display` of `Value::Str(s)` is `s`, so the text is identical and the box is gone. */
     rustConcatLiteralText(node: any, text: string, other: any): string;
     printNativeStringConcat(leftText: string, rightText: string): string;
+    rustFormatConcatText(leftText: string, rightText: string): string;
+    /** ral-57x: the `format!(..)` a `+` / `.toString()` node took at its latest print (the printer's own arm decision,
+     *  recorded where the box is built), cleared whenever that node is printed again; never read back from printed text. */
+    private rustFormatPrints;
+    /** The `+` node (or the `+=` node) printed the native concat arm: record its unboxed `format!` and return the box. */
+    rustRecordFormatConcat(node: any, leftText: string, rightText: string): string;
+    /** A `.toString()` call printed as a whole `Value::Str(format!("{}", x).into())`: record the `format!` and return the box. */
+    rustRecordFormatToString(node: any, name: string): string;
+    /** ral-57x: the `format!(..)` that the node's print boxes whole as `Value::Str(format!(..).into())`, else undefined. Decided
+     *  from the node: it is printed (as before) and the arm that printer took for this very node is looked up. */
+    rustUnboxedFormatOf(node: any): string | undefined;
     printNativeNumeric(op: any, leftText: string, rightText: string): string;
     private static readonly RUST_TYPEOF_HELPERS;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
@@ -342,6 +353,19 @@ export declare class RustTranspiler extends BaseTranspiler {
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printVariableDeclarationList(node: any, identation: any): string;
+    /** ral-57e: `const lvl = side[i]` off an order-book side handle (`Side::level` hands out the stored level, an `Arr` built
+     *  by `storeArray` / `store`, or `Null` out of range), read only as `const parts = lvl[K]` (numeric literal K) where
+     *  `parts` is itself read only at numeric literal keys. `lvl` holds the list (`into_list()`: the same `Arr`, an empty
+     *  list for `Null`), and `parts` borrows its element (`lvl.get(K).unwrap_or(&Value::Null)`): the same element
+     *  `get_value` cloned, `Null` where it answered `Null`. */
+    printRust57eSideLevel(declaration: any, parsedValue: string, indent: string, varName: string): string | undefined;
+    private rust57eSideLevels;
+    rust57eSideLevelLocal(declaration: any): boolean;
+    rust57eSideLevelLocalUncached(declaration: any): boolean;
+    /** `const e = x[k]` (one const declarator, identifier receiver, same function). */
+    rust57eConstElementOf(declaration: any): boolean;
+    /** Every use of the local is the receiver of an rvalue element read at a numeric literal key (no write-back bind). */
+    rust57eLiteralReadOnly(declaration: any): boolean;
     private static readonly RUST_NIL_INT_HELPERS;
     private static readonly RUST_NIL_BOOL_HELPERS;
     private static readonly RUST_NIL_PRECISE_STR;
@@ -434,6 +458,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  those displays as the JS concat does (Str text, Null `null`). */
     rustNilConcatPartner(other: any): boolean;
     rustNilOptStrConcatUse(n: any): boolean;
+    /** ral-56x K1: `return x` of a literal-seeded string local (never a parameter alias) in a `-> Option<String>` method. */
+    rust56xStrReturnLocal(n: any, fn: any): boolean;
+    rust56xStrReturnText(exp: any, fn: any): string | undefined;
     /** ral-56x K1: a `+` partner that is itself a concat (or a `.toString()`) the printer already prints as a boxed `Value::Str(format!(..))`
      *  (always a `Str`, never `Null`), so the optional string joins the same `format!` with its `as_deref().unwrap_or("null")` text. */
     rust56xFormatPartner(other: any): boolean;
@@ -1308,6 +1335,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BORROW_STR_METHODS;
     /** wg: `k.m (..)` with `m` a pure string method (reads the receiver, returns a fresh value). */
     rustBorrowStrMethodRecv(n: any): boolean;
+    /** ral-57f: `bucket` (`this.F[k]`) is the receiver of a plain two-level read `this.F[k][k2]` that is no assignment
+     *  target, update, delete or deeper chain link, in a non-test source. */
+    rustFieldBucketChainRead(bucket: any): boolean;
     /** ral-56f: `read` (`this.F[k]`) is an argument of a `this.` call that is the whole value of the statement write
      *  `this.F[k] = this.m (.., this.F[k], ..)` whose key admits the bucket reread. */
     rustFieldBucketRereadUse(wrapped: any, read: any): boolean;
@@ -1340,6 +1370,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-51e: `+` / `-` over int literals, `i64` scalar locals and the counter of an enclosing `for (let j = <int>; j < <i64 local>; j++)`
      *  whose body never writes it (the counter the loop prints as an `i64`; while the scope solves it is not registered yet). */
     rustCounterArithInit(expr: any, declaration: any): boolean;
+    /** ral-57e: `j * <int literal>` (either order) over a `for (let j = <int>; ..; j++)` counter only the step writes
+     *  (rustValueIntCounter, always an `Int`): the
+     *  printer already spells it `(j * k)` on the `i64` counter, the `Int` the runtime product of two Ints answers. */
+    rust57eCounterProduct(node: any, declaration: any): boolean;
+    /** ral-57e: `n` is an operand of a base `this.sum (n, <int literal>)` that is itself a base `safeDict` key: with `n` an
+     *  `i64` the sum prints as the native `i64` add (rustArithCallKind 'int') and boxes once into the key slot as the Int
+     *  the runtime `sum` of two Ints answers. */
+    rust57eSumKeyOperand(n: any): boolean;
     rustCounterArithHasCounter(expr: any, declaration: any): boolean;
     /** The enclosing `for` whose block-scoped counter `node` reads (int-literal start, `j++` / `++j` step, `j < <i64 local>`, never written in the body). */
     rustCounterLoopOf(node: any, declaration: any): any;
@@ -1414,8 +1452,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrVarNeedle(node: any, empty: boolean): string | undefined;
     /** 41b: a replace operand that is never `Null`: a string literal or a `String` local (`&str` text). */
     rustStrReplaceOperand(node: any): string | undefined;
-    /** ral-55x K1: `Value::Str(format!(..).into())` -> the `format!(..)` itself, when that macro call spans the whole box. */
-    rustUnboxedFormatText(text: string): string | undefined;
     /** ral-55x K1: every leaf of a `+` chain is a string literal or a `str` / `ostr` typed local, and at least one is a literal. */
     rustStrConcatOperandLeaves(node: any): boolean;
     private rust41bWsKeyMemo;
@@ -1735,7 +1771,13 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  parent class does not resolve. */
     private rustAncestorMethodTables;
     getMethodOverride(node: Node): Node;
+    /** ral-57x: the method prints `-> Option<String>` whatever its literal-seeded string locals become: the signature head
+     *  admits it and every return converts, a returned own literal-seeded local (checker `string`) counted as converting
+     *  (as a `String` it is `Some(x)`; as a `Value` it is a checker-string `Value`: rustStrReturnValueConverts either way). */
+    rust57xStrReturnMethod(fn: any): boolean;
     private rustNativeStrReturnDecisionUncached;
+    /** The signature half of the native-`Str` return decision: a sync `string` method outside the base tier / override groups. */
+    private rustNativeStrReturnHead;
     private static readonly RUST_BASE_NATIVE_STR_METHODS;
     private rustBaseNativeStrBare;
     /** A call resolving to a `-> Option<String>` base method of the table (or an override of one). */
@@ -2017,10 +2059,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBoolCompareSeed(node: any): boolean;
     /** `m['symbol']` / `m.id` off a loaded `crate::types::Market` local: the field's own `String` / `Option<String>`
      *  (the boxed read cloned the same field), so a local initialised from it is a typed string. */
-    rustMarketFieldScalar(node: any): {
+    rustMarketFieldScalar(node: any, placed?: boolean): {
         kind: string;
         text: string;
     } | undefined;
+    /** ral-57k: an arm of `x = c ? m['quote'] : m['base']` (a statement write into an initialised local, kucoin parseTrade
+     *  `feeCurrency`) whose other arm is a field read of the same kind off the same typed market local: the ternary is that
+     *  one kind, each arm the very `key_read` the boxed form printed (`None` where it held Null). */
+    rust57kMarketTernaryArm(top: any): boolean;
     /** A read off a struct local: a listed field natively, any other key off `raw`; `asBool` for a condition slot. */
     printTypedMarketRead(node: any, asBool?: boolean): string | undefined;
     private static readonly RUST_MARKET_FLAG_KEYS;
@@ -3645,7 +3691,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  those returns with the method's parameters bound to this call's arguments (defaults when omitted). */
     rustWsReturnPatterns(call: any, depth: number, seen: Set<Node>): Array<Array<string | null>> | undefined;
     private rustWsWsParents;
-    /** A pro venue that extends (through its abstract shim) another pro venue, or that another pro venue extends. */
+    /** A pro venue that extends (through its abstract shim) another pro venue, or that another pro venue extends.
+     *  ral-57w: the same rule over the prediction tier (`ts/src/prediction/`, shims in `abstract/prediction/`). */
     rustWsHasWsRelatives(file: string, at: number): boolean;
     /** ral-56h: the resolve table across a ws class and its ws subclass (kucoin + kucoinfutures) equals the parent's
      *  own table when the subclass adds no resolve and changes no ws path: every method of the subclass other than
@@ -3756,10 +3803,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsSubscriptionWriteValue(n: any): boolean;
     private rustBuiltLists;
     rustBuiltListLocal(declaration: any): boolean;
-    /** RAL-INT-64: `node` sits in the `then` branch of an `if` whose `else` branch holds every later read of the local (and
-     *  nothing after the `if` reads it); no loop or function lies between that `if` and the declaration. The two branches
-     *  never both run, so `node` is the last read on its path. */
-    rustLastUseBeforeElseOnly(node: any, declaration: any): boolean;
     /** ral-56s: a base `this.arrayConcat (a, b)` (two operands, non-test tier): always a `Value::Arr`. */
     rustBuiltListConcatInit(init: any): boolean;
     /** ral-56s: `t = x` (statement) where `t` is a nil-declared (`let t: T = undefined` / `let t;`) local of the same function
@@ -3780,6 +3823,12 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  items of the `Value::Arr` it is handed and answers a new `Value::Arr` (exchange_stubs.rs sort_by / sort_by2: any
      *  other variant is handed back as it came, and the moved-in box is always an Arr), so `.into_list()` takes exactly it. */
     rustBuiltListSelfSort(write: any, name: string): boolean;
+    /** ral-57i: the target of `y = x`: a `let` local of the same function that is never a built list itself, still printed as the plain
+     *  `Value` binding (no typed local, scalar, nil or borrowed decision). */
+    rustBuiltListAliasTarget(left: any): boolean;
+    private rustBuiltListAliasGuard;
+    /** ral-57i: `this.arraySlice (..)` resolved to the base declaration and redeclared by no venue. */
+    rustBaseArraySliceCall(call: any): boolean;
     /** `x = this.m(.., x, ..)` naming `x` only there and on the left: the old list moves into the call before the write. */
     rustBuiltListSelfWriteArg(n: any, name: string): boolean;
     /** A right-hand side that answers a `Value::Arr` on every path. */
@@ -3819,6 +3868,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  empty list, the landed ral-kc `into_list()` behaviour), or `this.parse<X> (..)` whose declaration returns `T[]`
      *  (every override must return a list too): `.into_list()` moves exactly the list out of the box. */
     rustDeclaredListProducer(rhs: any): boolean;
+    /** ral-57i: a base plural parser (not virtually dispatched) called from a venue file whose venue family declares no
+     *  method of that name: the Rust call resolves to the base body even where another family (derive parseTrades)
+     *  overrides it, so the base's declared `T[]` return holds there. */
+    rustBaseParserFamilyFree(call: any, declaration: any, method: string): boolean;
     private static readonly RUST_LIST_PARSERS;
     /** ral-sf: `x = y` as the only statement under `if (Array.isArray (y))` (the then-branch, `y` a plain `Value` local or
      *  parameter never written after its declaration), at `y`'s last use: `y` holds a `Value::Arr` there, so
@@ -3827,6 +3880,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustArrayGuardedCopies;
     /** ral-52i: `id` names a plain `Value` local or parameter of its own function (no typed local form). */
     rustPlainValueBinding(id: any): boolean;
+    /** ral-57i: a `this.X(.., x, ..)` argument in the then-branch of the nearest enclosing if whose later reads all sit in
+     *  that if's else-branch (rustGuardedBranchLastUse), with no other read of x in the same statement: x moves there. */
+    rustBuiltListBranchLastUse(node: any, declaration: any): boolean;
     /** ral-uf: every later read of `node`'s local lies in the else branch of `guard` (a path disjoint from the move) and
      *  nothing reads it after the if statement; no loop or closure sits between the move and the declaration. */
     rustGuardedBranchLastUse(node: any, declaration: any, guard: any): boolean;
@@ -3894,6 +3950,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `let mut x: crate::value::Dict = self.omit(&y, &["a", ..], &[]).into_dict();` measured as printed, indent included,
      *  stays within the 400-char line budget (the TS-text 240-char guess refuses a long key list that prints narrower). */
     rustOmitDeclLineFits(declaration: any): boolean;
+    /** ral-57a: a single-binding `const x = this.omit (m, k)` whose head is a proven map (rustOmitOfDict). */
+    rustOmitOfDictInit(declaration: any): boolean;
     /** ral-55a: a plain `let x = <map>` (rustHandedMapInit) that is reassigned in its function. */
     rustHandedReassignedMap(declaration: any): boolean;
     /** `n = <map>` as a statement: an always-map helper, an omit of `n` itself, or an omit of a proven map. */
