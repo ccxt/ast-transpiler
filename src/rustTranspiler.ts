@@ -5625,8 +5625,11 @@ export class RustTranspiler extends BaseTranspiler {
      *  declaration of which returns `int` (rustVenueIntCall, or the typed `-> i64` return rustBaseTypedReturnKind proves): the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
     rustIdString(node): boolean {
         if (node === undefined || !isCallExpression(node) || node.arguments.length !== 0 || !isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'toString') return false;
+        // INT-54: one id/clock string decision. 46a's runtime `incrementingNonce()` / `randNumber(n)` ints go through this
+        // id-string lend (46c) instead of the clock path, so each local is claimed once and the clock path is unchanged
+        if (this.rustClockString(node)) return false;
         const recv: any = this.unwrapParens(node.expression.expression);
-        return this.rustIntToStringShape(node) || this.rustVenueIntCall(recv)
+        return this.rustIntToStringShape(node) || this.rustVenueIntCall(recv) || this.rust46aIntRuntimeCall(recv)
             || (isCallExpression(recv) && isPropertyAccessExpression(recv.expression) && recv.expression.expression.kind === SyntaxKind.ThisKeyword && this.rustBaseTypedReturnKind(recv) === 'int');
     }
 
@@ -5634,7 +5637,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustClockString(node): boolean {
         if (!isCallExpression(node) || node.arguments.length !== 0 || !isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'toString') return false;
         const clock: any = this.unwrapParens(node.expression.expression);
-        return this.rustClockCall(clock) || this.rustNonceCall(clock) || this.rust46aIntRuntimeCall(clock);
+        return this.rustClockCall(clock) || this.rustNonceCall(clock);
     }
 
     /** ral-46a: `this.incrementingNonce()` / `this.randNumber(n)` of the base runtime (no venue override): the runtime
