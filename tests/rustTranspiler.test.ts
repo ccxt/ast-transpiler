@@ -20147,3 +20147,37 @@ describe('ral-58i: a nil-declared optional list written only from list sources',
         expect(out).not.toContain('let mut rows: Option<crate::value::List>');
     });
 });
+
+describe('ral-58w: a subscription field read only under its own `this.safeBool (sub, g, false)` guard reads the literals that set g to true', () => {
+    const base: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    futures: any = {};\n    subscriptions: any = {};\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "export default class Exchange {\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    safeBool (d: any, k: any, x: any = undefined): any { return x; }\n    safeList (d: any, k: any, x: any = undefined): any { return x; }\n    cleanUnsubscription (client: any, subHash: any, unsubHash: any) {}\n}\n",
+    };
+    const venue = (handler: string) => "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n"
+        + "    async watchTrades (symbol: string) {\n        const subscription = { 'topic': 'trades', 'messageHashes': this.liveHashes (symbol) };\n        const trades = await this.watch ('wss://x', 'trades::' + symbol, undefined, 'trades', subscription);\n        return trades;\n    }\n"
+        + "    liveHashes (symbol: string): string[] {\n        return [ 'trades::' + symbol ];\n    }\n"
+        + "    async unWatchTrades (symbol: string) {\n        const subscription = { 'unsubscribe': true, 'topic': 'trades', 'subMessageHashes': [ 'trades' ], 'messageHashes': [ 'unsubscribe::trades' ] };\n        return await this.watch ('wss://x', 'unsubscribe::trades', undefined, 'unsubscribe::trades', subscription);\n    }\n"
+        + "    handleTrades (client: Client, message: any) {\n        const stored = new ArrayCache (10);\n        stored.append (message);\n        client.resolve (stored, 'trades::' + message['s']);\n    }\n"
+        + "    handleUnSubscription (client: Client, subscription: any) {\n        const messageHashes = this.safeList (subscription, 'messageHashes', []);\n        const subMessageHashes = this.safeList (subscription, 'subMessageHashes', []);\n        for (let i = 0; i < messageHashes.length; i++) {\n            this.cleanUnsubscription (client, subMessageHashes[i], messageHashes[i]);\n        }\n    }\n"
+        + "    handleMessage (client: Client, message: any) {\n        const subscription = client.subscriptions['trades'];\n" + handler + "    }\n}\n";
+    const emit = (handler: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-58w-guard-'));
+        const files = { ...base, 'ts/src/pro/venue.ts': venue (handler) };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        try {
+            return transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    };
+    test('handed to the unsubscribe handler only under the guard: the watched cache is an optional cache', () => {
+        expect(emit ("        if (this.safeBool (subscription, 'unsubscribe', false)) {\n            this.handleUnSubscription (client, subscription);\n        }\n")).toContain('let mut trades: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: an unguarded hand-off reads every literal (an unknown list) and keeps the watch result a Value', () => {
+        expect(emit ("        this.handleUnSubscription (client, subscription);\n")).toContain('let mut trades: Value = ');
+    });
+});
