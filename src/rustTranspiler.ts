@@ -26211,7 +26211,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const up: any = n.parent;
                 if (isBinaryExpression(up) && up.left === n) {
                     return up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
-                        && (this.rustBuiltListWriteSource(up.right) || this.rustDeclaredArrayCallWriteSource(up.right) || this.rustBuiltListSelfSort(up, name) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== undefined || this.rustDefaultedAliasMove(up) !== undefined) && String(up.parent.getText()).split('\n')[0].length <= 200;
+                        && (this.rustBuiltListWriteSource(up.right) || this.rustDeclaredArrayCallWriteSource(up.right) || this.rustOverloadListCallWriteSource(up.right) || this.rustTypedCoreListCallWriteSource(up.right) || this.rustBuiltHelperListWriteSource(up.right) || this.rustBuiltListSelfSort(up, name) || this.rustArrayGuardedMove(up) || this.rustOptListGuardedMove(up) !== undefined || this.rustDefaultedAliasMove(up) !== undefined) && String(up.parent.getText()).split('\n')[0].length <= 200;
                 }
                 if (isElementAccessExpression(up) && up.expression === n) {
                     natives++;
@@ -26442,6 +26442,140 @@ export class RustTranspiler extends BaseTranspiler {
         } finally {
             this.rustDeclaredArrayProof = saved;
         }
+    }
+
+    /** ral-55i: `this.m (..)` that the checker resolves to a bodiless overload of a base method (marketIds, marketSymbols):
+     *  the proof reads the real implementation (the same-named member with a body), never the overload's spelled type
+     *  (ccxt compiles without strictNullChecks). Every `return` of the implementation must build a list, or be dead for this
+     *  call: it follows `if (!flag) throw` in its block with `flag` bound to a literal `false` here, or it sits in
+     *  `if (p === undefined)` with `p`'s argument proven present (rustPresentListArg). The callee must not be redeclared by a
+     *  venue, dispatched virtually or typed, so its `-> Value` result holds a `Value::Arr` and `.into_list()` moves it.
+     *  Only a whole reassignment of a built-list local uses it. */
+    rustOverloadListCallWriteSource(right: any): boolean {
+        const call: any = this.rustSkipWrappers(right);
+        if (call === undefined || !isCallExpression(call) || this.rustTestTierSource(call) || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(call.expression.name)) return false;
+        const name = String(call.expression.name.text);
+        const overload: any = this.rustScalarCallee(call);
+        if (overload === undefined || !isMethodDeclaration(overload) || overload.body !== undefined) return false;
+        const file = String(overload.getSourceFile?.()?.fileName ?? '');
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(file) || !this.rustListPassthroughCallee(call, name)) return false;
+        const impl: any = Array.from((overload.parent as any)?.members ?? []).find((m: any) => isMethodDeclaration(m) && m.body !== undefined
+            && isIdentifier(m.name) && String(m.name.text) === name);
+        if (impl === undefined || this.isAsyncFunction(impl) || this.rustVirtualDispatch?.[this.toSnakeCaseName(name)] !== undefined
+            || this.rustTypedUnified.has(name) || this.rustTypedSignature(impl) !== undefined) return false;
+        const params: any[] = Array.from(impl.parameters);
+        const paramAt = (id: any): number => isIdentifier(id) ? params.findIndex((q: any) => isIdentifier(q.name) && String(q.name.text) === String(id.text)) : -1;
+        const unwritten = (i: number): boolean => i >= 0 && !this.rustParamWritten(params[i]);
+        const falseArg = (i: number): boolean => i >= 0 && call.arguments[i] !== undefined && this.rustSkipWrappers(call.arguments[i])?.kind === SyntaxKind.FalseKeyword;
+        const isThrowOnly = (st: any): boolean => st !== undefined && (st.kind === SyntaxKind.ThrowStatement || (isBlock(st) && st.statements.length === 1 && st.statements[0].kind === SyntaxKind.ThrowStatement));
+        // `if (!flag) throw ..` earlier in the return's own block, `flag` an unwritten parameter bound to `false` here
+        const deadByFlag = (ret: any): boolean => {
+            const block: any = ret.parent;
+            if (!isBlock(block)) return false;
+            for (const st of Array.from(block.statements) as any[]) {
+                if (st === ret) return false;
+                if (st.kind === SyntaxKind.IfStatement && st.elseStatement === undefined && isThrowOnly(st.thenStatement)) {
+                    const cond: any = this.rustSkipWrappers(st.expression);
+                    if (isPrefixUnaryExpression(cond) && cond.operator === SyntaxKind.ExclamationToken) {
+                        const i = paramAt(this.rustSkipWrappers(cond.operand));
+                        if (unwritten(i) && falseArg(i)) return true;
+                    }
+                }
+            }
+            return false;
+        };
+        // inside `if (p === undefined)` (then branch), `p` an unwritten parameter whose argument here is present
+        const deadByPresent = (ret: any): boolean => {
+            for (let n: any = ret; n !== undefined && n !== impl.body; n = n.parent) {
+                const up: any = n.parent;
+                if (up?.kind === SyntaxKind.IfStatement && up.thenStatement === n) {
+                    const cond: any = this.rustSkipWrappers(up.expression);
+                    if (isBinaryExpression(cond) && cond.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken && this.rustSkipWrappers(cond.right)?.kind === SyntaxKind.Identifier
+                        && String(this.rustSkipWrappers(cond.right).text) === 'undefined') {
+                        const i = paramAt(this.rustSkipWrappers(cond.left));
+                        if (unwritten(i) && call.arguments[i] !== undefined && this.rustPresentListArg(call, call.arguments[i])) return true;
+                    }
+                }
+            }
+            return false;
+        };
+        let returns = 0;
+        let ok = true;
+        const visit = (node: any) => {
+            if (!ok) return;
+            if (node !== impl.body && isFunctionLike(node)) return;
+            if (isReturnStatement(node)) {
+                returns++;
+                if (node.expression === undefined) { ok = false; return; }
+                if (deadByFlag(node) || deadByPresent(node)) return;
+                if (this.rustBuiltContainerKind(node.expression, 1) !== 'list') ok = false;
+                return;
+            }
+            node.forEachChild(visit);
+        };
+        impl.body.forEachChild(visit);
+        return ok && returns > 0;
+    }
+
+    /** ral-55i: a whole reassignment from a producer the runtime answers as a fresh `Value::Arr` on every path:
+     *  `Object.keys (x)` (runtime object_keys: `Value::Array` for a map, `[]` otherwise; never a ws client handle's key list),
+     *  and `s.split (sep)` (native or runtime split, an array on every path). */
+    rustBuiltHelperListWriteSource(right: any): boolean {
+        const call: any = this.rustSkipWrappers(right);
+        if (call === undefined || !isCallExpression(call) || this.rustTestTierSource(call) || !isPropertyAccessExpression(call.expression)) return false;
+        const owner: any = call.expression.expression;
+        const method = String(call.expression.name.text);
+        if (isIdentifier(owner) && String(owner.text) === 'Object') return method === 'keys' && call.arguments.length === 1 && this.printClientHandleKeys(call) === undefined;
+        return owner.kind !== SyntaxKind.ThisKeyword && method === 'split' && call.arguments.length === 1;
+    }
+
+    /** ral-55i: an identifier argument that cannot be `undefined` at the call: it is a `const` local or an unwritten parameter,
+     *  and the call sits in the then branch of `if (a !== undefined)`, or follows `if (a === undefined) throw ..` in an
+     *  enclosing block of the same function. */
+    rustPresentListArg(call: any, arg: any): boolean {
+        const a: any = this.rustSkipWrappers(arg);
+        if (a === undefined || !isIdentifier(a)) return false;
+        const text = String(a.text);
+        const declaration: any = this.rustDeclarationOfIdentifier(a);
+        if (declaration === undefined) return false;
+        if (isVariableDeclaration(declaration)) {
+            if ((declaration.parent.flags & NodeFlags.Const) === 0) return false;
+        } else if (!isParameterDeclaration(declaration) || this.rustParamWritten(declaration)) return false;
+        const same = (e: any, op: SyntaxKind): boolean => {
+            const c: any = this.rustSkipWrappers(e);
+            return isBinaryExpression(c) && c.operatorToken.kind === op && isIdentifier(this.rustSkipWrappers(c.left)) && String(this.rustSkipWrappers(c.left).text) === text
+                && this.rustDeclarationOfIdentifier(this.rustSkipWrappers(c.left)) === declaration && String(this.rustSkipWrappers(c.right)?.getText?.() ?? '') === 'undefined';
+        };
+        const fn = this.rustEnclosingFunction(call);
+        for (let n: any = call; n !== undefined && n !== fn; n = n.parent) {
+            const up: any = n.parent;
+            if (up?.kind === SyntaxKind.IfStatement && up.thenStatement === n && same(up.expression, SyntaxKind.ExclamationEqualsEqualsToken)) return true;
+            if (up !== undefined && isBlock(up)) {
+                for (const st of Array.from(up.statements) as any[]) {
+                    if (st === n) break;
+                    if (st.kind === SyntaxKind.IfStatement && st.elseStatement === undefined && same(st.expression, SyntaxKind.EqualsEqualsEqualsToken)) {
+                        const t: any = st.thenStatement;
+                        if (t.kind === SyntaxKind.ThrowStatement || (isBlock(t) && t.statements.length === 1 && t.statements[0].kind === SyntaxKind.ThrowStatement)) return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /** ral-55i: `await this.m (..)` of a typed unified core whose typed return is `Vec<crate::types::T>`: the printer boxes it
+     *  through `IntoRaw::into_raw`, which always builds a `Value::Arr`, so `.into_list()` moves exactly that list. */
+    rustTypedCoreListCallWriteSource(right: any): boolean {
+        const rhs: any = this.rustSkipWrappers(right);
+        if (rhs?.kind !== SyntaxKind.AwaitExpression) return false;
+        const call: any = this.rustSkipWrappers(rhs.expression);
+        if (call === undefined || !isCallExpression(call) || this.rustTestTierSource(call) || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const declaration: any = this.rustScalarCallee(call);
+        if (declaration === undefined || !isMethodDeclaration(declaration)) return false;
+        const typed = this.rustTypedSignature(declaration);
+        return typed !== undefined && /^Vec<crate::types::\w+>$/.test(typed.ret);
     }
 
     /** ral-53i: `[await] this.m (..)` whose venue declaration the printer's typed-return table (rustVenueContainerReturnKind)

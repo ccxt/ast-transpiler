@@ -19001,3 +19001,56 @@ describe('ral-55k: value of a two-literal-key write on a typed one-level map bea
         expect(out).toMatch(/let mut defaultDex: Value = /);
     });
 });
+
+describe('ral-55i: a list local reassigned whole from a bodiless base overload or a typed list core', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport interface Market { id: Str; symbol: Str; info: any }\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    marketId (s: string): string { return s; }\n    marketIds (symbols: string[]): string[];\n    marketIds (symbols?: Strings): Strings;\n    marketIds (symbols: Strings = undefined): Strings {\n        if (symbols === undefined) {\n            return symbols;\n        }\n        const result: string[] = [];\n        for (let i = 0; i < symbols.length; i++) {\n            result.push (this.marketId (symbols[i]));\n        }\n        return result;\n    }\n    pick (symbols: Strings, allowEmpty: false): string[];\n    pick (symbols?: Strings, allowEmpty?: boolean): Strings;\n    pick (symbols: Strings = undefined, allowEmpty = true): Strings {\n        if (symbols === undefined) {\n            if (!allowEmpty) {\n                throw new Error ('empty');\n            }\n            return symbols;\n        }\n        const result: string[] = [];\n        for (let i = 0; i < symbols.length; i++) {\n            result.push (symbols[i]);\n        }\n        return result;\n    }\n    async fetchMarkets (params: Dict = {}): Promise<Market[]> { return []; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Strings, Market } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const use = "        const out = [];\n        for (let i = 0; i < ids.length; i++) {\n            out.push (this.safeString (ids, i));\n        }\n        return out;\n";
+    test('`ids = this.marketIds (s)` under `if (s !== undefined)` reads the implementation: the list is typed', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-55i-ov', "    m (symbols: Strings = undefined) {\n        const s: Strings = symbols;\n        let ids = [ 'ALL' ];\n        if (s !== undefined) {\n            ids = this.marketIds (s);\n        }\n" + use + "    }\n")).content;
+        expect(out).toContain('let mut ids: crate::value::List = ');
+        expect(out).toMatch(/ids = self\.(?:market_ids|marketIds)\([^;]*\)\.into_list\(\);/);
+    });
+    test('`ids = this.pick (s, false)` after the throw guard: the undefined return is dead, the list is typed', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-55i-flag', "    m (symbols: Strings = undefined) {\n        let ids = [];\n        ids = this.pick (symbols, false);\n" + use + "    }\n")).content;
+        expect(out).toContain('let mut ids: crate::value::List = ');
+    });
+    test('an argument that may be undefined proves nothing: the local stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-55i-neg', "    m (flag: boolean, symbols: Strings = undefined) {\n        let ids = [ 'ALL' ];\n        if (flag) {\n            ids = this.marketIds (symbols);\n        }\n        ids = this.pick (symbols, true);\n" + use + "    }\n")).content;
+        expect(out).not.toContain('let mut ids: crate::value::List');
+    });
+    test('`rows = await this.fetchMarkets (p)` of a typed `Vec<Market>` core types the list', () => {
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchMarkets'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = typed.transpileRustByPath (write ('ral-55i-core', "    async m (flag: boolean, params: Dict = {}) {\n        let rows: any[] = [];\n        if (flag) {\n            rows = await this.fetchMarkets (params);\n        }\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            out.push (this.safeString (rows[i], 'id'));\n        }\n        return out;\n    }\n")).content;
+        expect(out).toContain('let mut rows: crate::value::List = ');
+    });
+});
+
+describe('ral-55i: a list local reassigned whole from Object.keys or split', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    filterBy (x: any, k: string, v: any = undefined): any[] { return []; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (flag: boolean, d: Dict, s: Str) {\n        let rows: any[] = [];\n        if (flag) {\n" + body + "        }\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            out.push (this.safeString (rows, i));\n        }\n        return out;\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('`rows = Object.keys (d)` types the list', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-55i-keys', "            rows = Object.keys (d);\n")).content;
+        expect(out).toContain('let mut rows: crate::value::List = ');
+    });
+    test('`rows = s.split (\'-\')` types the list', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-55i-split', "            rows = (s as string).split ('-');\n")).content;
+        expect(out).toContain('let mut rows: crate::value::List = ');
+    });
+    test('a reader result cast to any is not one of them: the local stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-55i-values', "            rows = this.safeString (d, 'x') as any;\n")).content;
+        expect(out).not.toContain('let mut rows: crate::value::List');
+    });
+});
