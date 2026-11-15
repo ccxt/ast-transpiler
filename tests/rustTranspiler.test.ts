@@ -17451,3 +17451,36 @@ describe('ral-50i: a literal-built map lent to a base any-key reader stays a typ
         expect(out).toContain('let mut fees: Value = ');
     });
 });
+
+describe('ral-50b: map-literal producers (handleUntilOption list write, aeo write on a reuse literal, cast store)', () => {
+    test('aster-like request, bitget-like result and gemini-like ws store copy stay typed maps', () => {
+        const dir = path.join (rustFixtureRoot, 'ral50b-map-producers');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    bidsasks: Dict = {};\n    extend (...args: any[]): any { return {}; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeInteger (o: any, k: any, d: number = undefined): number { return o; }\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] { return [ request, params ]; }\n    parseX (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    until (since: number, params: Dict = {}): any {\n        let request: Dict = { 'a': 1 };\n        if (since !== undefined) {\n            request['startTime'] = since;\n        }\n        if ('until' in params) {\n            request = this.handleUntilOption ('endTime', request, params);\n        }\n        return this.parseX (this.extend (request, params));\n    }\n    rebuilt (response: Dict, flag: boolean): any {\n        let result: Dict = {};\n        if (flag) {\n            result = this.safeDict (response, 'data', {});\n        }\n        result['timestamp'] = this.safeInteger (response, 'ts');\n        return this.parseX (result);\n    }\n    store (symbol: string, ts: number): void {\n        let current: Dict = {};\n        if (symbol in this.bidsasks) {\n            const cached = this.bidsasks[symbol];\n            current = this.extend ({}, cached);\n        } else {\n            current = this.extend (this.parseX ({}));\n            current['symbol'] = symbol;\n        }\n        current['timestamp'] = ts;\n        this.bidsasks[symbol] = current as Dict;\n    }\n}\n");
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        const u = out.slice(out.indexOf('fn until'), out.indexOf('fn rebuilt'));
+        expect(u).toContain('let mut request: crate::value::Dict =');
+        expect(u).toMatch(/request = self\.[A-Za-z_]+\([^\n]*Value::Dict\(request\)[^\n]*\)\.into_dict\(\);/);
+        // a reuse literal written at literal keys through the helper (`impl AddTarget for Dict`) and stored into a cache field via a cast
+        const s = out.slice(out.indexOf('fn store'));
+        expect(s).toContain('let mut current: crate::value::Dict =');
+        expect(s).toContain('add_element_to_object(&mut current,');
+        expect(s).toContain('Value::Dict(current)); };');
+    });
+});
+
+describe('ral-50b: index write on a never-null list local (impl AddTarget for List)', () => {
+    test('coinbase-like orders[0] = extend (..) keeps the list typed; a nullable source stays Value', () => {
+        const dir = path.join (rustFixtureRoot, 'ral50b-list-target');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    extend (...args: any[]): any { return {}; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeList (o: any, k: any, d: List = undefined): List { return o; }\n    safeString (o: any, k: any, d: string = undefined): string { return o; }\n    parseOrders (o: any, m: any = undefined): any { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    one (response: Dict): any {\n        const orders = this.safeList (response, 'orders', []);\n        const cursor = this.safeString (response, 'cursor');\n        if ((cursor !== undefined) && (cursor !== '')) {\n            orders[0] = this.extend (this.safeDict (orders, 0, {}), { 'cursor': cursor });\n        }\n        return this.parseOrders (orders, undefined);\n    }\n    nullable (response: Dict): any {\n        const orders = this.safeList (response, 'orders');\n        orders[0] = 1;\n        return this.parseOrders (orders, undefined);\n    }\n}\n");
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        const one = out.slice(out.indexOf('fn one'), out.indexOf('fn nullable'));
+        expect(one).toContain('let mut orders: crate::value::List =');
+        expect(one).toContain('add_element_to_object(&mut orders, &Value::Int(0),');
+        const nul = out.slice(out.indexOf('fn nullable'));
+        expect(nul).toContain('let mut orders: Value =');
+    });
+});
