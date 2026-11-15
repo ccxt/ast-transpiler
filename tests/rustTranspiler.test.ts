@@ -11720,9 +11720,10 @@ describe('ral-jf: element-read string locals lent to this. arguments', () => {
         fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): any { return o; }\n    hold (x: any): any { return x; }\n}\n");
         fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    pick (raw: any) {\n        const keys = Object.keys (raw);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const a = this.hold (key);\n            const b = this.safeDict (raw, key);\n            this.hold ([ a, b ]);\n        }\n        const more = Object.keys (raw['x']);\n        for (let i = 0; i < more.length; i++) {\n            const key = more[i];\n            this.hold (key);\n        }\n    }\n}\n");
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
-        expect(out).toContain('let mut key: Option<String> = keys.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
+        // ral-41g: each twin is decided on its own uses, so both borrow off their key list (no copy at the declaration)
+        expect(out).toContain('let mut key: Option<&str> = keys.get(i as usize).and_then(Value::as_str);');
         expect(out).toContain('self.hold(Value::from(key.as_deref()))');
-        expect(out).toContain(', key.map(Value::from).unwrap_or(Value::Null), &[])');
+        expect(out).toContain('self.safeDict(raw.clone(), Value::from(key.as_deref()), &[])');
     });
 });
 
@@ -15540,5 +15541,36 @@ describe('ral-41a: parseInt of an optional string local read through `as string`
         const text = out();
         expect(text).toContain('let mut signedAmount: Option<String> = None');
         expect(text).toContain('(match signedAmount.as_deref() { Some(__parse_s) => __parse_s.trim().parse::<i64>().map(Value::Int).unwrap_or(Value::Null), None => Value::Null })');
+    });
+});
+
+describe('ral-41g: a borrowed string element decides its own uses only (a same-named element in a sibling block is another Rust local)', () => {
+    const mk = (second: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-41g-tw-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): string { return d; }\n    safeDict (o: any, k: any, d: any = undefined): any { return d; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    group (rows: any[]): any {\n        const byKey: Dict = {};\n        const keys: string[] = [];\n"
+            + "        for (let i = 0; i < rows.length; i++) {\n            const k = this.safeString (rows[i], 'id', '');\n            if (!(k in byKey)) {\n                byKey[k] = [];\n                keys.push (k);\n            }\n        }\n"
+            + "        const out = [];\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const grouped = byKey[key];\n            out.push (this.safeDict (grouped, 0));\n        }\n"
+            + "        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n" + second + "\n        }\n        return out;\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('both twins read the map by key: both borrow Option<&str> off the list', () => {
+        const out = mk('            const grouped = byKey[key];\n            out.push (this.safeDict (grouped, 1));');
+        const m = out.match(/let mut key: Option<&str> = keys\.get\(i as usize\)\.and_then\(Value::as_str\);/g) ?? [];
+        expect(m.length).toBe(2);
+    });
+    test('negative: a key whose map read initialises a pushed local keeps Value (the native push is proven from the Value key text)', () => {
+        const out = mk('            const grouped = byKey[key];\n            grouped.push (1);');
+        expect(out).not.toMatch(/let mut key: Option<&str>/);
+    });
+    test('negative: a twin whose own use only a Value prints (arithmetic on its length) keeps Value; the other twin borrows', () => {
+        const out = mk('            out.push (key.length + 1);');
+        expect(out).toMatch(/let mut key: Value = keys\.get\(i as usize\)\.cloned\(\)/);
+        expect((out.match(/let mut key: Option<&str> = keys\.get\(i as usize\)\.and_then\(Value::as_str\);/g) ?? []).length).toBe(1);
     });
 });

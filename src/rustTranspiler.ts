@@ -7826,10 +7826,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (!recvOk) return false;
         // wg: a parameter list's element keys no map (a keyed map decides its own type from a `Value` key)
         const keyed = isParameterDeclaration(owner);
-        return this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+        // ral-41g: the element's uses go through the one per-binding walk the scalar decision itself took (a same-named
+        // `const k = ..` in a sibling block is another Rust local), so the borrow is decided for exactly the uses whose forms it read
+        return this.rustScalarUsesAll(declaration, String(declaration.name.text), (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             const form = this.rustScalarUseForms.get(n);
             if (keyed && (form === 'okey' || form === 'kin' || form === 'key' || form === 'inbox')) return false;
+            // ral-41g: a map read keyed by the element that initialises a local later pushed stays on the `Value` key: ccxt's
+            // marker-free push pass proves that local from the read's `k.as_str()` text (a borrowed key would cost the native push)
+            if (this.rustElemKeyFeedsPushedLocal(n)) return false;
             if (form === 'test' || form === 'concat' || form === 'okey' || form === 'kin' || form === 'key' || form === 'inbox') return true;
             // int44 (wg x wd): an inArray needle boxes the borrow (`Value` is an `InArrayNeedle`), as wg printed it
             if (form === 'parg' && this.rustInArrayNeedle(n)) return true;
@@ -7840,6 +7845,22 @@ export class RustTranspiler extends BaseTranspiler {
             return (isCallExpression(up) && up.expression !== n) || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n)
                 || (isArrayLiteralExpression(up) && !(isBinaryExpression(up.parent) && up.parent.left === up)) || this.rustDictWriteValue(n)
                 || (isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.PlusToken);
+        });
+    }
+
+    /** ral-41g: `const g = m[k]` (k the use `n`) where `g`, or a same-named local of the method, is the receiver of a `.push (..)`. */
+    rustElemKeyFeedsPushedLocal(n: any): boolean {
+        const read: any = n.parent;
+        if (read === undefined || !isElementAccessExpression(read) || read.argumentExpression !== n) return false;
+        let up: any = read.parent;
+        while (up !== undefined && (isParenthesizedExpression(up) || up.kind === SyntaxKind.AsExpression || up.kind === SyntaxKind.NonNullExpression)) up = up.parent;
+        if (up === undefined || !isVariableDeclaration(up) || !isIdentifier(up.name)) return false;
+        // the pass proves a receiver from EVERY same-named declaration in the method body, so any pushed twin counts
+        const scope: any = this.rustEnclosingFunction(up);
+        if (scope === undefined) return true;
+        return (this.rustScopeNameNodes(scope, String(up.name.text)) as any[]).some((u: any) => {
+            const acc: any = u.parent;
+            return isIdentifier(u) && isPropertyAccessExpression(acc) && acc.expression === u && String(acc.name.text) === 'push' && isCallExpression(acc.parent) && acc.parent.expression === acc;
         });
     }
 
