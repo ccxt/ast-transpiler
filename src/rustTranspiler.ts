@@ -22823,20 +22823,27 @@ export class RustTranspiler extends BaseTranspiler {
         const list: any = declaration.parent;
         if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
         if (!RustTranspiler.RUST_PRO_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
-        if (!this.rustHandlerTableValue(declaration.initializer, false)) return false;
+        // ral-51h: `let method: any = undefined;` (bitfinex / blofin) starts as `None` when a table read is written later
+        const nilStart = declaration.initializer !== undefined && this.literalKindOfNode(this.unwrapParens(declaration.initializer)) === 'null';
+        if (!nilStart && !this.rustHandlerTableValue(declaration.initializer, false)) return false;
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
         let calls = 0;
+        let reads = 0;
         const ok = this.rustBlockLocalUsesAll(declaration, String(declaration.name.text), (n: any) => {
             if (this.rustEnclosingFunction(n) !== fn) return false;
             const up: any = n.parent;
             if (isBinaryExpression(up) && this.isEqualityOp(up.operatorToken.kind)) return this.literalKindOfNode(this.unwrapParens(up.left === n ? up.right : up.left)) === 'null';
             if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'call' && isCallExpression(up.parent) && up.parent.expression === up) return ++calls > 0;
             // a rewrite from a handler table again (woo / bitvavo fall back from `event` to `topic`)
-            if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement) return this.rustHandlerTableValue(up.right, true);
+            if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement) {
+                const right: any = this.rustSkipWrappers(up.right);
+                if (right !== undefined && !(isPropertyAccessExpression(right) && right.expression.kind === SyntaxKind.ThisKeyword)) reads++;
+                return this.rustHandlerTableValue(up.right, true);
+            }
             return false;
         });
-        return ok && calls > 0;
+        return ok && calls > 0 && (!nilStart || reads > 0);
     }
 
     // ral-49h: a handler value is a handler-table read, `c ? undefined : <read>` / `c ? <read> : undefined` (aster /
@@ -22862,6 +22869,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** The `Option<String>` text of a handler value accepted by `rustHandlerTableValue`. */
     printHandlerTableValue(expr: any): string {
         const e: any = this.rustSkipWrappers(expr);
+        if (e !== undefined && this.literalKindOfNode(this.unwrapParens(e)) === 'null') return 'None';
         if (e?.kind === SyntaxKind.ConditionalExpression) {
             const whenTrueNull = this.literalKindOfNode(this.unwrapParens(e.whenTrue)) === 'null';
             const cond = this.printCondition(e.condition, 0).trim();
@@ -22875,7 +22883,9 @@ export class RustTranspiler extends BaseTranspiler {
     rustHandlerTableRead(expr: any): boolean {
         const init: any = this.rustSkipWrappers(expr);
         if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
-            || String(init.expression.name.text) !== 'safeValue' || init.arguments.length !== 2) return false;
+            || !((String(init.expression.name.text) === 'safeValue' && init.arguments.length === 2)
+                // ral-51h: bitfinex `this.safeValue2 (publicMethods, name, channel)`: either key reads the same table
+                || (String(init.expression.name.text) === 'safeValue2' && init.arguments.length === 3))) return false;
         const callee: any = this.rustScalarCallee(init);
         if (callee === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile().fileName))) return false;
         return this.rustHandlerTable(this.rustSkipWrappers(init.arguments[0])) || this.rustSubscriptionMethodField(init);
@@ -22924,7 +22934,11 @@ export class RustTranspiler extends BaseTranspiler {
             // a local or method parameter that only ever holds such values (htx `subscribePublic (.., method: any)`)
             if (isIdentifier(v)) {
                 const d: any = this.rustDeclarationOfIdentifier(v);
-                if (d === undefined || d.name === v || seen.has(d) || seen.size > 16) return false;
+                if (d === undefined || d.name === v) return false;
+                // ral-51h: a declaration reached again (whitebit `watchMultipleSubscription` writes its `method` parameter
+                // twice) is already under proof: every write into it is checked on the first visit, so the revisit holds
+                if (seen.has(d)) return true;
+                if (seen.size > 16) return false;
                 seen.add(d);
                 if (isVariableDeclaration(d)) {
                     if (d.initializer === undefined || !valueOk(d.initializer)) return false;
@@ -23021,7 +23035,7 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustBlockLocalUsesAll(declaration, String(declaration.name.text), (n: any) => {
             const up: any = n.parent;
             if (isCallExpression(up) && up.arguments[0] === n && isPropertyAccessExpression(up.expression) && up.expression.expression.kind === SyntaxKind.ThisKeyword
-                && String(up.expression.name.text) === 'safeValue') return true;
+                && (String(up.expression.name.text) === 'safeValue' || String(up.expression.name.text) === 'safeValue2')) return true;
             // ral-49h: `Object.keys (table)` (the key list) and a `table[k]` element READ (apex / bybit / coinone / hyperliquid /
             // pacifica fall back to a substring match over the keys); any write through the table fails
             if (isCallExpression(up) && up.arguments.length === 1 && up.arguments[0] === n && isPropertyAccessExpression(up.expression)

@@ -17639,3 +17639,29 @@ describe('ral-51s: a string local keying a client subscription write', () => {
         expect(out).toContain('.add_subscription(temp.as_str(), ');
     });
 });
+
+describe('ral-51h: dispatch locals started Null and method fields fed from a parameter written twice', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeValue2 (o: any, k1: any, k2: any, d: any = undefined): any { return o[k1]; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeInteger (o: any, k: any, d: any = undefined): any { return o[k]; }\n    watch (url: any, h: any, m: any = undefined, s: any = undefined, sub: any = undefined): any { return undefined; }\n}\n";
+    const client = "export default class Client {\n    subscriptions: Dict = {};\n    resolve (v: any, h: string | undefined = undefined): void {}\n}\nimport type { Dict } from '../Exchange';\n";
+    const pro = "import Exchange from '../base/Exchange';\nimport type { Dict } from '../base/Exchange';\nimport Client from '../base/ws/Client';\nexport default class venue extends Exchange {\n    handleA (client: Client, message: Dict) {}\n    handleB (client: Client, message: Dict) {}\n    async watchA () {\n        return await this.watchPublic ('h', 'a_subscribe');\n    }\n    async watchB () {\n        return await this.watchTwice ('h', 'b_subscribe');\n    }\n    async watchPublic (messageHash: string, method: string) {\n        const request: Dict = { 'id': 1, 'method': method };\n        return await this.watch ('u', messageHash, request, messageHash);\n    }\n    async watchTwice (messageHash: string, method: string) {\n        const first: Dict = { 'id': 1, 'method': method };\n        const second: Dict = { 'id': 2, 'method': method };\n        await this.watch ('u', messageHash, first, messageHash);\n        return await this.watch ('u', messageHash, second, messageHash);\n    }\n    handleSub (client: Client, message: Dict) {\n        const subscription = this.safeValue (client.subscriptions, 'x');\n        const fromSub = this.safeValue (subscription, 'method');\n        if (fromSub !== undefined) {\n            fromSub.call (this, client, message);\n        }\n    }\n    handleMessage (client: Client, message: Dict) {\n        const name = this.safeString (message, 'n');\n        const table: Dict = {\n            'a': this.handleA,\n            'b': this.handleB,\n        };\n        let nilStart: any = undefined;\n        if (name === 'x') {\n            nilStart = this.safeValue (table, name);\n        } else {\n            nilStart = this.safeValue2 (table, name, 'b');\n        }\n        if (nilStart !== undefined) {\n            nilStart.call (this, client, message);\n        }\n        let refOnly: any = undefined;\n        refOnly = this.handleA;\n        if (refOnly !== undefined) {\n            refOnly.call (this, client, message);\n        }\n    }\n}\n";
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral51h-ws');
+        fs.mkdirSync (path.join (dir, 'ts/src/base/ws'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/base/ws/Client.ts'), client);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), pro);
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    });
+    test('a string parameter written to two method fields keeps the subscription read Option<String>', () => {
+        expect(out).toMatch(/let mut fromSub: Option<String> = [^\n]*"method"[^\n]*\.as_str\(\)\.map\(str::to_owned\);/);
+    });
+    test('a Null-started local rewritten from safeValue / safeValue2 table reads is Option<String>', () => {
+        expect(out).toMatch(/let mut nilStart: Option<String> = None;/);
+        expect(out).toMatch(/nilStart = [^\n]*\.as_str\(\)\.map\(str::to_owned\);/);
+    });
+    test('a Null-started local only rewritten from a method reference keeps a Value', () => {
+        expect(out).toMatch(/let mut refOnly: Value = /);
+    });
+});
