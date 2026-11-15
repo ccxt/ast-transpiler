@@ -3692,11 +3692,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (inner.kind === SyntaxKind.TrueKeyword) return 'true';
         if (inner.kind === SyntaxKind.FalseKeyword) return 'false';
         if (!(isElementAccessExpression(inner) || isPropertyAccessExpression(inner))) return undefined;
-        const key = this.rustMarketReadKey(inner.expression);
+        return this.rustMarketBoolFlagRead(inner.expression);
+    }
+
+    /** ral-46e / ne / 47e: THE market `bool` flag read (one decision for initialisers and literal-seeded flag writes):
+     *  off an `Option<Market>` local `matches!(m, Some(Market { f: true, .. }))` (`None` reads `false`, no closure),
+     *  off a loaded struct local its own field `(m).f`; anything else undefined. */
+    rustMarketBoolFlagRead(receiver: any): string | undefined {
+        const key = this.rustMarketReadKey(receiver);
         if (key === undefined || !RustTranspiler.RUST_MARKET_BOOL_FIELDS.has(key)) return undefined;
-        const optMarket = this.rustOptMarketLocalOf(inner.expression);
+        const optMarket = this.rustOptMarketLocalOf(receiver);
         if (optMarket !== undefined) return `matches!(${this.printNode(optMarket.name, 0)}, Some(crate::types::Market { ${key}: true, .. }))`;
-        const declaration = this.rustTypedMarketLocalOf(inner.expression);
+        const declaration = this.rustTypedMarketLocalOf(receiver);
         if (declaration === undefined || this.rustMarketLocalKind(declaration) !== 'struct') return undefined;
         return `(${this.printNode(declaration.name, 0)}).${key}`;
     }
@@ -12800,10 +12807,9 @@ export class RustTranspiler extends BaseTranspiler {
         // old Value took its truthiness, so `None` reads `false` and a loaded market its `bool` field.
         const optMarket = this.rustOptMarketLocalOf(node.expression);
         if (optMarket !== undefined) {
-            const optKey = this.rustMarketReadKey(node.expression);
-            if (optKey === undefined || !RustTranspiler.RUST_MARKET_BOOL_FIELDS.has(optKey)) return undefined;
-            // a pattern test, not a closure: the struct's own `bool` field, `false` for `None`
-            return { kind: 'bool', text: `matches!(${this.printNode(optMarket.name, 0)}, Some(crate::types::Market { ${optKey}: true, .. }))` };
+            // a pattern test, not a closure: the struct's own `bool` field, `false` for `None` (rustMarketBoolFlagRead)
+            const flag = this.rustMarketBoolFlagRead(node.expression);
+            return flag === undefined ? undefined : { kind: 'bool', text: flag };
         }
         const declaration = this.rustTypedMarketLocalOf(node.expression);
         const localKind = declaration === undefined ? false : this.rustMarketLocalKind(declaration);
@@ -12818,8 +12824,8 @@ export class RustTranspiler extends BaseTranspiler {
             return { kind: 'ostr', text: `crate::value::KeyRead::key_read(&&${this.printNode(declaration.name, 0)}, ${JSON.stringify(key)}).as_str().map(str::to_owned)` };
         }
         const recv = `(${this.printNode(declaration.name, 0)})`;
-        // ne: a loaded struct's flag is the `bool` its boxed read wraps (`Value::Bool((m).swap)`)
-        if (RustTranspiler.RUST_MARKET_BOOL_FIELDS.has(key)) return { kind: 'bool', text: `${recv}.${key}` };
+        // ne: a loaded struct's flag is the `bool` its boxed read wraps (`Value::Bool((m).swap)`), read by rustMarketBoolFlagRead
+        if (RustTranspiler.RUST_MARKET_BOOL_FIELDS.has(key)) return { kind: 'bool', text: this.rustMarketBoolFlagRead(node.expression) ?? `${recv}.${key}` };
         if (RustTranspiler.RUST_MARKET_OPT_BOOL_FIELDS.has(key)) return { kind: 'obool', text: `${recv}.${key}` };
         const field = RustTranspiler.RUST_MARKET_STR_FIELDS[key];
         if (field !== undefined) return { kind: 'str', text: `${recv}.${field}.clone()` };
@@ -21340,8 +21346,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isCallExpression(head)) return this.rustBuiltReturnSourceKind(head) === 'dict' || this.rustOmitOfDict(head);
         if (!isIdentifier(head)) return false;
         const d: any = this.rustDeclarationOfIdentifier(head);
-        if (d === undefined || d === head || d.name === head) return this.rustTypedParamsParam(d) || this.rustHelperParamsProvenMap(d);
-        return this.rustTypedParamsParam(d) || this.rustHelperParamsProvenMap(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+        if (d === undefined || d === head || d.name === head) return this.rustProvenMapParam(d);
+        return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
     }
 
     rustOmitOfDict(init: any): boolean {
@@ -21352,8 +21358,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isCallExpression(head)) return this.rustBuiltReturnSourceKind(head) === 'dict' || this.rustOmitOfDict(head);
         if (!isIdentifier(head)) return false;
         const d: any = this.rustDeclarationOfIdentifier(head);
-        if (d === undefined || d === head || d.name === head) return this.rustTypedParamsParam(d) || this.rustHelperParamsProvenMap(d);
-        return this.rustTypedParamsParam(d) || this.rustHelperParamsProvenMap(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+        if (d === undefined || d === head || d.name === head) return this.rustProvenMapParam(d);
+        return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
     }
 
     /** `this.deepExtend (m, p, ..)` whose every operand is a proven map: a tag-free literal, a built map, an omit of a
@@ -21482,6 +21488,13 @@ export class RustTranspiler extends BaseTranspiler {
         const slot = typed?.params?.[at];
         if (slot === undefined && String(fn.name?.text) === 'sign' && at === 3) return this.rustSignParamsProvenMap(fn) && !this.rustLocalIsReassigned(d, String(d.name.text));
         return slot !== undefined && String(slot.rustType).startsWith('impl Into<crate::Params>') && !this.rustLocalIsReassigned(d, String(d.name.text));
+    }
+
+    /** ONE params-map proof for an omit / keysort head (and so for 46g's slot-1 write-back, which takes the handed map
+     *  whose omit head this proves): a typed unified method's `params` (rustTypedParamsParam) or, ral-47g, a venue
+     *  `*Request` helper's `params` proven a map by every in-file caller (rustHelperParamsProvenMap). */
+    rustProvenMapParam(d: any): boolean {
+        return this.rustTypedParamsParam(d) || this.rustHelperParamsProvenMap(d);
     }
 
     /** ral-47g: the trailing `params: Dict = {}` of a venue's own helper (createOrderRequest and the like), never
