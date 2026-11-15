@@ -18500,6 +18500,7 @@ export class RustTranspiler extends BaseTranspiler {
         let endpointBoxes = 0;
         let plainReads = 0;
         let aliasBoxes = 0;
+        let optAliasWrites = 0;
         const boxedElementUses: any[] = [];
         const indexReadUses: any[] = [];
         const accept = (n: any) => {
@@ -18528,6 +18529,14 @@ export class RustTranspiler extends BaseTranspiler {
                 // ral-yh: a `safeDict*` / `safeList*` local rewritten only with its own kind: a tag-free map literal / a list
                 // literal, or a base builder that answers that container on every path (`arrayConcat`, `filterBy`, `extend`, ..)
                 if (!nilDeclared && (from === 'dict' || from === 'list') && this.rustSameKindRewrite(rhs, from)) return String(rhs.getText()).split('\n')[0].length <= 240;
+                // ral-43f: `t = s` of a `const s = this.safeDict* (..)` / `safeList*` (nullable default) in the same function:
+                // the alias holds the same optional container (syntactic proof, no decision of `s` is read: fixed point in one pass)
+                const aliasKind = nilDeclared ? this.rustOptAliasSourceKind(rhs, fn) : undefined;
+                if (aliasKind !== undefined) {
+                    if (from !== undefined && from !== aliasKind) mixed = true;
+                    from = from ?? aliasKind;
+                    return ++optAliasWrites > 0;
+                }
                 const kind = this.rustNilResponseWriteKind(rhs, nilDeclared, declaration);
                 const declaredWrite = nilDeclared && this.rustDeclaredEndpointWrite(rhs);
                 if (declaredWrite) declaredEndpointWrites++;
@@ -18614,6 +18623,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (from === 'dict' && isCallExpression(up) && this.rustLentParamsSlot(up, n) && (extendReuse || init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) === 'dict')) return ++reads > 0;
             // ral-oc: the runtime `jwt(request: impl Into<Value>, ..)` takes the request map lent (an Arc bump)
             if (from === 'dict' && this.rustJwtRequestSlot(up, n)) return ++jwtLends > 0 && ++reads > 0;
+            // ral-43f: the source of `t = x` whose target holds the optional form of the same kind: the alias shares x's handle
+            // (counted as a nullable lend: the source keeps Null apart from the empty map, so it takes the optional form too)
+            if (this.rustOptAliasTargetUse(n, declaration, fn)) return ++lentNullable > 0 && ++reads > 0;
             // ral-40h: `const|let y = x` of a container local (phase 1): the alias takes the container whole
             if (this.rustContainerAliasInit(n, declaration)) return ++aliasBoxes > 0 && boxedElementUses.push(n) > 0;
             if (!isCallExpression(up) || up.arguments[0] !== n) return handed();
@@ -18723,6 +18735,39 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustOptContainerLocals = new WeakSet<any>();
+
+    // ── ral-43f: optional-container alias fixed point ──
+    // `let t: NullableDict = undefined; .. t = s;` where `s` is `const s = this.safeDict (o, k)` (nullable default) in the
+    // same function: both partners hold `Option<Dict>` (`Option<List>` for `safeList*`). The target's proof is syntactic on
+    // the source's initializer, so the source may ask the target's decision without a cycle; a source that stays `Value`
+    // is converted at the write (`s.into_opt_dict()`), exactly the write the optional form already prints.
+    rustOptAliasSourceKind(rhs: any, fn: any): 'dict' | 'list' | undefined {
+        if (rhs === undefined || !isIdentifier(rhs)) return undefined;
+        const d: any = this.rustDeclarationOfIdentifier(rhs);
+        if (d === undefined || !isVariableDeclaration(d) || d.name === rhs || !isIdentifier(d.name) || this.rustEnclosingFunction(d) !== fn) return undefined;
+        const list: any = d.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1 || (list.flags & NodeFlags.Const) === 0) return undefined;
+        const init: any = this.rustSkipWrappers(d.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const name = String(init.expression.name.text);
+        const kind: 'dict' | 'list' | undefined = /^safeDict2?$/.test(name) ? 'dict' : (/^safeList2?$/.test(name) ? 'list' : undefined);
+        if (kind === undefined || !this.rustOptContainerSourceOk(init, kind)) return undefined;
+        const at = name.endsWith('2') ? 3 : 2;
+        // a nullable source only: a defaulted one is the plain form, whose alias the 40h rule owns
+        if (init.arguments.length > at && this.literalKindOfNode(this.rustSkipWrappers(init.arguments[at])) !== 'null') return undefined;
+        if (String(init.getText()).split('\n')[0].length > 240) return undefined;
+        return kind;
+    }
+
+    /** The source side: `t = n` (statement) whose target `t` holds the optional form of n's kind through rustOptAliasSourceKind. */
+    rustOptAliasTargetUse(n: any, declaration: any, fn: any): boolean {
+        const up: any = n.parent;
+        if (!isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(up.left)) return false;
+        if (this.rustOptAliasSourceKind(n, fn) === undefined) return false;
+        const t: any = this.rustDeclarationOfIdentifier(up.left);
+        if (t === undefined || t === declaration || !isVariableDeclaration(t) || t.name === up.left || this.rustBorrowedPending.has(t)) return false;
+        return this.rustBorrowedLocalKind(t) === this.rustOptAliasSourceKind(n, fn) && this.rustOptContainerLocals.has(t);
+    }
 
     // ── ral-wh: index / variable-key reads on held Dict / List locals (rustBorrowedIndexReadUse) ──
     // `KeyRead::read(&&x, &k)` is `get_map_value` / `get_list_value`, the arm `get_value` takes for that variant.
@@ -20117,6 +20162,12 @@ export class RustTranspiler extends BaseTranspiler {
         const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
         const rhs: any = this.rustSkipWrappers(right);
         if (this.literalKindOfNode(rhs) === 'null') return `${name} = None`;
+        // ral-43f: an optional source of the same kind is handed over as is (moved at its last use, else an Arc bump)
+        const src = this.rustOptContainerOf(rhs);
+        if (src !== undefined && src.kind === local.kind && this.rustPrintedOptional.has(src.declaration)) {
+            const s = super.transformIdentifier(rhs, this.ReservedKeywordsReplacements[rhs.text] ?? rhs.text);
+            return `${name} = ${this.rustOwnedLastUse(rhs, src.declaration) ? s : `${s}.clone()`}`;
+        }
         return `${name} = ${this.printNode(right, 0).trim()}.into_opt_${local.kind}()`;
     }
 

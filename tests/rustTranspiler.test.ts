@@ -16042,3 +16042,26 @@ describe('ral-43e: a venue method returning a safeMarket record prints crate::ty
         expect(text).toMatch(/let mut loose: Value = self\.looseOf\(/);
     });
 });
+
+describe('ral-43f: a nil-declared dict written only from nullable safeDict consts (alias fixed point)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type NullableDict = Dict | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k] ?? d; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k] ?? d; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, NullableDict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseOrder (order: Dict) {\n        const takeProfit = this.safeDict (order, 'take_profit');\n        const stopLoss = this.safeDict (order, 'stop_loss');\n        let leg: NullableDict = undefined;\n        if (takeProfit !== undefined) {\n            leg = takeProfit;\n        } else {\n            leg = stopLoss;\n        }\n        let price: Str = undefined;\n        if (leg !== undefined) {\n            price = this.safeString (leg, 'limit_price');\n        }\n        return { 'price': price };\n    }\n    parseLoose (order: Dict) {\n        const loose = this.safeDict (order, 'x', {});\n        let other: NullableDict = undefined;\n        other = loose;\n        return { 'o': this.safeString (other, 'p') };\n    }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-43f-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('both partners hold Option<Dict> and the write hands the optional map over', () => {
+        const text = out();
+        expect(text).toContain('let mut takeProfit: Option<crate::value::Dict> = ');
+        expect(text).toContain('let mut stopLoss: Option<crate::value::Dict> = ');
+        expect(text).toContain('let mut leg: Option<crate::value::Dict> = None');
+        expect(text).toMatch(/leg = takeProfit(\.clone\(\))?;/);
+        expect(text).toMatch(/leg = stopLoss(\.clone\(\))?;/);
+        // negative: a defaulted (never-null) source is the plain form: not this rule
+        expect(text).not.toMatch(/let mut loose: Option</);
+    });
+});
