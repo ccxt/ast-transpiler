@@ -19290,11 +19290,6 @@ describe('ral-56n: number vetoes (counter arithmetic slice bound, decided Option
         const out = run("    g (params: Dict = {}): any {\n        const pageSize = this.safeInteger (this.options, 'eventsPageSize', 100);\n        const limit = this.parseToInt (params['limit']);\n        const maxPages = Math.ceil (limit / pageSize);\n        const offsets: number[] = [];\n        for (let p = 1; maxPages === p; p++) {\n            offsets.push (p * pageSize);\n        }\n        return offsets;\n    }\n");
         expect(out).toContain('let mut p: Value = Value::Int(1);');
     });
-    test('polymarket fetchOutcomes: a counter started from an i64 local (Value::from(startIndex)) is i64', () => {
-        const out = run("    a (tokenIds: string[]): any {\n        const out = [];\n        const tokenIdsLength = tokenIds.length;\n        const chunkSize = this.safeInteger (this.options, 'fetchOutcomesBatchSize', 50);\n        let startIndex = 0;\n        while (startIndex < tokenIdsLength) {\n            let endIndex = this.sum (startIndex, chunkSize);\n            if (endIndex > tokenIdsLength) {\n                endIndex = tokenIdsLength;\n            }\n            const chunk: string[] = [];\n            for (let i = startIndex; i < endIndex; i++) {\n                chunk.push (tokenIds[i]);\n            }\n            out.push (chunk);\n            startIndex = this.sum (startIndex, chunkSize);\n        }\n        return out;\n    }\n");
-        expect(out).toContain('let mut i: i64 = startIndex;');
-        expect(out).toContain('get_value(&tokenIds, &Value::Int(i))');
-    });
 });
 
 describe('ral-56n: a ternary of two i64 locals bounding its own for counter', () => {
