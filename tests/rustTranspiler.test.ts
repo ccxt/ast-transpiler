@@ -13352,8 +13352,9 @@ describe('ral-uf: nullable list aliases read again only on the other branch, ear
     test('a []-defaulted safeList source read again only in the else branch moves', () => {
         expect(out).toMatch(/fn defElse[\s\S]*?let mut list: crate::value::List = [\s\S]*?list = given\.into_list\(\);/);
     });
-    test('negative: the source read after the if keeps the Value alias', () => {
-        expect(out).toMatch(/fn readAfter[\s\S]*?let mut rows: Value = /);
+    test('negative: the source read after the if is never moved (ral-52i: shared by an Arc copy instead)', () => {
+        expect(out).toMatch(/fn readAfter[\s\S]*?rows = data\.clone\(\)\.into_list\(\);/);
+        expect(out).not.toMatch(/fn readAfter[\s\S]*?rows = data\.into_list\(\);[\s\S]*?fn /);
     });
 });
 
@@ -18024,5 +18025,47 @@ describe('ral-52e: list index write at an i64 expression key (kraken addPaginati
         expect(b).toContain('let mut data: Value');
         // a bind mutated with no write-back keeps the boxed write-back pass
         expect(out.slice(out.indexOf('fn cursorE'), out.indexOf('fn cursorB'))).toContain('let mut data: Value');
+    });
+});
+
+describe('ral-52i: a list local reassigned whole from an endpoint answer or a `[x]` literal', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    tag (raw: any, many: boolean) {\n        const response = this.hold (raw);\n        const out = [];\n        if (many) {\n            let rows: Dict[] = [];\n            if (Array.isArray (response)) {\n                rows = response;\n            } else {\n                rows = [ response ];\n            }\n            for (let j = 0; j < rows.length; j++) {\n                out.push (this.safeString (rows[j], 'id'));\n            }\n        } else {\n            const rows = this.hold (response);\n            out.push (rows);\n        }\n        return out;\n    }\n    info (response: any) {\n        let safe: Dict[] = [];\n        if (Array.isArray (response)) {\n            safe = response;\n        }\n        const first = this.safeString (safe, 0);\n        return { 'info': response, 'first': first };\n    }\n    boxed (response: any) {\n        let kept: Dict[] = [];\n        if (Array.isArray (response)) {\n            kept = response;\n        }\n        return this.hold ([ kept, response ]);\n    }\n}\n";
+    const run = (): string => {
+        const dir = path.join (rustFixtureRoot, 'ral-52i');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a `[x]` literal of a read-again local and a sibling-block shadow keep a native List', () => {
+        const out = run();
+        const t = out.slice(out.indexOf('fn tag'), out.indexOf('fn info'));
+        expect(t).toContain('let mut rows: crate::value::List = ');
+        expect(t).toContain('rows = std::sync::Arc::new(vec![response.clone()])');
+    });
+    test('a guarded answer read again later is shared, not moved', () => {
+        const out = run();
+        const t = out.slice(out.indexOf('fn info'), out.indexOf('fn boxed'));
+        expect(t).toContain('let mut safe: crate::value::List = ');
+        expect(t).toContain('safe = response.clone().into_list()');
+    });
+    test('guard: a list only boxed straight back stays Value', () => {
+        const out = run();
+        const t = out.slice(out.indexOf('fn boxed'));
+        expect(t).toContain('let mut kept: Value = ');
+    });
+});
+
+describe('ral-52i: an `in`-tested insert key also stored as a literal value of the insert', () => {
+    test('`if (k !== undefined && !(k in m)) { m[k] = { .., \'network\': k } }` types k Option<String>, lent at the value', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-52i-key');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): string { return networkId; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] { return o[k]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    nets (currency: Dict, code: string) {\n        const bindings: Dict[] = this.safeList (currency, 'bindings', []);\n        const networks: Dict = {};\n        for (let i = 0; i < bindings.length; i++) {\n            const binding = bindings[i];\n            const networkId = this.safeString (binding, 'providerName');\n            const networkCode = this.networkIdToCode (networkId, code);\n            if ((networkCode !== undefined) && !(networkCode in networks)) {\n                networks[networkCode] = {\n                    'info': binding,\n                    'network': networkCode,\n                };\n            }\n        }\n        return networks;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut networkCode: Option<String> = ');
+        expect(out).toContain('Value::from(networkCode.as_deref())');
+        expect(out).not.toContain('let mut networkCode: Value');
     });
 });
