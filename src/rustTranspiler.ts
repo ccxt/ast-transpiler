@@ -11840,6 +11840,11 @@ export class RustTranspiler extends BaseTranspiler {
     rustMarketLocalIsTypedUncached(declaration: any): false | 'struct' | 'opt' | 'call' | 'smkt' {
         if (!isIdentifier(declaration.name) || declaration.parent?.declarations?.length !== 1) return false;
         if (this.rustIsSafeMarketCall(declaration.initializer)) return this.rustSafeMarketLocalOk(declaration) ? 'smkt' : false;
+        // ral-46i: `const a: Market = s` of a `safeMarket` struct local is the same record (an owned copy)
+        if (this.rustSmktAliasSource(declaration) !== undefined) {
+            const source = this.rustSmktAliasSource(declaration);
+            return this.rustMarketLocalKind(source) === 'smkt' && this.rustSafeMarketLocalOk(declaration, true) ? 'smkt' : false;
+        }
         if (this.rustTypedCallResultType(declaration.initializer) !== undefined) {
             if ((declaration.parent.flags & NodeFlags.Const) === 0) return false;
             const callFile = String(declaration.getSourceFile?.()?.fileName ?? '');
@@ -12634,6 +12639,8 @@ export class RustTranspiler extends BaseTranspiler {
             const value = this.printTypedMarketValue(this.rustSkipWrappers(declaration.initializer).expression);
             return ret === undefined || value === undefined ? undefined : `${indent}let mut ${varName}: ${ret} = ${value}`;
         }
+        // ral-46i: a const alias of a `safeMarket` struct local borrows it (no record copy)
+        if (kind === 'smkt' && this.rustSmktAliasSource(declaration) !== undefined) return `${indent}let ${varName}: &crate::types::Market = ${this.printNode(declaration.initializer, 0).trim()}`;
         if (kind === 'smkt') return `${indent}let mut ${varName}: crate::types::Market = ${this.printNode(declaration.initializer, 0).trim()}`;
         if (kind !== 'struct') return undefined;
         const value = this.printTypedMarketValue(declaration.initializer);
@@ -12782,7 +12789,15 @@ export class RustTranspiler extends BaseTranspiler {
             return `crate::Value::from(${super.printIdentifier(node)}.as_ref())`;
         }
         const declaration = this.rustTypedMarketLocalOf(node);
-        if (declaration === undefined || this.rustMarketReadKey(node) !== undefined || this.rustMarketLocalKind(declaration) === 'smkt') return undefined;
+        if (declaration !== undefined && this.rustMarketLocalKind(declaration) === 'smkt') {
+            // ral-46i: the alias's initializer is an owned copy of the source record; its `Value` hand-offs box the record's `raw`
+            const up: any = node.parent;
+            if (up?.kind === SyntaxKind.VariableDeclaration && up.initializer === node && this.rustSmktAliasSource(up) === declaration
+                && this.rustMarketLocalKind(up) === 'smkt') return `&${super.printIdentifier(node)}`;
+            if (this.rustSmktAliasValueUse(node)) return `crate::Value::from(${super.printIdentifier(node)})`;
+            return undefined;
+        }
+        if (declaration === undefined || this.rustMarketReadKey(node) !== undefined) return undefined;
         if (this.rustMarketReaderArg(node) || this.rustMarketSlotUse(node)) return undefined;
         return `(${String(node.text)}).raw.clone()`;
     }
@@ -16922,7 +16937,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(declaration?.name) || !isCallExpression(init) || !isPropertyAccessExpression(init.expression)
             || init.expression.expression.kind !== SyntaxKind.ThisKeyword || init.expression.name.text !== 'safeValue' || init.arguments.length !== 2) return false;
         // ral-45h: also the literal-key reader (`safe_value_k`) and a `Value` client's field (nado; ccxt prints it via `get_value`)
-        if (!/^self\.safe(?:_v|V)alue(?:_k)?\((?:(?:\(client\)|__ch|client)\.subscriptions\.clone\(\)|client\.subscriptions), [^;\n]*, &\[\]\)$/.test(parsedValue)) return false;
+        // ral-46i (INT-54 merge): any other safeValue read goes to the null-test-only flag rule
+        if (!/^self\.safe(?:_v|V)alue(?:_k)?\((?:(?:\(client\)|__ch|client)\.subscriptions\.clone\(\)|client\.subscriptions), [^;\n]*, &\[\]\)$/.test(parsedValue)) return this.rustNullTestOnlyFlag(declaration);
         const fn: any = this.rustEnclosingFunction(declaration);
         const name = String(declaration.name.text);
         // ral-45h: a literal key and a fn whose comments mention the name are taken too (uses are read from the AST)
@@ -16939,6 +16955,39 @@ export class RustTranspiler extends BaseTranspiler {
             n.forEachChild(visit);
         };
         if (ok) fn.forEachChild(visit);
+        if (!ok || uses === 0) return false;
+        this.rustPresenceFlagLocals.add(declaration);
+        return true;
+    }
+
+    /** ral-46i (B219): a const `this.safeValue* (..)` result (not a ws client table) whose every use is a null test in a
+     *  `bool` place: the presence flag `bool` (`x != Value::Null` once), each test reading the flag. */
+    rustNullTestOnlyFlag(declaration: any): boolean {
+        const init: any = this.unwrapParens(declaration?.initializer);
+        if (!isIdentifier(declaration?.name) || declaration.parent?.declarations?.length !== 1 || (declaration.parent.flags & NodeFlags.Const) === 0) return false;
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || ![ 'safeValue', 'safeValue2', 'safeValueN' ].includes(String(init.expression.name.text))) return false;
+        const file = String(declaration.getSourceFile?.()?.fileName ?? '');
+        if (!/ts[/]src[/]/.test(file) || /ts[/]src[/](pro[/])?test[/]/.test(file)) return false;
+        // ws client tables keep the subscription presence rule above
+        const recv: any = init.arguments[0];
+        if (recv !== undefined && isPropertyAccessExpression(recv) && [ 'subscriptions', 'futures' ].includes(String(recv.name.text))) return false;
+        const fn: any = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || isSourceFile(fn)) return false;
+        const name = String(declaration.name.text);
+        let uses = 0;
+        let ok = true;
+        const visit = (n: any) => {
+            if (!ok) return;
+            if (n !== declaration && (isVariableDeclaration(n) || isParameterDeclaration(n) || isBindingElement(n)) && (n.name as any)?.text === name) { ok = false; return; }
+            if (isIdentifier(n) && n.text === name && n !== declaration.name && !this.rustIdentifierIsPropertyName(n)) {
+                const bin: any = n.parent;
+                if (!this.rustIsNullTestOf(n) || bin.left !== n || !this.rustNullTestIsCondition(n)) { ok = false; return; }
+                uses++;
+            }
+            n.forEachChild(visit);
+        };
+        fn.forEachChild(visit);
         if (!ok || uses === 0) return false;
         this.rustPresenceFlagLocals.add(declaration);
         return true;
@@ -29802,7 +29851,31 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** `const m = this.safeMarket (..)` whose every use reads a key, lends the record, or rewrites it from `safeMarket`. */
-    rustSafeMarketLocalOk(declaration: any): boolean {
+    /** ral-46i: `const a: Market = s` where `s` is a const declared from `this.safeMarket (..)`: the declaration of `s`. */
+    rustSmktAliasSource(declaration: any): any {
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || !isIdentifier(declaration.name) || declaration.parent?.declarations?.length !== 1) return undefined;
+        if ((declaration.parent.flags & NodeFlags.Const) === 0) return undefined;
+        const type: any = declaration.type;
+        if (type === undefined || type.kind !== SyntaxKind.TypeReference || !isIdentifier(type.typeName) || String(type.typeName.text) !== 'Market') return undefined;
+        const init: any = declaration.initializer;
+        if (init === undefined || !isIdentifier(init)) return undefined;
+        const source: any = this.rustDeclarationOfIdentifier(init);
+        if (source === undefined || source === declaration || source.kind !== SyntaxKind.VariableDeclaration || source.name === init) return undefined;
+        if ((source.parent?.flags & NodeFlags.Const) === 0 || !this.rustIsSafeMarketCall(source.initializer)) return undefined;
+        return this.rustEnclosingFunction(source) === this.rustEnclosingFunction(declaration) ? source : undefined;
+    }
+
+    /** ral-46i: a whole-value hand-off of a `safeMarket` alias that is neither a lent market slot nor a reader's record. */
+    rustSmktAliasValueUse(n: any): boolean {
+        const declaration: any = isIdentifier(n) ? this.rustDeclarationOfIdentifier(n) : undefined;
+        if (declaration === undefined || declaration.name === n || this.rustSmktAliasSource(declaration) === undefined) return false;
+        const up: any = n.parent;
+        if (up === undefined || !isCallExpression(up) || up.expression === n) return false;
+        const at = Array.from(up.arguments).indexOf(n);
+        return at >= 0 && !this.rustMarketSlot(this.rustCalleeParams(up), at);
+    }
+
+    rustSafeMarketLocalOk(declaration: any, alias = false): boolean {
         const file = String(declaration.getSourceFile?.()?.fileName ?? '');
         if (!/ts[/]src[/]/.test(file) || /ts[/]src[/](pro[/])?test[/]/.test(file)) return false;
         const name = String(declaration.name.text);
@@ -29811,10 +29884,20 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustMarketLocalUsesAll(declaration, name, (n: any) => {
             if (this.rustEnclosingFunction(n) !== scope) return false;
             const up: any = n.parent;
+            // ral-46i: a borrowed alias is only lent to a market slot or boxed into a `Value` argument
+            if (alias) {
+                if (!isCallExpression(up) || up.expression === n) return false;
+                const at = Array.from(up.arguments).indexOf(n);
+                if (at < 0) return false;
+                return this.rustMarketSlot(this.rustCalleeParams(up), at) || this.rustSmktAliasValueUse(n);
+            }
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
                 return up.parent?.kind === SyntaxKind.ExpressionStatement && this.rustIsSafeMarketCall(up.right);
             }
             if (this.rustDictKeyReadUse(n)) return true;
+            // ral-46i: the initializer of a `const a: Market = m` alias whose own uses all take the struct
+            if (up?.kind === SyntaxKind.VariableDeclaration && up.initializer === n && this.rustSmktAliasSource(up) === declaration
+                && this.rustSafeMarketLocalOk(up, true)) return true;
             // `m['symbol']` keying another lookup reads the struct's own field (a `Value` key either way)
             if (this.rustMarketKeyOfLookup(n)) return true;
             // ral-43e: handed back whole from a market-returning venue method
@@ -29842,7 +29925,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (isIdentifier(inner)) {
             const name = super.printIdentifier(inner);
             if (this.rustMarketSlotParamOf(inner) !== undefined) return name;
-            if (this.rustSafeMarketLocalOf(inner) !== undefined || this.rustTypedMarketLocalOf(inner) !== undefined) return `Some(&${name})`;
+            const smkt = this.rustSafeMarketLocalOf(inner);
+            if (smkt !== undefined && this.rustSmktAliasSource(smkt) !== undefined) return `Some(${name})`;
+            if (smkt !== undefined || this.rustTypedMarketLocalOf(inner) !== undefined) return `Some(&${name})`;
             if (this.rustOptMarketLocalOf(inner) !== undefined) return `${name}.as_ref()`;
         }
         if (this.rustIsSafeMarketCall(inner)) return `Some(&${this.printNode(inner, identation).trim()})`;
