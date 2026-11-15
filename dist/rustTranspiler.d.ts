@@ -359,6 +359,16 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  list for `Null`), and `parts` borrows its element (`lvl.get(K).unwrap_or(&Value::Null)`): the same element
      *  `get_value` cloned, `Null` where it answered `Null`. */
     printRust57eSideLevel(declaration: any, parsedValue: string, indent: string, varName: string): string | undefined;
+    /** ral-58e: `const e = xs[k]` where `xs` is a typed `Vec<Value>` local of the same function (rustVecLocalDeclarationOf)
+     *  that no earlier container arm claims (read bearer, opt list, lent list, param shadow), so its element read is the
+     *  slice read `xs.get(K).cloned().unwrap_or(Value::Null)`. When `xs` is only read and every use of `e` is the receiver of
+     *  an rvalue element read at a numeric literal key, `e` borrows the element instead
+     *  (`xs.get(K).unwrap_or(&Value::Null)`): the same element, `Null` where the clone was `Null`. Decided on the AST and the
+     *  printer's own Vec decision; nothing is read back from printed text. */
+    printRust58eBorrowedElement(declaration: any, indent: string, varName: string): string | undefined;
+    rust58eBorrowedElementLocal(declaration: any): boolean;
+    /** Which arm of printNativeContainerAccess prints `xs[k]` as a slice read: a read-only list bearer, or a typed Vec local. */
+    rust58eBorrowedElementArm(declaration: any): 'bearer' | 'vec' | undefined;
     private rust57eSideLevels;
     rust57eSideLevelLocal(declaration: any): boolean;
     rust57eSideLevelLocalUncached(declaration: any): boolean;
@@ -837,6 +847,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustDerivedScalarKind(call: any): string | undefined;
     rustListLengthInit(node: any): boolean;
     rustSelfRootedLengthRecv(recv: any): boolean;
+    rustLocalRootedLengthRecv(recv: any): boolean;
     rustListLengthText(node: any): string;
     /** ral-52f: `this.handle*AndParams (..)[0]` read inline (bitget `productType`, toobit / okx pro `marketType`) where the
      *  helper's declared tuple slot 0 is a string (`[string, Dict]` / `[Str, Dict]`): the read is that string or undefined,
@@ -951,6 +962,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  local: only uses bound to its own symbol are walked. Any other second binding keeps the plain walk. */
     rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar?: boolean, skipPropertyNames?: boolean): boolean;
     rustBindingUsesWalk(declaration: any, nodes: any[], own: any, home: any, skip: any[], skipPropertyNames: boolean, acceptUse: (n: any) => boolean, scalar: boolean): boolean;
+    /** ral-58k: the key argument of a base `this.safeDict (src, k, dflt)` that is the whole source of a write to a local
+     *  declared `Dict` (bitget pro handleBalance `account = this.safeDict (this.balance, code, account)`): the written local's
+     *  type is its annotation, never this key's, and the reader takes the key as a boxed `Value` either way. */
+    rust58kDictReaderKeyWrite(n: any, write: any): boolean;
     /** ral-53s: a direct operand of a base `this.sum (a, b)` that is the whole source of a write to another local
      *  (`endTime = this.sum (startTime, oneWeek)`): with this operand typed the call keeps its own combinator kind
      *  (`rustArithCallKind`), so the write prints the same native combinator text the other operands decide, and the
@@ -1241,6 +1256,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `m[k] = v` as a statement: the element key of a native insert. */
     rustElemInsertKey(n: any): boolean;
     printElemKeyInOp(key: any, obj: any): string | undefined;
+    /** ral-58k: `n` is the whole right side of a statement `this.f[k] = n`, `k` another identifier (decided from the AST). */
+    rust58kThisFieldIdentKeyWrite(n: any): boolean;
     rustThisFieldLiteralWrite(n: any): boolean;
     /** ud: `n` is the whole right side of `x[k1][k2] = n` with `x` a typed two-level local map (`rustNestedBearerInsert`). */
     rustUdNestedBearerValue(n: any): boolean;
@@ -1450,6 +1467,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** 41b: an affix / includes needle as `Option<&str>`: any string literal (an empty one included when `empty`), a typed string local
      *  or a string-typed `Value` expression (`None` for `Null`: the helper answers `false`). */
     rustStrVarNeedle(node: any, empty: boolean): string | undefined;
+    /** ral-58k: `x.replace (o, to)` where exactly one operand `o` is an `Option<String>` local (decided from the AST: a typed
+     *  string identifier) and the other a never-`Null` operand. The boxed form answered the receiver itself when `o` was `Null`
+     *  (`recv.as_str().zip(o.as_deref()).map(..).unwrap_or_else(|| recv.clone())`): the native form keeps that arm. */
+    rust58kOptReplaceArgs(args: any[]): {
+        index: number;
+        opt: string;
+        other: string;
+    } | undefined;
     /** 41b: a replace operand that is never `Null`: a string literal or a `String` local (`&str` text). */
     rustStrReplaceOperand(node: any): string | undefined;
     /** ral-55x K1: every leaf of a `+` chain is a string literal or a `str` / `ostr` typed local, and at least one is a literal. */
@@ -2346,6 +2371,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustShadowMapKey;
     /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
     printShadowLength(node: any, shadow: RustParamShadow): string | undefined;
+    /** The safe-read name when `this.safe<Type>(x, 'k'[, default])` reads a shadowed dict parameter with an inlinable
+     *  literal key: printShadowSafeReadCall then prints `x.get("k")` and never borrows `self` for the call. */
+    rustShadowSafeReadOf(node: any): string | undefined;
+    /** ral-58x: the value expression borrows `self` when printed: it names `this` / `super`, except as the callee of a
+     *  shadow safe read (rustShadowSafeReadOf), which prints a native read of the parameter (its default argument still
+     *  counts). Decided from the node, not from its printed text. */
+    rustValueBorrowsSelf(node: any): boolean;
     /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
      *  runtime helper's exact semantics over `.get(..)`. */
     printShadowSafeReadCall(node: CallExpression): string | undefined;
@@ -2515,7 +2547,11 @@ export declare class RustTranspiler extends BaseTranspiler {
         sign: '+' | '-';
         literal: string;
         symbol: any;
+        start?: any;
     } | undefined;
+    /** ral-58n: the start identifier of a `for (let i = x; ..)` counter when `x` is a local the scalar rule decided `int`
+     *  and the counter's own declaration is no typed local (it prints `Value::from(x)`, an `Int`), else undefined. */
+    rust58nI64CounterStart(declaration: any): any;
     /** True when the identifier is (part of) an assignment target, a `++`/`--` operand or a `for-in/of` head. */
     rustIdentifierIsWritten(id: any): boolean;
     private rustI64Counters;
@@ -3374,6 +3410,7 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `keysort`, `ordered`, `omit` of a proven map), a `Dict` parameter, a `handle*AndParams` params slot, a method
      *  declared `Dict`, or a local whose every write is one of these. Any list literal, any dynamic `this[name] (..)`
      *  / `callDynamically` call, or anything else unproven fails the venue (fail closed). */
+    private static readonly RUST_SIGN_PARAM_HANDLERS;
     rustSignParamsProvenMap(fn: any): boolean;
     rustSignParamsProofUncached(root: string, venue: string, target?: {
         name: string;
@@ -3632,10 +3669,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsSubscriptionKeyRead(init: any): {
         key: string;
         element: boolean;
+        source?: any;
     } | undefined;
+    /** ral-58w: guard key g when `sub` (the dict a subscription field is read from) is a never-written parameter of a
+     *  method whose every mention is a direct `this.m (..)` call inside the then-branch of `if (this.safeBool (s, 'g', false))`
+     *  with s (a never-written local or parameter) passed for it, and every write of key g in the class is `'g': true` in an
+     *  object literal that, like every literal writing any subscription field read under g, initializes a never-written
+     *  const local only handed to `this.watch` / `this.watchMultiple` as the subscription. The read dict is then one of
+     *  the literals with `'g': true` (the runtime stores the subscription argument itself). Undefined otherwise. */
+    rustWsSubscriptionGuardKey(sub: any): string | undefined;
     /** Patterns of every value the class writes under subscription key `key` (`{ 'key': v }`, `x['key'] = v`); a list
      *  field takes the elements of its array literals. Any other write of the key is an unknown hash. */
-    rustWsSubscriptionKeyPatterns(at: any, key: string, element: boolean, depth: number, seen: Set<Node>): Array<Array<string | null>>;
+    rustWsSubscriptionKeyPatterns(at: any, key: string, element: boolean, depth: number, seen: Set<Node>, guard?: string): Array<Array<string | null>>;
     static rustWsPatternNorm(p: Array<string | null>): Array<string | null>;
     /** ral-55h: the hash text of a request-id echo (`rustWsRequestIdEcho`): some run of decimal digits. */
     private static readonly RUST_WS_DIGITS_HASH;
@@ -3878,6 +3923,14 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `y.into_list()` moves exactly that list (no copy, no other variant to lose). */
     rustArrayGuardedMove(write: any): boolean;
     private rustArrayGuardedCopies;
+    /** ral-58i: `x = this.safeList (o, k, x)` (safeList / safeList2 / safeListN of the base tier) with the list local itself as
+     *  the default: the base body answers the read value only when it is an array and the default otherwise, so both paths
+     *  hold a `Value::Arr` (the declared `any[]` overload for an array default says the same). */
+    rustSelfDefaultedListRead(right: any, declaration: any): boolean;
+    /** ral-58i: `c ? y : [ .. ]` where `c` is `Array.isArray (y)` or a const local initialised to it, `y` a const local or
+     *  parameter of the same function and the other branch a list source: both paths answer a `Value::Arr`, so the
+     *  printed ternary's `.into_list()` moves exactly that list (no other variant to lose). */
+    rustArrayGuardedTernary(right: any): boolean;
     /** ral-52i: `id` names a plain `Value` local or parameter of its own function (no typed local form). */
     rustPlainValueBinding(id: any): boolean;
     /** ral-57i: a `this.X(.., x, ..)` argument in the then-branch of the nearest enclosing if whose later reads all sit in
@@ -3923,6 +3976,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOptListName(node: any): string;
     /** The slice an optional list reads through (empty for `None`). */
     rustOptListSlice(node: any): string;
+    /** ral-58i: `let x: T = undefined` / `let x: T;` (one `let` declarator, nil or no initializer). */
+    rustOptListNilInit(declaration: any): boolean;
     printOptListDeclaration(declaration: any, varName: string, indent: string): string | undefined;
     printOptListWrite(left: any, right: any): string | undefined;
     printOptListNullTest(left: any, right: any, op: any): string | undefined;
