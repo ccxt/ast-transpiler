@@ -9299,7 +9299,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarContainsTest(node, dry: boolean): string | undefined {
         const left: any = this.unwrapParens(node.left);
         if (!isCallExpression(left) || !isPropertyAccessExpression(left.expression) || left.expression.name.text !== 'indexOf' || left.arguments.length !== 1) return undefined;
-        const recv: any = left.expression.expression;
+        // 42b: `(x as string).indexOf(..)` tests the local itself
+        const recv: any = this.rustStrCastLocal(left.expression.expression) ?? left.expression.expression;
         const kind = this.rustScalarIdentifierKind(recv) ?? this.rustScalarParamRead(recv)?.kind;
         const needle: any = left.arguments[0];
         if ((kind !== 'str' && kind !== 'ostr') || this.rustNativeStringLiteralArg(needle) === undefined || needle.text === '') return undefined;
@@ -9318,7 +9319,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** An operand printed by this rule: a scalar local, or a `.length` / string-method / `indexOf` of one. */
     rustScalarOwnsOperand(node): boolean {
-        const inner: any = this.unwrapParens(node);
+        // 42b: `(x as string)` is `x` itself (a type assertion prints nothing)
+        const cast = this.rustStrCastLocal(node);
+        const inner: any = cast ?? this.unwrapParens(node);
         if (inner === undefined) return false;
         if (isIdentifier(inner)) return this.rustScalarLocalOf(inner) !== undefined || this.rustI64CounterOperand(inner);
         if (isBinaryExpression(inner)) return this.rustScalarOwnsOperand(inner.left) || this.rustScalarOwnsOperand(inner.right);
@@ -9681,12 +9684,66 @@ export class RustTranspiler extends BaseTranspiler {
         return hoisted + '\n' + rest;
     }
 
+    /** 42b: `format!("{}..{}", .., Value::Str(format!("{}..{}", a, b).into()), ..)` -> one `format!` with the inner arguments spliced in
+     *  place. Only all-`{}` format strings (no literal text, no `{:?}`); the inner box is exactly one balanced `format!` slot. */
+    rustFlattenConcatChain(line: string): string {
+        const box = 'Value::Str(format!("';
+        let out = line;
+        for (let guard = 0; guard < 64; guard++) {
+            let changed = false;
+            for (let at = out.indexOf(box); at >= 0; at = out.indexOf(box, at + 1)) {
+                const fmtOpen = at + 'Value::Str(format!('.length;
+                const fmtEnd = out.indexOf('"', fmtOpen + 1);
+                const fmt = out.slice(fmtOpen + 1, fmtEnd);
+                if (!/^(?:\{\})+$/.test(fmt)) continue;
+                const macroClose = this.rustCloseBracketAt(out, at + 'Value::Str(format!'.length);
+                if (macroClose < 0 || out.slice(macroClose + 1, macroClose + 9) !== '.into())') continue;
+                const innerArgs = out.slice(fmtEnd + 1, macroClose);
+                if (!innerArgs.startsWith(', ')) continue;
+                // the box must be a whole argument slot of an enclosing all-`{}` format!
+                const before = out.slice(0, at);
+                if (!/(?:\(|, )$/.test(before)) continue;
+                const outer = before.lastIndexOf('format!("');
+                if (outer < 0) continue;
+                const outerOpen = outer + 'format!'.length;
+                const outerClose = this.rustCloseBracketAt(out, outerOpen);
+                if (outerClose < macroClose + 9) continue;
+                const ofEnd = out.indexOf('"', outerOpen + 2);
+                const ofmt = out.slice(outerOpen + 2, ofEnd);
+                if (!/^(?:\{\})+$/.test(ofmt)) continue;
+                // top-level argument index of the box inside the outer call
+                const args = out.slice(ofEnd + 1, outerClose);
+                let idx = -1, depth = 0, quoted = false, found = false;
+                for (let i = 0; i < args.length; i++) {
+                    const c = args[i];
+                    if (quoted) { if (c === '\\') i++; else if (c === '"') quoted = false; continue; }
+                    if (c === '"') quoted = true;
+                    else if ('([{'.includes(c)) depth++;
+                    else if (')]}'.includes(c)) depth--;
+                    else if (c === ',' && depth === 0) { idx++; if (ofEnd + 1 + i + 2 === at) { found = true; break; } }
+                }
+                if (!found) continue;
+                const n = ofmt.length / 2, m = fmt.length / 2;
+                if (idx >= n) continue;
+                const nfmt = '{}'.repeat(n - 1 + m);
+                out = out.slice(0, outerOpen + 2) + nfmt + out.slice(ofEnd, at) + innerArgs.slice(2) + out.slice(macroClose + 9);
+                changed = true;
+                break;
+            }
+            if (!changed) break;
+        }
+        return out;
+    }
+
     rustSplitLongLines(text: string, names: string[]): string {
         if (!text.split('\n').some((l) => l.length > 400)) return text;
         let nth = 0;
         const lines = text.split('\n');
         return lines.map((l, k) => {
             if (l.length <= 400 || !names.some((n) => new RegExp(`\\b${n}\\b`).test(l))) return l;
+            // 42b: a nested concat chain prints flat first (`Display` of `Value::Str(s)` is `s`: same text, same argument order)
+            const flat = this.rustFlattenConcatChain(l);
+            if (flat.length <= 400) return flat;
             return this.rustSplitLongLine(l, nth++, lines.slice(k + 1).join('\n')) ?? l;
         }).join('\n');
     }
@@ -10179,7 +10236,17 @@ export class RustTranspiler extends BaseTranspiler {
         while (isParenthesizedExpression(top.parent) || top.parent?.kind === SyntaxKind.AsExpression) top = top.parent;
         const access: any = top.parent;
         return isPropertyAccessExpression(access) && access.expression === top && isCallExpression(access.parent) && access.parent.expression === access
-            && (this.rustStrLocalSplitText(access.parent) ?? this.rustStrLocalSliceText(access.parent)) !== undefined;
+            && ((this.rustStrLocalSplitText(access.parent) ?? this.rustStrLocalSliceText(access.parent)) !== undefined
+                // 42b: a native method of the typed local reads it through the cast (`(x as string).m(..)` prints `x`)
+                || (this.rustStrCastLocal(top) !== undefined && this.rustScalarStrMethod(access.parent) !== undefined)
+                || (this.rustStrCastLocal(top) !== undefined && this.rust42bCastContainsTest(access.parent)));
+    }
+
+    /** 42b: the `(x as string).indexOf("lit") >= 0` call of a scalar contains test. */
+    rust42bCastContainsTest(call): boolean {
+        let top: any = call;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        return isBinaryExpression(top.parent) && top.parent.left === top && this.rustScalarContainsTest(top.parent, true) !== undefined;
     }
 
     /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
@@ -25833,7 +25900,8 @@ export class RustTranspiler extends BaseTranspiler {
         const receiver = node.expression.expression;
         if (receiver.kind === SyntaxKind.ThisKeyword || receiver.kind === SyntaxKind.SuperKeyword) return undefined;
         if (kind === 'string' && this.primitiveKindOfType(this.typeOfNodeIfAny(receiver)) !== 'string') return undefined;
-        if (isIdentifier(receiver) && (this.rustStringLocalIdentifierIsTyped(receiver) || this.rustScalarLocalOf(receiver) !== undefined)) return undefined;
+        const bare: any = this.rustStrCastLocal(receiver) ?? receiver;
+        if (isIdentifier(bare) && (this.rustStringLocalIdentifierIsTyped(bare) || this.rustScalarLocalOf(bare) !== undefined)) return undefined;
         const text = receiverText.trim();
         return /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(text) ? text : `(${text})`;
     }
