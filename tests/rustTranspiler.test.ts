@@ -15311,3 +15311,26 @@ describe('40i: tuple slots sixth pass', () => {
     });
 });
 
+
+describe('ral-41f: the nested-write veto is lifted per class (non-safe* producers not returned by their function)', () => {
+    const mk = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-41f-nw-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base/ws'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: Dict = {};\n    options: Dict = {};\n    milliseconds (): number { return 0; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/base/ws/Client.ts'), "export default class Client {\n    resolve (v: any, h: string | undefined = undefined): void {}\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange';\nimport type { Dict } from '../base/Exchange';\nimport Client from '../base/ws/Client';\nexport default class venue extends Exchange {\n" + body + "\n}\n");
+        const out = transpiler.transpileRustByPath(path.join(root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('a milliseconds() local read inside a nested this.options write stays i64 and the arithmetic is native', () => {
+        const out = mk("    signIn (): void {\n        const now = this.milliseconds ();\n        this.options['session']['expires'] = now + 1000;\n    }");
+        expect(out).toContain('let mut now: i64 = ');
+        expect(out).toContain('Value::Int((now + 1000))');
+    });
+    test('negative: a safeString local written into a nested store and returned keeps Value (binance pro stream class)', () => {
+        const out = mk("    stream (h: string): Str {\n        let s = this.safeString (this.options, h);\n        if (s === undefined) {\n            s = 'x';\n            this.options['byHash'][h] = s;\n        }\n        return s;\n    }");
+        expect(out).toContain('let mut s: Value = ');
+    });
+});

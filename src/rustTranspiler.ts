@@ -7543,7 +7543,30 @@ export class RustTranspiler extends BaseTranspiler {
         if (boxUse === true && (this.rustBalanceOptionsPlace(write.left) || this.rustPrintedSlotNestedWrite(write.left))) return false;
         // 40d: the size of `this.<cache>[k] (|[k2]) = new ArrayCache*(n)`: the printer's own `CacheStore::put` /
         // `CacheShelves::put2` prints that write (no ccxt text pass reads it) and the size boxes into `::new`
-        return !this.rustWsCacheCtorSizeWrite(n, write);
+        // ral-41f: a local whose kind no nested-write text pass decides is decided by its own rule
+        return !this.rustWsCacheCtorSizeWrite(n, write) && !this.rustNestedWriteFreeLocal(n);
+    }
+
+    /** ral-41f: a local whose kind the nested-write text passes never decide: declared with an initializer that is
+     *  not a safe* reader call, not `undefined` / another identifier (nil-declared and alias locals keep their own
+     *  rules) and not returned by its function (binance pro `stream`: its safeString local written whole into
+     *  `this.options[..][..]` and returned would move the method's return type to `Value` and add a dispatch arm). */
+    rustNestedWriteFreeLocal(n: any): boolean {
+        if (!isIdentifier(n)) return false;
+        const decl: any = this.rustDeclaredNode(n);
+        if (decl === undefined || !isVariableDeclaration(decl) || decl.initializer === undefined || !isIdentifier(decl.name)) return false;
+        const init: any = this.rustSkipWrappers(decl.initializer);
+        if (init === undefined || isIdentifier(init)) return false;
+        if (isCallExpression(init) && isPropertyAccessExpression(init.expression) && /^safe/.test(String(init.expression.name.text))) return false;
+        const fn: any = findAncestor(n, (x: any) => isFunctionLike(x));
+        let returned = false;
+        const visit = (x: any) => {
+            if (returned || x === undefined) return;
+            if (isReturnStatement(x) && x.expression !== undefined && isIdentifier(x.expression) && this.rustDeclaredNode(x.expression) === decl) { returned = true; return; }
+            x.forEachChild?.(visit);
+        };
+        if (fn?.body !== undefined) visit(fn.body);
+        return !returned;
     }
 
     // ── nested plain-field writes (rustNestedFieldKeyUse / printNestedFieldKeyWrite) ──
