@@ -14052,4 +14052,34 @@ describe('go proven return families (config provenReturnFamilies)', () => {
         const ts = 'class X {\n    parseThing (o) {\n        return o.x;\n    }\n}\n';
         expect (() => fam.transpileGo(ts)).toThrow (/provenReturnFamilies/);
     });
+    test('a const parseToNumeric local compared to an integer literal is compared as int64, no helper', () => {
+        const ts = 'class X {\n'
+            + '    parseToNumeric (number: any): number { return 1; }\n'
+            + '    isRoundNumber (value: number): boolean {\n'
+            + '        const res = this.parseToNumeric ((value % 1));\n'
+            + '        return res === 0;\n'
+            + '    }\n'
+            + '    notRound (value: number): boolean {\n'
+            + '        const res = this.parseToNumeric (value % 2);\n'
+            + '        return res !== 1;\n'
+            + '    }\n'
+            + '    floatLiteral (value: number): boolean {\n'
+            + '        const res = this.parseToNumeric (value % 2);\n'
+            + '        return res === 1.5;\n'
+            + '    }\n'
+            + '    stringArg (value: string): boolean {\n'
+            + '        const other = this.parseToNumeric (value);\n'
+            + '        return other === 0;\n'
+            + '    }\n'
+            + '}\n';
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('return (res == int64(0))');
+        expect(output).toContain('return (res != int64(1))');
+        expect(output).not.toContain('(res == 0)');
+        expect(output).not.toContain('IsEqual(res, 0)');
+        // a float literal can never equal the int64 box: it keeps its previous form
+        expect(output).not.toContain('int64(1.5)');
+        // a non-% argument (a string "0.0" would be a float64 zero) is not rewritten
+        expect(output).not.toContain('other == int64(0)');
+    });
 });

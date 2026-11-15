@@ -27632,6 +27632,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 ? `(${rightText} != nil && *${rightText} == ${leftText})`
                 : `(${rightText} == nil || *${rightText} != ${leftText})`;
         }
+        // a const local bound to parseToNumeric(...) boxes an integral result as int64 (ParseInt)
+        // and anything else as a float64 with a fraction, never as int: against an integer
+        // constant the typed constant int64(N) is the exact Go operand, `== N` boxes N as int
+        const numericBoxText = this.goParseToNumericBoxCompare(left, leftText, right, rightText, isEq)
+            ?? this.goParseToNumericBoxCompare(right, rightText, left, leftText, isEq);
+        if (numericBoxText !== undefined) {
+            return numericBoxText;
+        }
         // two definitely-present scalars of the same family: `==` is valid Go and
         // needs no helper. Nullable aliases (Str/Int/Num/Bool) are `any` in Go and
         // returned undefined by goScalarFamily, so they keep IsEqual.
@@ -27730,6 +27738,38 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
         return undefined;
+    }
+
+    // `res === 0` where `const res = this.parseToNumeric (...)`: the Go base method returns
+    // ParseInt(..) (int64) for a string without '.', else ParseFloat(..) (a float64 with a
+    // fraction, never integral), so the box is int64 whenever it can equal an integer constant
+    goParseToNumericBoxCompare(local, localText: string, other, otherText: string, isEq: boolean): string | undefined {
+        if ((local?.kind !== SyntaxKind.Identifier) || !this.goIsNumericConstant(other)
+            || (this.goNumericLiteralKind(other) !== 'int')) {
+            return undefined;
+        }
+        const decl = this.goAnyBoxLocalDeclaration(local);
+        if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.parent?.kind !== SyntaxKind.VariableDeclarationList)
+            || ((decl.parent.flags & NodeFlags.Const) === 0)) {
+            return undefined;
+        }
+        const init = decl.initializer;
+        const callee = init?.kind === SyntaxKind.CallExpression ? init.expression : undefined;
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+            || (callee.name?.text !== 'parseToNumeric') || (init.arguments?.length !== 1)) {
+            return undefined;
+        }
+        // only a `%` operand: Mod hands a number to NumberToString, whose text has a '.'
+        // exactly when the value is non-integral (a string argument such as "0.0" would be
+        // a float64 zero, which the int64 constant does not match)
+        let arg = init.arguments[0];
+        while (arg?.kind === SyntaxKind.ParenthesizedExpression) {
+            arg = arg.expression;
+        }
+        if ((arg?.kind !== SyntaxKind.BinaryExpression) || (arg.operatorToken?.kind !== SyntaxKind.PercentToken)) {
+            return undefined;
+        }
+        return isEq ? `(${localText} == int64(${otherText}))` : `(${localText} != int64(${otherText}))`;
     }
 
     // the kind a native `==` compares two numeric operands in; undefined keeps IsEqual. Two
