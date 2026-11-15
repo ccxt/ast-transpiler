@@ -17956,3 +17956,31 @@ describe('ral-52f: an inline handle*AndParams [0] read of a string slot is a str
         expect(output).toMatch(/let mut marketType: Option<String> = /);
     });
 });
+
+describe('ral-52k: Str by name and base credential fields as ternary arms', () => {
+    const write = (name: string, file: string, cls: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport default class Exchange {\n    apiKey!: string;\n    options: any = {};\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o; }\n    safeCurrencyCode (c: Str): Str { return c; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/' + file), "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class " + cls + " extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/' + file)).content;
+    };
+    const spot = "    updateSpotCurrencyCode (code: Str): Str {\n        if (code === undefined) {\n            return code;\n        }\n        const m = this.safeDict (this.options, 'spotCurrencyMapping', {});\n        return this.safeString (m, code, code);\n    }\n    p (b: any, isSpot: boolean) {\n        const u = this.safeCurrencyCode (this.safeString (b, 'coin'));\n        const code = (isSpot) ? this.updateSpotCurrencyCode (u) : u;\n        const r = {};\n        if (code !== undefined) {\n            r[code] = 1;\n        }\n        return r;\n    }\n";
+    test('hyperliquid updateSpotCurrencyCode returns Option<String> by name; the ternary local is Option<String>', () => {
+        const out = write ('52k-spot', 'hyperliquid.ts', 'hyperliquid', spot);
+        expect(out).toMatch(/pub fn update(?:_spot_currency_code|SpotCurrencyCode)\(&self, code: [^)]*\) -> Option<String>/);
+        expect(out).toMatch(/let mut code: Option<String> = \(if /);
+    });
+    test('negative: the same method of another venue keeps -> Value', () => {
+        const out = write ('52k-spot-other', 'other.ts', 'other', spot);
+        expect(out).toMatch(/pub fn update(?:_spot_currency_code|SpotCurrencyCode)\(&self, code: [^)]*\) -> Value/);
+    });
+    test('opinion: `c ? this.apiKey : this.safeString (..)` is an Option<String> local', () => {
+        const out = write ('52k-key', 'venue.ts', 'venue', "    w (c: boolean) {\n        const apiKey = (c) ? this.apiKey : this.safeString (this.options, 'apiKey');\n        if (apiKey === undefined) {\n            return undefined;\n        }\n        return 'u?k=' + apiKey;\n    }\n");
+        expect(out).toMatch(/let mut apiKey: Option<String> = \(if .* \{ self\.apiKey\.as_str\(\)\.map\(str::to_owned\) \} else \{/);
+    });
+    test('negative: a ternary of the field and a Value parameter stays Value', () => {
+        const out = write ('52k-key-neg', 'venue.ts', 'venue', "    w (c: boolean, p: any) {\n        const apiKey = (c) ? this.apiKey : p['k'];\n        return this.hold ('u' + apiKey);\n    }\n");
+        expect(out).toMatch(/let mut apiKey: Value = /);
+    });
+});

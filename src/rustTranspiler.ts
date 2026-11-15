@@ -5132,6 +5132,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && this.rustNilElemStrText(node) !== undefined) return 'ostr';
         if (fresh) { const field = this.rustMarketArmStrKind(node); if (field !== undefined) return field; }
         if (fresh && this.rustListLengthInit(node)) return 'int';
+        // ral-52k: a base credential field declared `string` (`this.apiKey`) as an arm of a ternary initializer: a `Str` or `Null`
+        if (fresh && this.rustTernaryArm(node) && this.rustBaseStrFieldRead(node)) return 'ostr';
         if (!isCallExpression(node)) return undefined;
         if (isIdentifier(node.expression) && this.rustStrRuntimeCall(node)) return 'str';
         if (fresh && this.rustDeclInitPosition(node) && this.rustValueCaseRecv(node) !== undefined) return 'ostr';
@@ -5197,6 +5199,23 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustScalarPreciseCall(arg)) return true;
         const kind = isIdentifier(arg) ? this.rustScalarLocalOf(arg)?.kind : this.rustScalarValueKind(arg, true);
         return kind === 'str' || kind === 'ostr';
+    }
+
+    // ral-52k: credential fields of the base class, declared `string` (each holds a `Str` or `Null` in the runtime struct)
+    private static readonly RUST_BASE_STR_FIELDS = new Set([ 'apiKey', 'secret', 'uid', 'password', 'privateKey', 'walletAddress' ]);
+
+    /** ral-52k: `this.<field>` of the table whose declaration is the base-tier `string` property (no venue redeclares it). */
+    rustBaseStrFieldRead(node: any): boolean {
+        if (node === undefined || !isPropertyAccessExpression(node) || node.expression.kind !== SyntaxKind.ThisKeyword || !RustTranspiler.RUST_BASE_STR_FIELDS.has(String(node.name.text))) return false;
+        let member: any;
+        try {
+            member = this.getChecker().getSymbolAtLocation(node.name)?.valueDeclaration;
+        } catch (e) {
+            return false;
+        }
+        member = member?.resolve?.() ?? member;
+        return member !== undefined && member.kind === SyntaxKind.PropertyDeclaration && member.type?.kind === SyntaxKind.StringKeyword
+            && RustTranspiler.RUST_BASE_TIER_FILE.test(String(member.getSourceFile?.()?.fileName ?? ''));
     }
 
     /** True when `node` (through parens) is the `whenTrue`/`whenFalse` arm of a ternary that initialises a declaration. */
@@ -8738,6 +8757,8 @@ export class RustTranspiler extends BaseTranspiler {
             return format === undefined ? undefined : wrap(format);
         }
         if (kind === 'int' && this.rustListLengthInit(node)) return this.rustListLengthText(node);
+        // ral-52k: a base credential field (`Value` in the struct, `Str` or `Null`) read once as its text
+        if (kind === 'ostr' && this.rustTernaryArm(node) && this.rustBaseStrFieldRead(node)) return `${this.printNode(node, 0).trim()}.as_str().map(str::to_owned)`;
         if (kind === 'ostr') { const row = this.rustRowFieldStrText(node); if (row !== undefined) return row; }
         if (kind === 'ostr') { const owned = this.rustNilElemStrText(node); if (owned !== undefined) return owned; }
         if (kind === 'ostr' && (this.rustElementReadScalarKind(node) !== undefined || this.rustInlineHandleStrSlot(node))) {
@@ -11169,6 +11190,8 @@ export class RustTranspiler extends BaseTranspiler {
         'polymarket.ts#polymarket': [ 'hashMessage', 'signMessage', 'signHash' ],
         // yd: pro phemex fromEn joins venue phemex fromEn's `-> Option<String>` group; its by-name `from_en` arm stays
         'pro/phemex.ts#phemex': [ 'fromEn' ],
+        // ral-52k: typed by name (no ts/src declaration change); its by-name arm boxes the `Option<String>` once
+        'hyperliquid.ts#hyperliquid': [ 'updateSpotCurrencyCode' ],
     };
 
     rustVenueKeptStrArm(node: any): boolean {
@@ -11229,7 +11252,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a local typed only through a per-venue string parameter keeps the decision its boxed form had
         if (this.rustVenueStrReturnLocal(inner) !== undefined && this.rustVenueStrParamLocal(inner)) return true;
         // a base-tier `Str` method's override returning a parameter the checker narrowed to `undefined` (it reads `None`)
-        if (isIdentifier(inner) && this.rustBaseNativeStrMethod(findAncestor(inner, isFunctionLike) as any)
+        // ral-52k: the same for a venue `Str` method of the kept-arm table (hyperliquid `updateSpotCurrencyCode`: `return code` under `code === undefined`)
+        if (isIdentifier(inner) && (this.rustBaseNativeStrMethod(findAncestor(inner, isFunctionLike) as any) || this.rustVenueKeptStrArm(findAncestor(inner, isFunctionLike) as any))
             && ((this.getCheckedTypeOf(inner)?.flags ?? 0) & ~(TypeFlags.Undefined | TypeFlags.Null)) === 0) return true;
         return this.printsValueExpression(inner) && this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string';
     }
