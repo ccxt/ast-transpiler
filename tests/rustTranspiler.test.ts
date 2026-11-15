@@ -17347,3 +17347,19 @@ describe('ral-49h: a guarded handler-table read (aster / modetrade / xt ternary)
         expect(out).toMatch(/let mut loose: Value = /);
     });
 });
+
+describe('ral-49a: a shared-map alias asked while its source is still deciding is decided again once the source settles', () => {
+    test('`let paramsOrder: Dict = paramsOmitted` rewritten as an omit of a proven map stays a Dict', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-49a-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Bool = boolean | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    omit = omit;\n    extend = extend;\n    safeString2 (o: any, k: any, k2: any, d: Str = undefined): Str { return o; }\n    safeNumber (o: any, k: any, d: any = undefined): any { return o; }\n    safeBool2 (o: any, k: any, k2: any, d: Bool = undefined): Bool { return o; }\n    async privatePostA (p: any = {}): Promise<any> { return p; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionBoolAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const value = this.safeBool2 (params, optionName, methodName, defaultValue);\n        const paramsOmitted = (value !== undefined) ? this.omit (params, optionName) : params;\n        return [ value, paramsOmitted ];\n    }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async createOrder (symbol: string, type: string, side: string, amount: number, price: number = undefined, params: Dict = {}): Promise<any> {\n        const request: Dict = { 'symbol': symbol };\n        const clientOrderId = this.safeString2 (params, 'clientOrderId', 'client-order-id');\n        if (clientOrderId !== undefined) {\n            request['client-order-id'] = clientOrderId;\n        }\n        const paramsOmitted = this.omit (this.extend ({}, params), [ 'clientOrderId', 'client-order-id' ]);\n        let paramsOrder: Dict = paramsOmitted;\n        if (type === 'market') {\n            const [ requiresPrice, paramsRequiresPrice ] = this.handleOptionBoolAndParams (paramsOmitted, 'createOrder', 'createMarketBuyOrderRequiresPrice', true);\n            const cost = this.safeNumber (paramsRequiresPrice, 'cost');\n            paramsOrder = this.omit (paramsRequiresPrice, 'cost');\n            if (requiresPrice && cost !== undefined) {\n                request['amount'] = cost;\n            }\n        }\n        return await this.privatePostA (this.extend (request, paramsOrder));\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['createOrder'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toContain('let mut paramsOmitted: crate::value::Dict = ');
+        expect(out).toContain('let mut paramsOrder: crate::value::Dict = Value::from(&paramsOmitted).into_dict();');
+        expect(out).toMatch(/paramsOrder = self\.omit\(&paramsRequiresPrice, [^\n]*\)\.into_dict\(\);/);
+        expect(out).not.toContain('paramsOrder.clone()');
+    });
+});

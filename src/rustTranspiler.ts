@@ -7056,7 +7056,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (source !== undefined && isVariableDeclaration(source) && this.rustBorrowedPending.has(source) && this.rustContainerAliasAsking.has(init)) { this.rustSbAliasDeferred.add(init.parent); return false; }
         // ral-44c: `let y = params` of a typed unified method's never-rebound `params` (a map on every path, `Into<Params>`)
         if (source !== undefined && source.kind === SyntaxKind.Parameter) return this.rustTypedParamsParam(source);
-        if (source === undefined || !isVariableDeclaration(source) || this.rustBorrowedPending.has(source)) return false;
+        // ral-49a: phase 2 of a shared-map alias. Asked while its source's own decision is still open (a box line printed
+        // inside it), the alias is refused for now and asked again once the source settles (never cached as Value)
+        if (source !== undefined && isVariableDeclaration(source) && this.rustBorrowedPending.has(source)) { if (isVariableDeclaration(init.parent) && init.parent.initializer === init) this.rustSbAliasDeferred.add(init.parent); return false; }
+        if (source === undefined || !isVariableDeclaration(source)) return false;
         return this.rustBorrowedLocalKind(source) === 'dict';
     }
 
@@ -19264,13 +19267,15 @@ export class RustTranspiler extends BaseTranspiler {
                 decision = false;
             }
             // asked while the kind decision is still pending (a box-line print inside it): answer, do not cache the guard
-            if (this.rustBorrowedPending.has(declaration)) this.rustBorrowedDictDecisions.delete(declaration);
+            if (this.rustBorrowedPending.has(declaration) || this.rustSbAliasReask.has(declaration)) { this.rustSbAliasReask.delete(declaration); this.rustBorrowedDictDecisions.delete(declaration); }
             else this.rustBorrowedDictDecisions.set(declaration, decision);
         }
         return decision;
     }
 
     private rustBorrowedPending = new WeakSet<any>();
+    /** ral-49a: an alias refused while its source was open: no decision derived from that refusal is cached. */
+    private rustSbAliasReask = new WeakSet<any>();
 
     rustBorrowedDictLocalUncached(declaration: any): boolean {
         return this.rustBorrowedLocalKind(declaration) !== undefined;
@@ -19293,7 +19298,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             this.rustBorrowedKinds.set(declaration, kind);
             // sb: an alias refused while its slot source was still deciding is asked again once that source settles
-            if (kind === undefined && this.rustSbAliasDeferred.has(declaration)) { this.rustSbAliasDeferred.delete(declaration); this.rustBorrowedKinds.delete(declaration); return undefined; }
+            if (kind === undefined && this.rustSbAliasDeferred.has(declaration)) { this.rustSbAliasDeferred.delete(declaration); this.rustBorrowedKinds.delete(declaration); this.rustSbAliasReask.add(declaration); return undefined; }
         }
         return this.rustBorrowedKinds.get(declaration);
     }
