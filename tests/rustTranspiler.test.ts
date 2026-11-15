@@ -17068,3 +17068,17 @@ describe('ral-47e: a literal-seeded bool local rewritten from a Market flag stay
         expect(text).toContain('let mut flag: Value = Value::Bool(false);');
     });
 });
+
+describe('ral-47i: a safeValueN / safeValue2 result used only by null tests reaches the presence flag (gate triggerValue)', () => {
+    test('safeValueN inside a for loop is a bool flag', () => {
+        const dir = path.join (rustFixtureRoot, 'ral47i-null-test-flag-n');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeValueN (o: any, k: any[], d: any = undefined): any { return o; }\n    safeValue2 (o: any, a: any, b: any, d: any = undefined): any { return o; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    createOrders (orders: any[], params: Dict = {}): Dict {\n        for (let i = 0; i < orders.length; i++) {\n            const orderParams = this.safeDict (orders[i], 'params', {});\n            const triggerValue = this.safeValueN (orderParams, [ 'triggerPrice', 'stopPrice' ]);\n            if (triggerValue !== undefined) {\n                throw new Error ('x');\n            }\n        }\n        const cid = this.safeValue2 (params, 'a', 'b');\n        if (cid === undefined) {\n            return {};\n        }\n        return { 'c': cid };\n    }\n}\n");
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let triggerValue: bool = self\.safe\w+\([^\n]*\) != Value::Null;/);
+        expect(out).toContain('if (triggerValue) {');
+        // a non-test use keeps the boxed local
+        expect(out).toMatch(/let mut cid: Value = /);
+    });
+});

@@ -17061,7 +17061,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustSubscriptionPresenceFlag(declaration: any, parsedValue: string): boolean {
         const init: any = this.unwrapParens(declaration?.initializer);
         if (!isIdentifier(declaration?.name) || !isCallExpression(init) || !isPropertyAccessExpression(init.expression)
-            || init.expression.expression.kind !== SyntaxKind.ThisKeyword || init.expression.name.text !== 'safeValue' || init.arguments.length !== 2) return false;
+            || init.expression.expression.kind !== SyntaxKind.ThisKeyword || init.expression.name.text !== 'safeValue' || init.arguments.length !== 2) return this.rustNullTestOnlyFlag(declaration); // ral-47i: safeValue2 / safeValueN / defaulted reads reach the B219 fallback too
         // ral-45h: also the literal-key reader (`safe_value_k`) and a `Value` client's field (nado; ccxt prints it via `get_value`)
         // ral-46i (INT-54 merge): any other safeValue read goes to the null-test-only flag rule
         if (!/^self\.safe(?:_v|V)alue(?:_k)?\((?:(?:\(client\)|__ch|client)\.subscriptions\.clone\(\)|client\.subscriptions), [^;\n]*, &\[\]\)$/.test(parsedValue)) return this.rustNullTestOnlyFlag(declaration);
