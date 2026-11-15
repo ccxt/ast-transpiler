@@ -6937,6 +6937,7 @@ export class RustTranspiler extends BaseTranspiler {
         const parent: any = n.parent;
         if (parent === undefined) return undefined;
         if (kind === 'bool' && this.rustBoolSlotWrite(n)) return 'bslot';
+        if (kind === 'ostr' && this.rustStrSlotWrite(n)) return 'slot';
         if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
             if (parent.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
             return this.rustScalarWriteOk(kind, parent.right, 0) ? (this.rustLimitCall(parent.right) ? 'lwrite' : 'write') : undefined;
@@ -8228,6 +8229,7 @@ export class RustTranspiler extends BaseTranspiler {
         // a string boxed more than once is lent before its last box (`From<&str>`: the one copy the `Value` clone made)
         const lent = !last && (this.rustStrLentLocals.has(local.declaration) || local.kind === 'ostr' && this.rustNilStrLentLocals.has(local.declaration));
         if (local.kind === 'ostr' && this.rustInArrayNeedle(node)) return `&${name}`;
+        if (local.kind === 'ostr' && !last && this.rustStrSlotSelfDefault(node)) return `Value::from(&${name})`;
         if (local.kind === 'ostr') return lent ? `Value::from(${name}.as_deref())` : `${moved}.map(Value::from).unwrap_or(Value::Null)`;
         if (local.kind === 'str') return lent ? `Value::from(${name}.as_str())` : `Value::from(${moved})`;
         if (local.kind === 'obool') return `${name}.map_or(Value::Null, Value::Bool)`;
@@ -8974,6 +8976,9 @@ export class RustTranspiler extends BaseTranspiler {
             const next = write === undefined ? undefined : this.rustScalarJoinKinds(joined, write, joined === 'bool' && write === 'null');
             if (next !== undefined && (next === joined || next === `o${joined}`)) joined = next;
         }
+        // ral-45d: a string local rewritten from a string slot of a proven tuple (`[x, p] = this.handleOptionStringAndParams (..)`)
+        // holds the slot's string or its Null: `Option<String>`
+        if ((joined === 'str' || joined === 'ostr') && this.rustStrSlotWrites(declaration)) joined = 'ostr';
         return joined;
     }
 
@@ -15880,6 +15885,57 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(n) || !this.rustNilSlotWrite(n)) return false;
         const write: any = n.parent.parent;
         return this.rustNativeListSource(write.right) && this.primitiveKindOfType(this.typeOfNodeIfAny(n)) === 'boolean';
+    }
+
+    // ral-45d: the string twin of `rustBoolSlotWrite` for an initialised local (`let x = 'lit'; [x, p] = this.handleOptionStringAndParams (..)`):
+    // the slot prints `x = <slot>.as_str().map(str::to_owned)` (the nil-declared `slot` form), a non-string slot reads `None`
+    rustStrSlotWrite(n: any): boolean {
+        if (!isIdentifier(n) || !this.rustNilSlotWrite(n)) return false;
+        const write: any = n.parent.parent;
+        return this.rustNativeListSource(write.right) && this.primitiveKindOfType(this.typeOfNodeIfAny(n)) === 'string'
+            && (this.rustScalarSeeding || this.rustStrSlotLineFits(write));
+    }
+
+    /** The `__destr_tmp` line keeps the 400-char budget with the slot unwrap and the lent self default (`Value::from(&x)`). */
+    private rustStrSlotLineMemo = new WeakMap<any, boolean>();
+    rustStrSlotLineFits(write: any): boolean {
+        const known = this.rustStrSlotLineMemo.get(write);
+        if (known !== undefined) return known;
+        this.rustStrSlotLineMemo.set(write, false);
+        let fits = false;
+        try {
+            const column = write.getStart() - String(write.getSourceFile().text).lastIndexOf('\n', write.getStart()) - 1;
+            const length = column + Math.max(...this.printNode(write, 0).split('\n').map((l: string) => l.trim().length));
+            // the open print boxes the self default as `x.clone()` (8 chars longer than `Value::from(&x)` minus `x`): only the unwrap is added
+            fits = length + '.as_str().map(str::to_owned)'.length <= 400;
+        } catch (e) {
+            fits = false;
+        }
+        this.rustStrSlotLineMemo.set(write, fits);
+        return fits;
+    }
+
+    /** Some write of the initialised local is a string tuple slot (`rustStrSlotWrite`). */
+    rustStrSlotWrites(declaration: any): boolean {
+        if (declaration?.initializer === undefined || !isIdentifier(declaration.name)) return false;
+        const name = String(declaration.name.text);
+        const hit = (this.rustScopeNameNodes(this.rustEnclosingFunction(declaration), name) as any[])
+            .some((n: any) => isIdentifier(n) && this.rustNilSlotWrite(n) && this.rustDeclaredNode(n) === declaration && this.rustStrSlotWrite(n));
+        return hit;
+    }
+
+    /** ral-45d: the local's own box as an argument of its string slot write (`[x, p] = this.m (.., x)`): it boxes the value the local
+     *  holds before the slot is read back, lent (`Value::from(&x)`, `From<&Option<String>>`: `None` is the Null, `Some` the Str). */
+    rustStrSlotSelfDefault(n: any): boolean {
+        let up: any = n;
+        while (up.parent !== undefined && !isStatement(up.parent)) {
+            const p: any = up.parent;
+            if (isBinaryExpression(p) && p.right === up && p.operatorToken.kind === SyntaxKind.EqualsToken && isArrayLiteralExpression(p.left)) {
+                return p.left.elements.some((e: any) => isIdentifier(e) && this.rustDeclaredNode(e) === this.rustDeclaredNode(n) && this.rustScalarUseForms.get(e) === 'slot');
+            }
+            up = p;
+        }
+        return false;
     }
 
     rustBoolSlotUsesOk(declaration: any): boolean {

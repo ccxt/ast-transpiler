@@ -16503,3 +16503,31 @@ describe('ral-45c: a Dictionary<Dict> row written at a literal key with a write-
         expect(r).toContain('add_element_to_object(&mut value');
     });
 });
+
+describe('ral-45d: a string-literal-seeded local rewritten from a handleOptionStringAndParams slot', () => {
+    const src = (body: string) =>
+        'class E {\n' +
+        '    handleOptionStringAndParams(params: any, methodName: string, optionName: string, defaultValue?: string): [string, any] { return [defaultValue, params]; }\n' +
+        '    hold(x: any): any { return x; }\n' +
+        '    run(params: any) {\n' + body + '    }\n' +
+        '}';
+    test('is an Option<String> written natively from the slot', () => {
+        const output = transpiler.transpileRust(src(
+            "        let mode = 'unified';\n" +
+            '        let rest = undefined;\n' +
+            "        [ mode, rest ] = this.handleOptionStringAndParams(params, 'm', 'mode', mode);\n" +
+            "        const isUnified = (mode === 'unified');\n" +
+            '        return this.hold(isUnified);\n')).content;
+        expect(output).not.toMatch(/let mut mode: Value/);
+        expect(output).toMatch(/mode = __destr_tmp\.get\(0\)[^;]*as_str\(\)\.map\(str::to_owned\)/);
+    });
+    test('a non-string write keeps the local Value', () => {
+        const output = transpiler.transpileRust(src(
+            "        let accountMode = 'unified';\n" +
+            '        let rest = undefined;\n' +
+            "        [ accountMode, rest ] = this.handleOptionStringAndParams(params, 'createOrder', 'accountMode', accountMode);\n" +
+            '        accountMode = this.hold(rest);\n' +
+            '        return this.hold(accountMode);\n')).content;
+        expect(output).toMatch(/let mut accountMode: Value/);
+    });
+});
