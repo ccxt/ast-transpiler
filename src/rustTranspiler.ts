@@ -4690,6 +4690,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(node)) return RustTranspiler.RUST_SCALAR_ARITH_OPS.has(node.operatorToken.kind) || this.rustBoolLeafLogical(node);
         if (isPrefixUnaryExpression(node) && node.operator === SyntaxKind.ExclamationToken) return this.rustBoolLeafLogical(node);
         if (this.rustSbJoinShape(node)) return true;
+        if (this.rustReaderCaseStrRecv(node) !== undefined) return true;
+        if (this.rustPreciseCompareCall(node)) return true;
         if (isIdentifier(node) || isConditionalExpression(node) || this.rustScalarStrMethod(node, true) !== undefined || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node)) return true;
         if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustIdString(node) || this.rustVenueTypedCall(node) !== undefined) return true;
         if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && (isIdentifier(node.expression) || this.rustSelfRootedLengthRecv(node.expression));
@@ -4795,6 +4797,8 @@ export class RustTranspiler extends BaseTranspiler {
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
         // ral-51n: an any-list length typed only for its native uses (a box-only length stays the `Value` it is handed as)
         if (anyLength && typedUses === 0) return undefined;
+        // ral-54x K1: a cased reader `String` with no native use would only be boxed straight back (boxed-straight-back stays `Value`)
+        if (nativeUses === 0 && kind === 'str' && this.rustReaderCaseStrRecv(this.unwrapParens(declaration.initializer)) !== undefined) return undefined;
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration)) return undefined;
         // of: a string compared against another local must not copy at a box where the `Value` was lent
         // (a call argument already copied the `Value`; an `in` key or other borrowed slot did not)
@@ -5162,6 +5166,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isCallExpression(node)) return undefined;
         if (isIdentifier(node.expression) && this.rustStrRuntimeCall(node)) return 'str';
         if (fresh && this.rustDeclInitPosition(node) && this.rustValueCaseRecv(node) !== undefined) return 'ostr';
+        // ral-54x K1: `this.safeString(o, k, 'lit').toLowerCase()` at a declaration: the reader is a `String` (literal default), so its case is too
+        if (fresh && this.rustDeclInitPosition(node) && this.rustReaderCaseStrRecv(node) !== undefined) return 'str';
+        // ral-54x bitstamp: `Precise.stringLt|Le|Gt|Ge|Eq(a, b)` always answers a `Bool` (`false` on a `Null` operand)
+        if (fresh && this.rustPreciseCompareCall(node)) return 'bool';
         const callee: any = node.expression;
         if (!isPropertyAccessExpression(callee) || !this.rustScalarReceiver(callee.expression)) return undefined;
         const name = String(callee.name.text);
@@ -5294,6 +5302,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.primitiveKindOfType(this.typeOfNodeIfAny(call)) !== 'string' || !this.printsValueExpression(recv)) return undefined;
         const text = this.printNode(recv, 0).trim();
         return RUST_PLAIN_PLACE.test(text) ? text : undefined;
+    }
+
+    /** ral-54x K1: the receiver of `<reader>.toUpperCase()` / `.toLowerCase()` (no arguments) when the reader is a base
+     *  string reader with a string-literal default (always a `Str`, so the scalar rule types it `String`), else undefined. */
+    rustReaderCaseStrRecv(call): any {
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || (call.arguments?.length ?? 0) !== 0) return undefined;
+        const method = String(call.expression.name.text);
+        if (method !== 'toUpperCase' && method !== 'toLowerCase') return undefined;
+        const recv: any = this.unwrapParens(call.expression.expression);
+        if (recv === undefined || !isCallExpression(recv) || !isPropertyAccessExpression(recv.expression) || recv.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (!RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(String(recv.expression.name.text))) return undefined;
+        return this.rustScalarValueKind(recv, true) === 'str' ? recv : undefined;
     }
 
     /** The initializer, or one of its ternary arms, is a `rustValueCaseRecv` conversion. */
@@ -7434,6 +7454,14 @@ export class RustTranspiler extends BaseTranspiler {
         if ((kind === 'str' || kind === 'ostr') && this.rustWsCacheMapKeyUse(n)) return 'fin';
         if (kind === 'bool' && this.rustScalarBoolLogicalText(this.rustClimbLogicalWrappers(n)) !== undefined) return 'cond';
         if (kind === 'bool' && isPrefixUnaryExpression(parent) && this.rustValueNotOfBoolLocal(parent) !== undefined) return 'cond';
+        // ral-54x S7: `let y = x;` copies a literal-seeded `bool` local into a `Value` local: the box is the `Bool` the
+        // `Value` local held (Copy, no clone); the nil-local rule (za) already boxes the same alias of an `Option<bool>`
+        // (a `bool` alias of a `bool` local copies natively: `let y: bool = x;`)
+        if (kind === 'bool' && isVariableDeclaration(parent) && parent.initializer === n && isIdentifier(parent.name) && this.rustNilLocalKind(parent) === undefined) {
+            const aliasKind = this.rustScalarLocalKind(parent);
+            if (aliasKind === undefined) return 'box';
+            if (aliasKind === 'bool') return 'native';
+        }
         if (kind === 'str' || kind === 'ostr') { const fieldForm = this.rustFieldKeyUseForm(n); if (fieldForm !== undefined) return fieldForm; }
         if ((kind === 'str' || kind === 'ostr') && this.rustWsKeyUse(n)) return 'targ';
         if ((kind === 'str' || kind === 'ostr') && this.rustWsSubscriptionWriteValue(n)) return 'box';
@@ -8989,6 +9017,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isCallExpression(node)) return undefined;
         if (this.rustArithCombinator(node)) return this.rustArithCallText(kind, node);
         if (base === 'str' && this.rustStrRuntimeCall(node)) return wrap(this.rustStrRuntimeBareText(node));
+        const readerCase = kind === 'str' && this.rustDeclInitPosition(node) ? this.rustReaderCaseStrRecv(node) : undefined;
+        if (readerCase !== undefined) {
+            const recvText = this.rustScalarNativeText('str', readerCase);
+            const fn = String((node.expression as any).name.text) === 'toUpperCase' ? 'to_uppercase' : 'to_lowercase';
+            if (recvText !== undefined) return `${recvText.endsWith('.to_string()') ? recvText.slice(0, -'.to_string()'.length) : recvText}.${fn}()`;
+        }
         const caseRecv = kind === 'ostr' ? this.rustValueCaseRecv(node) : undefined;
         const caseCallee: any = node.expression;
         if (caseRecv !== undefined) return `${caseRecv}.as_str().map(str::${String(caseCallee.name.text) === 'toUpperCase' ? 'to_uppercase' : 'to_lowercase'})`;
@@ -9411,6 +9445,14 @@ export class RustTranspiler extends BaseTranspiler {
         const callee: any = call.expression;
         return isIdentifier(callee.expression) && callee.expression.text === 'Precise'
             && RustTranspiler.RUST_NIL_PRECISE_STR.test(String(callee.name.text));
+    }
+
+    /** ral-54x: `Precise.stringEq|Gt|Ge|Lt|Le(a, b)`: the runtime answers `Value::Bool` for every operand pair. */
+    rustPreciseCompareCall(node): boolean {
+        const call: any = this.unwrapParens(node);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.arguments.length !== 2) return false;
+        const callee: any = call.expression;
+        return isIdentifier(callee.expression) && callee.expression.text === 'Precise' && /^string(?:Eq|Gt|Ge|Lt|Le)$/.test(String(callee.name.text));
     }
 
     /** `s.length` on a typed string local. */
