@@ -8693,8 +8693,25 @@ export class RustTranspiler extends BaseTranspiler {
         // pad / slice on a typed local, or on a typed parameter read: a `&str` parameter's binding is never `Null`
         // (callers and dispatch arms convert once), an `Option<&str>` one keeps `None` through the `if let` form
         if ((shape === 'pad' || shape === 'slice') && this.rustScalarIdentifierKind(recv) === undefined && this.rustScalarParamRead(recv) === undefined) return undefined;
-        if (recvKind === 'ostr' && shape !== 'case' && shape !== 'replace' && shape !== 'pad' && shape !== 'slice') return undefined;
+        // ral-48f: `x.toString()` of an `Option<String>` local outside the test tier is the local itself (`None` stays `None`; the
+        // `Value` form displayed its `Null` box as `null`, which the concat / box readers of an `ostr` operand print alike)
+        const ostrSelf = recvKind === 'ostr' && method === 'toString' && !this.rustTestTierSource(call) && this.rust48fSlotAliasConcatRecv(call, recv);
+        if (recvKind === 'ostr' && shape !== 'case' && shape !== 'replace' && shape !== 'pad' && shape !== 'slice' && !ostrSelf) return undefined;
         return { recv, recvKind, method, kind: recvKind };
+    }
+
+    /** ral-48f: `x.toString()` read as a `+` operand, `x` a destructured handle*AndParams slot or a local declared `Str` whose
+     *  initializer is such a slot read whole (the slot and the alias are decided together by the joint scalar solve). */
+    rust48fSlotAliasConcatRecv(call: any, recv: any): boolean {
+        let top: any = call;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        if (!isBinaryExpression(top.parent) || top.parent.operatorToken.kind !== SyntaxKind.PlusToken) return false;
+        const d: any = this.rustDeclaredNode(recv);
+        if (d?.kind === SyntaxKind.BindingElement) return this.rustSlotJoinsSolve(d);
+        if (d === undefined || !isVariableDeclaration(d) || d.type === undefined || String(d.type.getText()) !== 'Str') return false;
+        const init: any = this.unwrapParens(d.initializer);
+        const slot: any = init !== undefined && isIdentifier(init) ? this.rustDeclaredNode(init) : undefined;
+        return slot?.kind === SyntaxKind.BindingElement && this.rustSlotJoinsSolve(slot);
     }
 
     /** `padStart(N, "c")` / `padEnd(N, "c")`: a literal width (0..4096) and a one-char alphanumeric / space pad, the
@@ -9791,6 +9808,11 @@ export class RustTranspiler extends BaseTranspiler {
                 return wrap(`${name}.replace("${arg(0)}", "${arg(1)}")`);
             }
             const fn = method.method === 'toLowerCase' ? 'to_lowercase' : 'to_uppercase';
+            if (method.recvKind === 'ostr' && method.method === 'toString') {
+                const local = this.rustScalarLocalOf(method.recv);
+                // inside a loop / read again: borrow and copy the text once (the one String the `Value` form's `format!` made)
+                return wrap(local !== undefined && this.rustLocalLastUse(method.recv, local.declaration) ? name : `${name}.as_deref().map(str::to_owned)`);
+            }
             if (method.recvKind === 'ostr') return wrap(`${name}.as_deref().map(str::${fn})`);
             if (method.method === 'trim') return wrap(`${name}.trim().to_string()`);
             if (method.method === 'toString' && method.recvKind === 'int') return wrap(`format!("{}", ${name})`);

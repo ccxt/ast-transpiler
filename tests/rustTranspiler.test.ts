@@ -17218,3 +17218,35 @@ describe('ral-48a: a never-null safeDict local rewritten only as `x = this.exten
         expect(out).not.toMatch(/let mut row: crate::value::Dict = /);
     });
 });
+
+describe('ral-48f: a string handle*AndParams slot aliased whole into a declared Str local read by toString()', () => {
+    const src =
+        'type Str = string | undefined;\n' +
+        'class E {\n' +
+        '    handleOptionStringAndParams(params: any, methodName: string, optionName: string, defaultValue?: string): [string, any] { return [defaultValue, params]; }\n' +
+        '    hold(x: any): any { return x; }\n' +
+        '    run(params: any, flag: boolean) {\n' +
+        "        const [ rateOption, paramsRate ] = this.handleOptionStringAndParams (params, 'watchOrderBook', 'rate', '100');\n" +
+        '        let rate: Str = rateOption;\n' +
+        '        if (flag) {\n' +
+        "            rate = '500';\n" +
+        '        }\n' +
+        '        if (rate === undefined) {\n' +
+        "            throw new Error ('rate is required');\n" +
+        '        }\n' +
+        "        const hash = 'book@' + rate.toString () + 'ms';\n" +
+        '        return this.hold ([ hash, paramsRate ]);\n' +
+        '    }\n' +
+        '}';
+    test('types the slot and the alias Option<String> together', () => {
+        const output = transpiler.transpileRust(src).content;
+        expect(output).toMatch(/let mut rateOption: Option<String> = /);
+        expect(output).toMatch(/let mut rate: Option<String> = rateOption;/);
+        expect(output).toContain('rate.is_none()');
+    });
+    test('a toString() of the alias prints the local itself at its last use (no box, no copy)', () => {
+        const output = transpiler.transpileRust(src).content;
+        expect(output).not.toContain('format!("{}", rate)');
+        expect(output).not.toMatch(/let mut rate: Value/);
+    });
+});
