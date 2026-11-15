@@ -4674,7 +4674,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (isIdentifier(node) || isConditionalExpression(node) || this.rustScalarStrMethod(node, true) !== undefined || this.rustScalarPreciseCall(node) || this.rustArithCombinator(node)) return true;
         if (this.rustStrCastCall(node) !== undefined || this.rustClockString(node) || this.rustIdString(node) || this.rustVenueTypedCall(node) !== undefined) return true;
         if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && isIdentifier(node.expression);
-        if (isElementAccessExpression(node)) return isIdentifier(node.expression);
+        if (isElementAccessExpression(node)) return isIdentifier(node.expression) || this.rustInlineHandleStrSlot(node);
         if (isCallExpression(node) && isIdentifier(node.expression) && RustTranspiler.RUST_STR_RUNTIME_FREE.has(String(node.expression.text))) return true;
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustScalarReceiver(node.expression.expression)) return false;
         // any `this.m(..)`: the kind comes from the callee's checker return
@@ -5127,6 +5127,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.PlusToken
             && this.rustScalarFormatText(node) !== undefined) return 'str';
         if (this.rustElementReadScalarKind(node) !== undefined) return this.rustElementReadScalarKind(node);
+        if (fresh && this.rustInlineHandleStrSlot(node)) return 'ostr';
         if (fresh && this.rustRowFieldStrText(node) !== undefined) return 'ostr';
         if (fresh && this.rustNilElemStrText(node) !== undefined) return 'ostr';
         if (fresh) { const field = this.rustMarketArmStrKind(node); if (field !== undefined) return field; }
@@ -5877,6 +5878,19 @@ export class RustTranspiler extends BaseTranspiler {
         const text = this.printNode(node, 0).trim();
         const place = this.rustNativeLengths.get(node);
         return place !== undefined ? `${place}.len() as i64` : `${text}.as_i64().unwrap_or_default()`;
+    }
+
+    /** ral-52f: `this.handle*AndParams (..)[0]` read inline (bitget `productType`, toobit / okx pro `marketType`) where the
+     *  helper's declared tuple slot 0 is a string (`[string, Dict]` / `[Str, Dict]`): the read is that string or undefined,
+     *  printed off the temp list exactly as the destructured slot 0 (`.and_then(Value::as_str).map(str::to_owned)`). */
+    rustInlineHandleStrSlot(node: any): boolean {
+        if (!isElementAccessExpression(node) || this.rustTestTierSource(node) || this.checkerOrUndefined() === undefined) return false;
+        const index: any = this.unwrapParens(node.argumentExpression);
+        if (index === undefined || index.kind !== SyntaxKind.NumericLiteral || String(index.text) !== '0') return false;
+        const call: any = this.unwrapParens(node.expression);
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !/^handle\w*AndParams\d*$/.test(String(call.expression.name.text))) return false;
+        return this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'string';
     }
 
     // `xs[i]` over a local string list (`string[]`, `split`, `Object.keys`): `Option<String>` from the element.
@@ -8726,7 +8740,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'int' && this.rustListLengthInit(node)) return this.rustListLengthText(node);
         if (kind === 'ostr') { const row = this.rustRowFieldStrText(node); if (row !== undefined) return row; }
         if (kind === 'ostr') { const owned = this.rustNilElemStrText(node); if (owned !== undefined) return owned; }
-        if (kind === 'ostr' && this.rustElementReadScalarKind(node) !== undefined) {
+        if (kind === 'ostr' && (this.rustElementReadScalarKind(node) !== undefined || this.rustInlineHandleStrSlot(node))) {
             const read = this.printNode(node, 0).trim();
             const tail = '.cloned().unwrap_or(Value::Null)';
             return read.endsWith(tail) ? `${read.slice(0, -tail.length)}.and_then(Value::as_str).map(str::to_owned)` : undefined;
