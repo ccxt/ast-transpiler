@@ -12001,6 +12001,12 @@ export class RustTranspiler extends BaseTranspiler {
         return top !== n && isCallExpression(top.parent) && top.parent.expression !== top && Array.from(top.parent.arguments).includes(top);
     }
 
+    /** ral-50c: `d[k] = m`: the record stored whole into a map (its raw, an `Arc` bump). */
+    rustMarketStoreUse(n: any): boolean {
+        const up: any = n.parent;
+        return up !== undefined && isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(up.left);
+    }
+
     /** A whole-value hand-off: a call argument, an array element, a dict value or a returned value. */
     rustMarketValueUse(n: any): boolean {
         const parent: any = n.parent;
@@ -12114,7 +12120,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-44c: `let m = market` of a lent `Option<&Market>` parameter starts as the owned copy (`market.cloned()`)
         const fromSlot = this.rustMarketSlotParamOf(this.rustSkipWrappers(declaration.initializer)) !== undefined && (declaration.parent.flags & NodeFlags.Const) === 0;
         const fromOpt = this.rustIsOptMarketCall(declaration.initializer) || this.rustOptMarketTernary(declaration.initializer) !== undefined || fromSlot
-            || this.rustOptSafeMarketTernary(declaration.initializer) !== undefined;
+            || this.rustOptSafeMarketTernary(declaration.initializer) !== undefined || this.rustOptOutcomeEmptyTernary(declaration.initializer) !== undefined;
+        const emptyLitArm = this.rustOptOutcomeEmptyTernary(declaration.initializer) !== undefined;
         const empty = declaration.initializer === undefined || this.literalKindOfNode(declaration.initializer) === 'null' || fromOpt;
         if (!empty && !this.rustIsTypedMarketCall(declaration.initializer)) return false;
         if (empty && !fromOpt && ((declaration.parent.flags & NodeFlags.Const) !== 0 || this.rustNilLocalKind(declaration) !== undefined)) return false;
@@ -12128,20 +12135,22 @@ export class RustTranspiler extends BaseTranspiler {
         let keyReads = 0;
         const ok = this.rustMarketLocalUsesAll(declaration, String(declaration.name.text), (n) => {
             if (this.rustEnclosingFunction(n) !== scope) return false; // a closure capture keeps the box
+            // ral-50c: a `{}`-armed outcome ternary: key reads only (a null test or hand-off would tell `None` from `{}`)
+            if (emptyLitArm) return this.rustOptMarketKeyRead(n);
             if (this.rustIsTypedMarketWrite(n)) {
                 writes++;
                 return true;
             }
             // `m = undefined` on an `Option<Market>` local clears it; `m = this.safeMarket (..)` stores `Some(..)`
             if (empty && this.rustIsNullWriteOf(n)) return true;
-            if (empty && (this.rustIsSafeMarketWriteOf(n) || this.rustIsOptMarketWriteOf(n) || this.rustMarketAliasWriteSource(n) !== undefined)) {
+            if (empty && (this.rustIsSafeMarketWriteOf(n) || this.rustIsOptMarketWriteOf(n) || this.rustMarketAliasWriteSource(n) !== undefined || this.rustIsSlotParamWriteOf(n))) {
                 writes++;
                 return true;
             }
-            if (empty && this.rustOptMarketKeyRead(n)) return true;
+            if (empty && (this.rustOptMarketKeyRead(n) || this.rustOptMarketKeyAsKey(n))) return true;
             // a lent market slot takes `m.as_ref()`: not a `Value` hand-off
             if (empty && this.rustMarketSlotUse(n)) return true;
-            if (empty) return this.rustIsNullTestOf(n) || this.rustMarketValueUse(n) || this.rustMarketValueUseThroughCast(n);
+            if (empty) return this.rustIsNullTestOf(n) || this.rustMarketValueUse(n) || this.rustMarketValueUseThroughCast(n) || this.rustMarketStoreUse(n);
             // `this.market (x)` throws on an unknown symbol: a null test of its struct is constant
             if (this.rustIsNullTestOf(n) && this.rustNullTestIsCondition(n)) return true;
             const key = this.rustMarketReadKey(n);
@@ -12180,7 +12189,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** `crate::value::KeyRead::key_read(&&m, "k")` for a direct read on an `Option<Market>` local. */
     printOptMarketKeyRead(node: any): string | undefined {
         const recv: any = node.expression;
-        if (recv === undefined || !isIdentifier(recv) || !this.rustDictKeyReadUse(recv) || this.rustOptMarketLocalOf(recv) === undefined) return undefined;
+        if (recv === undefined || !isIdentifier(recv) || !(this.rustDictKeyReadUse(recv) || this.rustOptMarketKeyAsKey(recv)) || this.rustOptMarketLocalOf(recv) === undefined) return undefined;
         const key = isElementAccessExpression(node) ? String((this.rustSkipWrappers(node.argumentExpression) as any).text) : String(node.name.text);
         return `crate::value::KeyRead::key_read(&&${super.printIdentifier(recv)}, "${this.escapeRustStringLiteral(key)}")`;
     }
@@ -12614,15 +12623,29 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-49c: only `loadOutcome`. `outcome` / `safeOutcome` stay `Value`: their answers are handed back whole by the
         // async-virtual `fetchOutcome` overrides (a `Value` return the dispatch preamble forwards), the kalshi `{}`
         // ternaries and predictfun `outcomeForToken`, which would box the decoded record straight back.
-        'loadOutcome': 'PredictionOutcomeHandle',
+        'outcome': 'PredictionOutcomeMarket', 'safeOutcome': 'PredictionOutcomeHandle', 'loadOutcome': 'PredictionOutcomeHandle',
+        // ral-50c: the async-virtual `fetchOutcome` hands the same record on (declared in ts/src)
+        'fetchOutcome': 'PredictionOutcomeHandle',
+    };
+
+    private static readonly RUST_OPT_OUTCOME_BY_NAME = new Set([ 'fetchOutcome', 'outcomeForToken' ]);
+
+    /** ral-50c: prediction venue methods that answer the outcome record (overrides of `fetchOutcome`, predictfun `outcomeForToken`). */
+    private static readonly RUST_OPT_OUTCOME_VENUE_RETURNS: Record<string, string> = {
+        'fetchOutcome': 'PredictionOutcomeHandle', 'outcomeForToken': 'PredictionOutcomeHandle',
     };
 
     /** ral-48c: `outcome` / `safeOutcome` / `loadOutcome` of the prediction base class, declared with the outcome record. */
     rustReturnsOptOutcome(node: any): boolean {
         if (node === undefined || node.kind !== SyntaxKind.MethodDeclaration || node.body === undefined || !isIdentifier(node.name)) return false;
-        const want = RustTranspiler.RUST_OPT_OUTCOME_RETURNS[String(node.name.text)];
+        const file = String(node.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        const name = String(node.name.text);
+        const want = /ts[/]src[/]base[/]PredictionExchange\.ts$/.test(file) ? RustTranspiler.RUST_OPT_OUTCOME_RETURNS[name]
+            : (/ts[/]src[/]prediction[/][^/]+\.ts$/.test(file) ? RustTranspiler.RUST_OPT_OUTCOME_VENUE_RETURNS[name] : undefined);
         if (want === undefined || !isClassDeclaration(node.parent)) return false;
-        if (!/ts[/]src[/]base[/]PredictionExchange\.ts$/.test(String(node.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/'))) return false;
+        // ral-50c: `fetchOutcome` / `outcomeForToken` keep their ts/src declaration (`Promise<any>` / `any` / none: other ports
+        // print it unchanged); every return of theirs is an outcome record, a cache read decoded once, or the base answer
+        if (RustTranspiler.RUST_OPT_OUTCOME_BY_NAME.has(name)) return true;
         let ret: any = node.type;
         if (ret?.kind === SyntaxKind.TypeReference && isIdentifier(ret.typeName) && String(ret.typeName.text) === 'Promise' && ret.typeArguments?.length === 1) ret = ret.typeArguments[0];
         return ret?.kind === SyntaxKind.TypeReference && isIdentifier(ret.typeName) && String(ret.typeName.text) === want;
@@ -12633,7 +12656,7 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.rustSkipWrappers(node);
         if (inner?.kind !== SyntaxKind.AwaitExpression) return node;
         const call: any = this.rustSkipWrappers(inner.expression);
-        return call !== undefined && isCallExpression(call) && isPropertyAccessExpression(call.expression) && String(call.expression.name.text) === 'loadOutcome' ? call : node;
+        return call !== undefined && isCallExpression(call) && isPropertyAccessExpression(call.expression) && /^(?:loadOutcome|fetchOutcome)$/.test(String(call.expression.name.text)) ? call : node;
     }
 
     private rustVenueOptMarketDecisions = new WeakMap<any, boolean>();
@@ -12680,6 +12703,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** `this.getMarketFromSymbols (..)` resolving to the typed base method (or a venue `rustVenueReturnsOptMarket` one). */
     rustIsOptMarketCall(init: any): boolean {
         const call: any = this.rustSkipWrappers(this.rustSkipOutcomeAwait(init));
+        if (call !== undefined && isCallExpression(call) && this.rustSuperFetchOutcome(call)) return true;
         if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         if (!RustTranspiler.RUST_OPT_MARKET_RETURNS.has(String(call.expression.name.text))) {
             const venue: any = this.rustScalarCallee(call);
@@ -12692,6 +12716,25 @@ export class RustTranspiler extends BaseTranspiler {
             declaration = Array.from(declaration.parent.members).find((m: any) => isMethodDeclaration(m) && m.body !== undefined && isIdentifier(m.name) && String(m.name.text) === name);
         }
         return this.rustReturnsOptMarket(declaration);
+    }
+
+    /** ral-50c: `super.fetchOutcome (s)` in a prediction venue override declared with the outcome record (`super_fetch_outcome` answers `Option<Market>`). */
+    rustSuperFetchOutcome(call: any): boolean {
+        if (!isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.SuperKeyword || String(call.expression.name.text) !== 'fetchOutcome') return false;
+        const fn: any = findAncestor(call, isMethodDeclaration);
+        return fn !== undefined && isIdentifier(fn.name) && String(fn.name.text) === 'fetchOutcome' && this.rustReturnsOptOutcome(fn);
+    }
+
+    /** ral-50c: `c ? this.outcome (s) : {}` (either arm order): the outcome arm. Its local only takes key reads, where `None` reads as `{}` did. */
+    rustOptOutcomeEmptyTernary(init: any): any {
+        const cond: any = init === undefined ? undefined : this.unwrapParens(init);
+        if (cond === undefined || cond.kind !== SyntaxKind.ConditionalExpression) return undefined;
+        const t: any = this.unwrapParens(cond.whenTrue);
+        const f: any = this.unwrapParens(cond.whenFalse);
+        const empty = (o: any) => isObjectLiteralExpression(o) && o.properties.length === 0;
+        if (empty(f) && this.rustIsOptMarketCall(t)) return t;
+        if (empty(t) && this.rustIsOptMarketCall(f)) return f;
+        return undefined;
     }
 
     /** `c ? undefined : this.market (s)` (either arm order): the `this.market` arm. */
@@ -12744,6 +12787,23 @@ export class RustTranspiler extends BaseTranspiler {
         if (value === undefined) return undefined;
         const cond: any = this.unwrapParens(init);
         const some = `Some${value}`;
+        const armTrue = this.unwrapParens(cond.whenTrue) === arm;
+        return `(if ${this.printCondition(cond.condition, 0)} { ${armTrue ? some : 'None'} } else { ${armTrue ? 'None' : some} })`;
+    }
+
+    /** ral-50c: `(if c { self.outcome(s) } else { None })` for a `{}`-armed outcome ternary. */
+    printOptOutcomeEmptyTernary(init: any): string | undefined {
+        const arm = this.rustOptOutcomeEmptyTernary(init);
+        if (arm === undefined) return undefined;
+        const call: any = this.rustSkipWrappers(this.rustSkipOutcomeAwait(arm));
+        this.rustOptMarketBoxing.add(call);
+        let some: string;
+        try {
+            some = this.printNode(arm, 0).trim();
+        } finally {
+            this.rustOptMarketBoxing.delete(call);
+        }
+        const cond: any = this.unwrapParens(init);
         const armTrue = this.unwrapParens(cond.whenTrue) === arm;
         return `(if ${this.printCondition(cond.condition, 0)} { ${armTrue ? some : 'None'} } else { ${armTrue ? 'None' : some} })`;
     }
@@ -12850,6 +12910,23 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustOptMarketLocalOf(up.left);
     }
 
+    /** ral-50c: `m = market` as its own statement, `market` a lent `Option<&Market>` parameter: stores `market.cloned()`. */
+    rustIsSlotParamWriteOf(n: any): boolean {
+        const up: any = n.parent;
+        return up !== undefined && isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken
+            && up.parent?.kind === SyntaxKind.ExpressionStatement && isIdentifier(up.right) && this.rustMarketSlotParamOf(up.right) !== undefined;
+    }
+
+    /** ral-50c: `d[m['k']]`: a literal-key read of the local used as another map's key (read through `KeyRead`, a `Value`). */
+    rustOptMarketKeyAsKey(n: any): boolean {
+        const up: any = n.parent;
+        if (up === undefined || !isElementAccessExpression(up) || up.expression !== n) return false;
+        const arg: any = this.rustSkipWrappers(up.argumentExpression);
+        if (arg === undefined || !isStringLiteralLikeNode(arg) || /^\d+$/.test(String(arg.text))) return false;
+        const use: any = up.parent;
+        return use !== undefined && isElementAccessExpression(use) && use.argumentExpression === up;
+    }
+
     /** `m = undefined` as its own statement. */
     rustIsNullWriteOf(n: any): boolean {
         const up: any = n.parent;
@@ -12860,6 +12937,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** A later `m = this.market (y)` on a struct local (`Some(..)` on an `Option<Market>` one). */
     printTypedMarketWrite(left: any, right: any): string | undefined {
         if (isIdentifier(left) && this.rustIsNullWriteOf(left) && this.rustOptMarketLocalOf(left) !== undefined) return `${super.printIdentifier(left)} = None`;
+        if (isIdentifier(left) && this.rustIsSlotParamWriteOf(left) && this.rustOptMarketLocalOf(left) !== undefined) return `${super.printIdentifier(left)} = ${super.printIdentifier(right)}.cloned()`;
         if (isIdentifier(left) && this.rustIsSafeMarketWriteOf(left) && this.rustOptMarketLocalOf(left) !== undefined) return `${super.printIdentifier(left)} = Some(${this.printNode(right, 0).trim()})`;
         if (isIdentifier(left) && this.rustIsOptMarketWriteOf(left) && this.rustOptMarketLocalOf(left) !== undefined) return `${super.printIdentifier(left)} = ${this.printNode(right, 0).trim()}`;
         if (isIdentifier(left) && this.rustMarketAliasWriteSource(left) !== undefined && this.rustOptMarketLocalOf(left) !== undefined
@@ -12944,7 +13022,7 @@ export class RustTranspiler extends BaseTranspiler {
             const slot: any = this.rustSkipWrappers(declaration.initializer);
             const init = this.rustIsOptMarketCall(declaration.initializer) ? this.printNode(declaration.initializer, 0).trim()
                 : this.rustMarketSlotParamOf(slot) !== undefined ? `${super.printIdentifier(slot)}.cloned()`
-                    : (this.printOptMarketTernary(declaration.initializer) ?? this.printOptSafeMarketTernary(declaration.initializer) ?? 'None');
+                    : (this.printOptMarketTernary(declaration.initializer) ?? this.printOptSafeMarketTernary(declaration.initializer) ?? this.printOptOutcomeEmptyTernary(declaration.initializer) ?? 'None');
             return `${indent}let mut ${varName}: Option<crate::types::Market> = ${init}`;
         }
         if (kind === 'call') {
@@ -13096,7 +13174,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustCallLocalOf(node) !== undefined) {
             return this.rustMarketValueUse(node) ? `crate::types::IntoRaw::into_raw(${super.printIdentifier(node)}.clone())` : super.printIdentifier(node);
         }
-        if (this.rustOptMarketLocalOf(node) !== undefined && (this.rustMarketValueUse(node) || (this.rustMarketValueUseThroughCast(node) && !this.rustMarketSlotUse(node)))) {
+        if (this.rustOptMarketLocalOf(node) !== undefined && (this.rustMarketValueUse(node) || this.rustMarketStoreUse(node) || (this.rustMarketValueUseThroughCast(node) && !this.rustMarketSlotUse(node)))) {
             // the stored record's `raw` (an `Arc` bump), never a struct copy
             return `crate::Value::from(${super.printIdentifier(node)}.as_ref())`;
         }
@@ -15868,6 +15946,10 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeMapAccess(receiverText: string, receiverNode: Node, keyText: string): string | undefined {
+        // ral-50c: an `Option<Market>` local reads through `KeyRead` (Null when empty), as `printOptMarketKeyRead` does
+        if (isIdentifier(receiverNode) && this.rustOptMarketLocalOf(receiverNode) !== undefined && RustTranspiler.rustBearerKeyTextOk(keyText)) {
+            return `crate::value::KeyRead::key_read(&&${receiverText}, "${this.escapeRustStringLiteral(keyText)}")`;
+        }
         // `client.url` on a ws `Client`: the handle's own accessor, no map closure.
         if (keyText === 'url' && this.rustIsWsClientType(this.getCheckedTypeOf(receiverNode))) return `${receiverText}.url()`;
         // A native-map parameter is an `&mut IndexMap` too.
