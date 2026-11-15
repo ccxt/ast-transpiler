@@ -4554,8 +4554,9 @@ export class RustTranspiler extends BaseTranspiler {
      *  then re-checks all of them in declaration order until a whole pass changes nothing (each kept
      *  decision is then proven against the final ones); a candidate that keeps flipping stays `Value`. */
     rustScalarSolveScope(scope): void {
+        // ral-54s: a typed `let x: Num;` with no initializer starts as `undefined` too, so it joins the solve like `let x = undefined`
         const candidates = (this.rustScopeIndex(scope.getSourceFile()).nodes as any[]).filter((n) => ((isVariableDeclaration(n) && isIdentifier(n.name)
-            && this.rustScalarInitShape(n.initializer)) || (isBindingElement(n) && this.rustSlotJoinsSolve(n))) && this.rustEnclosingFunction(n) === scope);
+            && (this.rustScalarInitShape(n.initializer) || this.rustBareTypedLet(n))) || (isBindingElement(n) && this.rustSlotJoinsSolve(n))) && this.rustEnclosingFunction(n) === scope);
         this.rustScalarSolving.add(scope);
         try {
             // the other typed-local rules decide first and cache, so they never see a trial kind
@@ -4630,6 +4631,13 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustScalarAliasScope = undefined;
             this.rustScalarAliasTarget = undefined;
         }
+    }
+
+    /** ral-54s: `let x: T;` (one declarator, no initializer, a declared type) inside a function body. */
+    rustBareTypedLet(n): boolean {
+        const list: any = n?.parent;
+        return n?.initializer === undefined && n?.type !== undefined && list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1
+            && (list.flags & NodeFlags.Const) === 0 && list.parent?.kind === SyntaxKind.VariableStatement;
     }
 
     /** ya: a nil local with at least one `x = y;` write whose `y` is an initialised local (cheap pre-filter). */

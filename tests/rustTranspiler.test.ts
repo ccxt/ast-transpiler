@@ -18668,3 +18668,23 @@ describe('ral-54h: book locals of one name in sibling blocks are proven each on 
         expect(body).toMatch(/let mut orderbook: Value = /);
     });
 });
+describe('ral-54s: a typed `let x: Num;` with no initializer joins the scalar solve like `let x = undefined`', () => {
+    // kalshi parsePredictionTicker: `let bid: Num;` written from safeNumber locals on both branches, read by numberToString
+    const write = (name: string, decl: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Num = number | undefined;\nexport default class Exchange {\n    safeNumber (o: any, k: any, d: any = undefined): Num { return o[k] ?? d; }\n    numberToString (x: any): string { return String (x); }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Num } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    f (raw: any, isNo: boolean): any {\n        const yesBid = this.safeNumber (raw, 'y');\n        const noBid = this.safeNumber (raw, 'n');\n        " + decl + "\n        if (isNo) {\n            bid = noBid;\n        } else {\n            bid = yesBid;\n        }\n        let s = undefined;\n        if (bid !== undefined) {\n            s = this.numberToString (bid);\n        }\n        return this.hold ({ 'bid': bid, 's': s });\n    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('`let bid: Num;` is an Option<f64> like its `= undefined` twin', () => {
+        const out = write ('54s-bare', 'let bid: Num;');
+        expect(out).toContain('let mut bid: Option<f64> = None;');
+        expect(out).toContain('bid = noBid;');
+        expect(out).not.toContain('let mut bid: Value');
+    });
+    test('control: the `= undefined` spelling prints the same declaration', () => {
+        const out = write ('54s-undef', 'let bid: Num = undefined;');
+        expect(out).toContain('let mut bid: Option<f64> = None;');
+    });
+});
