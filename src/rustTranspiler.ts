@@ -21691,7 +21691,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (at !== fn.parameters.length - 1 || (fn.modifiers ?? []).some((x: any) => x.kind === SyntaxKind.OverrideKeyword)) return false;
         const name = String(fn.name.text);
         // request builders only (`*Request`): public venue methods have callers outside the venue that no proof sees
-        if (!/^[a-z][A-Za-z0-9]*Request$/.test(name) || this.rustLocalIsReassigned(d, String(d.name.text))) return false;
+        // ral-49d: or any other venue-own helper that is not a typed unified method (rustTypedParamsParam's domain) and
+        // has at least one in-file caller (rustHelperHasCaller); every caller must still prove the map below
+        if (!/^[a-z][A-Za-z0-9]*$/.test(name) || this.rustTypedUnified.has(name) || this.rustLocalIsReassigned(d, String(d.name.text))) return false;
         const file = String(fn.getSourceFile().fileName).replace(/\\/g, '/');
         const m = /^(.*ts\/src\/)((?:prediction\/)?[a-z0-9]+)\.ts$/.exec(file);
         if (m === null) return false;
@@ -21814,6 +21816,21 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return false;
         };
+        // ral-49d: slot `at` of a venue method declared a tuple (`[Dict, Dict]` / `Promise<[..]>`) whose slot is `Dict`
+        const declaredSlotDict = (rel: string, call: any, at: number): boolean => {
+            if (!thisCall(call) || at < 1) return false;
+            const name = String(call.expression.name.text);
+            for (let r: string | undefined = rel; r !== undefined; r = parentOf(r)) {
+                const md = ownMethod(classOf(parse(r)), name);
+                if (md === undefined) continue;
+                let t: any = md.type;
+                if (t !== undefined && t.kind === SyntaxKind.TypeReference && String(t.typeName?.getText?.()) === 'Promise') t = t.typeArguments?.[0];
+                if (t === undefined || t.kind !== SyntaxKind.TupleType) return false;
+                const el = t.elements[at];
+                return el !== undefined && String(el.getText()) === 'Dict';
+            }
+            return false;
+        };
         const enclosingFn = (n: any): any => {
             let x = n.parent;
             while (x !== undefined && !isFunctionLike(x)) x = x.parent;
@@ -21846,8 +21863,9 @@ export class RustTranspiler extends BaseTranspiler {
                 } else if (isBindingElement(n) && isIdentifier(n.name) && n.name.text === arg.text) {
                     writes++;
                     const init = (n.parent as any)?.parent?.initializer;
-                    good = (n.parent as any).elements.indexOf(n) >= 1 && thisCall(init) && /AndParams/.test(String(init.expression.name.text))
-                        && Array.from(init.arguments).some((x: any) => isMap(sf, rel, x, depth + 1));
+                    const slot = (n.parent as any).elements.indexOf(n);
+                    good = slot >= 1 && thisCall(init) && (/AndParams/.test(String(init.expression.name.text))
+                        && Array.from(init.arguments).some((x: any) => isMap(sf, rel, x, depth + 1)) || declaredSlotDict(rel, init, slot));
                 } else if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken) {
                     if (isIdentifier(n.left) && n.left.text === arg.text) {
                         writes++;
@@ -21856,8 +21874,8 @@ export class RustTranspiler extends BaseTranspiler {
                         writes++;
                         const at = n.left.elements.findIndex((e: any) => isIdentifier(e) && e.text === arg.text);
                         const rhs: any = n.right;
-                        good = at >= 1 && thisCall(rhs) && /AndParams/.test(String(rhs.expression.name.text))
-                            && Array.from(rhs.arguments).some((x: any) => isMap(sf, rel, x, depth + 1));
+                        good = at >= 1 && thisCall(rhs) && (/AndParams/.test(String(rhs.expression.name.text))
+                            && Array.from(rhs.arguments).some((x: any) => isMap(sf, rel, x, depth + 1)) || declaredSlotDict(rel, rhs, at));
                     }
                 }
                 n.forEachChild?.(visit);

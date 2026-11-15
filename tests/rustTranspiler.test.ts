@@ -16136,6 +16136,25 @@ describe('ral-47g: a venue helper params proven a map by every caller', () => {
     });
 });
 
+describe('ral-49d: params proof second pass (declared [Dict, Dict] slot callers, non-*Request helpers)', () => {
+    const mk = (name: string, helper: string, caller: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any, y: any = undefined): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    omit (x: any, k: any): any { return x; }\n    extend (...args: any[]): any { return args[0]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionStringAndParams (params: object, methodName: string, optionName: string, defaultValue: Str = undefined): [Str, Dict] {\n        return [ this.hold (params, optionName), this.omit (params, optionName) ];\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    splitArgs (symbol: string, params: Dict = {}): [Dict, Dict] {\n        return [ { 'symbol': symbol }, this.omit (params, 'x') ];\n    }\n    " + helper + " (symbol: string, params: Dict = {}): Dict {\n        let rest = this.omit (params, 'internal');\n        let mode: Str = undefined;\n        [ mode, rest ] = this.handleOptionStringAndParams (rest, 'thing', 'mode');\n        const a = this.safeString (rest, 'a');\n        return this.extend ({ 'symbol': symbol, 'mode': mode, 'a': a }, rest);\n    }\n    async createThing (symbol: string, body: any, params: Dict = {}) {\n        const [ order, globalParams ] = this.splitArgs (symbol, params);\n        return this.hold (order, this." + helper + " (symbol, " + caller + "));\n    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a *Request helper whose caller hands slot 1 of a method declared [Dict, Dict] stays Dict', () => {
+        expect(mk('r49d-slot', 'thingRequest', 'globalParams')).toContain('let mut rest: crate::value::Dict = self.omit(');
+    });
+    test('a non-*Request venue helper with an in-file caller handing a map stays Dict', () => {
+        expect(mk('r49d-helper', 'buildQuery', 'this.omit (params, \'y\')')).toContain('let mut rest: crate::value::Dict = self.omit(');
+    });
+    test('guard: a non-*Request helper whose caller hands an any keeps the box', () => {
+        expect(mk('r49d-helper-neg', 'buildQuery', 'body')).toContain('let mut rest: Value = ');
+    });
+});
+
 describe('ral-43a: a logical over bool scalar locals is a bool local boxed once at its sink', () => {
     test('`swap || future` and `!swap` over native bool locals print bool and box at the literal value', () => {
         const dir = path.join (rustFixtureRoot, 'r43a-bool-logical');
