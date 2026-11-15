@@ -5060,7 +5060,9 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-56f: an `Option<String>` reader local in a non-test source also lends at native options-field insert keys
         // (rustPlainFieldInsertKey: the printer owns the key text) and at copies into a jointly decided string local
         const readerLent = readerTouched && strKind && boxed > 0 && copied > 0 && !this.rustStrNoLend
-            && (this.rustReaderLendBoxes(declaration) || (kind === 'ostr' && !this.rustTestTierSource(declaration) && this.rustReaderLendBoxes(declaration, true, false, true)));
+            && (this.rustReaderLendBoxes(declaration) || (kind === 'ostr' && !this.rustTestTierSource(declaration) && this.rustReaderLendBoxes(declaration, true, false, true))
+                // ral-58k: a safeCurrencyCode local re-read as a reader default (nado parseBalance `code`) also lends at native insert keys
+                || (kind === 'ostr' && !this.rustTestTierSource(declaration) && this.rustSafeCurrencyCodeInit(declaration.initializer) && this.rustReaderLendBoxes(declaration, true)));
         if (readerTouched && strKind && ((boxed > 0 && copied > 0 && !readerLent) || this.rustReaderStrHandedOn(declaration))) return undefined;
         if (readerLent) this.rustStrLentLocals.add(declaration);
         // ud: a local seeded from a venue override of a native-`Str` base method never copies where the `Value` moved
@@ -6908,9 +6910,22 @@ export class RustTranspiler extends BaseTranspiler {
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
                 && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration) && !this.rustScalarCacheFieldCtor(n, write)
-                && !this.rustScalarSumOperandWrite(n, write)) return false;
+                && !this.rustScalarSumOperandWrite(n, write) && !this.rust58kDictReaderKeyWrite(n, write)) return false;
         }
         return true;
+    }
+
+    /** ral-58k: the key argument of a base `this.safeDict (src, k, dflt)` that is the whole source of a write to a local
+     *  declared `Dict` (bitget pro handleBalance `account = this.safeDict (this.balance, code, account)`): the written local's
+     *  type is its annotation, never this key's, and the reader takes the key as a boxed `Value` either way. */
+    rust58kDictReaderKeyWrite(n: any, write: any): boolean {
+        if (write.operatorToken?.kind !== SyntaxKind.EqualsToken || this.rustTestTierSource(n)) return false;
+        const target: any = this.unwrapParens(write.left);
+        const call: any = this.unwrapParens(write.right);
+        if (!isIdentifier(target) || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(call.expression.name.text) !== 'safeDict' || call.arguments.length < 2 || this.unwrapParens(call.arguments[1]) !== n) return false;
+        const d: any = this.rustDeclaredNode(target);
+        return d !== undefined && isVariableDeclaration(d) && d.type !== undefined && String(d.type.getText()) === 'Dict';
     }
 
     /** ral-53s: a direct operand of a base `this.sum (a, b)` that is the whole source of a write to another local
@@ -7824,6 +7839,9 @@ export class RustTranspiler extends BaseTranspiler {
         // (a string only where the write moves it: an earlier box would copy where the `Value` was shared)
         if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustThisFieldLiteralWrite(n)) return 'box';
         if ((kind === 'str' || kind === 'ostr') && this.rustThisFieldLiteralWrite(n) && this.rustLocalLastUse(n, this.rustDeclaredNode(n))) return 'box';
+        // ral-58k: `this.f[k] = n` keyed by a typed string identifier (kraken `this.commonCurrencies[id] = code`): the value
+        // boxes once into the printer's own insert, as the `Value` local was cloned there
+        if ((kind === 'str' || kind === 'ostr') && this.rust58kThisFieldIdentKeyWrite(n)) return 'box';
         // the last key of a nested `this.balance|options[..][k] = v` write: printed as the ccxt r05 insert itself
         if ((kind === 'str' || kind === 'ostr') && this.rustNestedFieldKeyUse(n)) return 'nkey';
         // a Copy number written into a nested `this.balance|options[..]['k'] = n`: the r05 insert takes the box
@@ -8702,6 +8720,16 @@ export class RustTranspiler extends BaseTranspiler {
         // a typed map bearer looks the borrowed key up itself; a `None` key is never contained (the `Null` key was not)
         if (this.rustDictBearerDeclaration(recvNode) !== undefined) return `Value::Bool(matches!(${super.printIdentifier(inner)}.as_deref(), Some(__k) if ${String(recvNode.text)}.contains_key(__k)))`;
         return `Value::Bool(matches!((&${recv}, ${super.printIdentifier(inner)}.as_deref()), (Value::Dict(__d), Some(__k)) if __d.contains_key(__k)))`;
+    }
+
+    /** ral-58k: `n` is the whole right side of a statement `this.f[k] = n`, `k` another identifier (decided from the AST). */
+    rust58kThisFieldIdentKeyWrite(n): boolean {
+        const write: any = n.parent;
+        if (!isBinaryExpression(write) || write.right !== n || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const left: any = write.left;
+        if (!isElementAccessExpression(left) || !isPropertyAccessExpression(left.expression) || left.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const key: any = this.rustSkipWrappers(left.argumentExpression);
+        return key !== undefined && isIdentifier(key) && key.text !== n.text && key.text !== 'undefined';
     }
 
     rustThisFieldLiteralWrite(n): boolean {
@@ -9815,7 +9843,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (shape === 'vslice') return this.rustStrSliceVarBounds(args) === undefined ? undefined : { recv, recvKind, method, kind: recvKind };
             if (shape === 'vaffix') return this.rustStrVarNeedle(args[0], method === 'includes') === undefined ? undefined : { recv, recvKind, method, kind: 'bool' };
             if (shape === 'vfind') return this.rustStrFindNeedle(args[0], false) === undefined ? undefined : { recv, recvKind, method, kind: 'int' };
-            return args.every((a) => this.rustStrReplaceOperand(a) !== undefined) ? { recv, recvKind, method, kind: recvKind } : undefined;
+            // ral-58k: one `Option<String>` local operand (the boxed form kept the receiver when it was `Null`)
+            return args.every((a) => this.rustStrReplaceOperand(a) !== undefined) || this.rust58kOptReplaceArgs(args) !== undefined ? { recv, recvKind, method, kind: recvKind } : undefined;
         }
         if (shape === 'find') return this.rustStrFindNeedle(args[0], false) === undefined ? undefined : { recv, recvKind, method, kind: 'int' };
         // pad / slice on a typed local, or on a typed parameter read: a `&str` parameter's binding is never `Null`
@@ -9891,6 +9920,23 @@ export class RustTranspiler extends BaseTranspiler {
         const lit = this.rustNativeStringLiteralArg(inner);
         if (lit !== undefined) return inner.text === '' && !empty ? undefined : `Some("${lit}")`;
         return this.rustStrFindNeedle(inner, false);
+    }
+
+    /** ral-58k: `x.replace (o, to)` where exactly one operand `o` is an `Option<String>` local (decided from the AST: a typed
+     *  string identifier) and the other a never-`Null` operand. The boxed form answered the receiver itself when `o` was `Null`
+     *  (`recv.as_str().zip(o.as_deref()).map(..).unwrap_or_else(|| recv.clone())`): the native form keeps that arm. */
+    rust58kOptReplaceArgs(args: any[]): { index: number, opt: string, other: string } | undefined {
+        if (args.length !== 2) return undefined;
+        const opt = (a: any) => {
+            const inner: any = this.unwrapParens(a);
+            return isIdentifier(inner) && inner.text !== 'undefined' && this.rustScalarIdentifierKind(inner) === 'ostr' && !this.rust41bWsKeyLocal(inner) ? inner : undefined;
+        };
+        for (const index of [ 0, 1 ]) {
+            const o = opt(args[index]);
+            const other = this.rustStrReplaceOperand(args[1 - index]);
+            if (o !== undefined && other !== undefined) return { index, opt: `${super.printIdentifier(o)}.as_deref()`, other };
+        }
+        return undefined;
     }
 
     /** 41b: a replace operand that is never `Null`: a string literal or a `String` local (`&str` text). */
@@ -11041,6 +11087,13 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if ((method.method === 'replace' || method.method === 'replaceAll') && !args.every((a) => this.rustNativeStringLiteralArg(a) !== undefined)) {
                 // 41b: never-`Null` operands: the helper's all-`Str` arm (every occurrence), `None` for a `None` receiver
+                const optArgs = args.every((a) => this.rustStrReplaceOperand(a) !== undefined) ? undefined : this.rust58kOptReplaceArgs(args);
+                if (optArgs !== undefined) {
+                    // ral-58k: `None` operand -> the receiver unchanged, as the boxed form's fallback
+                    const [ f, r ] = optArgs.index === 0 ? [ '__o', optArgs.other ] : [ optArgs.other, '__o' ];
+                    if (method.recvKind === 'ostr') return wrap(`(if let (Some(__s), Some(__o)) = (${name}.as_deref(), ${optArgs.opt}) { Some(__s.replace(${f}, ${r})) } else { ${name}.clone() })`);
+                    return wrap(`(if let Some(__o) = ${optArgs.opt} { ${name}.replace(${f}, ${r}) } else { ${name}.clone() })`);
+                }
                 const [ from, to ] = args.map((a) => this.rustStrReplaceOperand(a));
                 if (method.recvKind === 'ostr') return wrap(`(if let Some(__s) = ${name}.as_deref() { Some(__s.replace(${from}, ${to})) } else { None })`);
                 return wrap(`${name}.replace(${from}, ${to})`);
