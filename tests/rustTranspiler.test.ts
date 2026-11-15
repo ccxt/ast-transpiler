@@ -16050,6 +16050,20 @@ describe('ral-45a: a declared Promise<List> endpoint answer handed whole to a pe
     });
 });
 
+describe('ral-46g: a handed omit map written back by a handle*AndParams params slot', () => {
+    test('`let p = this.omit ({..}, k); [ f, p ] = this.handleOptionStringAndParams (p, ..)` keeps p a Dict and takes the slot back', () => {
+        const dir = path.join (rustFixtureRoot, 'r46g-handed-slot-write');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any, y: any = undefined): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    omit (x: any, k: any): any { return x; }\n    extend (...args: any[]): any { return args[0]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionStringAndParams (params: object, methodName: string, optionName: string, defaultValue: Str = undefined): [Str, Dict] {\n        return [ this.hold (params, optionName), this.omit (params, optionName) ];\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (params: Dict = {}) {\n        let rest = this.omit ({ 'a': 1, 'internal': true }, 'internal');\n        let mode: Str = undefined;\n        [ mode, rest ] = this.handleOptionStringAndParams (rest, 'fetchThing', 'mode');\n        const a = this.safeString (rest, 'a');\n        return this.hold (this.extend ({ 'mode': mode, 'a': a }, rest));\n    }\n    fetchOther (params: any) {\n        let other = this.omit (params, 'internal');\n        let mode: Str = undefined;\n        [ mode, other ] = this.handleOptionStringAndParams (other, 'fetchOther', 'mode');\n        const a = this.safeString (other, 'a');\n        this.hold (a);\n        return this.hold (this.extend ({ 'mode': mode }, other));\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut rest: crate::value::Dict = self.omit(');
+        expect(out).toContain('rest = __destr_tmp.get(1).cloned().unwrap_or(Value::Null).into_dict()');
+        // negative: an omit of an unproven head may hand a list through: the local keeps its box
+        expect(out).toContain('let mut other: Value = ');
+    });
+});
+
 describe('ral-43a: a logical over bool scalar locals is a bool local boxed once at its sink', () => {
     test('`swap || future` and `!swap` over native bool locals print bool and box at the literal value', () => {
         const dir = path.join (rustFixtureRoot, 'r43a-bool-logical');

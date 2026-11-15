@@ -3201,7 +3201,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Slot hook: an `Option<String>` local takes the slot's string. */
     printRustNilSlotWrite(element, read: string, strRead?: string, boolRead?: string): string | undefined {
-        if (this.rustNilSlotDictOf(element) !== undefined) return `${super.printIdentifier(element)} = ${read}.into_dict()`;
+        if (this.rustNilSlotDictOf(element) !== undefined || this.rustHandedSlotWriteOf(element) !== undefined) return `${super.printIdentifier(element)} = ${read}.into_dict()`;
         if (isIdentifier(element)) {
             const reuse: any = this.rustDeclarationOfIdentifier(element);
             if (reuse !== undefined && reuse.name !== element && this.rustExtendReuseLocals.has(reuse) && this.rustPrintedBorrowed.has(reuse) && this.rustUntilSelfWrite(element, reuse)) return `${super.printIdentifier(element)} = ${read}.into_dict()`;
@@ -24823,6 +24823,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (fn === undefined || isSourceFile(fn) || (rewritten && !this.rustHandedMapInit(declaration))) return false;
         let uses = 0;
         let boxes = 0;
+        let slotWrites = 0;
         let longBox = false;
         // zi: a slot re-declared by a destructure in a disjoint sibling block is its own block-scoped local
         const walk = declaration.kind === SyntaxKind.BindingElement ? this.rustSlotUsesAll.bind(this) : this.rustLocalUsesAll.bind(this);
@@ -24835,6 +24836,13 @@ export class RustTranspiler extends BaseTranspiler {
             if (nilSlot && (this.rustNilSlotWrite(n) || (isBinaryExpression(call) && call.left === n))) {
                 // `.into_dict()` (+12) must not push the `__destr_tmp` line over the 400-char budget (a line already over stays one long line)
                 if (this.rustNilSlotWrite(n) && !this.rustNilSlotLineOk(n)) longBox = true;
+                return true;
+            }
+            // ral-46g: `[ a, x ] = this.handle*AndParams (x, ..)` on a handed map whose initialiser answers a map: slot 1 is
+            // the params map the helper hands back (an omit of the map it was lent), taken back with `.into_dict()`
+            if (!nilSlot && isVariableDeclaration(declaration) && this.rustNilSlotWrite(n) && this.rustDictSlotOfWrite(n)) {
+                slotWrites++;
+                if (!this.rustNilSlotLineOk(n)) longBox = true;
                 return true;
             }
             const mutable = isCallExpression(call) ? undefined : this.rustMutableSlotUse(n, declaration); if (mutable === 'native') uses++;
@@ -24855,6 +24863,7 @@ export class RustTranspiler extends BaseTranspiler {
         });
         // a params slot only handed back to `Value` slots shares its map there (moved at the last use, lent before it)
         if (nilSlot) return safe && !longBox && (uses > 0 || boxes > 0);
+        if (slotWrites > 0 && (longBox || !this.rustHandedMapInit(declaration))) return false;
         return safe && (uses > 0 || ((declaration.kind === SyntaxKind.BindingElement || this.rustHandedTernaryLocal(declaration)) && boxes > 0 && !longBox));
     }
 
@@ -25025,6 +25034,14 @@ export class RustTranspiler extends BaseTranspiler {
     /** A nil-declared slot local typed as the map. */
     rustNilSlotDictLocal(declaration: any): boolean {
         return this.rustNilSlotDictCandidate(declaration) && this.rustHandedDictLocal(declaration);
+    }
+
+    /** ral-46g: the reassigned handed map written at slot 1 of `[ a, x ] = this.handle*AndParams (..)`, else undefined. */
+    rustHandedSlotWriteOf(node: any): any {
+        if (!isIdentifier(node) || !this.rustNilSlotWrite(node) || !this.rustDictSlotOfWrite(node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration.name === node || !isVariableDeclaration(declaration) || this.rustNilSlotDictCandidate(declaration)) return undefined;
+        return this.rustHandedDictLocal(declaration) ? declaration : undefined;
     }
 
     rustNilSlotDictOf(node: any): any {
