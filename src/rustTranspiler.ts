@@ -13776,6 +13776,12 @@ export class RustTranspiler extends BaseTranspiler {
         lighterSignTransfer: [ 'number', 'string' ],
         lighterSignUpdateLeverage: [ 'number', 'string' ],
         lighterSignUpdateMargin: [ 'number', 'string' ],
+        // 42i: TS `[ res.txType, res.txInfo, res.messageToSign ]`; Go appends GetTxType() (uint8), txInfoStr, GetL1SignatureBody
+        // (string); C# formatSignedLighterTx {TxType (int), TxInfo, MessageToSign (string)}; Python `[tx_type, tx_info, message_to_sign]`
+        lighterSignApproveIntegrator: [ 'number', 'string', 'string' ],
+        lighterSignChangePubkey: [ 'number', 'string', 'string' ],
+        // 42i: TS `[ res.privateKey, res.publicKey ]`; Go / C# / Python append the two key strings
+        lighterGenerateApiKey: [ 'string', 'string' ],
     };
 
     /** 41i: the primitive (`number` / `string`) slot `at` of `init` holds on every path when the checker only says `any`:
@@ -19848,7 +19854,8 @@ export class RustTranspiler extends BaseTranspiler {
             return `crate::value::KeyRead::key_read(&${super.printIdentifier(recv)}, "${this.escapeRustStringLiteral(k)}")`;
         }
         const declaration: any = this.rustDeclarationOfIdentifier(recv);
-        if (declaration === undefined || declaration === recv || declaration.name === recv || (this.rustBorrowedLocalKind(declaration) !== 'dict' && !this.rustMutableDictSlot(declaration))) return undefined;
+        if (declaration === undefined || declaration === recv || declaration.name === recv || (this.rustBorrowedLocalKind(declaration) !== 'dict' && !this.rustMutableDictSlot(declaration)
+            && !(declaration.kind === SyntaxKind.BindingElement && this.rustUntilHeadSlot(declaration)))) return undefined;
         const key = isElementAccessExpression(node) ? String((this.rustSkipWrappers(node.argumentExpression) as any).text) : String(node.name.text);
         const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
         return `crate::value::KeyRead::key_read(&&${name}, "${this.escapeRustStringLiteral(key)}")`;
@@ -24135,7 +24142,8 @@ export class RustTranspiler extends BaseTranspiler {
         // an extend head belongs to the until-head rule (a whole hand-off beside it keeps the box there)
         let head = false;
         this.rustLocalUsesAll(element, String(element.name.text), false, (n: any) => { if (this.rustExtendHeadUse(n)) head = true; return true; });
-        return !head;
+        // 42i: an extend head the until-head rule refuses (a whole endpoint hand-off beside it) is lent as a handed map instead
+        return !head || (element.kind === SyntaxKind.BindingElement && !this.rustUntilHeadSlot(element));
     }
 
     rustUntilHeadSlot(element: any): boolean {
@@ -24176,6 +24184,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustExtendHeadUse(n)) return heads++ >= 0;
             // 41i: the receiver of a base borrowed-key reader (`this.safeInteger (x, 'k', ..)`): lent `&x` (`impl KeyRead`)
             if (this.rustUntilHeadReaderUse(n)) return true;
+            // 42i: a plain literal-key read (an arithmetic operand included) reads the map natively (`KeyRead` on the Dict)
+            if (this.rustDictKeyReadUse(n)) return true;
             return this.rustUntilHeadKeyWrite(n) !== undefined;
         });
         return safe && heads > 0;
@@ -25246,7 +25256,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (joined && this.rustStrSlotTernaryArmJoined(n, element)) { nativeUses++; return true; }
                 // a box feeding another local's write or initializer would make that local's own typing depend on this slot
                 const feeds: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(m.left)) || isVariableDeclaration(m));
-                if (feeds !== undefined && !isStatement(feeds) && (form === 'box' || form === 'xbox')) return false;
+                // 42i: an element of an array literal is boxed into that list on its own, whatever the target's type
+                if (feeds !== undefined && !isStatement(feeds) && (form === 'box' || form === 'xbox') && !this.rustStrSlotListElement(n)) return false;
                 if (RustTranspiler.RUST_NIL_SCALAR_NATIVE_FORMS.has(form) || form === 'write') nativeUses++;
                 else if ((form === 'box' || form === 'xbox') && !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, element))) copies++;
                 return true;
@@ -25262,6 +25273,14 @@ export class RustTranspiler extends BaseTranspiler {
         if (!ok || joined || this.rustStrNoLend || !this.rustReaderLendBoxes(element)) return undefined;
         this.rustStrLentLocals.add(element);
         return 'ostr';
+    }
+
+    /** 42i: `n` (through parens) is a direct element of an array literal: the list boxes each element itself, so the
+     *  local the list is written to never takes this slot's type. */
+    rustStrSlotListElement(n: any): boolean {
+        let top: any = n;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        return isArrayLiteralExpression(top.parent);
     }
 
     /** zi: `n` is an arm of `c ? a : b`, the whole initializer of a local the joint solve currently types `Option<String>`

@@ -9655,9 +9655,10 @@ describe('rust request maps merged as the extend head', () => {
         expect(out).toContain('let mut query: crate::value::Dict = ');
         expect(out).toMatch(/self\.extend\(query(\.clone\(\))?, &\[params(\.clone\(\))?\]\)/);
     });
-    test('negative: a request slot handed on whole keeps its box', () => {
+    test('a request slot handed on whole beside an extend head is lent as a handed map (42i; was kept boxed)', () => {
         const kept = out.slice (out.indexOf ('fn kept'));
-        expect(kept).toMatch(/let mut requestUntil: Value = /);
+        expect(kept).toMatch(/let mut requestUntil: crate::value::Dict = /);
+        expect(kept).toContain('self.hold(Value::from(&requestUntil))');
     });
 });
 
@@ -15808,5 +15809,44 @@ describe('ral-42g: the string-list parameter element lift needs the element read
         // the declaration and its uses agree: no Option form of a `Value` local (the parent printed `name.as_deref()` / `name.map(..)`)
         expect(out).not.toContain('name.as_deref()');
         expect(out).not.toContain('name.map(Value::from)');
+    });
+});
+
+describe('42i: tuple slots eighth pass', () => {
+    const fx = (name: string, base: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('42i: a string slot aliased into a local and also boxed as an array-literal element joins the alias solve', () => {
+        const file = fx ('42i-alias-list', "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: any = undefined): string { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionStringAndParams (params: Dict, method: string, name: string, d: string = undefined): [string, Dict] {\n        const v = this.safeString (params, name, d);\n        return [ v, params ];\n    }\n}\n", "import Exchange from './base/Exchange.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    watchThing (marketId: string, limit: number, spot: boolean, params: Dict = {}) {\n        const [ interval, query ] = this.handleOptionStringAndParams (params, 'watchThing', 'interval', '100ms');\n        let payload: List = [];\n        if (spot) {\n            let finalInterval = interval;\n            if (limit === 400) {\n                finalInterval = '400';\n            }\n            payload = [ 'ob.' + marketId + '.' + finalInterval ];\n        } else {\n            payload = [ marketId, interval ];\n        }\n        return this.hold ([ payload, query ]);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        expect(out).toContain('let mut interval: Option<String> = ');
+        expect(out).toContain('let mut finalInterval: Option<String> = interval.clone();');
+        expect(out).toContain('interval.map(Value::from).unwrap_or(Value::Null)]');
+    });
+    test('42i: the 3-slot lighter signers and lighterGenerateApiKey type their slots from the hand-written slot table', () => {
+        const file = fx ('42i-signer3', "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    lighterSignChangePubkey (signer: any, request: any): any[] {\n        const res = (globalThis as any).SignChangePubKey (request['nonce']);\n        return [ res.txType, res.txInfo, res.messageToSign ];\n    }\n    lighterGenerateApiKey (signer: any): any[] {\n        const res = (globalThis as any).GenerateAPIKey ();\n        return [ res.privateKey, res.publicKey ];\n    }\n}\n", "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    changeIt (signer: any, signRaw: Dict) {\n        const [ privateKey, publicKey ] = this.lighterGenerateApiKey (signer);\n        const [ txType, txInfo, messageToSign ] = this.lighterSignChangePubkey (signer, signRaw);\n        const request: Dict = {\n            'tx_type': txType,\n            'tx_info': txInfo,\n            'msg': messageToSign,\n            'pub': publicKey,\n        };\n        return this.hold ([ request, privateKey ]);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        expect(out).toContain('let mut txType: Option<i64> = ');
+        expect(out).toContain('let mut txInfo: Option<String> = ');
+        expect(out).toContain('let mut messageToSign: Option<String> = ');
+        expect(out).toContain('let mut publicKey: Option<String> = ');
+    });
+    test('42i: an until-head slot read at a literal key inside arithmetic is typed and read through KeyRead', () => {
+        const b = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    milliseconds (): number { return 1; }\n    extend (a: any, b: any): Dict { return a; }\n    omit (a: any, k: any): Dict { return a; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeInteger2 (o: any, k1: any, k2: any, d: Int = undefined): Int { return o; }\n    parseToInt (x: any): number { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        const until = this.safeInteger2 (params, 'until', 'till');\n        if (until !== undefined) {\n            request[key] = this.parseToInt (until * multiplier);\n        }\n        const paramsOmitted = (until !== undefined) ? this.omit (params, [ 'until', 'till' ]) : params;\n        return [ request, paramsOmitted ];\n    }\n}\n";
+        const file = fx ('42i-until-arith', b, "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (symbol: string, since: number = undefined, params: Dict = {}) {\n        const request: Dict = {\n            'symbol': symbol,\n        };\n        let sinceValue = since;\n        const [ requestUntil, paramsUntil ] = this.handleUntilOption ('end_time', request, params);\n        if (this.safeInteger (requestUntil, 'end_time') === undefined) {\n            requestUntil['end_time'] = this.milliseconds ();\n        } else if (sinceValue === undefined) {\n            sinceValue = requestUntil['end_time'] - 60000;\n        }\n        requestUntil['start_time'] = sinceValue;\n        return this.hold (this.extend (requestUntil, paramsUntil));\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        expect(out).toContain('let mut requestUntil: crate::value::Dict = ');
+        expect(out).toContain('crate::value::KeyRead::key_read(&&requestUntil, "end_time")');
+    });
+    test('42i: an until slot used as an extend head beside a whole hand-off is lent as a handed map', () => {
+        const b = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    milliseconds (): number { return 1; }\n    extend (a: any, b: any): Dict { return a; }\n    omit (a: any, k: any): Dict { return a; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeInteger2 (o: any, k1: any, k2: any, d: Int = undefined): Int { return o; }\n    parseToInt (x: any): number { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        const until = this.safeInteger2 (params, 'until', 'till');\n        if (until !== undefined) {\n            request[key] = this.parseToInt (until * multiplier);\n        }\n        const paramsOmitted = (until !== undefined) ? this.omit (params, [ 'until', 'till' ]) : params;\n        return [ request, paramsOmitted ];\n    }\n}\n";
+        const file = fx ('42i-until-handoff', b, "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchThing (spot: boolean, params: Dict = {}) {\n        const request: Dict = {};\n        request['symbol'] = 'X';\n        const [ requestUntil, paramsUntil ] = this.handleUntilOption ('endTime', request, params);\n        if (spot) {\n            return this.hold (this.extend (requestUntil, paramsUntil));\n        }\n        return this.hold (requestUntil);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (file).content;
+        expect(out).toContain('let mut requestUntil: crate::value::Dict = ');
+        expect(out).not.toContain('requestUntil.clone()');
     });
 });
