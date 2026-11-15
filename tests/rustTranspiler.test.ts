@@ -15986,3 +15986,30 @@ describe('ral-43d: generated base-method parameters typed from their ts declarat
         expect(out).toMatch(/result = Value::Dict\(data\);/);
     });
 });
+
+describe('ral-43g: a venue tuple result whose every return is an array literal is a list', () => {
+    const mk = (ret2: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-43g-tuple-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: any = {};\n    safeValue (o: any, k: any, d: any = undefined): any { return d; }\n    safeBool (o: any, k: any, d: boolean = undefined): boolean {\n        const value = this.safeValue (o, k, d);\n        if (typeof value === 'boolean') {\n            return value;\n        }\n        return d;\n    }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    async fetchY (): Promise<any> {\n        return {};\n    }\n"
+            + "    async isEnabled (params: Dict = {}): Promise<[boolean, boolean]> {\n        const a = this.safeBool (this.options, 'a');\n        if (a === undefined) {\n"
+            + "            if (this.safeBool (this.options, 'demo', false)) {\n                this.options['a'] = false;\n                return [ this.options['a'], this.options['b'] ];\n            }\n"
+            + "            const r = await this.fetchY ();\n            this.options['a'] = this.safeBool (r, 'a') === true;\n        }\n        " + ret2 + "\n    }\n"
+            + "    async fetchX (params = {}) {\n        const enabled = await this.isEnabled ();\n        const a: boolean = this.safeBool (enabled, 0, false);\n        const b: boolean = this.safeBool (enabled, 1, false);\n        return a || b;\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        fs.rmSync(root, { recursive: true, force: true });
+        return out;
+    };
+    test('every return an array literal of the tuple arity: crate::value::List read by reference', () => {
+        const out = mk("return [ this.options['a'], this.options['b'] ];");
+        expect(out).toMatch(/let mut enabled: crate::value::List = .*\.await\.into_list\(\);/);
+        expect(out).toContain('(&enabled, Value::Int(0)');
+    });
+    test('negative: a return that is not an array literal keeps Value', () => {
+        const out = mk("const cached: any = this.options['cached'];\n        return cached;");
+        expect(out).toMatch(/let mut enabled: Value = /);
+    });
+});

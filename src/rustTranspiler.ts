@@ -20859,7 +20859,27 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_VENUE_RECORD_NAMES.has(inner)) return { kind: 'dict', nullable: false };
         const elem = /^(\w+)\[\]$/.exec(inner);
         if (elem !== null && RustTranspiler.RUST_VENUE_RECORD_NAMES.has(elem[1])) return { kind: 'list', nullable: false };
+        // ral-43g: a tuple return `[A, B, ..]` whose every return statement is an array literal of that arity: the body
+        // builds `Value::from(vec![..])` on every path, so the result is a list (never Null)
+        if (/^\[[^[\]]+\]$/.test(inner) && this.rustTupleLiteralReturns(declaration, inner.slice(1, -1).split(',').length)) return { kind: 'list', nullable: false };
         return undefined;
+    }
+
+    /** ral-43g: every `return` in `declaration`'s own body (nested functions excluded) is an array literal of `arity` plain elements. */
+    rustTupleLiteralReturns(declaration: any, arity: number): boolean {
+        let returns = 0;
+        let ok = true;
+        const visit = (n: any) => {
+            if (!ok || (n !== declaration.body && isFunctionLike(n))) return;
+            if (isReturnStatement(n)) {
+                const v: any = this.unwrapParens(n.expression);
+                if (v === undefined || !isArrayLiteralExpression(v) || v.elements.length !== arity || v.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement)) ok = false;
+                else returns++;
+            }
+            n.forEachChild(visit);
+        };
+        declaration.body.forEachChild(visit);
+        return ok && returns > 0;
     }
 
     /** `this.m(..)` of a venue method (no override, every venue declaration of the name returning `Dict`) whose every
