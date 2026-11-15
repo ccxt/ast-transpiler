@@ -65,7 +65,7 @@ interface RustScopeIndex {
     byName: Map<string, number[]> | undefined;
 }
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'other';
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -1307,6 +1307,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `a || b` / `a && b` whose every leaf is a native `bool` and one is a `bool` scalar local: JS returns an
      *  operand, which is then a boolean, so the Rust `||` / `&&` value is the same. */
     rustScalarBoolLogicalText(expr: any): string | undefined;
+    /** ral-43a: `!x` / `x || y` / `x && y` (nested, parenthesised) whose leaves are identifiers of locals declared in the
+     *  same function (never a parameter or a member): the shape the bool seed above reads through the solver. */
+    rustBoolLeafLogical(expr: any): boolean;
     /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
     rustBoolNativeText(expr: any): string | undefined;
     /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */
@@ -1412,6 +1415,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOkeyKind(receiver: any, read: any): 'map' | 'value' | undefined;
     /** A one-level read `m[k]` (not a write target, not a chain link) on an `rustOkeyKind` receiver. */
     rustOkeyReadUse(n: any): boolean;
+    /** ral-43c: a one-level read `m[k]` (no write, chain link, delete or update) on an identifier parameter typed `any` that no
+     *  typed-container rule holds: the boxed read is `get_value(&m, &k)`; the typed key is handed to `get_value` as is
+     *  (`impl ValueKey` boxes it inside, so the lookup is the same `Str` / `Null` key the boxed read took). */
+    rustAnyGetValueKeyUse(n: any): boolean;
     /** ral-yg: `this.urls['<lit>'][k]` read only (no write, chain link, delete or update) where `this.urls['<lit>']` is the
      *  base-declared string-keyed map (`rustUrlsMapEntry`): the native read takes the borrowed key off the map the boxed
      *  read reached (a non-map entry or a `None` key reads Null, as `get_value` did on a non-map or a `Null` key). */
@@ -2576,6 +2583,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustContainerInitReadsStore(init: any): boolean;
     /** A literal list/dict default (or a reader that always builds one): the local is never `Null`. */
     rustContainerInitNeverNull(init: any, kind: 'list' | 'map'): boolean;
+    /** An identifier whose local prints a plain `Dict` (borrowed dict route, not the optional form). */
+    rustNeverNullDictLocalArg(node: any): boolean;
     /** How a non-read use boxes: an argument of a plain `Value` slot of a `this.` method, the value of an object
      *  literal property or array element, or `return x`; a nullable local only feeds base `safe*` readers. */
     rustContainerBoxForm(n: any, neverNull: boolean): 'clone' | 'move' | undefined;
@@ -2596,6 +2605,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    rustOptAliasSourceKind(rhs: any, fn: any): 'dict' | 'list' | undefined;
+    /** The source side: `t = n` (statement) whose target `t` holds the optional form of n's kind through rustOptAliasSourceKind. */
+    rustOptAliasTargetUse(n: any, declaration: any, fn: any): boolean;
     private rustBorrowedIndexReads;
     /** `Promise.all ([..])` (an array literal operand): runtime `promise_all` hands its operand back, so it is always a list. */
     rustPromiseAllListKind(call: any): 'list' | undefined;
@@ -2848,6 +2860,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSortOfTypedList(call: any): boolean;
     /** `this.m (..)` resolves to the base declaration and no venue redeclares `m`. */
     rustListPassthroughCallee(call: any, method: string): boolean;
+    /** ral-43a: `{ 'k': x }` (a plain object literal, not a destructuring target) or `return x` of a held endpoint answer. */
+    rustDeclaredEndpointWholeBox(n: any): boolean;
     rustDeclaredEndpointBoxUse(n: any): boolean;
     /** `this.F` for a checker dict-shaped field (`fundingRates: Dictionary<FundingRate>`) the native insert writes
      *  (`printNativeDictInsert`: `rustFieldStaysDict`). The insert stores whatever handle it is given, so a built map
@@ -2921,6 +2935,8 @@ export declare class RustTranspiler extends BaseTranspiler {
         kind: 'dict' | 'list';
         nullable: boolean;
     } | undefined;
+    /** ral-43g: every `return` in `declaration`'s own body (nested functions excluded) is an array literal of `arity` plain elements. */
+    rustTupleLiteralReturns(declaration: any, arity: number): boolean;
     /** `this.m(..)` of a venue method (no override, every venue declaration of the name returning `Dict`) whose every
      *  return is `this.safeDict (this.<field>, '<key>', {})`: the shared handle of a typed store entry, a map on every path. */
     rustStoreDictReturnCall(call: any): boolean;
@@ -3621,6 +3637,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     printNativeStringPadStart(node: any, receiverText: string): string | undefined;
     printNativeStringPadEnd(node: any, receiverText: string): string | undefined;
     printNativeToFixed(node: any, receiverText: string): string | undefined;
+    /** ral-43b: `call` sits in the right side of a `+=` (the typed `String` target's push_str join keys on the old operand
+     *  text, bitget / bybit `channel += limit.toString ()` went back to `Value` in gate 14163): keep the old path there. */
+    rust43bInPlusEquals(call: any): boolean;
+    /** ral-43b: `n` is the only argument of `recv.indexOf(n)`, a typed string local (not a ws key), and `recv` is a string-typed
+     *  `Value` place (a plain identifier / property chain that is no typed local): the needle reads as `Option<&str>` in the
+     *  `zip` find, `-1` when either side is not a string, exactly the helper's answer for the `Str` / `Null` the box held. */
+    rust43bValueRecvFindNeedle(n: any, kind: string): boolean;
     printNativeStringIndexOfString(node: any, receiverText: string): string | undefined;
     printNativeStringJoin(node: any, receiverText: string): string | undefined;
     rustOperandKind(node: any): string | undefined;
@@ -3948,6 +3971,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustMarketSlotDecisions;
     /** A method declared `safeMarket (..): MarketInterface` with a body in `ts/src` (base or venue). */
     rustReturnsMarket(node: any): boolean;
+    private rustVenueMarketDecisions;
+    /** ral-43e: a venue (not base-tier) method declared `Market` / `MarketInterface`, not async, whose every return is a
+     *  `safeMarket` record (the call itself or a `const` struct local bound to it): it hands the struct back as is. */
+    rustVenueReturnsMarket(node: any, file: string): boolean;
     /** The `market` parameter of a base market-slot reader, read only by key readers, null tests or `Value` hand-offs. */
     rustMarketSlotParam(param: any): boolean;
     private rustMarketDepth;
