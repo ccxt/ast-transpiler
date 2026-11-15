@@ -19991,6 +19991,10 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustOptAliasInitTargetUse(n, declaration, fn)) return ++lentNullable > 0 && ++reads > 0;
             // ral-40h: `const|let y = x` of a container local (phase 1): the alias takes the container whole
             if (this.rustContainerAliasInit(n, declaration)) return ++aliasBoxes > 0 && boxedElementUses.push(n) > 0;
+            // ral-52a: a shared-map alias read whole as the initializer of a further alias (`let y: Dict = x`, same function) whose own
+            // decision is still open: boxed as an alias init, printed from y's final decision (`Value::from(&x).into_dict()` when y is
+            // the shared-map alias, else the box `Value::from(&x)` / `Value::Dict(x)`)
+            if (sbAlias && isVariableDeclaration(up) && up.initializer === n && isIdentifier(up.name) && (up.parent as any)?.declarations?.length === 1 && this.rustEnclosingFunction(up) === fn) { this.rustContainerAliasInits.add(n); return ++aliasBoxes > 0 && boxedElementUses.push(n) > 0; }
             if (!isCallExpression(up) || up.arguments[0] !== n) return handed();
             // An endpoint response may be a list or a map: only string-key reads agree for both.
             const keyArgs: any[] = up.arguments.slice(1, isPropertyAccessExpression(up.expression) && /2$/.test(String(up.expression.name.text)) ? 3 : 2).map((a: any) => this.rustSkipWrappers(a));
