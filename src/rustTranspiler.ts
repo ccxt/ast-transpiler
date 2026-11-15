@@ -2457,6 +2457,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rustTypedListField(declaration.initializer)) return `${indent}let mut ${varName}: crate::value::List = self.${String(this.rustSkipWrappers(declaration.initializer).name.text)}.clone()`;
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
@@ -19917,6 +19918,10 @@ export class RustTranspiler extends BaseTranspiler {
         // sb: `const y = x` of a typed shared-map local holds the same map (`Value::from(&x).into_dict()` shares the Arc, no copy)
         const sbAlias = from === undefined && !nilDeclared && this.rustSbDictAliasSource(init);
         if (sbAlias) from = 'dict';
+        // ral-53n: `let y = a; if (c) { y = b; }` where `a`, `b` (and y's every whole write) are never-null container locals of one
+        // kind (40h syntactic proof, no other local's decision read): y holds that container on every path
+        const nnAlias = from === undefined && !nilDeclared && allSlot === undefined && init !== undefined && isIdentifier(init) ? this.rustNeverNullAliasKind(declaration) : undefined;
+        if (nnAlias !== undefined) { from = nnAlias; this.rustNnAliasDecls.add(declaration); }
         // ral-we: a watch result whose every matching resolve passes a proven map holds that map (`.await.into_dict()`)
         if (from === undefined && !nilDeclared && declaration.initializer !== undefined && this.rustWsWatchResultKind(declaration.initializer) === 'dict') from = 'dict';
         // ral-ze: a watch result whose every matching resolve passes a proven list holds that list (`.await.into_list()`)
@@ -20014,6 +20019,7 @@ export class RustTranspiler extends BaseTranspiler {
                 if (sbAlias && this.rustParamsAliasWrite(rhs, declaration) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
                 // ral-50a: `y = t[1]` of a never-rebound `const t = this.handle*AndParams (m, ..)` (base helper) lent a proven map
                 if (sbAlias && (this.rustHandleTupleMapSlotRead(rhs) || this.rustHandedSlotIdentifier(rhs)) && String(rhs.getText()).split('\n')[0].length <= 240) { this.rustSbAliasWrites.add(up); return ++sbMapWrites > 0; }
+                if (nnAlias !== undefined && isIdentifier(rhs) && String(rhs.getText()).length <= 240) { this.rustSbAliasWrites.add(up); return true; }
                 writes++;
                 if (this.literalKindOfNode(rhs) === 'null') return ++nullWrites > 0;
                 // ral-48d: `x = this.omit (x, k)` keeps the container's kind (Null stays Null, a map stays a map; the optional
@@ -20132,6 +20138,8 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-45f: the source of `let t = x` whose target holds the optional form through the initialised alias rule
             if (this.rustOptAliasInitTargetUse(n, declaration, fn)) return ++lentNullable > 0 && ++reads > 0;
             // ral-40h: `const|let y = x` of a container local (phase 1): the alias takes the container whole
+            // ral-53n: the initializer / a whole write of a never-null alias of this kind is lent (`Value::from(&x)` shares the Arc)
+            if (!nilDeclared && (from === 'dict' || from === 'list') && this.rustNnAliasSourceUse(n, from)) return ++reads > 0;
             if (this.rustContainerAliasInit(n, declaration)) return ++aliasBoxes > 0 && boxedElementUses.push(n) > 0;
             // ral-52a: a shared-map alias read whole as the initializer of a further alias (`let y: Dict = x`, same function) whose own
             // decision is still open: boxed as an alias init, printed from y's final decision (`Value::from(&x).into_dict()` when y is
@@ -20629,7 +20637,10 @@ export class RustTranspiler extends BaseTranspiler {
     private rustSbAliasWrites = new WeakSet<any>();
     printSbAliasWrite(node: any, left: any, right: any): string | undefined {
         const declaration: any = this.rustDeclarationOfIdentifier(left);
-        if (declaration === undefined || !this.rustSbAliasWrites.has(node) || !this.rustPrintedBorrowed.has(declaration) || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
+        if (declaration === undefined || !this.rustSbAliasWrites.has(node) || !this.rustPrintedBorrowed.has(declaration)) return undefined;
+        // ral-53n: a never-null list alias takes the written list back (`Value::Arr` on every path)
+        if (this.rustNnAliasDecls.has(declaration) && isIdentifier(this.rustSkipWrappers(right))) return `${super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text)} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(right), node)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`;
+        if (this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
         const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
         // ral-50a: a handed slot map is already a Dict (moved, as the boxed write moved it)
         const slot: any = this.rustSkipWrappers(right);
@@ -21472,6 +21483,72 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustValueWriteTargets.set(up, ok);
         if (ok) this.rustContainerAliasInits.add(n);
         return ok;
+    }
+
+    private rustNnAliasDecls = new WeakSet<any>();
+    rustNnAliasSourceUse(n: any, kind: 'dict' | 'list'): boolean {
+        const up: any = n.parent;
+        let target: any;
+        if (isVariableDeclaration(up) && up.initializer === n) target = up;
+        else if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement && isIdentifier(up.left)) target = this.rustDeclaredNode(up.left);
+        if (target === undefined || !isVariableDeclaration(target) || target.name === n || this.rustBorrowedPending.has(target)) return false;
+        if (this.rustNeverNullAliasKind(target) !== kind) return false;
+        return this.rustBorrowedLocalKind(target) === kind && this.rustNnAliasDecls.has(target);
+    }
+    /** ral-53n: the boxed source of a never-null alias, cloned when it is read again after `at` (or `at` sits in a loop), moved otherwise. */
+    rustNnAliasSourceText(src: any, at: any): string {
+        const d: any = this.rustDeclarationOfIdentifier(src);
+        const text = super.transformIdentifier(src, this.ReservedKeywordsReplacements[src.text] ?? src.text);
+        const fn: any = this.rustEnclosingFunction(at);
+        let after = findAncestor(at, (a: any) => a.kind === SyntaxKind.ForStatement || a.kind === SyntaxKind.ForInStatement || a.kind === SyntaxKind.ForOfStatement || a.kind === SyntaxKind.WhileStatement || a.kind === SyntaxKind.DoStatement || isFunctionLike(a)) !== fn;
+        const end = at.getEnd();
+        if (!after && d !== undefined) this.rustLocalUsesAll(d, String(d.name.text), true, (n: any) => { if (n !== src && (n.getStart() >= end || this.rustEnclosingFunction(n) !== fn)) after = true; return true; });
+        // a source already printed as a typed container (Dict / List / Option<..>) is lent: `Value::from(&x)` shares its Arc
+        if (d !== undefined && (this.rustPrintedBorrowed.has(d) || this.rustLentListLocal(d) || this.rustHandedDictLocal(d))) return `Value::from(&${text})`;
+        return after || d === undefined ? `${text}.clone()` : text;
+    }
+
+    /** ral-53n: the container kind of a local declared as an alias whose initializer and every whole write are identifiers of
+     *  never-null container locals (rustContainerNeverNullLocal) whose root producers all answer the same kind. */
+    rustNeverNullAliasKind(declaration: any): 'dict' | 'list' | undefined {
+        if (!this.rustContainerNeverNullLocal(declaration, 0)) return undefined;
+        const fn: any = this.rustEnclosingFunction(declaration);
+        const kinds = new Set<string>();
+        const rootKind = (e: any, depth: number): 'dict' | 'list' | undefined => {
+            const x: any = this.rustSkipWrappers(e);
+            if (x === undefined || depth > 3) return undefined;
+            if (isIdentifier(x)) {
+                const d: any = this.rustDeclarationOfIdentifier(x);
+                if (d === undefined || !isVariableDeclaration(d) || d.name === x) return undefined;
+                const ks = new Set<string>();
+                const k0 = rootKind(d.initializer, depth + 1);
+                if (k0 === undefined) return undefined;
+                ks.add(k0);
+                for (const n of this.rustScopeNameNodes(this.rustEnclosingFunction(d), String((d.name as any).text)) as any[]) {
+                    if (!isIdentifier(n) || n === d.name || this.rustDeclaredNode(n) !== d) continue;
+                    const up: any = n.parent;
+                    if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) { const k = rootKind(up.right, depth + 1); if (k === undefined) return undefined; ks.add(k); }
+                }
+                return ks.size === 1 ? k0 : undefined;
+            }
+            if (!isCallExpression(x)) return undefined;
+            if (this.rustContainerInitNeverNull(x, 'map') || this.rustOmitOfDict(x)) return 'dict';
+            if (this.rustContainerInitNeverNull(x, 'list')) return 'list';
+            const built = this.rustBuiltReturnSourceKind(x);
+            if (built === 'dict' || built === 'list') return built;
+            const venue = this.rustVenueContainerReturnKind(x);
+            return venue !== undefined && venue.nullable === false && (venue.kind === 'dict' || venue.kind === 'list') ? venue.kind : undefined;
+        };
+        const add = (e: any): boolean => { const x: any = this.rustSkipWrappers(e); if (x === undefined || !isIdentifier(x)) return false; const k = rootKind(x, 0); if (k === undefined) return false; kinds.add(k); return true; };
+        if (!add(declaration.initializer)) return undefined;
+        // a never-written alias is the two-phase sb / 40h alias's (it shares the decided source); only reassigned aliases here
+        let written = 0;
+        for (const n of this.rustScopeNameNodes(fn, String(declaration.name.text)) as any[]) {
+            if (!isIdentifier(n) || n === declaration.name || this.rustDeclaredNode(n) !== declaration) continue;
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && up.left === n && rustIsAssignmentOperator(up.operatorToken.kind) && (!add(up.right) || ++written === 0)) return undefined;
+        }
+        return written > 0 && kinds.size === 1 ? Array.from(kinds)[0] as 'dict' | 'list' : undefined;
     }
 
     /** ral-40h: a local whose initializer and every whole write hold a container on every path (never Null): a fresh

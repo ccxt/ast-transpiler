@@ -18249,3 +18249,25 @@ describe('ral-53e: a reversed loop index read only as an element-read key is i64
         expect(b).toContain('let mut index: Value = ');
     });
 });
+
+describe('ral-53n: an alias whose initializer and every write are never-null container locals of one kind', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeDict (d: any, k: any, def: any = undefined): any { return def; }\n    safeList (d: any, k: any, def: any = undefined): any { return def; }\n    safeString (d: any, k: any, def: any = undefined): any { return def; }\n    hold (x: any): any { return x; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-53n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('sxbet `ownOdds` (Dict) and limitless `bidsSource` (List) alias two defaulted reads', () => {
+        const out = run("    a (raw: Dict, one: boolean) {\n        const o1 = this.safeDict (raw, 'outcomeOne', {});\n        const o2 = this.safeDict (raw, 'outcomeTwo', {});\n        let own: Dict = o2;\n        if (one) {\n            own = o1;\n        }\n        return this.safeString (own, 'p');\n    }\n    b (response: Dict, yes: boolean) {\n        const rb = this.safeList (response, 'bids', []);\n        const ra = this.safeList (response, 'asks', []);\n        let src: List = ra;\n        if (yes) {\n            src = rb;\n        }\n        let other: List = rb;\n        if (yes) {\n            other = ra;\n        }\n        for (let i = 0; i < src.length; i++) {\n            this.hold (this.safeString (this.safeDict (src, i), 'price'));\n        }\n        for (let j = 0; j < other.length; j++) {\n            this.hold (this.safeString (this.safeDict (other, j), 'price'));\n        }\n    }\n");
+        expect(out).toMatch(/let mut own: crate::value::Dict = (Value::from\(&o2\)|o2)\.into_dict\(\);/);
+        expect(out).toMatch(/own = (Value::from\(&o1\)|o1)\.into_dict\(\);/);
+        expect(out).not.toMatch(/let mut own: Value/);
+    });
+    test('guard: an alias of a nullable read (no default) keeps Value', () => {
+        const out = run("    c (raw: Dict, one: boolean) {\n        const o1 = this.safeDict (raw, 'outcomeOne');\n        const o2 = this.safeDict (raw, 'outcomeTwo', {});\n        let own: Dict = o2;\n        if (one) {\n            own = o1;\n        }\n        return this.safeString (own, 'p');\n    }\n");
+        expect(out).toMatch(/let mut own: Value/);
+    });
+});
