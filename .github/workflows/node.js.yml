@@ -26,6 +26,10 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: ${{ matrix.node-version }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
       - uses: taiki-e/cache-cargo-install-action@v3
         with:
           tool: cargo-hack
