@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { NodeFlags, SyntaxKind, type BinaryExpression, type BindingElement, type Block, type CallExpression, type Declaration, type ElementAccessExpression, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type TypeNode, type VariableDeclaration } from "typescript/unstable/ast";
+import { NodeFlags, SyntaxKind, type BinaryExpression, type BindingElement, type Block, type CallExpression, type ClassDeclaration, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type ExpressionWithTypeArguments, type Identifier, type MethodDeclaration, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type TypeNode, type VariableDeclaration } from "typescript/unstable/ast";
 import { isArrayBindingPattern, isArrayLiteralExpression, isArrayTypeNode, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertyAssignment, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isTypeReferenceNode, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
@@ -5281,8 +5281,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-54x K1: a cased reader `String` with no native use would only be boxed straight back (boxed-straight-back stays `Value`)
         if (nativeUses === 0 && kind === 'str' && this.rustReaderCaseStrRecv(this.unwrapParens(declaration.initializer)) !== undefined) return undefined;
         // ral-84h R1: a ternary with an arm read from a defaulted base `Str` parameter is typed only for a native use (box-only stays `Value`)
-        const init84h: any = this.unwrapParens(declaration.initializer);
-        if (nativeUses === 0 && init84h !== undefined && isConditionalExpression(init84h) && [ init84h.whenTrue, init84h.whenFalse ].some((arm: any) => this.rust84hDefaultedStrParamArm(this.unwrapParens(arm)))) return undefined;
+        const init84h: Node = this.unwrapParens(declaration.initializer);
+        if (nativeUses === 0 && init84h !== undefined && isConditionalExpression(init84h) && [ init84h.whenTrue, init84h.whenFalse ].some((arm: Node) => this.rust84hDefaultedStrParamArm(this.unwrapParens(arm)))) return undefined;
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration) || this.rust59pDeleteKeyInboxed(declaration)) return undefined;
         // of: a string compared against another local must not copy at a box where the `Value` was lent
         // (a call argument already copied the `Value`; an `in` key or other borrowed slot did not)
@@ -5856,9 +5856,9 @@ export class RustTranspiler extends BaseTranspiler {
      *  Its box holds a `Str` or `Null`, so the arm reads it once as an `Option<String>` (the same conversion the base
      *  `Str` call arm next to it takes). */
     /** ral-84h R1: the arm is a base `Str` parameter accepted by rust65nBaseStrParamArm through its `= undefined` / string-literal default. */
-    rust84hDefaultedStrParamArm(node: any): boolean {
+    rust84hDefaultedStrParamArm(node: Node): boolean {
         if (node === undefined || !isIdentifier(node) || !this.rust65nBaseStrParamArm(node)) return false;
-        const param: any = this.rustDeclaredNode(node);
+        const param: Node = this.rustDeclaredNode(node);
         return param !== undefined && isParameterDeclaration(param) && param.initializer !== undefined;
     }
 
@@ -5869,9 +5869,9 @@ export class RustTranspiler extends BaseTranspiler {
             || param.dotDotDotToken !== undefined) return false;
         // ral-84h R1: a `= undefined` default reads back the same `Str` or `Null` box (get_arg's `Value::Null`), and an
         // unannotated string-literal default (`takerOrMaker = 'taker'`) is a checker `string` whose box is that literal or the caller's `Str`
-        const init: any = param.initializer === undefined ? undefined : this.unwrapParens(param.initializer);
+        const init: Expression | undefined = param.initializer === undefined ? undefined : this.unwrapParens(param.initializer);
         const nilDefault = init !== undefined && this.literalKindOfNode(init) === 'null';
-        const strDefault = init !== undefined && param.type === undefined && this.literalKindOfNode(init) === 'string' && !(init.text in this.StringLiteralReplacements);
+        const strDefault = init !== undefined && param.type === undefined && this.literalKindOfNode(init) === 'string' && !(String((init as Identifier).text) in this.StringLiteralReplacements);
         if (init !== undefined && !nilDefault && !strDefault) return false;
         if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(param.getSourceFile?.()?.fileName ?? ''))) return false;
         const annotation: any = param.type;
@@ -5928,16 +5928,16 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-84e: an optional market / currency record (`Option<Market>` local, lent `Option<&Market>` / currency slot, currency
      *  local): its `KeyRead` reads the record's own map and answers `Null` when absent, the same `Value` the boxed read held. */
-    rust84eOptRecordRecv(recv: any): boolean {
+    rust84eOptRecordRecv(recv: Node): boolean {
         return this.rustOptContainerOf(recv) === undefined && (this.rustOptMarketLocalOf(recv) !== undefined || this.rustMarketSlotParamOf(recv) !== undefined
             || this.rustCurrencySlotParamOf(recv) !== undefined || this.rustCurrencyLocalOf(recv) !== undefined);
     }
 
     /** ral-84e: a ternary initializer with an arm `r['k']` read off such a record (rust84eOptRecordRecv). */
-    rust84eRecordArmTernary(init: any): boolean {
-        const node: any = this.unwrapParens(init);
+    rust84eRecordArmTernary(init: Node): boolean {
+        const node: Node = this.unwrapParens(init);
         if (node === undefined || !isConditionalExpression(node)) return false;
-        return [ node.whenTrue, node.whenFalse ].some((a: any) => { const arm: any = this.unwrapParens(a); return isElementAccessExpression(arm) && this.rust84eOptRecordRecv(arm.expression); });
+        return [ node.whenTrue, node.whenFalse ].some((a: Node) => { const arm: Node = this.unwrapParens(a); return isElementAccessExpression(arm) && this.rust84eOptRecordRecv(arm.expression); });
     }
 
     /** True when `node` (through parens) is the `whenTrue`/`whenFalse` arm of a ternary that initialises a declaration. */
@@ -8512,9 +8512,9 @@ export class RustTranspiler extends BaseTranspiler {
     /** ral-80e: `n` names a single-binding `const` local with an initializer (no later write is possible). */
     /** ral-84e: `n` is a leaf (through `!`, parentheses, `&&` / `||`) of the right side of a statement `y = <logical>` whose
      *  target y is an `Option<bool>` local and whose logical rust67bBoolLogicalWrite admits (printed `Some(<condition>)`). */
-    rust84eOptBoolWriteLeaf(n: any): boolean {
-        const top: any = this.rustClimbLogicalWrappers(n);
-        const write: any = top?.parent;
+    rust84eOptBoolWriteLeaf(n: Node): boolean {
+        const top: Node = this.rustClimbLogicalWrappers(n);
+        const write: Node = top?.parent;
         if (top === n || !isBinaryExpression(write) || write.right !== top || write.operatorToken.kind !== SyntaxKind.EqualsToken) return false;
         if (write.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(write.left)) return false;
         return this.rust67bBoolLogicalWrite(top) && this.rustScalarLocalOf(write.left)?.kind === 'obool';
@@ -13457,9 +13457,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** rd: some `+` chain holding this local also holds a nil-declared local (typing this one would retype that one, which
      *  belongs to the nil-declared rules). */
-    rustConcatWithNilLocal(declaration: any, strNilOk = false): boolean {
+    rustConcatWithNilLocal(declaration: VariableDeclaration, strNilOk = false): boolean {
         let found = false;
-        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+        this.rustLocalUsesAll(declaration, String((declaration.name as Identifier).text), false, (n: any) => {
             let top: any = n;
             while (isBinaryExpression(top.parent) && top.parent.operatorToken.kind === SyntaxKind.PlusToken || isParenthesizedExpression(top.parent)) top = top.parent;
             const visit = (m: any): void => {
@@ -16207,10 +16207,10 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-84e: an equality arm (`m['inverse'] === true`, `t === 'inverse'`) of a ternary initializer of a `boolean` local whose
      *  native text exists: the arm prints that `bool` (rustScalarNativeText's ternary arm), the very `Bool` its box held. */
-    rust84eBoolArmKind(arm: any): string | undefined {
-        const node: any = this.unwrapParens(arm);
+    rust84eBoolArmKind(arm: Node): string | undefined {
+        const node: Node = this.unwrapParens(arm);
         if (node === undefined || !isBinaryExpression(node) || !this.isEqualityOp(node.operatorToken.kind) || !this.rustTernaryArm(node)) return undefined;
-        let top: any = node;
+        let top: Node = node;
         while (isParenthesizedExpression(top.parent) || (isConditionalExpression(top.parent) && top.parent.condition !== top)) top = top.parent;
         if (!isVariableDeclaration(top.parent) || !isIdentifier(top.parent.name) || this.primitiveKindOfType(this.typeOfNodeIfAny(top.parent.name)) !== 'boolean') return undefined;
         return this.nativeEqualityText(node) !== undefined ? 'bool' : undefined;
@@ -21901,7 +21901,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             // ral-84b: `Object.keys/values(x)` of a literal-built map reads the map's own iterators (the enum arm below), never a
             // boxed escape (a produced map keeps its `Dict` handle: retyping it would deep-copy at the declaration)
-            if (prediction && isCallExpression(parent) && parent.arguments.some((a: any) => a === n) && (produced || this.bearerEnumArg(parent) !== n)) {
+            if (prediction && isCallExpression(parent) && parent.arguments.some((a: Node) => a === n) && (produced || this.bearerEnumArg(parent) !== n)) {
                 // A collection/JSON reader prints its own receiver text (`Object.keys(x)`,
                 // `JSON.stringify(x)`), so passing through the box would only add a clone.
                 if (this.nativeReadCallee(parent)) return false;
@@ -23398,7 +23398,7 @@ export class RustTranspiler extends BaseTranspiler {
         const indexReadUses: any[] = [];
         const aeoWriteUses: any[] = [];
         let listIndexWrites = 0;
-        const store84dWrites: any[] = [];
+        const store84dWrites: Node[] = [];
         // ral-60n: never-null reader initializer (checked once more after the walk: no whole write may follow)
         const neverNullInit = !nilDeclared && allSlot === undefined && init !== undefined && (from === 'dict' || from === 'list')
             && ((this.rustContainerInitNeverNull(init, from === 'list' ? 'list' : 'map') && this.rustBaseCallNamed(init, RustTranspiler.RUST_NEVER_NULL_TEST_READERS)
@@ -23968,8 +23968,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isVariableDeclaration(use) && use.initializer === top && this.primitiveKindOfType(this.typeOfNodeIfAny(use.name)) !== undefined) return false;
         // ral-84d R1: a read inside the value of a list index write on the same local (`xs[i] = f (xs[i])`): that write prints
         // its value into `__be_tmp` before `add_element_to_object(&mut xs, ..)`, so the read sees the list unchanged
-        let ownWrite: any = undefined;
-        for (let at: any = up.parent; at !== undefined && !isStatement(at); at = at.parent) {
+        let ownWrite: Node = undefined;
+        for (let at: Node = up.parent; at !== undefined && !isStatement(at); at = at.parent) {
             if (isBinaryExpression(at) && at.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(at.left) && isIdentifier(at.left.expression)
                 && at.left.expression.text === n.text && this.isNodeInsideNode(up, at.right) && this.rustListIndexLiteralWrite(at.left.expression)) ownWrite = at;
         }
@@ -24801,21 +24801,21 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** ral-84d R2: statement writes `x[k] = v` printed as a native insert on a typed `safeDict (this.options, ..)` copy. */
-    private rust84dStoreWrites = new WeakSet<any>();
+    private rust84dStoreWrites = new WeakSet<Node>();
 
     /** ral-84d R2: `n[k] = v` (statement, one level, `=`, non-literal key) on `const n = this.safeDict (this.options, 'lit', {})`
      *  (a base reader, an object-literal default: a map on every path). `this.options` is a plain field the runtime never tags
      *  (no ws subscription, cache bucket or book id), so the untyped printer already writes it as a native copy-on-write insert
      *  (printNativeDictInsert); on the typed map the same insert runs without the `if let Value::Dict` (always a map). */
-    rust84dStoreKeyWrite(n: any, init: any): boolean {
-        const access: any = n.parent;
-        const write: any = access?.parent;
+    rust84dStoreKeyWrite(n: Node, init: Node): boolean {
+        const access: Node = n.parent;
+        const write: Node = access?.parent;
         if (!isElementAccessExpression(access) || access.expression !== n || !isBinaryExpression(write) || write.left !== access
             || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         if (String(write.getText()).split('\n')[0].length > 200 || !this.rust84dNeverNullMapInit(init)) return false;
-        const key: any = this.rustSkipWrappers(access.argumentExpression);
+        const key: Node = this.rustSkipWrappers(access.argumentExpression);
         if (key === undefined) return false;
-        const head: any = this.rustSkipWrappers(init.arguments[0]);
+        const head: Node = this.rustSkipWrappers((init as CallExpression).arguments[0]);
         // R2: the plain `this.options` store (a variable key)
         const options = head !== undefined && isPropertyAccessExpression(head) && head.expression.kind === SyntaxKind.ThisKeyword && String(head.name.text) === 'options';
         if (options && isIdentifier(key)) return this.rust84dStoreKeyArg(n, access.argumentExpression) !== undefined;
@@ -24827,12 +24827,12 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-84d: a base `safeDict*` reader whose default is a map literal (a `Value::Dict` on every path: the typed map holds
      *  exactly what the box held). */
-    rust84dNeverNullMapInit(init: any): boolean {
+    rust84dNeverNullMapInit(init: Node): boolean {
         return init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) && /^safeDict(?:2|N)?$/.test(String(init.expression.name.text))
             && this.rustBorrowedDictSource(init) && this.rustContainerInitNeverNull(init, 'map');
     }
 
-    rust84dStoreKeyArg(n: any, keyNode: any): string | undefined {
+    rust84dStoreKeyArg(n: Node, keyNode: Node): string | undefined {
         const receiver = this.rustNativeInsertReceiver(n);
         if (receiver === undefined) return undefined;
         let keyText = '';
@@ -24845,45 +24845,47 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** ral-84d R2: `delete n[k]` (statement) on the `this.options` store copy, `k` a string local printed in the `dkey` form. */
-    rust84dStoreDelete(n: any, init: any): boolean {
-        const access: any = n.parent;
-        const del: any = access?.parent;
+    rust84dStoreDelete(n: Node, init: Node): boolean {
+        const access: Node = n.parent;
+        const del: Node = access?.parent;
         if (!isElementAccessExpression(access) || access.expression !== n || !isDeleteExpression(del) || del.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
-        const key: any = access.argumentExpression;
+        const key: Node = access.argumentExpression;
         if (!isIdentifier(key) || this.rustDeclaredNode(key) === this.rustDeclaredNode(n)) return false;
         const kind = this.rustScalarLocalOf(key)?.kind;
         if (kind !== 'str' && kind !== 'ostr') return false;
         if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || String(init.expression.name.text) !== 'safeDict') return false;
         if (!this.rustBorrowedDictSource(init) || !this.rustContainerInitNeverNull(init, 'map')) return false;
-        const head: any = this.rustSkipWrappers(init.arguments[0]);
+        const head: Node = this.rustSkipWrappers(init.arguments[0]);
         return head !== undefined && isPropertyAccessExpression(head) && head.expression.kind === SyntaxKind.ThisKeyword && String(head.name.text) === 'options';
     }
 
-    print84dStoreDelete(node: any): string | undefined {
+    print84dStoreDelete(node: DeleteExpression): string | undefined {
         if (!this.rust84dStoreWrites.has(node)) return undefined;
-        const target: any = node.expression;
-        const declaration: any = this.rustDeclaredNode(target.expression);
+        const target = node.expression as ElementAccessExpression;
+        const targetId = target.expression as Identifier;
+        const declaration: Node = this.rustDeclaredNode(targetId);
         if (declaration === undefined || !this.rustPrintedBorrowed.has(declaration) || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
-        const key: any = target.argumentExpression;
+        const key: Expression = target.argumentExpression;
         const kind = this.rustScalarLocalOf(key)?.kind;
         const keyName = super.printIdentifier(key);
-        const name = super.transformIdentifier(target.expression, this.ReservedKeywordsReplacements[target.expression.text] ?? target.expression.text);
+        const name = super.transformIdentifier(targetId, this.ReservedKeywordsReplacements[targetId.text] ?? targetId.text);
         // a `None` key is the boxed `Null` key: `remove` matched no arm and removed nothing
         return kind === 'str' ? `std::sync::Arc::make_mut(&mut ${name}).shift_remove(${keyName}.as_str())`
             : `if let Some(__k) = ${keyName}.as_deref() { std::sync::Arc::make_mut(&mut ${name}).shift_remove(__k); }`;
     }
 
-    print84dStoreKeyWrite(left: any, right: any, valueText: string): string | undefined {
-        const write: any = left.parent;
+    print84dStoreKeyWrite(left: ElementAccessExpression, right: Node, valueText: string): string | undefined {
+        const write: Node = left.parent;
         if (!this.rust84dStoreWrites.has(write) || !isIdentifier(left.expression)) return undefined;
-        const declaration: any = this.rustDeclaredNode(left.expression);
+        const leftId: Identifier = left.expression;
+        const declaration: Node = this.rustDeclaredNode(leftId);
         if (declaration === undefined || !this.rustPrintedBorrowed.has(declaration) || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
-        const keyArg = this.rust84dStoreKeyArg(left.expression, left.argumentExpression);
+        const keyArg = this.rust84dStoreKeyArg(leftId, left.argumentExpression);
         if (keyArg === undefined) return undefined;
-        const name = super.transformIdentifier(left.expression, this.ReservedKeywordsReplacements[left.expression.text] ?? left.expression.text);
+        const name = super.transformIdentifier(leftId, this.ReservedKeywordsReplacements[leftId.text] ?? leftId.text);
         const value = this.rustPrintedBoolArg(valueText) ? `Value::Bool(${valueText})` : valueText.trim();
         const insert = (v: string) => `std::sync::Arc::make_mut(&mut ${name}).insert(${keyArg}, ${v})`;
-        const reads = (x: any): boolean => (isIdentifier(x) && x.text === left.expression.text) || (x.forEachChild(reads) ?? false);
+        const reads = (x: Node): boolean => (isIdentifier(x) && x.text === leftId.text) || (x.forEachChild(reads) ?? false);
         if (reads(right)) return `{ let __be_tmp = ${value}; ${insert('__be_tmp')}; }`;
         return insert(RustTranspiler.cloneIfBareLocal(value));
     }
@@ -27129,12 +27131,12 @@ export class RustTranspiler extends BaseTranspiler {
     /** ral-84e: `self.safe_bool*_opt(..)` for a base safeBool / safeBool2 / safeBoolN call: `Option<bool>` as is for an
      *  `obool` local with no default, `.unwrap_or(<literal>)` for a `bool` local with a literal boolean default (the boxed
      *  reader returns the member only when it is a `Bool`, else that default: the twin's `None` then unwraps to it). */
-    rustOptBoolReaderText(kind: string, node: any): string | undefined {
+    rustOptBoolReaderText(kind: string, node: Node): string | undefined {
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
         const required = RustTranspiler.RUST_SCALAR_BOOL_HELPERS[String(node.expression.name.text)];
         if (required === undefined) return undefined;
-        const args: any[] = Array.from(node.arguments ?? []);
-        const fallback: any = args.length === required + 1 ? this.unwrapParens(args[required]) : undefined;
+        const args: Node[] = Array.from(node.arguments ?? []);
+        const fallback: Node = args.length === required + 1 ? this.unwrapParens(args[required]) : undefined;
         if (kind === 'obool' ? args.length !== required : (fallback === undefined || this.literalKindOfNode(fallback) !== 'boolean')) return undefined;
         const saved = this.rustOptBoolReading;
         this.rustOptBoolReading = true;
@@ -29208,8 +29210,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isCallExpression(n) || !isPropertyAccessExpression(n.expression)) return false;
         // ral-84f: `super.m (..)` inside the ws class reads the REST parent's own body
         if (n.expression.expression.kind === SyntaxKind.SuperKeyword) {
-            const sup: any = this.rustScalarCallee(n);
-            if (sup === undefined || !this.rustWsRestParentMethod(sup, n) || this.isAsyncFunction(sup)) return false;
+            const sup: Node = this.rustScalarCallee(n);
+            if (sup === undefined || !isMethodDeclaration(sup) || !this.rustWsRestParentMethod(sup, n) || this.isAsyncFunction(sup)) return false;
             return this.rustWsMapReturns(sup, depth);
         }
         if (n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
@@ -29228,7 +29230,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** Every return of the method body is a map on every path (rustWsResolvedMap), and there is at least one. */
-    rustWsMapReturns(declaration: any, depth: number): boolean {
+    rustWsMapReturns(declaration: MethodDeclaration, depth: number): boolean {
         let returns = 0;
         let ok = true;
         this.rustWalkScope(declaration.body, (r: any) => {
@@ -29244,19 +29246,19 @@ export class RustTranspiler extends BaseTranspiler {
      *  (`ts/src/pro/<id>.ts` extends the default export of `ts/src/<id>.ts`). The checker resolves `this.m` to the most
      *  derived declaration, so a ws override would have been answered instead, and a ws class with ws relatives has no
      *  resolve table at all. */
-    rustWsRestParentMethod(declaration: any, site: any): boolean {
-        const cls: any = findAncestor(site, isClassDeclaration);
-        const owner: any = findAncestor(declaration, isClassDeclaration);
+    rustWsRestParentMethod(declaration: Node, site: Node): boolean {
+        const cls = findAncestor<ClassDeclaration>(site, isClassDeclaration);
+        const owner = findAncestor<ClassDeclaration>(declaration, isClassDeclaration);
         if (cls === undefined || owner === undefined || owner === cls || !isMethodDeclaration(declaration) || declaration.body === undefined) return false;
         const wsFile = String(cls.getSourceFile().fileName).replace(/\\/g, '/');
         const restFile = String(owner.getSourceFile().fileName).replace(/\\/g, '/');
         const m = /(^|\/)ts\/src\/(?:pro|prediction)\/([^/]+)\.ts$/.exec(wsFile);
         if (m === null || !restFile.endsWith(`ts/src/${m[2]}.ts`)) return false;
-        const heritage: any = (cls.heritageClauses ?? [])[0]?.types?.[0]?.expression;
+        const heritage: Expression | undefined = ((cls.heritageClauses ?? [])[0]?.types?.[0] as ExpressionWithTypeArguments | undefined)?.expression;
         if (heritage === undefined || !isIdentifier(heritage)) return false;
-        const symbol: any = this.getChecker().getSymbolAtLocation(heritage);
-        const aliased: any = symbol !== undefined && (symbol.flags & SymbolFlags.Alias) ? this.getChecker().getAliasedSymbol(symbol) : symbol;
-        return (symbolDeclarations(aliased) ?? []).some((d: any) => d === owner);
+        const symbol: TsSymbol | undefined = this.getChecker().getSymbolAtLocation(heritage);
+        const aliased: TsSymbol | undefined = symbol !== undefined && (symbol.flags & SymbolFlags.Alias) ? this.getChecker().getAliasedSymbol(symbol) : symbol;
+        return (symbolDeclarations(aliased) ?? []).some((d: Node) => d === owner);
     }
 
     /** Any write of the local after its declaration (an assignment or an update). */
