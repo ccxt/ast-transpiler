@@ -10425,3 +10425,117 @@ describe('ral-77j3 primitive base numeric fields in comparisons', () => {
         expect(out).not.toContain('(this.other > 0)');
     });
 });
+
+describe('ral-84j1: a local declared String takes String methods, keys and String args with no checkcast', () => {
+    // build/java-local-types.js publishes `String k` for element locals whose TS type is a plain string
+    // and whose list holds only Strings; every String-method receiver, delete key and String core
+    // argument on it then prints the bare local. Without a resolver the casts stay byte-identically.
+    const input = `
+class T {
+    keep (s: string): string { return s; }
+    run (m: any, keys: string[]) {
+        for (let i = 0; i < keys.length; i++) {
+            const k = keys[i];
+            if (k.startsWith ('a') && k.indexOf ('b') >= 0 && k.length > 2) {
+                delete m[k];
+            }
+            const u = k.toUpperCase ();
+            const parts = k.split (':');
+        }
+    }
+}
+`;
+    const withResolver = (resolver: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = resolver;
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    test('declared String local prints native receivers and key', () => {
+        withResolver((d: any) => (d?.name?.text === 'k' ? 'String' : undefined), () => {
+            const out = transpiler.transpileJava(input).content;
+            expect(out).toContain('k.startsWith(');
+            expect(out).toContain('k.toUpperCase()');
+            expect(out).toContain('k.length()');
+            expect(out).toContain('.remove(k)');
+            expect(out).not.toContain('((String)k)');
+            expect(out).not.toContain('(String)k)');
+        });
+    });
+    test('an undeclared local keeps every cast', () => {
+        withResolver(() => undefined, () => {
+            const out = transpiler.transpileJava(input).content;
+            expect(out).toContain('((String)k).toUpperCase()');
+            expect(out).toContain('.remove((String)k)');
+        });
+    });
+});
+
+describe('ral-84j1: an element local declared Map<String, Object> is already the json-box argument', () => {
+    // javaNativeArgumentAlreadyTyped decides whether a fixed json-box parameter needs `(Map) (arg)`:
+    // a `const row = rows[i]` local the embedding layer declares Map<String, Object> does not
+    const input = `
+class T {
+    run (rows: any[], m: any) {
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const other = m;
+            this.use (row, other);
+        }
+    }
+    use (a: any, b: any) { return a; }
+}
+`;
+    test('element-read local declared Map is typed; a non-element local and an undeclared one are not', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        const seen: any = {};
+        const original = printer.javaNativeArgumentAlreadyTyped.bind(printer);
+        try {
+            printer.javaDeclaredLocalTypeResolver = (d: any) => (['row', 'other'].includes(d?.name?.text) ? 'java.util.Map<String, Object>' : undefined);
+            printer.javaNativeCallParameterTypes = () => ['java.util.Map<String, Object>', 'java.util.Map<String, Object>'];
+            printer.javaNativeArgumentAlreadyTyped = (arg: any, type: string) => {
+                const r = original(arg, type);
+                seen[arg.text] = r;
+                return r;
+            };
+            const out = transpiler.transpileJava(input).content;
+            expect(seen.row).toBe(true);
+            expect(seen.other).toBe(false);
+            expect(out).toContain('this.use(row, (java.util.Map<String, Object>) (other))');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+            delete printer.javaNativeCallParameterTypes;
+            delete printer.javaNativeArgumentAlreadyTyped;
+        }
+    });
+});
+
+describe('ral-84j1: `x as string` on an element local declared String prints the bare local', () => {
+    const input = `
+class T {
+    run (m: any, t: any) {
+        const symbol = t['symbol'];
+        m[(symbol as string)] = t;
+        const other = t['other'];
+        m[(other as string)] = t;
+    }
+}
+`;
+    test('declared String drops the assertion cast; undeclared keeps it', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'symbol' ? 'String' : undefined);
+            const out = transpiler.transpileJava(input).content;
+            expect(out).not.toContain('((String)symbol)');
+            expect(out).toContain('((String)other)');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    });
+});

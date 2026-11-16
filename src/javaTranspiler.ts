@@ -1941,6 +1941,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (arg.kind === SyntaxKind.NullKeyword) {
             return true;
         }
+        // ral-84j1: an element-read local the embedding layer declares with the parameter's json-box type
+        if (type === JAVA_NATIVE_RETURN_MAP_TYPE && isIdentifier(arg)
+            && String(this.javaDeclaredElementLocalType(arg, arg.text) ?? '').replace(/\s+/g, '').replace(/^java\.util\./, '') === 'Map<String,Object>') {
+            return true;
+        }
         // an object literal prints a `HashMap<String, Object>` instance, already a Map
         if (type === JAVA_NATIVE_RETURN_MAP_TYPE && isObjectLiteralExpression(arg)) {
             return true;
@@ -1964,7 +1969,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (isStringLiteralLikeNode(arg)) {
             return true;
         }
-        return this.javaProvableString(arg);
+        // ral-84j1: an element-read local the embedding layer declares a Java String
+        return this.javaProvableString(arg) || (isIdentifier(arg) && this.javaDeclaredStringElementLocal(arg, arg.text));
     }
 
     // the native printed type of each argument position of a call, when the resolved
@@ -4808,7 +4814,7 @@ export class JavaTranspiler extends BaseTranspiler {
     printJavaLength(expression, leftSide) {
         const kind = this.javaLengthKind(expression);
         if (kind !== undefined) {
-            const read = kind.startsWith('String') ? `((String)${leftSide}).length()` : `((java.util.List<?>)${leftSide}).size()`;
+            const read = kind.startsWith('String') ? `${this.javaStringReceiverText(expression, leftSide)}.length()` : `((java.util.List<?>)${leftSide}).size()`;
             return kind.endsWith('OrNull') ? `(${leftSide} == null ? 0 : ${read})` : read;
         }
         // a receiver the embedding pass declared a java.util.List (`List<Object> response =
@@ -5425,7 +5431,9 @@ export class JavaTranspiler extends BaseTranspiler {
         }
 
         if (type.kind === SyntaxKind.StringKeyword) {
-            return `((String)${this.printNode(node.expression, identation)})`;
+            const operand = this.printNode(node.expression, identation);
+            // ral-84j1: an element local already declared String needs no checkcast
+            return this.javaDeclaredStringElementLocal(node.expression, operand) ? operand : `((String)${operand})`;
         }
 
         if (type.kind === SyntaxKind.ArrayType) {
@@ -6599,15 +6607,18 @@ export class JavaTranspiler extends BaseTranspiler {
 
     printDeleteExpression(node, _identation) {
         const object = this.printNode(node.expression.expression, 0);
-        const key = this.printNode(node.expression.argumentExpression, 0);
+        const keyNode = node.expression.argumentExpression;
+        const printedKey = this.printNode(keyNode, 0);
+        // ral-84j1: a key declared a Java String already is remove(String)'s argument
+        const key = this.javaDeclaredStringElementLocal(keyNode, printedKey) ? printedKey : `(String)${printedKey}`;
         // a ws Client map (or a local bound to it) already binds `remove` with no receiver cast
         if (this.javaWsClientMapReceiver(node.expression.expression)) {
-            return `${object}.remove((String)${key})`;
+            return `${object}.remove(${key})`;
         }
         if (this.javaBaseDeclaredMapCacheField(node.expression.expression)) {
-            return `${object}.remove((String)${key})`;
+            return `${object}.remove(${key})`;
         }
-        return `((java.util.Map<String,Object>)${object}).remove((String)${key})`;
+        return `((java.util.Map<String,Object>)${object}).remove(${key})`;
     }
 
     // `this.<field>` resolving to an Exchange.ts field of JAVA_BASE_DECLARED_MAP_CACHE_FIELDS
@@ -9531,11 +9542,39 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaScalarFamily(receiver) !== 'string' || this.javaScalarFamily(separator) !== 'string') {
             return undefined;
         }
-        return `${this.ARRAY_OPENING_TOKEN}${this.javaNativeSplitText(name, parsedArg)}${this.ARRAY_CLOSING_TOKEN}`;
+        return `${this.ARRAY_OPENING_TOKEN}${this.javaNativeSplitText(name, parsedArg, receiver)}${this.ARRAY_CLOSING_TOKEN}`;
     }
 
-    javaNativeSplitText(name, parsedArg): string {
-        return `((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))`;
+    javaNativeSplitText(name, parsedArg, receiver = undefined): string {
+        return `${this.javaStringReceiverText(receiver, name)}.split(java.util.regex.Pattern.quote(${parsedArg}))`;
+    }
+
+    // ral-84j1: the text of a String-method receiver (or String argument). An identifier the
+    // embedding layer declares a Java String (javaDeclaredStringType, decided from the TS checker
+    // there) already has the static type the method needs, so the checkcast every Object local
+    // takes is not printed; anything else keeps `((String)x)`.
+    javaStringReceiverText(receiver, name): string {
+        return this.javaDeclaredStringElementLocal(receiver, name) ? name : `((String)${name})`;
+    }
+
+    // ral-84j1: `k` printed bare, bound to a `const k = xs[..]` element read (the element-read lane's
+    // own shape, from the AST) that the embedding layer declares a Java String
+    javaDeclaredStringElementLocal(node, printed: string): boolean {
+        return this.javaDeclaredElementLocalType(node, printed) !== undefined && this.javaDeclaredStringType(node);
+    }
+
+    // the declared Java type of a bare-printed `const x = xs[..]` element-read local, as the embedding
+    // layer publishes it (undefined for any other binding or when nothing is published)
+    javaDeclaredElementLocalType(node, printed: string): string | undefined {
+        if (node === undefined || !isIdentifier(node) || printed !== node.text) {
+            return undefined;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined
+            || !isElementAccessExpression(this.unwrapParenthesized(declaration.initializer))) {
+            return undefined;
+        }
+        return this.javaDeclaredTypeOf(node);
     }
 
     // `s.split (<literal>)[<int literal>]` on the native split: the helper's List branch answers
@@ -9644,7 +9683,7 @@ export class JavaTranspiler extends BaseTranspiler {
             return name;
         }
         if (this.javaScalarFamily(receiver) === 'string') {
-            return `((String)${name})`;
+            return this.javaStringReceiverText(receiver, name);
         }
         return undefined;
     }
@@ -9728,7 +9767,7 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         if (this.javaProvableString(arg)) {
-            return `((String)${name}).indexOf(${parsedArg})`;
+            return `${this.javaStringReceiverText(receiver, name)}.indexOf(${parsedArg})`;
         }
         let argType: any;
         try {
@@ -9740,7 +9779,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // the printer's own startsWith/endsWith argument shape
         if (argType.getAliasSymbol?.() === undefined && this.isStringType(argType.flags)
             && (isIdentifier(arg) || isPropertyAccessExpression(arg))) {
-            return `((String)${name}).indexOf(((String)${parsedArg}))`;
+            return `${this.javaStringReceiverText(receiver, name)}.indexOf(${this.javaStringReceiverText(arg, parsedArg)})`;
         }
         return undefined;
     }
@@ -9749,20 +9788,20 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaNativeIndexOfCall(node, name, parsedArg) ?? this.javaNarrowedIndexOf(node, name, parsedArg) ?? `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
     }
 
-    printSearchCall(_node, _identation, name = undefined, parsedArg = undefined) {
-        return `((String)${name}).indexOf(${parsedArg})`;
+    printSearchCall(node, _identation, name = undefined, parsedArg = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.indexOf(${parsedArg})`;
     }
 
-    printStartsWithCall(_node, _identation, name = undefined, parsedArg = undefined) {
-        return `((String)${name}).startsWith(((String)${parsedArg}))`;
+    printStartsWithCall(node, _identation, name = undefined, parsedArg = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.startsWith(${this.javaStringReceiverText(node?.arguments?.[0], parsedArg)})`;
     }
 
-    printEndsWithCall(_node, _identation, name = undefined, parsedArg = undefined) {
-        return `((String)${name}).endsWith(((String)${parsedArg}))`;
+    printEndsWithCall(node, _identation, name = undefined, parsedArg = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.endsWith(${this.javaStringReceiverText(node?.arguments?.[0], parsedArg)})`;
     }
 
-    printTrimCall(_node, _identation, name = undefined) {
-        return `((String)${name}).trim()`;
+    printTrimCall(node, _identation, name = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.trim()`;
     }
 
     printJoinCall(_node, _identation, name = undefined, parsedArg = undefined) {
@@ -9786,12 +9825,12 @@ export class JavaTranspiler extends BaseTranspiler {
         return `String.valueOf(${name})`;
     }
 
-    printToUpperCaseCall(_node, _identation, name = undefined) {
-        return `((String)${name}).toUpperCase()`;
+    printToUpperCaseCall(node, _identation, name = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.toUpperCase()`;
     }
 
-    printToLowerCaseCall(_node, _identation, name = undefined) {
-        return `((String)${name}).toLowerCase()`;
+    printToLowerCaseCall(node, _identation, name = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.toLowerCase()`;
     }
 
     printSliceCall(node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
