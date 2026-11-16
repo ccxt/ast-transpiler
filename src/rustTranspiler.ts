@@ -22197,6 +22197,9 @@ export class RustTranspiler extends BaseTranspiler {
                 if (!nilDeclared && (from === 'dict' || from === 'list') && this.rustSameKindRewrite(rhs, from)) return (this.rustSelfExtendWrite(n, declaration) ? ++sameKindWrites : 1) > 0 && String(rhs.getText()).split('\n')[0].length <= 240;
                 // ral-43f: `t = s` of a `const s = this.safeDict* (..)` / `safeList*` (nullable default) in the same function:
                 // the alias holds the same optional container (syntactic proof, no decision of `s` is read: fixed point in one pass)
+                // ral-65i: a declaration-initialised optional-map alias (45f / 61i source) rewritten from a declared `Promise<Dict>`
+                // endpoint holds that endpoint's map or None (`.into_opt_dict()` at the write, the ral-ua conversion)
+                if (optAliasInit && from === 'dict' && this.rust65iDeclaredDictEndpointWrite(rhs)) return String(rhs.getText()).split('\n')[0].length <= 240;
                 const aliasKind = nilDeclared ? this.rustOptAliasSourceKind(rhs, fn) : undefined;
                 if (aliasKind !== undefined) {
                     if (from !== undefined && from !== aliasKind) mixed = true;
@@ -22554,6 +22557,9 @@ export class RustTranspiler extends BaseTranspiler {
                     if (up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) { ok = false; return; }
                     const rhs: any = this.rustSkipWrappers(up.right);
                     if (this.literalKindOfNode(rhs) === 'null') return;
+                    // ral-65i: `x = this.extend (x, {..})` (runtime base extend, its operand not naming x) answers a map on every
+                    // path: the optional map stays a map (`extend (&x, ..).into_opt_dict()` is Some), so x still holds Null or a map
+                    if (this.rust65iSelfExtendLiteral(up, d)) return;
                     if (rhs?.kind !== SyntaxKind.AwaitExpression || !this.rustDeclaredEndpointWrite(rhs)) { ok = false; return; }
                     const call: any = this.rustSkipWrappers(rhs.expression);
                     if (this.rustDeclaredEndpointKind(call) !== 'dict') { ok = false; return; }
@@ -22565,6 +22571,19 @@ export class RustTranspiler extends BaseTranspiler {
         };
         visit(fn);
         return ok && writes > 0;
+    }
+
+    /** ral-65i: a statement `x = this.extend (x, {..})`: base runtime `extend`, two arguments, the head the local itself, the
+     *  operand an object literal that does not name x (decided from the call node and the callee declaration). */
+    rust65iSelfExtendLiteral(up: any, d: any): boolean {
+        const rhs: any = this.rustSkipWrappers(up.right);
+        if (!isCallExpression(rhs) || rhs.arguments.length !== 2 || !this.rustBaseCallNamed(rhs, RustTranspiler.RUST_SELF_EXTEND)) return false;
+        const head: any = this.rustSkipWrappers(rhs.arguments[0]);
+        const operand: any = this.rustSkipWrappers(rhs.arguments[1]);
+        if (!isIdentifier(head) || !this.rustIdentifierRefersToDeclaration(head, d) || !isObjectLiteralExpression(operand)) return false;
+        const name = String(d.name.text);
+        const names = (x: any): boolean => (isIdentifier(x) && String(x.text) === name && this.rustIdentifierRefersToDeclaration(x, d)) || (x.forEachChild(names) ?? false);
+        return !names(operand) && String(up.getText()).split('\n')[0].length <= 240;
     }
 
     /** The source side: `t = n` (statement) whose target `t` holds the optional form of n's kind through rustOptAliasSourceKind. */
@@ -24302,6 +24321,12 @@ export class RustTranspiler extends BaseTranspiler {
         return 'dict';
     }
 
+    /** ral-65i: `await this.<endpoint> (..)` whose abstract declaration spells `Promise<Dict>`. */
+    rust65iDeclaredDictEndpointWrite(rhs: any): boolean {
+        if (rhs?.kind !== SyntaxKind.AwaitExpression || !this.rustDeclaredEndpointWrite(rhs)) return false;
+        return this.rustDeclaredEndpointKind(this.rustSkipWrappers(rhs.expression)) === 'dict';
+    }
+
     /** ral-kc: `await this.<endpoint> (..)` whose abstract declaration spells `Promise<Dict>` / `Promise<List>`. */
     rustDeclaredEndpointWrite(rhs: any): boolean {
         let call: any = rhs;
@@ -25662,6 +25687,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustDefaultedListRead(init) && isIdentifier(declaration.name) && this.rustLocalIsReassigned(declaration, String(declaration.name.text))) return this.rustBuiltListLocal(declaration);
         // ral-56s: a reassigned base `arrayConcat (a, b)` initializer whose every write is a list producer is a built list too
         if (this.rustBuiltListConcatInit(init) && isIdentifier(declaration.name) && this.rustLocalIsReassigned(declaration, String(declaration.name.text))) return this.rustBuiltListLocal(declaration);
+        // ral-65i: a reassigned base `filterBy (..)` initializer (the runtime table's list answer) whose every write is a list producer
+        if (this.rust65iFilterByCall(init) && isIdentifier(declaration.name) && this.rustLocalIsReassigned(declaration, String(declaration.name.text))) return this.rustBuiltListLocal(declaration);
         if (!this.rustLentListSource(init)) return false;
         // a defaulted read boxes its shared handle only when it also has a length or index read
         const defaulted = this.rustDefaultedListRead(init);
@@ -28596,7 +28623,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-59i: no initial list is ever read (rustNilListAssignedFirst): the writes alone prove the kind
         const nilAssigned = this.rustNilListAssignedFirst(declaration);
         // ral-56s: a base `arrayConcat (a, b)` initializer answers a `Value::Arr` on every path, like a `[]`-defaulted read
-        const read = init !== undefined && (this.rustDefaultedListRead(this.rustSkipWrappers(init)) || this.rustBuiltListConcatInit(this.rustSkipWrappers(init)));
+        const read = init !== undefined && (this.rustDefaultedListRead(this.rustSkipWrappers(init)) || this.rustBuiltListConcatInit(this.rustSkipWrappers(init)) || this.rust65iFilterByCall(this.rustSkipWrappers(init)));
         if (!nilAssigned && (init === undefined || !read && (!isArrayLiteralExpression(init) || init.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement)))) return false;
         const type: any = nilAssigned ? undefined : this.typeOfNodeIfAny(read ? init : declaration.name);
         if (!nilAssigned && (type === undefined || !this.getChecker().isArrayType(type))) return false;
@@ -28933,7 +28960,14 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(rhs)) return (!rhs.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement || (isIdentifier(this.rustSkipWrappers(e)) && !this.rustBuiltListMovedElement(e)))
             && (!rhs.elements.some((e: any) => isIdentifier(this.rustSkipWrappers(e))) || this.rustBuiltListMovedLiteral(rhs) !== undefined))
             || this.rustBuiltListBoxedLiteral(rhs) !== undefined;
-        return this.rustAlwaysListProducer(rhs) || this.rustDefaultedListRead(rhs) || this.rustDeclaredListProducer(rhs) || this.rustVenueListWriteSource(rhs);
+        return this.rustAlwaysListProducer(rhs) || this.rustDefaultedListRead(rhs) || this.rustDeclaredListProducer(rhs) || this.rustVenueListWriteSource(rhs) || this.rust65iFilterByCall(rhs);
+    }
+
+    /** ral-65i: a base runtime `this.filterBy (..)` (RUST_BUILT_HELPER_RETURNS: exchange_stubs.rs filter_by answers
+     *  `Value::Array` on every path, the empty list for a non-list input), outside the test tier. */
+    rust65iFilterByCall(call: any): boolean {
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        return String(call.expression.name.text) === 'filterBy' && this.rustBuiltReturnSourceKind(call) === 'list';
     }
 
     /** ral-54i: `[await] this.m (..)` whose declaration spells an array return (`T[]`, or `Promise<T[]>` awaited here) and whose

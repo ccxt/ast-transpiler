@@ -22234,3 +22234,106 @@ describe('ral-65e: a markets_by_id row read off a const store local is the typed
         expect(out).toContain('let mut marketsList: Value = ');
     });
 });
+
+describe('ral-65i: an endpoint-declared optional map rewritten by a self-extend, and its paging alias rewritten from the endpoint', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeBool (o: any, k: any, d: boolean = undefined): boolean | undefined { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o; }\n    arrayConcat (a: any[], b: any[]): any[] { return a; }\n    extend (...args: any[]): any { return args[0]; }\n    hold (x: any): any { return x; }\n}\n";
+    const api = "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    privateGetA (params = {}): Promise<Dict> { return this.hold (params); }\n    privateGetB (params = {}): Promise<Dict> { return this.hold (params); }\n}\n";
+    const write = (name: string, extendOperand: string, pageWrite: string, last: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), api);
+        const body = [
+            "import venueApi from './abstract/venue.js';",
+            "import type { Dict, Str } from './base/Exchange.js';",
+            "export default class venue extends venueApi {",
+            "    parseCustomBalance (response: Dict, params: Dict = {}): any {",
+            "        return this.hold (this.safeList (response, 'accounts', []));",
+            "    }",
+            "    async fetchBal (paged: boolean, params: Dict = {}) {",
+            "        const request: Dict = {};",
+            "        let response = undefined;",
+            "        if (paged) {",
+            "            response = await this.privateGetA (this.extend (request, params));",
+            "            let accounts = this.safeList (response, 'accounts', []);",
+            "            let page = response;",
+            "            let cursor: Str = this.safeString (page, 'cursor');",
+            "            while (this.safeBool (page, 'has_next', false) && (cursor !== undefined)) {",
+            "                request['cursor'] = cursor;",
+            "                " + pageWrite,
+            "                accounts = this.arrayConcat (accounts, this.safeList (page, 'accounts', []));",
+            "                cursor = this.safeString (page, 'cursor');",
+            "            }",
+            "            response = this.extend (response, " + extendOperand + ");",
+            "        } else {",
+            "            response = await this.privateGetB (this.extend (request, params));",
+            "        }",
+            "        " + last,
+            "    }",
+            "}",
+            "",
+        ].join ('\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), body);
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const operand = "{ 'accounts': accounts, 'has_next': this.safeBool (page, 'has_next', false) }";
+    const endpointPage = "page = await this.privateGetA (this.extend (request, params));";
+    test('response and page hold Option<Dict>; the self-extend and the endpoint writes convert with into_opt_dict', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-65i-cb-pos', operand, endpointPage, "return this.parseCustomBalance (response, params);")).content;
+        expect(out).toContain('let mut response: Option<crate::value::Dict> = None;');
+        expect(out).toContain('let mut page: Option<crate::value::Dict> = response.clone();');
+        expect(out).toContain('.into_opt_dict();\n');
+        expect(out).toContain('response = self.extend(&response, ');
+        expect(out).toContain('self.safe_bool_k(&page, "has_next"');
+        expect(out).toContain('self.parseCustomBalance(&response, ');
+    });
+    test('negative: an extend operand naming the local itself keeps response Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-65i-cb-self', "{ 'prev': response }", endpointPage, "return this.parseCustomBalance (response, params);")).content;
+        expect(out).not.toContain('let mut response: Option<crate::value::Dict>');
+    });
+    test('negative: a page rewrite from a non-endpoint source keeps page Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-65i-cb-pagehold', operand, "page = this.hold (page);", "return this.parseCustomBalance (response, params);")).content;
+        expect(out).not.toContain('let mut page: Option<crate::value::Dict>');
+    });
+    test('negative: boxed straight back (a plain Value slot) keeps response Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-65i-cb-box', operand, endpointPage, "return this.hold (response);")).content;
+        expect(out).not.toContain('let mut response: Option<crate::value::Dict>');
+    });
+});
+
+describe('ral-65i: a reassigned base filterBy initializer whose every write is a filterBy is a built list', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    filterBy (array: any, key: any, value: any = undefined): any[] { return array; }\n    hold (x: any): any { return x; }\n}\n";
+    const write = (name: string, rewrite: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        const body = [
+            "import Exchange from './base/Exchange.js';",
+            "import type { Dict, Str } from './base/Exchange.js';",
+            "export default class venue extends Exchange {",
+            "    pick (positions: Dict[], symbol: string, side: Str) {",
+            "        let candidates = this.filterBy (positions, 'symbol', symbol);",
+            "        if (side !== undefined) {",
+            "            " + rewrite,
+            "        }",
+            "        const found = candidates[0];",
+            "        return this.hold (found);",
+            "    }",
+            "}",
+            "",
+        ].join ('\n');
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), body);
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('candidates holds a List; the rewrite boxes it into filterBy and takes the list back', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-65i-fb-pos', "candidates = this.filterBy (candidates, 'side', side);")).content;
+        expect(out).toContain('let mut candidates: crate::value::List = self.filterBy(');
+        expect(out).toContain('candidates = self.filterBy(Value::Arr(candidates), ');
+        expect(out).toContain('candidates.get(0)');
+    });
+    test('negative: a rewrite from a non-list source keeps candidates Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-65i-fb-hold', "candidates = this.hold (candidates);")).content;
+        expect(out).not.toContain('let mut candidates: crate::value::List');
+    });
+});
