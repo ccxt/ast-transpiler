@@ -441,7 +441,6 @@ export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     FetchLeverageTiersAsync: string;
     FetchMarkOHLCVAsync: string;
     FetchMarkPricesAsync: string;
-    FetchMarketAsync: string;
     FetchMarketByIdAsync: string;
     FetchMarketsAsync: string;
     FetchMarketsFromAPIAsync: string;
@@ -463,7 +462,6 @@ export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     FetchOptionOHLCVAsync: string;
     FetchOptionPositionsAsync: string;
     FetchOptionUnderlyingsAsync: string;
-    FetchOrderAsync: string;
     FetchOrderBookAsync: string;
     FetchOrderBooksAsync: string;
     FetchOrderClassicAsync: string;
@@ -759,7 +757,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goStringCallStaticType(node: any, printedText: string): string | undefined;
     goConstFloatStaticType(node: any): string | undefined;
     isNonZeroIntegerLiteral(node: any): boolean;
-    isNonZeroFloatLiteral(node: any): boolean;
     goConstantIntValue(node: any): number | undefined;
     goInsideTypedDeclarationInitializer(node: any): boolean;
     goNativeNumericResultType(op: any, leftType: string, rightType: string, node: any): string | undefined;
@@ -783,6 +780,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goDefaultedSafeIntegerCall(node: any): boolean;
     goNonNilPointerDivisionText(node: any, leftText: string, rightText: string): string | undefined;
     goPointerNumberIsNonNil(ident: any): boolean;
+    goCheckerTypeHasFlags(node: any, flags: number): boolean;
     goDivisionConsumerIgnoresBox(node: any): boolean;
     goFloatDivisionText(node: any, leftType: string, rightType: string, leftText: string, rightText: string): string;
     goNativeBinaryText(node: any, symbol: string, leftText: string, rightText: string): string;
@@ -807,16 +805,17 @@ export declare class GoTranspiler extends BaseTranspiler {
         names: Map<any, string>;
     }>>;
     goStringCallLocalName(call: any): string | undefined;
-    goSafeDictLocalArgs(initializer: any): {
-        container: any;
-        key: any;
-    };
-    goSafeAccessorLocalArgs(initializer: any, accessor: string, fallbackKind: SyntaxKind, fallbackItems: string): {
+    goSafeAccessorLocalArgs(initializer: any, accessor: 'safeDict' | 'safeList'): {
         container: any;
         key: any;
     };
     goIsNilComparisonOperand(node: any, parent: any): boolean;
     goSafeDictUseReadsTheMap(node: any): boolean;
+    goContainerLocalUseReads(node: any, rule: {
+        elementRead: (access: any) => boolean;
+        otherRead: (parent: any) => boolean;
+        calleeReads: (callee: string) => boolean;
+    }): boolean;
     goSafeDictLocalUnboxCache: Map<any, string>;
     goCachedLocalUnbox(cache: Map<any, string | undefined>, declaration: any, compute: () => string | undefined): string | undefined;
     goSafeDictLocalUnbox(declaration: any): string | undefined;
@@ -896,10 +895,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goDeclarationOfIdentifier(node: any): any;
     goMarketComparisonElementRead(node: any): boolean;
     goIsComparedOperand(node: any): boolean;
-    goSafeListLocalArgs(initializer: any): {
-        container: any;
-        key: any;
-    };
     goSafeListUseReadsTheList(node: any): boolean;
     goSafeListLocalUnboxCache: Map<any, string>;
     goSafeListLocalUnbox(declaration: any): string | undefined;
@@ -935,11 +930,8 @@ export declare class GoTranspiler extends BaseTranspiler {
         current: any;
         parent: any;
     };
-    goFieldStringLocalReadIsSafe(node: any): boolean;
     goNilInitEnclosingStatement(node: any): any;
     goNilInitWriteDominates(writes: any[], read: any): boolean;
-    goNilInitReadIsStringSafe(node: any): boolean;
-    goNilInitReadIsPointerSafe(node: any): boolean;
     getGoLocalType(declaration: any, parsedValue: string): string;
     goLocalSafeVerdicts: WeakMap<object, Map<string, string>>;
     goAnnotatedStringLocal(declaration: any, goType: string, scope: any, name: string): boolean;
@@ -1034,7 +1026,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBalanceDeleteText(node: any): string | undefined;
     goWsCacheEmptyLiteral(node: any): string | undefined;
     goWsTradesField(node: any): boolean;
-    goBaseExchangeFieldOfType(node: any, typeText: string): boolean;
+    goBaseExchangeFieldOfType(node: any, type: RegExp, file?: RegExp): boolean;
     goWsTradesRead(node: any): boolean;
     goIsBaseExchangeMethod(name: any): boolean;
     goIsPlainEntryRead(inner: any): boolean;
@@ -1119,8 +1111,8 @@ export declare class GoTranspiler extends BaseTranspiler {
         obj: any;
         key: any;
     }): boolean;
+    goEnclosingBlocksProve(at: any, listKinds: SyntaxKind[], siblingProves: (st: any) => boolean, ancestorProves: (parent: any, child: any) => boolean): boolean;
     goIsProducerAssignment(statement: any, name: string): boolean;
-    goDominatedByProducerWrite(at: any, name: string): boolean;
     goOrderBookRepairGuard(declaration: any, name: string): any;
     goOrderBookRefIsRead(id: any): boolean;
     goIsOrderBookSideAccess(node: any): boolean;
@@ -1342,6 +1334,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goHasTypeNameCompositeLiteral(text: string): boolean;
     goCompositeLitHasTypeName(text: string, braceIndex: number): boolean;
     goSkipBalanced(text: string, start: number, open: string, close: string): number;
+    goScanUnquoted(text: string, start: number, step: (index: number) => number): void;
     goSkipQuoted(text: string, start: number): number;
     printLeadingComments(node: any, identation: any): string;
     goStatementLevel: number;
@@ -1459,7 +1452,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     isArraySliceTypes: string[];
     isArrayNonSliceTypes: string[];
     goIdentifierUsedElsewhere(nameNode: any): boolean;
-    goLocalHoldsOnlyArrays(nameNode: any): boolean;
     goIsSafeContainerIsArray(call: any): boolean;
     printNegatedSafeContainerIsArray(operand: any): string | undefined;
     goSingleWriteSafeContainerKind(nameNode: any): 'list' | 'dict' | undefined;
@@ -1545,7 +1537,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     };
     goBinarySeparator(operator: string, rightText: string, left: any, right: any): string;
     printBinaryExpression(node: any, identation: any): any;
-    goDropRedundantNilGuard(leftVar: string, rightVar: string): string | undefined;
     printTryStatement(node: any, identation: number): string;
     /**
      * Strip the printer's own leading indentation from every line of a printed
@@ -1639,6 +1630,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGb08IsDictExpression(expr: any): boolean;
     goGb08BoundedListRead(node: any, keyNode: any): 'native' | 'deref' | undefined;
     goAwaitedObjectListRead(node: any, keyNode: any): boolean;
+    goFirstDefinedArm(arms: (() => string | undefined)[]): string | undefined;
     printElementAccessExpression(node: any, identation: any): string;
     isInsideVoidFunction(node: Node): boolean;
     /**
