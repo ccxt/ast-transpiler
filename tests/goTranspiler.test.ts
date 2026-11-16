@@ -14297,3 +14297,60 @@ describe('77g7 typed ternary locals', () => {
         expect(output).toContain('var w any = func() any {');
     });
 });
+
+describe ('ral-77g8 ws struct parser results', () => {
+    test ('a local initialised by a proven ws struct parser is declared map[string]any', () => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const src = 'class Ex {\n'
+            + '    safeString (a: any, b: any, c: any = undefined) { return undefined; }\n'
+            + '    parseWsBidAsk (t: any, m: any = undefined) { return {}; }\n'
+            + '    parseWsPosition (p: any, m: any = undefined) { return {}; }\n'
+            + '    h (message: any) {\n'
+            + '        const parsedTicker = this.parseWsBidAsk (message);\n'
+            + '        const position = this.parseWsPosition (message);\n'
+            + '        return [ this.safeString (parsedTicker, \'symbol\'), this.safeString (position, \'side\') ];\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo (src).content;
+        expect (out).toContain ('var parsedTicker map[string]any = this.ParseWsBidAsk(message)');
+        expect (out).toContain ('var position map[string]any = this.ParseWsPosition(message)');
+    });
+    test ('a bool seed rewritten only by a literal-default handleOptionBoolAndParams slot is a Go bool', () => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'class Exchange {\n'
+            + '    handleOptionBoolAndParams (params: Dict, m: string, o: string, d: boolean = undefined): [boolean, Dict] { return [ d, params ]; }\n'
+            + '}\n'
+            + 'class Ex extends Exchange {\n'
+            + '    f (params: Dict = {}) {\n'
+            + '        let stock = false;\n'
+            + '        let paramsStock = undefined;\n'
+            + '        [ stock, paramsStock ] = this.handleOptionBoolAndParams (params, \'f\', \'stock\', false);\n'
+            + '        if (stock) {\n'
+            + '            stock = true;\n'
+            + '        }\n'
+            + '        return [ stock, paramsStock ];\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo (src).content;
+        expect (out).toContain ('var stock bool = false');
+    });
+    test ('a string seed rewritten by a literal-default safeString is a Go string', () => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const src = 'class Ex {\n'
+            + '    options: any = {};\n'
+            + '    safeString (a: any, b: any, c: any = undefined): string { return undefined; }\n'
+            + '    f (o: any) {\n'
+            + '        let defaultType = \'spot\';\n'
+            + '        defaultType = this.safeString (this.options, \'defaultType\', defaultType);\n'
+            + '        return \'x\' + defaultType;\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo (src).content;
+        expect (out).toContain ('var defaultType string = "spot"');
+        expect (out).toContain ('defaultType = *this.SafeString(this.Options, "defaultType", defaultType)');
+    });
+});

@@ -33041,6 +33041,129 @@ export interface GoTranspiler {
 // `a - b` / `a * b` / `a + b` with one int64 and one int operand (or an int `- * %N` in a `var` initializer):
 // the helper boxes int64 (Add/Subtract/Mod via the float path, Multiply via reflect Int()); Go refuses
 // the mixed operator, so the int side converts. Exact under the helper's own 2^53 float bound.
+// ===== ral-77g8 (begin): parse* results and literal seeds =====
+// (1) ws struct parsers whose every function-level return (base + every override) is a struct->map converter
+//     or a map literal: the ccxt build retypes them to map[string]any (goProvenParseMapMethods), so a local
+//     initialised by one is that never-nil map.
+Object.assign (CCXT_GO_HELPER_RETURN_TYPES, Object.fromEntries ([ 'ParseWsBidAsk', 'ParseWsPosition', 'ParseWsMyTrade', 'ParseWsOrderTrade', 'ParseWsUtaTrade', 'ParseWsFundingRate' ]
+    .flatMap ((name) => [ [ 'this.' + name, 'map[string]any' ], [ 'this.DerivedExchange.' + name, 'map[string]any' ] ])));
+// (2) `let x = 'lit'` later rewritten only with string literals or `x = this.safeString (o, k, 'lit' | x)`: the
+//     defaulted call never answers nil, so the local is a Go string and each such write takes the call's
+//     deref (goPointerWriteText via goLiteralDefaultStringWrite); every read must be one a string serves.
+const goLiteralDefaultStringLocalBase77g8 = GoTranspiler.prototype.goLiteralDefaultStringLocal;
+GoTranspiler.prototype.goLiteralDefaultStringLocal = function (declaration, goType: string, scope, name: string): boolean {
+    const init: any = declaration?.initializer;
+    if ((goType !== 'string') || (scope === undefined) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || ((init?.kind !== SyntaxKind.StringLiteral) && (init?.kind !== SyntaxKind.NoSubstitutionTemplateLiteral))) {
+        return goLiteralDefaultStringLocalBase77g8.call (this, declaration, goType, scope, name);
+    }
+    if (this.goLiteralDefaultStringLocalCache.has (declaration)) {
+        return this.goLiteralDefaultStringLocalCache.get (declaration);
+    }
+    this.goLiteralDefaultStringLocalCache.set (declaration, false); // re-entrancy guard
+    let rewritten = false;
+    const visit = (n: any) => {
+        if (!rewritten && (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === name) && this.goLiteralDefaultStringCall (n.right, name)) {
+            rewritten = true;
+        }
+        if (!rewritten) {
+            n.forEachChild (visit);
+        }
+    };
+    scope.forEachChild (visit);
+    // only a seed some defaulted safeString rewrites is this rule's; plain literal-only locals keep the printer's verdict
+    const verdict = rewritten && !this.goTypeNameIsShadowed (scope, 'string') && this.goLiteralDefaultStringLocalUsesAreSafe (scope, declaration, name);
+    this.goLiteralDefaultStringLocalCache.set (declaration, verdict);
+    return verdict;
+};
+// (3) `let x = false` whose other writes are bool literals or element 0 of `[ x, p ] = this.handleOptionBoolAndParams
+//     (.., <bool literal>)` (or the 2-variant): with a literal default the base prints the value twin, a hand-written
+//     `(bool, map[string]any)` pair, so that slot is a Go bool and the local is one on every path.
+const GO_77G8_TUPLE_BOOL_PRODUCERS = { 'handleOptionBoolAndParams': 3, 'handleOptionBoolAndParams2': 4 };
+const goLocalIsSafeToTypeBase77g8 = GoTranspiler.prototype.goLocalIsSafeToType;
+GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false): boolean {
+    if (goLocalIsSafeToTypeBase77g8.call (this, scope, declaration, varName, goType, stringWriteProven)) {
+        return true;
+    }
+    const init: any = declaration?.initializer;
+    if ((goType !== 'bool') || (scope === undefined) || (declaration.kind !== SyntaxKind.VariableDeclaration)
+        || ((init?.kind !== SyntaxKind.TrueKeyword) && (init?.kind !== SyntaxKind.FalseKeyword))) {
+        return false;
+    }
+    const isBoolLiteral = (n: any) => (n?.kind === SyntaxKind.TrueKeyword) || (n?.kind === SyntaxKind.FalseKeyword);
+    let tupleWrites = 0;
+    const unsafe = this.hasNodeWhere (scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== varName) || (n === declaration.name)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.name === n)) {
+            return false; // a sibling block-scoped declaration; it gets its own type
+        }
+        if ((parent?.kind === SyntaxKind.Parameter) || (parent?.kind === SyntaxKind.BindingElement) || (parent?.kind === SyntaxKind.SpreadElement)) {
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.PostfixUnaryExpression)
+            || ((parent?.kind === SyntaxKind.PrefixUnaryExpression) && (parent.operator !== SyntaxKind.ExclamationToken))) {
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && isAssignmentOperator (parent.operatorToken.kind)) {
+            return (parent.operatorToken.kind !== SyntaxKind.EqualsToken) || !isBoolLiteral (parent.right);
+        }
+        if (parent?.kind === SyntaxKind.ArrayLiteralExpression) {
+            const assign: any = parent.parent;
+            if ((assign?.kind !== SyntaxKind.BinaryExpression) || (assign.left !== parent) || (assign.operatorToken.kind !== SyntaxKind.EqualsToken)) {
+                return false; // a value inside a list literal: a read
+            }
+            const call: any = assign.right;
+            const callee: any = call?.expression;
+            if ((parent.elements.indexOf (n) !== 0) || (parent.elements.length !== 2) || (call?.kind !== SyntaxKind.CallExpression)
+                || (call.questionDotToken !== undefined) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+                || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+                return true;
+            }
+            const slot = GO_77G8_TUPLE_BOOL_PRODUCERS[String (callee.name?.text ?? '')];
+            if ((slot === undefined) || !isBoolLiteral (call.arguments[slot]) || (call.arguments.length !== slot + 1)) {
+                return true;
+            }
+            let resolved: any = undefined;
+            try {
+                resolved = this.getChecker ().getResolvedSignature (call)?.declaration?.resolve ();
+            } catch (e) {
+                return true;
+            }
+            // the base implementation (an in-memory program has no path: its base class is named Exchange)
+            const fileName = String (resolved?.getSourceFile?.()?.fileName ?? '');
+            const baseDecl = CCXT_GO_ELEMENT_1_BASE_FILE.test (fileName)
+                || (!fileName.includes ('ts/src/') && (resolved?.parent?.kind === SyntaxKind.ClassDeclaration) && (resolved.parent.name?.text === 'Exchange'));
+            if (!baseDecl) {
+                return true; // a venue override may answer another shape
+            }
+            tupleWrites += 1;
+            return false;
+        }
+        return false;
+    });
+    return !unsafe && (tupleWrites > 0) && !this.goTypeNameIsShadowed (scope, 'bool');
+};
+// (1b) an element store into a local typed by (1): the helper it printed before derefs a pointer value
+//      (a *int64 timestamp), a native store would keep the pointer, so only a value proven pointer-free is native
+const GO_77G8_WS_STRUCT_PARSERS = [ 'parseWsBidAsk', 'parseWsPosition', 'parseWsMyTrade', 'parseWsOrderTrade', 'parseWsUtaTrade', 'parseWsFundingRate' ];
+const printNativeElementAssignmentBase77g8 = GoTranspiler.prototype.printNativeElementAssignment;
+GoTranspiler.prototype.printNativeElementAssignment = function (containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, compound = false, valueNode?) {
+    if (containerNode?.kind === SyntaxKind.Identifier) {
+        const init: any = this.goDeclarationOfIdentifier (containerNode)?.initializer;
+        const callee: any = init?.expression;
+        if ((init?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+            && (GO_77G8_WS_STRUCT_PARSERS.indexOf (callee.name?.text) >= 0) && !this.goMapWriteValueIsNotPointer (valueNode)) {
+            return undefined;
+        }
+    }
+    return printNativeElementAssignmentBase77g8.call (this, containerNode, containerStr, keyNode, keyStr, valueStr, compound, valueNode);
+};
+// ===== ral-77g8 (end) =====
+
 GoTranspiler.prototype.goNativeIntWideningArithmetic = function (node, leftType: string, rightType: string, leftText: string, rightText: string) {
     const op = node.operatorToken.kind;
     const isMod = (op === SyntaxKind.PercentToken) && this.isNonZeroIntegerLiteral(node.right);
