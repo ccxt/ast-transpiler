@@ -2555,6 +2555,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (typedStr) {
             // A native-`Option<String>` callee already carries the payload; `safeString` helpers need the unwrap.
+            const optRead = nativeStr ? undefined : this.rustOptReaderCallText(declaration.initializer, identation);
+            if (optRead !== undefined) return `${indent}let mut ${varName}: Option<String> = ${optRead}`;
             return `${indent}let mut ${varName}: Option<String> = ${parsedValue}${nativeStr ? '' : '.as_str().map(str::to_owned)'}`;
         }
         // A callee returning `Option<String>` into a boxed local keeps the box.
@@ -3546,7 +3548,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (peeled !== undefined && peeled.startsWith('format!(') && peeled.endsWith('.into()')) {
                 return `${name} = Some(${peeled.slice(0, -'.into()'.length)})`;
             }
-            return `${name} = ${text}.as_str().map(str::to_owned)`;
+            return `${name} = ${this.rustOptReaderCallText(node) ?? `${text}.as_str().map(str::to_owned)`}`;
         }
         if (local.kind === 'int') return `${name} = ${text}.as_i64()`;
         if (isCallExpression(node) && this.rustBaseTypedReturnKind(node) === 'bool') return `${name} = Some(${this.rustBaseTypedBareText(node)})`;
@@ -5984,7 +5986,7 @@ export class RustTranspiler extends BaseTranspiler {
         const text = this.printNode(exp, 0).trim();
         if (kind === 'int') return `${text}.as_i64().unwrap_or_default()`;
         if (kind === 'oint') return `${text}.as_i64()`;
-        if (kind === 'ostr') return `${text}.as_str().map(str::to_owned)`;
+        if (kind === 'ostr') return this.rustOptReaderCallText(exp) ?? `${text}.as_str().map(str::to_owned)`;
         if (kind === 'bool') return `${text}.as_bool().unwrap_or_default()`;
         return `${text}.as_str().unwrap_or_default().to_owned()`;
     }
@@ -10032,7 +10034,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'int' && defaulted) return `${text}.as_i64().unwrap_or(${this.rustScalarIntLiteral(fallback)})`;
         if (kind === 'ostr' && this.rustVenueStrCall(node)) return this.rustVenueStrCallText(node);
         if (kind === 'ostr' && this.rustBaseNativeStrCall(node)) return this.rustBaseNativeStrBareText(node);
-        if (kind === 'ostr') return `${text}.as_str().map(str::to_owned)`;
+        if (kind === 'ostr') return this.rustOptReaderCallText(node) ?? `${text}.as_str().map(str::to_owned)`;
         if (kind === 'oint') return `${text}.as_i64()`;
         if (kind === 'onum') return `${text}.as_f64()`;
         if (kind === 'obool') return `${text}.as_bool()`;
@@ -15320,6 +15322,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
 
         // Handle this.method(...) calls with optional params
+        const optNameArity: Record<string, number> = { safeString: 2, safeString2: 3, safeStringN: 2, safeStringLower: 2, safeStringUpper: 2 };
         if (expr.expression.kind === SyntaxKind.ThisKeyword) {
             const methodName = expr.name.text;
             const sig = this.methodSignatures[methodName];
@@ -15338,7 +15341,15 @@ export class RustTranspiler extends BaseTranspiler {
                 const ownedArgs = (list) => list.map((a, i) => this.rustOwnedArgText(a, this.rustWsWatchSlot(node, i) ? this.rustWsWatchSlotText(a, this.printNode(a, 0)) : printArg(a, i))).join(', ');
                 const requiredArgs = [ ownedArgs(args.slice(0, sig.requiredCount)), ...this.rustVenuePads(calleeParams, args.length, sig.requiredCount) ].filter((a) => a !== '').join(', ');
                 const reqPart = requiredArgs ? `${requiredArgs}, ` : '';
-                return `self.${methodName}(${reqPart}&[${args.slice(sig.requiredCount).map((a, i) => this.rustOwnedArgText(a, printArgs([ a ], sig.requiredCount + i))).join(', ')}])`;
+                const tail = args.slice(sig.requiredCount).map((a, i) => this.rustOwnedArgText(a, printArgs([ a ], sig.requiredCount + i))).join(', ');
+                const optName = this.rustOptReaderPrint.has(node) && sig.requiredCount === (optNameArity[methodName] ?? -1) ? this.rustOptReaderName(node) : undefined;
+                if (optName !== undefined) {
+                    // ral-62o: the `Option<String>` twin of the reader (same slots; `_k` takes the literal key as `&str`)
+                    this.rustOptReaderPrinted.add(node);
+                    const head = optName.key !== undefined ? `${ownedArgs(args.slice(0, 1))}, ${optName.key}` : requiredArgs;
+                    return `self.${optName.name}(${head}, &[${tail}])`;
+                }
+                return `self.${methodName}(${reqPart}&[${tail}])`;
             }
         }
 
@@ -15419,7 +15430,14 @@ export class RustTranspiler extends BaseTranspiler {
         // a trailing `&[..]` is an already-sliced tail, except the `&["a", ..]` key slot of a literal omit (ral-ra)
         if (args.length < fixed || (args.length > 0 && args[args.length - 1].startsWith('&[') && !this.rustOmitLiteralKeys(node))) return undefined;
         const params = this.rustCalleeParams(node);
+        const optName = receiver === 'self' && this.rustOptReaderPrint.has(node) ? this.rustOptReaderName(node) : undefined;
         const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== undefined || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : (at < fixed && this.rustOwnedArgText(node.arguments[at], a) !== a ? `\u0004${a}` : this.rustSliceArgText(a))));
+        if (optName !== undefined) {
+            // ral-62o: the `Option<String>` twin of the reader, chosen from the call node (`_k` when the key is a plain literal)
+            this.rustOptReaderPrinted.add(node);
+            const head = optName.key !== undefined ? [ cloned[0], optName.key ] : cloned.slice(0, fixed);
+            return `self.${optName.name}(${head.join(', ')}, &[${cloned.slice(fixed).join(', ')}])`;
+        }
         return `${receiver}.${methodName}(${cloned.slice(0, fixed).join(', ')}${fixed > 0 ? ', ' : ''}&[${cloned.slice(fixed).join(', ')}])`;
     }
 
@@ -19703,6 +19721,8 @@ export class RustTranspiler extends BaseTranspiler {
             // then sent its `sVal` local back to `Value`)
             const formatted = this.rustStrNativeExpression(exp) ? undefined : this.rustBoxedFormatInner(printed);
             if (formatted !== undefined) return `${idn}return Some(${formatted});`;
+            const optRead = this.rustStrNativeExpression(exp) ? undefined : this.rustOptReaderCallText(exp);
+            if (optRead !== undefined) return `${idn}return ${optRead};`;
             const suffix = this.rustStrNativeExpression(exp) ? '' : '.as_str().map(str::to_owned)';
             return `${idn}return ${printed}${suffix};`;
         }
@@ -25258,6 +25278,51 @@ export class RustTranspiler extends BaseTranspiler {
         return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName)) ? rust : undefined;
     }
 
+    // ── ral-62o: `Option<String>` reader twins (rustOptReaderCallText / rustOptReaderName) ──
+    // A typed `Option<String>` local, write or return fed by a base safeString-family reader prints the reader's
+    // `_opt` twin (hand-written in exchange_stubs.rs: same lookup, empty-string and default rules, `None` where the boxed
+    // helper yields `Null`), instead of `<boxed reader>.as_str().map(str::to_owned)`. Decided from the call node.
+    private static readonly RUST_OPT_K_READERS = new Set([ 'safe_string_k', 'safe_string_lower_k', 'safe_string_upper_k' ]);
+    private static readonly RUST_OPT_READERS: Record<string, { k?: string, any?: string }> = {
+        safeString: { k: 'safe_string_k_opt', any: 'safe_string_opt' },
+        safeString2: { any: 'safe_string2_opt' },
+        safeStringN: { any: 'safe_string_n_opt' },
+        safeStringLower: { k: 'safe_string_lower_k_opt' },
+        safeStringUpper: { k: 'safe_string_upper_k_opt' },
+    };
+
+    private rustOptReaderPrint = new WeakSet<any>();
+    private rustOptReaderPrinted = new WeakSet<any>();
+
+    /** The twin's name for a base reader call (and the `&str` key text of a `_k` twin), else undefined. */
+    rustOptReaderName(node: any): { name: string, key?: string } | undefined {
+        const callee: any = node?.expression;
+        if (!isCallExpression(node) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const twins = RustTranspiler.RUST_OPT_READERS[String(callee.name.text)];
+        if (twins === undefined || node.arguments.length < 2 || !this.rustCalleeIsRuntimeBase(node)) return undefined;
+        const key: any = node.arguments[1];
+        const literal = isStringLiteralLikeNode(key) && !(String(key.text) in this.StringLiteralReplacements) && !/["\\]/.test(String(key.text));
+        if (literal && twins.k !== undefined) return { name: twins.k, key: this.quotedStringLiteral(String(key.text)) };
+        return twins.any !== undefined ? { name: twins.any } : undefined;
+    }
+
+    /** The `_opt` twin call of a base safeString-family reader node, printed by the reader's own printer; else undefined. */
+    rustOptReaderCallText(expr: any, identation = 0): string | undefined {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || !isCallExpression(node) || this.checkerOrUndefined() === undefined) return undefined;
+        const borrowed = this.rustBorrowedDictReader(node);
+        if (borrowed === undefined ? this.rustOptReaderName(node) === undefined : !RustTranspiler.RUST_OPT_K_READERS.has(borrowed)) return undefined;
+        this.rustOptReaderPrint.add(node);
+        this.rustOptReaderPrinted.delete(node);
+        let text: string;
+        try {
+            text = this.printNode(node, identation).trim();
+        } finally {
+            this.rustOptReaderPrint.delete(node);
+        }
+        return this.rustOptReaderPrinted.has(node) ? text : undefined;
+    }
+
     /** `self.safe_X_k(&x, "k", &[..])` when `x` is a borrowed dict local or a typed container local. */
     printBorrowedDictRead(node: any, identation: number): string | undefined {
         if (!isCallExpression(node)) return undefined;
@@ -25278,7 +25343,9 @@ export class RustTranspiler extends BaseTranspiler {
         const dflt = node.arguments.length === 3 ? this.printNode(node.arguments[2], identation).trim() : '';
         const text = String(recv.text);
         const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[text] ?? text);
-        return `self.${rust}(&${name}, ${this.quotedStringLiteral(String(key.text))}, &[${dflt}])`;
+        const opt = this.rustOptReaderPrint.has(node) && RustTranspiler.RUST_OPT_K_READERS.has(rust);
+        if (opt) this.rustOptReaderPrinted.add(node);
+        return `self.${rust}${opt ? '_opt' : ''}(&${name}, ${this.quotedStringLiteral(String(key.text))}, &[${dflt}])`;
     }
 
     // ── lent string lists ────────────────────────────────────────────────────

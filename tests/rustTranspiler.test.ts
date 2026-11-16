@@ -6416,7 +6416,7 @@ describe('handed-on dict locals', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'handed-dict', 'ts/src/venue.ts')).content;
         expect(out).toMatch(/let mut query: crate::value::Dict = \w+\.get\(1\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
         expect(out).toContain('let mut rest: crate::value::Dict = self.omit(&query, Value::Str("x".into()), &[]).into_dict();');
-        expect(out).toContain('self.safe_string_k(&query, "s", &[])');
+        expect(out).toContain('self.safe_string_k_opt(&query, "s", &[])');
         expect(out).toContain('&[&rest])');
         expect(out).not.toContain('query: Value');
         expect(out).not.toContain('rest: Value');
@@ -6430,7 +6430,7 @@ describe('handed-on dict locals', () => {
     test('a conditional with a map on both arms holds the shared map out of a plain if-expression', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'handed-dict', 'ts/src/venue.ts')).content;
         expect(out).toMatch(/let mut picked: crate::value::Dict = \(if \(until (!= Value::Null|\.is_some\(\))\) \{ self\.omit\(params\.clone\(\), Value::Str\("until"\.into\(\)\), &\[\]\) \} else \{ params(\.clone\(\))? \}\)\.into_dict\(\);/);
-        expect(out).toContain('self.safe_string_k(&picked, "s", &[])');
+        expect(out).toContain('self.safe_string_k_opt(&picked, "s", &[])');
         expect(out).toContain('&[&picked])');
         expect(out).not.toContain('picked: Value');
         // a dict ternary handed straight back is stored-and-boxed-back (D11): typed, and the box moves the map
@@ -6443,10 +6443,10 @@ describe('borrowed dict locals', () => {
     test('a dict local read only by literal-key base readers holds the shared map and lends it to each read', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'borrowed-dict', 'ts/src/venue.ts')).content;
         expect(out).toMatch(/let mut data: crate::value::Dict = self\.safeDict\(resp(?:\.clone\(\))?, Value::Str\("data"\.into\(\)\), &\[\]\)\.into_dict\(\);/);
-        expect(out).toContain('self.safe_string_k(&data, "id", &[])');
+        expect(out).toContain('self.safe_string_k_opt(&data, "id", &[])');
         expect(out).toContain('self.safe_integer_k(&data, "n", &[Value::Int(1)])');
         expect(out).toContain('let mut merged: crate::value::Dict = ');
-        expect(out).toContain('self.safe_string_k(&merged, "s", &[])');
+        expect(out).toContain('self.safe_string_k_opt(&merged, "s", &[])');
         expect(out).not.toContain('data: Value');
         expect(out).not.toContain('data.clone()');
     });
@@ -6454,7 +6454,7 @@ describe('borrowed dict locals', () => {
     test('negative: a dict local that escapes to a Value slot keeps its box', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'borrowed-dict', 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut kept: Value = ');
-        expect(out).not.toContain('safe_string_k(&kept');
+        expect(out).not.toMatch(/safe_string_k(?:_opt)?\(&kept/);
     });
 });
 
@@ -6463,8 +6463,8 @@ describe('endpoint responses typed from the declared endpoint return', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'declared-endpoint-responses', 'ts/src/venue.ts')).content;
         expect(out).toMatch(/let mut rows: crate::value::List = self\.public_get_rows\([^\n]*\.await\.into_list\(\)/);
         expect(out).toMatch(/let mut byId: crate::value::Dict = self\.public_get_map\([^\n]*\.await\.into_dict\(\)/);
-        expect(out).toContain('self.safeString(&rows, ');
-        expect(out).toContain('self.safeString(&byId, ');
+        expect(out).toContain('self.safe_string_opt(&rows, ');
+        expect(out).toContain('self.safe_string_opt(&byId, ');
     });
 
     test('negative: a Dict | List endpoint answer read by index keeps the box', () => {
@@ -6479,7 +6479,7 @@ describe('endpoint responses with an initialiser', () => {
         expect(out).toMatch(/let mut response: crate::value::Dict = self\.public_get_a\([^\n]*\.await\.into_dict\(\)/);
         expect(out).toMatch(/let mut response: crate::value::Dict = self\.public_get_b\([^\n]*\.await\.into_dict\(\)/);
         expect(out).toContain('self.safe_dict_k(&response, "data", ');
-        expect(out).toContain('self.safeString2(&response, ');
+        expect(out).toContain('self.safe_string2_opt(&response, ');
         expect(out).not.toContain('response: Value');
     });
 
@@ -6774,7 +6774,7 @@ describe('optional dict and list locals', () => {
         expect(out).toContain('let mut fees: Option<crate::value::Dict> = ');
         expect(out).toContain('.into_opt_dict()');
         expect(out).toContain('fees.is_some()');
-        expect(out).toContain('self.safe_string_k(&fees, "id", &[])');
+        expect(out).toContain('self.safe_string_k_opt(&fees, "id", &[])');
         expect(out).toContain('let mut rows: Option<crate::value::List> = None');
         expect(out).toContain('rows = None');
         expect(out).not.toContain('rows = None.into_opt_list()');
@@ -6782,7 +6782,7 @@ describe('optional dict and list locals', () => {
         expect(out).toContain('rows.is_some()');
         expect(out).toContain('self.safeValue(&rows, ');
         expect(out).toContain('let mut info: Option<crate::value::Dict> = None');
-        expect(out).toContain('self.safeString(&info, key');
+        expect(out).toContain('self.safe_string_opt(&info, key');
         expect(out).not.toContain('fees: Value');
         expect(out).not.toContain('rows: Value');
         expect(out).not.toContain('info: Value');
@@ -6865,15 +6865,15 @@ describe('containers lent to any-key readers', () => {
     test('dict and list locals read by variable keys, indexes and length hold the shared container and lend it', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'borrowed-any-key', 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut data: crate::value::Dict = ');
-        expect(out).toContain('self.safeString(&data, key');
+        expect(out).toContain('self.safe_string_opt(&data, key');
         expect(out).toContain('self.safe_integer_k(&data, "n", &[Value::Int(1)])');
-        expect(out).toContain('self.safeString(&vs, key');
+        expect(out).toContain('self.safe_string_opt(&vs, key');
         expect(out).not.toContain('vs.clone().into()');
         expect(out).toContain('let mut lst: crate::value::List = ');
         expect(out).toContain('.into_list()');
         expect(out).toContain('self.safeValue(&lst, ');
-        expect(out).toContain('self.safeString2(&lst, ');
-        expect(out).toContain('self.safeString(&rows, ');
+        expect(out).toContain('self.safe_string2_opt(&lst, ');
+        expect(out).toContain('self.safe_string_opt(&rows, ');
         expect(out).toMatch(/rows\.len\(\) as i64/);
         expect(out).not.toContain('rows.clone().into()');
         expect(out).not.toContain('lst: Value');
@@ -8446,7 +8446,7 @@ describe('rust optional market locals read by key', () => {
     test('an empty market local read only by literal keys is an Option<Market> read through the reader trait', () => {
         expect(output).toContain('let mut market: Option<crate::types::Market> = None');
         expect(output).toContain('crate::value::KeyRead::key_read(&&market, "id")');
-        expect(output).toContain('self.safe_string_k(&market, "symbol", &[])');
+        expect(output).toContain('self.safe_string_k_opt(&market, "symbol", &[])');
     });
 
     test('a market local both read by key and handed on whole is an Option<Market> boxed once at the hand-off', () => {
@@ -8667,7 +8667,7 @@ describe('rust optional list locals', () => {
         expect(out).toContain('.into_opt_list()');
         expect(out).toContain('if (normalized.is_some()) {');
         expect(out).toContain('normalized.as_deref().map(Vec::as_slice).unwrap_or_default().get(i as usize)');
-        expect(out).toContain('self.safeString(&normalized, ');
+        expect(out).toContain('self.safe_string_opt(&normalized, ');
         expect(out).toContain('return self.parseTickers(rows, normalized.map_or(Value::Null, Value::Arr));');
         expect(out).toContain('let mut data: Option<crate::value::List> = ');
         expect(out).toContain('if (data.is_some()) {');
@@ -8867,7 +8867,7 @@ describe('rust reader default locals', () => {
         const text = out();
         expect(text).toMatch(/let mut flag: Option<bool> = self\.safe_?[bB]ool[^;]*\.as_bool\(\);/);
         expect(text).toContain('if (flag == Some(true)) {');
-        expect(text).toMatch(/let mut name: Option<String> = self\.safe_?[sS]tring[^;]*\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(text).toMatch(/let mut name: Option<String> = self\.safe_string_k_opt\([^;]*\);/);
         expect(text).toMatch(/let mut limit: Option<i64> = self\.safe_?[iI]nteger[^;]*\.as_i64\(\);/);
         expect(text).toMatch(/let mut fee: Option<f64> = self\.safe_?[nN]umber[^;]*\.as_f64\(\);/);
     });
@@ -8984,7 +8984,7 @@ describe('rust list reads with an empty list default', () => {
         expect(out).toContain('rows.get(i as usize).cloned().unwrap_or(Value::Null)');
     });
     test('a list lent to an any-key reader passes a reference', () => {
-        expect(out).toContain('self.safeString(&rows, Value::Int(i), &[])');
+        expect(out).toContain('self.safe_string_opt(&rows, Value::Int(i), &[])');
     });
     test('a list also handed to a Value slot boxes its shared handle', () => {
         expect(out).toContain('let mut items: crate::value::List = ');
@@ -9722,7 +9722,7 @@ describe('rust message field reads handed on whole', () => {
         const text = out();
         const ticker = text.slice(text.indexOf('fn handleTicker'), text.indexOf('fn handleTrades'));
         expect(ticker).toContain('let mut data: crate::value::Dict = __pro_message.get("data").cloned().unwrap_or_default().into_dict();');
-        expect(ticker).toContain('self.safe_string_k(&data, "symbol", &[])');
+        expect(ticker).toContain('self.safe_string_k_opt(&data, "symbol", &[])');
         expect(ticker).toContain('self.parseTicker(Value::Dict(data)');
         expect(ticker).not.toContain('Some(__v) if matches!(__v, Value::Dict(_))');
     });
@@ -10463,7 +10463,7 @@ describe('typed market slots of the singular parsers', () => {
         expect(base).toContain('self.parseTicker(tickers.get(0).cloned().unwrap_or(Value::Null), market)');
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('market: Option<&crate::types::Market>) -> Value');
-        expect(out).toContain('self.safe_string_k(&market, \"symbol\"');
+        expect(out).toContain('self.safe_string_k_opt(&market, \"symbol\"');
         expect(out).toContain('market.is_some()');
         expect(out).toContain('crate::value::KeyRead::key_read(&market, \"id\")');
         expect(out).toContain('self.hold(crate::Value::from(market))');
@@ -13541,7 +13541,7 @@ describe('vd: a reader whose default is an explicit undefined takes the no-defau
         fs.writeFileSync(path.join(root, 'ts/src/venue4.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue4 extends Exchange {\n    m (market: Dict, params: Dict) {\n        const qty = this.safeString (params, 'cost', undefined);\n        if (qty === undefined) {\n            return this.hold (params);\n        }\n        return { 'qty': qty };\n    }\n}\n");
         const t = new Transpiler({ 'verbose': false });
         const output = t.transpileRustByPath(path.join(root, 'ts/src/venue4.ts')).content;
-        expect(output).toContain('let mut qty: Option<String> = self.safeString(params.clone(), Value::Str("cost".into()), &[Value::Null]).as_str().map(str::to_owned);');
+        expect(output).toContain('let mut qty: Option<String> = self.safe_string_k_opt(params.clone(), "cost", &[Value::Null]);');
         expect(output).toContain('if (qty.is_none()) {');
     });
 });
@@ -15625,7 +15625,7 @@ describe('41d: a reader whose long declaration is held by the 400-char guard spl
     };
     test('string reader with a nested no-default string reader default: the nested reader prints into Option<String> __rd_x, the outer takes Value::from(__rd_x)', () => {
         const out = run("    m (params: any, account: any) {\n        const vault = this.safeString2 (params, 'K1', 'K2', this.safeString (account, 'K3'));\n        if (vault === undefined) {\n            return 0;\n        }\n        return this.hold (vault);\n    }\n".replace('K1', 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk').replace('K2', 'jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj').replace('K3', 'qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'));
-        expect(out).toMatch(/let __rd_vault: Option<String> = .*qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq.*;\n\s*let mut vault: Option<String> = .*&\[Value::from\(__rd_vault\)\]\)\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out).toMatch(/let __rd_vault: Option<String> = .*qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq.*;\n\s*let mut vault: Option<String> = .*&\[Value::from\(__rd_vault\)\]\);/);
         expect(out.split('\n').filter((l: string) => l.length > 400)).toEqual([]);
     });
     test('integer reader with a `this.seconds () + N` default: i64 temp, Option<i64> local', () => {
@@ -17242,7 +17242,7 @@ describe('ral-47c: a built list local named after its own method', () => {
         fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { List, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchMarkets (raw: List): any {\n        const fetchMarkets: List = [];\n        for (let i = 0; i < raw.length; i++) {\n            const t = this.safeString (raw, i);\n            if (t === 'option') {\n                continue;\n            }\n            fetchMarkets.push (t);\n        }\n        const out = [];\n        for (let i = 0; i < fetchMarkets.length; i++) {\n            const marketType = this.safeString (fetchMarkets, i);\n            out.push (this.hold (marketType));\n        }\n        return out;\n    }\n}\n");
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut fetchMarkets: crate::value::List = ');
-        expect(out).toContain('self.safeString(&fetchMarkets, Value::Int(i), &[])');
+        expect(out).toContain('self.safe_string_opt(&fetchMarkets, Value::Int(i), &[])');
         expect(out).not.toContain('let mut fetchMarkets: Value');
     });
 });
@@ -19045,7 +19045,7 @@ describe('ral-55a: long literal-key omit declarations and reassigned handed maps
     test('a reassigned handed map: any-key reader lent, slot write taken back, moved into the returned tuple', () => {
         const out = mk ('r55a-polo', "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    orderRequest (symbol: string, market: boolean, params: Dict = {}): any {\n        const result: Dict = { 'symbol': symbol };\n        const [ po, query ] = this.handleOptionBoolAndParams (params, 'createOrder', 'postOnly');\n        let queryOmitted: Dict = this.omit (query, [ 'postOnly', 'triggerPrice', 'stopPrice' ]);\n        if (market) {\n            let createMarketBuyOrderRequiresPrice = true;\n            [ createMarketBuyOrderRequiresPrice, queryOmitted ] = this.handleOptionBoolAndParams (queryOmitted, 'createOrder', 'requiresPrice', true);\n            const cost = this.safeNumber (queryOmitted, 'cost');\n            queryOmitted = this.omit (queryOmitted, 'cost');\n            result['cost'] = cost;\n            result['req'] = createMarketBuyOrderRequiresPrice;\n        }\n        const clientOrderId = this.safeString2 (queryOmitted, 'clientOrderId', 'clOrdId');\n        if (clientOrderId !== undefined) {\n            result['clientOid'] = clientOrderId;\n            queryOmitted = this.omit (queryOmitted, [ 'clientOrderId', 'clOrdId' ]);\n        }\n        return [ result, queryOmitted ];\n    }\n}\n");
         expect(out).toContain('let mut queryOmitted: crate::value::Dict = self.omit(&query, &["postOnly", "triggerPrice", "stopPrice"], &[]).into_dict();');
-        expect(out).toContain('self.safeString2(&queryOmitted, ');
+        expect(out).toContain('self.safe_string2_opt(&queryOmitted, ');
         expect(out).toContain('self.handleOptionBoolAndParams(&queryOmitted, ');
         expect(out).toContain('Value::from(vec![Value::Map(result), Value::Dict(queryOmitted)])');
     });
@@ -19809,7 +19809,7 @@ describe('ral-57a: a never-reassigned omit result read by a hand-written any-key
         const out = mk ('r57a-any', venue ('paramsGeneration'));
         expect(out).toContain('let mut paramsOmitted: crate::value::Dict = self.omit(&paramsGeneration, ');
         expect(out).toContain('self.omit(&paramsOmitted, ');
-        expect(out).toContain('self.safeString2(&paramsOmitted, ');
+        expect(out).toContain('self.safe_string2_opt(&paramsOmitted, ');
     });
     test('guard: an omit whose head is not a proven map (it may carry a list body) keeps Value', () => {
         const out = mk ('r57a-any-neg', venue ('this.other (paramsGeneration)'));
@@ -21728,5 +21728,63 @@ describe('ral-63p: an i64 base sum bounding a counter loop that starts at an i64
     test('negative: the counter written in the body keeps the bound a Value', () => {
         const out = transpiler.transpileRustByPath (write ('ral-63p-sum-bound-w', loop ('i < endIndex').replace ('chunk.push (tokenIds[i]);', 'chunk.push (tokenIds[i]);\n                i = i + 1;'))).content;
         expect(out).toContain('let mut endIndex: Value = ');
+    });
+});
+
+describe('ral-62o: an Option<String> reader local prints the `_opt` twin of the reader from the call node', () => {
+    const build = () => {
+        const dir = path.join (rustFixtureRoot, 'ral62o-opt');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n"
+            + "    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n"
+            + "    safeString2 (o: any, a: any, b: any, d: Str = undefined): Str { return o[a]; }\n"
+            + "    safeStringN (o: any, ks: any[], d: Str = undefined): Str { return o[ks[0]]; }\n"
+            + "    safeStringLower (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n"
+            + "    safeStringLower2 (o: any, a: any, b: any, d: Str = undefined): Str { return o[a]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    pick (o: Dict, i: number, k: string): string {\n"
+            + "        const a = this.safeString (o, 'id');\n"
+            + "        const b = this.safeString (o, i);\n"
+            + "        const c = this.safeString2 (o, 'x', 'y');\n"
+            + "        const d = this.safeStringN (o, [ 'x', 'y' ]);\n"
+            + "        const e = this.safeStringLower (o, 'side');\n"
+            + "        const f = this.safeStringLower2 (o, 'x', 'y');\n"
+            + "        let g = this.safeString (o, 'g');\n"
+            + "        if (g === undefined) {\n"
+            + "            g = this.safeString (o, 'h');\n"
+            + "        }\n"
+            + "        if (a === undefined || b === undefined || c === undefined || d === undefined || e === 'buy' || f === 'sell' || g === undefined) {\n"
+            + "            return 'none';\n"
+            + "        }\n"
+            + "        return k;\n"
+            + "    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('literal key: the `_k_opt` twin; Value key / safeString2 / safeStringN: their `_opt` twin; no `.as_str().map(str::to_owned)` tail', () => {
+        const out = build ();
+        expect(out).toContain('let mut a: Option<String> = self.safe_string_k_opt(o.clone(), "id", &[]);');
+        expect(out).toMatch(/let mut b: Option<String> = self\.safe_string_opt\(o\.clone\(\), [^;]*i[^;]*, &\[\]\);/);
+        expect(out).toContain('let mut c: Option<String> = self.safe_string2_opt(o.clone(), Value::Str("x".into()), Value::Str("y".into()), &[]);');
+        expect(out).toMatch(/let mut d: Option<String> = self\.safe_string_n_opt\(o\.clone\(\), [^;]*, &\[\]\);/);
+        expect(out).toContain('let mut e: Option<String> = self.safe_string_lower_k_opt(o.clone(), "side", &[]);');
+        expect(out).toMatch(/g = self\.safe_string_k_opt\(o(?:\.clone\(\))?, "h", &\[\]\);/);
+        expect(out).not.toMatch(/self\.safe_string(?:_k|_lower_k|2|_n)?\([^;]*\)\.as_str\(\)\.map\(str::to_owned\)/);
+    });
+    test('a method declared to return a string returns the twin of the reader it hands back', () => {
+        const dir = path.join (rustFixtureRoot, 'ral62o-ret');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n"
+            + "    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    parseStatus (status: Str): Str {\n        const statuses: Dict = { 'a': 'open' };\n        return this.safeString (statuses, status, status);\n    }\n"
+            + "    token (): Str {\n        return this.safeString (this.options, 'token');\n    }\n"
+            + "    use (s: Str): string {\n        return this.parseStatus (s) + this.token ();\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/return self\.safe_string_opt\(&?statuses[^;]*\);/);
+        expect(out).toMatch(/return self\.safe_string_k_opt\([^;]*"token", &\[\]\);/);
+        expect(out).not.toMatch(/return self\.safe_string[a-z0-9_]*\([^;]*\)\.as_str\(\)\.map\(str::to_owned\);/);
+    });
+    test('guard: a reader with no `_opt` twin (safeStringLower2) keeps its boxed call and the unwrap', () => {
+        expect(build ()).toContain('let mut f: Option<String> = self.safeStringLower2(o.clone(), Value::Str("x".into()), Value::Str("y".into()), &[]).as_str().map(str::to_owned);');
     });
 });
