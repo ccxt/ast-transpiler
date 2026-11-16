@@ -22020,3 +22020,16 @@ describe('ral-64i: an optional-map alias of a Value source converts a copy unles
         expect(out).toContain('self.parseMarginModification(&responseData');
     });
 });
+
+describe('ral-64e: an own-keys element key whose bind is mutated only inside the next compound statement is an Option<&str> local', () => {
+    const src = (body: string) => "export type Str = string | undefined;\nclass T {\n    inArray (a: any, b: any[]): boolean { return false; }\n    omit (o: any, k: any): any { return o; }\n    fm (x: any, extendsStr: Str) {\n        let featuresObj = x['a'];\n        if (extendsStr !== undefined) {\n            featuresObj = this.omit (featuresObj, 'extends');\n        }\n        const keys = Object.keys (featuresObj);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const featureBlock = featuresObj[key];\n" + body + "        }\n        return featuresObj;\n    }\n}\n";
+    test('positive: the key is typed and the bind reads it by reference', () => {
+        const out = transpiler.transpileRust(src("            if (!this.inArray (key, [ 'sandbox' ]) && featureBlock !== undefined) {\n                if (!('symbolRequired' in featureBlock)) {\n                    featureBlock['symbolRequired'] = this.inArray (key, [ 'createOrder' ]);\n                }\n            }\n")).content;
+        expect(out).toContain('let mut key: Option<&str> = keys.get(i as usize).and_then(Value::as_str);');
+        expect(out).toContain('let mut featureBlock: Value = get_value(&featuresObj, key.as_deref());');
+    });
+    test('guard: a bind mutated by the very next statement keeps the key a Value', () => {
+        const out = transpiler.transpileRust(src("            featureBlock['symbolRequired'] = this.inArray (key, [ 'createOrder' ]);\n")).content;
+        expect(out).toContain('let mut key: Value = ');
+    });
+});

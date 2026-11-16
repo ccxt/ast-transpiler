@@ -12269,10 +12269,29 @@ export class RustTranspiler extends BaseTranspiler {
         if (up === undefined || (isElementAccessExpression(up) && up.expression === read) || up.kind === SyntaxKind.DeleteExpression
             || isPrefixUnaryExpression(up) || up.kind === SyntaxKind.PostfixUnaryExpression) return false;
         if (isBinaryExpression(up) && up.left === read && rustIsAssignmentOperator(up.operatorToken.kind)) return false;
-        if (!this.isNativeAccessPositionSafe(read) || this.isNativeWriteTargetBase(read) || (this.isWriteBackBindRead(read) && !(ownKeys && this.rustOwnKeysTypedRowRead(read)))) return false;
+        if (!this.isNativeAccessPositionSafe(read) || this.isNativeWriteTargetBase(read)
+            || (this.isWriteBackBindRead(read) && !(ownKeys && (this.rustOwnKeysTypedRowRead(read) || this.rust64eNestedOnlyMutationBind(read))))) return false;
         return !this.isTestSource(recv) && this.rustMapParamDeclaration(recv) === undefined && this.rustOkeyKind(recv, read) === undefined
             && this.rustReadBearerKind(recv) === undefined && this.rustParamShadowOf(recv) === undefined && !this.rustLentListUse(recv)
             && this.printOptListElement(recv, n) === undefined;
+    }
+
+    /** ral-64e: the bind `const b = m[k]` is a single-declaration statement whose next sibling statement is a compound
+     *  statement (`if` / loop / block), not an expression statement: the local's mutation sits only inside that statement
+     *  (base featuresMapper `featureBlock`), so no write-back statement follows the bind directly, and the element is read
+     *  with the same `get_value(&m, &k)` call whatever the key's type (`impl ValueKey`). */
+    rust64eNestedOnlyMutationBind(read: any): boolean {
+        const declaration: any = read?.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer !== read) return false;
+        const list: any = declaration.parent;
+        const statement: any = list?.parent;
+        if (statement?.kind !== SyntaxKind.VariableStatement || list.declarations.length !== 1) return false;
+        const siblings: any[] = statement.parent?.statements ?? [];
+        const at = siblings.indexOf(statement);
+        if (at < 0 || at + 1 >= siblings.length) return false;
+        const next: any = siblings[at + 1];
+        return next.kind === SyntaxKind.IfStatement || next.kind === SyntaxKind.ForStatement || next.kind === SyntaxKind.Block
+            || next.kind === SyntaxKind.WhileStatement || next.kind === SyntaxKind.ForOfStatement || next.kind === SyntaxKind.ForInStatement;
     }
 
     /** ral-49e: the read's checker type is a declared record (`Dictionary<Dict>` receiver): its bind prints as the held
