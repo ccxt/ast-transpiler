@@ -5515,8 +5515,10 @@ describe('collection helpers on proven plain-dict / Arr-only locals', () => {
     });
 
     test('Object.keys / Object.values on a prediction plain local are native; any keeps the helper', () => {
-        expect(prediction).toContain('let mut queryKeys: Value = Value::Array(query.as_map().map(|__m| __m.keys().map(|__k| Value::Str(__k.clone().into())).collect()).unwrap_or_default());');
-        expect(prediction).toContain('let mut queryValues: Value = Value::Array(query.as_map().map(|__m| __m.values().cloned().collect()).unwrap_or_default());');
+        // ral-84b: the literal-built prediction map itself is a native IndexMap, its keys / values read in place
+        expect(prediction).toContain('let mut query: indexmap::IndexMap<String, Value> = ');
+        expect(prediction).toContain('let mut queryKeys: Value = Value::Array(query.keys().cloned().map(Value::from).collect());');
+        expect(prediction).toContain('let mut queryValues: Value = Value::Array(query.values().cloned().collect());');
         expect(prediction).toContain('let mut loose: Value = object_keys(&response);');
     });
 });
@@ -24266,5 +24268,68 @@ describe('ral-84a: an optional safeDict delta pushed into a typed book cache is 
     test('negative: a push into a plain list local is no book cache push', () => {
         const out = write ('84a-cpush-neg', buffer.replace ('orderbook.cache.push (delta);', 'const rows = [];\n            rows.cache.push (delta);'));
         expect(out).not.toContain('let mut delta: Option<crate::value::Dict>');
+    });
+});
+
+describe('ral-84b: a clock string concatenated with a nil-declared string local is a String', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export default class Exchange {\n    seconds (): number { return 1; }\n    json (x: any): string { return ''; }\n    hmac (x: string): string { return x; }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    sign (path: string, method: string = 'GET', params: any = {}) {\n        let requestBody: string = undefined;\n        let headers: any = undefined;\n        const timestamp = this.seconds ().toString ();\n        const privateHeaders: any = {\n            'timestamp': timestamp,\n        };\n        let auth: string = method + timestamp + path;\n        if (method === 'POST') {\n            requestBody = this.json (params);\n            auth = method + timestamp + path + requestBody;\n        }\n        privateHeaders['signature'] = this.hmac (auth);\n        headers = privateHeaders;\n        return { 'body': requestBody, 'headers': headers };\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84b1-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('delta sign timestamp: String, lent into the header literal before the later concatenations', () => {
+        expect(out).toContain('let mut timestamp: String = format!("{}", self.seconds().as_i64().unwrap_or_default());');
+        expect(out).not.toContain('let mut timestamp: Value');
+    });
+});
+
+describe('ral-84b: a prediction literal map read by Object.keys is a native map', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export default class Exchange {\n    safeString (obj: any, key: any, d: any = undefined): string { return obj[key]; }\n    keep (x: any): any { return x; }\n}\n",
+        'ts/src/prediction/venue.ts': "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    handleBook (rows: any[]) {\n        const updated: any = {};\n        for (let i = 0; i < rows.length; i++) {\n            const symbol = this.safeString (rows[i], 'symbol');\n            if (symbol !== undefined) {\n                updated[symbol] = true;\n            }\n        }\n        const updatedSymbols = Object.keys (updated);\n        return this.keep (updatedSymbols);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84b3-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/prediction/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('myriad handleOrderBook updated: IndexMap, Object.keys reads its own keys', () => {
+        expect(out).toContain('let mut updated: indexmap::IndexMap<String, Value> = ');
+        expect(out).not.toContain('let mut updated: Value');
+    });
+});
+
+describe('ral-84b: an implodeParams path appended into a String url builder is a String', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export default class Exchange {\n    urls: any = {};\n    safeString (obj: any, key: any, d: any = undefined): string { return obj[key]; }\n    implodeParams (path: string, params: any): string { return path; }\n    urlencode (p: any): string { return ''; }\n    isEmpty (p: any): boolean { return true; }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    sign (path: string, api: string = 'public', method: string = 'GET', params: any = {}) {\n        const pathWithParams = this.implodeParams (path, params);\n        const apiUrl = this.safeString (this.urls, api);\n        let url = apiUrl + '/v1/';\n        if (api === 'public') {\n            url += pathWithParams;\n            if (!this.isEmpty (params)) {\n                url += '?' + this.urlencode (params);\n            }\n        } else {\n            url += pathWithParams;\n        }\n        return { 'url': url, 'method': method };\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84b4-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('modetrade sign pathWithParams: String, appended natively into the url builder', () => {
+        expect(out).not.toContain('let mut pathWithParams: Value');
+        expect(out).toMatch(/let mut pathWithParams: String = /);
     });
 });
