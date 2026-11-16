@@ -22193,6 +22193,8 @@ export class RustTranspiler extends BaseTranspiler {
         return dflt === undefined || this.literalKindOfNode(dflt) === 'null' || isObjectLiteralExpression(dflt);
     }
     static readonly RUST_NEVER_NULL_TEST_READERS = new Set([ 'safeList', 'safeList2', 'safeListN', 'safeDict', 'safeDict2', 'safeDictN' ]);
+    /** ral-63i: base map readers whose result prints as a `Value` (the other arm of a boxed ternary arm). */
+    static readonly RUST_63I_DICT_READERS = new Set([ 'safeDict', 'safeDict2', 'safeDictN' ]);
     private rustNeverNullTests = new WeakMap<any, any>();
 
     /** ral-60n: the reader's default is the empty literal of the local's kind (`[]` for a list, `{}` for a map). */
@@ -23280,6 +23282,9 @@ export class RustTranspiler extends BaseTranspiler {
         const watched = watchedKind === 'dict' || watchedKind === 'list';
         if (!watched && !this.rustDictElementSource(init) && !this.rustListElementSource(init) || up === undefined || this.rustScalarInNestedWrite(n, true)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
+        // ral-63i: an element of an array literal that is the whole right side of `x = [..]` / `m[k] = [..]` or a base
+        // safeList* default (rust62nListLiteralSink): the literal boxes each element, so the row enters as the shared map
+        if (isArrayLiteralExpression(up) && this.rustDictElementSource(init) && this.rust62nListLiteralSink(up)) return true;
         // `rows.push (row)` into another local list: the list keeps its own type, the element enters as the shared map
         if (isCallExpression(up) && isPropertyAccessExpression(up.expression) && isIdentifier(up.expression.expression) && up.arguments.length === 1 && up.arguments[0] === n
             && String(up.expression.name.text) === 'push') return !this.rustIdentifierRefersToDeclaration(up.expression.expression, this.rustDeclarationOfIdentifier(n) as any);
@@ -24290,15 +24295,34 @@ export class RustTranspiler extends BaseTranspiler {
     // ── rustDeclaredEndpointBoxUse (ral-ld): a declared-endpoint optional container handed on whole ──
     // `{ 'info': response }` / `return response`: the box `x.map_or(Value::Null, Value::Dict|Arr)` gives back the
     // answer of the declared shape, Null for an unset local.
+    /** ral-63i: `this.m (..)` whose resolved declaration is a method of the calling venue's own source file (not the base
+     *  tier, not an abstract endpoint), so its argument slots print from that declaration. */
+    rust63iSameFileMethod(call: any): boolean {
+        const declaration: any = this.rustScalarCallee(call);
+        if (declaration?.kind !== SyntaxKind.MethodDeclaration || declaration.body === undefined) return false;
+        const file: any = declaration.getSourceFile?.();
+        return file !== undefined && file === call.getSourceFile?.() && !RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName));
+    }
+
     rustDeclaredEndpointBoxUse(n: any): boolean {
         const up: any = n.parent;
         if (up === undefined || this.rustScalarInNestedWrite(n, true)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n && isObjectLiteralExpression(up.parent) && !this.rustInDestructureWrite(n);
         if (isReturnStatement(up)) return up.expression === n;
+        // ral-63i: an argument of a same-class venue method (`this.m (.., x)`) at a plain by-value `Value` slot (no native
+        // map / list / str / bool slot, not a typed unified method): the box hands over the map the boxed local held, Null for `None`
+        if (isCallExpression(up) && up.expression !== n && isPropertyAccessExpression(up.expression) && up.expression.expression.kind === SyntaxKind.ThisKeyword
+            && this.rust63iSameFileMethod(up) && !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && !this.rustLentHelperSlot(up, n, 'dict')) {
+            return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+        }
         // ral-ua: an arm of a ternary whose other arm is a literal boxes like a return (the arm value is the box)
         if (up.kind === SyntaxKind.ConditionalExpression && up.condition !== n) {
             const other: any = this.unwrapParens(up.whenTrue === n ? up.whenFalse : up.whenTrue);
-            return isObjectLiteralExpression(other) || this.literalKindOfNode(other) !== undefined;
+            if (isObjectLiteralExpression(other) || this.literalKindOfNode(other) !== undefined) return true;
+            // ral-63i: the other arm is a base `safeDict*` read (a `Value` on every path): the if-expression stays a `Value`, and
+            // this arm boxes the map the boxed local held (Null for `None`)
+            const otherCall: any = this.rustSkipWrappers(other);
+            return isCallExpression(otherCall) && this.rustBaseCallNamed(otherCall, RustTranspiler.RUST_63I_DICT_READERS);
         }
         // ral-60i: the default of `safeDict (x, k, x)` (its own head): the optional box hands back the map the boxed local
         // held, Null for `None`, so a missing key answers exactly what the boxed default answered

@@ -21518,3 +21518,70 @@ describe('ral-63k: the key of a one-level helper write on a call-declared local 
         expect(out).toMatch(/let mut key: Value = /);
     });
 });
+
+describe('ral-63i: an empty-declared endpoint response handed whole to a same-file venue method Value slot', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const api = "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    privateGetA (params = {}): Promise<Dict> { return this.hold (params); }\n    privateGetB (params = {}): Promise<Dict> { return this.hold (params); }\n}\n";
+    const write = (name: string, handOff: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), api);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends venueApi {\n    parseUta (rows: Dict[], response: Dict | undefined = undefined): any {\n        return this.hold ([ rows, response ]);\n    }\n    async fetchThing (kind: Str, params: Dict = {}) {\n        let response = undefined;\n        if (kind === 'a') {\n            response = await this.privateGetA (params);\n            const rows = this.safeList (response, 'data', []);\n            return " + handOff + ";\n        } else {\n            response = await this.privateGetB (params);\n        }\n        const data = this.safeList (response, 'data', []);\n        return data;\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('the response holds Option<Dict> and boxes once at the venue slot', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-63i-slot-pos', 'this.parseUta (rows, response)')).content;
+        expect(out).toContain('let mut response: Option<crate::value::Dict> = None;');
+        expect(out).toContain('response.clone().map_or(Value::Null, Value::Dict)');
+        expect(out).toContain('.await.into_opt_dict();');
+    });
+    test('a base-tier Value slot (boxed straight back) keeps the local Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-63i-slot-neg', 'this.hold (response)')).content;
+        expect(out).not.toContain('let mut response: Option<crate::value::Dict>');
+    });
+});
+
+describe('ral-63i: an empty-declared endpoint response as the arm of a ternary whose other arm is a base safeDict read', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const api = "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    privateGetA (params = {}): Promise<Dict> { return this.hold (params); }\n    privateGetB (params = {}): Promise<Dict> { return this.hold (params); }\n}\n";
+    const write = (name: string, other: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), api);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends venueApi {\n    parseThing (o: Dict, m: any = undefined): any { return this.hold (o); }\n    async cancelThing (kind: Str, params: Dict = {}) {\n        let response = undefined;\n        if (kind === 'a') {\n            response = await this.privateGetA (params);\n        } else {\n            response = await this.privateGetB (params);\n        }\n        const contract = (kind === 'swap');\n        const order = contract ? response : " + other + ";\n        return this.parseThing (order);\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('the response holds Option<Dict> and boxes at the arm', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-63i-tern-pos', "this.safeDict (response, 'result', {})")).content;
+        expect(out).toContain('let mut response: Option<crate::value::Dict> = None;');
+        expect(out).toContain('{ response.clone().map_or(Value::Null, Value::Dict) } else { self.safe_dict_k(&response, ');
+    });
+    test('a non-reader other arm keeps the local Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-63i-tern-neg', 'this.hold (params)')).content;
+        expect(out).not.toContain('let mut response: Option<crate::value::Dict>');
+    });
+});
+
+describe('ral-63i: a Dict[] row stored as the element of an array literal written whole into a map slot', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const write = (name: string, store: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    bucket (data: Dict) {\n        const buckets: Dict = {};\n        const rows: Dict[] = this.safeList (data, 'rows', []);\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            const slug = this.safeString (row, 'slug');\n            if (slug !== undefined) {\n" + store + "\n            }\n        }\n        return buckets;\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('the row holds the shared map and boxes once inside the literal', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-63i-lit-pos', '                buckets[slug] = [ row ];')).content;
+        expect(out).toContain('let mut row: crate::value::Dict = ');
+        expect(out).toContain('vec![Value::Dict(row)]');
+    });
+    test('a literal handed to a call slot keeps the row Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-63i-lit-neg', '                this.hold ([ row ]);')).content;
+        expect(out).not.toContain('let mut row: crate::value::Dict');
+    });
+});
