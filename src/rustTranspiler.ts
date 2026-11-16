@@ -6477,7 +6477,26 @@ export class RustTranspiler extends BaseTranspiler {
         if (node === undefined || !isAsExpression(node) || node.type?.kind !== SyntaxKind.StringKeyword) return undefined;
         const inner: any = this.unwrapParens(node.expression);
         if (!isCallExpression(inner) || !isPropertyAccessExpression(inner.expression) || !this.rustScalarReceiver(inner.expression.expression)) return undefined;
+        // ral-68f: also a base safeString-family reader with no default (bithumb pro `this.safeString2 (m, a, b) as string`):
+        // the cast prints nothing, the reader's box is `Str` or `Null`, exactly its `_opt` twin
+        if (String(inner.expression.name.text) === 'safeString2' && this.rust68fNoDefaultReader(inner) && this.rust68fConstInit(node)) return inner;
         return RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(inner.expression.name.text)] === 'ostr' ? inner : undefined;
+    }
+
+    /** ral-68f: `node` is the whole initializer of a single-declarator `const` statement. */
+    rust68fConstInit(node: any): boolean {
+        let top: any = node;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const decl: any = top.parent;
+        const list: any = decl?.parent;
+        return decl !== undefined && isVariableDeclaration(decl) && decl.initializer === top && isIdentifier(decl.name)
+            && (list?.flags & NodeFlags.Const) !== 0 && list.declarations.length === 1;
+    }
+
+    /** ral-68f: a base safeString-family reader call (not safeCurrencyCode) with no default argument (rust64bReaderLocal's call test). */
+    rust68fNoDefaultReader(init: any): boolean {
+        if (!this.rustUdReaderStr(init) || String(init.expression.name.text) === 'safeCurrencyCode') return false;
+        return init.arguments.length <= (RustTranspiler.RUST_SAFE_STRING_KEY_ARGS[String(init.expression.name.text)] ?? 2);
     }
 
     // ── parseNumber of a string (rustParseNumberStrCall) ──
@@ -7256,9 +7275,22 @@ export class RustTranspiler extends BaseTranspiler {
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
                 && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration) && !this.rustScalarCacheFieldCtor(n, write)
                 && !this.rustScalarSumOperandWrite(n, write) && !this.rust58kDictReaderKeyWrite(n, write) && !this.rust60kBaseCallArgDictWrite(n, write)
-                && !this.rust62pBaseCallArgKeyWrite(n, write) && !this.rust64nTypedArgWrite(n, write, form)) return false;
+                && !this.rust62pBaseCallArgKeyWrite(n, write) && !this.rust64nTypedArgWrite(n, write, form) && !this.rust68fReaderSelfArgWrite(n, write, form, declaration)) return false;
         }
         return true;
+    }
+
+    /** ral-68f: an `Option<String>` base-reader local boxed at its moving last use as a bare argument of the `this.` call
+     *  that is the whole source of a write (mexc pro `timeframe = this.findTimeframe (timeframeId, ..)`): the box is
+     *  `x.map(Value::from).unwrap_or(Value::Null)`, the `Str` / `Null` the `Value` local moved there (ccxt's
+     *  rustStr2LocalOptionString pass printed this); the write's own source text is the call, unchanged otherwise. Also the
+     *  local itself as the whole source of a write to a plain `Value` local, at its last use. */
+    rust68fReaderSelfArgWrite(n: any, write: any, form: string, declaration: any): boolean {
+        if (this.rustScalarDecisions.get(declaration) !== 'ostr' || !this.rust64bReaderLocal(declaration) || !this.rustLocalLastUse(n, declaration)) return false;
+        // the whole source of a write to a local (binance `notional = quoteOrderQtyNew`): boxed when the target stays `Value`,
+        // moved (`x.take()`) when the target is an `Option<String>` local too (`native`); either way its last use
+        if (form === 'xbox' || form === 'native') return this.unwrapParens(write.right) === n && isIdentifier(this.unwrapParens(write.left));
+        return form === 'box' && this.unwrapParens(write.right) === n.parent && this.rustScalarSelfArgBox(n);
     }
 
     /** ral-64n: a typed-signature argument (`targ`: printed `x.as_deref().unwrap_or_default()` / `x.as_deref()` / the Copy
@@ -8309,6 +8341,10 @@ export class RustTranspiler extends BaseTranspiler {
         // on a typed map bearer: the printer's own guarded insert (rustBearerChainedWrite) takes the literal, no ccxt pass reads
         // it; at the local's last use the box moves the string where the `Value` moved (grvt createOrder selectedType)
         if ((kind === 'str' || kind === 'ostr') && this.rust68aBearerLitChainLiteralValue(n) && this.rustLocalLastUse(n, this.rustDeclaredNode(n))) return 'box';
+        // ral-68f: (before the nested-write veto, which counts `this.F[k] = v` as nested) an `Option<String>` base-reader local (no default) as the key of a statement `this.F[k] = v` on a plain
+        // untagged field the printer inserts natively: the key text is `k.as_deref().unwrap_or("null").to_string()`, the
+        // one allocation `stringify_param(&k)` of the boxed key made (ccxt's rustStr2LocalOptionString pass printed this)
+        if (kind === 'ostr' && this.rust64bReaderLocal(this.rustDeclaredNode(n)) && this.rustPlainFieldInsertKey(n)) return 'key';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -9250,6 +9286,20 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isElementAccessExpression(left) || !isPropertyAccessExpression(left.expression) || left.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const key: any = this.rustSkipWrappers(left.argumentExpression);
         return key !== undefined && isIdentifier(key) && key.text !== n.text && key.text !== 'undefined';
+    }
+
+    /** ral-68f: `n` (or `(n as string)`, through parentheses) is an argument of a `new X (..)` / `new m[k] (..)` expression that is
+     *  not thrown, and `n` reads a base-reader local. */
+    rust68fNewArgCast(n: any): boolean {
+        let top: any = n;
+        if (n.parent?.kind === SyntaxKind.AsExpression) {
+            top = n.parent;
+            if (top.expression !== n || String(top.type?.getText?.() ?? '') !== 'string') return false;
+        }
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const call: any = top.parent;
+        return call?.kind === SyntaxKind.NewExpression && (call.arguments ?? []).includes(top) && call.parent?.kind !== SyntaxKind.ThrowStatement
+            && this.rust64bReaderLocal(this.rustDeclaredNode(n));
     }
 
     /** ral-64b: a local declared from a base safeString-family reader with no default argument (its box is `Str` or `Null`). */
@@ -13178,6 +13228,10 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-41a: `parseInt (x as string)` of an optional string local reads it in place (`x.as_deref()`, runtime parse_int's own match)
             if (kind === 'ostr' && this.rustParseIntOfOptStr(call, top)) return 'native';
         }
+        // ral-68f: `new E ((x as string))` (not thrown) of an `Option<String>` base-reader local: the cast and parentheses print
+        // nothing, the argument boxes once (`x.map(Value::from).unwrap_or(Value::Null)`, the `Str` / `Null` the `Value` held;
+        // ccxt's rustStr2LocalOptionString pass printed this)
+        if (kind === 'ostr' && parent.kind === SyntaxKind.AsExpression && this.rust68fNewArgCast(n)) return 'box';
         if (isParenthesizedExpression(parent) || parent.kind === SyntaxKind.AsExpression) {
             const outer = this.rustScalarUseForm(parent, kind);
             // ral-64n: `(d as string)` as the delimiter of a native split of a string local
@@ -13234,6 +13288,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (ctor?.[parent.arguments.indexOf(n)] !== 'msg' || parent.parent?.kind !== SyntaxKind.ThrowStatement) return undefined;
             return kind === 'str' ? 'err' : 'xbox';
         }
+        // ral-68f: likewise the bare argument of a dynamic `new m[k] (x)` (printed `create_error(.., &stringify_param(&<box>))`)
+        if (kind === 'ostr' && parent.kind === SyntaxKind.NewExpression && isElementAccessExpression(parent.expression) && this.rust68fNewArgCast(n)) return 'box';
         // an alias initializer (a `bool` alias is the bool-initializer rule's)
         if (isVariableDeclaration(parent) && parent.initializer === n && isIdentifier(parent.name) && kind !== 'bool') return 'xbox';
         return undefined;

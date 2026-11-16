@@ -20176,7 +20176,8 @@ describe('ral-58k: a typed string value of a this.field[identifier] write boxes 
     test('`this.commonCurrencies[id] = code` keeps code Option<String>', () => {
         const out = write ('58k-this-ident-key', body ('id'));
         expect(out).toContain('let mut code: Option<String> = ');
-        expect(out).toMatch(/insert\(crate::runtime::stringify_param\(&id\), (Value::from\(code\.as_deref\(\)\)|code\.clone\(\)\.map\(Value::from\)\.unwrap_or\(Value::Null\))\)/);
+        // ral-68f: the `id` reader local is now a native key (its key text, as ccxt's rustStr2LocalOptionString pass printed in kraken.rs)
+        expect(out).toMatch(/insert\(id\.as_deref\(\)\.unwrap_or\("null"\)\.to_string\(\), (Value::from\(code\.as_deref\(\)\)|code\.clone\(\)\.map\(Value::from\)\.unwrap_or\(Value::Null\))\)/);
     });
     test('negative: the local as its own key keeps it Value', () => {
         const out = write ('58k-this-ident-key-neg', body ('code'));
@@ -23138,5 +23139,45 @@ describe('ral-68g: typed row reads (Market rows, safeValue rows, optional-string
     test('negative: row reads mixed with a whole-value hand-off keep the boxed result', () => {
         const out = build ('ral68g-neg', "        const markets = await this.fetchMarkets ();\n        const n = markets.length;\n        return this.hold ([ n, this.safeValue (markets, 0), markets ]);\n", ['fetchMarkets']);
         expect(out).toContain('let mut markets: Value = crate::types::IntoRaw::into_raw(self.fetch_markets(');
+    });
+});
+
+describe('ral-68f: rustStr2LocalOptionString locals typed by the printer (no-default safeString2 reader locals)', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport class ExchangeError extends Error {}\nexport default class Exchange {\n    options: Dict = {};\n    markets: Dict = {};\n    exceptions: Dict = {};\n    outcomes: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeString2 (o: any, a: any, b: any, d: Str = undefined): Str { return o[a]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o[k]; }\n    findBroadlyMatchedKey (broad: Dict, s: string): Str { return undefined; }\n    findTimeframe (tf: any, tfs: any = undefined): Str { return tf; }\n    numberToString (x: any): Str { return x; }\n    decimalToPrecision (x: any, r: any, p: any, m: any = undefined): string { return x; }\n    precisionMode: number = 0;\n    parseToInt (x: any): number { return x; }\n    milliseconds (): number { return 0; }\n    hold (x: any, y: any = undefined): any { return x; }\n}\n",
+        "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport { ExchangeError } from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleErrorMessage (message: Dict): boolean {\n        const errorMessage = this.safeString2 (message, 'errorMessage', 'error');\n        if (errorMessage !== undefined) {\n            const broad = this.exceptions['ws']['broad'];\n            const broadKey = this.findBroadlyMatchedKey (broad, errorMessage);\n            let exception: ExchangeError | undefined = undefined;\n            if (broadKey === undefined) {\n                exception = new ExchangeError ((errorMessage as string));\n            } else {\n                exception = new broad[broadKey] (errorMessage);\n            }\n            this.hold (exception);\n            return false;\n        }\n        return true;\n    }\n    pop (ms: any[]) {\n        for (let i = 0; i < ms.length; i++) {\n            const m = ms[i];\n            const marketHandle = this.safeString2 (m, 'market', 'symbol');\n            if (marketHandle !== undefined) {\n                this.markets[marketHandle] = m;\n            }\n        }\n    }\n    gen (message: Dict) {\n        const gen2TimestampStr = this.safeString2 (message, 'timestamp', 'datetime') as string;\n        let timestamp = this.milliseconds ();\n        if (gen2TimestampStr !== undefined) {\n            timestamp = this.parseToInt (gen2TimestampStr.slice (0, 13));\n        }\n        return timestamp;\n    }\n    tf (message: Dict) {\n        let timeframe: Str = undefined;\n        if ('k' in message) {\n            const data = this.safeDict (message, 'k', {});\n            const timeframeId = this.safeString (data, 'interval');\n            timeframe = this.findTimeframe (timeframeId, this.options['timeframes']);\n        } else {\n            const rawOhlcv = this.safeDict (message, 'd', {});\n            const timeframeId = this.safeString2 (rawOhlcv, 'i', 'interval');\n            const timeframes = this.safeDict (this.options, 'timeframes', {});\n            timeframe = this.findTimeframe (timeframeId, timeframes);\n        }\n        return this.hold (timeframe);\n    }\n    k (m: Dict) {\n        const ticker = this.safeString (m, 'ticker');\n        if (ticker === undefined) {\n            return undefined;\n        }\n        this.outcomes[ticker] = m;\n        return this.hold (ticker);\n    }\n    order (params: Dict, amount: any, price: any, precision: any, stopLoss: boolean) {\n        const request: Dict = {};\n        const stopLossPrice = this.safeString (params, 'stopLossPrice');\n        let stopPrice: Str = undefined;\n        if (stopLoss) {\n            stopPrice = stopLossPrice;\n        }\n        if (stopPrice !== undefined) {\n            request['stopPrice'] = stopPrice;\n        }\n        if (stopLoss) {\n            const quoteOrderQtyNew = this.safeString2 (params, 'quoteOrderQty', 'cost');\n            if (quoteOrderQtyNew !== undefined) {\n                request['quoteOrderQty'] = this.decimalToPrecision (quoteOrderQtyNew, 0, precision, this.precisionMode);\n            }\n            return request;\n        }\n        const quoteOrderQtyNew = this.safeString2 (params, 'quoteOrderQty', 'cost');\n        let notional: Str = undefined;\n        if (quoteOrderQtyNew !== undefined) {\n            notional = quoteOrderQtyNew;\n        } else if (price !== undefined) {\n            notional = this.numberToString (price);\n        } else {\n            notional = this.numberToString (amount);\n        }\n        if (precision === undefined) {\n            request['notional'] = notional;\n        } else {\n            request['notional'] = this.decimalToPrecision (notional, 0, precision, this.precisionMode);\n        }\n        return request;\n    }\n}\n"
+};
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-68f-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('kraken pro errorMessage: boxed into a non-thrown `new E ((x as string))` and a dynamic `new m[k] (x)`', () => {
+        expect(out).toContain('let mut errorMessage: Option<String> = self.safe_string2_opt(');
+        expect(out).not.toContain('let mut errorMessage: Value');
+    });
+    test('marketHandle: the key of a plain-field `this.markets[k] = v` insert is the key text', () => {
+        expect(out).toContain('let mut marketHandle: Option<String> = self.safe_string2_opt(');
+        expect(out).toContain('insert(marketHandle.as_deref().unwrap_or("null").to_string(), ');
+    });
+    test('bithumb pro gen2TimestampStr: `safeString2 (..) as string` const initializer', () => {
+        expect(out).toContain('let mut gen2TimestampStr: Option<String> = self.safe_string2_opt(');
+    });
+    test('mexc pro timeframeId: moved into the `this.` call that is the whole source of a write', () => {
+        expect(out).toContain('let mut timeframeId: Option<String> = self.safe_string2_opt(');
+        expect(out).toContain('timeframeId.map(Value::from).unwrap_or(Value::Null)');
+    });
+    test('binance quoteOrderQtyNew: moved whole into an Option<String> local at its last use; stopPrice stays Option<String>', () => {
+        expect(out).toContain('let mut quoteOrderQtyNew: Option<String> = self.safe_string2_opt(');
+        expect(out).toContain('notional = quoteOrderQtyNew.take();');
+        expect(out).toContain('let mut stopPrice: Option<String> = None;');
+        expect(out).not.toContain('let mut quoteOrderQtyNew: Value');
+        expect(out).not.toContain('let mut stopPrice: Value');
     });
 });
