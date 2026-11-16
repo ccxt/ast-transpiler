@@ -93,6 +93,11 @@ export declare const rustDispatch: {
     slotParams: (args: string[]) => string;
     /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
     isSlotStr: (arg: string, i: number) => boolean;
+    /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
+    isSlotTyped: (slot: string) => boolean;
+    slotName: (slot: string) => string;
+    /** A `&[..]` slot takes the method's optional-argument slice as is. */
+    isSlotSlice: (slot: string) => boolean;
     /** A forwarder's argument for an inherent parameter of `kind`: a slot already of that type passes by name. */
     slotArg: (kind: string, arg: string, i: number) => string;
     isSlotMarket: (arg: string, i: number) => boolean;
@@ -133,6 +138,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVirtualDispatch: Record<string, string[]>;
     /** Virtual base methods whose overrides call `super.X()`: the base body prints as `X_non_virtual`. */
     rustNonVirtualShims: Set<string>;
+    /** `DerivedExchange` slots whose first parameter is `impl Into<crate::Value>`: every venue override takes it lent. */
+    rustLentSlots: Set<string>;
     /** ccxt error classes with a subclass (`errorHierarchy`): `e instanceof K` on a caught error walks the hierarchy. */
     rustErrorClassesWithSubclasses: Set<string>;
     constructor(config?: {});
@@ -1995,6 +2002,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTypedIsAsync(node: any): boolean;
     rustTypedBody(node: any, typed: any, identation: number, inner: string): string;
     printTypedUnifiedCall(node: any): string | undefined;
+    printTypedUnifiedCallUnlifted(node: any): string | undefined;
     /** `await this.loadMarkets ();` as its own statement (the value is dropped). */
     rustTypedCallIsDiscarded(node: any): boolean;
     private static readonly RUST_MARKET_STR_FIELDS;
@@ -2222,6 +2230,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static rustBalancedClose;
     private static rustSplitTopLevel;
     printCallExpression(node: any, identation: any): string;
+    /** First parameter of a venue override of a lent `DerivedExchange` slot (same arity as the slot): `impl Into<crate::Value>`. */
+    rustLentSlotParam(param: any): boolean;
+    /** A venue (not base-tier) method overriding a lent slot with the slot's arity. */
+    rustLentSlotOverride(method: any): boolean;
+    /** A sync venue method overriding a `DerivedExchange` slot with the slot's arity (its body may sit in the trait impl). */
+    rustSlotOverrideBody(method: any): boolean;
+    /** File of the base-tier class above the venue override `method` when it declares `name` (its base trait has the method). */
+    rustBaseTierDeclarer(method: any, name: string): string | undefined;
+    /** `this.m(..)` to the calling file's own override of a lent slot: that override lives only in the
+     *  `DerivedExchange` impl, so the call names the trait (the base method of the same name takes a `Value`). */
+    rustLentSlotCallText(node: any, text: string): string;
+    printCallExpressionUnlifted(node: any, identation: any): string;
     printFreeFnDefaultArgsCall(node: any, identation: any): string | undefined;
     printDynamicSelfRead(node: any): string | undefined;
     printDynamicSelfCall(node: any, identation: any): string | undefined;

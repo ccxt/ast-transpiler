@@ -51496,9 +51496,14 @@ var rustDispatch = {
     }
   },
   /** Parameter list of a `DerivedExchange` slot: its `market` and currency arguments (never the first) are lent structs. */
-  slotParams: (args) => args.map((a, i) => `${a}: ${rustDispatch.isSlotMarket(a, i) ? "Option<&crate::types::Market>" : rustDispatch.isSlotCurrency(a, i) ? "Option<&crate::types::Currency>" : rustDispatch.isSlotStr(a, i) ? "&str" : "crate::Value"}`).join(", "),
+  slotParams: (args) => args.map((a, i) => rustDispatch.isSlotTyped(a) ? a : `${a}: ${rustDispatch.isSlotMarket(a, i) ? "Option<&crate::types::Market>" : rustDispatch.isSlotCurrency(a, i) ? "Option<&crate::types::Currency>" : rustDispatch.isSlotStr(a, i) ? "&str" : "crate::Value"}`).join(", "),
   /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
   isSlotStr: (arg, i) => arg === "path" && i === 0,
+  /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
+  isSlotTyped: (slot) => slot.includes(": "),
+  slotName: (slot) => slot.split(": ")[0],
+  /** A `&[..]` slot takes the method's optional-argument slice as is. */
+  isSlotSlice: (slot) => /^\w+: &\[/.test(slot),
   /** A forwarder's argument for an inherent parameter of `kind`: a slot already of that type passes by name. */
   slotArg: (kind, arg, i) => kind === "str" && rustDispatch.isSlotStr(arg, i) ? arg : rustDispatch.fromValue(kind, arg),
   isSlotMarket: (arg, i) => arg === "market" && i > 0,
@@ -52006,6 +52011,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustTypedUnified = new Set(config["typedUnified"] ?? []);
     this.rustVirtualDispatch = config["virtualDispatch"] ?? {};
     this.rustNonVirtualShims = new Set(config["nonVirtualShims"] ?? []);
+    this.rustLentSlots = new Set(config["lentSlots"] ?? []);
     this.rustErrorClassesWithSubclasses = new Set(config["errorClassesWithSubclasses"] ?? []);
     this.requiresParameterType = true;
     this.requiresReturnType = false;
@@ -55341,7 +55347,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return "Vec<String>";
     if (this.rustParamReadsByReference(param))
       return "impl KeyRead";
-    if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param) || this.rustSafeDictKeyParam(param))
+    if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param) || this.rustSafeDictKeyParam(param) || this.rustLentSlotParam(param))
       return "impl Into<crate::Value>";
     if (this.rustBookSideParam(param))
       return this.rustWsBookPath(param, "pro::order_book::Side");
@@ -65004,6 +65010,8 @@ ${classMethods}
         return p.name;
       if (p !== void 0 && p.type === "Option<&crate::types::Currency>")
         return p.name;
+      if (p !== void 0 && p.type === "&[Value]" && rustDispatch.isSlotSlice(_slot))
+        return p.name;
       if (sliceAt >= 0 && i >= sliceAt)
         return `crate::runtime::get_arg(${sig.params[sliceAt].name}, ${i - sliceAt}, crate::Value::Null)`;
       return "crate::Value::Null";
@@ -65024,7 +65032,12 @@ ${classMethods}
       return methodDef + body.slice(0, open) + preamble + body.slice(open);
     const nonVirtual = `${sig.name}_non_virtual`;
     this.rustSignatureTable.set({ shimOf: node }, { ...sig, name: nonVirtual });
-    const forward = `${body.slice(0, open)}${preamble}        self.${nonVirtual}(${sig.params.map((p) => p.name).join(", ")})
+    const forward = sig.ret === "typed" ? `${body.slice(0, open)}
+        // virtual-dispatch (static: DerivedExchange::${sig.name}(self, ...))
+        crate::exchange::DerivedExchange::${sig.name}(self, ${sig.params.map((p) => p.name).join(", ")})
+    }
+
+` : `${body.slice(0, open)}${preamble}        self.${nonVirtual}(${sig.params.map((p) => p.name).join(", ")})
     }
 
 `;
@@ -65121,6 +65134,10 @@ ${i1}}`;
   // `await this.<typed unified>(args)` inside a `Value` body: bind each argument, call the typed method and
   // box the `Result` back to `Value` (an `Err` re-raises as the panic the untyped call raised).
   printTypedUnifiedCall(node) {
+    const text = this.printTypedUnifiedCallUnlifted(node);
+    return text === void 0 ? void 0 : this.rustLentSlotCallText(node, text);
+  }
+  printTypedUnifiedCallUnlifted(node) {
     const callee = node.expression;
     if (!isPropertyAccessExpression3(callee))
       return void 0;
@@ -67079,6 +67096,90 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     return depth === 0 ? out : void 0;
   }
   printCallExpression(node, identation) {
+    return this.rustLentSlotCallText(node, this.printCallExpressionUnlifted(node, identation));
+  }
+  /** First parameter of a venue override of a lent `DerivedExchange` slot (same arity as the slot): `impl Into<crate::Value>`. */
+  rustLentSlotParam(param) {
+    const method = param?.parent;
+    if (param?.kind !== SyntaxKind7.Parameter || !isMethodDeclaration5(method) || method.body === void 0 || !isIdentifier3(method.name) || method.parameters?.[0] !== param)
+      return false;
+    if (!isIdentifier3(param.name) || param.initializer !== void 0 || param.questionToken !== void 0 || param.dotDotDotToken !== void 0)
+      return false;
+    if (!isClassDeclaration4(method.parent) || (method.modifiers ?? []).some((m) => m.kind === SyntaxKind7.StaticKeyword))
+      return false;
+    return this.rustLentSlotOverride(method) && !this.rustParamPrintsBool(param) && !this.rustParamIsLentDict(param) && !this.rustParamIsLentList(param) && !this.rustParamPrintsMap(param) && !this.rustParamPrintsStrVec(param) && !this.rustParamReadsByReference(param);
+  }
+  /** A venue (not base-tier) method overriding a lent slot with the slot's arity. */
+  rustLentSlotOverride(method) {
+    if (!isMethodDeclaration5(method) || method.body === void 0 || !isIdentifier3(method.name) || this.isAsyncFunction(method))
+      return false;
+    const snake = this.toSnakeCaseName(String(method.name.text));
+    const slots = this.rustLentSlots.has(snake) ? this.rustVirtualDispatch[snake] : void 0;
+    const file = String(method.getSourceFile?.()?.fileName ?? "").replace(/\\/g, "/");
+    return slots !== void 0 && method.parameters.length === slots.length && file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) >= 0 && this.rustTypedSignature(method) === void 0 && !this.rustMethodReferencedAsValue(method);
+  }
+  /** A sync venue method overriding a `DerivedExchange` slot with the slot's arity (its body may sit in the trait impl). */
+  rustSlotOverrideBody(method) {
+    if (!isMethodDeclaration5(method) || method.body === void 0 || !isIdentifier3(method.name) || this.isAsyncFunction(method))
+      return false;
+    const slots = this.rustVirtualDispatch[this.toSnakeCaseName(String(method.name.text))];
+    const file = String(method.getSourceFile?.()?.fileName ?? "").replace(/\\/g, "/");
+    const arity = slots !== void 0 && slots.length > 0 && rustDispatch.isSlotSlice(slots[slots.length - 1]) ? method.parameters.length >= slots.length - 1 : method.parameters.length === slots?.length;
+    return slots !== void 0 && arity && file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) >= 0;
+  }
+  /** File of the base-tier class above the venue override `method` when it declares `name` (its base trait has the method). */
+  rustBaseTierDeclarer(method, name) {
+    for (let cls = method?.parent; cls !== void 0 && isClassDeclaration4(cls); ) {
+      const heritage = getAllSuperTypeNodes(cls)[0];
+      if (heritage === void 0)
+        return void 0;
+      const base = this.getChecker().getTypeAtLocation(heritage)?.getSymbol()?.valueDeclaration?.resolve();
+      if (base === void 0 || !isClassDeclaration4(base))
+        return void 0;
+      const file = String(base.getSourceFile?.()?.fileName ?? "");
+      if (_RustTranspiler.RUST_BASE_TIER_FILE.test(file) && (base.members ?? []).some((m) => isMethodDeclaration5(m) && isIdentifier3(m.name) && m.name.text === name))
+        return file;
+      cls = base;
+    }
+    return void 0;
+  }
+  /** `this.m(..)` to the calling file's own override of a lent slot: that override lives only in the
+   *  `DerivedExchange` impl, so the call names the trait (the base method of the same name takes a `Value`). */
+  rustLentSlotCallText(node, text) {
+    if (this.rustLentSlots.size === 0 || !isPropertyAccessExpression3(node.expression))
+      return text;
+    const name = String(node.expression.name.text);
+    if (node.expression.expression.kind === SyntaxKind7.SuperKeyword) {
+      const target = this.rustScalarCallee(node);
+      const head = `super.${name}(`;
+      if (!this.rustLentSlots.has(this.toSnakeCaseName(name)) || !text.startsWith(head) || !/ts[/]src[/]pro[/]/.test(String(node.getSourceFile?.()?.fileName ?? "")) || target === void 0 || target.getSourceFile?.() === node.getSourceFile?.() || !this.rustLentSlotOverride(target))
+        return text;
+      const rest2 = text.slice(head.length);
+      return `crate::exchange::DerivedExchange::${this.toSnakeCaseName(name)}(&self.parent${rest2.startsWith(")") ? "" : ", "}${rest2}`;
+    }
+    if (node.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+      return text;
+    const snake = this.toSnakeCaseName(name);
+    const at = [`self.${name}(`, `self.${snake}(`].map((h) => ({ h, i: text.indexOf(h) })).filter((x) => x.i >= 0).sort((x, y) => x.i - y.i)[0];
+    if (!(snake in this.rustVirtualDispatch) || at === void 0)
+      return text;
+    const callee = this.rustScalarCallee(node);
+    if (callee === void 0)
+      return text;
+    let path4;
+    if (this.rustLentSlots.has(snake) && callee.getSourceFile?.() === node.getSourceFile?.() && this.rustLentSlotOverride(callee))
+      path4 = "crate::exchange::DerivedExchange";
+    else if (this.rustSlotOverrideBody(findAncestor(node, isMethodDeclaration5))) {
+      const own = String(callee.getSourceFile?.()?.fileName ?? "");
+      const file = (_RustTranspiler.RUST_BASE_TIER_FILE.test(own) ? own : this.rustSlotOverrideBody(callee) ? this.rustBaseTierDeclarer(callee, name) ?? "" : "").replace(/\\/g, "/");
+      path4 = /\/ts\/src\/base\/PredictionExchange\.ts$/.test(file) ? "crate::prediction_exchange_generated::PredictionBase" : _RustTranspiler.RUST_BASE_TIER_FILE.test(file) ? "crate::exchange_generated::ExchangeBase" : void 0;
+    }
+    if (path4 === void 0)
+      return text;
+    const rest = text.slice(at.i + at.h.length);
+    return `${text.slice(0, at.i)}<Self as ${path4}>::${snake}(self${rest.startsWith(")") ? "" : ", "}${rest}`;
+  }
+  printCallExpressionUnlifted(node, identation) {
     this.rustFormatPrints.delete(node);
     const expression = node.expression;
     const bookCall = this.printWsBookMapRead(node) ?? this.printWsBookCtorCall(node, identation);
@@ -82626,7 +82727,7 @@ ${iden}}`;
   }
   /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
   rustLentParamsBinding(node, identation) {
-    const lent = Array.from(node.parameters ?? []).filter((p) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p) || this.rustSafeDictKeyParam(p) || this.rustVenueStrParamType(p) !== void 0 && !this.rustVenueStrParamUnbound(p));
+    const lent = Array.from(node.parameters ?? []).filter((p) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p) || this.rustSafeDictKeyParam(p) || this.rustLentSlotParam(p) || this.rustVenueStrParamType(p) !== void 0 && !this.rustVenueStrParamUnbound(p));
     return lent.map((p) => {
       const name = this.printNode(p.name, 0);
       return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();
@@ -87930,7 +88031,7 @@ _RustTranspiler.RUST_TEST_VARIADIC_ARITY = /* @__PURE__ */ new Map([
 _RustTranspiler.RUST_PRECISE_TRIMMED = /^string(?:Div|Mul|Add|Sub|Mod|Eq|Gt|Ge|Lt|Le|Min|Max|Abs|Neg)$/;
 // By-value callees (`self.m(..)`, the test-harness helpers, the signers) take their `Value` arguments by move:
 // a bare local argument is printed `x.clone()` so the local stays usable after the call.
-_RustTranspiler.RUST_BY_VALUE_CALLEE = /(?:\b(?:self|super)\.[a-zA-Z_][a-zA-Z0-9_]*|\bexchange\d*\.[a-zA-Z_][a-zA-Z0-9_]*|\brsa|\beddsa|\becdsa|\bjwt|\btotp|\bhelper[A-Z][a-zA-Z0-9_]*|\bprecise[A-Z][a-zA-Z0-9_]*|\btest[A-Z][a-zA-Z0-9_]*|\b[a-z][a-zA-Z0-9_]*(?:Helper(?:Test)?|Test)|\bassert[A-Z][a-zA-Z0-9_]*|\b(?:equals|deepEqual|assert|dump|callMethod|callMethodSync|callExchangeMethodDynamically|callExchangeMethodDynamicallySync|getExchangeProp|setExchangeProp|setFetchResponse|setFetchResponseByUrl|initExchange|close|jsonStringify|jsonParse|exceptionMessage|convertAscii|isNullValue|ioFileExists|ioFileRead|ioDirRead|setupWsMockTransport|getWsSentMessages|injectWsMessage|wsClientHasPendingFutures|markWsTestCompleted|isWsTestCompleted|rejectPendingWsFutures|preloadWsMessages|wsHasQueuedMessages))\(/;
+_RustTranspiler.RUST_BY_VALUE_CALLEE = /(?:\b(?:self|super)\.[a-zA-Z_][a-zA-Z0-9_]*|<Self as crate::(?:exchange::DerivedExchange|exchange_generated::ExchangeBase|prediction_exchange_generated::PredictionBase)>::[a-zA-Z_][a-zA-Z0-9_]*|\bexchange\d*\.[a-zA-Z_][a-zA-Z0-9_]*|\brsa|\beddsa|\becdsa|\bjwt|\btotp|\bhelper[A-Z][a-zA-Z0-9_]*|\bprecise[A-Z][a-zA-Z0-9_]*|\btest[A-Z][a-zA-Z0-9_]*|\b[a-z][a-zA-Z0-9_]*(?:Helper(?:Test)?|Test)|\bassert[A-Z][a-zA-Z0-9_]*|\b(?:equals|deepEqual|assert|dump|callMethod|callMethodSync|callExchangeMethodDynamically|callExchangeMethodDynamicallySync|getExchangeProp|setExchangeProp|setFetchResponse|setFetchResponseByUrl|initExchange|close|jsonStringify|jsonParse|exceptionMessage|convertAscii|isNullValue|ioFileExists|ioFileRead|ioDirRead|setupWsMockTransport|getWsSentMessages|injectWsMessage|wsClientHasPendingFutures|markWsTestCompleted|isWsTestCompleted|rejectPendingWsFutures|preloadWsMessages|wsHasQueuedMessages))\(/;
 _RustTranspiler.RUST_BY_VALUE_CALLEE_NO_SUPER = new RegExp(_RustTranspiler.RUST_BY_VALUE_CALLEE.source.replace("(?:self|super)", "self"));
 _RustTranspiler.RUST_CACHE_CALL_HEADS = [
   /\b[a-zA-Z_]\w*\.(?:append|store|store_array|reset|update|get_limit|limit|reusable_future)\(/g,
