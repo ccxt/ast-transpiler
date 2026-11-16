@@ -22896,3 +22896,31 @@ describe('ral-67e: same-named sibling-block declarations are typed by their own 
         }
     });
 });
+
+describe('ral-67g: a typed Vec result read through base safeDict (rows, i) borrows the row', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Order { id: string; info: any }\nexport default class Exchange {\n    async fetchOpenOrders (symbol: Str = undefined, params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n    safeDict (dictionaryOrList: any, key: any, defaultValue: Dict = undefined): Dict | undefined {\n        return dictionaryOrList[key];\n    }\n    hold (x: any): any { return x; }\n}\n";
+    const build = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchOpenOrder (id: string, symbol: Str = undefined, params: Dict = {}) {\n        const result = await this.fetchOpenOrders (symbol, params);\n        const length = result.length;\n        if (length === 0) {\n            throw new Error ('none');\n        }\n" + body + "    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchOpenOrders'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        typed.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a literal index: the local is the typed Vec and the read matches the borrowed row', () => {
+        const out = build ('ral67g-lit', "        const order = this.safeDict (result, 0);\n        return this.hold (order);\n");
+        expect(out).toContain('let mut result: Vec<crate::types::Order> = (match self.fetch_open_orders(');
+        expect(out).toContain('(match result.get(0) { Some(__row) if matches!(__row.raw, Value::Dict(_)) => crate::Value::from(__row), _ => Value::Null })');
+        expect(out).not.toContain('IntoRaw::into_raw(self.fetch_open_orders');
+    });
+    test('a counter index with a default: the default is the non-dict / out-of-range arm', () => {
+        const out = build ('ral67g-ctr', "        let last = undefined;\n        for (let i = 0; i < length; i++) {\n            last = this.safeDict (result, i, {});\n        }\n        return this.hold (last);\n");
+        expect(out).toContain('let mut result: Vec<crate::types::Order> = ');
+        expect(out).toMatch(/\(match result\.get\(i as usize\) \{ Some\(__row\) if matches!\(__row\.raw, Value::Dict\(_\)\) => crate::Value::from\(__row\), _ => /);
+    });
+    test('negative: a string key keeps the boxed result', () => {
+        const out = build ('ral67g-neg', "        const order = this.safeDict (result, 'x');\n        return this.hold (order);\n");
+        expect(out).toContain('let mut result: Value = crate::types::IntoRaw::into_raw(self.fetch_open_orders(');
+    });
+});

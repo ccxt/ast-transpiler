@@ -14522,6 +14522,7 @@ export class RustTranspiler extends BaseTranspiler {
             let elemUses = 0;
             const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
                 if (this.rustEnclosingFunction(n) !== callScope) return false;
+                if (elem === 'vec' && this.rust67gSafeDictElemUse(n)) { elemUses++; return true; }
                 if (this.rustMarketValueUse(n)) { valueUses++; return true; }
                 if (elem !== undefined && this.rustTypedResultElemUse(n, elem)) { elemUses++; return true; }
                 return false;
@@ -14694,6 +14695,46 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (elem === 'map' || elem === 'map2') return `crate::value::KeyRead::read(&&${name}, &${this.printNode(key, 0).trim()})`;
         return `${name}.get(${this.printTypedResultIndex(key)}).map(crate::Value::from).unwrap_or_default()`;
+    }
+
+    // ── ral-67g: `this.safeDict (rows, i[, d])` on a typed `Vec<record>` result ──
+    // The base `safeDict` over a list answers the element when it is a dict, else the default (Null without one).
+    // On the typed result the element is the row's own decoded map (`raw`): the read borrows the row and hands on its
+    // shared handle when that map is a dict, so out of range, a non-dict row and the default answer as the boxed list did.
+    /** `n` is the list argument of a base-tier `this.safeDict (n, i[, d])` whose index is an int literal, an i64 counter,
+     *  an int scalar local or a number local seeded with an int literal. */
+    rust67gSafeDictElemUse(n: any): boolean {
+        const call: any = n?.parent;
+        if (call === undefined || !isCallExpression(call) || call.arguments[0] !== n || call.arguments.length < 2 || call.arguments.length > 3) return false;
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || String(callee.name.text) !== 'safeDict') return false;
+        if (call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+        const declaration: any = this.rustScalarCallee(call);
+        if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
+        return this.rust67gIndexText(this.rustSkipWrappers(call.arguments[1]), false) !== undefined;
+    }
+
+    rust67gIndexText(key: any, mark: boolean): string | undefined {
+        if (key === undefined) return undefined;
+        if (isNumericLiteral(key)) return Number.isInteger(Number(key.text)) && Number(key.text) >= 0 ? String(Number(key.text)) : undefined;
+        if (!isIdentifier(key)) return undefined;
+        if (mark ? this.rustI64CounterUse(key) : this.rustI64CounterOf(key) !== undefined) return `${String(key.text)} as usize`;
+        // an int scalar local: a negative one wraps past the end, so `get` answers None as the boxed list read answered Null
+        if (this.rustScalarLocalOf(key)?.kind === 'int') return `${String(key.text)} as usize`;
+        // a number local seeded with an int literal (as the `xs[i]` element rule): its boxed int, Null / negative past the end
+        if (this.isRustValueIndexKey(key)) return mark ? this.printTypedResultIndex(key) : '';
+        return undefined;
+    }
+
+    /** Call hook: the native `safeDict` read of a typed result row. */
+    printTyped67gSafeDict(node: any, identation: number): string | undefined {
+        const recv: any = node.arguments?.[0];
+        const declaration = recv !== undefined && isIdentifier(recv) ? this.rustCallLocalOf(recv) : undefined;
+        if (declaration === undefined || this.rustTypedResultElemKind(declaration.initializer) !== 'vec' || !this.rust67gSafeDictElemUse(recv)) return undefined;
+        const index = this.rust67gIndexText(this.rustSkipWrappers(node.arguments[1]), true);
+        if (index === undefined) return undefined;
+        const fallback = node.arguments.length > 2 ? this.printNode(node.arguments[2], identation).trim() : 'Value::Null';
+        return `(match ${super.printIdentifier(recv)}.get(${index}) { Some(__row) if matches!(__row.raw, Value::Dict(_)) => crate::Value::from(__row), _ => ${fallback} })`;
     }
 
     printTypedResultIndex(key: any): string {
@@ -16370,6 +16411,7 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustFormatPrints.delete(node);
         const expression = node.expression;
         const bookCall = this.printWsBookMapRead(node) ?? this.printWsBookCtorCall(node, identation); if (bookCall !== undefined) return bookCall;
+        const typed67g = this.printTyped67gSafeDict(node, identation); if (typed67g !== undefined) return typed67g;
         const mapLookup = this.printWsCacheMapRead(node); if (mapLookup !== undefined) return mapLookup;
         const borrowedRead = this.printBorrowedDictRead(node, identation); if (borrowedRead !== undefined) return borrowedRead;
         const handed = this.printHandedDictExtend(node, identation); if (handed !== undefined) return handed;
