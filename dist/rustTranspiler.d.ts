@@ -1,6 +1,11 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { type Block, type CallExpression, type Declaration, type Identifier, type Node, type ParameterDeclaration, type VariableDeclaration } from "typescript/unstable/ast";
 import { type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
+/** A ts/src index scan reads real `*.ts` sources and this process's own stripped base copy only: no `.d.ts`, no
+ *  dot-file temp copy, no other process's `*.nooverloads.<pid>.ts` (it can vanish or change mid-scan). */
+export declare function isRustTsIndexSource(name: string): boolean;
+/** The text of a listed ts/src file; undefined when it vanished between listing and reading, any other error throws. */
+export declare function readRustTsIndexSource(file: string): string | undefined;
 /** Answer of `RustTranspiler.rustDeclaredLocalTypeResolver` for a local whose
  *  value provably holds a `Value::Dict` at every use. */
 export type RustDeclaredLocalKind = 'dict';
@@ -1340,6 +1345,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-62k: `n` is the last key of a statement write `x[..][n] = v` whose chain root is a plain local identifier
      *  (two or more hops) and whose value never names `n` or `this`. */
     rust62kLocalNestedLastKey(n: any): boolean;
+    /** ral-63k: `n` is the whole key of a statement write `x[n] = v` whose receiver is a local declared by a call (never an
+     *  object literal: ccxt's literal-map pass keys on the boxed key text), whose value never writes `n` and never names `this`. */
+    rust63kLocalFlatHelperKey(n: any): boolean;
+    /** ral-63k: `n` is the last key of a statement write `p[..][n] = v` whose chain root is a plain-Dict parameter. */
+    rust63kDictParamNestedKey(n: any): boolean;
     /** ral-61k: `n` keys a middle hop of a statement write `this.balance|options[..][n][..] = v`: an element read whose
      *  receiver is itself an element read and which is itself the receiver of the outermost written element access. */
     rust61kNestedFieldMiddleKey(n: any): boolean;
@@ -1778,6 +1788,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOkeyBoxed(declaration: any, boxed: number): boolean;
     /** 'map' for a typed map receiver, 'value' for a proven-dict `Value` receiver, else undefined. */
     rustOkeyKind(receiver: any, read: any): 'map' | 'value' | undefined;
+    /** ral-63e: `m[k]` as the inner link of a pure read chain `m[k][j]` / `j in m[k]` (base featureValueByType `parentKey`):
+     *  the link prints the same native map read a one-level `okey` read prints (`(if let (Some(__m), Some(__k)) = ..)`), only
+     *  handed to the outer `get_value` / `in_op` by reference; the chain is never a write target, delete or update. */
+    rust63eChainLinkKeyRead(n: any): boolean;
     /** A one-level read `m[k]` (not a write target, not a chain link) on an `rustOkeyKind` receiver. */
     rustOkeyReadUse(n: any): boolean;
     /** ral-43c: a one-level read `m[k]` (no write, chain link, delete or update) on an identifier parameter typed `any` that no
@@ -1811,6 +1825,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** 40d: `const n = this.safeInteger* (.., <integer literal>)`: the reader answers an `Int` on every path (parsed or the
      *  literal default), printed `i64` by the existing int reader form: an exact `i64` bound like a `parseToInt` one. */
     rustIntReaderLitDefault(declaration: any): boolean;
+    /** ral-63n: `const x = this.safeInteger* (..)` with no default argument: the reader answers an `Int` or `Null`. */
+    rust63nNoDefaultIntReader(declaration: any): boolean;
     /** ral-54n: `this.safeInteger* (..)` printed as its `Value` (an `Int` or `Null` on every path). */
     rustIntReaderCall(node: any): boolean;
     /** wi: a tuple slot whose producer builds an exact Int-or-null on every return (`checkOptionInteger`): an `i64` bound too. */
@@ -1834,6 +1850,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** tb: `i OP b` as the condition of `for (let i = <int>; ..; i++)` (the step is the counter's only write, so it is always
      *  an `Int`), `b` a parseToInt `i64` / `Option<i64>` local: the counter operand, else undefined. */
     rustTbCounterBound(cond: any, n: any, kind: string): any;
+    /** ral-63p: `i OP n` as the condition of `for (let i = s; ..; i++)` where `n` is a local initialised by a base
+     *  `this.sum (..)` whose operands the scalar rule proves `i64` (rustArithCallKind 'int': the runtime sum of two `Int`s is
+     *  that `Int`), and the counter `i` starts at an int literal or at an `i64` local (ral-58n) and is written only by its
+     *  step, so it always holds an `Int`. Ordered compares of two `Int` payloads (`is_less_than` / `as_f64`) are the `as f64`
+     *  compare of the two `i64`s, which printTbCounterBound prints (or the i64 counter plan's own `i < n`). */
+    rust63pSumCounterBound(cond: any, n: any): boolean;
     /** tb: a use of the bound outside that for-condition meets another local (an operand, a write, another local's initializer or
      *  assignment source): those partners are other groups' decisions, so the bound keeps its `Value`. */
     rustTbBoundHasPartner(declaration: any, cond: any): boolean;
@@ -3134,6 +3156,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-62n: the reader's default (after its key arguments) is absent, `undefined` or an object literal: a map default. */
     rust62nMapOrNullDefault(call: any): boolean;
     static readonly RUST_NEVER_NULL_TEST_READERS: Set<string>;
+    /** ral-63i: base map readers whose result prints as a `Value` (the other arm of a boxed ternary arm). */
+    static readonly RUST_63I_DICT_READERS: Set<string>;
     private rustNeverNullTests;
     /** ral-60n: the reader's default is the empty literal of the local's kind (`[]` for a list, `{}` for a map). */
     rustEmptyContainerLiteral(node: any, from: string): boolean;
@@ -3469,6 +3493,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustDeclaredEndpointWholeBox(n: any): boolean;
     /** ral-53a: a plain `Value` argument slot of a `this.` method (not extend / omit, not a lent slot, no loop between). */
     rustSbAliasValueSlot(n: any): boolean;
+    /** ral-63i: `this.m (..)` whose resolved declaration is a method of the calling venue's own source file (not the base
+     *  tier, not an abstract endpoint), so its argument slots print from that declaration. */
+    rust63iSameFileMethod(call: any): boolean;
     rustDeclaredEndpointBoxUse(n: any): boolean;
     /** `this.F` for a checker dict-shaped field (`fundingRates: Dictionary<FundingRate>`) the native insert writes
      *  (`printNativeDictInsert`: `rustFieldStaysDict`). The insert stores whatever handle it is given, so a built map
@@ -4692,6 +4719,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueStrCallers;
     rustVenueStrParamType(param: any): string | undefined;
     rustVenueStrParamTypeUncached(param: any): string | undefined;
+    /** ral-63x: `&str` parameter, every call site in the file passes a string literal at its index, and some
+     *  `let x = <param>` declaration of the body reads it whole. */
+    rust63xLiteralSeedStrParam(method: any, param: any, rustType: string): boolean;
+    /** ral-63x: a sync ws method with a declared `string` return (`-> Option<String>`, no kept arm: no by-name or ws
+     *  handler arm) and no override, trait slot or typed-return entry. Its string parameters may print typed; should
+     *  the return still print `Value`, a string slot is one an arm decodes (rustDispatch.wsArg `str` / `optstr`). */
+    rust63xNoArmStrMethod(method: any): boolean;
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS;
     private static readonly RUST_BASE_ASYNC_SCALAR_PARAM_METHODS;
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
