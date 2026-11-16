@@ -2506,6 +2506,9 @@ export class RustTranspiler extends BaseTranspiler {
         const borrowedElem = node.declarations.length === 1 ? this.printRust58eBorrowedElement(declaration, indent, varName) : undefined;
         if (borrowedElem !== undefined) return borrowedElem;
         if (node.declarations.length === 1 && this.rustSubscriptionPresenceFlag(declaration, parsedValue)) return `${indent}let ${varName}: bool = ${parsedValue} != Value::Null`;
+        // ral-73c E1: an error value only ever settled through a ws `client.reject` is the typed `ExchangeError` the
+        // constructor returns (parenthesised: the ccxt `x = crate::exchange_errors::..;` boxing pass keys on a bare call)
+        if (node.declarations.length === 1 && this.rust73cRejectOnlyError(declaration)) return `${indent}let mut ${varName}: crate::ExchangeError = (${parsedValue})`;
         if (declaration.initializer.kind === SyntaxKind.NewExpression) {
             return `${indent}let mut ${varName} = ${parsedValue}`;
         }
@@ -8578,6 +8581,39 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(callee.name.text);
         return (name === 'resolve' || name === 'reject') && !call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement) && this.rustCallsRuntimeHandle(call);
     }
+
+    /** ral-73c E1: `const e = new XError (msg)` (a ccxt error class the printer routes to `crate::exchange_errors::<x>(msg)`,
+     *  which returns `ExchangeError`) in a non-test function, never written, whose every use is the settled value of a ws
+     *  `client.reject (e, ..)` (rustWsSettleCall: `err: impl Into<Value>`, the same `From<ExchangeError>` box the `Value`
+     *  local took at its declaration). Decided from the AST and the checker's symbols. */
+    rust73cRejectOnlyError(declaration: any): boolean {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.initializer?.kind !== SyntaxKind.NewExpression) return false;
+        const list: any = declaration.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || (list.flags & NodeFlags.Const) === 0 || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
+        const init: any = declaration.initializer;
+        if (!isIdentifier(init.expression) || (init.arguments?.length ?? 0) !== 1 || init.arguments[0].kind === SyntaxKind.SpreadElement) return false;
+        const cls = String(init.expression.text);
+        if (cls === 'Error' || !/^[A-Z]/.test(cls) || this.rustDynamicErrorClass(init) !== undefined) return false;
+        if (!RustTranspiler.RUST_ERROR_CLASS_NAME.test(cls) && !RustTranspiler.RUST_NAME_VALUE_IMPORTS.has(cls)) return false;
+        if (this.rustTestTierSource(declaration)) return false;
+        const scope: any = this.rustEnclosingFunction(declaration);
+        if (scope === undefined || isSourceFile(scope)) return false;
+        const own = this.rustSymbolOf(declaration.name);
+        if (own === undefined) return false;
+        let uses = 0;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
+            if (n === declaration.name || !isIdentifier(n) || this.rustSymbolOf(n) !== own) continue;
+            if (this.rustEnclosingFunction(n) !== scope) return false;
+            const call: any = n.parent;
+            if (!isCallExpression(call) || call.arguments[0] !== n || !isPropertyAccessExpression(call.expression)
+                || String(call.expression.name.text) !== 'reject' || !this.rustWsSettleCall(call)) return false;
+            uses++;
+        }
+        return uses > 0;
+    }
+
+    /** The class-name shape `printNewExpression` routes to the runtime error constructors. */
+    private static readonly RUST_ERROR_CLASS_NAME = /^(?:[A-Z][a-zA-Z]*(?:Error|Required|Found|Failed|Rejected|Available|Exceeded|Limit|Pending|Funds|Address|Order|Cached|Fillable|Closed|Maintenance|Nonce|Timeout|Response|Settings|User|Supported|Implemented|Denied|Enabled|Suspended|Symbol|Change|Unavailable|Proxy|Set|Needed))$/;
 
     /** `client.future|reusableFuture(hash)` on a ws handle: the hand-written method takes `hash: impl Into<Value>`. */
     rustWsFlightCall(call): boolean {

@@ -23181,3 +23181,32 @@ describe('ral-68f: rustStr2LocalOptionString locals typed by the printer (no-def
         expect(out).not.toContain('let mut stopPrice: Value');
     });
 });
+
+describe('ral-73c: scalar-literal and typed-expression locals', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/ws/Client.ts': "export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    resolve (result: any, messageHash: string = undefined): any { return result; }\n    reject (result: any, messageHash: string = undefined): any { return result; }\n    reset (error: any): void { }\n}\n",
+        'ts/src/base/errors.ts': "class BaseError extends Error { constructor (message: string) { super (message); } }\nclass ExchangeError extends BaseError {}\nclass NetworkError extends BaseError {}\nexport { BaseError, ExchangeError, NetworkError };\n",
+        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport default class Exchange {\n    id: string = 'x';\n    client (url: string): Client { return new Client (); }\n    hold (x: any): any { return x; }\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ExchangeError, NetworkError } from '../base/errors.js';\nexport default class venue extends Exchange {\n    handleSubError (client: Client, message: any, messageHash: string) {\n        const error = new ExchangeError (this.id + ' failed');\n        client.reject (error, messageHash);\n    }\n    handleTwice (client: Client, id: string) {\n        const failure = new NetworkError (this.id + ' lost');\n        client.reject (failure, id);\n        client.reject (failure);\n    }\n    handleReset (client: Client) {\n        const broken = new NetworkError (this.id + ' reset');\n        client.reset (broken);\n    }\n    handleHeld (client: Client) {\n        const held = new ExchangeError (this.id + ' held');\n        client.reject (held);\n        return this.hold (held);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-73c-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath (path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('E1: an error value only settled through client.reject is the typed ExchangeError', () => {
+        expect(out).toContain('let mut error: crate::ExchangeError = (crate::exchange_errors::exchange_error(');
+        expect(out).toContain('let mut failure: crate::ExchangeError = (crate::exchange_errors::network_error(');
+        expect(out).toContain('client.reject(error.clone(), &messageHash);');
+        expect(out).toContain('client.reject(failure.clone(), None);');
+    });
+    test('E1 negative: an error handed to reset or to a self method keeps the untyped form', () => {
+        expect(out).not.toContain('let mut broken: crate::ExchangeError');
+        expect(out).not.toContain('let mut held: crate::ExchangeError');
+    });
+});
