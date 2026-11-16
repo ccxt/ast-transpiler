@@ -3059,7 +3059,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (scope === undefined || isSourceFile(scope)) return undefined;
         const name = String(declaration.name.text);
         // ral-61x: in a `-> Option<String>` method only the local its returns hand back as the payload itself
-        if (this.rustNativeStrReturnKind(scope) === 'str' && !(this.rustScopeNameNodes(scope, name) as any[]).some((n: any) => this.rust61xNilStrReturnLocal(n, scope) && this.rustDeclaredNode(n) === declaration)) return undefined;
+        if (this.rustNativeStrReturnKind(scope) === 'str' && !this.rustScopeNameNodes(scope, name).some((n: any) => this.rust61xNilStrReturnLocal(n, scope) && this.rustDeclaredNode(n) === declaration)) return undefined;
         let joined: string | undefined = 'null';
         let writes = 0;
         for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
