@@ -5280,6 +5280,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'obool' && typedUses === 0 && this.rustHandleOptionLiteralKind(this.rust62pBoolCastOption(this.unwrapParens(declaration.initializer)) ? this.unwrapParens(declaration.initializer).expression : declaration.initializer) === 'obool') return undefined;
         // ral-54x K1: a cased reader `String` with no native use would only be boxed straight back (boxed-straight-back stays `Value`)
         if (nativeUses === 0 && kind === 'str' && this.rustReaderCaseStrRecv(this.unwrapParens(declaration.initializer)) !== undefined) return undefined;
+        // ral-84h R1: a ternary with an arm read from a defaulted base `Str` parameter is typed only for a native use (box-only stays `Value`)
+        const init84h: any = this.unwrapParens(declaration.initializer);
+        if (nativeUses === 0 && init84h !== undefined && isConditionalExpression(init84h) && [ init84h.whenTrue, init84h.whenFalse ].some((arm: any) => this.rust84hDefaultedStrParamArm(this.unwrapParens(arm)))) return undefined;
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration) || this.rust59pDeleteKeyInboxed(declaration)) return undefined;
         // of: a string compared against another local must not copy at a box where the `Value` was lent
         // (a call argument already copied the `Value`; an `in` key or other borrowed slot did not)
@@ -5714,6 +5717,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && this.rustNilElemStrText(node) !== undefined) return 'ostr';
         if (fresh) { const field = this.rustMarketArmStrKind(node); if (field !== undefined) return field; }
         if (fresh && this.rustListLengthInit(node)) return 'int';
+        // ral-84h R2: `c + k` / `c - k` of an always-`Int` for counter (rust76eCounterStep) at a declaration: an `Int` on every path
+        if (fresh && isBinaryExpression(node) && this.rustDeclInitPosition(node) && this.rust76eCounterStep(node)) return 'int';
         // ral-52k: a base credential field declared `string` (`this.apiKey`) as an arm of a ternary initializer: a `Str` or `Null`
         if (fresh && this.rustTernaryArm(node) && this.rustBaseStrFieldRead(node)) return 'ostr';
         // ral-65n: a never-written base-tier parameter declared `Str` / `string` as an arm of a ternary initializer: a `Str` or `Null`
@@ -5850,15 +5855,28 @@ export class RustTranspiler extends BaseTranspiler {
      *  (or string | undefined), printed as a `Value` binding (no typed signature slot) and never written in its function.
      *  Its box holds a `Str` or `Null`, so the arm reads it once as an `Option<String>` (the same conversion the base
      *  `Str` call arm next to it takes). */
+    /** ral-84h R1: the arm is a base `Str` parameter accepted by rust65nBaseStrParamArm through its `= undefined` / string-literal default. */
+    rust84hDefaultedStrParamArm(node: any): boolean {
+        if (node === undefined || !isIdentifier(node) || !this.rust65nBaseStrParamArm(node)) return false;
+        const param: any = this.rustDeclaredNode(node);
+        return param !== undefined && isParameterDeclaration(param) && param.initializer !== undefined;
+    }
+
     rust65nBaseStrParamArm(node: any): boolean {
         if (node === undefined || !isIdentifier(node) || node.text === 'undefined') return false;
         const param: any = this.rustDeclaredNode(node);
         if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || !isMethodDeclaration(param.parent)
-            || param.dotDotDotToken !== undefined || param.initializer !== undefined) return false;
+            || param.dotDotDotToken !== undefined) return false;
+        // ral-84h R1: a `= undefined` default reads back the same `Str` or `Null` box (get_arg's `Value::Null`), and an
+        // unannotated string-literal default (`takerOrMaker = 'taker'`) is a checker `string` whose box is that literal or the caller's `Str`
+        const init: any = param.initializer === undefined ? undefined : this.unwrapParens(param.initializer);
+        const nilDefault = init !== undefined && this.literalKindOfNode(init) === 'null';
+        const strDefault = init !== undefined && param.type === undefined && this.literalKindOfNode(init) === 'string' && !(init.text in this.StringLiteralReplacements);
+        if (init !== undefined && !nilDefault && !strDefault) return false;
         if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(param.getSourceFile?.()?.fileName ?? ''))) return false;
         const annotation: any = param.type;
-        const named = annotation !== undefined && ((annotation.kind === SyntaxKind.TypeReference && isIdentifier(annotation.typeName) && annotation.typeName.text === 'Str')
-            || annotation.kind === SyntaxKind.StringKeyword);
+        const named = strDefault || (annotation !== undefined && ((annotation.kind === SyntaxKind.TypeReference && isIdentifier(annotation.typeName) && annotation.typeName.text === 'Str')
+            || annotation.kind === SyntaxKind.StringKeyword));
         if (!named || this.primitiveKindOfType(this.typeOfNodeIfAny(param.name)) !== 'string') return false;
         if (this.rustOptParamKind(node) !== undefined) return false;
         for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text))) {
