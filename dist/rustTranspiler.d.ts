@@ -411,6 +411,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSiblingStrBoxesMove(declaration: any, scope: any): boolean;
     /** Static kind of a write's right-hand side: `null`, or the `Option` payload it yields exactly. */
     rustNilWriteKind(rhs: any): string | undefined;
+    /** ral-68b: `parseInt (s)` with one argument whose checker type is `string`, or that call times an integer literal. */
+    rust68bParseIntWrite(expr: any): boolean;
     /** za: a ternary whose arms are an `undefined` and a boolean literal (either order). */
     rustNilBoolNullTernary(expr: any): boolean;
     /** A boolean that is never undefined: `!x`, a ternary of boolean literals, or `&&` / `||` / parens over such operands. */
@@ -423,6 +425,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** How a read of a typed nil local prints: `'test'` (null / literal compare), `'cond'` (bool
      *  condition slot) or `'box'` (a `Value` argument, field, element, return or plain copy). */
     rustNilReadForm(n: any, kind: string): string | undefined;
+    /** ral-68b: `n` is a direct argument of a `this.<typed unified>(..)` call whose typed slot there is `Option<i64>`
+     *  (luno fetchLedgerByEntries `since`): the call prints the nil `Int` local's own `Option<i64>` in place of the box
+     *  the slot would read back through `.as_i64()`, the same `None` / `Some(n)` either way. */
+    rust68bNilIntTypedArg(call: any, n: any): boolean;
     /** rb: `y = !x;` as a whole statement, where `y` is another nil local typed `Option<bool>` (decided first; a cycle stays boxed). */
     rustNilNegatedBoolWrite(n: any): boolean;
     /** Box reads go only into plain `Value` slots: no `&mut` receivers, no native-typed callee slots. */
@@ -1192,6 +1198,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `Math.*` / ternary, or initialises / is written into another local): those partners belong to other groups. */
     rustSbHasPartner(declaration: any): boolean;
     private rustSbJoinMemo;
+    /** ral-68a R3: `recv.join('<sep>')` (an identifier or `this.<field>` receiver the checker types as an array) that is the
+     *  whole right side of a statement `x = ..` into an identifier: every printed join form answers a `Str` (a non-list
+     *  receiver joins to `""`), never `Null`. */
+    rust68aJoinWrite(node: any): boolean;
     /** sb: `xs.join(sep)` as a local's initializer: every printed join form is `Value::Str(<String>.into())` (a non-list
      *  receiver joins to `""`, never `Null`), so the local is that `String`. Only at a declaration initializer. */
     rustSbJoinShape(node: any): boolean;
@@ -1354,6 +1364,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustThisFieldLiteralWrite(n: any): boolean;
     /** ud: `n` is the whole right side of `x[k1][k2] = n` with `x` a typed two-level local map (`rustNestedBearerInsert`). */
     rustUdNestedBearerValue(n: any): boolean;
+    /** ral-68a R2: `n` is a property value inside an object literal (possibly nested in further object literals) that is the
+     *  whole right-hand side of a statement `x['a']['b'] = {..}` the printer prints itself (rustBearerLitChainValue). */
+    rust68aBearerLitChainLiteralValue(n: any): boolean;
     /** ral-55k: `n` is the whole right side of a statement `x['a']['b'] = n` with `x` a typed one-level map bearer and both keys
      *  plain string literals (rustBearerChainedWrite prints the two-level guarded native insert). */
     rustBearerLitChainValue(n: any): boolean;
@@ -1393,6 +1406,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNestedFieldUpperKeyUse(n: any): boolean;
     /** `this.F[..]['lit'] = n` (statement): the value slot of a nested plain-field insert. */
     rustNestedFieldValueUse(n: any): boolean;
+    /** ral-68h: `n` is the receiver of a two-argument `n.padStart|padEnd (..)` call (TS `String.prototype` method). */
+    rust68hPadReceiver(n: any): boolean;
+    /** ral-68h: the last key of `this.F[..][k] = n` is a string parameter of the enclosing method (pro requestId
+     *  `this.options['requestId'][url] = newValue`): the insert prints the same helper call with its own key text, the
+     *  value slot takes `Value::from(n)` (the Int / Float the `Value` local held). Decided from the parameter's
+     *  declaration (checker type `string`, never reassigned in the body) and `n` not naming the key. */
+    rust68hNestedParamKey(access: any, n: any): boolean;
     /** Assignment hook: the r05 insert of a nested plain-field write keyed by a typed string local. */
     printNestedFieldKeyWrite(left: any, acc: string, value: string): string | undefined;
     /** ral-56f: the bucket entry of a `ukey` upper key (rustNestedFieldUpperKeyUse), keyed by the local's own text (the
@@ -1693,6 +1713,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Joins the initializer kind with every `x = <rhs>` write: a nullish write makes the local optional. */
     rustScalarWidenedKind(declaration: any, kind: string): string;
     rustOptParamKind(expr: any): string | undefined;
+    /** ral-68a R1: an identifier read of an unwritten parameter whose typed signature slot is `&str` / `Option<&str>`
+     *  (decided from the signature table / per-venue string slot, never from printed text). */
+    rust68aStrParamWrite(node: any): boolean;
     private static readonly RUST_PARAM_READ;
     rustOptParamText(kind: string, node: any): string | undefined;
     rustScalarParamRead(node: any): {
@@ -2453,6 +2476,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** wi: a bare read under `!` / `&&` / `||` whose whole logical sits in a slot the printer already prints `bool`
      *  (a condition, `Value::Bool(..)`, a `bool` local): the slot's truthiness, `None` (Null) false as `is_true`. */
     rustBoolSlotLogicalUse(n: any): boolean;
+    /** ral-68d: the whole `&&` / `||` the leaf sits in is the initializer of a single-binding local the checker types
+     *  `boolean` (or `Bool`), every leaf a boolean-or-undefined identifier / call (`const isStockOrUta = (isStockSpot || uta)`):
+     *  the logical prints native (`is_true` over a `bool` is the identity), so the slot's truthiness reads the same. */
+    rust68dBoolSlotLogicalInit(n: any): boolean;
     /** qe: `x === true` / `x !== true` on a bool tuple slot: the slot reads `as_bool() == Some(true)`, so the native
      *  bool answers the strict test exactly (Null and a non-bool are `false` on both sides). Never `=== false`. */
     rustBoolSlotTrueTest(n: any): boolean;
@@ -3575,6 +3602,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustNilResponseLocals;
     /** The container kind of a write to a borrowed local; an endpoint write to an empty `let` counts as a map. */
     rustNilResponseWriteKind(rhs: any, nilDeclared: boolean, declaration: any): 'dict' | 'list' | 'api' | undefined;
+    /** ral-68c R1: `await this.m (..)` of a same-class async venue method whose declared return is a never-null container
+     *  (`Promise<Dict>` / `Promise<List>`, every declaration of the name alike), not a base builder. */
+    rust68cVenueWriteKind(rhs: any): 'dict' | 'list' | undefined;
     /** ral-65i: `await this.<endpoint> (..)` whose abstract declaration spells `Promise<Dict>`. */
     rust65iDeclaredDictEndpointWrite(rhs: any): boolean;
     /** ral-kc: `await this.<endpoint> (..)` whose abstract declaration spells `Promise<Dict>` / `Promise<List>`. */
@@ -4530,6 +4560,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The call a slot destructures, past parentheses, casts and one `await`. */
     rustAwaitedCall(node: any): any;
     rustHandedSlotBoxUse(n: any, declaration: any): boolean;
+    /** ral-68d: a params slot of `const [ a, p ] = this.handle*AndParams (x, ..)` returned whole: `x` is an identifier the
+     *  checker types a `Dict` (the base helper hands back that map or a copy of it), and `p` is never written at a key. */
+    rust68dReturnedParamsSlot(declaration: any): boolean;
     /** ral-59a: a local initialised or rewritten whole from another identifier (`let x = y` / `x = y`): handing it to a
      *  `Value` slot moved its source before; typing it would copy the source at the write instead. */
     rustRewrittenFromLocal(declaration: any): boolean;
