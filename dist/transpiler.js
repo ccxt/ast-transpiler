@@ -11878,29 +11878,17 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "this.BinaryConcat": "[]byte",
   // exchange_eth.go
   "this.EthGetAddressFromPrivateKey": "string",
-  // exchange_number.go / exchange.go / exchange_string.go — hand-written helpers whose every
-  // return path is a Go `string`. Look-alikes that must stay `any`: implodeParams/implodeHostname
-  // return the raw path or nil, json/iso8601/parse8601/parseDate/numberToString/parseJson/
-  // convertToBigInt have a nil path, hash returns []byte for digest "binary".
+  // hand-written helpers whose every return path is a Go `string` (look-alikes with a nil path stay `any`)
   "this.DecimalToPrecision": "string",
   "this.ExceptionMessage": "string",
   "this.Strip": "string",
   "this.ExtendedStarknetGetSelectorFromName": "string",
   "this.ExtendedStarknetComputePoseidonHashOnElements": "string",
-  // The SafeBool accessors are the one member of the Safe* pointer layer whose TS bodies are
-  // real methods (safeBool/safeBool2/safeBoolN live below the "METHODS BELOW THIS LINE"
-  // marker), so the printer emits them as methods and returns `any`. build/goTranspiler.ts
-  // drops that generated copy and go/v4/exchange_safe.go hand-writes the pointer-returning
-  // twins, mirroring this.SafeString / this.SafeFloat.
+  // SafeBool*: hand-written pointer-returning twins in exchange_safe.go, like this.SafeString
   "this.SafeBool": "*bool",
   "this.SafeBool2": "*bool",
   "this.SafeBoolN": "*bool",
-  // exchange_safe.go / exchange_generated.go. The Safe*Number accessors are TS methods whose
-  // `Num` return annotation prints as `any`; their Go signature is coerced to the honest
-  // *float64 pointer in exchange_safe.go (the transpiled copies are dropped in
-  // build/goTranspiler.ts), mirroring the hand-written SafeFloat layer. Same rule as the
-  // upstream table's SafeFloat/SafeInteger entries: a nil pointer is the absent value, a
-  // non-nil pointer a present number (so a present zero stays distinct).
+  // Safe*Number: signature coerced to *float64 in exchange_safe.go (nil = absent, like SafeFloat)
   "this.SafeNumber": "*float64",
   "this.SafeNumber2": "*float64",
   "this.SafeNumberN": "*float64",
@@ -11911,20 +11899,8 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "exchange.SafeNumber2": "*float64",
   "exchange.SafeNumberN": "*float64",
   "exchange.SafeNumberOmitZero": "*float64",
-  // --- numeric / time helpers ------------------------------------
-  // Each entry names the Go type every return path of the (hand-written or coerced)
-  // method already produces, so a local that receives the call keeps the very same
-  // value and only refines what the Go compiler knows.
-  //   NumberToString: string, or nil once the input stringifies to "" (undefined in TS)
-  //   Parse8601:      int64 milliseconds, or nil when every layout fails (undefined in TS)
-  //   Iso8601:        the formatted string, or nil for an absent/unparsable timestamp
-  // The two pointer shapes follow the #30054 Safe*/Precise.String* convention: a nil
-  // pointer is what TS reads as undefined, the printer emits *x / `x != nil` at every
-  // consumer of a typed local, and derefScalar() unwraps the ones that stay `any`.
-  //   ParseToInt:     ParseInt(ParseFloat(NumberToString(x))) — the hand-written ParseInt
-  //                   always returns int64 (math.MinInt64 on failure), so this one can
-  //                   never be nil and is named as a plain int64.
-  // ParseNumber answers a *float64 (nil = absent or non-numeric), the SafeNumber convention
+  // --- numeric / time helpers: the Go type every return path already produces ---
+  // NumberToString / Parse8601 / Iso8601 answer a nil pointer for TS undefined; ParseToInt is never nil
   "this.ParseNumber": "*float64",
   "exchange.ParseNumber": "*float64",
   "this.NumberToString": "*string",
@@ -11956,17 +11932,10 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "Jwt": "string",
   "Rsa": "string",
   "Ecdsa": "map[string]any",
-  // exchange_generated.go: SafeCurrencyCode / SafeSymbol return the code/symbol field of
-  // the dict safeCurrency/safeMarket always hands back, so their signature is coerced to
-  // the same `*string` shape as the hand-written accessors above (coerceTypedStringAccessors
-  // in build/goTranspiler.ts) and an absent value stays a nil pointer.
+  // SafeCurrencyCode / SafeSymbol: signature coerced to *string (coerceTypedStringAccessors)
   "this.SafeCurrencyCode": "*string",
   "this.SafeSymbol": "*string",
-  // base tuple helpers (exchange_generated.go). These are transpiled, but their emitted
-  // signature is coerced to `[]any` — every return path in the TS body prints a Go
-  // `[]any{...}` literal, see the coerceRegex in build/goTranspiler.ts#transpileBaseMethods.
-  // Listed so the ordinary (non-destructuring) call sites get a typed local too:
-  // `var values any = this.HandleOptionAndParams (...)` in HandleSubTypeAndParams.
+  // base tuple helpers whose signature build/goTranspiler.ts coerces to `[]any`
   "this.HandleOptionAndParams": "[]any",
   "this.HandleOptionAndParams2": "[]any",
   "this.HandleOptionStringAndParams": "[]any",
