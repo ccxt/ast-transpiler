@@ -509,6 +509,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-61x: `return x` of the method's own nil-declared `let x: Str = undefined` local (an accumulator the body writes):
      *  as an `Option<String>` it is the payload itself, as a `Value` a checker-string `Value` (converts either way). */
     rust61xNilStrReturnLocal(n: any, fn: any): boolean;
+    /** ral-76a S1: `return x` of the method's own local that another rule already prints `Option<String>` (a `safeString`
+     *  read, checker `string | undefined`): under a `: Str` signature it is the payload itself, so the method prints
+     *  `-> Option<String>` and its callers' string locals read it natively. Decided from the AST and the local's own rule. */
+    private rust76aS1Off;
+    rust76aOptStrReturnLocal(n: any, fn: any): boolean;
+    /** ral-76a S1: the method prints `-> Option<String>` only because a return is its own reader local (rust76aOptStrReturnLocal). */
+    rust76aOptStrReturnMethod(fn: any): boolean;
     rust56xStrReturnText(exp: any, fn: any): string | undefined;
     /** ral-56x K1: a `+` partner that is itself a concat (or a `.toString()`) the printer already prints as a boxed `Value::Str(format!(..))`
      *  (always a `Str`, never `Null`), so the optional string joins the same `format!` with its `as_deref().unwrap_or("null")` text. */
@@ -743,6 +750,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A local some `return` of a method with a declared string return hands back as-is. */
     rustStrReturnedLocal(declaration: any, scope: any): boolean;
     private static readonly RUST_COPY_SCALAR_KINDS;
+    /** ral-76f: a write `x = p.m(..)` of a string alias `x = p` calls a method on its own source parameter: the typed
+     *  write would copy the parameter again (a second copy), so such an alias keeps the `Value` binding. */
+    rust76fSourceMethodWrite(declaration: any, scope: any): boolean;
     rustParamAliasSeedKind(declaration: any): string | undefined;
     rustLimitCall(expr: any): boolean;
     rustLimitArgUse(n: any, kind: string): boolean;
@@ -1018,6 +1028,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustUdOverrideStrSeed(init: any): boolean;
     /** ud: reader strings admitted only through the lending-slot exemption of `rustBlockLocalUsesAll`. */
     private rustUdLent;
+    /** ral-76c R1: `xs[i]` over a local (never a parameter) whose checker type is an array of `string`, in a non-test source. */
+    rust76cLocalStrListElement(init: any): boolean;
     /** ud: a base-tier string reader (`safeString*`, `safeCurrencyCode`) initialiser, with or without a default. */
     rustUdReaderStr(init: any): boolean;
     /** True when the initializer is a reader this block admits (its kind comes from `rustReaderDefaultKind`). */
@@ -1989,6 +2001,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustConcatWithNilLocal(declaration: any): boolean;
     /** rd: a `for (let i = <int>; ..; i++)` counter read in its own loop whose only write is the step: always an `Int`. */
     rustValueIntCounter(node: any): boolean;
+    /** ral-76e: `c`, `c + k` or `c - k` (parentheses skipped) where `c` is an always-`Int` for counter (rustValueIntCounter) and
+     *  `k` an int literal: the runtime value is an `Int` on every path. */
+    rust76eCounterStep(node: any): boolean;
     /** tb: `const b = this.parseToInt (..)` (an `Int`-or-`Null` producer, `i64` / `Option<i64>`). */
     rustTbParseToIntInit(declaration: any): boolean;
     /** 40d: `const n = this.safeInteger* (.., <integer literal>)`: the reader answers an `Int` on every path (parsed or the
@@ -2465,6 +2480,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     printErrorConstructorArg(name: string, index: number, node: any, identation: number): string;
     rustErrorConstructorName(className: string): string;
     printNewExpression(node: any, identation: any): any;
+    /** ral-76a: a routed error constructor (returns `ExchangeError`) stored straight into an untyped local, by its
+     *  declaration or by a plain `x = new XError (..);` statement, is boxed by the printer: the target is a `Value`. The
+     *  ral-73c reject-only local keeps the bare `ExchangeError`. Decided from the AST parent chain, not printed text. */
+    rustErrorCtorValueTarget(node: any): boolean;
     /** Printed class expression of a `new` whose class is a runtime value, else undefined. */
     rustDynamicErrorClass(node: any): string | undefined;
     /** `param.member` where `param` is a class-typed parameter, the member is
@@ -2942,7 +2961,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): any;
+    printLogicalInBooleanContext(node: any): string;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
@@ -3115,6 +3134,13 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  value of a ws `client.resolve|reject|send (m, ..)`: each takes the boxed `Value` by value, so the map's last
      *  use moves into `Value::Map(m)`, exactly the shared map the boxed local handed over. */
     rustLiteralMoveSlot(n: any): boolean;
+    /** ral-76g: the admitted move is a ternary arm (rust76gTernaryArmMove); a whole re-seed (`x = { .. }`, rustBearerRebuild)
+     *  before it writes the same native map, so the single move still carries the last value. */
+    rust76gTernaryMoveUse(n: any): boolean;
+    /** ral-76g: `c ? x : y` / `c ? y : x` (x an arm, not the condition) as the initializer of a plain `const` / `let` or the value
+     *  of an object-literal property: the if-expression's arms are `Value`, so the map's last use moves into `Value::Map(x)`
+     *  there, the box the helper form made (no copy; the other arm is evaluated instead, never both). */
+    rust76gTernaryArmMove(up: any, n: any): boolean;
     /** ral-73a: `y = x` (statement), y another plain `let` of the same function declared `undefined` (no initializer value) and
      *  annotated `NullableDict` / `Dict`: x moves whole into y's `Option<Dict>` / `Value` box (`Value::Map(x)`, the box the helper
      *  form made at the write; no copy) at x's last use. */
@@ -3693,7 +3719,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `let mut x: Option<crate::value::Dict> = <init>.into_opt_dict()` (`None` when declared empty). */
     printOptContainerDeclaration(declaration: any, varName: string, indent: string): string | undefined;
     /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
-    printOptContainerWrite(left: any, right: any): string | undefined;
+    printOptContainerWrite(left: any, right: any, identation?: number): string | undefined;
     /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */
     printOptContainerNullTest(left: any, right: any, op: any): string | undefined;
     rustBorrowedListUse(node: any): boolean;
@@ -3730,6 +3756,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-63i: `this.m (..)` whose resolved declaration is a method of the calling venue's own source file (not the base
      *  tier, not an abstract endpoint), so its argument slots print from that declaration. */
     rust63iSameFileMethod(call: any): boolean;
+    /** ral-76b: `t[k] = x` (statement, one level, `t` a plain local or `this` field read) or `t = x` / `let t = x` whose
+     *  target local is untyped (no typed decision of its own), so the right side is a plain `Value` place. */
+    rust76bWholeHandOff(n: any): boolean;
+    rust76bUntypedTarget(target: any): boolean;
     rustDeclaredEndpointBoxUse(n: any): boolean;
     /** `this.F` for a checker dict-shaped field (`fundingRates: Dictionary<FundingRate>`) the native insert writes
      *  (`printNativeDictInsert`: `rustFieldStaysDict`). The insert stores whatever handle it is given, so a built map
@@ -5191,6 +5221,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-46i: a whole-value hand-off of a `safeMarket` alias that is neither a lent market slot nor a reader's record. */
     rustSmktAliasValueUse(n: any): boolean;
     rustSafeMarketLocalOk(declaration: any, alias?: boolean): boolean;
+    rust76jSmktUse(declaration: any, n: any, scope: any, alias: boolean): boolean | 'value';
+    /** ral-76j: `this.m (.., s, ..)` with a `safeMarket` struct local at a plain `Value` slot of a self method: the
+     *  boxed local was copied there (`s.clone()`); `crate::Value::from(&s)` shares the record's `raw` the same way. */
+    rust76jSmktValueArg(n: any): boolean;
     /** A use of a `safeMarket` struct local. */
     rustSafeMarketLocalOf(node: any): any;
     /** Argument text for a lent market slot: a typed market lends itself, any other value decodes once. */
