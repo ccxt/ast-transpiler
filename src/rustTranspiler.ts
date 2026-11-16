@@ -291,9 +291,14 @@ export const rustDispatch = {
         }
     },
     /** Parameter list of a `DerivedExchange` slot: its `market` and currency arguments (never the first) are lent structs. */
-    slotParams: (args: string[]): string => args.map((a, i) => `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : rustDispatch.isSlotStr(a, i) ? '&str' : 'crate::Value'}`).join(', '),
+    slotParams: (args: string[]): string => args.map((a, i) => rustDispatch.isSlotTyped(a) ? a : `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : rustDispatch.isSlotStr(a, i) ? '&str' : 'crate::Value'}`).join(', '),
     /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
     isSlotStr: (arg: string, i: number): boolean => arg === 'path' && i === 0,
+    /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
+    isSlotTyped: (slot: string): boolean => slot.includes(': '),
+    slotName: (slot: string): string => slot.split(': ')[0],
+    /** A `&[..]` slot takes the method's optional-argument slice as is. */
+    isSlotSlice: (slot: string): boolean => /^\w+: &\[/.test(slot),
     /** A forwarder's argument for an inherent parameter of `kind`: a slot already of that type passes by name. */
     slotArg: (kind: string, arg: string, i: number): string => (kind === 'str' && rustDispatch.isSlotStr(arg, i) ? arg : rustDispatch.fromValue(kind, arg)),
     isSlotMarket: (arg: string, i: number): boolean => arg === 'market' && i > 0,
@@ -13286,6 +13291,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (p !== undefined && p.type === '&str') return rustDispatch.isSlotStr(_slot, i) ? p.name : `crate::Value::from(${p.name})`;
             if (p !== undefined && p.type === 'Option<&crate::types::Market>') return p.name;
             if (p !== undefined && p.type === 'Option<&crate::types::Currency>') return p.name;
+            if (p !== undefined && p.type === '&[Value]' && rustDispatch.isSlotSlice(_slot)) return p.name;
             if (sliceAt >= 0 && i >= sliceAt) return `crate::runtime::get_arg(${sig.params[sliceAt].name}, ${i - sliceAt}, crate::Value::Null)`;
             return 'crate::Value::Null';
         });

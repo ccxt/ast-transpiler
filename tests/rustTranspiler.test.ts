@@ -12442,6 +12442,19 @@ describe('ral-qf: the sign override group types its path parameter together', ()
         expect(rustDispatch.slotArg('str', 'path', 0)).toBe('path');
         expect(rustDispatch.slotValue('path', 0)).toBe('crate::Value::from(path)');
     });
+    test('a trait slot typed as the trailing slice gets the optional-argument slice as is, not one get_arg per slot', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-qf-slice-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    sign (path: string, api: string[] = [ 'public' ], method: string = 'GET', params: Dict = {}): Dict {\n        return { 'url': path };\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'virtualDispatch': { sign: [ 'path', 'optional_args: &[Value]' ] }, 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const base = t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts')).content;
+        expect(base).toContain('{ let __v = crate::exchange::DerivedExchange::sign(self, path, optional_args); if !matches!(__v, crate::Value::Null) { return __v; } }');
+        expect(base).not.toContain('crate::runtime::get_arg(optional_args');
+        expect(rustDispatch.isSlotSlice('optional_args: &[Value]')).toBe(true);
+        expect(rustDispatch.isSlotSlice('params')).toBe(false);
+        expect(rustDispatch.slotParams([ 'path', 'optional_args: &[Value]' ])).toBe('path: &str, optional_args: &[Value]');
+        expect(rustDispatch.slotName('optional_args: &[Value]')).toBe('optional_args');
+    });
     test('negative: one declaration spelling path differently keeps the whole group Value', () => {
         const { base, venue } = mk('no', "    sign (path, api: string[] = [ 'public' ], method: string = 'GET', params: Dict = {}): Dict");
         expect(base).toMatch(/pub fn sign\(&self, (mut )?path: Value, optional_args/);
