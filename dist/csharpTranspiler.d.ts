@@ -168,7 +168,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpParameterWrittenAnywhere(identifier: any): boolean;
     csharpArrayListParamType(node: any): string | undefined;
     csharpFunctionStringListParamType(node: any): string | undefined;
-    csharpListParamSpelling(node: any, anyCell?: boolean): string | undefined;
     csharpListSpellingOfType(type: any, unionArms?: number, anyCell?: boolean): string | undefined;
     csharpListParamCensus(): Map<string, boolean> | undefined;
     csharpListParamBodyReadsAsList(parameter: any): boolean;
@@ -185,8 +184,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpCallSiteOperand(argument: any): any;
     csharpCallSiteIdentityOperand(argument: any, wanted: string, text: string): string;
     csharpCallSiteDeclaredType(argument: any, printedName: string): string | undefined;
-    csharpListParamIsWritten(parameter: any): boolean;
-    csharpListBindingIsWritten(declaration: any): boolean;
+    csharpNameIsRebound(binding: any, scope: any): boolean;
     csharpListParamArgumentPrintsList(argument: any, decide?: (key: string) => boolean): boolean;
     printParameterType(node: any): any;
     csharpWsCacheParamType(node: any): string | undefined;
@@ -345,6 +343,10 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIdentifierIsWritten(node: any): boolean;
     csharpIsSetOrAddTarget(node: any): boolean;
     csharpIsAssignmentOperator(kind: any): boolean;
+    csharpIsElementWrite(node: any): boolean;
+    csharpIsSingleDeclarator(declaration: any): boolean;
+    csharpPrintedLocalTypeOf(node: any): string | undefined;
+    csharpGuardedRead(guards: string, receiver: string, key: string): string;
     csharpInt64ForCounter(declaration: any): boolean;
     csharpInt64ForCounterProof(declaration: any): boolean;
     csharpCounterReadNormalises(read: any): boolean;
@@ -363,6 +365,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpConditionPositionAllowsNative(node: any): boolean;
     printInstanceOfExpression(node: any, identation: any): string;
     csharpBooleanReturnType(node: any): string | undefined;
+    csharpAnnotatedReturnType(node: any, cache: WeakMap<Node, string | undefined>, self: (n: any) => string | undefined, classify: (members: readonly any[]) => string | undefined, veto?: (result: string) => boolean): string | undefined;
     csharpConditionPrintsBool(node: any): boolean;
     csharpBinaryExpressionPrintsBool(node: any): boolean;
     csharpIsCheckedBoolean(node: any): boolean;
@@ -370,7 +373,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpStaticCalleeName(node: any): string | undefined;
     csharpCallHasBoolSignature(node: any): boolean;
     csharpGeneratedThisCallBoolType(node: any, callee: string | undefined): string | undefined;
-    csharpCallPrintsBool(node: any): boolean;
     csharpNullableBoolCondition(node: any): string | undefined;
     csharpCallPrintsNullableBool(node: any): boolean;
     printCondition(node: any, identation: any): any;
@@ -400,7 +402,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredReadType(node: any): string | undefined;
     csharpResolvedReadType(node: any): string | undefined;
     csharpDeclaredLocalType(node: any): string | undefined;
-    csharpOperandsAreDeclaredReads(left: any, right: any): boolean;
     csharpDeclaredReadEqualityType(node: any, printerType: string | undefined): string | undefined;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpDeclaredReadEqualityKind(node: any, operandType: string | undefined): string | undefined;
@@ -497,7 +498,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         text: string;
         type: string;
     } | undefined;
-    csharpTypeIsNative(csharpType: string): boolean;
     csharpTypedLocalType(node: any): string | undefined;
     csharpCountMemberOf(csharpType: string): string | undefined;
     csharpDeclaredLengthExpression(node: any): string | undefined;
@@ -583,7 +583,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpNativeInExpression(key: any, obj: any): string | undefined;
     csharpDictOrNullInExpression(key: any, obj: any): string | undefined;
-    csharpIsExchangeSource(node: any): boolean;
     csharpDictOrNullValue(node: any, depth: number): boolean;
     csharpDictOrNullTupleSlot(node: any, depth: number): boolean;
     csharpMemberInExpression(key: any, obj: any): string | undefined;
@@ -592,7 +591,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredDictInExpression(key: any, obj: any): string | undefined;
     csharpDeclaredStringKey(key: any): string | undefined;
     csharpStringKeyedElementAccess(node: any): boolean;
-    csharpNumericStringLiteral(node: any): boolean;
     csharpDictionaryReceiverType(node: any): string | undefined;
     csharpScalarElementKinds(node: any): number;
     csharpOperandIsNullLiteral(node: any): boolean;
@@ -624,7 +622,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printDeleteExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
-    csharpDeclaredReceiverReadable(node: any, expression: any): boolean;
     csharpIdentifierKeyRead(expression: any, argumentExpression: any): string | undefined;
     csharpObjectKeyCastable(key: any): boolean;
     csharpIsPlainRead(node: any): boolean;

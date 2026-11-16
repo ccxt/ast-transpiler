@@ -1010,13 +1010,11 @@ export declare class GoTranspiler extends BaseTranspiler {
         goType: string;
         text: string;
     } | undefined;
-    goNonNilPointerSubtractionText(node: any, leftText: string, rightText: string): string | undefined;
     goInt64Operand(node: any, printedText: string): {
         pointer: boolean;
         text: string;
     } | undefined;
-    goNonNilPointerAdditionText(node: any, leftText: string, rightText: string): string | undefined;
-    goNonNilPointerProductText(node: any, leftText: string, rightText: string): string | undefined;
+    goNonNilPointerOperationText(node: any, leftText: string, rightText: string, op: string, operandOf: any): string | undefined;
     goInt64ProductOperand(node: any, printedText: string): {
         pointer: boolean;
         text: string;
@@ -1238,7 +1236,6 @@ export declare class GoTranspiler extends BaseTranspiler {
         def?: any;
         safeDict?: boolean;
     } | undefined;
-    goWsOrderbooksReadText(node: any): string | undefined;
     goOrderBookWriteKeepsType(goType: string, right: any): boolean;
     goOrderBookMemberText(node: any): string | undefined;
     goOrderBookCacheWrite(node: any): string | undefined;
@@ -1284,8 +1281,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBalanceDeleteText(node: any): string | undefined;
     goWsCacheEmptyLiteral(node: any): string | undefined;
     goWsTradesField(node: any): boolean;
+    goBaseExchangeFieldOfType(node: any, typeText: string): boolean;
     goWsTradesRead(node: any): boolean;
-    goWsTradesReadText(node: any): string | undefined;
     goNilInitCacheLocalType(declaration: any): string | undefined;
     goNilInitOrderBookLocalType(declaration: any): string | undefined;
     goIsEqualityToken(kind: any): boolean;
@@ -1539,7 +1536,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsNilGuardedStringPointerKey(keyNode: any): boolean;
     goInOpPointerKeyProvenNonNil(statement: any, ident: any): boolean;
     goBlockExitsOnNilTest(block: any, statement: any, ident: any): boolean;
-    goIsNilTestOf(node: any, ident: any): boolean;
+    goNilComparisonOf(node: any, ident: any, loose: any, strict: any): boolean;
     goStatementAlwaysExits(statement: any): boolean;
     goIsFreshUnsharedMapLocal(node: any, writeSite: any): boolean;
     goUseMayPrecede(use: any, writeSite: any, scope: any): boolean;
@@ -1631,7 +1628,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     printInlineOrderedComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
     goOrderedComparisonPointerKind(node: any): string | undefined;
     printPointerOrderedComparison(left: any, right: any, leftText: string, rightText: string, operator: string, leftPointee: string | undefined, rightPointee: string | undefined): string | undefined;
-    goIsNonNilTestOf(node: any, ident: any): boolean;
     goIsNilLiteral(node: any): boolean;
     goIsSameSymbol(a: any, b: any): boolean;
     goNilGuardFields: {
@@ -1919,6 +1915,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goMapParamLiteralKey(key: any): boolean;
     goMapParamIsWriteValue(access: any): boolean;
     goMapParamMarketRow(node: any): boolean;
+    goRowLocalKeepsRow(scope: any, declaration: any, rowCallees: string[]): boolean;
     goMapParamDerefConsumer(access: any): boolean;
     goNonPointerAccessorSource(expr: any): boolean;
     goLiteralDefaultArg(node: any): boolean;

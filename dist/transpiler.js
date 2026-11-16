@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-MEKZ6QY3.js";
+} from "./chunk-AWK6QGCM.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -2093,7 +2093,47 @@ var PhpTranspiler = class extends BaseTranspiler {
 init_esm_shims();
 import { SyntaxKind as SyntaxKind4, NodeFlags } from "typescript/unstable/ast";
 import { IndexKind, TypeFlags as TypeFlags3 } from "typescript/unstable/sync";
-import { isArrayLiteralExpression as isArrayLiteralExpression2, isAsExpression, isBinaryExpression as isBinaryExpression2, isBlock, isBooleanLiteral as isBooleanLiteral2, isBreakStatement, isCallExpression as isCallExpression3, isClassDeclaration as isClassDeclaration2, isClassExpression, isClassLikeDeclaration, isConditionalExpression as isConditionalExpression2, isContinueStatement, isDeleteExpression, isElementAccessExpression, isExpressionStatement, isForStatement, isFunctionExpression as isFunctionExpression3, isIdentifier, isIfStatement, isMethodDeclaration as isMethodDeclaration2, isNumericLiteral as isNumericLiteral2, isObjectLiteralExpression as isObjectLiteralExpression2, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertySignatureDeclaration, isReturnStatement, isSourceFile as isSourceFile2, isSpreadAssignment, isSpreadElement, isStringLiteral, isStringLiteralLikeNode as isStringLiteralLikeNode2, isThrowStatement, isTypeAssertion, isVariableDeclaration, isWhileStatement } from "typescript/unstable/ast/is";
+import {
+  isArrayLiteralExpression as isArrayLiteralExpression2,
+  isAsExpression,
+  isBinaryExpression as isBinaryExpression2,
+  isBlock,
+  isBooleanLiteral as isBooleanLiteral2,
+  isBreakStatement,
+  isCallExpression as isCallExpression3,
+  isClassDeclaration as isClassDeclaration2,
+  isClassExpression,
+  isClassLikeDeclaration,
+  isConditionalExpression as isConditionalExpression2,
+  isContinueStatement,
+  isDeleteExpression,
+  isElementAccessExpression,
+  isExpressionStatement,
+  isForStatement,
+  isFunctionExpression as isFunctionExpression3,
+  isIdentifier,
+  isIfStatement,
+  isMethodDeclaration as isMethodDeclaration2,
+  isNumericLiteral as isNumericLiteral2,
+  isObjectLiteralExpression as isObjectLiteralExpression2,
+  isParameterDeclaration,
+  isParenthesizedExpression,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
+  isPropertyAccessExpression,
+  isPropertyDeclaration,
+  isPropertySignatureDeclaration,
+  isReturnStatement,
+  isSourceFile as isSourceFile2,
+  isSpreadAssignment,
+  isSpreadElement,
+  isStringLiteral,
+  isStringLiteralLikeNode as isStringLiteralLikeNode2,
+  isThrowStatement,
+  isTypeAssertion,
+  isVariableDeclaration,
+  isWhileStatement
+} from "typescript/unstable/ast/is";
 import fs from "fs";
 import path from "path";
 var parserConfig3 = {
@@ -2199,10 +2239,8 @@ var CSHARP_THIS_RETURN_TYPES = {
   "json": "string",
   "inArray": "bool",
   "valueIsDefined": "bool",
-  // the safe* accessor family: cs/ccxt/base already declares these with a concrete
-  // return type (`string? safeString(...)`, `Int64? safeInteger(...)`, `bool? safeBool(...)`,
-  // `IDictionary<string, object> safeDict(...)`, `List<object> safeList(...)`, ...), so a
-  // local initialised by one of them already holds that type inside its `object` box
+  // the safe* accessor family: cs/ccxt/base already declares these with a concrete return type (`string? safeString(...)`, `Int64? safeInteger(...)`, `bool? safeBool(...)`,
+  // `IDictionary<string, object> safeDict(...)`, `List<object> safeList(...)`, ...), so a local initialised by one of them already holds that type inside its `object` box
   "safeString": "string?",
   "safeString2": "string?",
   "safeStringN": "string?",
@@ -2710,10 +2748,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     this.csharpPrintedReturnTypes = /* @__PURE__ */ new WeakMap();
     // method names declared once tree-wide (config.csharp.uniqueMethodNames); absent = the inferred collection return is off
     this.csharpUniqueMethods = void 0;
-    // the embedding layer renames every async `Promise<int>` / `Promise<Int>` declaration to its PascalCase
-    // `Task<Int64>` typed core (ccxt: pascalizeTypedCores); on, the awaited `this.<name>(...)` calls of those
-    // methods print that PascalCase name (csharpInt64TaskCallName). Off by default: a standalone print keeps
-    // the declaration camelCase, and the call has to match it
+    // the embedding layer renames every async `Promise<int>` / `Promise<Int>` declaration to its PascalCase `Task<Int64>` typed core (ccxt: pascalizeTypedCores); on, the awaited
+    // `this.<name>(...)` calls of those methods print that PascalCase name (csharpInt64TaskCallName). Off by default: a standalone print keeps the declaration camelCase, and the
+    // call has to match it
     this.csharpPascalInt64TaskCalls = false;
     // method name -> parameter position -> the C# type the embedding build layer narrows that parameter to
     // (config.csharp.numericArgTypes); with the callee allowlist it lets the printer prove a literal-default
@@ -2728,11 +2765,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     this.csharpLocalTypes = /* @__PURE__ */ new WeakMap();
     // method node -> `key in recv` guards of that method, keyed by receiver text + key
     this.csharpGuardIndex = /* @__PURE__ */ new WeakMap();
-    // variable declaration -> the concrete C# type this printer named for it
-    // (getCSharpLocalType): 'List<object>' / 'Dictionary<string, object>' / 'string' / ...
-    // Only declarations the printer typed itself are kept: the printed `<type> name = `
-    // prefix is final, so every later read of the local is statically that type and its
-    // members may replace inOp/getArrayLength
+    // variable declaration -> the concrete C# type this printer named for it (getCSharpLocalType): 'List<object>' / 'Dictionary<string, object>' / 'string' / ... Only declarations
+    // the printer typed itself are kept: the printed `<type> name = ` prefix is final, so every later read of the local is statically that type and its members may replace
+    // inOp/getArrayLength
     this.csharpTypedLocals = /* @__PURE__ */ new WeakMap();
     this.csharpNativeForIncrementors = /* @__PURE__ */ new WeakSet();
     // for-counter declaration -> true when csharpInt64ForCounter proved it Int64 (undefined = not asked yet)
@@ -2782,16 +2817,13 @@ var CSharpTranspiler = class extends BaseTranspiler {
     this.csharpCoreArgTypes = {};
     // same, for positions retyped without a shadow (config.csharp.signatureArgTypes: sign / handleErrors / ...)
     this.csharpSignatureArgTypes = {};
-    // method name -> argument position -> the C# type the callee's parameter prints (config.csharp.callSiteArgTypes):
-    // a `this.` / `base.` (exchange tests: `exchange.`) call converts an argument that is not already that
-    // type: `((string)x)`, `ToInt64Arg(x)` / `ToDoubleArg(x)` (`Required` for non-nullable), a suffixed
-    // numeric literal (`1L`, `0d`); list targets are left as printed (csharpCallSiteArgs)
+    // method name -> argument position -> the C# type the callee's parameter prints (config.csharp.callSiteArgTypes): a `this.` / `base.` (exchange tests: `exchange.`) call
+    // converts an argument that is not already that type: `((string)x)`, `ToInt64Arg(x)` / `ToDoubleArg(x)` (`Required` for non-nullable), a suffixed numeric literal (`1L`, `0d`);
+    // list targets are left as printed (csharpCallSiteArgs)
     this.csharpCallSiteArgTypes = {};
-    // typed cores (config.csharp.typedCores): method name -> the C# type its Task returns, per tier
-    // (`base`, `prediction`, `snapshot` {type, predictionType}, per-venue `venue`). A typed core's
-    // declaration and its `this.`/`base.` (ws / main tests: `exchange.`) calls print the PascalCase name
-    // the receiver whose typed-core calls print PascalCase in an in-memory print (ccxt: `exchange` while the
-    // main test file prints); undefined = in-memory prints keep the TS name
+    // typed cores (config.csharp.typedCores): method name -> the C# type its Task returns, per tier (`base`, `prediction`, `snapshot` {type, predictionType}, per-venue `venue`). A
+    // typed core's declaration and its `this.`/`base.` (ws / main tests: `exchange.`) calls print the PascalCase name the receiver whose typed-core calls print PascalCase in an
+    // in-memory print (ccxt: `exchange` while the main test file prints); undefined = in-memory prints keep the TS name
     this.csharpTypedCoreInMemoryReceiver = void 0;
     this.csharpTypedCores = void 0;
     // the identifiers whose declared `string` makes a string-target argument print bare
@@ -2815,33 +2847,13 @@ var CSharpTranspiler = class extends BaseTranspiler {
     this.csharpMethodOverrides = /* @__PURE__ */ new WeakMap();
     // class declaration -> member name -> its LAST method of that name (base scan order)
     this.csharpClassMethodsByName = /* @__PURE__ */ new WeakMap();
-    // reads of a hand-written class's string-keyed dictionary member.
-    // The C# class that backs a TS class (ccxt: WebSocketClient for ws `Client`) declares members
-    // such as `futures` / `subscriptions` as `IDictionary<string, V>` and may carry a typed accessor
-    // (`getFuture(string)`). The consumer names such a member through csharpDeclaredDictMember (a
-    // table keyed on the checker's receiver class and member, stub undefined here, so an unpatched printer
-    // keeps the helper call). `recv.member[key]` and `this.safeValue (recv.member, key)` then print:
-    //   - the accessor call `recv.getX(key)` when the table names one (safeValue only: the accessor
-    //     answers null for a missing key exactly like the helper), or
-    //   - the helper's own key test: `(recv.member != null && key != null && recv.member.ContainsKey(key)
-    //     ? recv.member[key] : null)` (literal keys skip the key null test).
-    // The key must be a string literal or an identifier whose printed C# type is string / string?
-    // (csharpNativeStringKey, then the build layer's declared record); every other key, a write, a
-    // delete and a safeValue default keep the helper.
+    // reads of a hand-written class's string-keyed dictionary member. The C# class that backs a TS class (ccxt: WebSocketClient for ws `Client`) declares members such as `futures` / `subscriptions`
+    // as `IDictionary<string, V>` and may carry a typed accessor (`getFuture(string)`). The consumer names such a member through csharpDeclaredDictMember (a table keyed on the checker's receiver
+    // class and member, stub undefined here, so an unpatched printer keeps the helper call). `recv.member[key]` and `this.safeValue (recv.member, key)` then print:
     this.csharpDeclaredDictMemberReads = /* @__PURE__ */ new WeakSet();
-    // declared dictionary base fields, and `mod` equality against a literal:
-    // A hand-written BaseExchange field the printer's tables above do not name is declared in the
-    // embedding build layer's derived table (config.csharp.declaredBaseFieldTypes: the field's C# type in
-    // cs/ccxt/base/Exchange.Options.cs, read through csharpDeclaredBaseFieldType). Two declared shapes read natively:
-    //   - `IDictionary<string, object>` / `Dictionary<string, object>` (ccxt: urls, headers): the member IS a
-    //     dictionary, so its indexer and ContainsKey replace getValue / inOp; the helper's null receiver,
-    //     null key and missing key branches are spelled back as tests;
-    //   - `object` (ccxt: positions, currencies): the box is a dictionary whenever every write of the member in the
-    //     source file stores one (`{}` literal, a dictionary-typed value, null, undefined) and at least one
-    //     write exists, so the same reads go through the helper's own `(IDictionary<string,object>)` cast.
-    // The key is a string literal, an identifier whose printed C# type is string / string?, or an identifier
-    // whose TypeScript type is a string (printed `object` or string: `(string)key` is the helper's own cast).
-    // Every other key, a write, a delete and a name no hook declares keep the helper.
+    // declared dictionary base fields, and `mod` equality against a literal: A hand-written BaseExchange field the printer's tables above do not name is declared in the embedding build layer's
+    // derived table (config.csharp.declaredBaseFieldTypes: the field's C# type in cs/ccxt/base/Exchange.Options.cs, read through csharpDeclaredBaseFieldType). Two declared shapes read natively: -
+    // `IDictionary<string, object>` / `Dictionary<string, object>` (ccxt: urls, headers): the member IS a dictionary, so its indexer and ContainsKey replace getValue / inOp;
     this.csharpDeclaredBaseFields = {};
     this.csharpBaseFieldKeyNames = /* @__PURE__ */ new WeakMap();
     // method node -> the parameter indexes this printer emits as `bool?`; keyed by the ts.Program
@@ -3423,11 +3435,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
   printPromiseAllCall(node, identation, parsedArg = void 0) {
     return `promiseAll(${parsedArg})`;
   }
-  // ---- `await Promise.all ([a, b])` -> typed task locals + Task.WhenAll ----
-  //
-  // PromiseAll only reflects because an element's Task<T> has been erased to object. With every
-  // element a statically typed Task<T> whose T the helper hands back unchanged, WhenAll waits for
-  // exactly those tasks and `.Result` is the value the helper collected, in list order.
+  // ---- `await Promise.all ([a, b])` -> typed task locals + Task.WhenAll ---- PromiseAll only reflects because an element's Task<T> has been erased to object. With every element a statically typed
+  // Task<T> whose T the helper hands back unchanged, WhenAll waits for exactly those tasks and `.Result` is the value the helper collected, in list order.
   // the statements of a block are planned before any of them prints: a local feeding the list has
   // to be emitted as `var` (a concrete Task<T>) by the time the site reads its `.Result`
   printBlock(node, identation, chainBlock = false) {
@@ -3532,16 +3541,14 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const statement = declaration.parent.parent;
     const position = statements.indexOf(statement);
-    const singleDeclarator = declaration.parent?.declarations?.length === 1;
+    const singleDeclarator = this.csharpIsSingleDeclarator(declaration);
     if (!singleDeclarator || position < 0 || position >= index) {
       return void 0;
     }
     return this.csharpPromiseAllValueIsPlain(element) ? { text: this.printNode(element, 0).trim(), declaration } : void 0;
   }
-  // the awaited value of the element's Promise survives PromiseAll unchanged: FromTyped's switch
-  // covers the struct families and FromDictList reboxes List<Dictionary<...>> only, so an
-  // anonymous dictionary, a list of those, or a scalar is never rewritten; `any`/`object` and the
-  // named struct types keep the helper
+  // the awaited value of the element's Promise survives PromiseAll unchanged: FromTyped's switch covers the struct families and FromDictList reboxes List<Dictionary<...>> only,
+  // so an anonymous dictionary, a list of those, or a scalar is never rewritten; `any`/`object` and the named struct types keep the helper
   csharpPromiseAllValueIsPlain(element) {
     const checker = this.checkerOrUndefined();
     if (checker === void 0) {
@@ -3723,15 +3730,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     });
     return lines.map((line) => indent + line).join("\n");
   }
-  // ---- promiseAll over implicit-API tasks -> Task.WhenAll ----
-  //
-  // PromiseAll re-boxes every element through AsTaskOfObject/FromTyped, which hands a plain box back
-  // unchanged. When EVERY element of the awaited list is the Task<T> of an implicit-API endpoint (a
-  // `this.<m> (...)` call whose resolved signature is declared in the generated ts/src/abstract/<ex>.ts,
-  // so the generated api file prints exactly `Task<T>` for it) and T is one plain box, the list is a
-  // List<Task<T>> and Task.WhenAll waits for exactly those tasks. The list is either an array literal
-  // or a local that is only pushed to, measured by `.length` and awaited here; a task local feeding it
-  // is read nowhere else. Anything unproven keeps the helper call.
+  // ---- promiseAll over implicit-API tasks -> Task.WhenAll ---- PromiseAll re-boxes every element through AsTaskOfObject/FromTyped, which hands a plain box back unchanged. When EVERY element of
+  // the awaited list is the Task<T> of an implicit-API endpoint (a `this.<m> (...)` call whose resolved signature is declared in the generated ts/src/abstract/<ex>.ts, so the generated api file
+  // prints exactly `Task<T>` for it) and T is one plain box, the list is a List<Task<T>> and Task.WhenAll waits for exactly those tasks.
   csharpPromiseAllKey(node) {
     return (node.getSourceFile?.()?.fileName ?? "") + ":" + node.pos + ":" + node.end + ":" + node.kind;
   }
@@ -3780,7 +3781,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return;
     }
     const declaration = awaited.parent;
-    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.initializer !== awaited || declaration.name?.kind === SyntaxKind4.Identifier && (declaration.parent?.flags & NodeFlags.Const) === 0 || declaration.parent?.declarations?.length !== 1 || declaration.parent.parent?.kind !== SyntaxKind4.VariableStatement || this.csharpPromiseAllSites.has(declaration.parent.parent)) {
+    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.initializer !== awaited || declaration.name?.kind === SyntaxKind4.Identifier && (declaration.parent?.flags & NodeFlags.Const) === 0 || !this.csharpIsSingleDeclarator(declaration) || declaration.parent.parent?.kind !== SyntaxKind4.VariableStatement || this.csharpPromiseAllSites.has(declaration.parent.parent)) {
       return;
     }
     const argument = call.arguments[0];
@@ -3829,7 +3830,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // the single-declarator `const|let name = [...]` statement of this function an identifier names
   csharpPromiseAllLocalDeclaration(fn, identifier) {
     const declaration = this.csharpReceiverBinding(identifier);
-    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.name?.kind !== SyntaxKind4.Identifier || declaration.parent?.declarations?.length !== 1 || declaration.parent.parent?.kind !== SyntaxKind4.VariableStatement || this.csharpEnclosingFunction(declaration)?.pos !== fn.pos) {
+    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.name?.kind !== SyntaxKind4.Identifier || !this.csharpIsSingleDeclarator(declaration) || declaration.parent.parent?.kind !== SyntaxKind4.VariableStatement || this.csharpEnclosingFunction(declaration)?.pos !== fn.pos) {
       return void 0;
     }
     return declaration;
@@ -4026,13 +4027,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     });
     return written ? void 0 : "IList<object>";
   }
-  // The C# spelling an annotation proves, or undefined: an array (or a `T[] | undefined` union)
-  // whose cells the generated C# holds as `object` -- an `any` cell, a JSON dictionary, or a row
-  // class/interface (a TS object is a Dictionary<string, object> in every generated port). A
-  // `string`/`number`/`boolean` cell and a nested array keep their own C# type, so they decline.
-  csharpListParamSpelling(node, anyCell = false) {
-    return this.csharpListSpellingOfType(this.getChecker().getTypeAtLocation(node), 1, anyCell);
-  }
   // anyCell: the base tier boxes every array cell (`string[]`, `number[][]`) as the list's `object`
   csharpListSpellingOfType(type, unionArms = 1, anyCell = false) {
     if (type === void 0 || unionArms !== 1) {
@@ -4154,11 +4148,11 @@ var CSharpTranspiler = class extends BaseTranspiler {
           admitted = false;
           break;
         }
-        if (!followsBase && this.csharpListParamSpelling(parameter, baseTier) !== "IList<object>") {
+        if (!followsBase && this.csharpListSpellingOfType(this.getChecker().getTypeAtLocation(parameter), 1, baseTier) !== "IList<object>") {
           admitted = false;
           break;
         }
-        if (this.csharpListParamIsWritten(parameter)) {
+        if (this.csharpNameIsRebound(parameter, findAncestor(parameter, (n) => isMethodDeclaration2(n)))) {
           admitted = false;
           break;
         }
@@ -4435,15 +4429,13 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const configured = this.csharpCoreArgRow(method, this.csharpCoreArgTypes)?.[index] ?? this.csharpCoreArgRow(method, this.csharpSignatureArgTypes)?.[index];
     return configured ?? this.csharpParamTypes.get(declaration);
   }
-  // whether the method body rebinds the parameter (an assignment or ++/--): the declaration
-  // would then have to accept a value that is not a list
-  csharpListParamIsWritten(parameter) {
-    const name = parameter.name === void 0 || parameter.name.getText === void 0 ? "" : parameter.name.getText().trim();
+  // whether the binding is rebound (assignment or ++/--) in the scope's body; an unnamed binding counts as written
+  csharpNameIsRebound(binding, scope) {
+    const name = binding.name === void 0 || binding.name.getText === void 0 ? "" : binding.name.getText().trim();
     if (name === "") {
       return true;
     }
-    const method = findAncestor(parameter, (n) => isMethodDeclaration2(n));
-    if (method === void 0 || method.body === void 0) {
+    if (scope === void 0 || scope.body === void 0) {
       return false;
     }
     let written = false;
@@ -4461,35 +4453,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       }
       node.forEachChild(walk);
     };
-    method.body.forEachChild(walk);
-    return written;
-  }
-  // whether a variable binding is rebound anywhere in its function (assignment or ++/--)
-  csharpListBindingIsWritten(declaration) {
-    const name = declaration.name === void 0 || declaration.name.getText === void 0 ? "" : declaration.name.getText().trim();
-    if (name === "") {
-      return true;
-    }
-    const fn = findAncestor(declaration, (n) => isFunctionLike(n));
-    if (fn === void 0 || fn.body === void 0) {
-      return false;
-    }
-    let written = false;
-    const walk = (node) => {
-      if (written) {
-        return;
-      }
-      if (isBinaryExpression2(node) && isIdentifier(node.left) && node.left.text === name && this.csharpIsAssignmentOperator(node.operatorToken.kind)) {
-        written = true;
-        return;
-      }
-      if ((isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node)) && isIdentifier(node.operand) && String(node.operand.getText()).trim() === name) {
-        written = true;
-        return;
-      }
-      node.forEachChild(walk);
-    };
-    fn.body.forEachChild(walk);
+    scope.body.forEachChild(walk);
     return written;
   }
   // whether the argument's own printed C# declaration holds a list: an array literal, an
@@ -4525,7 +4489,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       if ((declaration.parent?.declarations?.length ?? 1) !== 1) {
         return false;
       }
-      if (this.csharpListBindingIsWritten(declaration)) {
+      if (this.csharpNameIsRebound(declaration, findAncestor(declaration, (n) => isFunctionLike(n)))) {
         return false;
       }
       const type2 = this.getCSharpLocalType(declaration);
@@ -4612,10 +4576,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return "IDictionary<string, object>";
   }
-  // A `boolean` parameter of a generated method prints `bool?` only when the whole-program
-  // call-site census proves every argument at that position is a C# bool (see the census
-  // below): C# is invariant on arguments, so a single caller passing `object` is CS1503 and
-  // that parameter has to stay `object`.
+  // A `boolean` parameter of a generated method prints `bool?` only when the whole-program call-site census proves every argument at that position is a C# bool (see the census
+  // below): C# is invariant on arguments, so a single caller passing `object` is CS1503 and that parameter has to stay `object`.
   csharpBooleanParamType(node) {
     if (node?.kind !== SyntaxKind4.Parameter) {
       return void 0;
@@ -4792,10 +4754,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return booleans > 0;
   }
-  // One call-site argument of a boolean parameter: a bool literal, `null` / `undefined`, a shape
-  // the printer already renders as a C# bool, or the caller's own proven `bool?` parameter.
-  // Locals keep the parameter `object`: their printed type is the build layer's decision and
-  // this census cannot see it (a `var` from a tuple element prints `object`).
+  // One call-site argument of a boolean parameter: a bool literal, `null` / `undefined`, a shape the printer already renders as a C# bool, or the caller's own proven `bool?`
+  // parameter. Locals keep the parameter `object`: their printed type is the build layer's decision and this census cannot see it (a `var` from a tuple element prints `object`).
   csharpBooleanArgumentProven(call, index, accepted) {
     let value = call.arguments[index];
     if (value === void 0) {
@@ -4864,10 +4824,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
     return this.csharpDictParamsMethods.has(camel) || this.csharpDictParamsMethods.has(pascal);
   }
   // ==== hand-written runtime members, base fields and their views ====
-  // a read of a hand-written BaseExchange dictionary member whose key may be absent: the key
-  // test plus the indexer print what the helper computes, so a missing key still reads null
-  // (a bare indexer would throw). The member's declared C# type (csharpDeclaredMemberType) names
-  // the dictionary; any other receiver or a numeric key keeps the helper
+  // a read of a hand-written BaseExchange dictionary member whose key may be absent: the key test plus the indexer print what the helper computes, so a missing key still reads
+  // null (a bare indexer would throw). The member's declared C# type (csharpDeclaredMemberType) names the dictionary; any other receiver or a numeric key keeps the helper
   csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey) {
     const member = this.csharpMemberReceiver(expression);
     if (member === void 0 || member.routed === true) {
@@ -4885,12 +4843,11 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const printedKey = this.printNode(argumentExpression, 0);
     const test = member.nullTest === void 0 ? "" : `${member.nullTest} != null && `;
-    return `(${test}${member.text}.ContainsKey(${printedKey}) ? ${member.text}[${printedKey}] : null)`;
+    return this.csharpGuardedRead(test, member.text, printedKey);
   }
-  // The typed C# dictionary a `this.<member>` / `this.<member>[<literal>]` read of the hand-written
-  // BaseExchange is: a declared IDictionary member is itself, `object` members with a typed view
-  // property (CSHARP_DICT_FIELD_VIEWS / CSHARP_DICT_ENTRY_VIEWS) are that view. Both may be null.
-  // Parentheses and `as` assertions print as their operand. Any other node has no view and keeps its cast / the helper.
+  // The typed C# dictionary a `this.<member>` / `this.<member>[<literal>]` read of the hand-written BaseExchange is: a declared IDictionary member is itself, `object` members
+  // with a typed view property (CSHARP_DICT_FIELD_VIEWS / CSHARP_DICT_ENTRY_VIEWS) are that view. Both may be null. Parentheses and `as` assertions print as their operand. Any
+  // other node has no view and keeps its cast / the helper.
   csharpBaseDictionaryView(node) {
     while (isParenthesizedExpression(node) || isAsExpression(node)) {
       node = node.expression;
@@ -4909,10 +4866,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // How a key identifier is spelled for a typed-view ContainsKey: 'string' when its emitted declaration
-  // is a C# string (the printer's tables, then the build layer's declared-local record, which also
-  // answers the core-argument parameters it narrows), 'object' for a parameter nobody retypes
-  // (printed `object`: the helper's own `(string)` cast of the key), otherwise undefined
+  // How a key identifier is spelled for a typed-view ContainsKey: 'string' when its emitted declaration is a C# string (the printer's tables, then the build layer's
+  // declared-local record, which also answers the core-argument parameters it narrows), 'object' for a parameter nobody retypes (printed `object`: the helper's own `(string)`
+  // cast of the key), otherwise undefined
   csharpBaseDictionaryViewKeyKind(key) {
     if (!isIdentifier(key)) {
       return void 0;
@@ -4936,14 +4892,14 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const printedKey = this.printNode(argumentExpression, 0);
     if (isStringLiteralLikeNode2(argumentExpression)) {
-      return `(${view} != null && ${view}.ContainsKey(${printedKey}) ? ${view}[${printedKey}] : null)`;
+      return this.csharpGuardedRead(`${view} != null && `, view, printedKey);
     }
     const kind = this.csharpBaseDictionaryViewKeyKind(argumentExpression);
     if (kind === void 0) {
       return void 0;
     }
     const key = kind === "string" ? printedKey : `(string)${printedKey}`;
-    return `(${view} != null && ${printedKey} != null && ${view}.ContainsKey(${key}) ? ${view}[${key}] : null)`;
+    return this.csharpGuardedRead(`${view} != null && ${printedKey} != null && `, view, key);
   }
   // `key in <view-able>` with a literal or string-declared key: InOp's dictionary branch on the typed view
   // (a null receiver or key answers false, as the helper does)
@@ -5019,10 +4975,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const named = CSHARP_SCALAR_FIELD_KINDS[node.name?.text];
     return named === void 0 ? void 0 : this.csharpValueEqualityKind(named);
   }
-  // `isEqual (this.<number>, N)` -> `==` / `!=`: the field's C# declaration is a non-nullable
-  // number, so the operator is isEqual's integer/double branch and a literal it holds converts
-  // exactly. Two such fields of one kind compare by value in both; every other shape keeps the
-  // helper (precisionMode is an `object` box, so it never reaches here).
+  // `isEqual (this.<number>, N)` -> `==` / `!=`: the field's C# declaration is a non-nullable number, so the operator is isEqual's integer/double branch and a literal it holds
+  // converts exactly. Two such fields of one kind compare by value in both; every other shape keeps the helper (precisionMode is an `object` box, so it never reaches here).
   csharpNativeScalarFieldEquality(left, right, leftText, rightText, isEquality) {
     const leftKind = this.csharpScalarFieldKind(left);
     const rightKind = this.csharpScalarFieldKind(right);
@@ -5073,8 +5027,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (node?.kind !== SyntaxKind4.ElementAccessExpression || !isPropertyAccessExpression(node.expression)) {
       return void 0;
     }
-    const parent = node.parent;
-    const isWrite = parent?.kind === SyntaxKind4.BinaryExpression && parent.left === node && parent.operatorToken.kind >= SyntaxKind4.FirstAssignment && parent.operatorToken.kind <= SyntaxKind4.LastAssignment || parent?.kind === SyntaxKind4.DeleteExpression || (parent?.kind === SyntaxKind4.PrefixUnaryExpression || parent?.kind === SyntaxKind4.PostfixUnaryExpression) && (parent.operator === SyntaxKind4.PlusPlusToken || parent.operator === SyntaxKind4.MinusMinusToken);
+    const isWrite = this.csharpIsElementWrite(node);
     const exception = this.printElementAccessExpressionExceptionIfAny(node);
     if (isWrite || exception || !this.ELEMENT_ACCESS_WRAPPER_OPEN || !this.ELEMENT_ACCESS_WRAPPER_CLOSE) {
       return void 0;
@@ -5087,7 +5040,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const receiver = this.printNode(node.expression, 0);
     this.csharpDeclaredDictMemberReads.add(node);
     const keyTest = isStringLiteralLikeNode2(node.argumentExpression) ? "" : ` && ${key} != null`;
-    return `(${receiver} != null${keyTest} && ${receiver}.ContainsKey(${key}) ? ${receiver}[${key}] : null)`;
+    return this.csharpGuardedRead(`${receiver} != null${keyTest} && `, receiver, key);
   }
   csharpDeclaredDictMemberCall(node) {
     if (node?.kind !== SyntaxKind4.CallExpression || node.arguments?.length !== 2) {
@@ -5209,8 +5162,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (node?.kind !== SyntaxKind4.ElementAccessExpression || !isPropertyAccessExpression(node.expression)) {
       return void 0;
     }
-    const parent = node.parent;
-    const isWrite = parent?.kind === SyntaxKind4.BinaryExpression && parent.left === node && parent.operatorToken.kind >= SyntaxKind4.FirstAssignment && parent.operatorToken.kind <= SyntaxKind4.LastAssignment || parent?.kind === SyntaxKind4.DeleteExpression || (parent?.kind === SyntaxKind4.PrefixUnaryExpression || parent?.kind === SyntaxKind4.PostfixUnaryExpression) && (parent.operator === SyntaxKind4.PlusPlusToken || parent.operator === SyntaxKind4.MinusMinusToken);
+    const isWrite = this.csharpIsElementWrite(node);
     if (isWrite || !this.ELEMENT_ACCESS_WRAPPER_OPEN || !this.ELEMENT_ACCESS_WRAPPER_CLOSE || this.printElementAccessExpressionExceptionIfAny(node)) {
       return void 0;
     }
@@ -5221,7 +5173,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const keyText = key.kind === "object" ? `(string)${key.text}` : key.text;
     const keyTest = key.kind === "literal" || key.kind === "string" && this.csharpBaseFieldDeclaredDictionary(receiver.name) ? "" : ` && ${key.text} != null`;
-    return `(${receiver.field} != null${keyTest} && ${receiver.text}.ContainsKey(${keyText}) ? ${receiver.text}[${keyText}] : null)`;
+    return this.csharpGuardedRead(`${receiver.field} != null${keyTest} && `, receiver.text, keyText);
   }
   // `key in this.<field>`: inOp's dictionary branch (a non-string key answers false)
   csharpBaseFieldInExpression(key, obj) {
@@ -5287,8 +5239,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (entry?.kind !== SyntaxKind4.ElementAccessExpression || !isStringLiteralLikeNode2(entry.argumentExpression) || !isPropertyAccessExpression(entry.expression) || entry.expression.expression?.kind !== SyntaxKind4.ThisKeyword) {
       return void 0;
     }
-    const parent = node.parent;
-    const isWrite = parent?.kind === SyntaxKind4.BinaryExpression && parent.left === node && parent.operatorToken.kind >= SyntaxKind4.FirstAssignment && parent.operatorToken.kind <= SyntaxKind4.LastAssignment || parent?.kind === SyntaxKind4.DeleteExpression || (parent?.kind === SyntaxKind4.PrefixUnaryExpression || parent?.kind === SyntaxKind4.PostfixUnaryExpression) && (parent.operator === SyntaxKind4.PlusPlusToken || parent.operator === SyntaxKind4.MinusMinusToken);
+    const isWrite = this.csharpIsElementWrite(node);
     if (isWrite || this.printElementAccessExpressionExceptionIfAny(node)) {
       return void 0;
     }
@@ -5304,7 +5255,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const key = node.argumentExpression;
     if (isStringLiteralLikeNode2(key)) {
       const printed = this.printNode(key, 0);
-      return `(${target} != null && ${target}.ContainsKey(${printed}) ? ${target}[${printed}] : null)`;
+      return this.csharpGuardedRead(`${target} != null && `, target, printed);
     }
     if (!isIdentifier(key) || !this.csharpIsPlainRead(key)) {
       return void 0;
@@ -5312,17 +5263,16 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const kind = this.csharpMemberKeyKind(key);
     const printedKey = this.printNode(key, 0);
     if (kind === "string" || kind === "string?") {
-      return `(${target} != null && ${printedKey} != null && ${target}.ContainsKey(${printedKey}) ? ${target}[${printedKey}] : null)`;
+      return this.csharpGuardedRead(`${target} != null && ${printedKey} != null && `, target, printedKey);
     }
     if (kind === "object" || kind === "param") {
-      return `(${target} != null && ${printedKey} != null && ${target}.ContainsKey((string)${printedKey}) ? ${target}[(string)${printedKey}] : null)`;
+      return this.csharpGuardedRead(`${target} != null && ${printedKey} != null && `, target, `(string)${printedKey}`);
     }
     return void 0;
   }
-  // `this.<member>['k1']['k2']['k3']` over a member whose hand-written class declares a
-  // typed view of `['k1']` entries that are themselves dictionaries (urls['api'] -> urlsApiSections):
-  // the section read becomes the view's two indexers, carrying the helper's missing-key tests. The
-  // view is re-derived by the refresh method after every write of the member (csharpMemberRefresh)
+  // `this.<member>['k1']['k2']['k3']` over a member whose hand-written class declares a typed view of `['k1']` entries that are themselves dictionaries (urls['api'] ->
+  // urlsApiSections): the section read becomes the view's two indexers, carrying the helper's missing-key tests. The view is re-derived by the refresh method after every write
+  // of the member (csharpMemberRefresh)
   csharpMemberSectionRead(expression, argumentExpression) {
     if (!isStringLiteralLikeNode2(argumentExpression)) {
       return void 0;
@@ -5377,11 +5327,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const refresh = this.csharpMemberRefreshStatement(node, identation);
     return refresh === void 0 ? printed : printed + "\n" + refresh;
   }
-  // the receiver `this.<member>` / `<client>.<member>` of a hand-written runtime member
-  // whose DECLARED C# type (csharpDeclaredMemberType: Exchange.Options.cs, ws/Client.cs) is a
-  // string-keyed object dictionary or an object list, so its own members replace the helpers.
-  // `text` is the receiver as written (an `object` member proven dictionary-only carries the
-  // interface cast), `type` the collection type, `nullTest` set when the declaration may hold null
+  // the receiver `this.<member>` / `<client>.<member>` of a hand-written runtime member whose DECLARED C# type (csharpDeclaredMemberType: Exchange.Options.cs, ws/Client.cs) is a
+  // string-keyed object dictionary or an object list, so its own members replace the helpers. `text` is the receiver as written (an `object` member proven dictionary-only
+  // carries the interface cast), `type` the collection type, `nullTest` set when the declaration may hold null
   csharpMemberReceiver(node) {
     if (!isPropertyAccessExpression(node)) {
       return void 0;
@@ -5464,7 +5412,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (owner !== "client" || !isIdentifier(receiver)) {
       return false;
     }
-    const printed = typeof this.csharpPrintedLocalType === "function" ? this.csharpPrintedLocalType(receiver) : void 0;
+    const printed = this.csharpPrintedLocalTypeOf(receiver);
     return (this.csharpTypedLocalType(receiver) ?? this.csharpDeclaredLocalResolverType(receiver) ?? printed) === "WebSocketClient";
   }
   // every write of `this.<name>` in the source file stores a dictionary literal, `undefined` or
@@ -5608,10 +5556,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return value > 0 ? `Math.Min(${value}, ${length})` : `Math.Max(${length} - ${-value}, 0)`;
   }
-  // The bound of a native slice, or undefined when the helper must stay: an integer literal,
-  // a read whose printed C# kind is `int` / `Int64`, and (end position only) an explicit
-  // null / undefined, which the helper answers as "to the end". The value is repeated by the
-  // clamp, so a call / assignment operand is refused; `double` is truncated by the helper.
+  // The bound of a native slice, or undefined when the helper must stay: an integer literal, a read whose printed C# kind is `int` / `Int64`, and (end position only) an explicit
+  // null / undefined, which the helper answers as "to the end". The value is repeated by the clamp, so a call / assignment operand is refused; `double` is truncated by the
+  // helper.
   csharpSliceBoundOperand(node, isEnd = false) {
     const literal2 = this.csharpSliceLiteralBound(node);
     if (literal2 !== void 0) {
@@ -5633,10 +5580,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return { kind, text: this.printNode(node, 0).trim() };
   }
-  // A bound written as `+` / `-` arithmetic (`n - 1`, `x.length - 3`, `i + 1`) whose operands are
-  // reads or integer literals and whose PRINTED form is native int / Int64 arithmetic (never a
-  // helper call, never double): the clamp repeats the text, which is then pure. A nullable
-  // operand lifts to null and is refused, as is every operand that is a call or an assignment.
+  // A bound written as `+` / `-` arithmetic (`n - 1`, `x.length - 3`, `i + 1`) whose operands are reads or integer literals and whose PRINTED form is native int / Int64
+  // arithmetic (never a helper call, never double): the clamp repeats the text, which is then pure. A nullable operand lifts to null and is refused, as is every operand that is
+  // a call or an assignment.
   csharpSliceArithmeticBound(node) {
     let inner = node;
     while (inner?.kind === SyntaxKind4.ParenthesizedExpression) {
@@ -5750,22 +5696,18 @@ var CSharpTranspiler = class extends BaseTranspiler {
     return false;
   }
   // ==== string methods: indexOf / includes and the other receiver calls ====
-  // `a + b` prints `add (a, b)`: when the chain's LEFT SPINE starts at a value whose emitted C#
-  // type is a NON-NULL string, every enclosing `+` is that same string whatever the remaining
-  // operands are (add(string, *) IS C# concatenation and never answers null), so the declaration
-  // may name it. `self` is the declaration under test: its own reads use the running type, so a
-  // `x = x + v` write cannot recurse through x's declaration.
+  // `a + b` prints `add (a, b)`: when the chain's LEFT SPINE starts at a value whose emitted C# type is a NON-NULL string, every enclosing `+` is that same string whatever the
+  // remaining operands are (add(string, *) IS C# concatenation and never answers null), so the declaration may name it. `self` is the declaration under test: its own reads use
+  // the running type, so a `x = x + v` write cannot recurse through x's declaration.
   csharpPlusChainNonNullStringType(node, self = void 0) {
     if (node?.kind !== SyntaxKind4.BinaryExpression || node.operatorToken?.kind !== SyntaxKind4.PlusToken) {
       return void 0;
     }
     return this.csharpNonNullStringOperandType(node.left, self);
   }
-  // the emitted C# static type of a `+` operand proven a NON-NULL string: a literal, a call the
-  // printer rebinds to a string-returning member (`x.toUpperCase ()` -> `((string)x).ToUpper()`,
-  // which throws instead of answering null), a local the printer itself declares `string`, a
-  // conditional whose every arm is one, or such a chain's own left spine. Undefined everywhere
-  // else — a nullable or boxed operand keeps the helper.
+  // the emitted C# static type of a `+` operand proven a NON-NULL string: a literal, a call the printer rebinds to a string-returning member (`x.toUpperCase ()` ->
+  // `((string)x).ToUpper()`, which throws instead of answering null), a local the printer itself declares `string`, a conditional whose every arm is one, or such a chain's own
+  // left spine. Undefined everywhere else — a nullable or boxed operand keeps the helper.
   csharpNonNullStringOperandType(node, self = void 0, guardedConcat = false) {
     let value = node;
     while (value?.kind === SyntaxKind4.ParenthesizedExpression) {
@@ -5800,7 +5742,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
         if (self !== void 0 && declaration === self) {
           return "string";
         }
-        if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.parent?.declarations?.length !== 1) {
+        if (declaration?.kind !== SyntaxKind4.VariableDeclaration || !this.csharpIsSingleDeclarator(declaration)) {
           return void 0;
         }
         const type = this.getCSharpLocalType(declaration);
@@ -5820,7 +5762,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (declaration?.kind !== SyntaxKind4.VariableDeclaration) {
       return void 0;
     }
-    if (declaration.parent?.declarations?.length !== 1) {
+    if (!this.csharpIsSingleDeclarator(declaration)) {
       return void 0;
     }
     const cached = this.stringReceiverTypes.get(declaration);
@@ -6428,11 +6370,28 @@ var CSharpTranspiler = class extends BaseTranspiler {
   csharpIsAssignmentOperator(kind) {
     return kind >= SyntaxKind4.FirstAssignment && kind <= SyntaxKind4.LastAssignment;
   }
-  // `for (let i = <int literal>; …; i++)` whose every read normalises the box: an ordered / equality
-  // comparison operand, an element index, the key of a `this.safe*` read, or `i ± <int literal>`.
-  // Each such read takes an Int64 the way it takes the Int32 box, so the counter is declared Int64
-  // and its increment is the native `i++`. Counters the embedding build layer already types
-  // (csharpFinalDeclaredLocalType) keep that type.
+  // an element access that is assigned, deleted or incremented/decremented
+  csharpIsElementWrite(node) {
+    const parent = node.parent;
+    if (parent?.kind === SyntaxKind4.BinaryExpression && parent.left === node && this.csharpIsAssignmentOperator(parent.operatorToken.kind)) {
+      return true;
+    }
+    return parent?.kind === SyntaxKind4.DeleteExpression || (parent?.kind === SyntaxKind4.PrefixUnaryExpression || parent?.kind === SyntaxKind4.PostfixUnaryExpression) && (parent.operator === SyntaxKind4.PlusPlusToken || parent.operator === SyntaxKind4.MinusMinusToken);
+  }
+  csharpIsSingleDeclarator(declaration) {
+    return declaration.parent?.declarations?.length === 1;
+  }
+  // the build layer's declared-local record, when installed
+  csharpPrintedLocalTypeOf(node) {
+    return typeof this.csharpPrintedLocalType === "function" ? this.csharpPrintedLocalType(node) : void 0;
+  }
+  // `(<guards>recv.ContainsKey(key) ? recv[key] : null)`: the helper's missing-key answer as a test
+  csharpGuardedRead(guards, receiver, key) {
+    return `(${guards}${receiver}.ContainsKey(${key}) ? ${receiver}[${key}] : null)`;
+  }
+  // `for (let i = <int literal>; …; i++)` whose every read normalises the box: an ordered / equality comparison operand, an element index, the key of a `this.safe*` read, or `i
+  // ± <int literal>`. Each such read takes an Int64 the way it takes the Int32 box, so the counter is declared Int64 and its increment is the native `i++`. Counters the
+  // embedding build layer already types (csharpFinalDeclaredLocalType) keep that type.
   csharpInt64ForCounter(declaration) {
     if (!isVariableDeclaration(declaration)) {
       return false;
@@ -6606,10 +6565,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
     return `prefixUnaryNeg(ref ${leftSide})`;
   }
   // ==== conditions: isTrue removal and bool proofs ====
-  // A `this.<name>(...)` call to a method the enclosing class (or a non-root class it extends) declares
-  // with a plain `bool` return (csharpBooleanReturnType prints that `bool`) hands back an unboxed bool,
-  // so a local holding it is `bool`. Root-class helpers, names the table answers and overloaded families
-  // keep their box.
+  // A `this.<name>(...)` call to a method the enclosing class (or a non-root class it extends) declares with a plain `bool` return (csharpBooleanReturnType prints that `bool`)
+  // hands back an unboxed bool, so a local holding it is `bool`. Root-class helpers, names the table answers and overloaded families keep their box.
   csharpBoolCallTyped(node) {
     if (node?.kind !== SyntaxKind4.CallExpression || !this.csharpIsCheckedBoolean(node)) {
       return false;
@@ -6650,7 +6607,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const pattern = element.parent;
     const declaration = pattern?.parent;
-    const proven = pattern?.kind === SyntaxKind4.ArrayBindingPattern && pattern.elements?.[0] === element && element.dotDotDotToken === void 0 && element.initializer === void 0 && element.name?.kind === SyntaxKind4.Identifier && declaration?.kind === SyntaxKind4.VariableDeclaration && declaration.name === pattern && declaration.parent?.declarations?.length === 1 && this.csharpBoolOptionSlotCall(declaration.initializer) && this.csharpLocalIsSafeToType(this.csharpEnclosingFunction(element), element, element.name.text, "bool");
+    const proven = pattern?.kind === SyntaxKind4.ArrayBindingPattern && pattern.elements?.[0] === element && element.dotDotDotToken === void 0 && element.initializer === void 0 && element.name?.kind === SyntaxKind4.Identifier && declaration?.kind === SyntaxKind4.VariableDeclaration && declaration.name === pattern && this.csharpIsSingleDeclarator(declaration) && this.csharpBoolOptionSlotCall(declaration.initializer) && this.csharpLocalIsSafeToType(this.csharpEnclosingFunction(element), element, element.name.text, "bool");
     this.boolSlotBindings.set(element, proven);
     return proven;
   }
@@ -6679,7 +6636,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (declaration?.kind !== SyntaxKind4.VariableDeclaration) {
       return void 0;
     }
-    if (declaration.parent?.declarations?.length !== 1) {
+    if (!this.csharpIsSingleDeclarator(declaration)) {
       return void 0;
     }
     const cached = this.conditionOperandTypes.get(declaration);
@@ -6744,41 +6701,39 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const right = node.right.text;
     return this.getIden(identation) + `${left} is ${right}`;
   }
-  // A method declared `: boolean` / `: boolean | undefined` (or an alias of either) returns a
-  // C# `bool` / `bool?` instead of `object`. Only non-async methods with an explicit annotation
-  // qualify: `undefined`/`null` union members make the result nullable, any other member (or an
-  // inferred type) keeps the upstream `object`. The nullable spelling is what keeps a missing
-  // key a missing key — plain `bool` would turn it into `false`.
+  // A method declared `: boolean` / `: boolean | undefined` (or an alias of either) returns a C# `bool` / `bool?` instead of `object`. Only non-async methods with an explicit
+  // annotation qualify: `undefined`/`null` union members make the result nullable, any other member (or an inferred type) keeps the upstream `object`. The nullable spelling is
+  // what keeps a missing key a missing key — plain `bool` would turn it into `false`.
   csharpBooleanReturnType(node) {
+    return this.csharpAnnotatedReturnType(node, this.csharpBooleanReturnTypes, (n) => this.csharpBooleanReturnType(n), (members) => {
+      const nullable = members.some((member) => (member.flags & (TypeFlags3.Undefined | TypeFlags3.Null)) !== 0);
+      const others = members.filter((member) => (member.flags & (TypeFlags3.Undefined | TypeFlags3.Null)) === 0);
+      if (others.length === 0 || others.some((member) => (member.flags & TypeFlags3.BooleanLike) === 0)) {
+        return void 0;
+      }
+      return nullable ? this.BOOLEAN_KEYWORD + "?" : this.BOOLEAN_KEYWORD;
+    });
+  }
+  // shared memo + override inheritance for the annotated-return classifiers: a non-async method's
+  // annotation members go to `classify`; an un-annotated override inherits the parent's printed type
+  csharpAnnotatedReturnType(node, cache, self, classify, veto) {
     if (node?.kind !== SyntaxKind4.MethodDeclaration || this.isAsyncFunction(node)) {
       return void 0;
     }
-    if (this.csharpBooleanReturnTypes.has(node)) {
-      return this.csharpBooleanReturnTypes.get(node);
+    if (cache.has(node)) {
+      return cache.get(node);
     }
     let result = void 0;
     if (node.type) {
       const type = this.getChecker().getTypeFromTypeNode(node.type);
-      const members = type.isUnionType() ? type.getTypes() : [type];
-      let nullable = false;
-      let sawBoolean = false;
-      let sawOther = false;
-      for (const member of members) {
-        if (member.flags & (TypeFlags3.Undefined | TypeFlags3.Null)) {
-          nullable = true;
-        } else if (member.flags & TypeFlags3.BooleanLike) {
-          sawBoolean = true;
-        } else {
-          sawOther = true;
-        }
-      }
-      if (sawBoolean && !sawOther) {
-        result = nullable ? this.BOOLEAN_KEYWORD + "?" : this.BOOLEAN_KEYWORD;
-      }
+      result = classify(type.isUnionType() ? type.getTypes() : [type]);
     } else {
-      result = this.csharpBooleanReturnType(this.getMethodOverride(node));
+      result = self(this.getMethodOverride(node));
     }
-    this.csharpBooleanReturnTypes.set(node, result);
+    if (result !== void 0 && veto !== void 0 && veto(result)) {
+      result = void 0;
+    }
+    cache.set(node, result);
     return result;
   }
   // `isTrue(x)` is the identity function on a C# bool (`isTrue` returns a bool unchanged),
@@ -6800,7 +6755,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       case SyntaxKind4.PropertyAccessExpression:
         return this.csharpFieldPrintsBool(node);
       case SyntaxKind4.CallExpression:
-        return this.csharpCallPrintsBool(node);
+        return this.csharpIsCheckedBoolean(node) && (this.csharpCallReturnType(node) === "bool" || this.csharpCallHasBoolSignature(node));
     }
     return false;
   }
@@ -6831,12 +6786,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const type = this.getChecker().getTypeAtLocation(node);
     return ((type?.flags ?? 0) & TypeFlags3.BooleanLike) !== 0;
   }
-  // `bool name = ...` is only declared when getCSharpLocalType resolved that exact
-  // declaration to `bool`, so ask the same function: the condition and the declaration
-  // cannot disagree. Parameters, members and demoted locals return `object` there. The
-  // embedding layer's resolver (ccxt: build/csharp-local-types.js) retypes locals the
-  // printer cannot name itself and reports the type the printed declaration carries, so a
-  // `bool` there is the same proof for a declaration this printer did not write
+  // `bool name = ...` is only declared when getCSharpLocalType resolved that exact declaration to `bool`, so ask the same function: the condition and the declaration cannot
+  // disagree. Parameters, members and demoted locals return `object` there. The embedding layer's resolver (ccxt: build/csharp-local-types.js) retypes locals the printer cannot
+  // name itself and reports the type the printed declaration carries, so a `bool` there is the same proof for a declaration this printer did not write
   csharpIdentifierPrintsBool(node) {
     if (!this.csharpIsCheckedBoolean(node)) {
       return false;
@@ -6899,11 +6851,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return this.csharpBooleanReturnType(declaration);
   }
-  // calls the printer gives a concrete bool signature (inArray, valueIsDefined, startsWith,
-  // Array.isArray, ...); safeBool and friends are `bool?` / `object` and keep the wrapper
-  csharpCallPrintsBool(node) {
-    return this.csharpIsCheckedBoolean(node) && (this.csharpCallReturnType(node) === "bool" || this.csharpCallHasBoolSignature(node));
-  }
   // The declared type of an identifier read: build layer's proof first, then this printer's table;
   // `var`/`object` mean "no type". `isTrue (x)` answers false for a null box, exactly the lifted
   // `x == true` on a `bool?`. Only reads declared `bool?` qualify; every other shape keeps helper.
@@ -6924,19 +6871,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return this.csharpGeneratedThisCallBoolType(node, this.csharpStaticCalleeName(node)) === "bool?";
   }
-  // same emission as the base implementation except for the bare-bool branch: the node is
-  // printed once and only wrapped in isTrue(...) when the printer did not already render a bool
-  //
-  // the single `printCondition` override, rules layered strongest-proof-first over the base
-  // body (the untyped fallback at the bottom):
-  // bare `isTrue (x)` in an if / while / && / || / ! condition: the operand is already
-  // the `bool` (or `bool?`) the helper computes, so the wrapper adds nothing (the gate is the
-  // csharpConditionPositionAllowsNative / csharpNativeCondition pair, never a name shape).
-  // a condition whose printed text is already a C# `bool` helper call
-  // (csharpPrintedConditionIsBoolean) needs no wrapper either; the same identity proven from
-  // the printed form rather than from the declaration.
-  // #82 -- csharpConditionPrintsBool folds the wrapper on the node shapes the printer itself
-  // renders as a bool, with csharpConditionParensIfNeeded keeping the `&&` / `||` precedence.
+  // same emission as the base implementation except for the bare-bool branch: the node is printed once and only wrapped in isTrue(...) when the printer did not already render a bool the single
+  // `printCondition` override, rules layered strongest-proof-first over the base body (the untyped fallback at the bottom): bare `isTrue (x)` in an if / while / && / || / ! condition: the operand
+  // is already the `bool` (or `bool?`) the helper computes, so the wrapper adds nothing (the gate is the csharpConditionPositionAllowsNative / csharpNativeCondition pair, never a name shape).
   printCondition(node, identation) {
     if (this.supportsFalsyOrTruthyValues) {
       return this.printNode(node, identation);
@@ -6961,12 +6898,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return `${this.getIden(identation)}${this.FALSY_WRAPPER_OPEN}${printed}${this.FALSY_WRAPPER_CLOSE}`;
   }
-  // dropping the wrapper exposes the `&&` / `||` / `is` of the node, so the bare text needs its own
-  // parentheses where C# binds tighter than the JS it replaces: under `!` (which binds tighter
-  // than both), and a `||` that becomes an operand of a `&&` (`(a || b) && c` must not flatten
-  // to `a || b && c`). A type test additionally needs them under the `(bool)` cast the
-  // conditional-expression printer prepends (`(bool) x is T` would bind as `((bool) x) is T`).
-  // Source parentheses, when present, already come out in `printed`.
+  // dropping the wrapper exposes the `&&` / `||` / `is` of the node, so the bare text needs its own parentheses where C# binds tighter than the JS it replaces: under `!` (which
+  // binds tighter than both), and a `||` that becomes an operand of a `&&` (`(a || b) && c` must not flatten to `a || b && c`). A type test additionally needs them under the
+  // `(bool)` cast the conditional-expression printer prepends (`(bool) x is T` would bind as `((bool) x) is T`). Source parentheses, when present, already come out in `printed`.
   csharpConditionParensIfNeeded(node, printed) {
     if (node?.kind !== SyntaxKind4.BinaryExpression) {
       return printed;
@@ -7260,10 +7194,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // `x == null` compiles — and matches isEqual — for reference types and nullable value
-  // types, but not for a non-nullable value type (double / bool / Int64 / int). Lists,
-  // dictionaries, class instances and `var` are references, and are the only types left
-  // once csharpValueEqualityKind has claimed the value-typed names above.
+  // `x == null` compiles — and matches isEqual — for reference types and nullable value types, but not for a non-nullable value type (double / bool / Int64 / int). Lists,
+  // dictionaries, class instances and `var` are references, and are the only types left once csharpValueEqualityKind has claimed the value-typed names above.
   csharpIsNullComparableType(csharpType) {
     if (csharpType === void 0 || csharpType === "" || csharpType === "null") {
       return false;
@@ -7298,11 +7230,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return CSHARP_NULL_COMPARISON_REFERENCE_HEADS.some((head) => csharpType.startsWith(head));
   }
-  // TypeScript numbers and booleans are C# value types in this port (double / bool /
-  // Int64 / int), and the ccxt build script retypes some `object` declarations to exactly
-  // those from its own tables (precisionFromString -> int, milliseconds -> Int64,
-  // isEmpty -> bool). A null comparison against one of them would not compile, and the
-  // printer's `object` cannot rule it out, so these always keep the helper.
+  // TypeScript numbers and booleans are C# value types in this port (double / bool / Int64 / int), and the ccxt build script retypes some `object` declarations to exactly those
+  // from its own tables (precisionFromString -> int, milliseconds -> Int64, isEmpty -> bool). A null comparison against one of them would not compile, and the printer's `object`
+  // cannot rule it out, so these always keep the helper.
   csharpOperandIsValueTyped(node) {
     if (node === void 0) {
       return true;
@@ -7381,12 +7311,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const type = this.csharpLocalTypes.get(declaration);
     return type === void 0 || type === this.VAR_TOKEN ? void 0 : type;
   }
-  // `a === b` / `a !== b` between two plain reads: a local or parameter prints as a bare
-  // name and both operands are read once by the printed expression
-  csharpOperandsAreDeclaredReads(left, right) {
-    const isRead = (node) => node?.kind === SyntaxKind4.Identifier && node.text !== "undefined";
-    return isRead(left) && isRead(right);
-  }
   // the C# type the embedding build layer declares for a read the printer can only call
   // `object`: that layer retypes the declaration so its recorded type IS the printed one
   csharpDeclaredReadEqualityType(node, printerType) {
@@ -7405,7 +7329,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     let leftType = this.csharpEqualityOperandType(left);
     let rightType = this.csharpEqualityOperandType(right);
-    if (this.csharpOperandsAreDeclaredReads(left, right)) {
+    if ([left, right].every((n) => n?.kind === SyntaxKind4.Identifier && n.text !== "undefined")) {
       leftType = this.csharpDeclaredReadEqualityType(left, leftType);
       rightType = this.csharpDeclaredReadEqualityType(right, rightType);
     }
@@ -7473,7 +7397,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
-    if (declaration === void 0 || !isVariableDeclaration(declaration) || declaration.parent?.declarations?.length !== 1) {
+    if (declaration === void 0 || !isVariableDeclaration(declaration) || !this.csharpIsSingleDeclarator(declaration)) {
       return void 0;
     }
     return this.csharpFinalDeclaredLocalType(declaration);
@@ -7496,10 +7420,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return isEquality ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
   }
-  // The C# numeric kind of an operand printed as `%` / `*` / `+` / `-` over two operands this
-  // printer can name in one family: C# types the result to that family. An operand that still
-  // prints an arithmetic helper (`mod(...)`, `add(...)`), a mixed int/double pair and an unnamed
-  // operand all answer undefined, so the helper stays.
+  // The C# numeric kind of an operand printed as `%` / `*` / `+` / `-` over two operands this printer can name in one family: C# types the result to that family. An operand that
+  // still prints an arithmetic helper (`mod(...)`, `add(...)`), a mixed int/double pair and an unnamed operand all answer undefined, so the helper stays.
   csharpPrintedArithmeticKind(node, text) {
     while (node?.kind === SyntaxKind4.ParenthesizedExpression) {
       node = node.expression;
@@ -7543,16 +7465,15 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // The C# type this printer gave a local's own DECLARATION: getCSharpLocalType is the function
-  // that printed the `<type> <name> =` prefix, so its answer IS the declaration type (the same
-  // oracle csharpConditionOperandType uses for isTrue). Undefined for a parameter, a member read
-  // and a multi-declarator statement, whose reads no single declaration types.
+  // The C# type this printer gave a local's own DECLARATION: getCSharpLocalType is the function that printed the `<type> <name> =` prefix, so its answer IS the declaration type
+  // (the same oracle csharpConditionOperandType uses for isTrue). Undefined for a parameter, a member read and a multi-declarator statement, whose reads no single declaration
+  // types.
   csharpDeclaredLocalValueType(node) {
     const declaration = this.csharpReceiverBinding(node);
     if (declaration?.kind !== SyntaxKind4.VariableDeclaration) {
       return void 0;
     }
-    if (declaration.parent?.declarations?.length !== 1) {
+    if (!this.csharpIsSingleDeclarator(declaration)) {
       return void 0;
     }
     const cached = this.csharpDeclaredLocalTypes.get(declaration);
@@ -7579,10 +7500,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return leftKind !== "double" && rightKind !== "double";
   }
-  // `isEqual (<numeric arithmetic>, N)` -> `==` / `!=`: the printed expression is native C#
-  // arithmetic of one numeric kind, so an integer literal it holds exactly compares the way
-  // isEqual's ToInt64 / Convert.ToDouble branches do. Two such expressions of one kind compare by
-  // value in both; every other pair keeps the helper.
+  // `isEqual (<numeric arithmetic>, N)` -> `==` / `!=`: the printed expression is native C# arithmetic of one numeric kind, so an integer literal it holds exactly compares the
+  // way isEqual's ToInt64 / Convert.ToDouble branches do. Two such expressions of one kind compare by value in both; every other pair keeps the helper.
   csharpNativeArithmeticEquality(left, right, leftText, rightText, isEquality) {
     const modEquality = this.csharpNativeModEquality(left, right, isEquality);
     if (modEquality !== void 0) {
@@ -7613,10 +7532,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return isEquality ? `(${arithmeticText} == ${literalText})` : `(${arithmeticText} != ${literalText})`;
   }
-  // `isEqual (x % N, M)` for an Int64 / Int64? identifier `x`, a positive integer literal divisor of at most
-  // nine digits and an integer literal `M`: mod's double remainder converted back to Int64 is exact there
-  // (below 2^53), and the lifted `==` answers false for a null `x` exactly like isEqual. The printed
-  // remainder is the form mod(Int64, literal) prints once the host's numeric pass has typed `x`
+  // `isEqual (x % N, M)` for an Int64 / Int64? identifier `x`, a positive integer literal divisor of at most nine digits and an integer literal `M`: mod's double remainder
+  // converted back to Int64 is exact there (below 2^53), and the lifted `==` answers false for a null `x` exactly like isEqual. The printed remainder is the form mod(Int64,
+  // literal) prints once the host's numeric pass has typed `x`
   csharpNativeModEquality(left, right, isEquality) {
     const [modSide, literal2] = this.csharpUnparenthesized(left)?.kind === SyntaxKind4.BinaryExpression ? [left, right] : [right, left];
     const mod = this.csharpUnparenthesized(modSide);
@@ -8063,7 +7981,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const token = isEquality ? "==" : "!=";
-    if (isStringLiteral4 && this.csharpNumericStringLiteral(literal2)) {
+    if (isStringLiteral4 && String(literal2.text).trim() !== "" && !isNaN(Number(String(literal2.text).trim()))) {
       return void 0;
     }
     const cast = isBoolLiteral ? "bool?" : "string";
@@ -8244,10 +8162,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
   csharpNullComparisonTypeOf(node) {
     return void 0;
   }
-  // `-x` on a local declared `double?` (a safeNumber read) inside a
-  // non-null guard on x (`if (x !== undefined)`, `x !== undefined && ...`, early exit). The guard
-  // proves the box is a number, so the local keeps its nullable scalar type and the negation is the
-  // helper's own in-place body `(x = -x)` (lifted: x is non-null here). Unguarded reads keep `object`.
+  // `-x` on a local declared `double?` (a safeNumber read) inside a non-null guard on x (`if (x !== undefined)`, `x !== undefined && ...`, early exit). The guard proves the box
+  // is a number, so the local keeps its nullable scalar type and the negation is the helper's own in-place body `(x = -x)` (lifted: x is non-null here). Unguarded reads keep
+  // `object`.
   csharpGuardedNullableNegation(node, csharpType) {
     if (csharpType !== "double?") {
       return false;
@@ -8370,44 +8287,14 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return super.printFunctionBody(node, identation);
   }
-  // A method declared `: string` / `: Str` returns a C# `string?` instead of `object`. Only
-  // non-async methods with an explicit annotation qualify; any other member of the annotation
-  // (or an inferred type) keeps the upstream `object`. The nullable spelling is deliberate:
-  // `string` and `string?` are one runtime type, and the nullable one keeps a caller's null test
-  // meaningful (a non-nullable return turns it into CS8073 under TreatWarningsAsErrors).
+  // A non-async method annotated `: string` / `: Str` returns `string?` (one runtime type with `string`; the nullable spelling keeps a caller's
+  // null test meaningful, else CS8073). Any other annotation member keeps `object`. netstandard2.x forbids a covariant return (CS8830):
+  // an override is typed only when its base is.
   csharpStringReturnType(node) {
-    if (node?.kind !== SyntaxKind4.MethodDeclaration || this.isAsyncFunction(node)) {
-      return void 0;
-    }
-    if (this.csharpStringReturnTypes.has(node)) {
-      return this.csharpStringReturnTypes.get(node);
-    }
-    let result = void 0;
-    if (node.type) {
-      const type = this.getChecker().getTypeFromTypeNode(node.type);
-      const members = type.isUnionType() ? type.getTypes() : [type];
-      let stringMember = false;
-      let otherMember = false;
-      for (const member of members) {
-        if (member.flags & (TypeFlags3.Undefined | TypeFlags3.Null)) {
-          continue;
-        } else if (this.isStringType(member.flags)) {
-          stringMember = true;
-        } else {
-          otherMember = true;
-        }
-      }
-      if (stringMember && !otherMember) {
-        result = this.STRING_KEYWORD + "?";
-      }
-    } else {
-      result = this.csharpStringReturnType(this.getMethodOverride(node));
-    }
-    if (result !== void 0 && this.isOverrideMethod(node) && this.csharpStringReturnType(this.getMethodOverride(node)) === void 0) {
-      result = void 0;
-    }
-    this.csharpStringReturnTypes.set(node, result);
-    return result;
+    return this.csharpAnnotatedReturnType(node, this.csharpStringReturnTypes, (n) => this.csharpStringReturnType(n), (members) => {
+      const others = members.filter((member) => (member.flags & (TypeFlags3.Undefined | TypeFlags3.Null)) === 0);
+      return others.length > 0 && others.every((member) => this.isStringType(member.flags)) ? this.STRING_KEYWORD + "?" : void 0;
+    }, () => this.isOverrideMethod(node) && this.csharpStringReturnType(this.getMethodOverride(node)) === void 0);
   }
   // the C# string box a `this.<name>(...)` call hands back: the printer's own table of the
   // hand-written base helpers first (that IS the emitted signature), then a method of the SAME
@@ -8520,11 +8407,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return rights.length === 0 ? void 0 : { base: current, rights };
   }
-  // `x + r1 + r2` over a local the checker types string (or string | undefined) whose C# declaration is the
-  // untyped `object` box: add(object, object) of a string left is `(string)x + (string)r`, and a null left answers
-  // null, so the null test plus the concatenation is the same value. Each right is spelled as the string it
-  // prints, or cast through object the way the helper casts it. A right operand is evaluated only when x is
-  // non-null; one that awaits, assigns or creates a closure keeps the helper.
+  // `x + r1 + r2` over a local the checker types string (or string | undefined) whose C# declaration is the untyped `object` box: add(object, object) of a string left is
+  // `(string)x + (string)r`, and a null left answers null, so the null test plus the concatenation is the same value. Each right is spelled as the string it prints, or cast
+  // through object the way the helper casts it. A right operand is evaluated only when x is non-null; one that awaits, assigns or creates a closure keeps the helper.
   csharpObjectStringConcat(base, rights) {
     let local = base;
     while (local?.kind === SyntaxKind4.ParenthesizedExpression) {
@@ -8549,7 +8434,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // another such local): the box holds a string or null at every read, so add's string branch is the concat
   csharpObjectStringLocal(identifier, depth = 0) {
     const declaration = this.csharpReceiverBinding(identifier);
-    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.parent?.declarations?.length !== 1 || declaration.initializer === void 0 || depth > 4) {
+    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || !this.csharpIsSingleDeclarator(declaration) || declaration.initializer === void 0 || depth > 4) {
       return false;
     }
     if (this.csharpLocalTypeInProgress?.has(declaration) || this.getCSharpLocalType(declaration) !== this.VAR_TOKEN || this.csharpTypeIsStringType(this.csharpDeclaredKeyType(identifier) ?? "")) {
@@ -8661,12 +8546,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const own = super.printFunctionType(node);
     return own === "object" ? this.csharpCollectionReturnType(node) ?? own : own;
   }
-  // `return x;` inside a bool/bool?/string/string? method: the printed expression is still the
-  // `object` box the rest of the printer produces, so unbox it through `object`. The nullable
-  // spellings accept null; the non-nullable ones need the null-forgiving `!` on the box
-  // (CS8605 under TreatWarningsAsErrors otherwise) — which is exactly the runtime
-  // NullReferenceException a `: boolean` method returning null deserves (a `: string` one
-  // answers null, the reference-type cast the box already has)
+  // `return x;` inside a bool/bool?/string/string? method: the printed expression is still the `object` box the rest of the printer produces, so unbox it through `object`. The
+  // nullable spellings accept null; the non-nullable ones need the null-forgiving `!` on the box (CS8605 under TreatWarningsAsErrors otherwise) — which is exactly the runtime
+  // NullReferenceException a `: boolean` method returning null deserves (a `: string` one answers null, the reference-type cast the box already has)
   printReturnStatement(node, identation) {
     const owner = findAncestor(node.parent, isFunctionLike);
     const booleanType = this.csharpBooleanReturnType(owner);
@@ -8947,11 +8829,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // the C# types this printer can name on a local whose members replace the helpers:
-  // the collection types (Count/ContainsKey) and string (Length/ContainsKey keys)
-  csharpTypeIsNative(csharpType) {
-    return CSHARP_NATIVE_COLLECTION_TYPES.indexOf(csharpType) >= 0 || csharpType.indexOf("string") === 0;
-  }
   // the C# type this printer declared for a local read, or undefined
   csharpTypedLocalType(node) {
     const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
@@ -9157,7 +9034,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const declaration = this.csharpReceiverBinding(node);
-    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.parent?.declarations?.length !== 1) {
+    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || !this.csharpIsSingleDeclarator(declaration)) {
       return void 0;
     }
     const type = this.getCSharpLocalType(declaration);
@@ -9230,16 +9107,14 @@ var CSharpTranspiler = class extends BaseTranspiler {
         return this.getIden(identation) + rowType + " " + this.printNode(declaration.name) + " = ((" + rowType + ")" + parsedValue + ")";
       }
     }
-    if (!isNew && node.declarations.length === 1 && this.csharpTypeIsNative(declaredType) && !this.csharpLocalHoldsInferredCollection(declaration)) {
+    if (!isNew && node.declarations.length === 1 && (CSHARP_NATIVE_COLLECTION_TYPES.indexOf(declaredType) >= 0 || declaredType.indexOf("string") === 0) && !this.csharpLocalHoldsInferredCollection(declaration)) {
       this.csharpTypedLocals.set(declaration, declaredType);
     }
     return this.getIden(identation) + declaredType + " " + this.printNode(declaration.name) + " = " + parsedValue;
   }
-  // `const x = this.omit (this.<member>, keys)` on a hand-written member DECLARED a string-keyed
-  // object dictionary (Exchange.Options.cs). Both dict-receiver overloads of Exchange.Functions.cs hand back a
-  // fresh Dictionary<string, object> and an `object` receiver is the only one that may pass a list through, so
-  // the call's own C# type is the dictionary. A const local is never rewritten, so the declaration may name it
-  // and the write back into the member (`this.urls = x`) binds without a conversion.
+  // `const x = this.omit (this.<member>, keys)` on a hand-written member DECLARED a string-keyed object dictionary (Exchange.Options.cs). Both dict-receiver overloads of
+  // Exchange.Functions.cs hand back a fresh Dictionary<string, object> and an `object` receiver is the only one that may pass a list through, so the call's own C# type is the
+  // dictionary. A const local is never rewritten, so the declaration may name it and the write back into the member (`this.urls = x`) binds without a conversion.
   csharpOmitMemberLocalType(declaration) {
     if (declaration?.name?.kind !== SyntaxKind4.Identifier || (declaration.parent?.flags & NodeFlags.Const) === 0) {
       return void 0;
@@ -9489,18 +9364,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
   printElementAccessExpressionExceptionIfAny(node) {
     return void 0;
   }
-  // reads print getValue(recv, key), which yields null for a missing key; a C# indexer
-  // throws instead, so the native form is only emitted where the source guarantees the key
-  // is there: a dominating `key in recv` guard, or a receiver local built by a literal that
-  // declares the key, or a receiver the declared table proves is a dictionary (the native
-  // form then keeps the helper's null-for-a-missing-key result). every other read keeps the
-  // helper.
-  // the single element-access override, gates strongest (declaration-type) proof first:
-  // typed dict WRITE (csharpDictionaryElementWriteTarget), typed dict READ twin
-  // (printTypedDictElementAccessIfAny), list-cast (csharpElementAccessReceiverIsList),
-  // then the native read form proven from the printed source (#82, csharpNativeElementAccess,
-  // see the note above). Every other read keeps the helper; a site no gate names keeps the
-  // base printing.
+  // reads print getValue(recv, key), which yields null for a missing key; a C# indexer throws instead, so the native form is only emitted where the source guarantees the key is there: a dominating
+  // `key in recv` guard, or a receiver local built by a literal that declares the key, or a receiver the declared table proves is a dictionary (the native form then keeps the helper's null-for-a-
+  // missing-key result). every other read keeps the helper. the single element-access override, gates strongest (declaration-type) proof first:
   printElementAccessExpression(node, identation) {
     const declaredMember = this.csharpDeclaredDictMemberElementRead(node);
     if (declaredMember !== void 0) {
@@ -9608,7 +9474,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const receiver = this.printNode(expression, 0);
     const printedKey = this.printNode(argumentExpression, 0);
-    return `(${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+    return this.csharpGuardedRead("", receiver, printedKey);
   }
   // the C# dictionary type the declared table names for a local read, or undefined: the
   // printer's own table, then the build layer's read proof (the row a market/currency builder
@@ -9654,7 +9520,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const receiver = this.printNode(expression, 0);
     const printedKey = this.printNode(argumentExpression, 0);
-    return `(${receiver} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+    return this.csharpGuardedRead(`${receiver} != null && `, receiver, printedKey);
   }
   // A literal-key read on a local whose C# declaration is already a collection: no cast needed, but
   // the indexer throws where GetValue answers null, so the native form carries the helper's key/index
@@ -9670,7 +9536,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (csharpType === void 0) {
       return void 0;
     }
-    if (!this.csharpDeclaredReceiverReadable(node, expression)) {
+    if (this.csharpEnclosingFunction(node) === void 0 || !isIdentifier(expression)) {
       return void 0;
     }
     const receiver = this.printNode(expression, 0);
@@ -9679,7 +9545,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
         return void 0;
       }
       const printedKey = this.printNode(argumentExpression, 0);
-      return `(${receiver} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+      return this.csharpGuardedRead(`${receiver} != null && `, receiver, printedKey);
     }
     if (isNumberKey) {
       const index = Number(argumentExpression.text);
@@ -9690,11 +9556,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // A literal-index read on a local whose emitted C# declaration is a `string` / `string?` (the type
-  // csharpStringReceiverType names, build-layer retypes included): the string indexer throws on a null
-  // receiver and past the end where GetValue answers null, so the native form carries both tests and
-  // re-boxes the char as the helper's `.ToString ()` string. Only an Identifier qualifies (read up to
-  // three times) and only a plain read (never a write target, delete or ++/--).
+  // A literal-index read on a local whose emitted C# declaration is a `string` / `string?` (the type csharpStringReceiverType names, build-layer retypes included): the string
+  // indexer throws on a null receiver and past the end where GetValue answers null, so the native form carries both tests and re-boxes the char as the helper's `.ToString ()`
+  // string. Only an Identifier qualifies (read up to three times) and only a plain read (never a write target, delete or ++/--).
   csharpDeclaredStringIndexRead(node, expression, argumentExpression, isNumberKey) {
     if (!isNumberKey || !isIdentifier(expression) || !this.csharpIsPlainRead(node)) {
       return void 0;
@@ -9752,7 +9616,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const local = this.printNode(expression, 0);
     const receiver = `((IDictionary<string, object>)${local})`;
     const printedKey = this.printNode(argumentExpression, 0);
-    return `(${local} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+    return this.csharpGuardedRead(`${local} != null && `, receiver, printedKey);
   }
   // the read sits in a branch that a `key in recv` guard admitted: same then-branch as the
   // guard, the else-branch of a negated guard, or after an early-exiting `if (!(key in recv))`
@@ -10157,11 +10021,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return printed !== void 0 && this.csharpTypedCoreType(node, callee.name.text) !== "" ? printed : void 0;
   }
-  // ws `future.resolve (x)` / `future.reject (e)` statements: the local is the ws runtime's Future
-  // (cs/ccxt/ws/Future.cs: void resolve(object) / reject(object)), whose C# declaration may be
-  // `Future` or a `var` bound from an object read, so the call binds the declared method through
-  // the receiver cast `(future as Future).resolve(..)` / `((Future)future).reject(..)`.
-  // Only the ws trees (ts/src/pro, ts/src/prediction) hold that Future; other ccxt trees keep the printer.
+  // ws `future.resolve (x)` / `future.reject (e)` statements: the local is the ws runtime's Future (cs/ccxt/ws/Future.cs: void resolve(object) / reject(object)), whose C#
+  // declaration may be `Future` or a `var` bound from an object read, so the call binds the declared method through the receiver cast `(future as Future).resolve(..)` /
+  // `((Future)future).reject(..)`. Only the ws trees (ts/src/pro, ts/src/prediction) hold that Future; other ccxt trees keep the printer.
   csharpFutureSettleCall(node) {
     const callee = node?.expression;
     if (!isPropertyAccessExpression(callee) || !isIdentifier(callee.expression) || callee.expression.text !== "future" || node.parent?.kind !== SyntaxKind4.ExpressionStatement) {
@@ -10182,10 +10044,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const args = (node.arguments ?? []).map((arg) => this.printNode(arg, 0).trim()).join(", ");
     return method === "resolve" ? `(future as Future).resolve(${args})` : `((Future)future).reject(${args})`;
   }
-  // `this.<name> (...)` resolving to an async method whose checker return type is `Promise<int>` /
-  // `Promise<Int>`: its C# signature is the typed core `Task<Int64> <Name>(...)` (the declaration is
-  // renamed to the PascalCase public name), so the awaited value is a bare Int64 and the call binds the
-  // PascalCase method. Answers that PascalCase name, or undefined for every other call.
+  // `this.<name> (...)` resolving to an async method whose checker return type is `Promise<int>` / `Promise<Int>`: its C# signature is the typed core `Task<Int64> <Name>(...)`
+  // (the declaration is renamed to the PascalCase public name), so the awaited value is a bare Int64 and the call binds the PascalCase method. Answers that PascalCase name, or
+  // undefined for every other call.
   csharpInt64TaskCallName(node) {
     const callee = node?.expression;
     if (!this.csharpPascalInt64TaskCalls || callee?.kind !== SyntaxKind4.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind4.ThisKeyword || node.parent?.kind !== SyntaxKind4.AwaitExpression) {
@@ -10366,7 +10227,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // a ternary of two such values or slot 1 of a base handleParam* / handleOptionAndParams* tuple: the box is a
   // Dictionary or null, where inOp's answer is the type test plus ContainsKey (exchange sources only)
   csharpDictOrNullInExpression(key, obj) {
-    if (!isStringLiteralLikeNode2(key) || !isIdentifier(obj) || !this.csharpIsExchangeSource(obj)) {
+    const source = obj.getSourceFile?.()?.fileName ?? "";
+    if (!isStringLiteralLikeNode2(key) || !isIdentifier(obj) || !source.includes("ts/src/") || source.includes("ts/src/test/") || source.includes("examples/")) {
       return void 0;
     }
     const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(obj)?.valueDeclaration?.resolve();
@@ -10377,10 +10239,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const next = this.csharpInOpDictCounters.get(file) ?? 0;
     this.csharpInOpDictCounters.set(file, next + 1);
     return `(${this.printNode(obj, 0)} is IDictionary<string, object> inOpDict${next} && inOpDict${next}.ContainsKey(${this.printNode(key, 0)}))`;
-  }
-  csharpIsExchangeSource(node) {
-    const file = node.getSourceFile?.()?.fileName ?? "";
-    return file.includes("ts/src/") && !file.includes("ts/src/test/") && !file.includes("examples/");
   }
   csharpDictOrNullValue(node, depth) {
     while (node !== void 0 && (isParenthesizedExpression(node) || isAsExpression(node))) {
@@ -10421,7 +10279,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       const name = method.name?.text ?? "";
       return writes.length === 0 && declaration.initializer !== void 0 && isObjectLiteralExpression2(declaration.initializer) && ["sign", "request", "fetch2", "calculateRateLimiterCost", "handleErrors"].indexOf(name) < 0;
     }
-    if (!isVariableDeclaration(declaration) || declaration.parent?.declarations?.length !== 1 || declaration.initializer === void 0) {
+    if (!isVariableDeclaration(declaration) || !this.csharpIsSingleDeclarator(declaration) || declaration.initializer === void 0) {
       return false;
     }
     return [declaration.initializer, ...writes].every((value) => this.csharpDictOrNullValue(value, depth + 1));
@@ -10447,11 +10305,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return this.csharpDictOrNullValue(init.arguments[0], depth + 1);
   }
-  // `key in this.<member>` / `key in client.<member>` where the member's declared C# type is a string-keyed
-  // dictionary that may hold null (an interface-typed or initializer-less declaration): the helper's null
-  // receiver branch is the `!= null` test, and its non-string key branch (false) is the type test. The key
-  // is an identifier whose printed declaration is a C# string (nullable: tested) or `object` (type-tested),
-  // or a string literal; every other key shape keeps the helper
+  // `key in this.<member>` / `key in client.<member>` where the member's declared C# type is a string-keyed dictionary that may hold null (an interface-typed or initializer-less
+  // declaration): the helper's null receiver branch is the `!= null` test, and its non-string key branch (false) is the type test. The key is an identifier whose printed
+  // declaration is a C# string (nullable: tested) or `object` (type-tested), or a string literal; every other key shape keeps the helper
   csharpMemberInExpression(key, obj) {
     const member = this.csharpMemberReceiver(obj);
     if (member === void 0 || member.kind !== "dict" || member.nullTest === void 0) {
@@ -10471,12 +10327,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // how an identifier key reaches a dictionary member: 'string' when its printed C# declaration is a
-  // string; 'object' when the declaration is `object` (inOp answers false for a non-string box, GetValue
-  // casts the key to string); 'param' for a default-less parameter the checker proves a string (its C#
-  // type is the signature's `object` or `string`, and both a `key is string k` test and a `(string)key`
-  // cast are valid for both). A local not declared yet keeps the helper: the build layer retypes it
-  // after printing, and a hard cast here would block that retype
+  // how an identifier key reaches a dictionary member: 'string' when its printed C# declaration is a string; 'object' when the declaration is `object` (inOp answers false for a non-string box,
+  // GetValue casts the key to string); 'param' for a default-less parameter the checker proves a string (its C# type is the signature's `object` or `string`, and both a `key is string k` test and a
+  // `(string)key` cast are valid for both). A local not declared yet keeps the helper: the build layer retypes it after printing, and a hard cast here would block that retype
   csharpMemberKeyKind(key) {
     const keyType = this.csharpDeclaredKeyType(key) ?? this.csharpDeclaredLocalResolverType(key);
     if (keyType === "string" || keyType === "string?") {
@@ -10550,13 +10403,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // `x["k"]` — the element read of a dictionary key this printer prints as getValue(x, "k")
   csharpStringKeyedElementAccess(node) {
     return node?.kind === SyntaxKind4.ElementAccessExpression && isStringLiteralLikeNode2(node.argumentExpression);
-  }
-  // isEqual compares a boxed number with a numeric string by converting both, which the
-  // string cast of the native form cannot reproduce: a numeric-looking literal stays on
-  // the helper (the element proof says the box is a string, and a number box would differ)
-  csharpNumericStringLiteral(node) {
-    const text = String(node.text).trim();
-    return text !== "" && !isNaN(Number(text));
   }
   // the declared C# type of a dictionary receiver: a local the embedding build layer retypes
   // (csharpExpressionTypeResolver) or a hand-written BaseExchange field; undefined keeps the
@@ -10770,10 +10616,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return false;
     });
   }
-  // reject the refinement when something downstream needs the local to stay `object`:
-  // `x.push(v)` prints `((IList<object>)x).Add(v)` on a value that must be boxed, a
-  // later assignment of another concrete type would stop compiling, and `x++` prints
-  // `postFixIncrement(ref x)` whose parameter is `ref object`
+  // reject the refinement when something downstream needs the local to stay `object`: `x.push(v)` prints `((IList<object>)x).Add(v)` on a value that must be boxed, a later
+  // assignment of another concrete type would stop compiling, and `x++` prints `postFixIncrement(ref x)` whose parameter is `ref object`
   csharpLocalIsSafeToType(scope, declaration, varName, csharpType, safeAccessor = false) {
     if (scope === void 0) {
       return false;
@@ -10838,13 +10682,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
   }
   // a `((string)x)` wrapper is redundant as soon as the receiver's static C# type is
   // already string: the cast names the box the value is in, it never changes the value
-  // `limit: Int = 100` on a method whose `limit` position the build layer narrows to `Int64?`: the body
-  // prints a `limit ??= 100;` prologue, so the build layer's post-print pass keeps the parameter in a
-  // shadow local (`limitVar`) and types that local `Int64?` when every use is an identity read. This is
-  // the same decision made on the AST: every use of the parameter is a null test, an argument of an
-  // allowlisted `this.<callee>` call, or an operand of Math.min/max against an integer literal. The
-  // build layer's pass accepts the printed form of each of those, so the local is `Int64?` and a
-  // null-proven read can unbox with `.Value`. Anything else answers undefined (the shadow stays object).
+  // `limit: Int = 100` on a method whose `limit` position the build layer narrows to `Int64?`: the body prints a `limit ??= 100;` prologue, so the build layer's post-print pass keeps the parameter
+  // in a shadow local (`limitVar`) and types that local `Int64?` when every use is an identity read. This is the same decision made on the AST: every use of the parameter is a null test, an
+  // argument of an allowlisted `this.<callee>` call, or an operand of Math.min/max against an integer literal.
   csharpShadowedNumericParamType(node) {
     if (!isIdentifier(node) || node.text !== "limit") {
       return void 0;
@@ -11018,7 +10858,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const target = pattern.elements?.[0];
     const declaration = this.csharpReceiverBinding(target);
-    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.name?.kind !== SyntaxKind4.Identifier || declaration.parent?.declarations?.length !== 1 || declaration.initializer?.kind !== SyntaxKind4.TrueKeyword && declaration.initializer?.kind !== SyntaxKind4.FalseKeyword) {
+    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.name?.kind !== SyntaxKind4.Identifier || !this.csharpIsSingleDeclarator(declaration) || declaration.initializer?.kind !== SyntaxKind4.TrueKeyword && declaration.initializer?.kind !== SyntaxKind4.FalseKeyword) {
       return void 0;
     }
     return this.csharpBoolOptionSlotCall(this.csharpUnparenthesized(assignment.right), target) ? target : void 0;
@@ -11102,9 +10942,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return super.printThrowStatement(node, identation);
     }
   }
-  csharpDeclaredReceiverReadable(node, expression) {
-    return this.csharpEnclosingFunction(node) !== void 0 && isIdentifier(expression);
-  }
   // `x[i]` / `m[k]` with an identifier key on a declared collection or a base dict field.
   // The emission carries GetValue's own null/missing-key/past-the-end tests; a negative index
   // throws in both. Key must be declared `int` (list) or `string`/`string?` (dictionary).
@@ -11122,7 +10959,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       }
       const routedPrinted = this.printNode(argumentExpression, 0);
       const routedSpelling = routedKey === "string" || routedKey === "string?" ? routedPrinted : `(string)${routedPrinted}`;
-      return `(${member.text} != null && ${routedPrinted} != null && ${member.text}.ContainsKey(${routedSpelling}) ? ${member.text}[${routedSpelling}] : null)`;
+      return this.csharpGuardedRead(`${member.text} != null && ${routedPrinted} != null && `, member.text, routedSpelling);
     }
     if (member !== void 0 && member.routed !== true) {
       const keyType2 = this.csharpDeclaredKeyType(argumentExpression);
@@ -11136,10 +10973,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
         return `(${test}${printedKey2} < ${member.text}.Count ? ${member.text}[${printedKey2}] : null)`;
       }
       if (keyKind === "string" || keyKind === "string?") {
-        return `(${test}${printedKey2} != null && ${member.text}.ContainsKey(${printedKey2}) ? ${member.text}[${printedKey2}] : null)`;
+        return this.csharpGuardedRead(`${test}${printedKey2} != null && `, member.text, printedKey2);
       }
       if (keyKind === "object" || keyKind === "param") {
-        return `(${test}${printedKey2} != null && ${member.text}.ContainsKey((string)${printedKey2}) ? ${member.text}[(string)${printedKey2}] : null)`;
+        return this.csharpGuardedRead(`${test}${printedKey2} != null && `, member.text, `(string)${printedKey2}`);
       }
       return void 0;
     }
@@ -11148,7 +10985,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     csharpType = this.csharpDeclaredCollectionType(expression);
     if (csharpType === void 0) {
-      const printed = typeof this.csharpPrintedLocalType === "function" ? this.csharpPrintedLocalType(expression) : void 0;
+      const printed = this.csharpPrintedLocalTypeOf(expression);
       csharpType = CSHARP_NATIVE_COLLECTION_TYPES.indexOf(printed) >= 0 ? printed : void 0;
     }
     if (csharpType === void 0 || this.csharpEnclosingFunction(expression) === void 0) {
@@ -11159,12 +10996,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const keyType = this.csharpDeclaredKeyType(argumentExpression);
     if (csharpType.indexOf("Dictionary<") >= 0) {
       if (keyType === "object" && this.csharpObjectKeyCastable(argumentExpression)) {
-        return `(${receiver} != null && ${printedKey} != null && ${receiver}.ContainsKey((string)${printedKey}) ? ${receiver}[(string)${printedKey}] : null)`;
+        return this.csharpGuardedRead(`${receiver} != null && ${printedKey} != null && `, receiver, `(string)${printedKey}`);
       }
       if (keyType !== "string" && keyType !== "string?") {
         return void 0;
       }
-      return `(${receiver} != null && ${printedKey} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+      return this.csharpGuardedRead(`${receiver} != null && ${printedKey} != null && `, receiver, printedKey);
     }
     if (keyType !== "int") {
       return void 0;
@@ -11192,7 +11029,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (typed !== void 0) {
       return typed;
     }
-    const printed = typeof this.csharpPrintedLocalType === "function" ? this.csharpPrintedLocalType(key) : void 0;
+    const printed = this.csharpPrintedLocalTypeOf(key);
     if (printed !== void 0) {
       return printed;
     }
@@ -11688,6 +11525,102 @@ function tupleJoinBindingMentionsName(node, name) {
   node.forEachChild(visit);
   return found;
 }
+function goDefiniteAssignmentWalker(state, declaration, name, readExpression, readCaseLabels, writeStatement) {
+  const isName = (node) => node?.kind === ts.SyntaxKind.Identifier && node.text === name;
+  const visitStatement = (node, assigned) => {
+    if (!state.ok || node === void 0 || node === null) {
+      return assigned;
+    }
+    switch (node.kind) {
+      case ts.SyntaxKind.Block: {
+        let current = assigned;
+        for (const statement of node.statements) {
+          current = visitStatement(statement, current);
+        }
+        return current;
+      }
+      case ts.SyntaxKind.ExpressionStatement: {
+        const written = writeStatement(node.expression, assigned);
+        if (written !== void 0) {
+          return written;
+        }
+        readExpression(node.expression, assigned);
+        return assigned;
+      }
+      case ts.SyntaxKind.VariableStatement: {
+        let current = assigned;
+        for (const child of node.declarationList.declarations) {
+          if (isName(child.name)) {
+            if (child === declaration) {
+              current = false;
+            } else {
+              state.ok = false;
+            }
+          }
+          readExpression(child.initializer, current);
+        }
+        return current;
+      }
+      case ts.SyntaxKind.IfStatement: {
+        readExpression(node.expression, assigned);
+        const thenAssigned = visitStatement(node.thenStatement, assigned);
+        const elseAssigned = node.elseStatement === void 0 ? assigned : visitStatement(node.elseStatement, assigned);
+        return thenAssigned && elseAssigned;
+      }
+      case ts.SyntaxKind.ForStatement: {
+        visitStatement(node.initializer, assigned);
+        readExpression(node.condition, assigned);
+        readExpression(node.incrementor, assigned);
+        visitStatement(node.statement, assigned);
+        return assigned;
+      }
+      case ts.SyntaxKind.WhileStatement:
+      case ts.SyntaxKind.DoStatement:
+      case ts.SyntaxKind.ForInStatement:
+      case ts.SyntaxKind.ForOfStatement: {
+        readExpression(node.expression, assigned);
+        visitStatement(node.statement, assigned);
+        return assigned;
+      }
+      case ts.SyntaxKind.SwitchStatement: {
+        readExpression(node.expression, assigned);
+        for (const clause of node.caseBlock.clauses) {
+          if (readCaseLabels) {
+            readExpression(clause.expression, assigned);
+          }
+          for (const statement of clause.statements) {
+            visitStatement(statement, assigned);
+          }
+        }
+        return assigned;
+      }
+      case ts.SyntaxKind.TryStatement: {
+        visitStatement(node.tryBlock, assigned);
+        if (node.catchClause !== void 0) {
+          visitStatement(node.catchClause.block, assigned);
+        }
+        visitStatement(node.finallyBlock, assigned);
+        return assigned;
+      }
+      case ts.SyntaxKind.ReturnStatement:
+      case ts.SyntaxKind.ThrowStatement: {
+        readExpression(node.expression, assigned);
+        return true;
+      }
+      case ts.SyntaxKind.EmptyStatement:
+      case ts.SyntaxKind.BreakStatement:
+      case ts.SyntaxKind.ContinueStatement:
+        return assigned;
+      default: {
+        if (tupleJoinBindingMentionsName(node, name)) {
+          state.ok = false;
+        }
+        return assigned;
+      }
+    }
+  };
+  return visitStatement;
+}
 function tupleJoinType(goTranspiler, declaration, name) {
   const scope = typeof goTranspiler.goEnclosingFunction === "function" ? goTranspiler.goEnclosingFunction(declaration) : void 0;
   if (scope === void 0) {
@@ -11729,105 +11662,21 @@ function tupleJoinType(goTranspiler, declaration, name) {
     }
     node.forEachChild((child) => readExpression(child, assigned));
   };
-  const visitStatement = (node, assigned) => {
-    if (!state.ok || node === void 0 || node === null) {
-      return assigned;
+  const visitStatement = goDefiniteAssignmentWalker(state, declaration, name, readExpression, true, (expression, assigned) => {
+    if (expression?.kind === ts.SyntaxKind.BinaryExpression && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken && isName(expression.left)) {
+      readExpression(expression.right, assigned);
+      const goType = tupleJoinIndexWriteType(goTranspiler, expression.right) ?? goTranspiler.goTypeOfInitializer(expression.right, goTranspiler.printNode(expression.right, 0));
+      joinWrite(goType);
+      return state.ok;
     }
-    switch (node.kind) {
-      case ts.SyntaxKind.Block: {
-        let current = assigned;
-        for (const statement of node.statements) {
-          current = visitStatement(statement, current);
-        }
-        return current;
-      }
-      case ts.SyntaxKind.ExpressionStatement: {
-        const expression = node.expression;
-        if (expression?.kind === ts.SyntaxKind.BinaryExpression && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken && isName(expression.left)) {
-          readExpression(expression.right, assigned);
-          const goType = tupleJoinIndexWriteType(goTranspiler, expression.right) ?? goTranspiler.goTypeOfInitializer(expression.right, goTranspiler.printNode(expression.right, 0));
-          joinWrite(goType);
-          return state.ok;
-        }
-        const slotType = tupleJoinWriteType(expression, name);
-        if (slotType !== void 0) {
-          readExpression(expression.right, assigned);
-          joinWrite(slotType);
-          return state.ok;
-        }
-        readExpression(expression, assigned);
-        return assigned;
-      }
-      case ts.SyntaxKind.VariableStatement: {
-        let current = assigned;
-        for (const child of node.declarationList.declarations) {
-          if (isName(child.name)) {
-            if (child === declaration) {
-              current = false;
-            } else {
-              fail();
-            }
-          }
-          readExpression(child.initializer, current);
-        }
-        return current;
-      }
-      case ts.SyntaxKind.IfStatement: {
-        readExpression(node.expression, assigned);
-        const thenAssigned = visitStatement(node.thenStatement, assigned);
-        const elseAssigned = node.elseStatement === void 0 ? assigned : visitStatement(node.elseStatement, assigned);
-        return thenAssigned && elseAssigned;
-      }
-      case ts.SyntaxKind.ForStatement: {
-        visitStatement(node.initializer, assigned);
-        readExpression(node.condition, assigned);
-        readExpression(node.incrementor, assigned);
-        visitStatement(node.statement, assigned);
-        return assigned;
-      }
-      case ts.SyntaxKind.WhileStatement:
-      case ts.SyntaxKind.DoStatement:
-      case ts.SyntaxKind.ForInStatement:
-      case ts.SyntaxKind.ForOfStatement: {
-        readExpression(node.expression, assigned);
-        visitStatement(node.statement, assigned);
-        return assigned;
-      }
-      case ts.SyntaxKind.SwitchStatement: {
-        readExpression(node.expression, assigned);
-        for (const clause of node.caseBlock.clauses) {
-          readExpression(clause.expression, assigned);
-          for (const statement of clause.statements) {
-            visitStatement(statement, assigned);
-          }
-        }
-        return assigned;
-      }
-      case ts.SyntaxKind.TryStatement: {
-        visitStatement(node.tryBlock, assigned);
-        if (node.catchClause !== void 0) {
-          visitStatement(node.catchClause.block, assigned);
-        }
-        visitStatement(node.finallyBlock, assigned);
-        return assigned;
-      }
-      case ts.SyntaxKind.ReturnStatement:
-      case ts.SyntaxKind.ThrowStatement: {
-        readExpression(node.expression, assigned);
-        return true;
-      }
-      case ts.SyntaxKind.EmptyStatement:
-      case ts.SyntaxKind.BreakStatement:
-      case ts.SyntaxKind.ContinueStatement:
-        return assigned;
-      default: {
-        if (tupleJoinBindingMentionsName(node, name)) {
-          fail();
-        }
-        return assigned;
-      }
+    const slotType = tupleJoinWriteType(expression, name);
+    if (slotType !== void 0) {
+      readExpression(expression.right, assigned);
+      joinWrite(slotType);
+      return state.ok;
     }
-  };
+    return void 0;
+  });
   const shadowingWalk = (node) => {
     if (state.ok === false) {
       return;
@@ -12801,10 +12650,13 @@ function ccxtGoTypeOfNativeArithmeticInitializer(goTranspiler, initializer, prin
   return CCXT_GO_NATIVE_ARITHMETIC_LOCAL_TYPES.indexOf(native.goType) >= 0 ? native.goType : void 0;
 }
 function ccxtGoUnboxArithmeticDeclaration(goTranspiler, printed) {
+  return ccxtGoUnboxCallDeclaration(printed, /^([\s\S]*?\bvar [A-Za-z0-9_]+ int64 = )((?:ccxt\.)?(?:Multiply|Subtract|Divide|Mod)\([^\n]*)$/, CCXT_GO_ARITHMETIC_LOCAL_TYPE);
+}
+function ccxtGoUnboxCallDeclaration(printed, pattern, goType) {
   if (typeof printed !== "string") {
     return printed;
   }
-  const match = /^([\s\S]*?\bvar [A-Za-z0-9_]+ int64 = )((?:ccxt\.)?(?:Multiply|Subtract|Divide|Mod)\([^\n]*)$/.exec(printed);
+  const match = pattern.exec(printed);
   if (match === null) {
     return printed;
   }
@@ -12818,7 +12670,7 @@ function ccxtGoUnboxArithmeticDeclaration(goTranspiler, printed) {
   if (!/^\s*(;?\s*(\/\/[^\n]*)?)$/.test(rest)) {
     return printed;
   }
-  return match[1] + tail.substring(0, close) + ".(" + CCXT_GO_ARITHMETIC_LOCAL_TYPE + ")" + rest;
+  return match[1] + tail.substring(0, close) + ".(" + goType + ")" + rest;
 }
 function ccxtGoPrintedCallEnd(value, open) {
   let depth = 0;
@@ -12898,24 +12750,7 @@ function ccxtGoTypeOfCurrencyInitializer(goTranspiler, initializer, printedValue
   return CCXT_GO_CURRENCY_LOCAL_TYPE;
 }
 function ccxtGoUnboxCurrencyDeclaration(goTranspiler, printed) {
-  if (typeof printed !== "string") {
-    return printed;
-  }
-  const match = /^([\s\S]*?\bvar [A-Za-z0-9_]+ map\[string\]any = )((?:ccxt\.)?(?:this\.)?(?:Currency|SafeCurrency)\([^\n]*)$/.exec(printed);
-  if (match === null) {
-    return printed;
-  }
-  const tail = match[2];
-  const open = tail.indexOf("(");
-  const close = ccxtGoPrintedCallEnd(tail, open);
-  if (close < 0) {
-    return printed;
-  }
-  const rest = tail.substring(close);
-  if (!/^\s*(;?\s*(\/\/[^\n]*)?)$/.test(rest)) {
-    return printed;
-  }
-  return match[1] + tail.substring(0, close) + ".(" + CCXT_GO_CURRENCY_LOCAL_TYPE + ")" + rest;
+  return ccxtGoUnboxCallDeclaration(printed, /^([\s\S]*?\bvar [A-Za-z0-9_]+ map\[string\]any = )((?:ccxt\.)?(?:this\.)?(?:Currency|SafeCurrency)\([^\n]*)$/, CCXT_GO_CURRENCY_LOCAL_TYPE);
 }
 function ccxtGoTypeOfUrlsInitializer(goTranspiler, initializer, printedValue) {
   if (initializer?.parent?.kind !== ts.SyntaxKind.VariableDeclaration || initializer.parent.initializer !== initializer || initializer.parent.parent?.parent?.kind !== ts.SyntaxKind.VariableStatement || !/^(?:GetValue\(|this\.UrlsApi(?:Sections)?\[)/.test((printedValue ?? "").trim()) || !urlsDescribeStringProducer(initializer)) {
@@ -14979,21 +14814,6 @@ function nilJoinOccurrenceKind(node) {
   }
   return "read";
 }
-function nilJoinMentionsName(node, name) {
-  let found = false;
-  const visit = (n) => {
-    if (found) {
-      return;
-    }
-    if (n.kind === ts.SyntaxKind.Identifier && n.text === name) {
-      found = true;
-      return;
-    }
-    n?.forEachChild(visit);
-  };
-  visit(node);
-  return found;
-}
 var CCXT_GO_NIL_JOIN_CACHE = /* @__PURE__ */ new WeakMap();
 function ccxtGoNilDeclaredContainerJoinType(goTranspiler, declaration) {
   if (CCXT_GO_NIL_JOIN_CACHE.has(declaration)) {
@@ -15160,95 +14980,12 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached(goTranspiler, declaration) {
     state.copies = state.copies || mayBeAbsent;
     return !mayBeAbsent;
   };
-  const visitStatement = (node, assigned) => {
-    if (!state.ok || node === void 0 || node === null) {
-      return assigned;
+  const visitStatement = goDefiniteAssignmentWalker(state, declaration, name, readExpression, false, (expression, assigned) => {
+    if (expression?.kind === ts.SyntaxKind.BinaryExpression && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken && isName(expression.left)) {
+      return writeExpression(expression.right, assigned) ? true : assigned;
     }
-    switch (node.kind) {
-      case ts.SyntaxKind.Block: {
-        let current = assigned;
-        for (const statement of node.statements) {
-          current = visitStatement(statement, current);
-        }
-        return current;
-      }
-      case ts.SyntaxKind.ExpressionStatement: {
-        const expression = node.expression;
-        if (expression?.kind === ts.SyntaxKind.BinaryExpression && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken && isName(expression.left)) {
-          return writeExpression(expression.right, assigned) ? true : assigned;
-        }
-        readExpression(expression, assigned);
-        return assigned;
-      }
-      case ts.SyntaxKind.VariableStatement: {
-        let current = assigned;
-        for (const child of node.declarationList.declarations) {
-          if (isName(child.name)) {
-            if (child === declaration) {
-              current = false;
-            } else {
-              fail();
-            }
-          }
-          readExpression(child.initializer, current);
-        }
-        return current;
-      }
-      case ts.SyntaxKind.IfStatement: {
-        readExpression(node.expression, assigned);
-        const thenAssigned = visitStatement(node.thenStatement, assigned);
-        const elseAssigned = node.elseStatement === void 0 ? assigned : visitStatement(node.elseStatement, assigned);
-        return thenAssigned && elseAssigned;
-      }
-      case ts.SyntaxKind.ForStatement: {
-        visitStatement(node.initializer, assigned);
-        readExpression(node.condition, assigned);
-        readExpression(node.incrementor, assigned);
-        visitStatement(node.statement, assigned);
-        return assigned;
-      }
-      case ts.SyntaxKind.WhileStatement:
-      case ts.SyntaxKind.DoStatement:
-      case ts.SyntaxKind.ForInStatement:
-      case ts.SyntaxKind.ForOfStatement: {
-        readExpression(node.expression, assigned);
-        visitStatement(node.statement, assigned);
-        return assigned;
-      }
-      case ts.SyntaxKind.SwitchStatement: {
-        readExpression(node.expression, assigned);
-        for (const clause of node.caseBlock.clauses) {
-          for (const statement of clause.statements) {
-            visitStatement(statement, assigned);
-          }
-        }
-        return assigned;
-      }
-      case ts.SyntaxKind.TryStatement: {
-        visitStatement(node.tryBlock, assigned);
-        if (node.catchClause !== void 0) {
-          visitStatement(node.catchClause.block, assigned);
-        }
-        visitStatement(node.finallyBlock, assigned);
-        return assigned;
-      }
-      case ts.SyntaxKind.ReturnStatement:
-      case ts.SyntaxKind.ThrowStatement: {
-        readExpression(node.expression, assigned);
-        return true;
-      }
-      case ts.SyntaxKind.EmptyStatement:
-      case ts.SyntaxKind.BreakStatement:
-      case ts.SyntaxKind.ContinueStatement:
-        return assigned;
-      default: {
-        if (nilJoinMentionsName(node, name)) {
-          fail();
-        }
-        return assigned;
-      }
-    }
-  };
+    return void 0;
+  });
   visitStatement(scope.body, false);
   if (state.copies && state.mutated) {
     return void 0;
@@ -15653,6 +15390,9 @@ function ccxtGoIsIdentityTupleRebind(goTranspiler, n) {
   return slot !== void 0 && isIdentifierNamed(assignment.right.arguments?.[slot], n.text);
 }
 function ccxtGoIdentityTupleLocalIsSafe(goTranspiler, scope, declaration, varName) {
+  return ccxtGoRebindLocalIsSafe(goTranspiler, scope, declaration, varName, (n) => ccxtGoIsIdentityTupleRebind(goTranspiler, n));
+}
+function ccxtGoRebindLocalIsSafe(goTranspiler, scope, declaration, varName, isRebind) {
   if (scope === void 0 || declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer?.kind !== ts.SyntaxKind.ObjectLiteralExpression) {
     return false;
   }
@@ -15661,7 +15401,7 @@ function ccxtGoIdentityTupleLocalIsSafe(goTranspiler, scope, declaration, varNam
     if (n.kind !== ts.SyntaxKind.Identifier || n.text !== varName || n === declaration.name) {
       return false;
     }
-    if (ccxtGoIsIdentityTupleRebind(goTranspiler, n)) {
+    if (isRebind(n)) {
       rebinds += 1;
       return false;
     }
@@ -15950,6 +15690,21 @@ function ccxtGoClosureDefaultShape(goTranspiler, declaration) {
   }
   return { pointerName: (goTranspiler.printNode(pointer, 0) ?? "").trim(), pointerIsTrueArm: negated, valueType };
 }
+function ccxtGoSomeUseOf(scope, varName, nameNode, fails) {
+  let found = false;
+  const visit = (n) => {
+    if (found) {
+      return;
+    }
+    if (n.kind === ts.SyntaxKind.Identifier && n.text === varName && n !== nameNode) {
+      found = fails(n);
+      return;
+    }
+    n?.forEachChild(visit);
+  };
+  scope?.forEachChild(visit);
+  return found;
+}
 function ccxtGoClosureDefaultReadsAreSafe(goTranspiler, declaration, valueType) {
   const scope = goTranspiler.goEnclosingFunction(declaration);
   if (scope === void 0) {
@@ -15957,18 +15712,7 @@ function ccxtGoClosureDefaultReadsAreSafe(goTranspiler, declaration, valueType) 
   }
   const name = declaration.name;
   const varName = name.text;
-  let unproven = false;
-  const visit = (n) => {
-    if (unproven) {
-      return;
-    }
-    if (n.kind === ts.SyntaxKind.Identifier && n.text === varName && n !== name) {
-      unproven = !ccxtGoClosureReadIsSafe(goTranspiler, n, varName);
-      return;
-    }
-    n?.forEachChild(visit);
-  };
-  scope?.forEachChild(visit);
+  const unproven = ccxtGoSomeUseOf(scope, varName, name, (n) => !ccxtGoClosureReadIsSafe(goTranspiler, n, varName));
   return !unproven && !goTranspiler.goTypeNameIsShadowed(scope, valueType) && goTranspiler.goLocalIsSafeToType(scope, declaration, varName, valueType);
 }
 function installCcxtGoClosureDefaultValue(goTranspiler) {
@@ -17245,7 +16989,13 @@ function ccxtGoEndpointHolderBlock(node) {
 }
 var CCXT_GO_ENDPOINT_HOLDER_NAMES = /* @__PURE__ */ new WeakMap();
 function ccxtGoEndpointHolderName(goTranspiler, awaitNode, target) {
-  const cached = CCXT_GO_ENDPOINT_HOLDER_NAMES.get(awaitNode);
+  return ccxtGoRecvHolderName(goTranspiler, awaitNode, target, CCXT_GO_ENDPOINT_HOLDER_NAMES, ccxtGoEndpointHolderName, (n) => {
+    const earlierTarget = ccxtGoEndpointHolderTarget(n);
+    return earlierTarget !== void 0 && goTranspiler.printNode(earlierTarget, 0) === target;
+  }, (n) => ccxtGoEndpointHolderApplies(goTranspiler, n));
+}
+function ccxtGoRecvHolderName(goTranspiler, awaitNode, target, cache, nameOf, sameTarget, applies) {
+  const cached = cache.get(awaitNode);
   if (cached !== void 0) {
     return cached;
   }
@@ -17256,11 +17006,7 @@ function ccxtGoEndpointHolderName(goTranspiler, awaitNode, target) {
       taken.add(String(n.text));
       continue;
     }
-    if (n.kind !== ts.SyntaxKind.AwaitExpression || n === awaitNode || n.pos >= awaitNode.pos) {
-      continue;
-    }
-    const earlierTarget = ccxtGoEndpointHolderTarget(n);
-    if (earlierTarget === void 0 || goTranspiler.printNode(earlierTarget, 0) !== target) {
+    if (n.kind !== ts.SyntaxKind.AwaitExpression || n === awaitNode || n.pos >= awaitNode.pos || !sameTarget(n)) {
       continue;
     }
     const block = ccxtGoEndpointHolderBlock(n);
@@ -17268,15 +17014,15 @@ function ccxtGoEndpointHolderName(goTranspiler, awaitNode, target) {
     for (let current = awaitNode; current !== void 0 && !visible; current = current.parent) {
       visible = current === block;
     }
-    if (visible && ccxtGoEndpointHolderApplies(goTranspiler, n)) {
-      taken.add(ccxtGoEndpointHolderName(goTranspiler, n, target));
+    if (visible && applies(n)) {
+      taken.add(nameOf(goTranspiler, n, target));
     }
   }
   let name = target + "Recv";
-  for (let n = 2; taken.has(name); n++) {
-    name = target + "Recv" + n;
+  for (let k = 2; taken.has(name); k++) {
+    name = target + "Recv" + k;
   }
-  CCXT_GO_ENDPOINT_HOLDER_NAMES.set(awaitNode, name);
+  cache.set(awaitNode, name);
   return name;
 }
 var CCXT_GO_ASYNC_LIST_PRODUCER_PROOF = /* @__PURE__ */ new WeakMap();
@@ -17397,35 +17143,15 @@ function ccxtGoAsyncListTarget(goTranspiler, awaitNode) {
 }
 var CCXT_GO_ASYNC_LIST_HOLDER_NAMES = /* @__PURE__ */ new WeakMap();
 function ccxtGoAsyncListHolderName(goTranspiler, awaitNode, target) {
-  const cached = CCXT_GO_ASYNC_LIST_HOLDER_NAMES.get(awaitNode);
-  if (cached !== void 0) {
-    return cached;
-  }
-  const scope = goTranspiler.goEnclosingFunction(awaitNode);
-  const taken = /* @__PURE__ */ new Set();
-  for (const n of scope === void 0 ? [] : goTranspiler.goDescendantsOf(scope)) {
-    if (n.kind === ts.SyntaxKind.Identifier) {
-      taken.add(String(n.text));
-      continue;
-    }
-    if (n.kind !== ts.SyntaxKind.AwaitExpression || n === awaitNode || n.pos >= awaitNode.pos || ccxtGoAsyncListTarget(goTranspiler, n) !== target) {
-      continue;
-    }
-    const block = ccxtGoEndpointHolderBlock(n);
-    let visible = false;
-    for (let current = awaitNode; current !== void 0 && !visible; current = current.parent) {
-      visible = current === block;
-    }
-    if (visible && ccxtGoAsyncListReceive(goTranspiler, n, "ListTyped(PanicOnError(" + goTranspiler.printNode(n, 0).trim() + "))") !== void 0) {
-      taken.add(ccxtGoAsyncListHolderName(goTranspiler, n, target));
-    }
-  }
-  let name = target + "Recv";
-  for (let k = 2; taken.has(name); k++) {
-    name = target + "Recv" + k;
-  }
-  CCXT_GO_ASYNC_LIST_HOLDER_NAMES.set(awaitNode, name);
-  return name;
+  return ccxtGoRecvHolderName(
+    goTranspiler,
+    awaitNode,
+    target,
+    CCXT_GO_ASYNC_LIST_HOLDER_NAMES,
+    ccxtGoAsyncListHolderName,
+    (n) => ccxtGoAsyncListTarget(goTranspiler, n) === target,
+    (n) => ccxtGoAsyncListReceive(goTranspiler, n, "ListTyped(PanicOnError(" + goTranspiler.printNode(n, 0).trim() + "))") !== void 0
+  );
 }
 function ccxtGoAsyncListHolderLines(goTranspiler, awaitNode, target, lead, wrapped) {
   const recv = ccxtGoAsyncListReceive(goTranspiler, awaitNode, wrapped);
@@ -18353,6 +18079,25 @@ function ccxtGoTupleElementMemo(goTranspiler, family, element, compute) {
   }
   return cache.get(element);
 }
+function ccxtGoBindingElementIsRebound(scope, element, name, rebinds) {
+  let rebound = false;
+  const visit = (n) => {
+    if (rebound) {
+      return;
+    }
+    if (n !== element && n.kind === ts.SyntaxKind.BindingElement && bindingMentionsName(n.name, name)) {
+      rebound = true;
+      return;
+    }
+    if (isIdentifierNamed(n, name) && n !== element.name && rebinds(n)) {
+      rebound = true;
+      return;
+    }
+    n?.forEachChild(visit);
+  };
+  scope?.forEachChild(visit);
+  return rebound;
+}
 function ccxtGoTupleParamsElementType(goTranspiler, element) {
   return ccxtGoTupleElementMemo(goTranspiler, "params", element, () => ccxtGoTupleParamsElementTypeUncached(goTranspiler, element));
 }
@@ -18372,24 +18117,7 @@ function ccxtGoTupleParamsElementTypeUncached(goTranspiler, element) {
   }
   const name = element.name.text;
   const scope = goTranspiler.goEnclosingFunction(element);
-  let rebound = false;
-  const visit = (n) => {
-    if (rebound) {
-      return;
-    }
-    if (n !== element && n.kind === ts.SyntaxKind.BindingElement && bindingMentionsName(n.name, name)) {
-      rebound = true;
-      return;
-    }
-    if (isIdentifierNamed(n, name) && n !== element.name && isDestructuringTarget(n)) {
-      rebound = true;
-      return;
-    }
-    n?.forEachChild(visit);
-  };
-  if (scope !== void 0) {
-    scope?.forEachChild(visit);
-  }
+  const rebound = ccxtGoBindingElementIsRebound(scope, element, name, (n) => isDestructuringTarget(n));
   if (rebound) {
     return void 0;
   }
@@ -20407,18 +20135,7 @@ function ccxtGoTernaryLiftJoin(goTranspiler, declaration, literal2) {
     return void 0;
   }
   const varName = declaration.name.text;
-  let unproven = false;
-  const visit = (n) => {
-    if (unproven) {
-      return;
-    }
-    if (n.kind === ts.SyntaxKind.Identifier && n.text === varName && n !== declaration.name) {
-      unproven = !ccxtGoClosureReadIsSafe(goTranspiler, n, varName);
-      return;
-    }
-    n?.forEachChild(visit);
-  };
-  scope?.forEachChild(visit);
+  const unproven = ccxtGoSomeUseOf(scope, varName, declaration.name, (n) => !ccxtGoClosureReadIsSafe(goTranspiler, n, varName));
   if (unproven || goTranspiler.goTypeNameIsShadowed(scope, joinType) || !goTranspiler.goLocalIsSafeToType(scope, declaration, varName, joinType)) {
     return void 0;
   }
@@ -20498,18 +20215,7 @@ function installCcxtGoTernaryMapJoin(goTranspiler) {
       return printed;
     }
     const varName = declaration.name.text;
-    let unproven = false;
-    const visit = (n) => {
-      if (unproven) {
-        return;
-      }
-      if (n.kind === ts.SyntaxKind.Identifier && n.text === varName && n !== declaration.name) {
-        unproven = ccxtGoProducerUseRebinds(n);
-        return;
-      }
-      n?.forEachChild(visit);
-    };
-    scope?.forEachChild(visit);
+    const unproven = ccxtGoSomeUseOf(scope, varName, declaration.name, (n) => ccxtGoProducerUseRebinds(n));
     const mapType = CCXT_GO_PRODUCER_DICT_TYPE;
     if (unproven || goTranspiler.goTypeNameIsShadowed(scope, mapType) || !goTranspiler.goLocalIsSafeToType(scope, declaration, varName, mapType)) {
       return printed;
@@ -20712,25 +20418,13 @@ function ccxtGoTupleParamsRebindIsMap(goTranspiler, n) {
   return slot !== void 0 && (slot < 0 || ccxtGoProducerArgIsMap(goTranspiler, assignment.right.arguments[slot]));
 }
 function ccxtGoTupleParamsRebindLocalIsSafe(goTranspiler, scope, declaration, varName) {
-  if (scope === void 0 || declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer?.kind !== ts.SyntaxKind.ObjectLiteralExpression) {
-    return false;
-  }
-  let rebinds = 0;
-  const unsafe = goTranspiler.hasNodeWhere(scope, (n) => {
-    if (n.kind !== ts.SyntaxKind.Identifier || n.text !== varName || n === declaration.name) {
-      return false;
-    }
-    const parent = n.parent;
-    if (parent?.kind === ts.SyntaxKind.ArrayLiteralExpression && ccxtGoTupleParamsRebindIsMap(goTranspiler, n)) {
-      rebinds += 1;
-      return false;
-    }
-    if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n && parent.operatorToken?.kind === ts.SyntaxKind.EqualsToken) {
-      return goTranspiler.goTypeOfInitializer(parent.right, goTranspiler.printNode(parent.right, 0)) !== "map[string]any";
-    }
-    return ccxtGoWriteSiteShippedVeto(goTranspiler, n, parent, "map[string]any");
-  });
-  return !unsafe && rebinds > 0;
+  return ccxtGoRebindLocalIsSafe(
+    goTranspiler,
+    scope,
+    declaration,
+    varName,
+    (n) => n.parent?.kind === ts.SyntaxKind.ArrayLiteralExpression && ccxtGoTupleParamsRebindIsMap(goTranspiler, n)
+  );
 }
 function installCcxtGoTupleParamsRebind(goTranspiler) {
   if (goTranspiler === void 0 || goTranspiler.__ccxtGoTupleParamsRebindInstalled || typeof goTranspiler.goLocalIsSafeToType !== "function" || typeof goTranspiler.hasNodeWhere !== "function") {
@@ -21138,22 +20832,7 @@ function ccxtGoJoinedParamsLocal(goTranspiler, node) {
   }
   const name = element.name.text;
   const scope = goTranspiler.goEnclosingFunction(element);
-  let rebound = false;
-  const visit = (n) => {
-    if (rebound) {
-      return;
-    }
-    if (n !== element && n.kind === ts.SyntaxKind.BindingElement && bindingMentionsName(n.name, name)) {
-      rebound = true;
-      return;
-    }
-    if (isIdentifierNamed(n, name) && n !== element.name && (isDestructuringTarget(n) || ccxtGoProducerUseRebinds(n))) {
-      rebound = true;
-      return;
-    }
-    n?.forEachChild(visit);
-  };
-  scope?.forEachChild(visit);
+  const rebound = ccxtGoBindingElementIsRebound(scope, element, name, (n) => isDestructuringTarget(n) || ccxtGoProducerUseRebinds(n));
   return !rebound && scope !== void 0;
 }
 function installCcxtGoTupleResults(goTranspiler) {
@@ -21315,25 +20994,35 @@ function selfMapWrite(goTranspiler, right, declaration) {
   return same ? callee.name.text : void 0;
 }
 function selfMapWritesAreSafe(goTranspiler, scope, declaration, varName) {
+  return goMapLocalWritesAreSafe(
+    goTranspiler,
+    scope,
+    declaration,
+    varName,
+    (right) => selfMapWrite(goTranspiler, right, declaration) !== void 0 ? "counted" : void 0
+  );
+}
+function goMapLocalWritesAreSafe(goTranspiler, scope, declaration, varName, classify) {
   if (scope === void 0 || declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer?.kind !== ts.SyntaxKind.ObjectLiteralExpression || declaration.name?.kind !== ts.SyntaxKind.Identifier || typeof goTranspiler.hasNodeWhere !== "function") {
     return false;
   }
-  let selfWrites = 0;
+  let counted = 0;
   const unsafe = goTranspiler.hasNodeWhere(scope, (n) => {
     if (n.kind !== ts.SyntaxKind.Identifier || n.text !== varName || n === declaration.name) {
       return false;
     }
     const parent = n.parent;
     if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n && parent.operatorToken?.kind === ts.SyntaxKind.EqualsToken) {
-      if (selfMapWrite(goTranspiler, parent.right, declaration) !== void 0) {
-        selfWrites += 1;
+      const kind = classify(parent.right);
+      if (kind !== void 0) {
+        counted += kind === "counted" ? 1 : 0;
         return false;
       }
       return parent.right?.kind !== ts.SyntaxKind.ObjectLiteralExpression;
     }
     return ccxtGoWriteSiteShippedVeto(goTranspiler, n, parent, "map[string]any");
   });
-  if (unsafe || selfWrites === 0) {
+  if (unsafe || counted === 0) {
     return false;
   }
   goTranspiler.selfMapWriteTypedLocals ??= /* @__PURE__ */ new Set();
@@ -21495,33 +21184,12 @@ function b02NeverNilMapLocal(goTranspiler, declaration) {
   return declaration?.kind === ts.SyntaxKind.VariableDeclaration && declaration.name?.kind === ts.SyntaxKind.Identifier && declaration.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression && goTranspiler.goDeclaredTypeOfIdentifier(declaration.name) === "map[string]any";
 }
 function b02SelfMapWritesAreSafe(goTranspiler, scope, declaration, varName) {
-  if (scope === void 0 || declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer?.kind !== ts.SyntaxKind.ObjectLiteralExpression || declaration.name?.kind !== ts.SyntaxKind.Identifier || typeof goTranspiler.hasNodeWhere !== "function") {
-    return false;
-  }
-  let balanceWrites = 0;
-  const unsafe = goTranspiler.hasNodeWhere(scope, (n) => {
-    if (n.kind !== ts.SyntaxKind.Identifier || n.text !== varName || n === declaration.name) {
-      return false;
+  return goMapLocalWritesAreSafe(goTranspiler, scope, declaration, varName, (right) => {
+    if (b02SafeBalanceOfLocal(goTranspiler, right) === declaration) {
+      return "counted";
     }
-    const parent = n.parent;
-    if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n && parent.operatorToken?.kind === ts.SyntaxKind.EqualsToken) {
-      if (b02SafeBalanceOfLocal(goTranspiler, parent.right) === declaration) {
-        balanceWrites += 1;
-        return false;
-      }
-      if (selfMapWrite(goTranspiler, parent.right, declaration) !== void 0) {
-        return false;
-      }
-      return parent.right?.kind !== ts.SyntaxKind.ObjectLiteralExpression;
-    }
-    return ccxtGoWriteSiteShippedVeto(goTranspiler, n, parent, "map[string]any");
+    return selfMapWrite(goTranspiler, right, declaration) !== void 0 ? "allowed" : void 0;
   });
-  if (unsafe || balanceWrites === 0) {
-    return false;
-  }
-  goTranspiler.selfMapWriteTypedLocals ??= /* @__PURE__ */ new Set();
-  goTranspiler.selfMapWriteTypedLocals.add(declaration.getSourceFile().fileName + ":" + declaration.pos);
-  return true;
 }
 function installB02SafeBalanceLocals(goTranspiler) {
   if (goTranspiler === void 0 || goTranspiler.__safeBalanceLocalsInstalled || !goTranspiler.__selfMapWritesInstalled || typeof goTranspiler.goSafeDictLocalUnbox !== "function" || typeof goTranspiler.goSafeDictUnboxValue !== "function" || typeof goTranspiler.goDeclaredLocalTypeIfSafe !== "function") {
@@ -21675,18 +21343,7 @@ function installClosureNumericDefault(goTranspiler) {
       return printed;
     }
     const varName = declaration.name.text;
-    let unproven = false;
-    const visit = (n) => {
-      if (unproven) {
-        return;
-      }
-      if (n.kind === ts.SyntaxKind.Identifier && n.text === varName && n !== declaration.name) {
-        unproven = !goClosureDefaultArithReadIsSafe(goTranspiler, n, varName);
-        return;
-      }
-      n?.forEachChild(visit);
-    };
-    scope.forEachChild(visit);
+    const unproven = ccxtGoSomeUseOf(scope, varName, declaration.name, (n) => !goClosureDefaultArithReadIsSafe(goTranspiler, n, varName));
     if (unproven || goTranspiler.goTypeNameIsShadowed(scope, valueType) || !goTranspiler.goLocalIsSafeToType(scope, declaration, varName, valueType)) {
       return printed;
     }
@@ -22634,12 +22291,7 @@ function goCallSiteDerivedType(go, param) {
   }
   return void 0;
 }
-function installCcxtGoParamTypes(goTranspiler) {
-  const flag = "goCallSiteParamTypesInstalled";
-  const current = goTranspiler.goNativeParameterType;
-  if (current?.[flag] === true) {
-    return current;
-  }
+function goWrapParamTypeHook(goTranspiler, flag, derive) {
   const original = goTranspiler.goNativeParameterType;
   const cache = /* @__PURE__ */ new Map();
   const inProgress = /* @__PURE__ */ new Set();
@@ -22657,7 +22309,7 @@ function installCcxtGoParamTypes(goTranspiler) {
     inProgress.add(param);
     let derived;
     try {
-      derived = goCallSiteDerivedType(this, param);
+      derived = derive(this, param);
     } finally {
       inProgress.delete(param);
     }
@@ -22667,6 +22319,14 @@ function installCcxtGoParamTypes(goTranspiler) {
   native[flag] = true;
   goTranspiler.goNativeParameterType = native;
   return native;
+}
+function installCcxtGoParamTypes(goTranspiler) {
+  const flag = "goCallSiteParamTypesInstalled";
+  const current = goTranspiler.goNativeParameterType;
+  if (current?.[flag] === true) {
+    return current;
+  }
+  return goWrapParamTypeHook(goTranspiler, flag, goCallSiteDerivedType);
 }
 var GO_CALL_SITE_PARAMS_TEST_BASE = `export type Dict = { [key: string]: any };
 export type Str = string | undefined;
@@ -22920,33 +22580,7 @@ function installCcxtGoDictParams(goTranspiler) {
   if (current?.[flag] === true) {
     return current;
   }
-  const original = goTranspiler.goNativeParameterType;
-  const cache = /* @__PURE__ */ new Map();
-  const inProgress = /* @__PURE__ */ new Set();
-  const native = function(param) {
-    const answer = original.call(this, param);
-    if (answer !== void 0) {
-      return answer;
-    }
-    if (cache.has(param)) {
-      return cache.get(param);
-    }
-    if (inProgress.has(param)) {
-      return void 0;
-    }
-    inProgress.add(param);
-    let derived;
-    try {
-      derived = goDictParamDerived(this, param);
-    } finally {
-      inProgress.delete(param);
-    }
-    cache.set(param, derived);
-    return derived;
-  };
-  native[flag] = true;
-  goTranspiler.goNativeParameterType = native;
-  return native;
+  return goWrapParamTypeHook(goTranspiler, flag, goDictParamDerived);
 }
 function goDictParamTypesSelfTest() {
   const problems = [];
@@ -23033,33 +22667,7 @@ function installCcxtGoGb05ParamTypes(goTranspiler) {
   if (current?.[flag] === true) {
     return current;
   }
-  const original = goTranspiler.goNativeParameterType;
-  const cache = /* @__PURE__ */ new Map();
-  const inProgress = /* @__PURE__ */ new Set();
-  const native = function(param) {
-    const answer = original.call(this, param);
-    if (answer !== void 0) {
-      return answer;
-    }
-    if (cache.has(param)) {
-      return cache.get(param);
-    }
-    if (inProgress.has(param)) {
-      return void 0;
-    }
-    inProgress.add(param);
-    let derived;
-    try {
-      derived = goScalarParamDerived(this, param);
-    } finally {
-      inProgress.delete(param);
-    }
-    cache.set(param, derived);
-    return derived;
-  };
-  native[flag] = true;
-  goTranspiler.goNativeParameterType = native;
-  return native;
+  return goWrapParamTypeHook(goTranspiler, flag, goScalarParamDerived);
 }
 var GO_PARSE_FRAME_TEST_BASE = `export type Dict = { [key: string]: any };
 export class Exchange {
@@ -23330,33 +22938,7 @@ function installCcxtGoGb11HandleErrorsCode(goTranspiler) {
   };
   args[flag] = true;
   goTranspiler.goUnifiedStringCallArgs = args;
-  const original = goTranspiler.goNativeParameterType;
-  const cache = /* @__PURE__ */ new Map();
-  const inProgress = /* @__PURE__ */ new Set();
-  const native = function(param) {
-    const answer = original.call(this, param);
-    if (answer !== void 0) {
-      return answer;
-    }
-    if (cache.has(param)) {
-      return cache.get(param);
-    }
-    if (inProgress.has(param)) {
-      return void 0;
-    }
-    inProgress.add(param);
-    let derived;
-    try {
-      derived = gb11Derived(this, param);
-    } finally {
-      inProgress.delete(param);
-    }
-    cache.set(param, derived);
-    return derived;
-  };
-  native[flag] = true;
-  goTranspiler.goNativeParameterType = native;
-  return native;
+  return goWrapParamTypeHook(goTranspiler, flag, gb11Derived);
 }
 var GO_STATUS_CODE_TEST_BASE = `export type Dict = { [key: string]: any };
 export class Exchange {
@@ -24837,7 +24419,7 @@ var GO_TS_SRC_SLICE_STRING_PRODUCERS = [
   /^(?:'[^'\\]*'|"[^"\\]*"|`[^`\\]*`)$/
 ];
 var GO_TS_SRC_MAP_PRODUCERS = goThisCallPatterns(["extend", "deepExtend", "keysort", "indexBy", "groupBy"]);
-function goBalancedCallArgs(text, open) {
+function goBalancedArgs(text, open, opens, closes) {
   const args = [];
   let depth = 0;
   let current = "";
@@ -24867,14 +24449,14 @@ function goBalancedCallArgs(text, open) {
       }
       continue;
     }
-    if (ch === "(") {
+    if (opens.includes(ch)) {
       depth++;
       if (depth > 1) {
         current += ch;
       }
       continue;
     }
-    if (ch === ")") {
+    if (closes.includes(ch)) {
       depth--;
       if (depth === 0) {
         if (current.trim().length > 0) {
@@ -24894,62 +24476,11 @@ function goBalancedCallArgs(text, open) {
   }
   return void 0;
 }
+function goBalancedCallArgs(text, open) {
+  return goBalancedArgs(text, open, "(", ")");
+}
 function goBalancedSliceArgs(text, open) {
-  const args = [];
-  let depth = 0;
-  let current = "";
-  let quote;
-  for (let i = open; i < text.length; i++) {
-    const ch = text[i];
-    if (quote !== void 0) {
-      current += ch;
-      if (ch === "\\") {
-        current += text[i + 1] ?? "";
-        i++;
-        continue;
-      }
-      if (ch === quote) {
-        quote = void 0;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === "`") {
-      quote = ch;
-      current += ch;
-      continue;
-    }
-    if (ch === "/" && text[i + 1] === "/") {
-      while (i < text.length && text[i] !== "\n") {
-        i++;
-      }
-      continue;
-    }
-    if (ch === "(" || ch === "[" || ch === "{") {
-      depth++;
-      if (depth > 1) {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === ")" || ch === "]" || ch === "}") {
-      depth--;
-      if (depth === 0) {
-        if (current.trim().length > 0) {
-          args.push(current.trim());
-        }
-        return args;
-      }
-      current += ch;
-      continue;
-    }
-    if (ch === "," && depth === 1) {
-      args.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += ch;
-  }
-  return void 0;
+  return goBalancedArgs(text, open, "([{", ")]}");
 }
 var GO_GETARG_EXCLUDED_POSITIONS = {
   "fetch2": [1, 3],
@@ -26690,18 +26221,15 @@ func New${this.capitalize(this.className)}() *${this.className} {
       if (concat !== void 0) {
         return concat;
       }
-      const pointerAddition = this.goNonNilPointerAdditionText(node, leftText, rightText);
+      const pointerAddition = this.goNonNilPointerOperationText(node, leftText, rightText, " + ", this.goInt64Operand);
       if (pointerAddition !== void 0) {
         return { "goType": "int64", "text": pointerAddition };
       }
     }
-    const pointerSubtraction = this.goNonNilPointerSubtractionText(node, leftText, rightText);
-    if (pointerSubtraction !== void 0) {
-      return { "goType": "int64", "text": pointerSubtraction };
-    }
-    const pointerProduct = this.goNonNilPointerProductText(node, leftText, rightText);
-    if (pointerProduct !== void 0) {
-      return { "goType": "int64", "text": pointerProduct };
+    const pointerOp = { [SyntaxKind5.MinusToken]: [" - ", this.goInt64Operand], [SyntaxKind5.AsteriskToken]: [" * ", this.goInt64ProductOperand] }[node.operatorToken.kind];
+    const pointerArithmetic = pointerOp === void 0 ? void 0 : this.goNonNilPointerOperationText(node, leftText, rightText, pointerOp[0], pointerOp[1]);
+    if (pointerArithmetic !== void 0) {
+      return { "goType": "int64", "text": pointerArithmetic };
     }
     const pointerDivision = this.goNonNilPointerDivisionText(node, leftText, rightText);
     if (pointerDivision !== void 0) {
@@ -26732,19 +26260,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return { goType, "text": this.goNativeBinaryText(node, this.SupportedKindNames[op], leftText, rightText) };
   }
-  // `a - b` where each side is a non-nil `*int64` (dereferenced), an int64 value or an int literal and at
-  // least one side is a pointer: Subtract's integral result is the same int64 box
-  goNonNilPointerSubtractionText(node, leftText, rightText) {
-    if (node.operatorToken.kind !== SyntaxKind5.MinusToken) {
-      return void 0;
-    }
-    const left = this.goInt64Operand(node.left, leftText);
-    const right = left === void 0 ? void 0 : this.goInt64Operand(node.right, rightText);
-    if (right === void 0 || !left.pointer && !right.pointer) {
-      return void 0;
-    }
-    return left.text + " - " + right.text;
-  }
   goInt64Operand(node, printedText) {
     const text = this.goUnwrapPrintedParens(printedText.trim());
     if (node?.kind === SyntaxKind5.ParenthesizedExpression) {
@@ -26767,28 +26282,14 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return void 0;
   }
-  // `a + b` over the same int-kind operands as the subtraction: Add's int64 row returns the
-  // same int64 sum, so a non-nil `*int64` leaf plus an int64 value or int literal is native
-  goNonNilPointerAdditionText(node, leftText, rightText) {
-    const left = this.goInt64Operand(node.left, leftText);
-    const right = left === void 0 ? void 0 : this.goInt64Operand(node.right, rightText);
+  // `left <op> right` over int64 operands when at least one side is a non-nil pointer
+  goNonNilPointerOperationText(node, leftText, rightText, op, operandOf) {
+    const left = operandOf.call(this, node.left, leftText);
+    const right = left === void 0 ? void 0 : operandOf.call(this, node.right, rightText);
     if (right === void 0 || !left.pointer && !right.pointer) {
       return void 0;
     }
-    return left.text + " + " + right.text;
-  }
-  // `a * b` over the same operands as the subtraction (or a nested int64 product): Multiply's
-  // Int-kind branch returns the same wrapping int64 product
-  goNonNilPointerProductText(node, leftText, rightText) {
-    if (node.operatorToken.kind !== SyntaxKind5.AsteriskToken) {
-      return void 0;
-    }
-    const left = this.goInt64ProductOperand(node.left, leftText);
-    const right = left === void 0 ? void 0 : this.goInt64ProductOperand(node.right, rightText);
-    if (right === void 0 || !left.pointer && !right.pointer) {
-      return void 0;
-    }
-    return left.text + " * " + right.text;
+    return left.text + op + right.text;
   }
   goInt64ProductOperand(node, printedText) {
     let inner = node;
@@ -29806,15 +29307,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // ---- BaseExchange.orderbooks is the typed OrderBookCache (go/v4/exchange_orderbook_cache.go) -------
   // `this.orderbooks`: the BaseExchange field declared `Dictionary<WsOrderBook>`, read on the dispatch loop
   goWsOrderbooksField(node) {
-    if (this.goOrderBook === void 0 || node?.kind !== SyntaxKind5.PropertyAccessExpression || node.expression?.kind !== SyntaxKind5.ThisKeyword) {
-      return false;
-    }
-    try {
-      const declarations = this.getChecker().getSymbolAtLocation(node.name)?.declarations?.map((d) => d.resolve()) ?? [];
-      return declarations.length > 0 && declarations.every((d) => d.kind === SyntaxKind5.PropertyDeclaration && /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.[\w.-]+)?\.ts$/.test(String(d.getSourceFile().fileName).replace(/\\/g, "/")) && (d.type?.getText?.() ?? "").trim() === "Dictionary<WsOrderBook>");
-    } catch (e) {
-      return false;
-    }
+    return this.goOrderBook !== void 0 && this.goBaseExchangeFieldOfType(node, "Dictionary<WsOrderBook>");
   }
   // a read of one cache entry: `this.orderbooks[k]`, `this.safeValue (this.orderbooks, k[, dflt])`, `this.safeDict (this.orderbooks, k)`
   goWsOrderbooksReadParts(node) {
@@ -29841,9 +29334,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     } catch (e) {
       return void 0;
     }
-  }
-  goWsOrderbooksReadText(node) {
-    return this.goWsCacheReadText(node);
   }
   // a write that keeps a book local an OrderBookInterface: a book constructor or nil
   goOrderBookWriteKeepsType(goType, right) {
@@ -30350,12 +29840,16 @@ ${iden}}`;
   }
   // `this.trades`: the BaseExchange field declared `Dictionary<ArrayCache>`, the Go TradesCache map of WsArrayCache
   goWsTradesField(node) {
+    return this.goBaseExchangeFieldOfType(node, "Dictionary<ArrayCache>");
+  }
+  // `this.<field>` declared only in base Exchange.ts with exactly the type text `typeText`
+  goBaseExchangeFieldOfType(node, typeText) {
     if (node?.kind !== SyntaxKind5.PropertyAccessExpression || node.expression?.kind !== SyntaxKind5.ThisKeyword) {
       return false;
     }
     try {
       const declarations = this.getChecker().getSymbolAtLocation(node.name)?.declarations?.map((d) => d.resolve()) ?? [];
-      return declarations.length > 0 && declarations.every((d) => d.kind === SyntaxKind5.PropertyDeclaration && /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.[\w.-]+)?\.ts$/.test(String(d.getSourceFile().fileName).replace(/\\/g, "/")) && (d.type?.getText?.() ?? "").trim() === "Dictionary<ArrayCache>");
+      return declarations.length > 0 && declarations.every((d) => d.kind === SyntaxKind5.PropertyDeclaration && /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.[\w.-]+)?\.ts$/.test(String(d.getSourceFile().fileName).replace(/\\/g, "/")) && (d.type?.getText?.() ?? "").trim() === typeText);
     } catch (e) {
       return false;
     }
@@ -30380,10 +29874,6 @@ ${iden}}`;
     } catch (e) {
       return false;
     }
-  }
-  // `this.trades[k]` / `this.safeValue (this.trades, k)` print the cache's own Get; `k in this.trades` its Has
-  goWsTradesReadText(node) {
-    return this.goWsCacheReadText(node);
   }
   // a nil-declared local (`let c; if (..) { c = this.trades[k]; }`) whose every write is a ws cache or nil
   goNilInitCacheLocalType(declaration) {
@@ -30541,13 +30031,9 @@ ${iden}}`;
     if (wsAppend !== void 0) {
       return wsAppend;
     }
-    const tradesRead = this.goWsTradesReadText(node);
-    if (tradesRead !== void 0) {
-      return tradesRead;
-    }
-    const orderbooksRead = this.goWsOrderbooksReadText(node);
-    if (orderbooksRead !== void 0) {
-      return orderbooksRead;
+    const wsCacheRead = this.goWsCacheReadText(node);
+    if (wsCacheRead !== void 0) {
+      return wsCacheRead;
     }
     const tickersFilter = this.goWsTickersFilterText(node);
     if (tickersFilter !== void 0) {
@@ -34247,19 +33733,19 @@ ${iden}}`;
         continue;
       }
       const test = this.goUnwrapParenthesizedNode(sibling.expression);
-      if ((this.goIsNilTestOf(test, ident) || this.goOrChainHasNilTestOf(test, ident)) && this.goStatementAlwaysExits(sibling.thenStatement)) {
+      if ((this.goNilComparisonOf(test, ident, SyntaxKind5.EqualsEqualsToken, SyntaxKind5.EqualsEqualsEqualsToken) || this.goOrChainHasNilTestOf(test, ident)) && this.goStatementAlwaysExits(sibling.thenStatement)) {
         return true;
       }
     }
     return false;
   }
-  // `k === null/undefined` (the helper's false branch is the nil key)
-  goIsNilTestOf(node, ident) {
+  // `ident <op> nil` / `nil <op> ident` for one of the two given operators
+  goNilComparisonOf(node, ident, loose, strict) {
     if (node?.kind !== SyntaxKind5.BinaryExpression) {
       return false;
     }
     const op = node.operatorToken?.kind;
-    if (op !== SyntaxKind5.EqualsEqualsToken && op !== SyntaxKind5.EqualsEqualsEqualsToken) {
+    if (op !== loose && op !== strict) {
       return false;
     }
     return this.goIsSameSymbol(node.left, ident) && this.goIsNilLiteral(node.right) || this.goIsSameSymbol(node.right, ident) && this.goIsNilLiteral(node.left);
@@ -34918,7 +34404,7 @@ ${iden}}
     }
     const dict = this.goUnwrapParenthesizedNode(read.right);
     const keyNode = this.goUnwrapParenthesizedNode(read.left);
-    if (keyNode?.kind !== SyntaxKind5.Identifier || this.goDeclaredTypeOfIdentifier(keyNode) !== "*string" || !this.goIsNonNilTestOf(guard, keyNode)) {
+    if (keyNode?.kind !== SyntaxKind5.Identifier || this.goDeclaredTypeOfIdentifier(keyNode) !== "*string" || !this.goNilComparisonOf(guard, keyNode, SyntaxKind5.ExclamationEqualsToken, SyntaxKind5.ExclamationEqualsEqualsToken)) {
       return void 0;
     }
     if (this.goInOpPointerKeyProvenNonNil(node, keyNode)) {
@@ -35890,18 +35376,6 @@ ${indent}}`);
     }
     return `(${leftText} == nil || (${rightText} != nil && ${lv} <= ${rv}))`;
   }
-  // `x !== undefined` / `x != null` on that identifier: the printer writes the Go
-  // `x != nil` test for it, so an enclosing one proves the pointer present
-  goIsNonNilTestOf(node, ident) {
-    if (node?.kind !== SyntaxKind5.BinaryExpression) {
-      return false;
-    }
-    const op = node.operatorToken?.kind;
-    if (op !== SyntaxKind5.ExclamationEqualsToken && op !== SyntaxKind5.ExclamationEqualsEqualsToken) {
-      return false;
-    }
-    return this.goIsSameSymbol(node.left, ident) && this.goIsNilLiteral(node.right) || this.goIsSameSymbol(node.right, ident) && this.goIsNilLiteral(node.left);
-  }
   // a null/undefined literal, or any expression the checker types as one
   goIsNilLiteral(node) {
     if (node?.kind === SyntaxKind5.NullKeyword || node?.kind === SyntaxKind5.UndefinedKeyword) {
@@ -35970,7 +35444,7 @@ ${indent}}`);
     if (inner === void 0) {
       return false;
     }
-    if (this.goIsNonNilTestOf(inner, ident)) {
+    if (this.goNilComparisonOf(inner, ident, SyntaxKind5.ExclamationEqualsToken, SyntaxKind5.ExclamationEqualsEqualsToken)) {
       return true;
     }
     if (inner.kind !== SyntaxKind5.BinaryExpression || inner.operatorToken?.kind !== SyntaxKind5.AmpersandAmpersandToken) {
@@ -39677,13 +39151,9 @@ ${ind}}
     }
   }
   printElementAccessExpression(node, identation) {
-    const tradesRead = this.goWsTradesReadText(node);
-    if (tradesRead !== void 0) {
-      return tradesRead;
-    }
-    const orderbooksRead = this.goWsOrderbooksReadText(node);
-    if (orderbooksRead !== void 0) {
-      return orderbooksRead;
+    const wsCacheRead = this.goWsCacheReadText(node);
+    if (wsCacheRead !== void 0) {
+      return wsCacheRead;
     }
     const bookSide = this.goOrderBookSideRead(node);
     if (bookSide !== void 0) {
@@ -39865,7 +39335,11 @@ ${ind}}
     if (scope === void 0) {
       return false;
     }
-    const isRow = (v) => v === void 0 || v.kind === SyntaxKind5.Identifier && v.text === "undefined" || v.kind === SyntaxKind5.CallExpression && v.expression?.kind === SyntaxKind5.PropertyAccessExpression && v.expression.expression?.kind === SyntaxKind5.ThisKeyword && v.expression.name?.text === "market";
+    return this.goRowLocalKeepsRow(scope, declaration, ["market"]);
+  }
+  // the local starts and stays nil or a `this.<rowCallee>(..)` row; a destructuring write vetoes
+  goRowLocalKeepsRow(scope, declaration, rowCallees) {
+    const isRow = (v) => v === void 0 || v.kind === SyntaxKind5.Identifier && v.text === "undefined" || v.kind === SyntaxKind5.CallExpression && v.expression?.kind === SyntaxKind5.PropertyAccessExpression && v.expression.expression?.kind === SyntaxKind5.ThisKeyword && rowCallees.includes(v.expression.name?.text);
     let ok = isRow(declaration.initializer);
     const name = declaration.name?.text;
     const visit = (n) => {
@@ -40157,22 +39631,7 @@ GoTranspiler.prototype.goCurrencyRowLocal = function(node) {
   if (scope === void 0) {
     return false;
   }
-  const isRow = (v) => v === void 0 || v.kind === SyntaxKind5.Identifier && v.text === "undefined" || v.kind === SyntaxKind5.CallExpression && v.expression?.kind === SyntaxKind5.PropertyAccessExpression && v.expression.expression?.kind === SyntaxKind5.ThisKeyword && ["currency", "safeCurrency"].includes(v.expression.name?.text);
-  let ok = isRow(declaration.initializer);
-  const name = declaration.name?.text;
-  const visit = (n) => {
-    if (!ok) {
-      return;
-    }
-    if (n.kind === SyntaxKind5.BinaryExpression && n.left?.kind === SyntaxKind5.Identifier && n.left.text === name && n.operatorToken?.kind === SyntaxKind5.EqualsToken && this.goIdentifierRefersToDeclaration(n.left, declaration)) {
-      ok = isRow(n.right);
-    } else if (n.kind === SyntaxKind5.ArrayLiteralExpression && n.parent?.kind === SyntaxKind5.BinaryExpression && n.parent.left === n && n.elements.some((e) => e.kind === SyntaxKind5.Identifier && e.text === name)) {
-      ok = false;
-    }
-    n.forEachChild(visit);
-  };
-  scope.forEachChild(visit);
-  return ok;
+  return this.goRowLocalKeepsRow(scope, declaration, ["currency", "safeCurrency"]);
 };
 GoTranspiler.prototype.goRequiredParameterNativeType = function(fn, param, index) {
   const asyncMethod = this.isAsyncFunction(fn);
@@ -40240,7 +39699,6 @@ GoTranspiler.prototype.goAnnotateMethodTypes = function(methodsTypes, file) {
 };
 var GO_ASYNC_PARAMETER_TYPES = ["map[string]any", "string"];
 var GO_NULLABLE_PARAM_ALIASES = /^(?:Str|Int|Num|Bool)$/;
-var GO_ASYNC_PARAM_DYNAMIC_CACHE = /* @__PURE__ */ new WeakMap();
 GoTranspiler.prototype.goCallSiteParameterCandidates = function(fn, param, index) {
   if (this.goHasDynamicCallee(fn, fn.name.text)) {
     return [];
@@ -40305,19 +39763,7 @@ GoTranspiler.prototype.goFeedsNullableSlot = function(fn, param) {
   return found;
 };
 GoTranspiler.prototype.goHasDynamicCallee = function(fn, name) {
-  const file = fn.getSourceFile();
-  let names = GO_ASYNC_PARAM_DYNAMIC_CACHE.get(file);
-  if (names === void 0) {
-    names = /* @__PURE__ */ new Set();
-    const rx = /\[\s*['"]([A-Za-z_$][\w$]*)['"]\s*\]\s*\(/g;
-    const text = String(file.getFullText());
-    let m;
-    while ((m = rx.exec(text)) !== null) {
-      names.add(m[1]);
-    }
-    GO_ASYNC_PARAM_DYNAMIC_CACHE.set(file, names);
-  }
-  return names.has(name);
+  return goDynamicCallees(fn).has(name);
 };
 GoTranspiler.prototype.goParameterHasNullishDefault = function(body, param) {
   const name = param.name.text;
