@@ -2324,7 +2324,7 @@ export class RustTranspiler extends BaseTranspiler {
                     : `add_element_to_object(${acc}, &${keyStrs[0]}, ${RustTranspiler.cloneIfBareLocal(rhs.trim())})`;
             }
             const nestedKeyWrite = keyStrs.length > 1 ? this.printNestedFieldKeyWrite(left, acc, ((owned) => owned.startsWith('\u0004') ? owned : RustTranspiler.cloneIfBareLocal(owned))(this.rustOwnedArgText(right, rhs.trim()))) : undefined; if (nestedKeyWrite !== undefined) return nestedKeyWrite;
-            const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) ?? this.printReuseDynamicKeyWrite(left, right, rhs) ?? this.printNilMapKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
+            const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) ?? this.printReuseDynamicKeyWrite(left, right, rhs) ?? this.print84dStoreKeyWrite(left, right, rhs) ?? this.printNilMapKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
             const slotNested = keyStrs.length > 1 ? this.printSlotNestedInsert(left, right, this.rustOwnedArgText(right, rhs.trim())) : undefined; if (slotNested !== undefined) return slotNested;
             // the helper takes the value by move: an owned bare local (`Copy`, last use) is marked, the rest cloned on the file text
             // ral-55n: a registered `i64` counter as the written key is the `Int` the boxed counter held (marked closed only below,
@@ -20493,7 +20493,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printDeleteExpression(node, identation) {
-        return this.printBearerDelete(node) ?? this.printWsBookMapDelete(node) ?? this.printWsCacheMapDelete(node) ?? this.printClientHandleDelete(node) ?? this.provenDictFieldDelete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
+        return this.printBearerDelete(node) ?? this.print84dStoreDelete(node) ?? this.printWsBookMapDelete(node) ?? this.printWsCacheMapDelete(node) ?? this.printClientHandleDelete(node) ?? this.provenDictFieldDelete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
     }
 
     printInstanceOfExpression(node, identation) {
@@ -23333,6 +23333,7 @@ export class RustTranspiler extends BaseTranspiler {
         const indexReadUses: any[] = [];
         const aeoWriteUses: any[] = [];
         let listIndexWrites = 0;
+        const store84dWrites: any[] = [];
         // ral-60n: never-null reader initializer (checked once more after the walk: no whole write may follow)
         const neverNullInit = !nilDeclared && allSlot === undefined && init !== undefined && (from === 'dict' || from === 'list')
             && this.rustContainerInitNeverNull(init, from === 'list' ? 'list' : 'map') && this.rustBaseCallNamed(init, RustTranspiler.RUST_NEVER_NULL_TEST_READERS)
@@ -23478,6 +23479,10 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-48b: `x['k'] = v` (statement, one level, literal key, the value not reading x) on a held map: the runtime
             // `add_element_to_object` takes the typed map itself (`impl AddTarget for Dict / Option<Dict>`) and runs the very tag
             // hooks (book meta, ws subscriptions, cache buckets) the boxed `Value::Dict` arm ran; `None` skips as `Null` did
+            // ral-84d R2: `delete x[k]` (a string local key) on the same store copy: native `shift_remove` (no ws tag on `this.options`)
+            if (!extendReuse && !sbAlias && from === 'dict' && this.rust84dStoreDelete(n, init)) return store84dWrites.push(n.parent.parent) > 0 && ++keyWrites > 0 && ++reads > 0;
+            // ral-84d R2: a variable-key write on a defaulted `safeDict (this.options, 'k', {})` copy (an untagged plain store): native insert
+            if (!extendReuse && !sbAlias && from === 'dict' && this.rust84dStoreKeyWrite(n, init)) return keyWriteUses.push(n) > 0 && store84dWrites.push(n.parent.parent) > 0 && ++keyWrites > 0 && ++reads > 0;
             if (!sbAlias && this.rustAeoTargetWrite(n) && !this.rustAeoBoxedNative(n)) return aeoWriteUses.push(n) > 0 && ++reads > 0;
             // ral-50b: `xs[0] = v` (statement, one level, integer literal index) on a never-null list local: the runtime
             // `add_element_to_object` takes the typed list (`impl AddTarget for List`) and writes the index exactly as the boxed
@@ -23691,6 +23696,7 @@ export class RustTranspiler extends BaseTranspiler {
         for (const n of boxedElementUses) this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) || (n.parent?.kind === SyntaxKind.ConditionalExpression && this.rustOwnedLastUse(n, declaration)) ? 'move' : 'share');
         if (extendReuse || neverNullRewrites) this.rustExtendReuseLocals.add(declaration);
         for (const w of reuseProducerWrites) this.rustReuseProducerWrites.add(w);
+        for (const w of store84dWrites) this.rust84dStoreWrites.add(w);
         return from === 'list' ? 'list' : 'dict';
     }
 
@@ -23889,7 +23895,14 @@ export class RustTranspiler extends BaseTranspiler {
         if (isElementAccessExpression(use) && use.argumentExpression === top) return false;
         // a primitive local initialised from the element keeps its element-read scalar rule (reads the boxed receiver)
         if (isVariableDeclaration(use) && use.initializer === top && this.primitiveKindOfType(this.typeOfNodeIfAny(use.name)) !== undefined) return false;
-        if ((this.isWriteBackBindRead(up) && !(top === up && this.rustExplicitWriteBackBind(up))) || !this.isNativeAccessPositionSafe(up) || (top !== up && (this.isWriteBackBindRead(top) || !this.isNativeAccessPositionSafe(top)))) return false;
+        // ral-84d R1: a read inside the value of a list index write on the same local (`xs[i] = f (xs[i])`): that write prints
+        // its value into `__be_tmp` before `add_element_to_object(&mut xs, ..)`, so the read sees the list unchanged
+        let ownWrite: any = undefined;
+        for (let at: any = up.parent; at !== undefined && !isStatement(at); at = at.parent) {
+            if (isBinaryExpression(at) && at.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(at.left) && isIdentifier(at.left.expression)
+                && at.left.expression.text === n.text && this.isNodeInsideNode(up, at.right) && this.rustListIndexLiteralWrite(at.left.expression)) ownWrite = at;
+        }
+        if ((this.isWriteBackBindRead(up) && !(top === up && this.rustExplicitWriteBackBind(up))) || !this.isNativeAccessPositionSafe(up, ownWrite) || (top !== up && (this.isWriteBackBindRead(top) || !this.isNativeAccessPositionSafe(top, ownWrite)))) return false;
         const key: any = this.rustSkipWrappers(up.argumentExpression);
         if (key === undefined || isStringLiteralLikeNode(key)) return false;
         if (isNumericLiteral(key)) return Number.isInteger(Number(key.text)) && Number(key.text) >= 0;
@@ -24691,7 +24704,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isElementAccessExpression(access) || access.expression !== n || !isBinaryExpression(write) || write.left !== access
             || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         const key: any = this.rustSkipWrappers(access.argumentExpression);
-        return key !== undefined && this.rustListIndexIntKey(key) && String(write.getText()).split('\n')[0].length <= 240;
+        if (key === undefined || String(write.getText()).split('\n')[0].length > 240) return false;
+        // ral-84d R1: or an i64 scalar local / `+` `-` of them (a loop counter `i`, `lastIndex = length - 1`): the key prints as
+        // the `Int` the boxed counter held, and `impl AddTarget for List` runs the boxed `Value::Arr` arm on it (same padding,
+        // same no-op for a non-integer key)
+        return this.rustListIndexIntKey(key) || (isIdentifier(key) && (this.rustScalarLocalOf(key)?.kind === 'int' || this.rustValueIntCounter(key)));
     }
 
     /** ral-52e: a list index key proved i64: an integer literal, or `+` / `-` over integer literals and i64 scalar locals (at least one literal);
@@ -24710,6 +24727,94 @@ export class RustTranspiler extends BaseTranspiler {
             return (op === SyntaxKind.PlusToken || op === SyntaxKind.MinusToken) && this.rustListIndexIntKey(node.left, false) && this.rustListIndexIntKey(node.right, false);
         }
         return isIdentifier(node) && this.rustScalarLocalOf(node)?.kind === 'int';
+    }
+
+    /** ral-84d R2: statement writes `x[k] = v` printed as a native insert on a typed `safeDict (this.options, ..)` copy. */
+    private rust84dStoreWrites = new WeakSet<any>();
+
+    /** ral-84d R2: `n[k] = v` (statement, one level, `=`, non-literal key) on `const n = this.safeDict (this.options, 'lit', {})`
+     *  (a base reader, an object-literal default: a map on every path). `this.options` is a plain field the runtime never tags
+     *  (no ws subscription, cache bucket or book id), so the untyped printer already writes it as a native copy-on-write insert
+     *  (printNativeDictInsert); on the typed map the same insert runs without the `if let Value::Dict` (always a map). */
+    rust84dStoreKeyWrite(n: any, init: any): boolean {
+        const access: any = n.parent;
+        const write: any = access?.parent;
+        if (!isElementAccessExpression(access) || access.expression !== n || !isBinaryExpression(write) || write.left !== access
+            || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        if (String(write.getText()).split('\n')[0].length > 200 || !this.rust84dNeverNullMapInit(init)) return false;
+        const key: any = this.rustSkipWrappers(access.argumentExpression);
+        if (key === undefined) return false;
+        const head: any = this.rustSkipWrappers(init.arguments[0]);
+        // R2: the plain `this.options` store (a variable key)
+        const options = head !== undefined && isPropertyAccessExpression(head) && head.expression.kind === SyntaxKind.ThisKeyword && String(head.name.text) === 'options';
+        if (options && isIdentifier(key)) return this.rust84dStoreKeyArg(n, access.argumentExpression) !== undefined;
+        // R3: any never-null map whose untyped write is already the native insert (printNativeDictInsert proved the receiver
+        // a map read off no tagged container: no ws subscription / cache / book route for the helper to take)
+        // (the read's head a local: a call result is left to its own proofs, ral-40h)
+        return head !== undefined && isIdentifier(head) && this.rustAeoBoxedNative(n) && this.rust84dStoreKeyArg(n, access.argumentExpression) !== undefined;
+    }
+
+    /** ral-84d: a base `safeDict*` reader whose default is a map literal (a `Value::Dict` on every path: the typed map holds
+     *  exactly what the box held). */
+    rust84dNeverNullMapInit(init: any): boolean {
+        return init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) && /^safeDict(?:2|N)?$/.test(String(init.expression.name.text))
+            && this.rustBorrowedDictSource(init) && this.rustContainerInitNeverNull(init, 'map');
+    }
+
+    rust84dStoreKeyArg(n: any, keyNode: any): string | undefined {
+        const receiver = this.rustNativeInsertReceiver(n);
+        if (receiver === undefined) return undefined;
+        let keyText = '';
+        try {
+            keyText = this.printNode(keyNode, 0);
+        } catch (e) {
+            return undefined;
+        }
+        return this.rustNativeInsertKeyArg(receiver, keyNode, keyText);
+    }
+
+    /** ral-84d R2: `delete n[k]` (statement) on the `this.options` store copy, `k` a string local printed in the `dkey` form. */
+    rust84dStoreDelete(n: any, init: any): boolean {
+        const access: any = n.parent;
+        const del: any = access?.parent;
+        if (!isElementAccessExpression(access) || access.expression !== n || !isDeleteExpression(del) || del.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const key: any = access.argumentExpression;
+        if (!isIdentifier(key) || this.rustDeclaredNode(key) === this.rustDeclaredNode(n)) return false;
+        const kind = this.rustScalarLocalOf(key)?.kind;
+        if (kind !== 'str' && kind !== 'ostr') return false;
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || String(init.expression.name.text) !== 'safeDict') return false;
+        if (!this.rustBorrowedDictSource(init) || !this.rustContainerInitNeverNull(init, 'map')) return false;
+        const head: any = this.rustSkipWrappers(init.arguments[0]);
+        return head !== undefined && isPropertyAccessExpression(head) && head.expression.kind === SyntaxKind.ThisKeyword && String(head.name.text) === 'options';
+    }
+
+    print84dStoreDelete(node: any): string | undefined {
+        if (!this.rust84dStoreWrites.has(node)) return undefined;
+        const target: any = node.expression;
+        const declaration: any = this.rustDeclaredNode(target.expression);
+        if (declaration === undefined || !this.rustPrintedBorrowed.has(declaration) || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
+        const key: any = target.argumentExpression;
+        const kind = this.rustScalarLocalOf(key)?.kind;
+        const keyName = super.printIdentifier(key);
+        const name = super.transformIdentifier(target.expression, this.ReservedKeywordsReplacements[target.expression.text] ?? target.expression.text);
+        // a `None` key is the boxed `Null` key: `remove` matched no arm and removed nothing
+        return kind === 'str' ? `std::sync::Arc::make_mut(&mut ${name}).shift_remove(${keyName}.as_str())`
+            : `if let Some(__k) = ${keyName}.as_deref() { std::sync::Arc::make_mut(&mut ${name}).shift_remove(__k); }`;
+    }
+
+    print84dStoreKeyWrite(left: any, right: any, valueText: string): string | undefined {
+        const write: any = left.parent;
+        if (!this.rust84dStoreWrites.has(write) || !isIdentifier(left.expression)) return undefined;
+        const declaration: any = this.rustDeclaredNode(left.expression);
+        if (declaration === undefined || !this.rustPrintedBorrowed.has(declaration) || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
+        const keyArg = this.rust84dStoreKeyArg(left.expression, left.argumentExpression);
+        if (keyArg === undefined) return undefined;
+        const name = super.transformIdentifier(left.expression, this.ReservedKeywordsReplacements[left.expression.text] ?? left.expression.text);
+        const value = this.rustPrintedBoolArg(valueText) ? `Value::Bool(${valueText})` : valueText.trim();
+        const insert = (v: string) => `std::sync::Arc::make_mut(&mut ${name}).insert(${keyArg}, ${v})`;
+        const reads = (x: any): boolean => (isIdentifier(x) && x.text === left.expression.text) || (x.forEachChild(reads) ?? false);
+        if (reads(right)) return `{ let __be_tmp = ${value}; ${insert('__be_tmp')}; }`;
+        return insert(RustTranspiler.cloneIfBareLocal(value));
     }
 
     /** ral-48b: `n['k'] = v` (statement, literal non-digit key) whose value does not read `n`. */
@@ -31270,7 +31375,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (this.rustSafeValueKeyReaderUse(n)) { mapReads++; this.rustOptListBoxes.set(n, 'map'); return true; }
                 // every other use reads the list, so it must sit where `Array.isArray (x)` held
                 if (!this.rust80dInListArm(n, declaration, fn)) return false;
-                if (isBinaryExpression(use) || isPropertyAccessExpression(use)) return false;
+                // ral-84d R4: a `.length` read in the list arm reads the held list's slice (Some there: the boxed length)
+                if (isBinaryExpression(use) || (isPropertyAccessExpression(use) && !(use.expression === n && String(use.name.text) === 'length'))) return false;
             }
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
