@@ -10841,7 +10841,10 @@ export class RustTranspiler extends BaseTranspiler {
             const name = super.printIdentifier(self);
             return `(${kind === 'int' ? `Some(${name} as f64)` : `Value::from(${name}).as_f64()`} ${sign} ${this.printNode(partner, 0).trim()}.as_f64())`;
         }
-        if (!isIdentifier(self) || !isIdentifier(partner) || this.rustScalarIdentifierKind(self) === undefined) return undefined;
+        if (!isIdentifier(self) || this.rustScalarIdentifierKind(self) === undefined) return undefined;
+        // ral-59n: a base `safe*` scalar reader partner (a `Value`) compares through its payload accessor
+        // (not for a local that also keys an element read: typing that key changes how the receiver map local is decided)
+        if (!isIdentifier(partner)) return this.rust59nValueReaderPartner(partner) && !this.rust59nKeysElementRead(self) ? this.rustScalarPayloadPartnerTest(self, partner, kind, sign, dry) : undefined;
         const base = kind.startsWith('o') ? kind.slice(1) : kind;
         if ((base !== 'str' && base !== 'int') || this.rustScalarValuePartnerKind(partner) !== base) return this.rustScalarPayloadPartnerTest(self, partner, kind, sign, dry);
         if (dry) return '_';
@@ -10882,20 +10885,25 @@ export class RustTranspiler extends BaseTranspiler {
     /** qf: a typed local against an untyped `Value` partner (a local or parameter) that the checker types like the local:
      *  the `Value` pair printed `a.<payload>() == p.<payload>()` (PAYLOAD_ACCESSORS by checker kind), and the typed local
      *  is exactly `a.<payload>()` (`None` where the `Value` was `Null`), so the same compare reads `own == p.<payload>()`.
-     *  `Option<i64>` is left out (its payload is an `f64`, which needs a closure). */
+     *  ral-59n: an `Option<i64>` local prints `Value::from(x).as_f64()` (the very `as_f64` of the box it held, no closure),
+     *  and the partner may also be a base `safe*` scalar read off `this` (rust59nValueReaderPartner), which prints a `Value`. */
     rustScalarPayloadPartnerTest(self, partner, kind: string, sign: string, dry: boolean): string | undefined {
         const forms: Record<string, [ string, (n: string) => string ]> = {
             str: [ 'string', (n) => `Some(${n}.as_str())` ], ostr: [ 'string', (n) => `${n}.as_deref()` ],
             bool: [ 'boolean', (n) => `Some(${n})` ], obool: [ 'boolean', (n) => n ],
             int: [ 'number', (n) => `Some(${n} as f64)` ], num: [ 'number', (n) => `Some(${n})` ], onum: [ 'number', (n) => n ],
+            oint: [ 'number', (n) => `Value::from(${n}).as_f64()` ],
         };
         const form = forms[kind];
         if (form === undefined || this.rustTestTierSource(partner)) return undefined;
-        if (this.rustScalarIdentifierKind(partner) !== undefined || this.rustScalarParamRead(partner) !== undefined || !this.printsValueExpression(partner)) return undefined;
-        const declaration: any = this.rustDeclaredNode(partner);
-        if (declaration === undefined || (!isVariableDeclaration(declaration) && declaration.kind !== SyntaxKind.Parameter)) return undefined;
-        // a nil-declared partner may be typed by its own rule later: leave it to that rule
-        if (isVariableDeclaration(declaration) && (declaration.initializer === undefined || this.literalKindOfNode(this.unwrapParens(declaration.initializer)) === 'null')) return undefined;
+        const reader = this.rust59nValueReaderPartner(partner);
+        if (!reader) {
+            if (this.rustScalarIdentifierKind(partner) !== undefined || this.rustScalarParamRead(partner) !== undefined || !this.printsValueExpression(partner)) return undefined;
+            const declaration: any = this.rustDeclaredNode(partner);
+            if (declaration === undefined || (!isVariableDeclaration(declaration) && declaration.kind !== SyntaxKind.Parameter)) return undefined;
+            // a nil-declared partner may be typed by its own rule later: leave it to that rule
+            if (isVariableDeclaration(declaration) && (declaration.initializer === undefined || this.literalKindOfNode(this.unwrapParens(declaration.initializer)) === 'null')) return undefined;
+        }
         // ral-58n: an `i64` local initialised from a list length is `Int` whatever its receiver's checker type (`any` there):
         // its box answered `Some(n as f64)` to `as_f64()`, the very payload the typed side prints
         const selfDecl: any = kind === 'int' ? this.rustDeclaredNode(self) : undefined;
@@ -10903,7 +10911,36 @@ export class RustTranspiler extends BaseTranspiler {
             && this.rustListLengthInit(this.unwrapParens(selfDecl.initializer));
         if (this.primitiveKindOfType(this.typeOfNodeIfAny(partner)) !== form[0] || (!lengthSelf && this.primitiveKindOfType(this.typeOfNodeIfAny(self)) !== form[0])) return undefined;
         if (dry) return '_';
-        return `(${form[1](super.printIdentifier(self))} ${sign} ${super.printIdentifier(partner)}.${RustTranspiler.PAYLOAD_ACCESSORS[form[0]]}())`;
+        const partnerText = reader ? this.printNode(this.unwrapParens(partner), 0).trim() : super.printIdentifier(partner);
+        return `(${form[1](super.printIdentifier(self))} ${sign} ${partnerText}.${RustTranspiler.PAYLOAD_ACCESSORS[form[0]]}())`;
+    }
+
+    // ral-59n: base readers whose generated Rust answers a plain `Value` of one primitive family (or `Null`)
+    private static readonly RUST_59N_VALUE_READERS = new Set([ 'safeString', 'safeString2', 'safeStringLower', 'safeStringUpper', 'safeInteger', 'safeInteger2', 'safeNumber', 'safeNumber2', 'safeBool', 'safeBool2' ]);
+
+    /** ral-59n: some read of the local is the argument of an element access `m[x]` (decided on the TS AST). */
+    rust59nKeysElementRead(self: any): boolean {
+        const declaration: any = this.rustDeclaredNode(self);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return true;
+        let keys = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            let top: any = n;
+            while (isParenthesizedExpression(top.parent) || top.parent?.kind === SyntaxKind.AsExpression) top = top.parent;
+            if (isElementAccessExpression(top.parent) && top.parent.argumentExpression === top) keys = true;
+            return true;
+        });
+        return keys;
+    }
+
+    /** ral-59n: `this.safeString|Integer|Number|Bool(..)` declared in the base tier (no venue override): printed as the
+     *  generated `self.safe_*` reader, a `Value`. The boxed compare against it was the payload pair `a.<p>() == r.<p>()`
+     *  (printNativeEqualityComparison, both sides `Value`, same checker kind), so the typed side prints its own payload. */
+    rust59nValueReaderPartner(node: any): boolean {
+        const call: any = this.unwrapParens(node);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (!RustTranspiler.RUST_59N_VALUE_READERS.has(String(call.expression.name.text))) return false;
+        const declaration: any = this.rustScalarCallee(call);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
 
     /** `'str'` / `'int'` when `p` is a plain `Value` local (no typed-local rule claims it) whose initializer and every

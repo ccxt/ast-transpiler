@@ -20206,3 +20206,61 @@ describe('ral-59p: an Object.keys element used as the key of a delete statement'
         expect(out).toContain('let mut key: Value = ');
     });
 });
+
+describe('ral-59n: a typed scalar local against a Value at an equality prints the boxed payload compare', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Str = string | undefined;\nexport type Bool = boolean | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: any = undefined): Int { return o; }\n    safeBool (o: any, k: any, d: any = undefined): Bool { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-59n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table. The boxed pair printed `a.<p>() == b.<p>()` (p = as_str / as_f64 / as_bool by checker kind); the typed side
+    // prints the very payload its box held: String -> Some(s.as_str()), Option<String> -> s.as_deref(), i64 -> Some(n as f64),
+    // Option<i64> -> Value::from(n).as_f64(), f64 -> Some(f), bool -> Some(b). Rows: [typed kind, typed value, partner Value, ==].
+    // `null` is Null / None. A Str partner against a number side is None (as_f64 of Str), no string-to-number coercion.
+    type V = { t: 'Null' | 'Str' | 'Int' | 'Float' | 'Bool', v?: any };
+    const asF64 = (x: V) => (x.t === 'Int' || x.t === 'Float') ? Number(x.v) : null;
+    const payload = (p: string, x: V) => p === 'as_str' ? (x.t === 'Str' ? x.v : null) : (p === 'as_bool' ? (x.t === 'Bool' ? x.v : null) : asF64(x));
+    const box = (k: string, v: any): V => v === null ? { t: 'Null' } : ({ str: { t: 'Str', v }, ostr: { t: 'Str', v }, int: { t: 'Int', v }, oint: { t: 'Int', v }, num: { t: 'Float', v }, bool: { t: 'Bool', v } } as any)[k];
+    const typedSide = (k: string, v: any) => v === null ? null : (k === 'int' || k === 'oint' || k === 'num' ? Number(v) : v);
+    const access: Record<string, string> = { str: 'as_str', ostr: 'as_str', int: 'as_f64', oint: 'as_f64', num: 'as_f64', bool: 'as_bool' };
+    const table: [ string, any, V, boolean ][] = [
+        [ 'str', 'a', { t: 'Str', v: 'a' }, true ], [ 'str', 'a', { t: 'Str', v: 'b' }, false ], [ 'str', 'a', { t: 'Null' }, false ], [ 'str', '1', { t: 'Int', v: 1 }, false ],
+        [ 'ostr', null, { t: 'Null' }, true ], [ 'ostr', null, { t: 'Str', v: 'a' }, false ], [ 'ostr', 'a', { t: 'Null' }, false ], [ 'ostr', 'a', { t: 'Str', v: 'a' }, true ],
+        [ 'int', 3, { t: 'Int', v: 3 }, true ], [ 'int', 3, { t: 'Float', v: 3 }, true ], [ 'int', 3, { t: 'Float', v: 3.5 }, false ], [ 'int', 3, { t: 'Null' }, false ], [ 'int', 3, { t: 'Str', v: '3' }, false ],
+        [ 'oint', null, { t: 'Null' }, true ], [ 'oint', null, { t: 'Int', v: 0 }, false ], [ 'oint', 2, { t: 'Null' }, false ], [ 'oint', 2, { t: 'Int', v: 2 }, true ], [ 'oint', 2, { t: 'Float', v: 2 }, true ], [ 'oint', 2, { t: 'Str', v: '2' }, false ],
+        [ 'num', 1.5, { t: 'Float', v: 1.5 }, true ], [ 'num', 2, { t: 'Int', v: 2 }, true ], [ 'num', 1.5, { t: 'Null' }, false ],
+        [ 'bool', true, { t: 'Bool', v: true }, true ], [ 'bool', true, { t: 'Bool', v: false }, false ], [ 'bool', true, { t: 'Null' }, false ], [ 'bool', true, { t: 'Int', v: 1 }, false ],
+    ];
+    test('truth table: the typed payload compare answers exactly what the boxed payload compare answered', () => {
+        for (const [ k, v, partner, expected ] of table) {
+            const p = access[k];
+            const boxed = payload(p, box(k, v)) === payload(p, partner);
+            const typed = typedSide(k, v) === payload(p, partner);
+            expect([ k, v, partner, boxed ]).toEqual([ k, v, partner, expected ]);
+            expect([ k, v, partner, typed ]).toEqual([ k, v, partner, expected ]);
+        }
+    });
+    test('String local against a base safeString read: Some(x.as_str()) == reader.as_str()', () => {
+        const out = run("    a (base: string, items: Dict[]): any {\n        const symbolValue = base + '/USDT';\n        for (let i = 0; i < items.length; i++) {\n            if (this.safeString (items[i], 'symbol') === symbolValue) {\n                return items[i];\n            }\n        }\n        return this.hold (symbolValue);\n    }\n");
+        expect(out).toMatch(/let mut symbolValue: String = /);
+        expect(out).toMatch(/\(Some\(symbolValue\.as_str\(\)\) == self\.safe_?[sS]tring/);
+    });
+    test('Option<String> local against a base safeString read: x.as_deref() == reader.as_str()', () => {
+        const out = run("    b (params: Dict, entries: Dict[]): any {\n        const clientId = this.safeString (params, 'clientId');\n        let matches = false;\n        for (let i = 0; i < entries.length; i++) {\n            matches = (this.safeString (entries[i], 'clientId') === clientId);\n        }\n        return matches;\n    }\n");
+        expect(out).toMatch(/let mut clientId: Option<String> = /);
+        expect(out).toContain('(clientId.as_deref() == self.');
+    });
+    test('Option<i64> local against a number Value local: Value::from(x).as_f64() == p.as_f64()', () => {
+        const out = run("    c (subscription: Dict, message: Dict): any {\n        const subId = this.safeInteger (subscription, 'id');\n        const other: number = this.hold (message);\n        if ((subId !== undefined) && (subId === other)) {\n            return true;\n        }\n        return false;\n    }\n");
+        expect(out).toMatch(/let mut subId: Option<i64> = /);
+        expect(out).toContain('(Value::from(subId).as_f64() == other.as_f64())');
+    });
+    test('guard: a string local that also keys an element read stays Value against a reader', () => {
+        const out = run("    d (data: Dict, fees: Dict): any {\n        const keys = Object.keys (data);\n        for (let i = 0; i < keys.length; i++) {\n            const code = keys[i];\n            const entry = data[code];\n            if (this.safeString (fees, 'ticker') === code) {\n                return entry;\n            }\n        }\n        return undefined;\n    }\n");
+        expect(out).not.toContain('(code.as_deref() == self.');
+    });
+});
