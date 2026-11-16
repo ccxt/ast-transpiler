@@ -23903,3 +23903,38 @@ describe('ral-80h: a base optional-int local whose bare last-use write copies in
         expect(out).not.toContain('let mut last: Value');
     });
 });
+
+describe('ral-80c R1: a copy of a typed string-list parameter holds Option<List>', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport default class Exchange {\n    symbols: string[] = [];\n    marketSymbols (s: Strings = undefined): any { return s; }\n    parseTickers (r: any, s: Strings = undefined): any { return r; }\n    isEmpty (o: any): boolean { return o === undefined; }\n    async fetchTickers (symbols: Strings = undefined, params: Dict = {}): Promise<any> { return {}; }\n    async watchPositions (symbols: Strings = undefined, params: Dict = {}): Promise<any> { return {}; }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict, Strings } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    async fetchTickers (symbols: Strings = undefined, params: Dict = {}): Promise<any> {\n        let symbolsResolved: Strings = symbols;\n        if (symbols === undefined) {\n            symbolsResolved = [];\n            const all: string[] = this.symbols;\n            for (let i = 0; i < all.length; i++) {\n                symbolsResolved.push (all[i]);\n            }\n        }\n        return this.parseTickers (params, symbolsResolved);\n    }\n"
+            + "    async watchPositions (symbols: Strings = undefined, params: Dict = {}): Promise<any> {\n        let symbolsNormalized = symbols;\n        if (symbols !== undefined) {\n            symbolsNormalized = this.marketSymbols (symbols);\n        }\n        if (symbolsNormalized === undefined) {\n            symbolsNormalized = this.symbols;\n        }\n        return symbolsNormalized.length;\n    }\n"
+            + "    async fetchX (symbols: Strings = undefined, params: Dict = {}): Promise<any> {\n        let held = symbols;\n        symbols = [];\n        return this.parseTickers (params, held);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-80c-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTickers', 'watchPositions'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('bitget fetchTickers symbolsResolved: seeded from the parameter, pushed natively, boxed once at its last use', () => {
+        expect(out).toContain('let mut symbolsResolved: Option<crate::value::List> = symbols.clone().into_opt_list();');
+        expect(out).toContain('if let Some(__a) = &mut symbolsResolved { std::sync::Arc::make_mut(__a).push(');
+        expect(out).toContain('symbolsResolved.map_or(Value::Null, Value::Arr)');
+        expect(out).not.toContain('let mut symbolsResolved: Value');
+    });
+    test('watchPositions symbolsNormalized: marketSymbols and this.symbols writes, native null test and length', () => {
+        expect(out).toContain('let mut symbolsNormalized: Option<crate::value::List> =');
+        expect(out).toContain('symbolsNormalized.is_none()');
+    });
+    test('negative: a parameter that is itself rewritten keeps the alias boxed', () => {
+        expect(out).toContain('let mut held: Value =');
+    });
+});

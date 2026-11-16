@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { NodeFlags, SyntaxKind, type BinaryExpression, type Block, type CallExpression, type Declaration, type ElementAccessExpression, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
-import { isArrayBindingPattern, isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyAssignment, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
+import { NodeFlags, SyntaxKind, type BinaryExpression, type Block, type CallExpression, type Declaration, type ElementAccessExpression, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type TypeNode, type VariableDeclaration } from "typescript/unstable/ast";
+import { isArrayBindingPattern, isArrayLiteralExpression, isArrayTypeNode, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertyAssignment, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isTypeReferenceNode, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 import * as fs from 'fs';
@@ -20572,7 +20572,7 @@ export class RustTranspiler extends BaseTranspiler {
             const text = this.rustBearerElementPushText(node, RustTranspiler.cloneIfBareLocal(parsedArg.trim()));
             if (text !== undefined) return text;
         }
-        return this.print66cCachePush(node, parsedArg) ?? this.printRustVecPush(node, name, parsedArg) ?? this.printBuiltListPush(node, name, parsedArg) ?? this.arrPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${node?.arguments?.length === 1 && parsedArg !== undefined ? this.rustOwnedArgText(node.arguments[0], parsedArg.trim()) : parsedArg})`;
+        return this.print66cCachePush(node, parsedArg) ?? this.print80cOptListPush(node, parsedArg) ?? this.printRustVecPush(node, name, parsedArg) ?? this.printBuiltListPush(node, name, parsedArg) ?? this.arrPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${node?.arguments?.length === 1 && parsedArg !== undefined ? this.rustOwnedArgText(node.arguments[0], parsedArg.trim()) : parsedArg})`;
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -31033,7 +31033,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (init?.kind === SyntaxKind.AwaitExpression) init = this.rustSkipWrappers(init.expression);
         // ral-58i: a nil-declared `let x: NullableList = undefined` whose every write is a list source holds `None` until written
         const nil = this.rustOptListNilInit(declaration);
-        if (!nil && !this.rustOptListSource(init)) return false;
+        // ral-80c R1: or a copy of an unwritten parameter whose typed signature slot is `Option<Vec<String>>` / `Vec<String>`
+        const strVecAlias = !nil && this.rust80cStrVecParamAlias(init);
+        if (!nil && !strVecAlias && !this.rustOptListSource(init)) return false;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
@@ -31059,7 +31061,12 @@ export class RustTranspiler extends BaseTranspiler {
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
                 if (nil) writes++;
                 return up.parent?.kind === SyntaxKind.ExpressionStatement && (this.rustOptListSource(up.right) || this.rustOptListLiteralWrite(up.right)
-                    || (nil && this.rustDefaultedListRead(this.rustSkipWrappers(up.right))));
+                    || (nil && this.rustDefaultedListRead(this.rustSkipWrappers(up.right))) || (strVecAlias && this.rust80cBaseStrListField(up.right)));
+            }
+            // ral-80c R1: a statement push onto the alias (a `None` alias pushes nothing, as `append_to_array` on `Null`)
+            if (strVecAlias && isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'push' && isCallExpression(up.parent) && up.parent.expression === up) {
+                natives++;
+                return this.rustVecPushShape(up.parent, name);
             }
             if (isCallExpression(up) && up.arguments.length === 1 && up.arguments[0] === at && this.rustIsArrayIsArrayCallee(up)) {
                 natives++;
@@ -31113,6 +31120,47 @@ export class RustTranspiler extends BaseTranspiler {
         return true;
     }
 
+    /** ral-80c R1: an unwritten method parameter whose typed signature slot is a string list (decided from the signature table). */
+    rust80cStrVecParamAlias(init: Expression | undefined): boolean {
+        const node: Node | undefined = this.unwrapParens(init);
+        if (node === undefined || !isIdentifier(node) || node.text === 'undefined') return false;
+        const param: Node | undefined = this.rustDeclaredNode(node);
+        if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || !isMethodDeclaration(param.parent)) return false;
+        const method = param.parent;
+        const entry = this.rustTypedSignature(method)?.params[Array.from(method.parameters).indexOf(param)];
+        // an untyped signature re-binds the argument as a `Value`; its declared `Strings` / `string[]` type says it is a list or nothing
+        const type: TypeNode | undefined = param.type;
+        const declaredList = type !== undefined && ((isTypeReferenceNode(type) && isIdentifier(type.typeName) && type.typeName.text === 'Strings')
+            || (isArrayTypeNode(type) && type.elementType.kind === SyntaxKind.StringKeyword));
+        if (entry === undefined ? !declaredList : (entry.rustType !== 'Option<Vec<String>>' && entry.rustType !== 'Vec<String>')) return false;
+        for (const n of this.rustScopeNameNodes(method, String(param.name.text))) {
+            if (n === param.name || !isIdentifier(n)) continue;
+            const up: Node = n.parent;
+            if (isBinaryExpression(up) && up.left === n && rustIsAssignmentOperator(up.operatorToken.kind)) return false;
+            if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'push') return false;
+        }
+        return true;
+    }
+
+    /** ral-80c R1: `this.symbols` / `this.ids`, base fields declared `string[]` (always a list). */
+    rust80cBaseStrListField(node: Expression): boolean {
+        const read: Node | undefined = this.rustSkipWrappers(node);
+        if (read === undefined || !isPropertyAccessExpression(read) || read.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const declaration: Node | undefined = symbolDeclarations(this.checkerOrUndefined()?.getSymbolAtLocation(read.name))[0];
+        if (declaration === undefined || !isPropertyDeclaration(declaration) || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
+        const type: TypeNode | undefined = declaration.type;
+        return type !== undefined && isArrayTypeNode(type) && type.elementType.kind === SyntaxKind.StringKeyword;
+    }
+
+    /** ral-80c R1: `x.push(v)` statement on an optional list alias. */
+    print80cOptListPush(node: CallExpression, parsedArg: string | undefined): string | undefined {
+        const access: Expression = node.expression;
+        if (parsedArg === undefined || !isPropertyAccessExpression(access) || node.arguments.length !== 1 || node.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
+        const declaration: VariableDeclaration | undefined = this.rustOptListOf(access.expression);
+        if (declaration === undefined || !this.rust80cStrVecParamAlias(declaration.initializer)) return undefined;
+        return `if let Some(__a) = &mut ${this.rustOptListName(access.expression)} { std::sync::Arc::make_mut(__a).push(${RustTranspiler.cloneIfBareLocal(parsedArg.trim())}); }`;
+    }
+
     /** `xs[N]` on a `string[]` parameter the body re-binds as its slice (`xs.get(N)`). */
     rustOptListParamRead(node: any): boolean {
         const key: any = this.rustSkipWrappers(node.argumentExpression);
@@ -31164,7 +31212,11 @@ export class RustTranspiler extends BaseTranspiler {
     printOptListDeclaration(declaration: any, varName: string, indent: string): string | undefined {
         if (!this.rustOptListLocal(declaration)) return undefined;
         if (this.rustOptListNilInit(declaration)) return `${indent}let mut ${varName}: Option<crate::value::List> = None`;
-        return `${indent}let mut ${varName}: Option<crate::value::List> = ${this.printNode(declaration.initializer, 0).trim()}.into_opt_list()`;
+        const seed = this.printNode(declaration.initializer, 0).trim();
+        // ral-80c R1: the parameter's box is copied once (a handle bump) unless the alias is its last reader
+        const source: Node | undefined = this.rust80cStrVecParamAlias(declaration.initializer) ? this.rustDeclaredNode(this.unwrapParens(declaration.initializer)) : undefined;
+        const copy = source !== undefined && !seed.endsWith('.clone()') && !this.rustLocalLastUse(this.unwrapParens(declaration.initializer), source) ? '.clone()' : '';
+        return `${indent}let mut ${varName}: Option<crate::value::List> = ${seed}${copy}.into_opt_list()`;
     }
 
     printOptListWrite(left: any, right: any): string | undefined {
