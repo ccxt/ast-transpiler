@@ -651,8 +651,7 @@ export declare function installFmGo5OG02(goTranspiler: any): void;
 export declare function installRfGo5OwnedTables(goTranspiler: any): void;
 export declare function installNumParams(goTranspiler: any): void;
 export declare function installCcxtGoHooks(goTranspiler: any, unifiedInt64Params?: any): void;
-declare function alignGoTrailingComments(content: string): string;
-export { alignGoTrailingComments, };
+export declare function alignGoTrailingComments(content: string): string;
 export declare class GoTranspiler extends BaseTranspiler {
     goScopeDescendants: WeakMap<object, any[]>;
     goDescendantsOf(scope: any): any[];
@@ -710,21 +709,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printStruct(node: any, indentation: any): string;
     printNewStructMethod(node: any): string;
     printClass(node: any, identation: any): string;
-    /**
-     * gofmt's declaration-list rule (go/printer nodes.go `declList`): a top-level
-     * declaration that carries a doc comment is separated from the previous declaration
-     * by exactly one blank line (`min = 2` linebreaks), while a declaration without one
-     * keeps the source's own separation (the printer emits members adjacent to the
-     * closing brace above them). `printClass` used to join every member with a bare
-     * "\n", so a method whose leading `/** ... *` + `/` comment follows the previous
-     * method's closing brace came out as `}\n/**` and gofmt re-inserted the blank line.
-     */
     joinTopLevelDecls(decls: string[]): string;
-    /**
-     * True when the emitted declaration text opens with its doc comment - the comment
-     * group gofmt attaches to the declaration (`getDoc(d) != nil` in go/printer).
-     */
-    startsWithComment(decl: string): boolean;
     /**
      * Indent every non-blank line of `lines` by `identation` levels. gofmt trims trailing
      * whitespace, so an indented *blank* line (only the indentation of a blank source
@@ -735,56 +720,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goProvenReturnRetype(node: any, printed: string): string;
     printAsyncDeclarationPair(node: any, identation: any, def: string, funcBody: string, isMethod: boolean): string;
     printFunctionDeclaration(node: any, identation: any): string;
-    /**
-     * Name of the sibling *body* method/function an async core hands its work to.
-     *
-     * `FetchTicker` -> `fetchTickerBody`. Deliberately UNEXPORTED: the body is an
-     * implementation detail of the trampoline, so it must not show up on the generated
-     * interfaces (ICoreExchange) nor on the typed `*_wrapper.go` facades, and it stays
-     * invisible to the reflection based `callInternal`/`callDynamically` dispatch.
-     *
-     * If that name is already taken by a real declaration (a hand written
-     * `fetchTickerBody`), a numeric suffix is appended instead of silently clobbering it.
-     */
     getAsyncBodyName(node: any, goName: string): string;
-    /**
-     * Parameter list of the body: the channel it must fill, then the original parameters
-     * verbatim (including the `optionalArgs ...any` tail), so the trampoline can forward
-     * its own arguments unchanged.
-     */
-    printAsyncBodyParameters(node: any): string;
-    /**
-     * Arguments the trampoline forwards to its body, matching printMethodParameters:
-     * the declared parameters in order, plus the variadic `optionalArgs...` tail when
-     * the function has any defaulted parameter.
-     */
     printAsyncTrampolineArgs(node: any): string;
-    /**
-     * The trampoline: an async core hands back a *hot handle*.
-     *
-     *     func (this *Exchange) FetchTicker(symbol any) <-chan any {
-     *         ch := make(chan any, 1)
-     *         go this.fetchTickerBody(ch, symbol)
-     *         return ch
-     *     }
-     *
-     *   - `ch` is buffered (cap 1): the body's single `ch <- value` never blocks, so a
-     *     result nobody ever receives still lets the goroutine finish and run
-     *     `defer close(ch)` (no leak for abandoned calls).
-     *   - the body runs on its own goroutine, so the call expression returns immediately
-     *     with work already in flight. That is what makes
-     *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
-     *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
-     *   - the result stays UNNAMED (`<-chan any`): `return ch` is the trampoline's only
-     *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
-     *     lives on the body, not here.
-     */
     printAsyncTrampolineBlock(node: any, identation: any, callee: string): string;
-    /**
-     * Go name of an async (channel returning) declaration: `fetchTicker` -> `FetchTickerAsync`.
-     * Empty `asyncMethodSuffix` (the default) keeps the plain name, so the suffix is opt-in.
-     */
-    printAsyncDeclarationName(node: any, goName: string): string;
     /**
      * Resolve the declaration a call/property access refers to and append `asyncMethodSuffix`
      * when it is an async function. Uses the checker, so `this.x()`, `super.x()`, `obj.x()` and
@@ -885,7 +823,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goDeclaredLocalTypeIfSafe(declaration: any, goType: string, readsTheValue: (n: any) => boolean, skipUse?: (n: any) => boolean): string | undefined;
     goSafeDictLocalUnboxStandard(declaration: any): string | undefined;
     goSafeDictUnboxValue(declaration: any, identation: number): string | undefined;
-    goBaseMapCalleeName(name: string): boolean;
     goNodeIsInPredictionTree(node: any): boolean;
     GO_MARKET_TABLES: {
         [name: string]: {
@@ -974,7 +911,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goContainerCandidateType(declaration: any): string | undefined;
     goContainerInitializerConversion(initializer: any, goType: string): 'direct' | undefined;
     goStringListLiteralIsProven(node: any): boolean;
-    goPrintsAsPlainString(node: any): boolean;
     goContainerUseReadsAs(node: any, goType: string): boolean;
     goStringListUseReadsAs(node: any): boolean;
     goContainerWriteConversion(right: any, goType: string): 'direct' | undefined;
@@ -995,13 +931,14 @@ export declare class GoTranspiler extends BaseTranspiler {
     goFieldStringLocalType(declaration: any): string | undefined;
     goFieldStringLocalTypeCache: WeakMap<object, string>;
     goFieldStringLocalTypeScan(declaration: any): string | undefined;
+    goUseParent(node: any): {
+        current: any;
+        parent: any;
+    };
     goFieldStringLocalReadIsSafe(node: any): boolean;
-    goNilInitWrittenHelperCall(printed: string): boolean;
-    goNilInitReadIsConcatOperand(node: any): boolean;
     goNilInitEnclosingStatement(node: any): any;
     goNilInitWriteDominates(writes: any[], read: any): boolean;
     goNilInitReadIsStringSafe(node: any): boolean;
-    goNilInitComparedToNonNil(parent: any, current: any): boolean;
     goNilInitReadIsPointerSafe(node: any): boolean;
     getGoLocalType(declaration: any, parsedValue: string): string;
     goLocalSafeVerdicts: WeakMap<object, Map<string, string>>;
@@ -1101,8 +1038,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWsTradesRead(node: any): boolean;
     goIsBaseExchangeMethod(name: any): boolean;
     goIsPlainEntryRead(inner: any): boolean;
-    goNilInitCacheLocalType(declaration: any): string | undefined;
-    goNilInitOrderBookLocalType(declaration: any): string | undefined;
     goIsEqualityToken(kind: any): boolean;
     goNilInitInterfaceLocalType(declaration: any, goType: string): string | undefined;
     goWsCacheReceiverIsCallable(receiver: any, type: any): boolean;
@@ -1210,7 +1145,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goUnifiedAnySliceParameterType(fn: any, param: any): string | undefined;
     goIsUnifiedAnySliceParameterNode(decl: any): boolean;
     goSliceTableRootParameter(fn: any, param: any): any;
-    goAnnotatedParameterText(param: any): string | undefined;
     goSliceTableDeclarationsMatch(fn: any, annotation: string): boolean;
     goSliceTableCallSitesPass(fn: any, methodName: string, index: number, goType: string): boolean;
     goTextSliceArgumentMatches(argText: string, goType: string, file: string, tree: any, at?: number): boolean;
@@ -1226,6 +1160,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSliceCallArgs(node: any, identation: any): string | undefined;
     goUnifiedStringCallArgs(node: any, identation: any, flat?: boolean): string | undefined;
     goRequiredStringParameterType(param: any): string | undefined;
+    goParameterBodyTakes(fn: any, param: any, goType: string): boolean;
     goParameterKeepsNilCompareNative(body: any, param: any, goType: string): boolean;
     goWsFrameParameterType(fn: any, param: any): string | undefined;
     goWsFrameReadsStayNative(body: any, param: any): boolean;
@@ -1314,6 +1249,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goRunsOnMessageLoop(containerNode: any, field: any): boolean;
     goStoreValueIsPlain(valueNode: any, field: any): boolean;
     goEmptyDefaultCall(call: any, field: any): boolean;
+    goNilGuardedKeyWrite(containerStr: string, keyStr: string, valueStr: string, identation: number): string;
     goFieldStoreAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation?: number): string | undefined;
     goWsFieldName(node: any): string | undefined;
     goWsMapFieldType(node: any): string | undefined;
@@ -1370,7 +1306,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBookReceiver(node: any): boolean;
     goBookEntryText(node: any): string | undefined;
     goUnderNegation(inNode: any): boolean;
-    goInOpMapReceiver(node: any): boolean;
     goDefaultedDictLocal(node: any): boolean;
     goDefaultedDictDeclaration(declaration: any): boolean;
     goDictLocalBacksHoist(declaration: any): boolean;
@@ -1416,7 +1351,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     printSourceFileStatements(node: any, identation: any): string;
     goBinaryMemoized<T>(node: any, key: string, compute: () => T): T;
     goBinaryContextKey(): string;
-    goPrintBinaryMemoized(node: any, identation: number): string;
     printNode(node: any, identation?: number): string;
     printObjectLiteralExpression(node: any, identation: any): string;
     goWsTickersPointerInIf(node: any, identation: any): string | undefined;
@@ -1480,7 +1414,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goTupleSlotPointerType(element: any): string | undefined;
     goTupleSlotPointerTypeOf(element: any): string | undefined;
     goTupleSlotStoreText(valueNode: any, valueStr: string): string;
-    goTupleSlotPointerLines(name: string, holder: string, index: number, iden: string): string;
     goTupleSlotNameIsSafe(nameNode: any, declaration: any): boolean;
     goTupleBindingProducerName(declaration: any): string | undefined;
     goTupleBindingIsSliceHolder(declaration: any): boolean;
@@ -1507,6 +1440,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgTupleWriteIsDict(declaration: any, right: any, index: number): boolean;
     goGetArgBindsDictElement(leftElement: any, right: any, index: number): boolean;
     goGetArgParameterType(decl: any): string | undefined;
+    goGetArgCalleeDeclaration(callee: any): any;
     goGetArgPositionIsDefaulted(callee: any, argIndex: number): boolean;
     goGetArgPassesIntoContainerDefault(callee: any, argIndex: number): boolean;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
@@ -1516,15 +1450,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goInt64TernaryStore(node: any, identation: any): string | undefined;
     printExpressionStatement(node: any, identation: any): string;
     isInsideAsyncFunction(returnStatementNode: any): any;
-    /**
-     * Statement that terminates an async (channel returning) function body.
-     *
-     * The body is the trampoline's sibling method (`go this.fetchTickerBody(ch, ...)`),
-     * and the synthetic try/catch closures nest inside it: in both cases `return` leaves
-     * a function whose result is a plain `any`, never the channel. The trampoline itself
-     * owns the single `return ch`, emitted by printFunctionBody.
-     */
-    getAsyncReturnStatement(node: any): string;
     printReturnStatement(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;
@@ -1567,6 +1492,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goExcisedSpans: WeakMap<object, [number, number][]>;
     goInsideExcisedSpan(): boolean;
     goStdlibImportIsPlaceable(): boolean;
+    goStringsPairCall(node: any, name: any, parsedArg: any, goFunc: string, helper: string, receiverType?: string): string;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printTrimCall(node: any, identation: any, name?: any): string;
@@ -1656,13 +1582,13 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsUrlsWrite(statement: any): boolean;
     goElementWriteChain(baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string;
     goKeyIsString(node: any, printed: string): any;
-    goIsDerefStringKeyExpression(node: any): boolean;
     printNilGuardedMapIndex(containerStr: string, keyStr: string): string;
     isGoThisPropertyAccessExpression(node: any): boolean;
     isGoElementAccessAssignmentTarget(node: any): boolean;
     goIntIndexExpression(node: any): boolean;
     goIntOperandIdentifier(node: any): boolean;
     goSafeListUnboxIdentifier(node: any): boolean;
+    goCheckerVariableDeclaration(node: any): any;
     goDeclaredListIdentifier(node: any): boolean;
     goNameWriteSites(scope: any, name: string, declaration?: any): any[];
     goEnclosingLoopExcluding(loop: any, declaration: any): boolean;
@@ -1725,10 +1651,10 @@ export declare class GoTranspiler extends BaseTranspiler {
     blockEndsWithConditionalReturn(statements: NodeArray<Statement>): boolean;
     goMapParamType(node: any): string | undefined;
     goMapParamReadOk(receiver: any, access: any): string | undefined;
-    goMapParamLiteralKey(key: any): boolean;
+    goMapParamOuterParens(access: any): any;
     goMapParamIsWriteValue(access: any): boolean;
     goMapParamMarketRow(node: any): boolean;
-    goRowLocalKeepsRow(scope: any, declaration: any, rowCallees: string[]): boolean;
+    goRowLocalKeepsRow(node: any, rowCallees: string[]): boolean;
     goMapParamDerefConsumer(access: any): boolean;
     goNonPointerAccessorSource(expr: any): boolean;
     goLiteralDefaultArg(node: any): boolean;
