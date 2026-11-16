@@ -15116,7 +15116,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     goSafeDictLocalUnbox(declaration): string | undefined {
-        return this.goCachedLocalUnbox(this.goSafeDictLocalUnboxCache, declaration, () => this.goSafeDictLocalUnboxUncached(declaration));
+        return this.goCachedLocalUnbox(this.goSafeDictLocalUnboxCache, declaration,
+            () => this.goSafeDictLocalUnboxStandard(declaration) ?? (this.goDictLocalBacksHoist(declaration) ? GO_SAFE_DICT_LOCAL_TYPE : undefined));
     }
 
     // every read of `declaration`'s name inside its function must keep the boxed value's meaning for
@@ -15142,10 +15143,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         return goType;
-    }
-
-    goSafeDictLocalUnboxUncached(declaration): string | undefined {
-        return this.goSafeDictLocalUnboxStandard(declaration) ?? (this.goDictLocalBacksHoist(declaration) ? GO_SAFE_DICT_LOCAL_TYPE : undefined);
     }
 
     goSafeDictLocalUnboxStandard(declaration): string | undefined {
@@ -15526,57 +15523,55 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     goSafeDictMapLocal(declaration): string | undefined {
-        return this.goCachedLocalUnbox(this.goSafeDictMapLocalCache, declaration, () => this.goSafeDictMapLocalUncached(declaration));
-    }
-
-    goSafeDictMapLocalUncached(declaration): string | undefined {
-        const kind = this.goSourceTreeKind(declaration);
-        const found = this.goSafeDictCallArgs(declaration.initializer);
-        if ((kind === 'skip') || (found === undefined) || (this.goSafeDictLocalUnbox(declaration) !== undefined)) {
-            return undefined;
-        }
-        const ws = kind === 'ws';
-        const noDefault = found.fallback === undefined;
-        if (!(noDefault || this.goNeverNilDict(found.call, ws)) || !this.goPlainMapContainer(found.call.arguments[0], ws, noDefault)) {
-            return undefined;
-        }
-        const scope: any = this.goTopFunction(declaration);
-        const name = declaration.name.text as string;
-        if ((scope === undefined) || this.goTypeNameIsShadowed(scope, GO_SAFE_DICT_LOCAL_TYPE)) {
-            return undefined;
-        }
-        // one declaration of the name in the whole Go function
-        const bindings = this.goDescendantsOf(scope).filter((n: any) => ((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter)
-            || (n.kind === SyntaxKind.BindingElement)) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name));
-        // the ohlcv book local may be declared again in a sibling block; every use then resolves to its own declaration
-        const siblings = (bindings.length > 1) && (this.goOhlcvsBookCall(declaration.initializer)?.withDefault === true)
-            && bindings.every((b: any) => b.kind === SyntaxKind.VariableDeclaration);
-        if ((bindings.length !== 1) && !siblings) {
-            return undefined;
-        }
-        const rebinds = new Set<any>();
-        const refs = this.goDescendantsOf(scope).filter((n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
-            && (!siblings || (this.goDeclarationOfIdentifier(n) === declaration))
-            && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
-            && !((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n)));
-        for (const ref of refs) {
-            const write: any = ref.parent;
-            if ((write?.kind === SyntaxKind.BinaryExpression) && (write.left === ref) && (write.operatorToken.kind === SyntaxKind.EqualsToken)) {
-                const again = noDefault ? undefined : this.goSafeDictCallArgs(write.right);
-                if ((again !== undefined) && (again.family === found.family) && this.goNeverNilDict(again.call, ws)
-                    && !this.hasNodeWhere(again.call, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
-                        && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n)))) {
-                    rebinds.add(write); // every write is again a never-nil safeDict: one map type
-                }
-            }
-        }
-        for (const ref of refs) {
-            if (!this.goMapLocalUseKeepsMap(ref, rebinds, noDefault, ws, name)) {
+        return this.goCachedLocalUnbox(this.goSafeDictMapLocalCache, declaration, () => {
+            const kind = this.goSourceTreeKind(declaration);
+            const found = this.goSafeDictCallArgs(declaration.initializer);
+            if ((kind === 'skip') || (found === undefined) || (this.goSafeDictLocalUnbox(declaration) !== undefined)) {
                 return undefined;
             }
-        }
-        this.goMapLocalRebindWrites.set(declaration, rebinds);
-        return GO_SAFE_DICT_LOCAL_TYPE;
+            const ws = kind === 'ws';
+            const noDefault = found.fallback === undefined;
+            if (!(noDefault || this.goNeverNilDict(found.call, ws)) || !this.goPlainMapContainer(found.call.arguments[0], ws, noDefault)) {
+                return undefined;
+            }
+            const scope: any = this.goTopFunction(declaration);
+            const name = declaration.name.text as string;
+            if ((scope === undefined) || this.goTypeNameIsShadowed(scope, GO_SAFE_DICT_LOCAL_TYPE)) {
+                return undefined;
+            }
+            // one declaration of the name in the whole Go function
+            const bindings = this.goDescendantsOf(scope).filter((n: any) => ((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter)
+                || (n.kind === SyntaxKind.BindingElement)) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name));
+            // the ohlcv book local may be declared again in a sibling block; every use then resolves to its own declaration
+            const siblings = (bindings.length > 1) && (this.goOhlcvsBookCall(declaration.initializer)?.withDefault === true)
+                && bindings.every((b: any) => b.kind === SyntaxKind.VariableDeclaration);
+            if ((bindings.length !== 1) && !siblings) {
+                return undefined;
+            }
+            const rebinds = new Set<any>();
+            const refs = this.goDescendantsOf(scope).filter((n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
+                && (!siblings || (this.goDeclarationOfIdentifier(n) === declaration))
+                && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+                && !((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n)));
+            for (const ref of refs) {
+                const write: any = ref.parent;
+                if ((write?.kind === SyntaxKind.BinaryExpression) && (write.left === ref) && (write.operatorToken.kind === SyntaxKind.EqualsToken)) {
+                    const again = noDefault ? undefined : this.goSafeDictCallArgs(write.right);
+                    if ((again !== undefined) && (again.family === found.family) && this.goNeverNilDict(again.call, ws)
+                        && !this.hasNodeWhere(again.call, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+                            && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n)))) {
+                        rebinds.add(write); // every write is again a never-nil safeDict: one map type
+                    }
+                }
+            }
+            for (const ref of refs) {
+                if (!this.goMapLocalUseKeepsMap(ref, rebinds, noDefault, ws, name)) {
+                    return undefined;
+                }
+            }
+            this.goMapLocalRebindWrites.set(declaration, rebinds);
+            return GO_SAFE_DICT_LOCAL_TYPE;
+        });
     }
 
     goMapLocalRebindWrites = new Map<any, Set<any>>();
@@ -15634,8 +15629,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         case SyntaxKind.ObjectLiteralExpression:
         case SyntaxKind.ArrayLiteralExpression:
             return true;
-        case SyntaxKind.PrefixUnaryExpression:
-            return (inner.operator === SyntaxKind.MinusToken) && (inner.operand?.kind === SyntaxKind.NumericLiteral);
         case SyntaxKind.Identifier:
             return inner.text === 'undefined';
         }
@@ -15856,7 +15849,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return false;
     }
 
-    goMarketCallIsMap(call): boolean {
+    // `printsMap`: the call's *printed Go* result is a map (a base accessor, or a producer this printer
+    // retypes); a method proved only by its body shape has no signature there and keeps its converter
+    goMarketCallIsMap(call, printsMap = false): boolean {
         const callee: any = call?.expression;
         const name = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text
             : ((callee?.kind === SyntaxKind.Identifier) ? callee.text : undefined);
@@ -15868,27 +15863,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if ((GO_MARKET_MAP_CALLS.indexOf(name) >= 0) || (GO_MARKET_MAP_CALLS.indexOf(printed) >= 0)) {
             return true;
         }
-        const declaration = this.goMethodDeclarationOfCallee(callee);
-        return (declaration !== undefined) && this.goMethodBodyReturnsMap(declaration);
-    }
-
-    // the call's *printed Go* result is a map (a base accessor, or a producer this printer retypes);
-    // a method proved only by its body shape has no signature here and keeps its converter
-    goMarketCalleePrintsMap(call): boolean {
-        const callee: any = call?.expression;
-        const name = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text
-            : ((callee?.kind === SyntaxKind.Identifier) ? callee.text : undefined);
-        if (name === undefined) {
-            return false;
-        }
-        const printed = name.charAt(0).toUpperCase() + name.slice(1);
-        if ((GO_MARKET_MAP_CALLS.indexOf(name) >= 0) || (GO_MARKET_MAP_CALLS.indexOf(printed) >= 0)) {
+        if (printsMap && ((GO_MARKET_MAP_BASE_CALLS.indexOf(name) >= 0) || (GO_MARKET_MAP_BASE_CALLS.indexOf(printed) >= 0))) {
             return true;
         }
-        if ((GO_MARKET_MAP_BASE_CALLS.indexOf(name) >= 0) || (GO_MARKET_MAP_BASE_CALLS.indexOf(printed) >= 0)) {
-            return true;
-        }
-        if (GO_MARKET_PRODUCER_METHODS.indexOf(name) < 0) {
+        if (printsMap && (GO_MARKET_PRODUCER_METHODS.indexOf(name) < 0)) {
             return false;
         }
         const declaration = this.goMethodDeclarationOfCallee(callee);
@@ -15952,7 +15930,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (initializer.kind === SyntaxKind.ObjectLiteralExpression) {
             return true;
         }
-        return (initializer.kind === SyntaxKind.CallExpression) && this.goMarketCalleePrintsMap(initializer);
+        return (initializer.kind === SyntaxKind.CallExpression) && this.goMarketCallIsMap(initializer, true);
     }
 
     // ---- Nonce () is int64 end to end ----------------
@@ -16122,7 +16100,27 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goMarketLocalUnboxCache = new Map<any, string | undefined>();
 
     goMarketLocalUnbox(declaration): string | undefined {
-        return this.goCachedLocalUnbox(this.goMarketLocalUnboxCache, declaration, () => this.goMarketLocalUnboxUncached(declaration));
+        return this.goCachedLocalUnbox(this.goMarketLocalUnboxCache, declaration, () => {
+            const bookRead = this.goBookAccessorRead(declaration.initializer) && !this.goNodeIsInPredictionTree(declaration.initializer);
+            if (!bookRead && !this.goMarketCallReturnsDict(declaration.initializer)) {
+                return undefined;
+            }
+            // the throwing accessors (`this.market`, `this.currency`) panic instead of answering absent, so
+            // the boxed result is always a dictionary and passing the local re-boxes the same map into the
+            // callee's `any`. The Safe* accessors may answer their own optional argument: read shapes only.
+            const accessorName = declaration.initializer.expression?.name?.text;
+            const throwingAccessor = !bookRead && ((accessorName === 'market') || (accessorName === 'currency'));
+            // the extra use shapes below only apply when the callee's own Go result is the map: a local
+            // that still needs the converter keeps the shipped read-only scan (no new converter calls)
+            const keepsMap = bookRead || this.goMarketCallIsMap(declaration.initializer, true);
+            const handsOn = keepsMap && this.goBaseMapResultLocal(declaration.initializer);
+            // `this.market(…)` carries the same name as the local: a property/method name is not
+            // a reference, and neither is a different binding of the same name
+            return this.goDeclaredLocalTypeIfSafe(declaration, GO_MARKET_LOCAL_TYPE,
+                (n) => this.goMarketUseReadsTheValue(n, throwingAccessor, keepsMap, handsOn),
+                (n) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+                    || !this.goIdentifierRefersToDeclaration(n, declaration));
+        });
     }
 
     // true when this identifier resolves to the declaration being typed (a property name or a
@@ -16242,28 +16240,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return false;
     }
 
-    goMarketLocalUnboxUncached(declaration): string | undefined {
-        const bookRead = this.goBookAccessorRead(declaration.initializer) && !this.goNodeIsInPredictionTree(declaration.initializer);
-        if (!bookRead && !this.goMarketCallReturnsDict(declaration.initializer)) {
-            return undefined;
-        }
-        // the throwing accessors (`this.market`, `this.currency`) panic instead of answering absent, so
-        // the boxed result is always a dictionary and passing the local re-boxes the same map into the
-        // callee's `any`. The Safe* accessors may answer their own optional argument: read shapes only.
-        const accessorName = declaration.initializer.expression?.name?.text;
-        const throwingAccessor = !bookRead && ((accessorName === 'market') || (accessorName === 'currency'));
-        // the extra use shapes below only apply when the callee's own Go result is the map: a local
-        // that still needs the converter keeps the shipped read-only scan (no new converter calls)
-        const keepsMap = bookRead || this.goMarketCalleePrintsMap(declaration.initializer);
-        const handsOn = keepsMap && this.goBaseMapResultLocal(declaration.initializer);
-        // `this.market(…)` carries the same name as the local: a property/method name is not
-        // a reference, and neither is a different binding of the same name
-        return this.goDeclaredLocalTypeIfSafe(declaration, GO_MARKET_LOCAL_TYPE,
-            (n) => this.goMarketUseReadsTheValue(n, throwingAccessor, keepsMap, handsOn),
-            (n) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
-                || !this.goIdentifierRefersToDeclaration(n, declaration));
-    }
-
     // the initializer a typed market local is declared with: the same call, its boxed result
     // converted to the map the checker proved (nil when the call answered a non-map)
     goMarketUnboxValue(declaration, parsedValue: string): string | undefined {
@@ -16376,24 +16352,22 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goSafeListLocalUnboxCache = new Map<any, string | undefined>();
 
     goSafeListLocalUnbox(declaration): string | undefined {
-        return this.goCachedLocalUnbox(this.goSafeListLocalUnboxCache, declaration, () => this.goSafeListLocalUnboxUncached(declaration));
-    }
-
-    goSafeListLocalUnboxUncached(declaration): string | undefined {
-        if (this.goSafeListLocalArgs(declaration.initializer) === undefined) {
-            return undefined;
-        }
-        const readsTheList = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => this.goSafeListUseReadsTheList(n));
-        if (readsTheList !== undefined) {
-            return readsTheList;
-        }
-        // the other uses the box already answered as a list: a nil test, a copy into another
-        // `any`/[]any local, or a helper whose parameters are all `any`. None of them prints an
-        // element read, so the typed local adds no bounds-guarded read and no other call.
-        // A read with a default answers nil where the box held that default, so only the length
-        // read and the all-`any` helpers may stay: a nil test or a copy would answer differently.
-        const defaulted = (declaration.initializer?.arguments?.length !== 2);
-        return this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => this.goListLocalSinkReadsAsList(n, !defaulted));
+        return this.goCachedLocalUnbox(this.goSafeListLocalUnboxCache, declaration, () => {
+            if (this.goSafeListLocalArgs(declaration.initializer) === undefined) {
+                return undefined;
+            }
+            const readsTheList = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => this.goSafeListUseReadsTheList(n));
+            if (readsTheList !== undefined) {
+                return readsTheList;
+            }
+            // the other uses the box already answered as a list: a nil test, a copy into another
+            // `any`/[]any local, or a helper whose parameters are all `any`. None of them prints an
+            // element read, so the typed local adds no bounds-guarded read and no other call.
+            // A read with a default answers nil where the box held that default, so only the length
+            // read and the all-`any` helpers may stay: a nil test or a copy would answer differently.
+            const defaulted = (declaration.initializer?.arguments?.length !== 2);
+            return this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => this.goListLocalSinkReadsAsList(n, !defaulted));
+        });
     }
 
     // hand-written helpers whose Go parameters are all `any`: a []any argument is the very value
@@ -16665,32 +16639,30 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goContainerLocalCache = new Map<any, string | undefined>();
 
     goContainerLocalType(declaration): string | undefined {
-        return this.goCachedLocalUnbox(this.goContainerLocalCache, declaration, () => this.goContainerLocalTypeUncached(declaration));
-    }
-
-    goContainerLocalTypeUncached(declaration): string | undefined {
-        // the accessor families already name their own result more precisely (SafeMapTyped /
-        // SafeListTyped read the member in one call); leave those declarations to them
-        if ((this.goSafeDictLocalUnbox(declaration) !== undefined)
-            || (this.goSafeListLocalUnbox(declaration) !== undefined)
-            || (this.goMarketLocalUnbox(declaration) !== undefined)) {
-            return undefined;
-        }
-        const candidate = this.goContainerCandidateType(declaration);
-        if (candidate === undefined) {
-            return undefined;
-        }
-        // the scan below prints the local's own expressions; a nested declared-type query must
-        // not memoise the in-flight answer
-        this.goDeclaredTypeInProgress.add(declaration);
-        try {
-            if (this.goContainerInitializerConversion(declaration.initializer, candidate) === undefined) {
+        return this.goCachedLocalUnbox(this.goContainerLocalCache, declaration, () => {
+            // the accessor families already name their own result more precisely (SafeMapTyped /
+            // SafeListTyped read the member in one call); leave those declarations to them
+            if ((this.goSafeDictLocalUnbox(declaration) !== undefined)
+                || (this.goSafeListLocalUnbox(declaration) !== undefined)
+                || (this.goMarketLocalUnbox(declaration) !== undefined)) {
                 return undefined;
             }
-            return this.goDeclaredLocalTypeIfSafe(declaration, candidate, (n) => this.goContainerUseReadsAs(n, candidate));
-        } finally {
-            this.goDeclaredTypeInProgress.delete(declaration);
-        }
+            const candidate = this.goContainerCandidateType(declaration);
+            if (candidate === undefined) {
+                return undefined;
+            }
+            // the scan below prints the local's own expressions; a nested declared-type query must
+            // not memoise the in-flight answer
+            this.goDeclaredTypeInProgress.add(declaration);
+            try {
+                if (this.goContainerInitializerConversion(declaration.initializer, candidate) === undefined) {
+                    return undefined;
+                }
+                return this.goDeclaredLocalTypeIfSafe(declaration, candidate, (n) => this.goContainerUseReadsAs(n, candidate));
+            } finally {
+                this.goDeclaredTypeInProgress.delete(declaration);
+            }
+        });
     }
 
     // the array literal a `string[]` local is declared with, opened as a []string
@@ -18020,11 +17992,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const member = Object.prototype.hasOwnProperty.call(GO_ORDERBOOK_MEMBERS, memberName) ? GO_ORDERBOOK_MEMBERS[memberName] : undefined;
         if ((cfg === undefined) || (member === undefined) || (node.expression?.kind !== SyntaxKind.Identifier)) {
             return undefined;
-        }
-        const parent: any = node.parent;
-        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === node) && (parent.operatorToken.kind >= SyntaxKind.FirstAssignment)
-            && (parent.operatorToken.kind <= SyntaxKind.LastAssignment)) {
-            return undefined;  // the write is printed by goOrderBookCacheWrite
         }
         if (!this.goReceiverIsOrderBook(node.expression)) {
             return undefined;
