@@ -22708,3 +22708,38 @@ describe('ral-67b: declared-empty Int / Bool locals typed in TypeScript', () => 
         expect(out).toContain('let mut active: Value = Value::Null;');
     });
 });
+
+describe('ral-67c: declared-empty NullableDict sign headers', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type NullableDict = Dict | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n    apiKey: string = '';\n    extend (...args: any[]): Dict { return {}; }\n    keep (x: any): any { return x; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, NullableDict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const sign = (inner: string) => "    sign (path: string, api = 'public', method = 'GET', params = {}, headers: any = undefined, body: any = undefined) {\n        let url = path;\n        let requestHeaders: NullableDict = undefined;\n        if (api === 'private') {\n" + inner + "        }\n        const headersResult = requestHeaders;\n        return { 'url': url, 'method': method, 'body': body, 'headers': headersResult };\n    }\n";
+    test('a map literal then `x = this.extend (x, y)` holds Option<Dict>: the head is taken out and the result put back', () => {
+        const out = write ('ral-67c-extend', sign ("            requestHeaders = { 'K': this.apiKey };\n            if (method === 'POST') {\n                requestHeaders = this.extend (requestHeaders, { 'Content-Type': 'application/json' });\n            }\n"));
+        expect(out).toContain('let mut requestHeaders: Option<crate::value::Dict> = None;');
+        expect(out).toContain('requestHeaders = Some(crate::value::Dict::new({');
+        expect(out).toContain('requestHeaders = Some(self.extend(requestHeaders.take(), &[Value::Map({');
+        expect(out).toContain('})]).into_dict());');
+        expect(out).toContain('let mut headersResult: Option<crate::value::Dict> = requestHeaders;');
+        expect(out).toContain('headersResult.map_or(Value::Null, Value::Dict)');
+    });
+    test('`x = y` of a const map-literal local that stays Value: taken back with into_opt_dict', () => {
+        const out = write ('ral-67c-alias', sign ("            const signed: Dict = { 'K': this.apiKey };\n            signed['S'] = url;\n            requestHeaders = signed;\n"));
+        expect(out).toContain('let mut requestHeaders: Option<crate::value::Dict> = None;');
+        expect(out).toMatch(/requestHeaders = signed\.into_opt_dict\(\);/);
+    });
+    test('negative: an undeclared (`any`) empty local, an extend reading another source, or a non-literal source keeps Value', () => {
+        const untyped = write ('ral-67c-neg1', sign ("            requestHeaders = { 'K': this.apiKey };\n").replace('let requestHeaders: NullableDict = undefined;', 'let requestHeaders = undefined;').replace("            requestHeaders = { 'K': this.apiKey };\n", "            requestHeaders = { 'K': this.apiKey };\n            requestHeaders = this.extend (requestHeaders, { 'A': 1 });\n"));
+        expect(untyped).toContain('let mut requestHeaders: Value = Value::Null;');
+        const other = write ('ral-67c-neg2', sign ("            requestHeaders = { 'K': this.apiKey };\n            requestHeaders = this.extend (params, { 'A': 1 });\n"));
+        expect(other).toContain('let mut requestHeaders: Value = Value::Null;');
+        const nonLiteral = write ('ral-67c-neg3', sign ("            const signed: Dict = this.keep (params);\n            requestHeaders = signed;\n"));
+        expect(nonLiteral).toContain('let mut requestHeaders: Value = Value::Null;');
+    });
+});

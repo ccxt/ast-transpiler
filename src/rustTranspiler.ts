@@ -23530,6 +23530,14 @@ export class RustTranspiler extends BaseTranspiler {
                 if (parent.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
                 const rhs: any = this.unwrapParens(parent.right);
                 if (this.literalKindOfNode(rhs) === 'null') return true;
+                // ral-67c: a declared `NullableDict` / `Dict` map rebuilt as `x = this.extend (x, y)`: `extend` answers a map
+                // (a `None` head extends the empty map, as the boxed Null head did), taken back with `.into_dict()`
+                if (this.rust67cNilMapExtendWrite(n, declaration) || this.rust67cMapLocalSource(rhs, declaration) !== undefined) {
+                    if (kind !== undefined && kind !== 'dict') return false;
+                    kind = 'dict';
+                    writes++;
+                    return true;
+                }
                 const k = isObjectLiteralExpression(rhs) && !rhs.properties.some((p: any) => p.kind !== SyntaxKind.PropertyAssignment) ? 'dict'
                     : (isArrayLiteralExpression(rhs) && this.rustNilListLiteralOk(rhs) ? 'list' : undefined);
                 if (k === undefined || (kind !== undefined && kind !== k)) return false;
@@ -23537,6 +23545,8 @@ export class RustTranspiler extends BaseTranspiler {
                 writes++;
                 return true;
             }
+            // ral-67c: the head of `x = this.extend (x, y)` (the write itself is counted above)
+            if (this.rust67cNilMapExtendHead(n, declaration)) return true;
             if (this.rustNilMapKeyWrite(n, declaration) || this.rustNilMapExtraBox(n)) {
                 if (!this.rustNilMapKeyWrite(n, declaration)) boxes++;
                 return true;
@@ -23561,6 +23571,44 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustNilListLocals = new WeakSet<any>();
+
+    /** ral-67c: `x = this.extend (x, y)` (base `extend`, y not naming x) on a `let` whose declared type node is `NullableDict` / `Dict`. */
+    rust67cNilMapExtendWrite(n: any, declaration: any): boolean {
+        const type: any = declaration?.type;
+        if (type === undefined || type.kind !== SyntaxKind.TypeReference || !isIdentifier(type.typeName) || (type.typeArguments?.length ?? 0) > 0
+            || !RustTranspiler.RUST_67C_MAP_TYPES.has(String(type.typeName.text))) return false;
+        return this.rustSelfExtendWrite(n, declaration);
+    }
+
+    private static readonly RUST_67C_MAP_TYPES = new Set([ 'NullableDict', 'Dict' ]);
+
+    /** ral-67c: `x = y` where y is a `const y = { .. }` (plain map literal, never rebound) of x's function that no typed rule takes
+     *  (y prints `Value` and holds a map on every path): x takes it back with `.into_opt_dict()` (moved at y's last use). */
+    rust67cMapLocalSource(rhs: any, declaration: any): any {
+        const type: any = declaration?.type;
+        if (rhs === undefined || !isIdentifier(rhs) || type === undefined || type.kind !== SyntaxKind.TypeReference || !isIdentifier(type.typeName)
+            || !RustTranspiler.RUST_67C_MAP_TYPES.has(String(type.typeName.text))) return undefined;
+        const source: any = this.rustDeclarationOfIdentifier(rhs);
+        if (source === undefined || source === declaration || source.name === rhs || !isVariableDeclaration(source) || !isIdentifier(source.name)) return undefined;
+        const list: any = source.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || (list.flags & NodeFlags.Const) === 0 || list.declarations.length !== 1) return undefined;
+        const init: any = source.initializer === undefined ? undefined : this.unwrapParens(source.initializer);
+        if (init === undefined || !isObjectLiteralExpression(init) || init.properties.some((p: any) => p.kind !== SyntaxKind.PropertyAssignment)) return undefined;
+        if (this.rustEnclosingFunction(source) !== this.rustEnclosingFunction(declaration)) return undefined;
+        if (this.rustNilLocalKind(source) !== undefined || this.rustScalarLocalKind(source) !== undefined || this.rustBorrowedLocalKind(source) !== undefined
+            || this.rustDictLocalIsTyped(source) || this.rustVecLocalIsTyped(source) || this.rustMarketLocalKind(source) !== false || this.rustOptListLocal(source)
+            || this.rustNilMapLocal(source)) return undefined;
+        return source;
+    }
+
+    /** ral-67c: the head `x` of `x = this.extend (x, y)` on a nil map local: the optional map moves out (`x.take()`) and is written back. */
+    rust67cNilMapExtendHead(node: any, declaration: any): boolean {
+        const call: any = node?.parent;
+        if (!isCallExpression(call) || call.arguments[0] !== node) return false;
+        const assign: any = call.parent;
+        if (!isBinaryExpression(assign) || assign.right !== call || !isIdentifier(assign.left)) return false;
+        return this.rustIdentifierRefersToDeclaration(assign.left, declaration) && this.rust67cNilMapExtendWrite(assign.left, declaration);
+    }
 
     /** og: the nil-declared map local a declaration aliases whole (`const x = y`, same function, no closure between). */
     rustNilMapAliasSource(declaration: any): any {
@@ -23655,6 +23703,12 @@ export class RustTranspiler extends BaseTranspiler {
         const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
         const rhs: any = this.unwrapParens(right);
         if (this.literalKindOfNode(rhs) === 'null') return `${name} = \u0004None`;
+        const mapSource = this.rust67cMapLocalSource(rhs, this.rustNilMapOf(left));
+        if (mapSource !== undefined) {
+            const s = super.transformIdentifier(rhs, this.ReservedKeywordsReplacements[rhs.text] ?? rhs.text);
+            return `${name} = ${this.rustLocalLastUse(rhs, mapSource) ? s : `${s}.clone()`}.into_opt_dict()`;
+        }
+        if (this.rust67cNilMapExtendWrite(left, this.rustNilMapOf(left))) return `${name} = Some(${this.printNode(right, identation).trim()}.into_dict())`;
         if (isArrayLiteralExpression(rhs)) return `${name} = Some(${this.printBuiltListLiteral(rhs)})`;
         return `${name} = Some(crate::value::Dict::new(${this.rustObjectLiteralBlock(rhs, identation)}))`;
     }
@@ -23672,6 +23726,9 @@ export class RustTranspiler extends BaseTranspiler {
     /** The `Value` hand-off: the map moved at the last use, else the Arc bump; `None` is `Value::Null`. */
     printNilMapBox(node, text: string): string | undefined {
         const parent: any = node?.parent;
+        // ral-67c: the optional map moves out of the local into the `extend` head (`impl ExtendHead for Option<Dict>`); the write puts it back
+        const extendHeadOf = this.rustNilMapOf(node);
+        if (extendHeadOf !== undefined && this.rust67cNilMapExtendHead(node, extendHeadOf)) return `${text}.take()`;
         if (parent === undefined || !((parent.kind === SyntaxKind.PropertyAssignment && parent.initializer === node) || (isReturnStatement(parent) && parent.expression === node)
             || this.rustNilMapExtraBox(node))) return undefined;
         const declaration = this.rustNilMapOf(node);
