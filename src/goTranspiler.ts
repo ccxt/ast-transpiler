@@ -34847,3 +34847,170 @@ GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varNa
     });
     return !unsafe && (rebinds > 0);
 };
+
+// ---- 84g7: ternary locals asked while a parameter's GetArg type is being decided -----------------
+// A defaulted parameter's GetArg type is decided by scanning its copy targets, and a ternary local that
+// copies the parameter (`const n = (limit !== undefined) ? limit : 2000`) is one of them: classifying the
+// local inside that scan sees the parameter's in-progress `any` and used to memoise the box for good, so
+// the declaration printed `var n any = func() any {..}()` although the parameter ends up `*int64`. An
+// answer reached while a GetArg type is being computed is provisional: it is neither memoised nor left in
+// the declared-type caches, and the next ask, once the parameter is settled, decides the declaration.
+// The parameter's own verdict never depended on the local being typed (the scan saw the box, the
+// pointer-or-pointee join keeps every value the parameter can hold).
+export interface GoTranspiler {
+    goTernaryJoinProvisional(): boolean;
+    goTernaryJoinFeedsAnotherTernary(declaration): boolean;
+}
+
+GoTranspiler.prototype.goTernaryJoinProvisional = function (): boolean {
+    return (this.goGetArgTypeComputing?.size ?? 0) > 0;
+};
+
+// declarations first asked provisionally: before this rule they stayed boxed, so a value-typed answer
+// must not reach another ternary as an arm (a pointer-typed sibling would wrap it in Int64PtrTyped)
+const GO_TERNARY_JOIN_PROVISIONAL = new WeakSet<object>();
+const goTernaryJoinSettledParts = GoTranspiler.prototype.goTernaryJoinParts;
+GoTranspiler.prototype.goTernaryJoinParts = function (declaration) {
+    if ((declaration === undefined) || GO_TERNARY_JOIN_MEMO.has(declaration)
+        || (this.goUnwrapParenthesizedNode(declaration.initializer)?.kind !== SyntaxKind.ConditionalExpression)) {
+        return goTernaryJoinSettledParts.call(this, declaration);
+    }
+    if (!this.goTernaryJoinProvisional()) {
+        const settled = goTernaryJoinSettledParts.call(this, declaration);
+        if ((settled === undefined) || !GO_TERNARY_JOIN_PROVISIONAL.has(declaration) || settled.goType.startsWith('*')
+            || !this.goTernaryJoinFeedsAnotherTernary(declaration)) {
+            return settled;
+        }
+        GO_TERNARY_JOIN_MEMO.set(declaration, { parts: undefined });
+        return undefined;
+    }
+    GO_TERNARY_JOIN_PROVISIONAL.add(declaration);
+    const parts = goTernaryJoinSettledParts.call(this, declaration);
+    GO_TERNARY_JOIN_MEMO.delete(declaration);
+    return parts;
+};
+
+// is the local read as an arm of another conditional expression in its function?
+GoTranspiler.prototype.goTernaryJoinFeedsAnotherTernary = function (declaration): boolean {
+    const scope = this.goEnclosingFunction(declaration);
+    const name = declaration.name;
+    return (scope === undefined) || this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)) {
+            return false;
+        }
+        let current: any = n;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        return (current.parent?.kind === SyntaxKind.ConditionalExpression) && (current.parent.condition !== current);
+    });
+};
+
+const goTernaryJoinSettledDeclaredType = GoTranspiler.prototype.goDeclaredTypeOfIdentifier;
+GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node) {
+    if (!this.goTernaryJoinProvisional() || (node?.kind !== SyntaxKind.Identifier)) {
+        return goTernaryJoinSettledDeclaredType.call(this, node);
+    }
+    const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    const owner = ((declaration?.kind === SyntaxKind.VariableDeclaration)
+        && (this.goUnwrapParenthesizedNode(declaration.initializer)?.kind === SyntaxKind.ConditionalExpression))
+        ? goTernaryJoinOwner(declaration.initializer) : undefined;
+    if ((owner !== declaration) || (owner === undefined) || this.goDeclaredTypeCache.has(owner) || GO_TERNARY_JOIN_MEMO.has(owner)) {
+        return goTernaryJoinSettledDeclaredType.call(this, node);
+    }
+    const answer = goTernaryJoinSettledDeclaredType.call(this, node);
+    this.goDeclaredTypeCache.delete(owner);
+    this.goLocalStaticTypeCache.delete(owner);
+    this.goLocalSafeVerdicts.delete(owner);
+    return answer;
+};
+
+// ---- 84g7 R2: a defined int64 pointer arm next to a Go `int` arm --------------------------------
+// `const n = (limit === undefined) ? defaultLimit : limit` with `limit` a `*int64` the condition proves
+// defined on its branch and `defaultLimit` a Go `int` local (an integer-literal seed): the literal kept a
+// boxed `int` or a boxed `*int64`; both read as the same integer through every helper. The local is
+// declared `int64`, the pointer arm is dereferenced on the branch that proves it defined and the `int` arm
+// converts with Go's own `int64(..)`, so later reads are native int64 operations.
+interface GoTernaryJoinIntParts { goType: string, derefTrue: boolean, derefFalse: boolean, widenTrue?: boolean, widenFalse?: boolean }
+
+const goTernaryJoinR1PartsUncached = GoTranspiler.prototype.goTernaryJoinPartsUncached;
+GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
+    const known = goTernaryJoinR1PartsUncached.call(this, declaration);
+    // inside a parameter's GetArg scan the widened join is not offered: that scan decided the
+    // parameter's twin before this rule existed, and a provisional answer is not memoised (R1)
+    if ((known !== undefined) || this.goTernaryJoinProvisional()) {
+        return known;
+    }
+    const ternary: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if (ternary?.kind !== SyntaxKind.ConditionalExpression) {
+        return undefined;
+    }
+    const whenTrue = this.goTernaryJoinArmType(ternary.whenTrue);
+    const whenFalse = this.goTernaryJoinArmType(ternary.whenFalse);
+    if (this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0)).includes('\n')) {
+        return undefined;
+    }
+    const pointerArm = (armNode, armType: string, otherType: string, outcome: boolean): boolean => {
+        const arm: any = this.goUnwrapParenthesizedNode(armNode);
+        return (armType === '*int64') && (otherType === 'int') && (arm?.kind === SyntaxKind.Identifier)
+            && this.goTernaryJoinConditionDefines(ternary.condition, arm.text, outcome);
+    };
+    // a write of a parameter's copy (`sinceValue = now - n * d` after `let sinceValue = since`) reading the
+    // local would turn native and change that parameter's GetArg proof: keep the box there
+    if (this.goTernaryJoinFeedsParameterCopy(declaration)) {
+        return undefined;
+    }
+    if (pointerArm(ternary.whenTrue, whenTrue, whenFalse, true)) {
+        return { goType: 'int64', derefTrue: true, derefFalse: false, widenFalse: true } as GoTernaryJoinIntParts;
+    }
+    if (pointerArm(ternary.whenFalse, whenFalse, whenTrue, false)) {
+        return { goType: 'int64', derefTrue: false, derefFalse: true, widenTrue: true } as GoTernaryJoinIntParts;
+    }
+    return undefined;
+};
+
+export interface GoTranspiler {
+    goTernaryJoinFeedsParameterCopy(declaration): boolean;
+}
+
+GoTranspiler.prototype.goTernaryJoinFeedsParameterCopy = function (declaration): boolean {
+    const scope = this.goEnclosingFunction(declaration);
+    const name = declaration.name.text;
+    const checker: any = this.checkerOrUndefined();
+    if ((scope === undefined) || (checker === undefined)) {
+        return true;
+    }
+    return this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.BinaryExpression) || (n.operatorToken?.kind !== SyntaxKind.EqualsToken) || (n.left?.kind !== SyntaxKind.Identifier)
+            || !this.hasNodeWhere(n.right, (r: any) => (r.kind === SyntaxKind.Identifier) && (r.text === name))) {
+            return false;
+        }
+        const target: any = checker.getSymbolAtLocation(n.left)?.valueDeclaration?.resolve();
+        const source: any = this.goUnwrapParenthesizedNode(target?.initializer);
+        return (target?.kind === SyntaxKind.VariableDeclaration) && (source?.kind === SyntaxKind.Identifier)
+            && (checker.getSymbolAtLocation(source)?.valueDeclaration?.resolve()?.kind === SyntaxKind.Parameter);
+    });
+};
+
+const goTernaryJoinR1Declaration = GoTranspiler.prototype.goTernaryJoinDeclaration;
+GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declaration, identation: number) {
+    const parts = (goTernaryJoinOwner(declaration?.initializer) === declaration) ? (this.goTernaryJoinParts(declaration) as GoTernaryJoinIntParts) : undefined;
+    if ((parts === undefined) || (!parts.widenTrue && !parts.widenFalse)) {
+        return goTernaryJoinR1Declaration.call(this, statement, declaration, identation);
+    }
+    if ((statement?.parent?.kind !== SyntaxKind.FirstStatement) || (statement.declarations?.length !== 1)
+        || (this.getGoLocalType(declaration, this.printNode(declaration.initializer, identation)) !== parts.goType)) {
+        return undefined;
+    }
+    const ternary: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const condition = this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0));
+    const arm = (node, deref: boolean, widen: boolean) => {
+        const printed = this.goPrintTernaryBranch(node, 1).trim();
+        return deref ? ('*' + printed) : (widen ? ('int64(' + printed + ')') : printed);
+    };
+    const whenTrue = arm(ternary.whenTrue, parts.derefTrue, parts.widenTrue === true);
+    const whenFalse = arm(ternary.whenFalse, parts.derefFalse, parts.widenFalse === true);
+    const name = this.printNode(declaration.name, 0);
+    const iden = this.getIden(identation);
+    return `${iden}var ${name} ${parts.goType}\n${iden}if ${this.goStripControlClauseParens(condition)} {\n${iden}\t${name} = ${whenTrue}\n${iden}} else {\n${iden}\t${name} = ${whenFalse}\n${iden}}`;
+};

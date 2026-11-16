@@ -14899,3 +14899,118 @@ describe('ral-84g6 a map typing needs a native use', () => {
         expect(output).toContain('var query any = paramsFlag');
     });
 });
+
+describe('84g7 ternary locals copied into a defaulted parameter scan', () => {
+    test('a ternary over a GetArg pointer parameter is typed even when first asked inside that parameter scan', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Int = number | undefined;\n'
+            + 'class X {\n'
+            + '    seconds (): number { return 1; }\n'
+            + '    parseTimeframe (t: string): number { return 60; }\n'
+            + '    f (timeframe: string, isContract: boolean, since: Int = undefined, limit: Int = undefined) {\n'
+            + '        const request = {};\n'
+            + '        const contractLimit: number = (limit !== undefined) ? limit : 2000;\n'
+            + '        let rangeLimit = limit;\n'
+            + '        if (isContract) {\n'
+            + '            rangeLimit = contractLimit;\n'
+            + '        }\n'
+            + '        const duration = this.parseTimeframe (timeframe);\n'
+            + '        if (since === undefined) {\n'
+            + '            const now = this.seconds ();\n'
+            + '            request[\'from\'] = now - duration * (contractLimit - 1);\n'
+            + '        }\n'
+            + '        request[\'size\'] = rangeLimit;\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).toContain('var limit *int64 = GetArgInt64Ptr(optionalArgs, 1, nil)');
+        expect(out).toContain('\tvar contractLimit int64\n\tif limit != nil {\n\t\tcontractLimit = *limit\n\t} else {\n\t\tcontractLimit = 2000\n\t}');
+        expect(out).not.toContain('var contractLimit any = func() any {');
+    });
+    test('a non-ternary local copied from a pointer and reassigned from the parameter keeps its value form', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Int = number | undefined;\n'
+            + 'class X {\n'
+            + '    options: any = {};\n'
+            + '    safeInteger (o: any, k: string, d: Int = undefined): Int { return d; }\n'
+            + '    f (tf: number, now: number, limit: Int = undefined) {\n'
+            + '        const request = {};\n'
+            + '        const defaultLimit = this.safeInteger (this.options, \'l\', 200);\n'
+            + '        let candlesCount: Int = defaultLimit;\n'
+            + '        if (limit !== undefined) {\n'
+            + '            candlesCount = limit;\n'
+            + '        }\n'
+            + '        request[\'start_ts\'] = now - (candlesCount * tf);\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).not.toContain('*candlesCount');
+    });
+    test('a provisionally typed value ternary read as an arm of a pointer ternary keeps the box (no Int64PtrTyped)', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Int = number | undefined;\n'
+            + 'class X {\n'
+            + '    sum (a: any, b: any): number { return 1; }\n'
+            + '    f (since: Int = undefined, limit: Int = undefined) {\n'
+            + '        const request = {};\n'
+            + '        const cappedLimit = ((limit === undefined) || (limit > 1440)) ? 1440 : limit;\n'
+            + '        const limitResolved = (since !== undefined) ? cappedLimit : limit;\n'
+            + '        if (since !== undefined) {\n'
+            + '            request[\'end\'] = this.sum (since, 60 * cappedLimit);\n'
+            + '        }\n'
+            + '        request[\'limit\'] = limitResolved;\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).not.toContain('Int64PtrTyped(cappedLimit)');
+    });
+});
+
+describe('84g7 R2 int64 pointer arm next to an int arm', () => {
+    test('a defined *int64 arm and an int local arm declare int64 with a deref and an int64() conversion', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Int = number | undefined;\n'
+            + 'class X {\n'
+            + '    f (method: string, rpi: boolean, limit: Int = undefined) {\n'
+            + '        const request = {};\n'
+            + '        const defaultLimit = (method === \'full\') ? 5000 : 100;\n'
+            + '        const requestedLimit = (limit === undefined) ? defaultLimit : limit;\n'
+            + '        const limitResolved = rpi ? 400 : requestedLimit;\n'
+            + '        request[\'sz\'] = limitResolved;\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).toContain('\tvar requestedLimit int64\n\tif limit == nil {\n\t\trequestedLimit = int64(defaultLimit)\n\t} else {\n\t\trequestedLimit = *limit\n\t}');
+        expect(out).toContain('\tvar limitResolved int64\n');
+    });
+    test('a widened join read by a write of a parameter copy keeps the box and the parameter keeps its pointer twin', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Int = number | undefined;\n'
+            + 'class X {\n'
+            + '    milliseconds (): number { return 1; }\n'
+            + '    f (since: Int = undefined, limit: Int = undefined) {\n'
+            + '        const request = {};\n'
+            + '        const defaultMaxLimit = 1000;\n'
+            + '        const limitValue: Int = (limit === undefined) ? defaultMaxLimit : limit;\n'
+            + '        const nowMs = this.milliseconds ();\n'
+            + '        let sinceValue: Int = since;\n'
+            + '        if (sinceValue === undefined) {\n'
+            + '            sinceValue = nowMs - limitValue * 60;\n'
+            + '        }\n'
+            + '        request[\'start_time\'] = sinceValue;\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).toContain('var since *int64 = GetArgInt64Ptr(optionalArgs, 0, nil)');
+    });
+});
