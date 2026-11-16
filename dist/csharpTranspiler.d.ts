@@ -32,7 +32,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredLocalTypeResolver?: (declaration: any) => string | undefined;
     csharpDeclaredMemberType?: (owner: 'this' | 'client', name: string) => CsharpDeclaredMember | undefined;
     csharpDeclaredMethodReturnType?: (name: string) => string | undefined;
-    csharpListParamExclusions?: (name: string, index: number) => boolean;
     csharpElementRowLocalSource?: (fileName: string) => boolean;
     csharpTypedLocals: WeakMap<Node, string>;
     csharpNativeForIncrementors: WeakSet<Node>;
@@ -169,7 +168,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpArrayListParamType(node: any): string | undefined;
     csharpFunctionStringListParamType(node: any): string | undefined;
     csharpListSpellingOfType(type: any, unionArms?: number, anyCell?: boolean): string | undefined;
-    csharpListParamCensus(): Map<string, boolean> | undefined;
+    csharpListParamCensus(): Map<string, boolean>;
     csharpListParamBodyReadsAsList(parameter: any): boolean;
     csharpArgumentMayBeList(type: any): boolean;
     printArgsForCallExpression(node: any, identation: any): string;
@@ -284,7 +283,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpSliceArithmeticOperandsArePure(node: any): boolean;
     csharpSliceClampExpression(bound: any, length: any): string;
     csharpSliceReceiverKind(expression: any): "list" | "string";
-    csharpSliceStringType(type: any): boolean;
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     csharpPlusChainNonNullStringType(node: any, self?: any): string | undefined;
     csharpNonNullStringOperandType(node: any, self?: any, guardedConcat?: boolean): string | undefined;
@@ -380,7 +378,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printConditionalExpression(node: any, identation: any): string;
     csharpTernaryConditionOperand(node: any): string;
     printTernaryCondition(node: any): any;
-    csharpConditionPrintsAsBool(node: any): boolean;
+    csharpQuotedLiteralEnd(text: string, start: number): number;
     csharpMatchingParenIndex(text: string, start: number): number;
     csharpTextHasTopLevelConditional(text: string): boolean;
     csharpPrintedConditionIsBoolean(text: string): boolean;
@@ -443,7 +441,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIntegralTestedInExpression(call: any, symbol: any): boolean;
     csharpIntegralBindingIsRewritten(symbol: any): boolean;
     csharpNativeParseCall(node: any): string;
-    csharpNativeParseCallOnDeclaredLocal(callee: any, arg: any): string;
     csharpNativeLiteralProduct(left: any, right: any): string | undefined;
     csharpNativeModExpression(left: any, right: any, leftText: any): string;
     csharpNativeNegatedLocal(operand: any, leftSide: any): string;
@@ -488,7 +485,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpCoreArgShadows(node: any): any[];
     csharpCoreArgNeedsShadow(node: any, param: any, wanted: string): boolean;
     csharpParamWrites(method: any, param: any): any[];
-    csharpWriteProducesList(rhs: any): boolean;
     csharpShadowNameOf(node: any): string | undefined;
     csharpCallReturnsString(node: any): boolean;
     printJsonParseCall(node: any, identation: any, parsedArg?: any): string;
@@ -526,7 +522,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpLocalTypeOf(node: any): string | undefined;
     csharpDeclaredDictReceiverType(node: any): string | undefined;
     csharpReceiverIsDeclaredList(receiver: any): boolean;
-    printLengthProperty(node: any, identation: any, name?: any): string;
     csharpDeclaredReceiverType(node: any): string | undefined;
     csharpReceiverIsDeclaredDictionary(expression: any): boolean;
     csharpDictionaryElementWriteTarget(node: any): string | undefined;
