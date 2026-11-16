@@ -15014,3 +15014,100 @@ describe('84g7 R2 int64 pointer arm next to an int arm', () => {
         expect(out).toContain('var since *int64 = GetArgInt64Ptr(optionalArgs, 0, nil)');
     });
 });
+
+describe ('ral-84g8: sibling block-scoped parse* locals', () => {
+    test ('two const parsed in disjoint blocks each take the parser map type', () => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'class Ex {\n'
+            + '    parseWsTrade (t: Dict, market: any = undefined): Dict { return { \'id\': t[\'id\'] }; }\n'
+            + '    safeString (a: any, b: any, c: any = undefined): string { return undefined; }\n'
+            + '    f (message: Dict, list: any[], stored: any) {\n'
+            + '        if (Array.isArray (list)) {\n'
+            + '            for (let i = 0; i < list.length; i++) {\n'
+            + '                const parsed = this.parseWsTrade (list[i]);\n'
+            + '                stored.append (parsed);\n'
+            + '            }\n'
+            + '        } else {\n'
+            + '            const parsed = this.parseWsTrade (message);\n'
+            + '            const symbol = this.safeString (parsed, \'symbol\');\n'
+            + '            stored.append (parsed);\n'
+            + '        }\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo (src).content;
+        expect (out).toContain ('var parsed map[string]any = this.ParseWsTrade(GetValue(list, i))');
+        expect (out).toContain ('var parsed map[string]any = this.ParseWsTrade(message)');
+    });
+    test ('a nested same-named declaration still keeps the box', () => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'class Ex {\n'
+            + '    parseWsTrade (t: Dict, market: any = undefined): Dict { return { \'id\': t[\'id\'] }; }\n'
+            + '    f (message: Dict, stored: any) {\n'
+            + '        {\n'
+            + '            const parsed = this.parseWsTrade (message);\n'
+            + '            if (stored) {\n'
+            + '                const parsed = this.parseWsTrade (message);\n'
+            + '                stored.append (parsed);\n'
+            + '            }\n'
+            + '            stored.append (parsed);\n'
+            + '        }\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo (src).content;
+        expect (out).not.toContain ('var parsed map[string]any');
+    });
+});
+
+describe ('ral-84g8 R2: inherited string-mapper results', () => {
+    test ('a parent-class parseOrderStatus proven *string types the child local', () => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'class Exchange {\n'
+            + '    safeString (a: any, b: any, c: any = undefined): string { return undefined; }\n'
+            + '}\n'
+            + 'class Rest extends Exchange {\n'
+            + '    parseOrderStatus (status: string): string {\n'
+            + '        const statuses: Dict = { \'1\': \'open\' };\n'
+            + '        return this.safeString (statuses, status, status);\n'
+            + '    }\n'
+            + '}\n'
+            + 'class Pro extends Rest {\n'
+            + '    parseWsOrder (order: Dict) {\n'
+            + '        const status = this.parseOrderStatus (this.safeString (order, \'s\'));\n'
+            + '        return { \'status\': status };\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo (src).content;
+        expect (out).toContain ('var status *string = this.ParseOrderStatus(this.SafeString(order, "s"))');
+    });
+});
+
+describe ('ral-84g8 R3: inherited annotated-method results', () => {
+    test ('a parent-class request builder proven map types the child local', () => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'class Exchange {\n'
+            + '    extend (...args: any[]): Dict { return {}; }\n'
+            + '}\n'
+            + 'class Rest extends Exchange {\n'
+            + '    parseRequestThing (id: string, params: Dict = {}): Dict {\n'
+            + '        const request: Dict = { \'id\': id };\n'
+            + '        return this.extend (request, params);\n'
+            + '    }\n'
+            + '}\n'
+            + 'class Pro extends Rest {\n'
+            + '    send (id: string, params: Dict = {}) {\n'
+            + '        const request = this.parseRequestThing (id, params);\n'
+            + '        return request[\'id\'];\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo (src).content;
+        expect (out).toContain ('var request map[string]any = this.ParseRequestThing(id, params)');
+    });
+});
