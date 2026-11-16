@@ -21850,7 +21850,9 @@ describe('ral-64b: build-pass locals typed by the printer', () => {
     const signIn = "    signIn (response: Dict, responseInner: Dict): Dict {\n        let sessionToken = this.safeString (response, 'SessionToken');\n        if (sessionToken !== undefined) {\n            this.options['sessionToken'] = sessionToken;\n            return response;\n        }\n        sessionToken = this.safeString (responseInner, 'SessionToken');\n        this.options['sessionToken'] = sessionToken;\n        return responseInner;\n    }\n";
     test('a reader local stored at a literal `this.` field key before a later use is Option<String> (copy at the store)', () => {
         const out = build ('ral64b-reassign', signIn);
-        expect(out).toMatch(/let mut sessionToken: Option<String> = self\.\w+\(response\.clone\(\), Value::Str\("SessionToken"\.into\(\)\), &\[\]\)/);
+        // INT-72: re-spelled to the `_opt` reader form 62o prints (was the long `.as_str().map(str::to_owned)` form)
+        expect(out).toContain('let mut sessionToken: Option<String> = self.safe_string_k_opt(response.clone(), "SessionToken", &[]);');
+        expect(out).toContain('sessionToken = self.safe_string_k_opt(responseInner.clone(), "SessionToken", &[]);');
         expect(out).toContain('insert("sessionToken".into(), sessionToken.clone().map(Value::from).unwrap_or(Value::Null));');
         expect(out).toContain('insert("sessionToken".into(), sessionToken.map(Value::from).unwrap_or(Value::Null));');
         expect(out).not.toContain('let mut sessionToken: Value');
@@ -22072,12 +22074,15 @@ describe('ral-64n: bitflyer fetchMarkets: `s.split (d as string)` with an option
     test('same-named sibling consts, each a typed-signature argument of the write to a typed local: both Option<String>', () => {
         const out = run(twin);
         expect(out).toContain('let mut e: Option<String> = (if let Some(__s) = id.as_deref()');
-        expect(out).toContain('let mut e: Option<String> = self.safeString(');
+        // INT-72: re-spelled to the `_opt` reader form 62o prints
+        expect(out).toContain('let mut e: Option<String> = self.safe_string_k_opt(market, "q", &[]);');
         expect(out).toContain('expiry = self.parseExpiryDate(e.as_deref().unwrap_or_default()).as_i64();');
     });
     test('guard: the write target is an untyped parameter: the sibling walk still refuses', () => {
         const out = run(twin.replace('f (market: any, a: Str): any {', 'f (market: any, a: Str, expiry: any): any {').replace('        let expiry: Int = undefined;\n', ''));
-        expect(out).not.toContain('let mut e: Option<String> = self.safeString(');
+        // INT-72: re-spelled with the positive (the long-form text would pass vacuously); the sibling stays Value
+        expect(out).not.toContain('let mut e: Option<String> = self.safe_string_k_opt(market, "q"');
+        expect(out).toContain('let mut e: Value');
     });
 });
 
