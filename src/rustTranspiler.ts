@@ -21185,6 +21185,35 @@ export class RustTranspiler extends BaseTranspiler {
         return (method === 'resolve' || method === 'reject') && this.rustWsSettleCall(up);
     }
 
+    /** ral-73a: `y = x` (statement), y another plain `let` of the same function declared `undefined` (no initializer value) and
+     *  annotated `NullableDict` / `Dict`: x moves whole into y's `Option<Dict>` / `Value` box (`Value::Map(x)`, the box the helper
+     *  form made at the write; no copy) at x's last use. */
+    rust73aNilDictAliasWrite(n: any): boolean {
+        const up: any = n?.parent;
+        if (!isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const left: any = up.left;
+        if (!isIdentifier(left) || String(left.text) === String(n.text) || this.rustTestTierSource(up)) return false;
+        const target: any = this.rustDeclarationOfIdentifier(left);
+        if (target === undefined || !isVariableDeclaration(target) || target.name === left || !isIdentifier(target.name)) return false;
+        if (this.rustEnclosingFunction(target) !== this.rustEnclosingFunction(up)) return false;
+        const list: any = target.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || (list.flags & NodeFlags.Const) !== 0 || list.declarations?.length !== 1) return false;
+        const init: any = this.rustSkipWrappers(target.initializer);
+        if (init !== undefined && this.literalKindOfNode(init) !== 'null') return false;
+        const type: any = this.typeOfNodeIfAny(target.name);
+        if (type === undefined) return false;
+        const parts: any[] = (type.flags & TypeFlags.Union) ? (typeParts(type) ?? []).filter((p: any) => !this.rustTypeIsNullish(p)) : [type];
+        return parts.length === 1 && this.isProvenMapType(parts[0]);
+    }
+
+    /** ral-73a: `this.f = x` (statement, a direct property of `this`, outside the test tier): the field is a `Value` slot that
+     *  stores the reference, so a native map moves into it whole as `Value::Map(x)` at x's last use. */
+    rust73aThisFieldStore(n: any): boolean {
+        const up: any = n?.parent;
+        if (!isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        return isPropertyAccessExpression(up.left) && up.left.expression.kind === SyntaxKind.ThisKeyword && !this.rustTestTierSource(up);
+    }
+
     /** `client.resolve|reject (x, ..)` on a ws handle, x the settled value. */
     rustWsSettleMove(n: any): boolean {
         const up: any = n?.parent;
@@ -21323,6 +21352,16 @@ export class RustTranspiler extends BaseTranspiler {
                 moveEscapes.push(n);
                 return true;
             }
+            // ral-73a: written whole into a nil-declared map-typed local (`requestHeaders = privateHeaders`) at its last use
+            if (!produced && !prediction && this.rust73aNilDictAliasWrite(n)) {
+                moveEscapes.push(n);
+                return true;
+            }
+            // ral-73a: stored whole into a plain `this.<field>` (`this.events = eventsDict`) at its last use
+            if (!produced && this.rust73aThisFieldStore(n)) {
+                moveEscapes.push(n);
+                return true;
+            }
             return false;
         });
         const siblings = this.literalSiblingBindings;
@@ -21345,7 +21384,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (moveEscapes.length > 0) {
             // ral-tf: a map widened by string-local keys (written at `m[k] = v`) still moves whole into a ws settle value at
             // its last use: that is its only escape, so the move is the box the helper form made (no copy)
-            if (moveEscapes.length > 1 || escapes.length > 0 || rebuilds > 0 || (widened && !siblingMove && !this.rustWsSettleMove(moveEscapes[0])) || enumUses > 0 || prediction
+            if (moveEscapes.length > 1 || escapes.length > 0 || rebuilds > 0 || (widened && !siblingMove && !this.rustWsSettleMove(moveEscapes[0]) && !this.rust73aThisFieldStore(moveEscapes[0])) || enumUses > 0 || (prediction && !this.rust73aThisFieldStore(moveEscapes[0]))
                 || !this.rustLocalLastUse(moveEscapes[0], declaration) || !this.rustBoxLineOk(moveEscapes[0])) return false;
             this.rustLiteralMoves.add(moveEscapes[0]);
         }
@@ -23922,6 +23961,8 @@ export class RustTranspiler extends BaseTranspiler {
         const init: any = source.initializer === undefined ? undefined : this.unwrapParens(source.initializer);
         if (init === undefined || !isObjectLiteralExpression(init) || init.properties.some((p: any) => p.kind !== SyntaxKind.PropertyAssignment)) return undefined;
         if (this.rustEnclosingFunction(source) !== this.rustEnclosingFunction(declaration)) return undefined;
+        // ral-73a: a literal map typed as a native bearer whose move into x is its admitted last-use escape (rust73aNilDictAliasWrite)
+        if (this.rustDictLocalIsTyped(source) && this.rustLiteralMoves.has(rhs)) return source;
         if (this.rustNilLocalKind(source) !== undefined || this.rustScalarLocalKind(source) !== undefined || this.rustBorrowedLocalKind(source) !== undefined
             || this.rustDictLocalIsTyped(source) || this.rustVecLocalIsTyped(source) || this.rustMarketLocalKind(source) !== false || this.rustOptListLocal(source)
             || this.rustNilMapLocal(source)) return undefined;
@@ -24033,6 +24074,8 @@ export class RustTranspiler extends BaseTranspiler {
         const mapSource = this.rust67cMapLocalSource(rhs, this.rustNilMapOf(left));
         if (mapSource !== undefined) {
             const s = super.transformIdentifier(rhs, this.ReservedKeywordsReplacements[rhs.text] ?? rhs.text);
+            // ral-73a: the native bearer moves into the shared handle (no copy)
+            if (this.rustLiteralMoves.has(rhs) && this.rustDictLocalIsTyped(mapSource)) return `${name} = Some(crate::value::Dict::new(${s}))`;
             return `${name} = ${this.rustLocalLastUse(rhs, mapSource) ? s : `${s}.clone()`}.into_opt_dict()`;
         }
         if (this.rust67cNilMapExtendWrite(left, this.rustNilMapOf(left))) return `${name} = Some(${this.printNode(right, identation).trim()}.into_dict())`;
@@ -29531,6 +29574,15 @@ export class RustTranspiler extends BaseTranspiler {
                     handOffs++;
                     return true;
                 }
+                // ral-73a: stored whole into a `this.f[..]` slot (statement) at the list's last use, or at its last use on its path
+                // (a then-branch store whose later uses all sit in that if's else branch, e.g. the else-branch store under
+                // another key): JS stores the reference and nothing reads or pushes `x` afterwards, so `Value::Arr(x)` moves it
+                if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
+                    && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left)) && short(n) && this.rust73aStoreLastUse(up.left, n, declaration)) {
+                    boxes.push([n, 'move']);
+                    handOffs++;
+                    return true;
+                }
                 // ral-tf: a one-kind push accumulator boxed into an object-literal value before its last hand-off shares the
                 // list there (`Value::Arr(x.clone())`, an Arc bump where the Value box was `x.clone()`); nothing mutates it afterwards
                 if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n && short(n) && this.rustBuiltListFrozenAfter(n, declaration, name)) {
@@ -29585,6 +29637,31 @@ export class RustTranspiler extends BaseTranspiler {
         for (const [n, form] of boxes) this.rustLentListBoxes.set(n, form);
         this.rustBuiltLists.add(declaration);
         return true;
+    }
+
+    /** ral-73a: `this.f[..] = x` / `m[k] = x` (m another local or parameter, k a literal or a plain identifier other than x) at
+     *  x's last use, or at its last use on its path (rustGuardedBranchLastUse: every later use sits in the else branch of the
+     *  nearest if whose then-branch holds the store). */
+    rust73aStoreLastUse(place: any, n: any, declaration: any): boolean {
+        if (this.rustTestTierSource(place)) return false;
+        const name = String(n.text);
+        let mentions = false;
+        const visit = (m: any) => { if (mentions) return; if (isIdentifier(m) && String(m.text) === name) { mentions = true; return; } m.forEachChild?.(visit); };
+        visit(place);
+        if (mentions) return false;
+        if (!this.rustThisRootedPlace(place)) {
+            const recv: any = place.expression;
+            if (!isIdentifier(recv)) return false;
+            const d: any = this.rustDeclarationOfIdentifier(recv);
+            if (d === undefined || d === recv || d.name === recv || !(isVariableDeclaration(d) || d.kind === SyntaxKind.Parameter)) return false;
+            if (isElementAccessExpression(place)) {
+                const key: any = this.rustSkipWrappers(place.argumentExpression);
+                if (!isStringLiteralLikeNode(key) && !isIdentifier(key)) return false;
+            }
+        }
+        if (this.rustLocalLastUse(n, declaration)) return true;
+        const guard: any = findAncestor(n, (a: any) => a.kind === SyntaxKind.IfStatement || isFunctionLike(a));
+        return guard !== undefined && guard.kind === SyntaxKind.IfStatement && this.rustGuardedBranchLastUse(n, declaration, guard);
     }
 
     /** ral-56s: a base `this.arrayConcat (a, b)` (two operands, non-test tier): always a `Value::Arr`. */

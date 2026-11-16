@@ -22761,7 +22761,8 @@ describe('ral-67c: declared-empty NullableDict sign headers', () => {
     test('`x = y` of a const map-literal local that stays Value: taken back with into_opt_dict', () => {
         const out = write ('ral-67c-alias', sign ("            const signed: Dict = { 'K': this.apiKey };\n            signed['S'] = url;\n            requestHeaders = signed;\n"));
         expect(out).toContain('let mut requestHeaders: Option<crate::value::Dict> = None;');
-        expect(out).toMatch(/requestHeaders = signed\.into_opt_dict\(\);/);
+        // ral-73a: the literal is now a native map moved into the optional handle (was `signed.into_opt_dict()` on a Value box)
+        expect(out).toMatch(/requestHeaders = Some\(crate::value::Dict::new\(signed\)\);/);
     });
     test('negative: an undeclared (`any`) empty local, an extend reading another source, or a non-literal source keeps Value', () => {
         const untyped = write ('ral-67c-neg1', sign ("            requestHeaders = { 'K': this.apiKey };\n").replace('let requestHeaders: NullableDict = undefined;', 'let requestHeaders = undefined;').replace("            requestHeaders = { 'K': this.apiKey };\n", "            requestHeaders = { 'K': this.apiKey };\n            requestHeaders = this.extend (requestHeaders, { 'A': 1 });\n"));
@@ -23285,5 +23286,75 @@ describe('ral-73d: rows of a base list field of unified records (this.accounts[i
         expect(out).toContain('let mut account: crate::value::Dict = self.accounts.');
         expect(out).toContain('.into_dict();');
         expect(out).not.toContain('let mut account: Value');
+    });
+});
+
+describe('ral-73a: a built list stored whole into a this-field slot or under either branch of an if at its last use', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-73a-list-store');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    field (ids: string[]) {\n        const keys = [];\n        for (let i = 0; i < ids.length; i++) {\n            keys.push (ids[i]);\n        }\n        this.options['pairs'] = keys;\n    }\n    branches (ids: string[], spot: boolean) {\n        const idList: Dict[] = [];\n        for (let i = 0; i < ids.length; i++) {\n            idList.push ({ 'orderId': ids[i] });\n        }\n        const request: Dict = {};\n        if (spot) {\n            request['orderList'] = idList;\n        } else {\n            request['orderIdList'] = idList;\n        }\n        return this.hold (request);\n    }\n    readAfter (ids: string[]) {\n        const kept = [];\n        for (let i = 0; i < ids.length; i++) {\n            kept.push (ids[i]);\n        }\n        this.options['pairs'] = kept;\n        kept.push ('x');\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('this.options[k] = x at the last use moves the typed list', () => {
+        const body = out.slice (out.indexOf ('fn field'), out.indexOf ('fn branches'));
+        expect(body).toMatch(/let mut keys: crate::value::List = /);
+        expect(body).toContain('Value::Arr(keys)');
+        expect(body).not.toContain('keys.clone()');
+    });
+    test('a store in each branch of one if moves the typed list in both', () => {
+        const body = out.slice (out.indexOf ('fn branches'), out.indexOf ('fn readAfter'));
+        expect(body).toMatch(/let mut idList: crate::value::List = /);
+        expect(body.match(/Value::Arr\(idList\)/g)?.length).toBe(2);
+        expect(body).not.toContain('idList.clone()');
+    });
+    test('negative: a push after the store keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn readAfter'));
+        expect(body).toMatch(/let mut kept: Value = /);
+    });
+});
+
+describe('ral-73a: a literal header map moved whole into a nil-declared NullableDict local at its last use', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-73a-nil-alias');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type NullableDict = Dict | undefined;\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, NullableDict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    sign (path: string, api: string, signature: string) {\n        let requestHeaders: NullableDict = undefined;\n        if (api === 'private') {\n            const privateHeaders: Dict = {\n                'X-Key': path,\n            };\n            privateHeaders['signature'] = signature;\n            requestHeaders = privateHeaders;\n        }\n        return { 'url': path, 'headers': requestHeaders };\n    }\n    readAfter (path: string, api: string) {\n        let requestHeaders: NullableDict = undefined;\n        const kept: Dict = {\n            'X-Key': path,\n        };\n        requestHeaders = kept;\n        kept['late'] = api;\n        return { 'url': path, 'headers': requestHeaders };\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('the native map moves into the optional handle (no copy) and the target stays Option<Dict>', () => {
+        const body = out.slice (out.indexOf ('fn sign'), out.indexOf ('fn readAfter'));
+        expect(body).toMatch(/let mut privateHeaders: indexmap::IndexMap<String, Value> = /);
+        expect(body).toContain('requestHeaders = Some(crate::value::Dict::new(privateHeaders));');
+        expect(body).toMatch(/let mut requestHeaders: Option<crate::value::Dict> = None;/);
+        expect(body).not.toContain('privateHeaders.clone()');
+    });
+    test('negative: a write after the alias keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn readAfter'));
+        expect(body).toMatch(/let mut kept: Value = /);
+    });
+});
+
+describe('ral-73a: a literal map stored whole into a this-field at its last use', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-73a-field-store');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    events: Dict = {};\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    load (keys: string[]) {\n        const eventsDict: Dict = {};\n        for (let i = 0; i < keys.length; i++) {\n            const k = keys[i];\n            eventsDict[k] = i;\n        }\n        this.events = eventsDict;\n        return keys;\n    }\n    readAfter (keys: string[]) {\n        const kept: Dict = {};\n        for (let i = 0; i < keys.length; i++) {\n            const k = keys[i];\n            kept[k] = i;\n        }\n        this.events = kept;\n        kept['late'] = 1;\n        return keys;\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('the native map moves into the field (no clone)', () => {
+        const body = out.slice (out.indexOf ('fn load'), out.indexOf ('fn readAfter'));
+        expect(body).toMatch(/let mut eventsDict: indexmap::IndexMap<String, Value> = /);
+        expect(body).toContain('Value::Map(eventsDict)');
+        expect(body).not.toContain('eventsDict.clone()');
+    });
+    test('negative: a write after the store keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn readAfter'));
+        expect(body).toMatch(/let mut kept: Value = /);
     });
 });
