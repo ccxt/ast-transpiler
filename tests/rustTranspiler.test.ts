@@ -22510,3 +22510,24 @@ describe('ral-65p: `-x` over an i64 / Option<i64> scalar local keeps the local t
         expect(out).toContain('negate(&v)');
     });
 });
+describe('ral-65x: `x.toString()` of an Option<String> local that is never None is the local itself', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: string, d: Str = undefined): Str { return d; }\n    omit (o: any, k: string[]): any { return o; }\n}\n";
+    const build = (name: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = (write: string) => "    fetchOrderRequest (id: string, symbol: Str = undefined, params: Dict = {}) {\n        const raw = this.safeString (params, 'text');\n        let orderId = id;\n        if (raw !== undefined) {\n            if (!raw.startsWith ('t')) {\n                orderId = 't-' + raw;\n            } else {\n                orderId = " + write + ";\n            }\n        }\n        const request: Dict = {};\n        request['order_id'] = orderId.toString ();\n        return request;\n    }\n";
+    test('every write is a string: the local is Option<String> and the request reads it unformatted', () => {
+        const out = build ('ral65x-tostr', body ('raw'));
+        expect(out).toContain('let mut orderId: Option<String> = ');
+        expect(out).not.toContain('format!("{}", orderId)');
+    });
+    test('negative: a write the checker types possibly undefined keeps the formatted Value read', () => {
+        const out = build ('ral65x-tostr-neg', body ('this.safeString (params, \'x\')'));
+        expect(out).not.toMatch(/orderId\.map\(Value::from\)/);
+    });
+});

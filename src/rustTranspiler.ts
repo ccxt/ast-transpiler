@@ -10395,9 +10395,42 @@ export class RustTranspiler extends BaseTranspiler {
         if ((shape === 'pad' || shape === 'slice') && this.rustScalarIdentifierKind(recv) === undefined && this.rustScalarParamRead(recv) === undefined) return undefined;
         // ral-48f: `x.toString()` of an `Option<String>` local outside the test tier is the local itself (`None` stays `None`; the
         // `Value` form displayed its `Null` box as `null`, which the concat / box readers of an `ostr` operand print alike)
-        const ostrSelf = recvKind === 'ostr' && method === 'toString' && !this.rustTestTierSource(call) && this.rust48fSlotAliasConcatRecv(call, recv);
+        const ostrSelf = recvKind === 'ostr' && method === 'toString' && !this.rustTestTierSource(call)
+            && (this.rust48fSlotAliasConcatRecv(call, recv) || this.rust65xNeverNullStrRecv(recv));
         if (recvKind === 'ostr' && shape !== 'case' && shape !== 'replace' && shape !== 'pad' && shape !== 'slice' && !ostrSelf) return undefined;
         return { recv, recvKind, method, kind: recvKind };
+    }
+
+    /** ral-65x: `x.toString()` of an `Option<String>` local that can never hold `None`: the checker types this read
+     *  `string` and every write of the local (initializer included) is a string the checker types `string` where it is
+     *  written (a required string parameter, a guarded non-undefined local, a literal or a `+` chain with a string literal
+     *  operand). The `Value` form's `format!` then displayed a `Str` box, so the local itself is the same text. */
+    rust65xNeverNullStrRecv(recv: any): boolean {
+        const d: any = this.rustDeclaredNode(recv);
+        if (d === undefined || !isVariableDeclaration(d) || !isIdentifier(d.name) || d.initializer === undefined) return false;
+        const here: any = this.typeOfNodeIfAny(recv);
+        if (here === undefined || !this.isStringLikeType(here)) return false;
+        const fn: any = this.rustEnclosingFunction(d);
+        const strAt = (e: any): boolean => {
+            const n: any = this.unwrapParens(e);
+            if (n === undefined) return false;
+            if (n.kind === SyntaxKind.StringLiteral || n.kind === SyntaxKind.NoSubstitutionTemplateLiteral) return true;
+            if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.PlusToken) {
+                const lit = (x: any) => { const y: any = this.unwrapParens(x); return y.kind === SyntaxKind.StringLiteral || y.kind === SyntaxKind.NoSubstitutionTemplateLiteral; };
+                return lit(n.left) || lit(n.right);
+            }
+            if (!isIdentifier(n)) return false;
+            const t: any = this.typeOfNodeIfAny(n);
+            return t !== undefined && this.isStringLikeType(t);
+        };
+        if (!strAt(d.initializer)) return false;
+        return this.rustLocalUsesAll(d, String(d.name.text), true, (n: any) => {
+            if (this.rustEnclosingFunction(n) !== fn) return false;
+            const parent: any = n.parent;
+            if ((parent?.kind === SyntaxKind.PrefixUnaryExpression || parent?.kind === SyntaxKind.PostfixUnaryExpression) && parent.operator !== SyntaxKind.ExclamationToken) return false;
+            if (!isBinaryExpression(parent) || parent.left !== n || !rustIsAssignmentOperator(parent.operatorToken.kind)) return true;
+            return parent.operatorToken.kind === SyntaxKind.EqualsToken && strAt(parent.right);
+        });
     }
 
     /** ral-48f: `x.toString()` read as a `+` operand, `x` a destructured handle*AndParams slot or a local declared `Str` whose
