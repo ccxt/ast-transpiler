@@ -23773,3 +23773,29 @@ describe('ral-76f: a string alias of a typed parameter with a native use keeps t
         expect(out).toContain('let mut codeId: Value =');
     });
 });
+
+describe('ral-76g: a literal header map moved whole into a ternary arm at its last use', () => {
+    let out = '';
+    beforeAll(() => {
+        const dir = path.join (rustFixtureRoot, 'ral-76g-ternary-arm');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type NullableDict = Dict | undefined;\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, NullableDict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    sign (path: string, api: string, signature: string) {\n        let privateHeaders: Dict = {};\n        if (api === 'private') {\n            privateHeaders = {\n                'X-Key': path,\n            };\n            privateHeaders['signature'] = signature;\n        }\n        const requestHeaders: NullableDict = (api === 'public') ? undefined : privateHeaders;\n        return { 'url': path, 'headers': requestHeaders };\n    }\n    inline (path: string, api: string) {\n        const headers: Dict = {};\n        headers['X-Key'] = path;\n        return { 'url': path, 'headers': (api === 'private') ? headers : undefined };\n    }\n    readAfter (path: string, api: string) {\n        const kept: Dict = {};\n        kept['X-Key'] = path;\n        const requestHeaders: NullableDict = (api === 'public') ? undefined : kept;\n        kept['late'] = api;\n        return { 'url': path, 'headers': requestHeaders };\n    }\n}\n");
+        out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    });
+    test('a re-seeded native map moves into the declaration ternary arm (no copy)', () => {
+        const body = out.slice (out.indexOf ('fn sign'), out.indexOf ('fn inline'));
+        expect(body).toMatch(/let mut privateHeaders: indexmap::IndexMap<String, Value> = /);
+        expect(body).toContain('{ Value::Map(privateHeaders) }');
+        expect(body).not.toContain('privateHeaders.clone()');
+    });
+    test('an object-literal value ternary moves the native map', () => {
+        const body = out.slice (out.indexOf ('fn inline'), out.indexOf ('fn readAfter'));
+        expect(body).toMatch(/let mut headers: indexmap::IndexMap<String, Value> = /);
+        expect(body).toContain('{ Value::Map(headers) }');
+    });
+    test('negative: a write after the ternary keeps the box', () => {
+        const body = out.slice (out.indexOf ('fn readAfter'));
+        expect(body).toMatch(/let mut kept: Value = /);
+    });
+});

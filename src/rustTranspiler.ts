@@ -21492,6 +21492,7 @@ export class RustTranspiler extends BaseTranspiler {
         const up: any = n.parent;
         if (up === undefined) return false;
         if (isArrayLiteralExpression(up)) return !this.rustInDestructureWrite(n) && !(isBinaryExpression(up.parent) && up.parent.left === up);
+        if (up.kind === SyntaxKind.ConditionalExpression) return this.rust76gTernaryArmMove(up, n);
         if (!isCallExpression(up) || up.arguments.length === 0 || up.arguments[0] !== n || !isPropertyAccessExpression(up.expression)) return false;
         const recv: any = up.expression.expression;
         const method = String(up.expression.name.text);
@@ -21503,6 +21504,25 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(recv)) return false;
         if (method === 'send') return up.arguments.length === 1 && this.rustCallsRuntimeHandle(up);
         return (method === 'resolve' || method === 'reject') && this.rustWsSettleCall(up);
+    }
+
+    /** ral-76g: the admitted move is a ternary arm (rust76gTernaryArmMove); a whole re-seed (`x = { .. }`, rustBearerRebuild)
+     *  before it writes the same native map, so the single move still carries the last value. */
+    rust76gTernaryMoveUse(n: any): boolean {
+        const up: any = n?.parent;
+        return up !== undefined && up.kind === SyntaxKind.ConditionalExpression && this.rust76gTernaryArmMove(up, n);
+    }
+
+    /** ral-76g: `c ? x : y` / `c ? y : x` (x an arm, not the condition) as the initializer of a plain `const` / `let` or the value
+     *  of an object-literal property: the if-expression's arms are `Value`, so the map's last use moves into `Value::Map(x)`
+     *  there, the box the helper form made (no copy; the other arm is evaluated instead, never both). */
+    rust76gTernaryArmMove(up: any, n: any): boolean {
+        if (up.condition === n || (up.whenTrue !== n && up.whenFalse !== n) || this.rustTestTierSource(up)) return false;
+        let outer: any = up.parent;
+        while (outer !== undefined && outer.kind === SyntaxKind.ParenthesizedExpression) outer = outer.parent;
+        if (outer?.kind === SyntaxKind.PropertyAssignment) return isObjectLiteralExpression(outer.parent);
+        const list: any = outer?.parent;
+        return outer !== undefined && isVariableDeclaration(outer) && isIdentifier(outer.name) && list?.declarations?.length === 1;
     }
 
     /** ral-73a: `y = x` (statement), y another plain `let` of the same function declared `undefined` (no initializer value) and
@@ -21704,7 +21724,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (moveEscapes.length > 0) {
             // ral-tf: a map widened by string-local keys (written at `m[k] = v`) still moves whole into a ws settle value at
             // its last use: that is its only escape, so the move is the box the helper form made (no copy)
-            if (moveEscapes.length > 1 || escapes.length > 0 || rebuilds > 0 || (widened && !siblingMove && !this.rustWsSettleMove(moveEscapes[0]) && !this.rust73aThisFieldStore(moveEscapes[0])) || enumUses > 0 || (prediction && !this.rust73aThisFieldStore(moveEscapes[0]))
+            if (moveEscapes.length > 1 || escapes.length > 0 || (rebuilds > 0 && !this.rust76gTernaryMoveUse(moveEscapes[0])) || (widened && !siblingMove && !this.rustWsSettleMove(moveEscapes[0]) && !this.rust73aThisFieldStore(moveEscapes[0])) || enumUses > 0 || (prediction && !this.rust73aThisFieldStore(moveEscapes[0]))
                 || !this.rustLocalLastUse(moveEscapes[0], declaration) || !this.rustBoxLineOk(moveEscapes[0])) return false;
             this.rustLiteralMoves.add(moveEscapes[0]);
         }
