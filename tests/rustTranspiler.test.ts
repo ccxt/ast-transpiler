@@ -24566,3 +24566,34 @@ describe('ral-84e: a boolean ternary whose arms are native equality tests is a b
         expect(out).toContain('let mut isMaker: bool = (if (side.as_deref() == Some(\"sell\")) { (isMakerAsk == Some(true)) } else { (isMakerAsk == Some(false)) });');
     });
 });
+
+describe('ral-84f: a watched ticker resolved through the REST parent parse helper is a typed map', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport interface Dictionary<T> { [key: string]: T }\nexport type Str = string | undefined;\nexport default class Exchange {\n    tickers: Dictionary<Dict> = {};\n    newUpdates: boolean = true;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeTicker (t: Dict, m: any = undefined): Dict { return t; }\n    extend (...args: any[]): Dict { return {}; }\n    async watchMultiple (url: string, hashes: string[], message: any = undefined, subs: any = undefined): Promise<any> { return {}; }\n}\n";
+    const client = "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n";
+    const rest = "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTicker (t: Dict, m: any = undefined): Dict {\n        return this.safeTicker ({ 'symbol': this.safeString (t, 's') }, m);\n    }\n}\n";
+    const pro = (handler: string) => "import venueRest from '../venue.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends venueRest {\n    async watchTickers (symbols: string[]) {\n        const hashes = [ 'ticker:' + symbols[0] ];\n        const newTicker = await this.watchMultiple ('wss://x', hashes, {}, hashes);\n        if (this.newUpdates) {\n            const result: Dict = {};\n            const s = this.safeString (newTicker, 'symbol');\n            if (s !== undefined) {\n                result[s] = newTicker;\n            }\n            return result;\n        }\n        return this.tickers;\n    }\n" + handler + "}\n";
+    const emit = (handler: string, tag: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84f-' + tag + '-'));
+        const files: Record<string, string> = { "ts/src/base/Exchange.ts": base, "ts/src/base/ws/Client.ts": client, "ts/src/venue.ts": rest, "ts/src/pro/venue.ts": pro(handler) };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+        return out;
+    };
+    test('a field write keyed by a rebound local, then `resolve (this.tickers[symbol], ..)` in the same block', () => {
+        const out = emit("    handleTicker (client: Client, message: Dict) {\n        let symbol: Str = undefined;\n        symbol = this.safeString (message, 's');\n        if (symbol === undefined) {\n            return;\n        }\n        const ticker = this.parseTicker (message);\n        const messageHash = 'ticker:' + symbol;\n        this.tickers[symbol] = ticker;\n        client.resolve (this.tickers[symbol], messageHash);\n    }\n", 'a');
+        expect(out).toMatch(/let mut newTicker: crate::value::Dict = self\.watchMultiple\(/);
+        expect(out).toMatch(/\.await\.into_dict\(\);/);
+    });
+    test('a ws override that answers `super.parseTicker (..)` reads the REST body', () => {
+        const out = emit("    parseTicker (t: Dict, m: any = undefined): Dict {\n        return super.parseTicker (t, m);\n    }\n    handleTicker (client: Client, message: Dict) {\n        const ticker = this.parseTicker (message);\n        client.resolve (ticker, 'ticker:' + this.safeString (ticker, 'symbol', ''));\n    }\n", 'b');
+        expect(out).toMatch(/let mut newTicker: crate::value::Dict = self\.watchMultiple\(/);
+    });
+    test('negative: the key rebound between the write and the read keeps the watch boxed', () => {
+        const out = emit("    handleTicker (client: Client, message: Dict) {\n        let symbol: Str = undefined;\n        symbol = this.safeString (message, 's');\n        const ticker = this.parseTicker (message);\n        this.tickers[symbol] = ticker;\n        symbol = this.safeString (message, 'z');\n        client.resolve (this.tickers[symbol], 'ticker:' + symbol);\n    }\n", 'c');
+        expect(out).toMatch(/let mut newTicker: Value = self\.watchMultiple\(/);
+    });
+});

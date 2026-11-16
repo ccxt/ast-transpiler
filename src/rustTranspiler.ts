@@ -29097,9 +29097,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (field(n)) return mapType(this.typeOfNodeIfAny(n));
         if (!isElementAccessExpression(n) || !field(n.expression)) return false;
         const key: any = this.rustStripWrappers(n.argumentExpression);
+        // ral-84f: a key local written before the field write still names the same key at the read when no statement
+        // between the write and the read mentions it (checked in the search below)
+        let keyRebound = false;
         if (!isStringLiteralLikeNode(key)) {
             const d: any = isIdentifier(key) ? this.rustDeclarationOfIdentifier(key) : undefined;
-            if (d === undefined || this.rustLocalReassigned(d)) return false;
+            if (d === undefined) return false;
+            keyRebound = this.rustLocalReassigned(d);
         }
         const keyText = String(key.getText());
         const fieldName = String(this.rustStripWrappers(n.expression).name.text);
@@ -29116,9 +29120,12 @@ export class RustTranspiler extends BaseTranspiler {
             return mapType(this.typeOfNodeIfAny(x)) || this.rustWsResolvedMap(x, 0) || (isIdentifier(x) && this.rustWsResolvedKind(x) === 'dict');
         };
         // the nearest earlier statement that writes the field (any key) must write this key with a map
+        let levels = 0;
         for (let s: any = findAncestor(n, isStatement); s !== undefined && !isFunctionLike(s); s = s.parent) {
             const list: any[] | undefined = isBlock(s.parent) ? Array.from(s.parent.statements) : undefined;
             if (list === undefined) continue;
+            // a rebound key is only followed within the read's own block (a loop could rebind it after the read)
+            if (keyRebound && levels++ > 0) return false;
             for (let i = list.indexOf(s) - 1; i >= 0; i--) {
                 const v = isWrite(list[i]);
                 if (v === null) return false;
@@ -29126,6 +29133,7 @@ export class RustTranspiler extends BaseTranspiler {
                 // any other statement that mentions the field or rebinds the key ends the search
                 const text = String(list[i].getText());
                 if (new RegExp(`\\bthis\\.${fieldName}\\b`).test(text) || (!isStringLiteralLikeNode(key) && new RegExp(`\\b${keyText}\\s*=[^=]`).test(text))) return false;
+                if (keyRebound && new RegExp(`\\b${keyText}\\b`).test(text)) return false;
             }
         }
         return false;
@@ -29171,7 +29179,14 @@ export class RustTranspiler extends BaseTranspiler {
             if (d === undefined || !isVariableDeclaration(d) || !isIdentifier(d.name) || d.initializer === undefined || this.rustLocalReassigned(d)) return false;
             return (d.parent as any)?.kind === SyntaxKind.VariableDeclarationList && (d.parent as any).declarations.length === 1 && this.rustWsResolvedMap(d.initializer, depth + 1);
         }
-        if (!isCallExpression(n) || !isPropertyAccessExpression(n.expression) || n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (!isCallExpression(n) || !isPropertyAccessExpression(n.expression)) return false;
+        // ral-84f: `super.m (..)` inside the ws class reads the REST parent's own body
+        if (n.expression.expression.kind === SyntaxKind.SuperKeyword) {
+            const sup: any = this.rustScalarCallee(n);
+            if (sup === undefined || !this.rustWsRestParentMethod(sup, n) || this.isAsyncFunction(sup)) return false;
+            return this.rustWsMapReturns(sup, depth);
+        }
+        if (n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         // ral-ye: the base generic `extend` (`Object.assign ({}, ..)`) and `indexBy` (default `out = {}`) build a fresh map
         const callee = String(n.expression.name.text);
         if ((callee === 'extend' || (callee === 'indexBy' && n.arguments.length === 2)) && RustTranspiler.RUST_BASE_TIER_FILE.test(String(this.rustScalarCallee(n)?.getSourceFile?.()?.fileName ?? ''))) return true;
@@ -29179,8 +29194,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration === undefined || !isMethodDeclaration(declaration) || declaration.body === undefined) return false;
         const file = String(declaration.getSourceFile?.()?.fileName ?? '');
         if (RustTranspiler.RUST_WS_MAP_RECORD_BUILDERS.has(String(n.expression.name.text))) return RustTranspiler.RUST_BASE_TIER_FILE.test(file);
-        // a venue helper of the same ws class (no override below it: the class has no ws relatives)
-        if (findAncestor(declaration, isClassDeclaration) !== findAncestor(n, isClassDeclaration) || this.isAsyncFunction(declaration)) return false;
+        // a venue helper of the same ws class (no override below it: the class has no ws relatives); ral-84f: or of the
+        // venue's REST class it extends (`ts/src/<id>.ts`), which the checker resolved past any override in the ws class
+        const own = findAncestor(declaration, isClassDeclaration) === findAncestor(n, isClassDeclaration);
+        if ((!own && !this.rustWsRestParentMethod(declaration, n)) || this.isAsyncFunction(declaration)) return false;
+        return this.rustWsMapReturns(declaration, depth);
+    }
+
+    /** Every return of the method body is a map on every path (rustWsResolvedMap), and there is at least one. */
+    rustWsMapReturns(declaration: any, depth: number): boolean {
         let returns = 0;
         let ok = true;
         this.rustWalkScope(declaration.body, (r: any) => {
@@ -29190,6 +29212,25 @@ export class RustTranspiler extends BaseTranspiler {
             if (r.expression === undefined || !this.rustWsResolvedMap(r.expression, depth + 1)) { ok = false; return RUST_WALK_STOP; }
         });
         return ok && returns > 0;
+    }
+
+    /** ral-84f: `declaration` is a method body of the REST venue class that the ws class of `site` directly extends
+     *  (`ts/src/pro/<id>.ts` extends the default export of `ts/src/<id>.ts`). The checker resolves `this.m` to the most
+     *  derived declaration, so a ws override would have been answered instead, and a ws class with ws relatives has no
+     *  resolve table at all. */
+    rustWsRestParentMethod(declaration: any, site: any): boolean {
+        const cls: any = findAncestor(site, isClassDeclaration);
+        const owner: any = findAncestor(declaration, isClassDeclaration);
+        if (cls === undefined || owner === undefined || owner === cls || !isMethodDeclaration(declaration) || declaration.body === undefined) return false;
+        const wsFile = String(cls.getSourceFile().fileName).replace(/\\/g, '/');
+        const restFile = String(owner.getSourceFile().fileName).replace(/\\/g, '/');
+        const m = /(^|\/)ts\/src\/(?:pro|prediction)\/([^/]+)\.ts$/.exec(wsFile);
+        if (m === null || !restFile.endsWith(`ts/src/${m[2]}.ts`)) return false;
+        const heritage: any = (cls.heritageClauses ?? [])[0]?.types?.[0]?.expression;
+        if (heritage === undefined || !isIdentifier(heritage)) return false;
+        const symbol: any = this.getChecker().getSymbolAtLocation(heritage);
+        const aliased: any = symbol !== undefined && (symbol.flags & SymbolFlags.Alias) ? this.getChecker().getAliasedSymbol(symbol) : symbol;
+        return (symbolDeclarations(aliased) ?? []).some((d: any) => d === owner);
     }
 
     /** Any write of the local after its declaration (an assignment or an update). */
