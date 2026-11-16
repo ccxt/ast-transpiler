@@ -63994,7 +63994,7 @@ ${ind}];`;
     if (recvDecl === void 0 || !(isVariableDeclaration3(recvDecl) || isParameterDeclaration3(recvDecl)) || recvDecl.type === void 0)
       return false;
     const kind = this.rustOkeyKind(read.expression, read);
-    return kind === "map" || kind === "value" && RUST_PLAIN_PLACE.test(this.printNode(read.expression, 0).trim());
+    return kind === "map" || kind === "value";
   }
   /** A one-level read `m[k]` (not a write target, not a chain link) on an `rustOkeyKind` receiver. */
   rustOkeyReadUse(n) {
