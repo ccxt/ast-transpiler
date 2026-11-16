@@ -14200,3 +14200,36 @@ describe ('ral-77g2 reader-result locals', () => {
         expect(run(body.replace('if (snap === true) {', 'if (snap === true) {\n            snap = false;'), 'ts/src/pro')).toContain('var snap any');
     });
 });
+
+describe('go 77g3 ws reusable-future locals', () => {
+    const root = fs.mkdtempSync (path.join (os.tmpdir (), 'go77g3-'));
+    const src = path.join (root, 'ts', 'src');
+    fs.mkdirSync (path.join (src, 'base', 'ws'), { recursive: true });
+    fs.mkdirSync (path.join (src, 'pro'), { recursive: true });
+    fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), "export class Exchange {\n    client (url) { return undefined; }\n    watch (a, b, c, d) { return undefined; }\n}\n");
+    fs.writeFileSync (path.join (src, 'base', 'ws', 'Client.ts'), "export interface FutureInterface { resolve (x?: any): void; }\nexport class Client {\n    subscriptions: any = {};\n    reusableFuture (messageHash: string): FutureInterface { return undefined; }\n}\n");
+    const goPath = (body: string) => {
+        const file = path.join (src, 'pro', 'ex.ts');
+        fs.writeFileSync (file, "import { Exchange } from '../base/Exchange';\nimport { Client } from '../base/ws/Client';\n" + body);
+        return new Transpiler ({ verbose: false, go: {} }).transpileGoByPath (file).content;
+    };
+    afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
+    test ('an awaited reusable future declares *Future and receives natively', () => {
+        const out = goPath ("export class ex extends Exchange {\n    async authenticate (url: string) {\n        const client: Client = this.client (url);\n        const future = client.reusableFuture ('authenticated');\n        this.watch (url, 'a', {}, future);\n        return await future;\n    }\n}\n");
+        expect (out).toContain ('var future *Future = ');
+        expect (out).toContain ('(<-future.Await())');
+    });
+    test ('a copy of the client subscriptions table declares map[string]any', () => {
+        const file = path.join (src, 'pro', 'ex.ts');
+        fs.writeFileSync (file, "import { Exchange } from '../base/Exchange';\nimport { Client } from '../base/ws/Client';\nexport class ex extends Exchange {\n    handle (client: Client) {\n        const subs = client.subscriptions;\n        return Object.keys (subs);\n    }\n}\n");
+        const x = new Transpiler ({ verbose: false, go: {} });
+        installFmGo5G01 (x.goTranspiler);
+        const out = x.transpileGoByPath (file).content;
+        expect (out).toContain ('var subs map[string]any = client.(ClientInterface).SubscriptionsSnapshot()');
+    });
+    test ('a future stored into a table keeps the any local', () => {
+        const out = goPath ("export class ex extends Exchange {\n    async authenticate (url: string) {\n        const client: Client = this.client (url);\n        const future = client.reusableFuture ('authenticated');\n        client.subscriptions['a'] = future;\n        return await future;\n    }\n}\n");
+        expect (out).toContain ('var future any = ');
+        expect (out).not.toContain ('future.Await()');
+    });
+});

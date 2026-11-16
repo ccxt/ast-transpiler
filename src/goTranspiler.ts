@@ -33497,3 +33497,90 @@ GoTranspiler.prototype.goHandleOptionTrueLocal = function (declaration) {
         return this.goHandleOptionTrueLocal(declaration) ? `${parsedValue.trim()} == true` : marketValue.call(this, declaration, parsedValue);
     };
 }
+
+// ===== 77g3: ws reusable-future locals =====
+// `const future = client.reusableFuture (hash)` where the checker resolves the callee to the ws `Client`
+// class (ts/src/base/ws/Client.ts): the hand-written Go `ReusableFuture` returns `*Future` and never nil,
+// so the local declares that type. Every use must be `await future` (printed as the native receive
+// `<-future.Await()`, the very channel the boxed `future.(*Future).Await()` assertion read) or a bare
+// call argument (boxed again exactly as before); any other use keeps the `any` local.
+export interface GoTranspiler {
+    goReusableFutureCall(node): boolean;
+    goReusableFutureLocal(declaration): boolean;
+    goReusableFutureLocalCache: WeakMap<object, boolean>;
+}
+GoTranspiler.prototype.goReusableFutureCall = function (node) {
+    let call: any = node;
+    while ((call?.kind === SyntaxKind.ParenthesizedExpression) || (call?.kind === SyntaxKind.NonNullExpression)) {
+        call = call.expression;
+    }
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 1)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.name?.text !== 'reusableFuture')) {
+        return false;
+    }
+    const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(call.expression.name)?.valueDeclaration?.resolve?.();
+    const owner: any = declaration?.parent;
+    const fileName = String(declaration?.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+    return (declaration?.kind === SyntaxKind.MethodDeclaration) && (owner?.kind === SyntaxKind.ClassDeclaration)
+        && (owner.name?.text === 'Client') && /(^|\/)ts\/src\/base\/ws\/Client\.ts$/.test(fileName);
+};
+GoTranspiler.prototype.goReusableFutureLocal = function (declaration) {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || !this.goReusableFutureCall(declaration.initializer)) {
+        return false;
+    }
+    if (this.goReusableFutureLocalCache === undefined) {
+        this.goReusableFutureLocalCache = new WeakMap<object, boolean>();
+    }
+    if (this.goReusableFutureLocalCache.has(declaration)) {
+        return this.goReusableFutureLocalCache.get(declaration);
+    }
+    const checker: any = this.checkerOrUndefined();
+    const own: any = checker?.getSymbolAtLocation(declaration.name);
+    const scope: any = this.goEnclosingFunction(declaration);
+    const name = declaration.name.text;
+    const verdict = (own !== undefined) && (scope !== undefined) && !this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if (((parent?.kind === SyntaxKind.PropertyAccessExpression) || (parent?.kind === SyntaxKind.PropertyAssignment)) && (parent.name === n)) {
+            return false; // a member name, not the local
+        }
+        if (checker.getSymbolAtLocation(n) !== own) {
+            return true; // another binding of the name
+        }
+        if ((parent?.kind === SyntaxKind.AwaitExpression) && (parent.expression === n)) {
+            return false;
+        }
+        return !((parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n) && (parent.arguments.indexOf(n) >= 0));
+    });
+    this.goReusableFutureLocalCache.set(declaration, verdict);
+    return verdict;
+};
+{
+    const goTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+    GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+        const declaration: any = initializer?.parent;
+        if ((declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.initializer === initializer) && this.goReusableFutureLocal(declaration)) {
+            return '*Future';
+        }
+        // `const subs = client.subscriptions`: the owner hands back a fresh `map[string]any` copy
+        if ((clientSubscriptions(this, initializer) !== undefined) && printedValue.trim().endsWith('.SubscriptionsSnapshot()')) {
+            return 'map[string]any';
+        }
+        return goTypeOfInitializer.call(this, initializer, printedValue);
+    };
+    const printAwaitExpression = GoTranspiler.prototype.printAwaitExpression;
+    GoTranspiler.prototype.printAwaitExpression = function (node, identation) {
+        const operand: any = node.expression;
+        if (operand?.kind === SyntaxKind.Identifier) {
+            const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(operand)?.valueDeclaration?.resolve?.();
+            if (this.goReusableFutureLocal(declaration) && (this.goDeclaredTypeOfIdentifier(operand) === '*Future')) {
+                return `(<-${this.printNode(operand, 0)}.Await())`;
+            }
+        }
+        return printAwaitExpression.call(this, node, identation);
+    };
+}
+// ===== end 77g3 =====
