@@ -1253,6 +1253,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustElemKeyInsertLiteralValue(n: any, declaration: any): boolean;
     /** ral-53k: `m[k]` handed as a call argument off a plain map-literal local: the lookup borrows the key's `&str`, no copy. */
     rustElemPlainMapReadKey(n: any): boolean;
+    /** ral-59p: `n` is the whole key of `delete X[n]` as an expression statement. The delete prints the key either into
+     *  provenDictFieldDelete's native `shift_remove` (borrowing the `&str`: a `None` key removes nothing, as the `Null` key
+     *  matched no `Value::Str` arm) or into the `remove` helper as `&Value::from(..)` (the `Str` / `Null` the box held). */
+    rust59pDeleteKeyUse(n: any): boolean;
+    /** ral-59p: a local typed for a `delete` key (`dkey`) that is also an `in` key boxed into `in_op` (`inbox`) stays `Value`:
+     *  its `Value` print took the borrowed `in` test, the typed one would box into the helper. */
+    rust59pDeleteKeyInboxed(declaration: any): boolean;
     /** `m[k] = v` as a statement: the element key of a native insert. */
     rustElemInsertKey(n: any): boolean;
     printElemKeyInOp(key: any, obj: any): string | undefined;
@@ -1358,6 +1365,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-56f: `read` (`this.F[k]`) is an argument of a `this.` call that is the whole value of the statement write
      *  `this.F[k] = this.m (.., this.F[k], ..)` whose key admits the bucket reread. */
     rustFieldBucketRereadUse(wrapped: any, read: any): boolean;
+    /** ral-59k: `this.F[k] = v` where every read of `k` in `v` is the key argument of a base `this.safeDict (this.F, k, ..)`
+     *  on the same field (woo pro handleBalance `this.balance[code] = this.extend (this.safeDict (this.balance, code, {}), account)`):
+     *  the printer binds the value before the insert, so the reader's boxed key and the insert key text are one copy each,
+     *  as the `Value` key cloned at the reader and stringified at the insert. Non-test sources; decided from the AST. */
+    rust59kFieldSafeDictReread(n: any, access: any, value: any): boolean;
+    /** ral-59k: `n` is the reader key of a statement `this.F[k] = v` that rust59kFieldSafeDictReread admits. */
+    rust59kFieldSafeDictReaderKey(n: any): boolean;
+    /** ral-59k: `m` is the key argument of a base `this.safeDict (this.<field>, m, ..)`. */
+    rust59kFieldSafeDictKeyArg(m: any, field: string): boolean;
     /** ral-56f: every read of `k` in `value` is `this.F[k]` on the written field (no write of `k`), and some other use of
      *  `k` is a two-level upper key of the same field (rustNestedFieldUpperKeyUse). Non-test sources. */
     rustFieldBucketReread(n: any, access: any, value: any): boolean;
@@ -1406,6 +1422,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust53eElemReadKey(n: any): boolean;
     /** Identifier hook: a `box` use converts with the standard `From` impls (scalars are `Copy`). */
     printRustScalarLocalRead(node: any): string | undefined;
+    /** ral-59x: a local declared `let y = x` / `const y = x` from another local (an alias of it). */
+    rust59xAliasDecl(declaration: any): boolean;
     /** The native value of a scalar expression for a local of `kind` (`Some(..)` for optional kinds). */
     rustScalarNativeText(kind: string, expr: any): string | undefined;
     /** Declaration hook: `let mut x: <scalar> = <native init>`, else undefined. */
@@ -1607,8 +1625,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** qf: a typed local against an untyped `Value` partner (a local or parameter) that the checker types like the local:
      *  the `Value` pair printed `a.<payload>() == p.<payload>()` (PAYLOAD_ACCESSORS by checker kind), and the typed local
      *  is exactly `a.<payload>()` (`None` where the `Value` was `Null`), so the same compare reads `own == p.<payload>()`.
-     *  `Option<i64>` is left out (its payload is an `f64`, which needs a closure). */
+     *  ral-59n: an `Option<i64>` local prints `Value::from(x).as_f64()` (the very `as_f64` of the box it held, no closure),
+     *  and the partner may also be a base `safe*` scalar read off `this` (rust59nValueReaderPartner), which prints a `Value`. */
     rustScalarPayloadPartnerTest(self: any, partner: any, kind: string, sign: string, dry: boolean): string | undefined;
+    private static readonly RUST_59N_VALUE_READERS;
+    /** ral-59n: some read of the local is the argument of an element access `m[x]` (decided on the TS AST). */
+    rust59nKeysElementRead(self: any): boolean;
+    /** ral-59n: `this.safeString|Integer|Number|Bool(..)` declared in the base tier (no venue override): printed as the
+     *  generated `self.safe_*` reader, a `Value`. The boxed compare against it was the payload pair `a.<p>() == r.<p>()`
+     *  (printNativeEqualityComparison, both sides `Value`, same checker kind), so the typed side prints its own payload. */
+    rust59nValueReaderPartner(node: any): boolean;
     /** `'str'` / `'int'` when `p` is a plain `Value` local (no typed-local rule claims it) whose initializer and every
      *  write is a fresh `str|ostr|null` (`int|oint|null`) producer, written only by whole `p = ..` statements. */
     rustScalarValuePartnerKind(partner: any): string | undefined;
@@ -3954,6 +3980,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBuiltListBoxedLiteral(node: any): string | undefined;
     printBuiltListLiteral(node: any): string;
     printBuiltListDeclaration(declaration: any, indent: string, varName: string): string | undefined;
+    private rustNilListFirstCache;
+    rustNilListAssignedFirst(declaration: any): boolean;
+    rustNilListAssignedFirstUncached(declaration: any): boolean;
     rustOptListGuardedMove(write: any): any;
     /** A never-reassigned local initialised by a `[]`-defaulted base `safeList*` that still prints as the plain `Value` binding. */
     rustDefaultedListValue(declaration: any, y: any): boolean;
@@ -4041,6 +4070,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOptExtendOperandUse(n: any): boolean;
     /** `self.extend(a, &[&x])` / `self.omit(&x, keys, &[])` lending a handed dict local. */
     printHandedDictExtend(node: any, identation: number): string | undefined;
+    /** ral-59a: a base `this.omit (x, k1, k2, ..)` with literal extra keys and no spread: the call keeps its printed
+     *  `optional_args` slice, only the head is lent (`OmitSource for &Dict`). */
+    rustHandedRestOmit(call: any): boolean;
     /** `let mut x: crate::value::Dict = <slot read>.into_dict()` for a handed params slot. */
     printRustHandedDictSlot(element: any, printedName: string, read: string, indent: string): string | undefined;
     /** `n` is the first operand of a two-operand base `this.extend (n, x)`. */
@@ -4208,6 +4240,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The call a slot destructures, past parentheses, casts and one `await`. */
     rustAwaitedCall(node: any): any;
     rustHandedSlotBoxUse(n: any, declaration: any): boolean;
+    /** ral-59a: a local initialised or rewritten whole from another identifier (`let x = y` / `x = y`): handing it to a
+     *  `Value` slot moved its source before; typing it would copy the source at the write instead. */
+    rustRewrittenFromLocal(declaration: any): boolean;
+    /** ral-59a: a single-binding, never-reassigned `const x = this.omit (m, k)` whose head is a proven map. */
+    rustOmitAliasSource(declaration: any): boolean;
     /** ral-53a: no loop or closure between the source's declaration and the alias declaration. */
     rustAliasInitOutsideLoop(alias: any, declaration: any): boolean;
     /** No loop or closure between the destructure and this use: a box there copies the slot once. */
@@ -4316,6 +4353,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `delete X[k]` on a receiver the native-insert proof admits (never a ws
      *  subscriptions snapshot, so `try_ws_subs_remove` is dead): `shift_remove`. */
     provenDictFieldDelete(node: any): string | undefined;
+    /** ral-59p: the borrowed `Option<&str>` text of a `dkey` string local key, else undefined. */
+    rust59pDeleteKeyText(keyNode: any): string | undefined;
     /** A key the native `if let` can borrow beside `&mut RECV`: one expression
      *  (no statement), naming neither the receiver nor its owner — the tuple
      *  would borrow `self` twice — and never a bare `self`. */
@@ -4547,6 +4586,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueStrParamType(param: any): string | undefined;
     rustVenueStrParamTypeUncached(param: any): string | undefined;
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS;
+    private static readonly RUST_BASE_ASYNC_SCALAR_PARAM_METHODS;
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
     private rustOverrideGroupAgreeByRoot;
     /** The first parameter of a listed override group when ALL declarations (base, prediction base, every venue,
