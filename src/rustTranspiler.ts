@@ -16706,6 +16706,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (joined && this.rustCopySlotAliasTarget(n, kind, element)) { this.rustScalarUseForms.set(n, 'native'); nativeUses++; return true; }
                 const form = this.rustScalarUseForm(n, kind);
                 this.rustScalarUseForms.set(n, form);
+                // ral-64x: an exact `Option<i64>` slot handed whole to a per-venue `Option<i64>` parameter is passed as it is
+                if (form === 'targ' && kind === 'oint' && this.rust64xOintParamArg(n)) { nativeUses++; return true; }
                 if (form === undefined || form === 'xbox' || form === 'err' || form === 'key' || form === 'okey' || form === 'targ') return false;
                 if (loose && (form !== 'test' || this.literalKindOfNode(this.unwrapParens(n.parent.left === n ? n.parent.right : n.parent.left)) === 'null')) return false;
                 // ccxt passes key on the boxed operand of a `.push(..)` or of a write to another local
@@ -34029,6 +34031,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (calls.length === 0) return false;
         for (const call of calls) {
             const arg: any = call.arguments[at];
+            // ral-64x: or the caller's own `&str` parameter passed by name whose every other read is a ws url / hash slot:
+            // it stays the unbound borrow it came in as and is lent here as it is (no conversion at the caller)
+            if (arg !== undefined && isIdentifier(arg) && this.rust64xLentStrParamArg(arg, method, at)) continue;
             if (arg === undefined || (arg.kind !== SyntaxKind.StringLiteral && arg.kind !== SyntaxKind.NoSubstitutionTemplateLiteral)) return false;
         }
         const symbol = this.getChecker().getSymbolAtLocation(param.name);
@@ -34055,6 +34060,15 @@ export class RustTranspiler extends BaseTranspiler {
         // the signature half only: asking the full return decision from here would decide it early (order-dependent);
         // the slot admitted (`&str`, rust63xLiteralSeedStrParam) is one a by-name / ws arm decodes either way
         return this.rustNativeStrReturnHead(method);
+    }
+
+    /** ral-64x: `n` is a whole argument of a `this.m (..)` call whose parameter at that index prints `Option<i64>`
+     *  (rustVenueStrParamType). The slot local is passed as it is (Copy, no box). */
+    rust64xOintParamArg(n: any): boolean {
+        const call: any = n.parent;
+        if (!isCallExpression(call) || call.expression === n) return false;
+        const at = Array.from(call.arguments).indexOf(n);
+        return at >= 0 && this.rustVenueStrSlot(this.rustCalleeParams(call), at) === 'Option<i64>';
     }
 
     // Base methods whose scalar parameters print typed (measured one by one: each frees more locals than it adds
@@ -34162,10 +34176,40 @@ export class RustTranspiler extends BaseTranspiler {
             return rustType === 'Option<i64>' || String(callee.name.text) === 'parseToInt';
         }
         if (isIdentifier(inner) && [ 'int', 'oint' ].includes(this.rustOptParamKind(inner) ?? '')) return this.rustOptParamKind(inner) === 'int' || rustType === 'Option<i64>';
+        // ral-64x: a `const [ x, .. ] = this.handleOptionIntegerAndParams (..)` slot is `Option<i64>` by its exact producer
+        // (syntactic seed, so the slot's own decision is not asked while this parameter is being decided)
+        const slot: any = isIdentifier(inner) ? this.rustDeclaredNode(inner) : undefined;
+        if (slot?.kind === SyntaxKind.BindingElement && slot.name !== inner && this.rustExactCopySlotSeed(slot) === 'oint') return rustType === 'Option<i64>';
         const declaration: any = isIdentifier(inner) ? this.rustDeclaredNode(inner) : undefined;
         const typeNode: any = declaration?.type;
         const alias = typeNode?.kind === SyntaxKind.TypeReference && isIdentifier(typeNode.typeName) ? String(typeNode.typeName.text) : '';
         return alias === 'int' || (alias === 'Int' && rustType === 'Option<i64>');
+    }
+
+    /** ral-64x: `arg` is the caller's own required `&str` parameter, and every read of it is either a ws url / hash
+     *  slot or the argument at `at` of a call to `method` (syntactic, so deciding `method`'s slot does not ask back). */
+    rust64xLentStrParamArg(arg: any, method: any, at: number): boolean {
+        const param: any = this.rustDeclaredNode(arg);
+        if (param?.kind !== SyntaxKind.Parameter || param.name === arg || !isIdentifier(param.name) || param.parent === method) return false;
+        if (this.rustVenueStrParamType(param) !== '&str') return false;
+        return this.rust64xStrParamReadsLent(param, (call: any, i: number) => i === at && this.rustScalarCallee(call) === method);
+    }
+
+    /** ral-64x: every read of `param` is a ws url / hash slot (ral-yc) or a call argument `other` accepts. */
+    rust64xStrParamReadsLent(param: any, other: (call: any, at: number) => boolean): boolean {
+        let uses = 0;
+        for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text)) as any[]) {
+            if (n === param.name || n === param || n.parent === param) continue;
+            if (!isIdentifier(n) || this.rustDeclaredNode(n) !== param) return false;
+            const call: any = n.parent;
+            if (!isCallExpression(call) || call.expression === n || !isPropertyAccessExpression(call.expression)) return false;
+            const i = Array.from(call.arguments).indexOf(n);
+            const name = String(call.expression.name.text);
+            const ws = (name === 'client' || name === 'watch' || name === 'watchMultiple') && call.arguments.length <= 5 && this.rustWsWatchSlot(call, i);
+            if (!ws && !(call.expression.expression.kind === SyntaxKind.ThisKeyword && other(call, i))) return false;
+            uses++;
+        }
+        return uses > 0;
     }
 
     /** `this.<m>(..)` / `super.<m>(..)` calls in the method's own file that resolve to it. */
@@ -34230,19 +34274,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustVenueStrParamUnboundUncached(param: any): boolean {
         if (this.rustVenueStrParamType(param) !== '&str') return false;
-        const method: any = param.parent;
-        let uses = 0;
-        for (const n of this.rustScopeNameNodes(method, String(param.name.text)) as any[]) {
-            if (n === param.name || n === param || n.parent === param) continue;
-            if (!isIdentifier(n) || this.rustDeclaredNode(n) !== param) return false;
-            const call: any = n.parent;
-            if (!isCallExpression(call) || call.expression === n || !isPropertyAccessExpression(call.expression)) return false;
-            const name = String(call.expression.name.text);
-            if (!((name === 'client' || name === 'watch' || name === 'watchMultiple') && call.arguments.length <= 5)) return false;
-            if (!this.rustWsWatchSlot(call, Array.from(call.arguments).indexOf(n))) return false;
-            uses++;
-        }
-        return uses > 0;
+        // ral-64x: also a whole argument of a venue call whose parameter there prints `&str` (lent as it came in)
+        return this.rust64xStrParamReadsLent(param, (call: any, at: number) => this.rustVenueStrSlot(this.rustCalleeParams(call), at) === '&str');
     }
 
     rustVenueStrParamUnboundRead(node: any): boolean {
@@ -34342,6 +34375,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (local !== undefined) return local;
         const inner: any = this.unwrapParens(arg);
         if (type !== '&str' && type !== 'Option<&str>') return this.rustVenueScalarArgText(arg, type, identation);
+        // ral-64x: an unbound `&str` venue parameter is lent as the borrow it is
+        if (isIdentifier(inner) && this.rustVenueStrParamUnboundRead(inner)) return type === '&str' ? RustTranspiler.rustLentMark(super.printIdentifier(inner)) : `Some(${super.printIdentifier(inner)})`;
         // ral-ve: an `Option<String>` ws url local lends its text
         if (isIdentifier(inner) && this.rustWsUrlLocalOf(inner)) return type === '&str' ? `${super.printIdentifier(inner)}.as_deref().unwrap_or_default()` : `${super.printIdentifier(inner)}.as_deref()`;
         // an `Option<String>` string local, or a call returning one, lends its text

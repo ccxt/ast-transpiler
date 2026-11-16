@@ -21860,3 +21860,65 @@ describe('ral-64b: build-pass locals typed by the printer', () => {
         expect(out).not.toMatch(/let mut sessionToken: Option<String>/);
     });
 });
+
+describe('ral-64x: an exact Option<i64> tuple slot handed whole types the venue `Int` parameter it fills', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    handleOptionAndParams (params: object, methodName: Str, optionName: string, defaultValue: any = undefined): [any, Dict] { return [ defaultValue, params ]; }\n    checkOptionInteger (m: Str, o: string, v: any): Int { return v; }\n    handleOptionIntegerAndParams (params: object, methodName: Str, optionName: string, defaultValue: Int = undefined): [Int, Dict] {\n        const [ value, newParams ] = this.handleOptionAndParams (params, methodName, optionName, defaultValue);\n        return [ this.checkOptionInteger (methodName, optionName, value), newParams ];\n    }\n    milliseconds (): number { return 0; }\n    sum (...args: any[]): any { return args[0]; }\n    numberToString (x: any): Str { return x; }\n    hold (x: any, y: any = undefined): any { return x; }\n}\n";
+    const venue = (second: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+        "    nonceOf (recvWindow: Int): Str {\n        const expires = this.sum (this.milliseconds (), recvWindow);\n        return this.numberToString (expires);\n    }\n" +
+        "    createOrder (params: Dict = {}) {\n        const [ recvWindow, rest ] = this.handleOptionIntegerAndParams (params, 'createOrder', 'recvWindow', 5000);\n        const nonce = this.nonceOf (recvWindow);\n        return this.hold (nonce, rest);\n    }\n" +
+        "    cancelOrder (params: Dict = {}) {\n" + second + "        const nonce = this.nonceOf (recvWindow);\n        return this.hold (nonce, rest);\n    }\n}\n";
+    const out = (second: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-64x-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue (second));
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('the parameter prints Option<i64>, callers pass the slot as it is, the seeded sum is Option<i64>', () => {
+        const text = out ("        const [ recvWindow, rest ] = this.handleOptionIntegerAndParams (params, 'cancelOrder', 'recvWindow', 5000);\n");
+        expect(text).toMatch(/fn nonceOf\(&self, recvWindow: Option<i64>\)/);
+        expect(text).toContain('self.nonceOf(recvWindow)');
+        expect(text).not.toContain('Value::from(recvWindow)');
+        expect(text).toContain('let mut recvWindow: Option<i64> = ');
+        expect(text).toContain('let mut expires: Option<i64> = ');
+    });
+    test('negative: a caller passing a loose (any-typed) slot keeps the parameter Value', () => {
+        const text = out ("        const [ recvWindow, rest ] = this.handleOptionAndParams (params, 'cancelOrder', 'recvWindow', 5000);\n");
+        expect(text).toMatch(/fn nonceOf\(&self, recvWindow: Value\)/);
+        expect(text).toMatch(/let mut expires: Value = /);
+    });
+});
+
+describe('ral-64x: a caller lends its own unbound `&str` parameter to a no-arm ws string method', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    symbol (s: string): string { return s; }\n    async watchMultiple (url: string, hashes: string[], req: any = undefined, subs: any = undefined): Promise<any> { return undefined; }\n}\n";
+    const build = (name: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    const body = (feed: string) => "    async watchTicker (symbol: string): Promise<any> {\n        return await this.watchMultiHelper ('ticker', 'ticker_v2', [ symbol ]);\n    }\n" +
+        "    async watchTrades (symbol: string): Promise<any> {\n        return await this.watchMultiHelper ('trade', 'trade', [ symbol ]);\n    }\n" +
+        "    async watchMultiHelper (unifiedName: string, channelName: string, symbols: string[], params: Dict = {}) {\n        const messageHashes: string[] = [];\n        for (let i = 0; i < symbols.length; i++) {\n            messageHashes.push (this.getMessageHash (" + feed + ", undefined, this.symbol (symbols[i])));\n        }\n        const request: Dict = { 'feed': channelName };\n        return await this.watchMultiple ('wss://x', messageHashes, request, messageHashes);\n    }\n" +
+        "    getMessageHash (unifiedElementName: string, subChannelName: Str = undefined, symbol: Str = undefined): string {\n        let messageHash = unifiedElementName;\n        if (symbol === undefined) {\n            messageHash = messageHash + 's';\n        } else {\n            messageHash = messageHash + ':' + symbol;\n        }\n        return messageHash;\n    }\n" +
+        "    async watchOrderBook (symbol: string): Promise<any> {\n        const messageHash = this.getMessageHash ('orderbook', undefined, symbol);\n        return await this.watchMultiple ('wss://x', [ messageHash ], {}, [ messageHash ]);\n    }\n";
+    test('the parameter prints `&str`, the caller lends its own parameter unbound, the accumulator is a String', () => {
+        const out = build ('ral64x-lend', body ('unifiedName'));
+        expect(out).toMatch(/fn getMessageHash\(&self, unifiedElementName: &str, /);
+        expect(out).toContain('self.getMessageHash(unifiedName, ');
+        expect(out).not.toContain('let mut unifiedName: Value');
+        expect(out).toContain('let mut messageHash: String = ');
+    });
+    test('negative: the passed parameter is also boxed elsewhere (request map), the callee parameter stays Value', () => {
+        const out = build ('ral64x-lend-neg', body ('channelName'));
+        expect(out).toMatch(/fn getMessageHash\(&self, unifiedElementName: Value, /);
+        expect(out).toMatch(/let mut messageHash: Value = /);
+    });
+});
