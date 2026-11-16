@@ -21681,8 +21681,9 @@ describe('ral-63i: a Dict[] row stored as the element of an array literal writte
         expect(out).toContain('let mut row: crate::value::Dict = ');
         expect(out).toContain('vec![Value::Dict(row)]');
     });
-    test('a literal handed to a call slot keeps the row Value', () => {
-        const out = transpiler.transpileRustByPath (write ('ral-63i-lit-neg', '                this.hold ([ row ]);')).content;
+    // ral-84a: a literal handed straight to a self-method Value slot now boxes the row too (R2); a literal bound to a local first stays refused
+    test('a literal bound to a local before the call keeps the row Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-63i-lit-neg', '                const pair = [ row ];\n                this.hold (pair);')).content;
         expect(out).not.toContain('let mut row: crate::value::Dict');
     });
 });
@@ -24168,7 +24169,9 @@ describe('ral-80a: a watched tuple cache slot reads helper tuple literals and sk
     });
     test('a helper-built tuple and boolean settles under unknown hashes leave the candles slot an optional cache', () => {
         expect(out).toMatch(/let mut candles: Option<crate::pro::cache::Cache> = get_value\(&[A-Za-z]+Variable, &Value::Int\(2\)\)\.into\(\);/);
-        expect(out).toMatch(/let mut s: Value = get_value\(/);
+        // ral-84a: the symbol slot is a resolved `string` lent to getLimit natively
+        expect(out).toMatch(/let mut s: Option<String> = get_value\(&[A-Za-z]+Variable, &Value::Int\(0\)\)\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out).toContain('.getLimit(s.as_deref(), ');
     });
 });
 
@@ -24192,5 +24195,76 @@ describe('ral-80a: a non-boolean settle under an unknown hash keeps the tuple sl
     });
     test('negative: a string settle under an unknown hash still blocks the slot', () => {
         expect(out).toMatch(/let mut candles: Value = get_value\(/);
+    });
+});
+
+describe('ral-84a: a watched tuple string slot stays boxed when a resolve puts a non-string there', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/OrderBook.ts": "export class WsOrderBook {\n    cache: any[] = [];\n    constructor (snapshot: any = {}, depth: any = undefined) {}\n    limit () { return this; }\n    reset (snapshot: any = {}) {}\n}\n",
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: any = undefined) {}\n    append (item: any) {}\n    getLimit (symbol: any, limit: any): any { return limit; }\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: any, messageHash: string): any { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { WsOrderBook } from './ws/OrderBook.js';\nimport { ArrayCache } from './ws/Cache.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport type Int = number | undefined;\nexport default class Exchange {\n    orderbooks: Dictionary<WsOrderBook> = {};\n    trades: Dictionary<ArrayCache> = {};\n    newUpdates: boolean = true;\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    async watch (url: string, messageHash: string, message: any = undefined, subscribeHash: any = undefined, subscription: any = undefined): Promise<any> { return undefined; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterBySinceLimit (array: object[] | undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return [];\n    }\n    cleanUnsubscription (client: any, subHash: string, unsubHash: string) {\n        client.resolve (true, unsubHash);\n    }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchCandles (symbol: string, limit: any = undefined) {\n        const messageHash = 'candles:' + symbol + ':1m';\n        const [ s, tf, candles ] = await this.watch ('wss://x', messageHash, {}, messageHash);\n        let limitResolved = limit;\n        if (this.newUpdates) {\n            limitResolved = candles.getLimit (s, limit);\n        }\n        return this.filterBySinceLimit (candles, undefined, limitResolved, true);\n    }\n    handleOHLCV (client: Client, message: any) {\n        const symbol = this.safeString (message, 's');\n        const stored = new ArrayCache (10);\n        client.resolve ([ symbol, '1m', stored ], 'candles:' + symbol + ':1m');\n        client.resolve ([ message, '1m', stored ], 'candles:' + symbol + ':1m');\n    }\n    handleUnsubscription (client: Client, message: any) {\n        const hash = this.safeString (message, 'h');\n        this.cleanUnsubscription (client, hash, 'unsubscribe:' + hash);\n        client.resolve (true, hash);\n    }\n    handleMessage (client: Client, message: any) {\n        this.handleOHLCV (client, message);\n        this.handleUnsubscription (client, message);\n    }\n}\n"
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-watch84a-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('an any-typed tuple element at the slot keeps s a Value', () => {
+        expect(out).toMatch(/let mut s: Value = get_value\(/);
+    });
+});
+
+
+describe('ral-84a: a Dict[] row handed inside an array literal to a self-method Value slot', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o; }\n    safeList (o: any, k: any, d: any = undefined): List { return o; }\n    feeOf (rows: any): any { return rows; }\n}\n";
+    const write = (name: string, hand: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (message: Dict) {\n        const rows: Dict[] = this.safeList (message, 'B', []);\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const fee = rows[i];\n            out.push (this.safeString (fee, 'a'));\n" + hand + "        }\n        return out;\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('[ fee ] as a self-call argument keeps the row a shared map', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-84a-lit-pos', "            out.push (this.feeOf ([ fee ]));\n")).content;
+        expect(out).toContain('let mut fee: crate::value::Dict = ');
+        expect(out).toContain('self.feeOf(Value::from(vec![Value::Dict(fee)]))');
+    });
+    test('[ fee ] read back by index keeps the row Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-84a-lit-neg', "            const pair = [ fee ];\n            out.push (pair);\n")).content;
+        expect(out).not.toContain('let mut fee: crate::value::Dict');
+    });
+});
+
+describe('ral-84a: an optional safeDict delta pushed into a typed book cache is boxed once there', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport class OrderBook { bids: any; asks: any; cache: any[] = []; reset (s: any = undefined) { } }\nexport default class Exchange {\n    orderbooks: Dict = {};\n    orderBook (s: any = {}, d: any = undefined): OrderBook { return new OrderBook (); }\n    safeInteger (o: any, k: any, d: any = undefined): number { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    consume (x: any): void { }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    const buffer = "    buffer (message: Dict) {\n        const delta = this.safeDict (message, 'result');\n        const start = this.safeInteger (delta, 'U');\n        const orderbook = this.orderBook ({}, 10);\n        if (this.safeInteger (orderbook, 'nonce') === undefined) {\n            orderbook.cache.push (delta);\n        } else {\n            this.consume (start);\n        }\n    }\n";
+    test('the delta is Option<Dict>, read natively and boxed into cache_push', () => {
+        const out = write ('84a-cpush', buffer);
+        expect(out).toContain('let mut delta: Option<crate::value::Dict> = ');
+        expect(out).toContain('orderbook.cache_push(delta.map_or(Value::Null, Value::Dict));');
+    });
+    test('a defaulted ws message field (`safeDict (message, k, {})`) pushed into the book is the shared map, boxed there', () => {
+        const out = write ('84a-cpush-ws', buffer.replace ("this.safeDict (message, 'result')", "this.safeDict (message, 'result', {})"));
+        expect(out).toContain('let mut delta: crate::value::Dict = ');
+        expect(out).toContain('orderbook.cache_push(Value::Dict(delta));');
+    });
+    test('negative: a push into a plain list local is no book cache push', () => {
+        const out = write ('84a-cpush-neg', buffer.replace ('orderbook.cache.push (delta);', 'const rows = [];\n            rows.cache.push (delta);'));
+        expect(out).not.toContain('let mut delta: Option<crate::value::Dict>');
     });
 });
