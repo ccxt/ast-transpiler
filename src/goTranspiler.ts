@@ -655,6 +655,60 @@ function goDefiniteAssignmentWalker (state, declaration, name, readExpression, r
     return visitStatement;
 }
 
+// the shared join over the writes `x = <rhs>` of one nil-declared local: `rule` classifies every other
+// occurrence, types each write (`slotWriteType` adds tuple-slot writes) and says whether a write proves x present
+function goNilJoinWalk (goTranspiler, declaration, name, scope, rule) {
+    const state: any = { ok: true, goType: undefined, writes: 0 };
+    const fail = () => { state.ok = false; };
+    const isName = (node) => (node?.kind === ts.SyntaxKind.Identifier) && (node.text === name);
+    // one concrete type for every write
+    const joinWrite = (goType) => {
+        if (goType === undefined) {
+            fail ();
+        } else if (state.goType === undefined) {
+            state.goType = goType;
+        } else if (state.goType !== goType) {
+            fail ();
+        }
+        if (state.ok) {
+            state.writes += 1;
+        }
+    };
+    const readExpression = (node, assigned) => {
+        if (!state.ok || (node === undefined) || (node === null)) {
+            return;
+        }
+        if (node.kind === ts.SyntaxKind.Identifier) {
+            if (isName (node) && (node !== declaration.name)) {
+                rule.use (node, assigned, joinWrite, fail);
+            }
+            return;
+        }
+        if ((node !== scope) && ts.isFunctionLike (node)) {
+            if (!rule.closureNeedsMention || tupleJoinBindingMentionsName (node.body, name)) {
+                fail ();                                      // a closure over x: its call order is unknowable
+            }
+            return;
+        }
+        node.forEachChild ((child) => readExpression (child, assigned));
+    };
+    const visitStatement = goDefiniteAssignmentWalker (state, declaration, name, readExpression, rule.readCaseLabels, (expression, assigned) => {
+        const plain = (expression?.kind === ts.SyntaxKind.BinaryExpression)
+            && (expression.operatorToken.kind === ts.SyntaxKind.EqualsToken) && isName (expression.left);
+        const slotType = plain ? undefined : rule.slotWriteType?.(expression);
+        if (!plain && (slotType === undefined)) {
+            return undefined;
+        }
+        readExpression (expression.right, assigned);          // the RHS is evaluated before the store
+        joinWrite (plain ? rule.writeType (expression.right) : slotType);
+        if (!state.ok) {
+            return assigned;
+        }
+        return ((rule.writeProvesPresent === undefined) || rule.writeProvesPresent (expression.right)) ? true : assigned;
+    });
+    return { state, visitStatement };
+}
+
 // definite-assignment walk: `assigned` is true where a write ran on every path reaching the node
 function tupleJoinType (goTranspiler, declaration, name) {
     const scope = (typeof goTranspiler.goEnclosingFunction === 'function')
@@ -663,63 +717,15 @@ function tupleJoinType (goTranspiler, declaration, name) {
     if (scope === undefined) {
         return undefined;
     }
-    const state = { 'ok': true, 'goType': undefined, 'writes': 0 };
-    const fail = () => { state.ok = false; };
-
-    const isName = (node) => (node?.kind === ts.SyntaxKind.Identifier) && (node.text === name);
-
-    // the write join: one concrete type for every write, map[string]any only
-    const joinWrite = (goType) => {
-        if (goType === undefined) {
-            fail ();
-            return;
-        }
-        if (state.goType === undefined) {
-            state.goType = goType;
-        } else if (state.goType !== goType) {
-            fail ();
-            return;
-        }
-        state.writes += 1;
-    };
-
-    const readExpression = (node, assigned) => {
-        if (!state.ok || (node === undefined) || (node === null)) {
-            return;
-        }
-        if (node.kind === ts.SyntaxKind.Identifier) {
-            if (isName (node) && (node !== declaration.name)) {
-                tupleJoinClassifyUse (node, assigned, readExpression, joinWrite, fail, scope, goTranspiler);
-            }
-            return;
-        }
-        if ((node !== scope) && ts.isFunctionLike (node)) {
-            if (tupleJoinBindingMentionsName (node.body, name)) {
-                fail ();                                      // a closure over x: its call order is unknowable
-            }
-            return;
-        }
-        node.forEachChild ((child) => readExpression (child, assigned));
-    };
-
-    const visitStatement = goDefiniteAssignmentWalker (state, declaration, name, readExpression, true, (expression, assigned) => {
-        if ((expression?.kind === ts.SyntaxKind.BinaryExpression)
-            && (expression.operatorToken.kind === ts.SyntaxKind.EqualsToken) && isName (expression.left)) {
-            // `x = <rhs>`: the right-hand side must print the joined type
-            readExpression (expression.right, assigned);
-            const goType = tupleJoinIndexWriteType (goTranspiler, expression.right)
-                ?? goTranspiler.goTypeOfInitializer (expression.right, goTranspiler.printNode (expression.right, 0));
-            joinWrite (goType);
-            return state.ok;
-        }
-        const slotType = tupleJoinWriteType (expression, name);
-        if (slotType !== undefined) {
-            readExpression (expression.right, assigned);
-            joinWrite (slotType);
-            return state.ok;
-        }
-        return undefined;
+    const { state, visitStatement } = goNilJoinWalk (goTranspiler, declaration, name, scope, {
+        readCaseLabels: true,
+        closureNeedsMention: true,
+        use: (node, assigned, joinWrite, fail) => tupleJoinClassifyUse (node, assigned, joinWrite, fail, scope, goTranspiler),
+        writeType: (right) => tupleJoinIndexWriteType (goTranspiler, right)
+            ?? goTranspiler.goTypeOfInitializer (right, goTranspiler.printNode (right, 0)),
+        slotWriteType: (expression) => tupleJoinWriteType (expression, name),
     });
+    const fail = () => { state.ok = false; };
 
     // any other binding of the same name in the scope: give up
     const shadowingWalk = (node) => {
@@ -759,7 +765,7 @@ function tupleJoinType (goTranspiler, declaration, name) {
 
 // one occurrence of the local outside a plain write: every read must be dominated by a write, or
 // answer the same for the typed nil as it did for the absent box
-function tupleJoinClassifyUse (node, assigned, readExpression, joinWrite, fail, scope, goTranspiler) {
+function tupleJoinClassifyUse (node, assigned, joinWrite, fail, scope, goTranspiler) {
     const parent = node.parent;
     if (parent === undefined) {
         fail ();
@@ -829,8 +835,7 @@ function tupleJoinClassifyUse (node, assigned, readExpression, joinWrite, fail, 
 }
 
 export function installNilDeclaredTupleJoins (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__nilDeclaredTupleJoinsInstalled
-        || (typeof goTranspiler.printVariableDeclarationList !== 'function')) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__nilDeclaredTupleJoinsInstalled', 'printVariableDeclarationList')) {
         return;
     }
     const upstream = goTranspiler.printVariableDeclarationList.bind (goTranspiler);
@@ -866,7 +871,6 @@ export function installNilDeclaredTupleJoins (goTranspiler) {
         goTranspiler.goDeclaredTypeCache?.set (declaration, goType);
         return parsed[1] + 'var ' + parsed[2] + ' ' + goType + ' = ' + goTranspiler.UNDEFINED_TOKEN;
     };
-    goTranspiler.__nilDeclaredTupleJoinsInstalled = true;
 }
 
 // ------------------------------- self-test -------------------------------
@@ -1745,20 +1749,16 @@ function ccxtGoTypeOfNativeArithmeticInitializer (goTranspiler, initializer, pri
     return (CCXT_GO_NATIVE_ARITHMETIC_LOCAL_TYPES.indexOf (native.goType) >= 0) ? native.goType : undefined;
 }
 
-// The declared type alone cannot be passed to a Go `any`-returning call: the
-// printer would emit `var x int64 = Multiply(a, b)` and the compiler would reject
-// it. Add the unbox the type forces — the same helper call, so the value (and with
-// it every overflow/rounding decision) is the helper's. A `var x int64 = `
-// declaration over one of these four calls can only come from the rule above: the
-// printer's own table has no entry for them and no other rule names a concrete
-// type for an arithmetic initializer, so this pass cannot fire on anything the
-// proof did not cover.
-export function ccxtGoUnboxArithmeticDeclaration (goTranspiler, printed) {
-    return ccxtGoUnboxCallDeclaration (printed, /^([\s\S]*?\bvar [A-Za-z0-9_]+ int64 = )((?:ccxt\.)?(?:Multiply|Subtract|Divide|Mod)\([^\n]*)$/, CCXT_GO_ARITHMETIC_LOCAL_TYPE);
-}
+// a `var x T = <call>(...)` declaration typed by the arithmetic, currency or sum rule: the call's Go
+// signature is still `any`, so append the `.(T)` unbox the declared type forces (never twice: an
+// already-unboxed tail fails the trailing-text check)
+const CCXT_GO_UNBOX_DECLARATIONS: [ RegExp, string ][] = [
+    [ /^([\s\S]*?\bvar [A-Za-z0-9_]+ int64 = )((?:ccxt\.)?(?:Multiply|Subtract|Divide|Mod)\([^\n]*)$/, 'int64' ],
+    [ /^([\s\S]*?\bvar [A-Za-z0-9_]+ map\[string\]any = )((?:ccxt\.)?(?:this\.)?(?:Currency|SafeCurrency)\([^\n]*)$/, 'map[string]any' ],
+    [ /^([\s\S]*?\bvar [A-Za-z0-9_]+ int64 = )((?:this\.Sum|(?:ccxt\.)?Add)\([^\n]*)$/, 'int64' ],
+];
 
-// appends `.(<goType>)` to a `var x T = <call>(...)` declaration whose call `pattern` matches and ends the line
-function ccxtGoUnboxCallDeclaration (printed, pattern: RegExp, goType: string) {
+function ccxtGoUnboxDeclaration (printed, pattern: RegExp, goType: string) {
     if (typeof printed !== 'string') {
         return printed;
     }
@@ -1767,8 +1767,7 @@ function ccxtGoUnboxCallDeclaration (printed, pattern: RegExp, goType: string) {
         return printed;
     }
     const tail = match[2];
-    const open = tail.indexOf ('(');
-    const close = ccxtGoPrintedCallEnd (tail, open);
+    const close = ccxtGoPrintedCallEnd (tail, tail.indexOf ('('));
     if (close < 0) {
         return printed;
     }
@@ -1819,18 +1818,6 @@ function ccxtGoPrintedCallEnd (value, open) {
     return -1;
 }
 
-function installCcxtGoArithmeticUnbox (goTranspiler) {
-    if (typeof goTranspiler.printVariableDeclarationList !== 'function' || goTranspiler.__ccxtGoArithmeticUnboxInstalled) {
-        return;
-    }
-    const upstream = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
-        const printed = upstream.call (this, node, identation);
-        return ccxtGoUnboxArithmeticDeclaration (this, printed);
-    };
-    goTranspiler.__ccxtGoArithmeticUnboxInstalled = true;
-}
-
 // ---------------------------------------------------------------------------------------------
 // `var currency map[string]any = this.Currency (code)` / `this.SafeCurrency (id)`
 //
@@ -1842,8 +1829,7 @@ function installCcxtGoArithmeticUnbox (goTranspiler) {
 // indexer stores an element only when it IS a map, so a currency entry is never a *sync.Map, a
 // slice or a scalar. Unlike SafeDict*/SafeList* there is no absent value to carry (neither
 // accessor returns undefined), so the declaration can name the map — and the emitted call,
-// whose Go signature is still `any`, is unboxed at the declaration (see
-// ccxtGoUnboxCurrencyDeclaration) exactly like the arithmetic family.
+// whose Go signature is still `any`, is unboxed at the declaration (CCXT_GO_UNBOX_DECLARATIONS).
 const CCXT_GO_CURRENCY_LOCAL_TYPE = 'map[string]any';
 
 const CCXT_GO_CURRENCY_CALLEES = [ 'this.Currency', 'this.SafeCurrency' ];
@@ -1882,14 +1868,6 @@ function ccxtGoTypeOfCurrencyInitializer (goTranspiler, initializer, printedValu
         return undefined;
     }
     return CCXT_GO_CURRENCY_LOCAL_TYPE;
-}
-
-// The declaration names a map while the accessor's emitted Go signature is `any`, so the call
-// has to be unboxed for the declaration to compile. Fires only on the exact shape the
-// classifier above typed (a whole `this.Currency (..)` / `this.SafeCurrency (..)` call), and
-// never twice: an already-unboxed tail fails the trailing-text check.
-export function ccxtGoUnboxCurrencyDeclaration (goTranspiler, printed) {
-    return ccxtGoUnboxCallDeclaration (printed, /^([\s\S]*?\bvar [A-Za-z0-9_]+ map\[string\]any = )((?:ccxt\.)?(?:this\.)?(?:Currency|SafeCurrency)\([^\n]*)$/, CCXT_GO_CURRENCY_LOCAL_TYPE);
 }
 
 // `var url *string = SafeStringPtr(GetValue(GetValue(this.Urls, "api"), "ws"))`: the C#
@@ -2069,16 +2047,16 @@ export function ccxtGoWrapUrlsDeclaration (printed) {
     return (match === null) ? printed : match[1] + 'SafeStringPtr(' + match[2] + ')' + match[3];
 }
 
-function installCcxtGoCurrencyUnbox (goTranspiler) {
-    if (typeof goTranspiler.printVariableDeclarationList !== 'function' || goTranspiler.__ccxtGoCurrencyUnboxInstalled) {
+function installCcxtGoDeclarationUnbox (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__ccxtGoDeclarationUnboxInstalled', 'printVariableDeclarationList')) {
         return;
     }
     const upstream = goTranspiler.printVariableDeclarationList;
     goTranspiler.printVariableDeclarationList = function (node, identation) {
         const printed = upstream.call (this, node, identation);
-        return ccxtGoWrapAddChainDeclaration (ccxtGoWrapUrlsDeclaration (ccxtGoUnboxSumDeclaration (this, ccxtGoUnboxCurrencyDeclaration (this, printed))));
+        const unboxed = CCXT_GO_UNBOX_DECLARATIONS.reduce ((text, [ pattern, goType ]) => ccxtGoUnboxDeclaration (text, pattern, goType), printed);
+        return ccxtGoWrapAddChainDeclaration (ccxtGoWrapUrlsDeclaration (unboxed));
     };
-    goTranspiler.__ccxtGoCurrencyUnboxInstalled = true;
 }
 
 // Types `this.safeDict` / `this.safeList` / `this.safeDict2` / `this.safeList2` locals the printer's
@@ -2588,12 +2566,10 @@ function ccxtGoSafeCollectionUnboxValue (goTranspiler, declaration, identation, 
 // checks the shipped predicate first, so a site the printer already types is emitted byte for byte
 // as before.
 function installCcxtGoSafeCollectionUnbox (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoSafeCollectionUnboxInstalled) {
+    if ((goTranspiler === undefined) || (typeof goTranspiler.goSafeDictLocalUnbox !== 'function') || (typeof goTranspiler.goSafeListLocalUnbox !== 'function')
+        || (typeof goTranspiler.goSafeDictUnboxValue !== 'function') || (typeof goTranspiler.goSafeListUnboxValue !== 'function')
+        || !goInstallOnce (goTranspiler, '__ccxtGoSafeCollectionUnboxInstalled')) {
         return;
-    }
-    if ((typeof goTranspiler.goSafeDictLocalUnbox !== 'function') || (typeof goTranspiler.goSafeListLocalUnbox !== 'function')
-        || (typeof goTranspiler.goSafeDictUnboxValue !== 'function') || (typeof goTranspiler.goSafeListUnboxValue !== 'function')) {
-        return; // older printer without the container unbox: nothing to extend
     }
     const shippedDictType = goTranspiler.goSafeDictLocalUnbox;
     const shippedListType = goTranspiler.goSafeListLocalUnbox;
@@ -2627,7 +2603,6 @@ function installCcxtGoSafeCollectionUnbox (goTranspiler) {
         }
         return shippedListValue.call (this, declaration, identation);
     };
-    goTranspiler.__ccxtGoSafeCollectionUnboxInstalled = true;
 }
 
 // Fields of the hand-written `BaseExchange` (go/v4/exchange.go) whose Go type is a
@@ -2668,11 +2643,8 @@ export function ccxtGoIndexableThisField (goTranspiler, node) {
 // teach the Go printer's `goIndexableTypeOf` the exchange fields above, so an
 // element access on one of them prints as a native map index instead of GetValue
 export function installCcxtGoIndexableTypes (goTranspiler) {
-    if (goTranspiler === undefined || goTranspiler.__ccxtGoIndexableTypesInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoIndexableTypesInstalled', 'goIndexableTypeOf')) {
         return;
-    }
-    if (typeof goTranspiler.goIndexableTypeOf !== 'function') {
-        return; // older printer without the element-access typing: nothing to extend
     }
     const upstream = goTranspiler.goIndexableTypeOf;
     goTranspiler.goIndexableTypeOf = function (node, printed) {
@@ -2690,7 +2662,6 @@ export function installCcxtGoIndexableTypes (goTranspiler) {
             return ((known === undefined) && (ccxtGoIndexableThisField (this, node) !== undefined) && (node.name?.text === 'urls')) ? 'map[string]any' : known;
         };
     }
-    goTranspiler.__ccxtGoIndexableTypesInstalled = true;
     installCcxtGoPrintedMapDeclarations (goTranspiler);
 }
 
@@ -3095,7 +3066,7 @@ function goNativeConcatVetoed (goTranspiler, declaration, varName) {
 // wrap printVariableDeclarationList: the declaration whose initializer is a typed
 // concatenation is emitted as `var x string = <left> + <right>`. Idempotent.
 function installCcxtGoTypedConcat (goTranspiler) {
-    if (goTranspiler.__ccxtGoTypedConcatInstalled || (typeof goTranspiler.printVariableDeclarationList !== 'function')) {
+    if (!goInstallOnce (goTranspiler, '__ccxtGoTypedConcatInstalled', 'printVariableDeclarationList')) {
         return;
     }
     const upstream = goTranspiler.printVariableDeclarationList.bind (goTranspiler);
@@ -3131,7 +3102,6 @@ function installCcxtGoTypedConcat (goTranspiler) {
         }
         return upstream (node, identation);
     };
-    goTranspiler.__ccxtGoTypedConcatInstalled = true;
 }
 
 // the CCXT helper's Go return type when `printedValue` is one whole call
@@ -3324,7 +3294,7 @@ function retypeAsyncArrayBindingHolder (goTranspiler, node, printed, identation 
 // wrap both destructuring paths on a Transpiler's Go printer. Idempotent; everything the
 // upstream printer printed in another shape is returned untouched.
 export function installCcxtGoArrayBindingHolders (goTranspiler) {
-    if (goTranspiler === undefined || goTranspiler.__ccxtGoArrayBindingHoldersInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoArrayBindingHoldersInstalled')) {
         return;
     }
     // declaration shape: `const [ a, b ] = this.handleM (...)`
@@ -3344,7 +3314,6 @@ export function installCcxtGoArrayBindingHolders (goTranspiler) {
             return retypeArrayBindingHolder (this, node, upstreamBinary.call (this, node, identation), identation);
         };
     }
-    goTranspiler.__ccxtGoArrayBindingHoldersInstalled = true;
 }
 
 // --- generated string-returning helpers (parse*Status / parseOrderType / ...) ---
@@ -3609,7 +3578,7 @@ function ccxtGoTypeOfSumInitializer (goTranspiler, initializer, printedValue) {
 // bound once to one) its int64 branch returns int64 + int64 natively, or — for any other
 // non-nil int-kind right — the integral float64 sum through ParseInt, an int64 again. A nil
 // right is the only nil path, and ccxtGoSumOperandIsInt admits no nilable operand. Declarations
-// only, unboxed like the Sum family (ccxtGoUnboxSumDeclaration).
+// only, unboxed like the Sum family (CCXT_GO_UNBOX_DECLARATIONS).
 function ccxtGoTypeOfAddInitializer (goTranspiler, initializer, printedValue) {
     if ((initializer?.parent?.kind !== ts.SyntaxKind.VariableDeclaration) || (initializer.parent.initializer !== initializer)
         || (initializer.parent.parent?.parent?.kind !== ts.SyntaxKind.VariableStatement)) {
@@ -3652,26 +3621,6 @@ function ccxtGoIsNonNilInt64Pointer (goTranspiler, node, printed) {
     }
     return (declaration?.kind === ts.SyntaxKind.VariableDeclaration) && (declaration.name?.kind === ts.SyntaxKind.Identifier)
         && ((declaration.parent?.flags & ts.NodeFlags.Const) !== 0) && ccxtGoIsDefaultedSafeInteger (declaration.initializer);
-}
-
-export function ccxtGoUnboxSumDeclaration (goTranspiler, printed) {
-    if (typeof printed !== 'string') {
-        return printed;
-    }
-    const match = /^([\s\S]*?\bvar [A-Za-z0-9_]+ int64 = )((?:this\.Sum|(?:ccxt\.)?Add)\([^\n]*)$/.exec (printed);
-    if (match === null) {
-        return printed;
-    }
-    const tail = match[2];
-    const close = ccxtGoPrintedCallEnd (tail, tail.indexOf ('('));
-    if (close < 0) {
-        return printed;
-    }
-    const rest = tail.substring (close);
-    if (!/^\s*(;?\s*(\/\/[^\n]*)?)$/.test (rest)) {
-        return printed;
-    }
-    return match[1] + tail.substring (0, close) + '.(' + CCXT_GO_SUM_LOCAL_TYPE + ')' + rest;
 }
 
 // `requestId ()`: every return path already prints one int64 / string value, so the
@@ -4636,66 +4585,35 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration) 
     if (scope === undefined) {
         return undefined;
     }
-    const state: any = { ok: true, goType: undefined, writes: 0 };
-    const fail = () => { state.ok = false; };
-    const isName = (node) => (node?.kind === ts.SyntaxKind.Identifier) && (node.text === name);
-    const readExpression = (node, assigned) => {
-        if (!state.ok || (node === undefined) || (node === null)) {
-            return;
-        }
-        if (node.kind === ts.SyntaxKind.Identifier) {
-            if (isName (node) && (node !== declaration.name)) {
-                const kind = nilJoinOccurrenceKind (node);
-                if (kind === 'read') {
-                    state.mutated = state.mutated || ccxtGoNilJoinIsElementWrite (node);
-                    if (ccxtGoNilJoinIsPush (node)) {
-                        fail ();                          // AppendToArray(&x) needs an `any` box
-                    } else if (!assigned) {
-                        if (!ccxtGoNilJoinReadSeesAbsent (goTranspiler, node)) {
-                            fail ();
-                        }
+    const { state, visitStatement } = goNilJoinWalk (goTranspiler, declaration, name, scope, {
+        readCaseLabels: false,
+        closureNeedsMention: false,
+        use: (node, assigned, joinWrite, fail) => {
+            const kind = nilJoinOccurrenceKind (node);
+            if (kind === 'read') {
+                state.mutated = state.mutated || ccxtGoNilJoinIsElementWrite (node);
+                if (ccxtGoNilJoinIsPush (node)) {
+                    fail ();                              // AppendToArray(&x) needs an `any` box
+                } else if (!assigned) {
+                    if (!ccxtGoNilJoinReadSeesAbsent (goTranspiler, node)) {
+                        fail ();
                     }
-                } else if (kind !== 'skip') {
-                    fail ();                              // write/reject in expression position
                 }
+            } else if (kind !== 'skip') {
+                fail ();                                  // write/reject in expression position
             }
-            return;
-        }
-        if ((node !== scope) && ts.isFunctionLike (node)) {
-            fail ();                                      // a closure over x: its call order is unknowable
-            return;
-        }
-        node?.forEachChild ((child) => readExpression (child, assigned));
-    };
-    const writeExpression = (right, assigned) => {
-        readExpression (right, assigned);                 // the RHS is evaluated before the store
-        let goType = goTranspiler.goTypeOfInitializer (right, goTranspiler.printNode (right, 0));
-        if (NIL_JOIN_TYPES.indexOf (goType) < 0) {
-            goType = NIL_JOIN_TYPES.find ((t) => ccxtGoWriteSiteConversion (goTranspiler, t, right, true) !== undefined);
-        }
-        if (goType === undefined) {
-            fail ();
-            return;
-        }
-        if (state.goType === undefined) {
-            state.goType = goType;
-        } else if (state.goType !== goType) {
-            fail ();                                      // map and slice writes cannot join
-            return;
-        }
-        state.writes += 1;
+        },
+        writeType: (right) => {
+            const goType = goTranspiler.goTypeOfInitializer (right, goTranspiler.printNode (right, 0));
+            return (NIL_JOIN_TYPES.indexOf (goType) >= 0) ? goType
+                : NIL_JOIN_TYPES.find ((t) => ccxtGoWriteSiteConversion (goTranspiler, t, right, true) !== undefined);
+        },
         // a Safe* accessor may answer absent: the local is not proven present after it
-        const callee = ccxtGoWriteSiteCallee (goTranspiler, right);
-        const mayBeAbsent = /^this\.Safe(?:Dict|List)2?$/.test (callee ?? '');
-        state.copies = state.copies || mayBeAbsent;
-        return !mayBeAbsent;
-    };
-    const visitStatement = goDefiniteAssignmentWalker (state, declaration, name, readExpression, false, (expression, assigned) => {
-        if ((expression?.kind === ts.SyntaxKind.BinaryExpression)
-            && (expression.operatorToken.kind === ts.SyntaxKind.EqualsToken) && isName (expression.left)) {
-            return writeExpression (expression.right, assigned) ? true : assigned;
-        }
-        return undefined;
+        writeProvesPresent: (right) => {
+            const mayBeAbsent = /^this\.Safe(?:Dict|List)2?$/.test (ccxtGoWriteSiteCallee (goTranspiler, right) ?? '');
+            state.copies = state.copies || mayBeAbsent;
+            return !mayBeAbsent;
+        },
     });
     visitStatement (scope.body, false);
     if (state.copies && state.mutated) {
@@ -5027,7 +4945,7 @@ function ccxtGoWriteSiteAssignment (goTranspiler, node, identation) {
 // the type half (a later convertible assignment does not veto the local) and the value half (the
 // assignment text) are installed together, so the two can never disagree
 function installCcxtGoWriteSiteConversions (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoWriteSiteConversionsInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoWriteSiteConversionsInstalled')) {
         return;
     }
     const shippedIsSafe = goTranspiler.goLocalIsSafeToType;
@@ -5045,7 +4963,6 @@ function installCcxtGoWriteSiteConversions (goTranspiler) {
         }
         return shippedBinary.call (this, node, identation);
     };
-    goTranspiler.__ccxtGoWriteSiteConversionsInstalled = true;
 }
 
 // ----------------- array-literal locals: `let x = []; if (Array.isArray (y)) { x = y; }` -----------------
@@ -7455,11 +7372,8 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
         return methodDef.replace (/(\)\s+)any(\s*)$/, '$1' + goType + '$2');
     };
     goTranspiler.__ccxtGoLocalTypesInstalled = true;
-    // the arithmetic type names a type Go will not unbox implicitly: the emitted
-    // declaration needs the `.(int64)` the new declared type forces
-    installCcxtGoArithmeticUnbox (goTranspiler);
-    // same for the currency dict the accessors box in `any`
-    installCcxtGoCurrencyUnbox (goTranspiler);
+    // the arithmetic / currency / sum types need the `.(T)` unbox at the declaration
+    installCcxtGoDeclarationUnbox (goTranspiler);
     installCcxtGoWriteSiteConversions (goTranspiler);
     installCcxtGoIdentityTupleRebind (goTranspiler);
     installCcxtGoArrayLiteralWrites (goTranspiler);
