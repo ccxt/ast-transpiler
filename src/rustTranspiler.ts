@@ -26551,10 +26551,10 @@ export class RustTranspiler extends BaseTranspiler {
     /** ral-80g: `const o = this.parseJson (s)` (base `parseJson`, one argument): its answer is whatever JSON the text holds
      *  (a map, a list, a scalar) or Null. Under ral-qa's use rule (literal string-key base reads only) a non-map answer reads
      *  Null at every key exactly as the empty map `into_dict()` leaves, and a parsed value carries no store tag. */
-    rust80gParseJsonKeyReadSource(call: any): boolean {
+    rust80gParseJsonKeyReadSource(call: Node): boolean {
         if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         if (String(call.expression.name.text) !== 'parseJson' || call.arguments.length !== 1 || this.rustTestTierSource(call)) return false;
-        const declaration: any = this.rustScalarCallee(call);
+        const declaration: Node | undefined = this.rustScalarCallee(call);
         return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
 
@@ -31601,11 +31601,11 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-80g R2: `c ? this.omit (p, k) : p` where every arm answers a map: an omit of a proven map, an always-map base
         // helper, or the proven-map params parameter itself (rustProvenMapParam)
         if (init !== undefined && isConditionalExpression(init) && this.rustDictTernaryInit(init)) {
-            const arm = (x: any): boolean => {
-                const a: any = this.rustSkipWrappers(x);
+            const arm = (x: Expression): boolean => {
+                const a: Expression | undefined = this.rustSkipWrappers(x);
                 if (a !== undefined && isCallExpression(a)) return this.rustBaseCallNamed(a, RustTranspiler.RUST_ALWAYS_MAP_HELPERS) || (this.rustOmitOfDict(a) && this.rustOmitLineFits(a));
                 if (a === undefined || !isIdentifier(a)) return false;
-                const d: any = this.rustDeclarationOfIdentifier(a);
+                const d: Node | undefined = this.rustDeclarationOfIdentifier(a);
                 return d !== undefined && d !== a && isParameterDeclaration(d) && this.rustProvenMapParam(d) && !this.rustLocalIsReassigned(d, String(a.text));
             };
             return arm(init.whenTrue) && arm(init.whenFalse) && String(declaration.initializer.getText()).split('\n')[0].length <= 240;
