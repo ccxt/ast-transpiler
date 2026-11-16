@@ -2901,6 +2901,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (isBinaryExpression(node) && RustTranspiler.COMPARISON_OPS.has(node.operatorToken.kind)) return 'bool';
         if (this.rustNilDefiniteBool(node)) return 'bool';
+        // ral-68b: `parseInt (s)` / `parseInt (s) * <int literal>` over a checker-string argument (gate parseLedgerEntry
+        // `timestamp`): the native parse answers `Int` or `Null` and the multiply keeps `Int * Int` an `Int`, so `.as_i64()` is exact
+        if (this.rust68bParseIntWrite(node)) return 'int';
         if (!isCallExpression(node)) return undefined;
         // ta: a base call of the typed-return table answering a Rust `bool` (`isPostOnly`, runtime `inArray`): never undefined
         if (this.rustBaseTypedReturnKind(node) === 'bool') return 'bool';
@@ -2924,6 +2927,19 @@ export class RustTranspiler extends BaseTranspiler {
             return args.length === boolBase || (args.length === boolBase + 1 && this.literalKindOfNode(args[boolBase]) === 'boolean') ? 'bool' : undefined;
         }
         return undefined;
+    }
+
+    /** ral-68b: `parseInt (s)` with one argument whose checker type is `string`, or that call times an integer literal. */
+    rust68bParseIntWrite(expr: any): boolean {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined) return false;
+        if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.AsteriskToken) {
+            const [ a, b ] = [ this.unwrapParens(node.left), this.unwrapParens(node.right) ];
+            return (this.rust68bParseIntWrite(a) && this.rustNilIntLiteral(b) !== undefined) || (this.rustNilIntLiteral(a) !== undefined && this.rust68bParseIntWrite(b));
+        }
+        if (!isCallExpression(node) || !isIdentifier(node.expression) || String(node.expression.text) !== 'parseInt' || node.arguments.length !== 1) return false;
+        const type: any = this.getCheckedTypeOf(node.arguments[0]);
+        return type !== undefined && this.isStringType(type.flags);
     }
 
     /** za: a ternary whose arms are an `undefined` and a boolean literal (either order). */
@@ -2992,6 +3008,8 @@ export class RustTranspiler extends BaseTranspiler {
         // reads `None` as the `Null` box and `Some(s)` as its `Str`): no box, no copy
         if (kind === 'str' && this.rustPreciseLentOperand(n)) return 'lend';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
+            // ral-68b: an `Int` nil local in an `Option<i64>` slot of a typed unified call passes its own `Option` (no box)
+            if (kind === 'int' && this.rust68bNilIntTypedArg(parent, n)) return 'targ';
             return this.rustNilBoxCallOk(parent, parent.arguments.indexOf(n)) ? 'box' : undefined;
         }
         if (parent.kind === SyntaxKind.PropertyAssignment && parent.initializer === n) return 'box';
@@ -3003,6 +3021,16 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustNativeStrReturnKind(findAncestor(parent.parent, isFunctionLike) as any) === 'str' ? undefined : 'box';
         }
         return undefined;
+    }
+
+    /** ral-68b: `n` is a direct argument of a `this.<typed unified>(..)` call whose typed slot there is `Option<i64>`
+     *  (luno fetchLedgerByEntries `since`): the call prints the nil `Int` local's own `Option<i64>` in place of the box
+     *  the slot would read back through `.as_i64()`, the same `None` / `Some(n)` either way. */
+    rust68bNilIntTypedArg(call: any, n: any): boolean {
+        if (call === undefined || !isCallExpression(call) || !isIdentifier(n)) return false;
+        const at: number = call.arguments.indexOf(n);
+        if (at < 0) return false;
+        return this.rustScalarTypedParamType(call, at) === 'Option<i64>';
     }
 
     /** rb: `y = !x;` as a whole statement, where `y` is another nil local typed `Option<bool>` (decided first; a cycle stays boxed). */
@@ -14355,6 +14383,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (absent && p.rustType === 'bool') return declParams[i]?.initializer?.kind === SyntaxKind.TrueKeyword ? 'true' : 'false';
             if (absent) return p.rustType.startsWith('impl') ? 'Value::Null' : 'None';
             const scalarArg = this.rustScalarTypedArgText(args[i], p.rustType); if (scalarArg !== undefined) return scalarArg;
+            // ral-68b: an `Int` nil local (`Option<i64>`) in an `Option<i64>` slot passes as itself
+            if (p.rustType === 'Option<i64>' && isIdentifier(args[i]) && this.rustNilLocalOfIdentifier(args[i])?.kind === 'int') return RustTranspiler.rustLentMark(super.printIdentifier(args[i]));
             if (p.rustType === 'bool') {
                 if (args[i].kind === SyntaxKind.TrueKeyword) return 'true';
                 if (args[i].kind === SyntaxKind.FalseKeyword) return 'false';

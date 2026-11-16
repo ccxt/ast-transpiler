@@ -23003,3 +23003,37 @@ describe('ral-68c: declared-empty container locals written from awaited typed ca
         expect(out).toMatch(/let mut response: Value = Value::Null;/);
     });
 });
+
+describe('ral-68b: declared-empty Int locals typed from TypeScript (typed-slot nil hand-off, parseInt writes)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n    keep (o: any): any { return o; }\n    extend (...a: any[]): any { return a[0]; }\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k] ?? d; }\n    async fetchLedger (code: Str = undefined, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any[]> { return []; }\n}\n";
+    const write = (name: string, body: string, typedUnified: string[] = []) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'typedUnified': typedUnified, 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
+        t.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return t.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const ledgerBody = (decl: string) => "    async byEntries (code: Str = undefined, limit: Int = undefined, params = {}) {\n        const limitValue = (limit === undefined) ? 1 : limit;\n        " + decl + "\n        return await this.fetchLedger (code, since, limitValue, this.extend ({}, params));\n    }\n";
+    test('luno fetchLedgerByEntries `since`: a never-written Int handed to an Option<i64> typed slot passes as itself', () => {
+        const out = write ('ral-68b-nil-int-targ', ledgerBody ('const since: Int = undefined;'), [ 'fetchLedger' ]);
+        expect(out).toContain('let mut since: Option<i64> = None;');
+        expect(out).toContain('self.fetch_ledger(code.as_str(), since, Some(limitValue),');
+    });
+    test('negative: the same slot of an un-awaited (untyped) call keeps the local Value', () => {
+        const out = write ('ral-68b-nil-int-targ-neg', ledgerBody ('const since: Int = undefined;').replace ('return await this.fetchLedger', 'return this.fetchLedger'), [ 'fetchLedger' ]);
+        expect(out).toContain('let mut since: Value = Value::Null;');
+    });
+    const parseBody = (rhs: string) => "    parseLedger (item: Dict) {\n        const rawTimestamp = this.safeString (item, 'time');\n        let timestamp: Int = undefined;\n        if ((rawTimestamp as string).length > 10) {\n            timestamp = parseInt (rawTimestamp as string);\n        } else {\n            timestamp = " + rhs + ";\n        }\n        return { 'timestamp': timestamp };\n    }\n";
+    test('gate parseLedgerEntry `timestamp`: parseInt of a string (times an int literal) into an Int local is Option<i64>', () => {
+        const out = write ('ral-68b-parseint', parseBody ('parseInt (rawTimestamp as string) * 1000'));
+        expect(out).toContain('let mut timestamp: Option<i64> = None;');
+        expect(out).toMatch(/timestamp = \(match &rawTimestamp \{ Value::Str\(__parse_s\).*\}\)\.as_i64\(\);/);
+        expect(out).toContain('Value::from(timestamp)');
+    });
+    test('negative: parseInt times a float literal keeps Value (a Float product)', () => {
+        const out = write ('ral-68b-parseint-neg', parseBody ('parseInt (rawTimestamp as string) * 1.5'));
+        expect(out).toContain('let mut timestamp: Value = Value::Null;');
+    });
+});
