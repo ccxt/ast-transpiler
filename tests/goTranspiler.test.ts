@@ -13023,7 +13023,7 @@ describe ('goTypeKeyedMapLocals', () => {
         });
         test('a rebinding to anything else, an assertion-like use, an address or a non-nil compare keep the box', () => {
             for (const body of [
-                'd = this.extend (d, {});\n return 1;',
+                'd = this.safeString (p, "x");\n return 1;', // ral-77g2 R2: an extend rebinding now keeps the map (was `d = this.extend (d, {})`)
                 'const q = d.foo; return q;',
                 'if (d === p) { return 1; }\n return 2;',
                 'const q = typeof d; return q;',
@@ -13063,7 +13063,9 @@ describe ('goTypeKeyedMapLocals', () => {
         });
         test('prediction and base sources keep the box', () => {
             const body = '    f (p: Dict): any {\n        const d = this.safeDict (p, "data", {});\n        return this.extend (d, {});\n    }\n';
-            expect(run(body, 'ts/src/prediction')).not.toContain('SafeDictMap');
+            // ral-77g2 R1: prediction sources now take the rule (ws container checks); base Exchange still keeps the box
+            expect(run(body, 'ts/src/prediction')).toContain('SafeDictMap');
+            expect(run(body, 'ts/src/base')).not.toContain('SafeDictMap');
             expect(run(body, 'ts/src')).toContain('SafeDictMap');
         });
     });
@@ -14141,5 +14143,60 @@ describe ('77g1 nil-declared tuple-slot joins', () => {
             + '        return pm;\n'
             + '    }\n');
         expect(out).toContain('var pm any = nil');
+    });
+});
+
+describe ('ral-77g2 reader-result locals', () => {
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'type Str = string | undefined;\n' +
+        'export class Exchange {\n' +
+        '    options: Dict;\n' +
+        '    safeDict (a: any, k: any, d: any = undefined): Dict { return a; }\n' +
+        '    safeList (a: any, k: any, d: any = undefined): any[] { return a; }\n' +
+        '    safeString (a: any, k: any, d: any = undefined): Str { return a; }\n' +
+        '    extend (a: any, b: any): Dict { return a; }\n';
+    const run = (members: string, dir: string, name = 'x.ts'): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'r77g2-'));
+        try {
+            const src = path.join(tmp, dir);
+            fs.mkdirSync(src, { recursive: true });
+            const file = path.join(src, name);
+            fs.writeFileSync(file, PRELUDE + members + '}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    test('R1: a prediction source types a never-nil safeDict local like a ws source', () => {
+        const body = '    f (raw: Dict): any {\n        const d = this.safeDict (raw, "outcome", {});\n        d["seen"] = true;\n        return this.extend (d, {});\n    }\n';
+        expect(run(body, 'ts/src/prediction')).toContain('var d map[string]any = this.SafeDictMap(raw, "outcome", map[string]any{})');
+        expect(run(body, 'ts/src/base', 'PredictionExchange.ts')).toContain('var d map[string]any = this.SafeDictMap(raw, "outcome", map[string]any{})');
+        // the ws container checks still hold, and the base Exchange stays boxed
+        const field = '    f (raw: Dict): any {\n        const d = this.safeDict (this.markets, "x", {});\n        return this.extend (d, {});\n    }\n    markets: Dict;\n';
+        expect(run(field, 'ts/src/prediction')).not.toContain('SafeDictMap');
+        expect(run(body, 'ts/src/base', 'Exchange.ts')).not.toContain('SafeDictMap');
+    });
+    test('R2: a statement-level this.extend rebinding keeps the typed map local', () => {
+        const body = '    f (raw: Dict, params: Dict): any {\n        let d = this.safeDict (raw, "data", {});\n        d = this.extend (d, params);\n        return this.safeString (d, "id");\n    }\n';
+        const out = run(body, 'ts/src');
+        expect(out).toContain('var d map[string]any = this.SafeDictMap(raw, "data", map[string]any{})');
+        expect(out).toContain('d = this.Extend(d, params)');
+        // an extend used as a value, or another call, keeps the box
+        const value = '    f (raw: Dict, params: Dict): any {\n        let d = this.safeDict (raw, "data", {});\n        const e = (d = this.extend (d, params));\n        return e;\n    }\n';
+        expect(run(value, 'ts/src')).not.toContain('SafeDictMap');
+        const other = '    f (raw: Dict, params: Dict): any {\n        let d = this.safeDict (raw, "data", {});\n        d = this.safeString (raw, "x");\n        return d;\n    }\n';
+        expect(run(other, 'ts/src')).not.toContain('SafeDictMap');
+    });
+    test('R4: a handleOption local read only against true is a Go bool', () => {
+        const pre = '    handleOption (m: string, o: string, d: any = undefined): any { return d; }\n';
+        const body = pre + '    f (): any {\n        const snap = this.handleOption ("watchPositions", "fetchPositionsSnapshot", true);\n        if (snap === true) {\n            return 1;\n        }\n        return 2;\n    }\n';
+        const out = run(body, 'ts/src/pro');
+        expect(out).toContain('var snap bool = this.HandleOption("watchPositions", "fetchPositionsSnapshot", true) == true');
+        expect(out).not.toContain('var snap any');
+        // a value read or a rebinding keeps the box
+        expect(run(body.replace('if (snap === true)', 'if (snap)'), 'ts/src/pro')).toContain('var snap any');
+        expect(run(body.replace('if (snap === true) {', 'if (snap === true) {\n            snap = false;'), 'ts/src/pro')).toContain('var snap any');
     });
 });

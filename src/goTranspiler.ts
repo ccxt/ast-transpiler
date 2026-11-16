@@ -33410,3 +33410,90 @@ GoTranspiler.prototype.goBaseCacheInitText = function (node) {
     }
     return `${this.printNode(node.left, 0)} = ${this.goWsCacheEmptyLiteral(node.left) ?? 'map[string]any'}{}`;
 };
+
+// ===== ral-77g2: reader-result locals =====
+// R1. A safeDict-seeded Dict local in a prediction source (ts/src/prediction/*, base/PredictionExchange)
+// is typed by the same rule as a ws source: those files embed BaseExchange, so the SafeDictMap twin
+// reads the same member, and the ws container checks (no cache / client / class-typed receiver) apply
+// because the prediction venues also hold stream state. Every other caller of goSourceTreeKind keeps
+// treating the tree as skipped.
+export interface GoTranspiler {
+    goSafeDictMapPredictionAsWs: boolean;
+}
+GoTranspiler.prototype.goSafeDictMapPredictionAsWs = false;
+{
+    const sourceTreeKind = GoTranspiler.prototype.goSourceTreeKind;
+    GoTranspiler.prototype.goSourceTreeKind = function (node) {
+        const kind = sourceTreeKind.call(this, node);
+        return ((kind === 'skip') && this.goSafeDictMapPredictionAsWs && this.goNodeIsInPredictionTree(node)) ? 'ws' : kind;
+    };
+    const safeDictMapLocal = GoTranspiler.prototype.goSafeDictMapLocalUncached;
+    GoTranspiler.prototype.goSafeDictMapLocalUncached = function (declaration) {
+        const outer = this.goSafeDictMapPredictionAsWs;
+        this.goSafeDictMapPredictionAsWs = true;
+        try {
+            return safeDictMapLocal.call(this, declaration);
+        } finally {
+            this.goSafeDictMapPredictionAsWs = outer;
+        }
+    };
+}
+// R2. A statement-level rebinding `x = this.extend (..)` of such a local keeps the map type: the Go
+// BaseExchange.Extend result is a fresh non-nil map[string]any (ExtendMap), so the write prints as it
+// stands (`x = this.Extend(..)`), assignable to the typed local, and no later nil test can differ.
+{
+    const useKeepsMap = GoTranspiler.prototype.goMapLocalUseKeepsMap;
+    GoTranspiler.prototype.goMapLocalUseKeepsMap = function (ref, rebinds, noDefault, ws, name) {
+        const write: any = ref.parent;
+        if ((write?.kind === SyntaxKind.BinaryExpression) && (write.left === ref) && (write.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (write.parent?.kind === SyntaxKind.ExpressionStatement)) {
+            const right: any = this.goUnwrapParenthesizedNode(write.right);
+            if ((right?.kind === SyntaxKind.CallExpression) && (right.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                && (right.expression.expression?.kind === SyntaxKind.ThisKeyword) && (right.expression.name?.text === 'extend')
+                && (right.arguments.length >= 1) && (right.arguments.length <= 2)) {
+                return true;
+            }
+        }
+        return useKeepsMap.call(this, ref, rebinds, noDefault, ws, name);
+    };
+}
+// R4. `const x = this.handleOption (m, o[, d])` read only as `x === true` / `x == true` / `x !== true`
+// is a Go bool: BaseExchange.HandleOption returns the boxed option, and each of those reads is the
+// interface comparison with the true constant, so the declaration takes that comparison once
+// (`var x bool = this.HandleOption(..) == true`) and every use compares a bool with the same answer.
+// A rebinding, any other read, or a shadowing binding keeps the box.
+export interface GoTranspiler {
+    goHandleOptionTrueLocal(declaration): boolean;
+}
+GoTranspiler.prototype.goHandleOptionTrueLocal = function (declaration) {
+    const call: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.type !== undefined)
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (call.expression.name?.text !== 'handleOption')
+        || (call.arguments.length < 2) || (call.arguments.length > 3)) {
+        return false;
+    }
+    const comparesWithTrue = (n: any): boolean => {
+        const parent: any = n.parent;
+        const op = parent?.operatorToken?.kind;
+        if ((parent?.kind !== SyntaxKind.BinaryExpression) || ((op !== SyntaxKind.EqualsEqualsEqualsToken) && (op !== SyntaxKind.EqualsEqualsToken)
+            && (op !== SyntaxKind.ExclamationEqualsEqualsToken) && (op !== SyntaxKind.ExclamationEqualsToken))) {
+            return false;
+        }
+        return (((parent.left === n) ? parent.right : parent.left)?.kind === SyntaxKind.TrueKeyword);
+    };
+    return this.goDeclaredLocalTypeIfSafe(declaration, 'bool', comparesWithTrue,
+        (n: any) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+            || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n))) === 'bool';
+};
+{
+    const marketLocal = GoTranspiler.prototype.goMarketLocalUnbox;
+    GoTranspiler.prototype.goMarketLocalUnbox = function (declaration) {
+        return this.goHandleOptionTrueLocal(declaration) ? 'bool' : marketLocal.call(this, declaration);
+    };
+    const marketValue = GoTranspiler.prototype.goMarketUnboxValue;
+    GoTranspiler.prototype.goMarketUnboxValue = function (declaration, parsedValue) {
+        return this.goHandleOptionTrueLocal(declaration) ? `${parsedValue.trim()} == true` : marketValue.call(this, declaration, parsedValue);
+    };
+}
