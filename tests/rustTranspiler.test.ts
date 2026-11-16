@@ -21171,3 +21171,29 @@ describe('ral-62n: an optional base safeDict result as an element of an array li
         expect(out).not.toContain('let mut rawTrade: Option<crate::value::Dict> = ');
     });
 });
+
+describe('ral-62e: a guarded borrow-rate bucket bind (`if (!(k in m)) m[k] = []; const b = m[k]; b.push (v)`) is a List local', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict | undefined { return o; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    hold (x: any, y: any = undefined, z: any = undefined): any { return x; }\n    filterRows (x: object[] | undefined, y: Str = undefined, z: any = undefined): any[] { return []; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const rates = (rewrite: string, guard = '!(code in result)') => "    parse (response: any[], codes: any, since: any) {\n        const result: Dict = {};\n        for (let i = 0; i < response.length; i++) {\n            const item = this.safeDict (response, i);\n            const code = this.safeCurrencyCode (this.safeString (item, 'currency'));\n            if ((code !== undefined) && (codes === undefined || this.hold (code, codes))) {\n                if (" + guard + ") {\n                    result[code] = [];\n                }\n                const rate = this.safeDict (item, 'x');\n                const bucket = result[code];\n                bucket.push (rate);\n            }\n        }\n        const keys = Object.keys (result);\n        for (let i = 0; i < keys.length; i++) {\n            const code = keys[i];\n            result[code] = " + rewrite + ";\n        }\n        return result;\n    }\n";
+    test('every write of the map stores a list: the bind is a List, pushed natively and boxed back as an Arr', () => {
+        const out = write ('62e-br', rates ('this.filterRows (result[code], code, since)'));
+        expect(out).toContain('let mut bucket: crate::value::List = result.get(code.as_deref().unwrap_or(""))');
+        expect(out).toContain('std::sync::Arc::make_mut(&mut bucket).push(rate.map_or(Value::Null, Value::Dict)); if let Some(__k) = code.as_deref() { result.insert(__k.to_string(), Value::Arr(bucket)); }');
+        expect(out).not.toMatch(/let mut bucket: Value/);
+    });
+    test('guard: a later write of a non-list value keeps the bind Value', () => {
+        const out = write ('62e-br-neg', rates ('this.hold (result[code], code, since)'));
+        expect(out).toMatch(/let mut bucket: Value = /);
+    });
+    test('guard: a presence test that does not write the list first keeps the bind Value', () => {
+        const out = write ('62e-br-neg2', rates ('this.filterRows (result[code], code, since)', 'code === undefined'));
+        expect(out).toMatch(/let mut bucket: Value = /);
+    });
+});

@@ -2436,6 +2436,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (recordElem !== undefined) return recordElem;
         const sideLocal = node.declarations.length === 1 ? this.printBookSideLocal(declaration, indent, varName) : undefined;
         if (sideLocal !== undefined) return sideLocal;
+        if (node.declarations.length === 1 && this.rustOwnedBucketListBind(declaration)) {
+            return `${indent}let mut ${varName}: crate::value::List = ${this.printNode(declaration.initializer, 0).trim()}.into_list()`;
+        }
         const nilKind = node.declarations.length === 1 ? this.rustNilLocalKind(declaration) : undefined;
         if (nilKind !== undefined) {
             return `${indent}let mut ${varName}: Option<${nilKind === 'str' ? 'String' : (nilKind === 'int' ? 'i64' : 'bool')}> = None`;
@@ -20698,6 +20701,97 @@ export class RustTranspiler extends BaseTranspiler {
         return !reads;
     }
 
+    /** ral-62e: `if (!(k in m)) { m[k] = []; } const b = m[k]; b.push (v);` (kucoin / okx borrow-rate buckets): the printer-owned
+     *  push bind (rustOwnedWriteBackPushBind) whose only other reference is that push. The guard right before the bind wrote a list
+     *  under `k`, and every element write of `m` in the function stores an array literal or an array-typed value, so the read is
+     *  always an `Arr` for a present key: the bind is a `List` local. A `None` key reads an empty list where the box read Null; its
+     *  push is dropped with the local and nothing is written back in either form (`if let Some(__k)`). */
+    private rustOwnedBucketListDecisions = new WeakMap<Node, boolean>();
+    rustOwnedBucketListBind(declaration: any): boolean {
+        if (declaration === undefined) return false;
+        // the declaration and its push print from one decision (a key decided later must not flip only the push)
+        let decision = this.rustOwnedBucketListDecisions.get(declaration);
+        if (decision === undefined) {
+            decision = this.rustOwnedBucketListBindUncached(declaration);
+            this.rustOwnedBucketListDecisions.set(declaration, decision);
+        }
+        return decision;
+    }
+
+    rustOwnedBucketListBindUncached(declaration: any): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        const access: any = declaration.initializer;
+        if (access === undefined || !isElementAccessExpression(access) || !this.rustOwnedWriteBackPushBind(access)) return false;
+        // arrPush prints the push and its write-back only for a typed string key (else ccxt's write-back pass owns the box)
+        if (this.rustBearerTypedStrReadKey(access) === undefined) return false;
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) return false;
+        const fn: any = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || isSourceFile(fn)) return false;
+        const name = String(declaration.name.text);
+        const mapNode: any = access.expression;
+        const keyNode: any = access.argumentExpression;
+        const mapName = String(mapNode.text);
+        const keyName = String(keyNode.text);
+        // the bind's only references: its declaration and the push receiver right after it
+        let refs = 0;
+        const nameNodes: any[] = this.rustScopeNameNodes(fn, name);
+        for (const n of nameNodes) {
+            if (!isIdentifier(n) || n === declaration.name || this.rustSingleLocalDeclaration(n) !== declaration) continue;
+            refs++;
+        }
+        if (refs !== 1) return false;
+        // the statement before the bind: `if (!(k in m)) { m[k] = []; }` (no else)
+        const statement: any = declaration.parent?.parent;
+        const siblings: any[] = statement?.parent?.statements ?? [];
+        const at = siblings.indexOf(statement);
+        let guardAt = at - 1;
+        while (guardAt >= 0 && !isIfStatement(siblings[guardAt])) {
+            const prev: any = siblings[guardAt];
+            // a sibling between guard and bind must not write the map (a declaration with a call initializer is allowed)
+            if (!(prev?.kind === SyntaxKind.VariableStatement || prev?.kind === SyntaxKind.ExpressionStatement)) return false;
+            let writes = false;
+            const visit = (x: any) => { if (isBinaryExpression(x) && rustIsAssignmentOperator(x.operatorToken.kind) && isElementAccessExpression(x.left) && isIdentifier(x.left.expression) && String(x.left.expression.text) === mapName) writes = true; else if (isDeleteExpression(x)) writes = true; else x.forEachChild(visit); };
+            visit(prev);
+            if (writes) return false;
+            guardAt--;
+        }
+        const guard: any = siblings[guardAt];
+        if (guard === undefined || guard.elseStatement !== undefined) return false;
+        const cond: any = this.rustSkipWrappers(guard.expression);
+        if (!isPrefixUnaryExpression(cond) || cond.operator !== SyntaxKind.ExclamationToken) return false;
+        const inTest: any = this.rustSkipWrappers(cond.operand);
+        if (!isBinaryExpression(inTest) || inTest.operatorToken.kind !== SyntaxKind.InKeyword || !isIdentifier(inTest.left) || !isIdentifier(inTest.right)
+            || String(inTest.left.text) !== keyName || String(inTest.right.text) !== mapName) return false;
+        const thenStatements: any[] = isBlock(guard.thenStatement) ? Array.from(guard.thenStatement.statements) : [guard.thenStatement];
+        const wroteList = thenStatements.some((st: any) => st?.kind === SyntaxKind.ExpressionStatement && isBinaryExpression(st.expression)
+            && st.expression.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(st.expression.left)
+            && isIdentifier(st.expression.left.expression) && String(st.expression.left.expression.text) === mapName
+            && isIdentifier(st.expression.left.argumentExpression) && String(st.expression.left.argumentExpression.text) === keyName
+            && isArrayLiteralExpression(this.rustSkipWrappers(st.expression.right)) && this.rustSkipWrappers(st.expression.right).elements.length === 0);
+        if (!wroteList) return false;
+        // every element write of the map stores an array (literal or array-typed); the map itself is never rebound
+        const mapDecl: any = this.rustDeclarationOfIdentifier(access.expression);
+        if (mapDecl === undefined || !isVariableDeclaration(mapDecl) || this.rustLocalReassigned(mapDecl)) return false;
+        const mapNodes: any[] = this.rustScopeNameNodes(fn, mapName);
+        for (const n of mapNodes) {
+            if (!isIdentifier(n) || this.rustDeclarationOfIdentifier(n) !== mapDecl) continue;
+            const up: any = n.parent;
+            if (!isElementAccessExpression(up) || up.expression !== n) continue;
+            let target: any = up;
+            while (target.parent !== undefined && (isParenthesizedExpression(target.parent) || isNonNullExpression(target.parent))) target = target.parent;
+            const asg: any = target.parent;
+            if (isDeleteExpression(asg)) return false;
+            if (!isBinaryExpression(asg) || asg.left !== target || !rustIsAssignmentOperator(asg.operatorToken.kind)) continue;
+            if (asg.operatorToken.kind !== SyntaxKind.EqualsToken) return false;
+            const rhs: any = this.rustSkipWrappers(asg.right);
+            if (isArrayLiteralExpression(rhs)) continue;
+            const type = checker.getTypeAtLocation(rhs);
+            if (type === undefined || !checker.isArrayType(type)) return false;
+        }
+        return true;
+    }
+
     /** ral-xf: `const x = m[k]` mutated by the next statement, where `m` is a map-literal local and `k` a plain
      *  identifier key: the printer's native read (`m.get(k.as_str().unwrap_or("")).cloned()..`) is a form ccxt's
      *  write-back pass (`writeBackIndexedMutations`) and push pass (`rustVecPushInline`) read as the same get. */
@@ -32831,6 +32925,11 @@ export class RustTranspiler extends BaseTranspiler {
                 const mapText = super.printIdentifier(ownedBind.expression);
                 // the bucket moves into the map at its last use (the write-back pass inserted it by move as well)
                 const moved = this.rustLocalLastUse(recv, this.rustDeclaredNode(recv)) ? name : `${name}.clone()`;
+                // ral-62e: a guarded bucket bind is a `List` local: push straight onto it, box it back by its tag
+                if (this.rustOwnedBucketListBind(this.rustSingleLocalDeclaration(recv))) {
+                    return `std::sync::Arc::make_mut(&mut ${name}).push(${RustTranspiler.cloneIfBareLocal(parsedArg.trim())}); `
+                        + `if let Some(__k) = ${keyText} { ${mapText}.insert(__k.to_string(), Value::Arr(${moved})); }`;
+                }
                 return `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${RustTranspiler.cloneIfBareLocal(parsedArg.trim())}); } `
                     + `if let Some(__k) = ${keyText} { ${mapText}.insert(__k.to_string(), ${moved}); }`;
             }
