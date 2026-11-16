@@ -22388,3 +22388,72 @@ describe('ral-65k: the literal-ternary key of a flat helper write whose value re
         expect(out).toMatch(/let mut freeOrTotal: Value = /);
     });
 });
+
+describe('ral-65n: a never-written base `Str` parameter as a ternary arm, and `Option<String>` arms of a ternary that initializes an `Option<String>` local', () => {
+    const base = (methods: string) => "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    id: string = '';\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    networkCodeToId (networkCode: Str, currencyCode: Str = undefined): Str { return networkCode; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n" + methods + "}\n";
+    const run = (methods: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-65n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base(methods));
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            return t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    const pick = "    pick (currencyCode: string, networkCode: Str, entries: Dict, unified = false): Str {\n        let chosen: Str = undefined;\n        if (networkCode !== undefined) {\n            const networkIdOrCode = unified ? networkCode : this.networkCodeToId (networkCode, currencyCode);\n            if (networkIdOrCode === undefined) {\n                throw new Error (this.id + ' - ' + networkCode);\n            }\n            if (networkIdOrCode in entries) {\n                chosen = networkIdOrCode;\n            }\n        } else {\n            const defaultNetworkCode = this.safeString (this.safeDict (this.options, 'defaultNetworks', {}), currencyCode, this.safeString (this.options, 'defaultNetwork'));\n            const defaultNetworkId = unified ? defaultNetworkCode : this.networkCodeToId (defaultNetworkCode, currencyCode);\n            if (defaultNetworkId === undefined) {\n                throw new Error ('missing');\n            }\n            if (defaultNetworkId in entries) {\n                return defaultNetworkId;\n            }\n        }\n        return chosen;\n    }\n";
+    // Truth tables (old boxed form vs new Option<String> form). The value is a `Str` or `Null` on every path (a `Str`
+    // parameter, a `Str` base call, a no-default / Str-default safeString), so only those two inputs are reachable:
+    //  `x === undefined`: old `x == Value::Null`, new `x.is_none()`: Null -> true / true, 'TRX' -> false / false.
+    //  `x in d` (d a Dict): old matches!((Dict, Value::Str(k))) && contains, new matches!((Dict, Some(k))) && contains:
+    //   Null -> false / false; 'TRX' with 'TRX' a key -> true / true; 'ETH' not a key -> false / false.
+    //  Int against Float and string against number cannot occur: no operand is a number; number behaviour is untouched.
+    const oldEq = (x: string | null) => x === null;
+    const newEq = (x: string | null) => x === null;
+    const oldIn = (x: string | null, d: Record<string, any>) => typeof x === 'string' && x in d;
+    const newIn = (x: string | null, d: Record<string, any>) => x !== null && x in d;
+    test('truth table: null test and `in` agree for Null / present / absent keys', () => {
+        const d = { 'TRX': 1 };
+        for (const x of [ null, 'TRX', 'ETH', '' ]) {
+            expect(newEq(x)).toBe(oldEq(x));
+            expect(newIn(x, d)).toBe(oldIn(x, d));
+        }
+    });
+    test('both network locals and the default code are Option<String>', () => {
+        const out = run(pick);
+        expect(out).toContain('let mut networkIdOrCode: Option<String> = (if unified');
+        expect(out).toContain('{ networkCode.as_str().map(str::to_owned) } else {');
+        expect(out).toContain('let mut defaultNetworkCode: Option<String> = ');
+        expect(out).toContain('let mut defaultNetworkId: Option<String> = (if unified');
+        expect(out).toContain('{ defaultNetworkCode.clone() } else {');
+        expect(out).toContain('if (networkIdOrCode.is_none()) {');
+        expect(out).toContain('if (defaultNetworkId.is_none()) {');
+    });
+    test('guard: a written `Str` parameter stays boxed (the ternary keeps its Value form)', () => {
+        const out = run(pick.replace("if (networkCode !== undefined) {\n", "if (networkCode !== undefined) {\n            networkCode = networkCode + '';\n"));
+        expect(out).not.toContain('let mut networkIdOrCode: Option<String>');
+    });
+    test('an `Option<String>` local as a ternary arm of an `Option<String>` local (venue loop, nado shape): both typed, the arm a plain clone', () => {
+        const vbase = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    safeCurrencyCode (c: Str): string { return c as string; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n";
+        const venue = (other: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    settle (o: Dict, rows: Dict[], contract: boolean): Dict[] {\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const raw = this.safeString (rows[i], 'quote', 'USDT0');\n            const quote = this.safeCurrencyCode (raw);\n            const quoteAsset = this.safeDict (o, quote);\n            const quoteId = this.safeString (quoteAsset, 'product_id', raw);\n            const settleId = contract ? quoteId : " + other + ";\n            out.push (this.hold ({ 'quoteId': quoteId, 'settleId': settleId }));\n        }\n        return out;\n    }\n}\n";
+        const runv = (src: string) => {
+            const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-65n-'));
+            fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+            fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), vbase);
+            fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), src);
+            const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            try {
+                return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+            } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        };
+        const out = runv(venue('undefined'));
+        expect(out).toContain('let mut quoteId: Option<String> = self.safe_string_k_opt(&quoteAsset, "product_id", ');
+        expect(out).toContain('let mut settleId: Option<String> = (if contract { quoteId.clone() } else { None });');
+        // guard (zi / 40i): a plain `String` local as the other arm would be copied into `Some(..)`: the rule stays off
+        const guarded = runv(venue('quote'));
+        expect(guarded).not.toContain('let mut settleId: Option<String> = (if contract { quoteId.clone() } else { Some(');
+    });
+    test('guard: an `any` parameter arm is not a `Str` arm', () => {
+        const out = run(pick.replace('networkCode: Str,', 'networkCode: any,'));
+        expect(out).not.toContain('let mut networkIdOrCode: Option<String>');
+    });
+});

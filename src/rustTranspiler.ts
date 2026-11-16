@@ -5467,6 +5467,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && this.rustListLengthInit(node)) return 'int';
         // ral-52k: a base credential field declared `string` (`this.apiKey`) as an arm of a ternary initializer: a `Str` or `Null`
         if (fresh && this.rustTernaryArm(node) && this.rustBaseStrFieldRead(node)) return 'ostr';
+        // ral-65n: a never-written base-tier parameter declared `Str` / `string` as an arm of a ternary initializer: a `Str` or `Null`
+        if (fresh && this.rustTernaryArm(node) && this.rust65nBaseStrParamArm(node)) return 'ostr';
         // ral-53k: `c['code']` of an `Option<Dict>` local (a unified string key) as an arm of a ternary initializer
         if (fresh && this.rustTernaryArm(node) && this.rustOptDictStrKeyText(node) !== undefined) return 'ostr';
         if (!isCallExpression(node)) return undefined;
@@ -5595,6 +5597,31 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_STR_FIELDS = new Set([ 'apiKey', 'secret', 'uid', 'password', 'privateKey', 'walletAddress' ]);
 
     /** ral-52k: `this.<field>` of the table whose declaration is the base-tier `string` property (no venue redeclares it). */
+    /** ral-65n: `p` is a parameter of a base-tier method, annotated `Str` (or `string`), whose checker type is a string
+     *  (or string | undefined), printed as a `Value` binding (no typed signature slot) and never written in its function.
+     *  Its box holds a `Str` or `Null`, so the arm reads it once as an `Option<String>` (the same conversion the base
+     *  `Str` call arm next to it takes). */
+    rust65nBaseStrParamArm(node: any): boolean {
+        if (node === undefined || !isIdentifier(node) || node.text === 'undefined') return false;
+        const param: any = this.rustDeclaredNode(node);
+        if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || !isMethodDeclaration(param.parent)
+            || param.dotDotDotToken !== undefined || param.initializer !== undefined) return false;
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(param.getSourceFile?.()?.fileName ?? ''))) return false;
+        const annotation: any = param.type;
+        const named = annotation !== undefined && ((annotation.kind === SyntaxKind.TypeReference && isIdentifier(annotation.typeName) && annotation.typeName.text === 'Str')
+            || annotation.kind === SyntaxKind.StringKeyword);
+        if (!named || this.primitiveKindOfType(this.typeOfNodeIfAny(param.name)) !== 'string') return false;
+        if (this.rustOptParamKind(node) !== undefined) return false;
+        for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text))) {
+            if (n === param.name || !isIdentifier(n)) continue;
+            const up: any = n.parent;
+            if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return false;
+            if ((up.kind === SyntaxKind.PrefixUnaryExpression || up.kind === SyntaxKind.PostfixUnaryExpression)
+                && (up.operator === SyntaxKind.PlusPlusToken || up.operator === SyntaxKind.MinusMinusToken)) return false;
+        }
+        return true;
+    }
+
     rustBaseStrFieldRead(node: any): boolean {
         if (node === undefined || !isPropertyAccessExpression(node) || node.expression.kind !== SyntaxKind.ThisKeyword || !RustTranspiler.RUST_BASE_STR_FIELDS.has(String(node.name.text))) return false;
         let member: any;
@@ -6824,9 +6851,12 @@ export class RustTranspiler extends BaseTranspiler {
             // a bare hand-off at the local's last use moves it: the receiver decides alone, nothing is copied
             // (never into a nil-declared receiver: those locals are another group's)
             const { moved, solved } = this.rustStrHandOffDecided(n, top, declaration);
+            // ral-65n: the arm of a ternary initializing an `Option<String>` local of the same function prints natively there
+            const armOfOstr = top !== n && this.rustScalarUseForms.get(n) === 'native' && isConditionalExpression(this.rust65nClimbParens(n).parent)
+                && this.rust65nOstrTernaryArmOfOstrLocal(this.rust65nClimbParens(n).parent) && this.rustEnclosingFunction(top) === this.rustEnclosingFunction(declaration);
             if (isBinaryExpression(top.parent) && top.parent.right === top && top.parent.operatorToken.kind === SyntaxKind.EqualsToken
                 && !isElementAccessExpression(this.unwrapParens(top.parent.left)) && !isPropertyAccessExpression(this.unwrapParens(top.parent.left)) && !moved && !solved) handed = true;
-            if (isVariableDeclaration(top.parent) && top.parent.initializer === top && !moved && !solved) handed = true;
+            if (isVariableDeclaration(top.parent) && top.parent.initializer === top && !moved && !solved && !armOfOstr) handed = true;
             // a returned string decides the method's own `-> Option<String>` return (and its dispatch arm); a method whose
             // return the signature table already keeps typed reads the local natively
             // sd: a venue `: Str` method of the kept-arm table keeps its by-name arm whichever return it prints
@@ -8138,8 +8168,35 @@ export class RustTranspiler extends BaseTranspiler {
             if (kind === 'ostr') return this.printNode(parent, 0).trim().startsWith('Value::Str(format!(') && this.rustOptStrConcatFits(n) ? 'concat' : 'box';
             return kind === 'str' && this.printNode(parent, 0).trim().startsWith('Value::Str(format!(') ? 'concat' : 'box';
         }
+        // ral-65n: an `Option<String>` arm of a ternary that initializes a local decided `Option<String>` too: the arm prints
+        // through rustScalarNativeText (`x.clone()`, the copy the `Value` arm's clone made), never a box
+        if (kind === 'ostr' && isConditionalExpression(parent) && parent.condition !== n && this.rust65nOstrTernaryArmOfOstrLocal(parent)) return 'native';
         if (isConditionalExpression(parent) && parent.condition !== n) return 'box';
         return this.rustScalarExpressionUseForm(n, kind);
+    }
+
+    /** ral-65n: `n` climbed through its parentheses. */
+    rust65nClimbParens(n: any): any {
+        let top: any = n;
+        while (top.parent !== undefined && isParenthesizedExpression(top.parent)) top = top.parent;
+        return top;
+    }
+
+    /** ral-65n: `t` is the whole initializer (through parentheses) of a `const` whose current scalar decision is `ostr`. */
+    rust65nOstrTernaryArmOfOstrLocal(t: any): boolean {
+        let top: any = t;
+        while (top.parent !== undefined && isParenthesizedExpression(top.parent)) top = top.parent;
+        const declaration: any = top.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer !== top || !isIdentifier(declaration.name)) return false;
+        if (this.rustScalarDecisions.get(declaration) !== 'ostr') return false;
+        // zi / 40i: an arm that is a plain `String` local would be copied into `Some(..)` (an added clone): not this rule
+        for (const arm of [ t.whenTrue, t.whenFalse ]) {
+            const leaf: any = this.unwrapParens(arm);
+            if (!isIdentifier(leaf)) continue;
+            const decl: any = this.rustDeclaredNode(leaf);
+            if (decl !== undefined && isVariableDeclaration(decl) && this.rustScalarDecisions.get(decl) === 'str') return false;
+        }
+        return true;
     }
 
     // rustWsClientCallArg: `client.resolve|reject|future|reusableFuture|send(.., x)` on a ws `Client`
@@ -10061,6 +10118,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'int' && this.rustListLengthInit(node)) return this.rustListLengthText(node);
         // ral-52k: a base credential field (`Value` in the struct, `Str` or `Null`) read once as its text
         if (kind === 'ostr' && this.rustTernaryArm(node) && this.rustBaseStrFieldRead(node)) return `${this.printNode(node, 0).trim()}.as_str().map(str::to_owned)`;
+        if (kind === 'ostr' && this.rustTernaryArm(node) && this.rust65nBaseStrParamArm(node)) return `${super.printIdentifier(node)}.as_str().map(str::to_owned)`;
         if (kind === 'ostr' && this.rustTernaryArm(node)) { const read = this.rustOptDictStrKeyText(node); if (read !== undefined) return read; }
         if (kind === 'ostr') { const row = this.rustRowFieldStrText(node); if (row !== undefined) return row; }
         if (kind === 'ostr') { const owned = this.rustNilElemStrText(node); if (owned !== undefined) return owned; }
