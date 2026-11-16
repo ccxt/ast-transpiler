@@ -2507,8 +2507,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (borrowedElem !== undefined) return borrowedElem;
         if (node.declarations.length === 1 && this.rustSubscriptionPresenceFlag(declaration, parsedValue)) return `${indent}let ${varName}: bool = ${parsedValue} != Value::Null`;
         // ral-73c E1: an error value only ever settled through a ws `client.reject` is the typed `ExchangeError` the
-        // constructor returns (parenthesised: the ccxt `x = crate::exchange_errors::..;` boxing pass keys on a bare call)
-        if (node.declarations.length === 1 && this.rust73cRejectOnlyError(declaration)) return `${indent}let mut ${varName}: crate::ExchangeError = (${parsedValue})`;
+        // constructor returns (rustErrorCtorValueTarget leaves it unboxed)
+        if (node.declarations.length === 1 && this.rust73cRejectOnlyError(declaration)) return `${indent}let mut ${varName}: crate::ExchangeError = ${parsedValue}`;
         if (declaration.initializer.kind === SyntaxKind.NewExpression) {
             return `${indent}let mut ${varName} = ${parsedValue}`;
         }
@@ -3565,7 +3565,58 @@ export class RustTranspiler extends BaseTranspiler {
         return this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) === 'string';
     }
 
+    /** ral-76a S1: `return x` of the method's own local that another rule already prints `Option<String>` (a `safeString`
+     *  read, checker `string | undefined`): under a `: Str` signature it is the payload itself, so the method prints
+     *  `-> Option<String>` and its callers' string locals read it natively. Decided from the AST and the local's own rule. */
+    private rust76aS1Off = false;
+
+    rust76aOptStrReturnLocal(n: any, fn: any): boolean {
+        if (this.rust76aS1Off) return false;
+        if (n === undefined || !isIdentifier(n) || !isReturnStatement(n.parent) || findAncestor(n.parent.parent, isFunctionLike) !== fn) return false;
+        const declaration: any = this.rustDeclaredNode(n);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || this.rustEnclosingFunction(declaration) !== fn) return false;
+        // a kept-arm venue method (RUST_VENUE_KEPT_STR_ARMS) stays `-> Value` and boxes its reader string once (ral-sd)
+        if (this.rustVenueKeptStrArm(fn)) return false;
+        if (this.rustScalarLocalOf(n)?.kind !== 'ostr') return false;
+        // every other bare-identifier return must be such a local too: a `Value` local returned beside it would be
+        // re-decided under the new signature (blofin `suffix`: typed only by moving its conversion, one more clone)
+        let ok = true;
+        const visit = (m: any) => {
+            if (!ok || (m !== fn.body && isFunctionLike(m))) return;
+            if (isReturnStatement(m)) {
+                const e: any = this.unwrapParensNode(m.expression);
+                if (e !== undefined && isIdentifier(e) && e.text !== 'undefined' && e !== n && this.rustScalarLocalOf(e)?.kind !== 'ostr') { ok = false; return; }
+            }
+            m.forEachChild(visit);
+        };
+        fn.body?.forEachChild(visit);
+        return ok;
+    }
+
+    /** ral-76a S1: the method prints `-> Option<String>` only because a return is its own reader local (rust76aOptStrReturnLocal). */
+    rust76aOptStrReturnMethod(fn: any): boolean {
+        if (fn === undefined || fn.kind !== SyntaxKind.MethodDeclaration || fn.body === undefined || this.rustNativeStrReturnKind(fn) !== 'str') return false;
+        // a method the other return rules already type (no S1 needed) keeps the arm set it had
+        this.rust76aS1Off = true;
+        let without: boolean;
+        try {
+            without = this.rust57xStrReturnMethod(fn);
+        } finally {
+            this.rust76aS1Off = false;
+        }
+        if (without) return false;
+        let hit = false;
+        const visit = (n: any) => {
+            if (hit || (n !== fn.body && isFunctionLike(n))) return;
+            if (isReturnStatement(n) && this.rust76aOptStrReturnLocal(this.unwrapParensNode(n.expression), fn)) { hit = true; return; }
+            n.forEachChild(visit);
+        };
+        fn.body.forEachChild(visit);
+        return hit;
+    }
+
     rust56xStrReturnText(exp: any, fn: any): string | undefined {
+        if (this.rust76aOptStrReturnLocal(exp, fn)) return super.printIdentifier(exp);
         if (exp !== undefined && this.rust61xNilStrReturnLocal(exp, fn) && this.rustScalarLocalOf(exp)?.kind === 'ostr') return super.printIdentifier(exp);
         if (exp === undefined || !isIdentifier(exp) || !this.rust56xStrReturnLocal(exp, fn)) return undefined;
         const kind = this.rustScalarLocalOf(exp)?.kind;
@@ -11575,7 +11626,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (!isIdentifier(n) || !isBinaryExpression(parent) || parent.left !== n || parent.operatorToken.kind !== SyntaxKind.EqualsToken) continue;
             const src: any = this.rustScalarAsWrite(parent.right) ?? parent.right;
             const write = isIdentifier(this.unwrapParens(src)) && this.literalKindOfNode(this.unwrapParens(src)) !== 'null'
-                ? this.rustScalarIdentifierKind(this.unwrapParens(src)) ?? this.rustOptParamKind(src) : this.rustScalarValueKind(src, true);
+                ? this.rustScalarIdentifierKind(this.unwrapParens(src)) ?? this.rustOptParamKind(src) : this.rustScalarValueKind(src, true)
+                    // ral-76a S2: a write from a venue `Str` method (every venue declaration `string` / `Str`; rustScalarWriteOk's vd arm) holds its string or Null
+                    ?? (this.rustVenueStrCall(this.unwrapParens(src)) ? 'ostr' : undefined);
             // 40b: a `bool` local with a later `x = undefined` write is an `Option<bool>` (`None` is the `Null` it held)
             const next = write === undefined ? undefined : this.rustScalarJoinKinds(joined, write, joined === 'bool' && write === 'null');
             if (next !== undefined && (next === joined || next === `o${joined}`)) joined = next;
@@ -13690,7 +13743,7 @@ export class RustTranspiler extends BaseTranspiler {
                 // only a local the `-> Option<String>` signature itself held back (rustStrReturnSignature: its return use answered no form);
                 // a local other rules already type keeps the decision it had
                 const own = (inner !== undefined && isIdentifier(inner) && this.rust56xStrReturnLocal(inner, fn) && this.rustStrReturnSignature(fn, inner)
-                    && this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string') || this.rust61xNilStrReturnLocal(inner, fn);
+                    && this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string') || this.rust61xNilStrReturnLocal(inner, fn) || this.rust76aOptStrReturnLocal(inner, fn);
                 if (!own && !this.rustStrReturnValueConverts(n.expression)) { ok = false; return; }
             }
             n.forEachChild(visit);
@@ -14273,6 +14326,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (ret === 'ostr' && this.rustBaseNativeStrMethod(node)) ret = 'keptostr';
         // mh1: a venue method that printed `-> Value` (with a by-name arm) until its `: Str` return was spelled keeps that arm
         if (ret === 'ostr' && this.rustVenueKeptStrArm(node)) ret = 'keptostr';
+        // ral-76a S1: a venue method typed `-> Option<String>` by its returned reader local keeps the by-name arm it had as `-> Value`
+        if (ret === 'ostr' && this.rust76aOptStrReturnMethod(node)) ret = 'keptostr';
         // ral-43e: a venue `Market` record producer keeps every by-name arm it had as `-> Value` (ws handler arm too)
         if (ret === 'struct' && returnType === 'crate::types::Market' && isMethodDeclaration(node) && isIdentifier(node.name) && String(node.name.text) !== 'safeMarket') ret = 'keptstruct';
         this.rustSignatureTable.set(node, {
@@ -17023,7 +17078,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (typeof expression === 'string' && (errorClassPattern.test(expression) || RustTranspiler.RUST_NAME_VALUE_IMPORTS.has(expression) && /^[A-Z]/.test(expression))) {
             const snake = this.rustErrorConstructorName(expression);
             const args = node.arguments.map((a, index) => this.printErrorConstructorArg(snake, index, a, identation)).join(', ');
-            return `crate::exchange_errors::${snake}(${args})`;
+            const built = `crate::exchange_errors::${snake}(${args})`;
+            return this.rustErrorCtorValueTarget(node) ? `Value::from(${built})` : built;
         }
         // A class picked at runtime (`new table[k](msg)`, or a thrown local class value)
         // constructs by name through `create_error`; a value position keeps it boxed.
@@ -17040,6 +17096,20 @@ export class RustTranspiler extends BaseTranspiler {
             ? node.arguments.map((a, index) => this.printErrorConstructorArg(this.rustErrorConstructorName(expression), index, a, identation)).join(', ')
             : node.arguments.map(a => this.printNode(a, identation)).join(', ');
         return this.rustWsCacheCtorBox(node, `${expression}::new(${args})`);
+    }
+
+    /** ral-76a: a routed error constructor (returns `ExchangeError`) stored straight into an untyped local, by its
+     *  declaration or by a plain `x = new XError (..);` statement, is boxed by the printer: the target is a `Value`. The
+     *  ral-73c reject-only local keeps the bare `ExchangeError`. Decided from the AST parent chain, not printed text. */
+    rustErrorCtorValueTarget(node: any): boolean {
+        const parent: any = node.parent;
+        if (parent !== undefined && isVariableDeclaration(parent) && parent.initializer === node) {
+            const list: any = parent.parent;
+            if (list?.kind !== SyntaxKind.VariableDeclarationList || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
+            return !(list.declarations.length === 1 && this.rust73cRejectOnlyError(parent));
+        }
+        return parent !== undefined && isBinaryExpression(parent) && parent.right === node && isIdentifier(parent.left) && parent.operatorToken.kind === SyntaxKind.EqualsToken
+            && parent.parent?.kind === SyntaxKind.ExpressionStatement;
     }
 
     /** Printed class expression of a `new` whose class is a runtime value, else undefined. */
