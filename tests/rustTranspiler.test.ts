@@ -10364,6 +10364,28 @@ describe('rust by-name dispatch signature table', () => {
         expect((out.rustSignatures ?? []).map((s) => s.name)).toEqual([ 'parse_ticker', 'market', 'market_non_virtual' ]);
     });
 
+    test('inside any slot override a call to another slot names its base trait (body sits in the trait impl)', () => {
+        const cfg = { 'virtualDispatch': { nonce: [], sign: [ 'path', 'optional_args: &[Value]' ], market: [ 'symbol' ], parse_order: [ 'order', 'market' ] }, 'lentSlots': [ 'parse_order' ], 'parser': { 'NUM_LINES_END_FILE': 0 } };
+        const t = new Transpiler({ 'verbose': false, 'rust': cfg });
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-slotcall-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), 'export type Dict = { [key: string]: any };\nexport class BaseExchange {\n    nonce (): number { return 1; }\n}\n'
+            + 'export default class Exchange extends BaseExchange {\n    market (symbol: string): any { return symbol; }\n    parseOrder (order: Dict, market: any = undefined): any { return order; }\n'
+            + "    sign (path: string, api: any = 'public', method: string = 'GET', params: Dict = {}, headers: any = undefined, body: any = undefined): any { return {}; }\n}\n");
+        const venue = path.join(root, 'ts/src/venue.ts');
+        fs.writeFileSync(venue, "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + '    override nonce (): number { return 2; }\n'
+            + "    override sign (path: string, api: any = 'public', method: string = 'GET', params: Dict = {}, headers: any = undefined, body: any = undefined): any { const n = this.nonce (); return { 'url': path, 'n': n }; }\n"
+            + "    override parseOrder (order: Dict, market: any = undefined): any { const m = this.market ('x'); return [ m, this.nonce () ]; }\n"
+            + '    other (): number { return this.nonce (); }\n}\n');
+        const out = t.transpileRustByPath(venue).content;
+        // sign is not a lent slot: its own nonce() call names ExchangeBase, whose preamble reaches the venue nonce
+        expect(out).toContain('<Self as crate::exchange_generated::ExchangeBase>::nonce(self)');
+        expect(out).toContain('<Self as crate::exchange_generated::ExchangeBase>::market(self');
+        // a method outside the trait impl keeps method syntax
+        expect(out).toMatch(/pub fn other\(&self\)[^]*?self\.nonce\(\)/);
+    });
+
     test('a venue override of a lent slot takes `impl Into` and its own file calls it through the trait', () => {
         const lent = new Transpiler({ 'verbose': false, 'rust': { 'virtualDispatch': { parse_order: [ 'order', 'market' ] }, 'lentSlots': [ 'parse_order' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-'));

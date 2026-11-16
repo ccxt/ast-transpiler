@@ -15625,6 +15625,31 @@ export class RustTranspiler extends BaseTranspiler {
             && this.rustTypedSignature(method) === undefined && !this.rustMethodReferencedAsValue(method);
     }
 
+    /** A sync venue method overriding a `DerivedExchange` slot with the slot's arity (its body may sit in the trait impl). */
+    rustSlotOverrideBody(method: any): boolean {
+        if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || this.isAsyncFunction(method)) return false;
+        const slots = this.rustVirtualDispatch[this.toSnakeCaseName(String(method.name.text))];
+        const file = String(method.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        // a trailing slice slot takes the optional parameters, so the method has at least the slots before it
+        const arity = slots !== undefined && slots.length > 0 && rustDispatch.isSlotSlice(slots[slots.length - 1]) ? method.parameters.length >= slots.length - 1 : method.parameters.length === slots?.length;
+        return slots !== undefined && arity && file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) >= 0;
+    }
+
+    /** File of the base-tier class above the venue override `method` when it declares `name` (its base trait has the method). */
+    rustBaseTierDeclarer(method: any, name: string): string | undefined {
+        for (let cls: any = method?.parent; cls !== undefined && isClassDeclaration(cls);) {
+            const heritage = getAllSuperTypeNodes(cls)[0];
+            if (heritage === undefined) return undefined;
+            const base: any = this.getChecker().getTypeAtLocation(heritage)?.getSymbol()?.valueDeclaration?.resolve();
+            if (base === undefined || !isClassDeclaration(base)) return undefined;
+            const file = String(base.getSourceFile?.()?.fileName ?? '');
+            // the base tier is a chain of classes too (Exchange extends BaseExchange)
+            if (RustTranspiler.RUST_BASE_TIER_FILE.test(file) && (base.members ?? []).some((m: any) => isMethodDeclaration(m) && isIdentifier(m.name) && m.name.text === name)) return file;
+            cls = base;
+        }
+        return undefined;
+    }
+
     /** `this.m(..)` to the calling file's own override of a lent slot: that override lives only in the
      *  `DerivedExchange` impl, so the call names the trait (the base method of the same name takes a `Value`). */
     rustLentSlotCallText(node: any, text: string): string {
@@ -15647,9 +15672,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (callee === undefined) return text;
         let path: string | undefined;
         if (this.rustLentSlots.has(snake) && callee.getSourceFile?.() === node.getSourceFile?.() && this.rustLentSlotOverride(callee)) path = 'crate::exchange::DerivedExchange';
-        // inside a lifted override the trait is in scope too: a base slot method is named by its base trait
-        else if (this.rustLentSlotOverride(this.rustEnclosingFunction(node))) {
-            const file = String(callee.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        // inside a slot override (printed in the trait impl, closures included) both traits are in scope: a base slot or another
+        // venue override is named by its base trait (what the inherent body resolved to); its preamble reaches the override
+        else if (this.rustSlotOverrideBody(findAncestor(node, isMethodDeclaration))) {
+            const own = String(callee.getSourceFile?.()?.fileName ?? '');
+            const file = (RustTranspiler.RUST_BASE_TIER_FILE.test(own) ? own : this.rustSlotOverrideBody(callee) ? this.rustBaseTierDeclarer(callee, name) ?? '' : '').replace(/\\/g, '/');
             path = /\/ts\/src\/base\/PredictionExchange\.ts$/.test(file) ? 'crate::prediction_exchange_generated::PredictionBase'
                 : RustTranspiler.RUST_BASE_TIER_FILE.test(file) ? 'crate::exchange_generated::ExchangeBase' : undefined;
         }
