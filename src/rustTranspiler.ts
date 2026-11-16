@@ -5052,7 +5052,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' ? !this.rustErrMsgMoves(n, declaration) : !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || form === 'bkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))
                 // ral-63k: the last key of a nested write on a plain-Dict parameter is the native insert's typed key text
                 || (form === 'mkey' && this.rust63kDictParamNestedKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
@@ -8044,6 +8044,8 @@ export class RustTranspiler extends BaseTranspiler {
         // an optional-string local keys a proven map read or an `in` test natively (a `None` key misses, as the `Null` did)
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rust63eChainLinkKeyRead(n)) return 'okey';
+        // ral-64k: the key of `const y = book[k]` on a typed ws order-book local is handed to `get_value` as is
+        if ((kind === 'str' || kind === 'ostr') && this.rust64kBookKeyRead(n)) return 'bkey';
         // ral-yg: an element key into the base-declared `this.urls['<lit>']` map reads it by the borrowed key
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustUrlsKeyReadUse(n)) return 'okey';
         // uh: a ternary of two string literals keys a proven map read natively (`m.get(k)` is the entry `get_value` reads)
@@ -9449,11 +9451,11 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustScalarUsesAll(declaration, String(declaration.name.text), (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment;
             const form = this.rustScalarUseForms.get(n);
-            if (keyed && (form === 'okey' || form === 'kin' || form === 'key' || form === 'inbox')) return false;
+            if (keyed && (form === 'okey' || form === 'kin' || form === 'key' || form === 'inbox' || form === 'bkey')) return false;
             // ral-41g: a map read keyed by the element that initialises a local later pushed stays on the `Value` key: ccxt's
             // marker-free push pass proves that local from the read's `k.as_str()` text (a borrowed key would cost the native push)
             if (this.rustElemKeyFeedsPushedLocal(n)) return false;
-            if (form === 'test' || form === 'concat' || form === 'okey' || form === 'kin' || form === 'key' || form === 'inbox') return true;
+            if (form === 'test' || form === 'concat' || form === 'okey' || form === 'kin' || form === 'key' || form === 'inbox' || form === 'bkey') return true;
             // int44 (wg x wd): an inArray needle boxes the borrow (`Value` is an `InArrayNeedle`), as wg printed it
             if (form === 'parg' && this.rustInArrayNeedle(n)) return true;
             // wg: the receiver of a string method reads the borrow (`k.as_deref()` is the same `Option<&str>`)
@@ -9915,7 +9917,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'parg' && this.rustInArrayNeedle(node)) return `&${super.printIdentifier(node)}`;
         // zd: a cache-constructor size boxes the `Copy` integer itself, so no argument pass clones a bare name there
         if ((form === 'box' || form === 'targ') && (local.kind === 'int' || local.kind === 'oint') && this.rustCacheCtorLimitArg(node, local.kind)) return `Value::from(${super.printIdentifier(node)})`;
-        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg') return super.printIdentifier(node);
+        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'bkey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg') return super.printIdentifier(node);
         if (form === 'err') return this.rustErrMsgMoves(node, local.declaration) ? super.printIdentifier(node) : `${super.printIdentifier(node)}.clone()`;
         if (form === 'inbox') return local.kind === 'ostr' ? `Value::from(&${super.printIdentifier(node)})` : `Value::from(${super.printIdentifier(node)}.as_str())`;
         if (form !== 'box' && form !== 'xbox') return undefined;
@@ -12314,6 +12316,30 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclaredNode(n);
         const init: any = declaration !== undefined && isVariableDeclaration(declaration) ? this.unwrapParens(declaration.initializer) : undefined;
         return init !== undefined && isConditionalExpression(init) && this.literalKindOfNode(this.unwrapParens(init.whenTrue)) === 'string' && this.literalKindOfNode(this.unwrapParens(init.whenFalse)) === 'string';
+    }
+
+    /** ral-64k: `n` is the whole key of an element read `book[n]` (through `( .. as T)` wrappers) that initialises a local,
+     *  on a typed ws order-book local whose use there is its `Value` box: `get_value` takes the key as `impl ValueKey`
+     *  (`&str` / `Option<&str>` box to the very `Str` / `Null` key the `Value` local held), so the lookup is unchanged. */
+    rust64kBookKeyRead(n: any): boolean {
+        if (!isIdentifier(n) || this.rustTestTierSource(n)) return false;
+        const read: any = n.parent;
+        if (!isElementAccessExpression(read) || read.argumentExpression !== n) return false;
+        const recv: any = this.rustStripWrappers(read.expression);
+        if (!isIdentifier(recv) || this.rustWsBookLocal(this.rustDeclarationOfIdentifier(recv)) === undefined || this.rustWsBookUses.get(recv) !== 'box') return false;
+        let up: any = read;
+        while (isParenthesizedExpression(up.parent) || isAsExpression(up.parent) || isNonNullExpression(up.parent)) up = up.parent;
+        return isVariableDeclaration(up.parent) && up.parent.initializer === up;
+    }
+
+    /** ral-64k: the read of a `bkey` use: `get_value(&<book box>, k.as_str() | k.as_deref())`. */
+    print64kBookKeyRead(node: any): string | undefined {
+        const key: any = node.argumentExpression;
+        if (!isIdentifier(key) || this.rustScalarUseForms.get(key) !== 'bkey') return undefined;
+        const kind = this.rustScalarLocalOf(key)?.kind;
+        if (kind !== 'str' && kind !== 'ostr') return undefined;
+        const recv = this.printNode(node.expression, 0).trim();
+        return `get_value(&${recv}, ${super.printIdentifier(key)}.${kind === 'str' ? 'as_str' : 'as_deref'}())`;
     }
 
     /** Element-access hook: the native read of an `okey` use. */
@@ -16708,7 +16734,7 @@ export class RustTranspiler extends BaseTranspiler {
                 this.rustScalarUseForms.set(n, form);
                 // ral-64x: an exact `Option<i64>` slot handed whole to a per-venue `Option<i64>` parameter is passed as it is
                 if (form === 'targ' && kind === 'oint' && this.rust64xOintParamArg(n)) { nativeUses++; return true; }
-                if (form === undefined || form === 'xbox' || form === 'err' || form === 'key' || form === 'okey' || form === 'targ') return false;
+                if (form === undefined || form === 'xbox' || form === 'err' || form === 'key' || form === 'okey' || form === 'bkey' || form === 'targ') return false;
                 if (loose && (form !== 'test' || this.literalKindOfNode(this.unwrapParens(n.parent.left === n ? n.parent.right : n.parent.left)) === 'null')) return false;
                 // ccxt passes key on the boxed operand of a `.push(..)` or of a write to another local
                 const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
@@ -18465,7 +18491,7 @@ export class RustTranspiler extends BaseTranspiler {
         const mapRead = this.printWsCacheMapRead(node); if (mapRead !== undefined) return mapRead;
         const fieldRead = this.printFieldKeyRead(node); if (fieldRead !== undefined) return fieldRead;
         const dictKeyRead = this.printDictKeyRead(node); if (dictKeyRead !== undefined) return dictKeyRead;
-        const okeyRead = this.printOkeyRead(node); if (okeyRead !== undefined) return okeyRead;
+        const okeyRead = this.printOkeyRead(node) ?? this.print64kBookKeyRead(node); if (okeyRead !== undefined) return okeyRead;
         const handleRead = this.printClientHandleKeyedRead(node); if (handleRead !== undefined) return handleRead;
         const marketRead = this.printTypedMarketRead(node);
         if (marketRead !== undefined) return marketRead;
@@ -31379,7 +31405,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const form = plus ? 'concat' : this.rustScalarUseForm(n, 'ostr');
                 this.rustScalarUseForms.set(n, form);
                 // ral-53f: a ws `watch` url / hash / message-hash slot reads the string slot in place (`x.as_deref()`)
-                if (form === undefined || form === 'err' || form === 'key' || form === 'okey' || (form === 'targ' && !this.rustWsKeyUse(n)) || form === 'kin') return false;
+                if (form === undefined || form === 'err' || form === 'key' || form === 'okey' || form === 'bkey' || (form === 'targ' && !this.rustWsKeyUse(n)) || form === 'kin') return false;
                 const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
                 if (push !== undefined && isCallExpression(push)) return false;
                 if ((form === 'box' || form === 'xbox') && !this.rustSlotUseOutsideLoop(n, element)) return false;

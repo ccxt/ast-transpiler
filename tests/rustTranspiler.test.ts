@@ -21922,3 +21922,25 @@ describe('ral-64x: a caller lends its own unbound `&str` parameter to a no-arm w
         expect(out).toMatch(/let mut messageHash: Value = /);
     });
 });
+
+describe('ral-64k: the key of an element read on a typed ws order-book local is handed to get_value as is (bitfinex pro `side`, kraken pro `key`)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport class OrderBook { bids: any; asks: any; reset (s: any = undefined) { } }\nexport default class Exchange {\n    orderbooks: Dict = {};\n    orderBook (s: any = {}, d: any = undefined): OrderBook { return new OrderBook (); }\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    consume (x: any): void { }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    const body = (keyUse: string) => "    handle (amount: number, first: Dict) {\n        const orderbook = this.orderBook ({}, 10);\n        const side = (amount < 0) ? 'asks' : 'bids';\n        const bookside = orderbook[side];\n        this.consume (bookside);\n" + keyUse + "        this.consume (orderbook);\n    }\n";
+    test('the key is a String and the read lends side.as_str()', () => {
+        const out = write ('64k-book', body (''));
+        expect(out).not.toMatch(/let mut side: Value = /);
+        expect(out).toContain('get_value(&Value::from(&orderbook), side.as_str())');
+    });
+    test('negative: a read that is no local initializer keeps the boxed key', () => {
+        const out = write ('64k-book-neg', body ('').replace ('const bookside = orderbook[side];\n        this.consume (bookside);', 'this.consume (orderbook[side]);'));
+        expect(out).toMatch(/let mut side: Value = /);
+    });
+});
