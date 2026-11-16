@@ -14737,6 +14737,8 @@ export class RustTranspiler extends BaseTranspiler {
         'DepositWithdrawFee', 'FundingRate', 'FundingRateHistory', 'FundingHistory', 'Leverage', 'MarginMode', 'MarginModification',
         'OpenInterest', 'Liquidation', 'LeverageTier', 'Greeks', 'OptionContract', 'LastPrice', 'PredictionEvent', 'PredictionSettlement',
         'Account', 'BorrowRate', 'IsolatedBorrowRate', 'MarginLoan', 'Conversion', 'ADL', 'LongShortRatio', 'BorrowInterest',
+        // ral-68g: a `fetchMarkets` row (`Market::from_value` keeps the element as `raw`; `From<&Market>` shares it)
+        'Market',
     ]);
 
     /** `'vec'` for a `Vec<record>` typed result, `'map'` for `Tickers` (`HashMap<String, Ticker>`). */
@@ -14775,7 +14777,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (keyDecl === undefined || !(isVariableDeclaration(keyDecl) || isParameterDeclaration(keyDecl))) return false;
         // ral-65k: a `String` key local of checker type `string` reads by its text (printTypedResultElemRead)
         const keyLocal = this.rustScalarLocalOf(key);
-        return keyLocal === undefined || (keyLocal.kind === 'str' && this.rust65kPlainStringKey(key));
+        // ral-68g: an `Option<String>` key local the checker types plain `string` (printTypedResultElemRead reads Null for None)
+        return keyLocal === undefined || ((keyLocal.kind === 'str' || keyLocal.kind === 'ostr') && this.rust65kPlainStringKey(key));
     }
 
     /** ral-65k: the checker types `k` as plain `string` (no `undefined` / `null` member). */
@@ -14806,6 +14809,10 @@ export class RustTranspiler extends BaseTranspiler {
         if ((elem === 'map' || elem === 'map2') && isIdentifier(key) && this.rustScalarLocalOf(key)?.kind === 'str') {
             return `crate::value::KeyRead::key_read(&&${name}, ${super.printIdentifier(key)}.as_str())`;
         }
+        // ral-68g: an `Option<String>` key: its text, Null for None (the boxed read of a Null key answered Null)
+        if ((elem === 'map' || elem === 'map2') && isIdentifier(key) && this.rustScalarLocalOf(key)?.kind === 'ostr') {
+            return `(match ${super.printIdentifier(key)}.as_deref() { Some(__k) => crate::value::KeyRead::key_read(&&${name}, __k), None => Value::Null })`;
+        }
         if (elem === 'map' || elem === 'map2') return `crate::value::KeyRead::read(&&${name}, &${this.printNode(key, 0).trim()})`;
         return `${name}.get(${this.printTypedResultIndex(key)}).map(crate::Value::from).unwrap_or_default()`;
     }
@@ -14820,7 +14827,7 @@ export class RustTranspiler extends BaseTranspiler {
         const call: any = n?.parent;
         if (call === undefined || !isCallExpression(call) || call.arguments[0] !== n || call.arguments.length < 2 || call.arguments.length > 3) return false;
         const callee: any = call.expression;
-        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || String(callee.name.text) !== 'safeDict') return false;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || !['safeDict', 'safeValue'].includes(String(callee.name.text))) return false;
         if (call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
         const declaration: any = this.rustScalarCallee(call);
         if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return false;
@@ -14847,7 +14854,9 @@ export class RustTranspiler extends BaseTranspiler {
         const index = this.rust67gIndexText(this.rustSkipWrappers(node.arguments[1]), true);
         if (index === undefined) return undefined;
         const fallback = node.arguments.length > 2 ? this.printNode(node.arguments[2], identation).trim() : 'Value::Null';
-        return `(match ${super.printIdentifier(recv)}.get(${index}) { Some(__row) if matches!(__row.raw, Value::Dict(_)) => crate::Value::from(__row), _ => ${fallback} })`;
+        // ral-68g: base `safeValue` answers any element but Null / the empty string, else the default
+        const guard = String(node.expression.name.text) === 'safeValue' ? '!__row.raw.is_null() && __row.raw.as_str() != Some("")' : 'matches!(__row.raw, Value::Dict(_))';
+        return `(match ${super.printIdentifier(recv)}.get(${index}) { Some(__row) if ${guard} => crate::Value::from(__row), _ => ${fallback} })`;
     }
 
     printTypedResultIndex(key: any): string {

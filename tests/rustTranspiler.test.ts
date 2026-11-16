@@ -23108,3 +23108,35 @@ describe('ral-68d: tuple slots with `a || b` uses, one-operand extend and `retur
         expect(fn).not.toContain('query.clone()');
     });
 });
+
+describe('ral-68g: typed row reads (Market rows, safeValue rows, optional-string Tickers keys)', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport interface Market { id: string; symbol: string; info: any }\nexport interface Ticker { symbol: string; info: any }\nexport interface Tickers { [symbol: string]: Ticker }\nexport default class Exchange {\n    async fetchMarkets (params: Dict = {}): Promise<Market[]> {\n        return [];\n    }\n    async fetchTickers (symbols: Strings = undefined, params: Dict = {}): Promise<Tickers> {\n        return {};\n    }\n    safeDict (dictionaryOrList: any, key: any, defaultValue: Dict = undefined): Dict | undefined {\n        return dictionaryOrList[key];\n    }\n    safeValue (dictionaryOrList: any, key: any, defaultValue: any = undefined): any {\n        return dictionaryOrList[key];\n    }\n    safeString (d: any, k: any, defaultValue: Str = undefined): Str {\n        return d[k];\n    }\n    safeSymbol (s: string): string {\n        return s;\n    }\n    hold (x: any): any { return x; }\n}\n";
+    const build = (name: string, body: string, typedUnified: string[]) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async probe (symbol: string, params: Dict = {}) {\n" + body + "    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': typedUnified, 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        typed.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a fetchMarkets result read through length and safeDict (rows, i) is the typed Vec<Market>', () => {
+        const out = build ('ral68g-mkt', "        const markets = await this.fetchMarkets (params);\n        const result: Dict = {};\n        for (let i = 0; i < markets.length; i++) {\n            const item = this.safeDict (markets, i);\n            result[this.safeString (item, 'symbol')] = item;\n        }\n        return result;\n", ['fetchMarkets']);
+        expect(out).toContain('let mut markets: Vec<crate::types::Market> = (match self.fetch_markets(');
+        expect(out).toContain('(match markets.get(i as usize) { Some(__row) if matches!(__row.raw, Value::Dict(_)) => crate::Value::from(__row), _ => Value::Null })');
+    });
+    test('safeValue (rows, i) on a typed Vec: any element but Null / empty string, else the default', () => {
+        const out = build ('ral68g-sv', "        const markets = await this.fetchMarkets ();\n        let last = undefined;\n        for (let i = 0; i < markets.length; i++) {\n            last = this.safeValue (markets, i);\n        }\n        return this.hold (last);\n", ['fetchMarkets']);
+        expect(out).toContain('let mut markets: Vec<crate::types::Market> = ');
+        expect(out).toContain('(match markets.get(i as usize) { Some(__row) if !__row.raw.is_null() && __row.raw.as_str() != Some("") => crate::Value::from(__row), _ => Value::Null })');
+    });
+    test('a Tickers result keyed by an Option<String> local reads the typed map', () => {
+        const out = build ('ral68g-ostr', "        const s = this.safeString (params, 'symbol');\n        if (s === undefined) {\n            return undefined;\n        }\n        const tickers = await this.fetchTickers ([ symbol ], params);\n        return tickers[s];\n", ['fetchTickers']);
+        expect(out).toContain('let mut tickers: crate::types::Tickers = (match self.fetch_tickers(');
+        expect(out).not.toContain('IntoRaw::into_raw(self.fetch_tickers(');
+    });
+    test('negative: row reads mixed with a whole-value hand-off keep the boxed result', () => {
+        const out = build ('ral68g-neg', "        const markets = await this.fetchMarkets ();\n        const n = markets.length;\n        return this.hold ([ n, this.safeValue (markets, 0), markets ]);\n", ['fetchMarkets']);
+        expect(out).toContain('let mut markets: Value = crate::types::IntoRaw::into_raw(self.fetch_markets(');
+    });
+});
