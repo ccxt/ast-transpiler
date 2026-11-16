@@ -21585,3 +21585,28 @@ describe('ral-63i: a Dict[] row stored as the element of an array literal writte
         expect(out).not.toContain('let mut row: crate::value::Dict');
     });
 });
+
+describe('ral-63x: a sync ws `string` method with no arm types a `&str` parameter every caller fills with a literal', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    async watch (url: string, hash: string): Promise<any> { return undefined; }\n}\n";
+    const build = (name: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    const body = "    getMessageHash (unifiedChannel: string, symbol: Str = undefined): string {\n        let hash = unifiedChannel;\n        if (symbol !== undefined) {\n            hash = hash + '::' + symbol;\n        } else {\n            hash = hash + 's';\n        }\n        return hash;\n    }\n    async watchTicker (symbol: string): Promise<any> {\n        const messageHash = this.getMessageHash ('ticker', symbol);\n        return await this.watch ('wss://x', messageHash);\n    }\n    async watchTickers (): Promise<any> {\n        const messageHash = this.getMessageHash ('ticker');\n        return await this.watch ('wss://x', messageHash);\n    }\n";
+    test('the parameter prints `&str`, callers pass the literal, the seeded accumulator is a String', () => {
+        const out = build ('ral63x-lit', body);
+        expect(out).toMatch(/fn getMessageHash\(&self, unifiedChannel: &str, /);
+        expect(out).toContain('self.getMessageHash("ticker", ');
+        expect(out).not.toMatch(/let mut hash: Value/);
+    });
+    test('negative: one caller passes a non-literal string, the parameter and the local stay Value', () => {
+        const out = build ('ral63x-neg', body.replace ("this.getMessageHash ('ticker', symbol)", "this.getMessageHash (symbol, symbol)"));
+        expect(out).toMatch(/fn getMessageHash\(&self, unifiedChannel: Value, /);
+        expect(out).toMatch(/let mut hash: Value/);
+    });
+});

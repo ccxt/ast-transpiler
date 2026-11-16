@@ -33796,7 +33796,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a ws core's sync by-name handler table takes only `Value` / `bool` slots
         // ral-ve: except a `url: string` parameter every caller fills with a `this.urls[..]` read (the arm decodes it once)
         const urlOnly = this.rustVenueUrlParam(method, param);
-        if (!group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method) && !urlOnly) return undefined;
+        const noArmStr = !group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method) && !urlOnly && this.rust63xNoArmStrMethod(method);
+        if (!group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method) && !urlOnly && !noArmStr) return undefined;
         const hidden: any = this.getMethodOverride(method);
         if (!group && hidden !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(hidden.getSourceFile().fileName))) return undefined;
         if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return undefined;
@@ -33808,6 +33809,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (declared === undefined || (optional && declared === 'bool')) return undefined;
         const rustType = optional && !declared.startsWith('Option<') ? `Option<${declared}>` : declared;
         if (rustType.includes('f64') && !this.rustVenueFloatUsesStayInside(method, param)) return undefined;
+        // ral-63x: only a required string slot whose every caller passes a string literal (no conversion at any caller)
+        // and that seeds a local of the body (`let x = param`): that local is what the typed parameter frees
+        if (noArmStr && !this.rust63xLiteralSeedStrParam(method, param, rustType)) return undefined;
         // every caller in the method's own file passes a value the checker types (never `any`), no spread
         const at = Array.from(method.parameters).indexOf(param);
         for (const call of this.rustVenueStrCallSites(method)) {
@@ -33822,6 +33826,43 @@ export class RustTranspiler extends BaseTranspiler {
             if (!rustType.includes('str') && args.some((a: any) => this.rustVenueArithmeticArg(a))) return undefined;
         }
         return rustType;
+    }
+
+    /** ral-63x: `&str` parameter, every call site in the file passes a string literal at its index, and some
+     *  `let x = <param>` declaration of the body reads it whole. */
+    rust63xLiteralSeedStrParam(method: any, param: any, rustType: string): boolean {
+        if (rustType !== '&str' || !isIdentifier(param.name)) return false;
+        const at = Array.from(method.parameters).indexOf(param);
+        const calls = this.rustVenueStrCallSites(method);
+        if (calls.length === 0) return false;
+        for (const call of calls) {
+            const arg: any = call.arguments[at];
+            if (arg === undefined || (arg.kind !== SyntaxKind.StringLiteral && arg.kind !== SyntaxKind.NoSubstitutionTemplateLiteral)) return false;
+        }
+        const symbol = this.getChecker().getSymbolAtLocation(param.name);
+        let seeds = false;
+        const visit = (n: any) => {
+            if (seeds || (n !== method.body && isFunctionLike(n))) return;
+            if (isVariableDeclaration(n) && n.initializer !== undefined && isIdentifier(n.initializer)
+                && this.getChecker().getSymbolAtLocation(n.initializer) === symbol) { seeds = true; return; }
+            n.forEachChild(visit);
+        };
+        method.body.forEachChild(visit);
+        return seeds;
+    }
+
+    /** ral-63x: a sync ws method with a declared `string` return (`-> Option<String>`, no kept arm: no by-name or ws
+     *  handler arm) and no override, trait slot or typed-return entry. Its string parameters may print typed; should
+     *  the return still print `Value`, a string slot is one an arm decodes (rustDispatch.wsArg `str` / `optstr`). */
+    rust63xNoArmStrMethod(method: any): boolean {
+        if (!isMethodDeclaration(method) || !isIdentifier(method.name) || this.isAsyncFunction(method)) return false;
+        if (this.toSnakeCaseName(String(method.name.text)) in (this.rustVirtualDispatch ?? {})) return false;
+        if (this.rustMethodTypedReturnKind(method) !== undefined || this.rustBaseNativeStrMethod(method) || this.rustVenueKeptStrArm(method)) return false;
+        const hidden: any = this.getMethodOverride(method);
+        if (hidden !== undefined && hidden !== method) return false;
+        // the signature half only: asking the full return decision from here would decide it early (order-dependent);
+        // the slot admitted (`&str`, rust63xLiteralSeedStrParam) is one a by-name / ws arm decodes either way
+        return this.rustNativeStrReturnHead(method);
     }
 
     // Base methods whose scalar parameters print typed (measured one by one: each frees more locals than it adds
