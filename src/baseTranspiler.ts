@@ -1403,12 +1403,13 @@ class BaseTranspiler {
             }
         }
 
-        let parsedCall = parsedExpression;
-        if (!removeParenthesis) {
-            parsedCall+= "(" + parsedArgs + ")";
+        if (removeParenthesis) return parsedExpression;
+        return this.printCallHead(node, parsedExpression, parsedArgs);
+    }
 
-        }
-        return parsedCall;
+    /** `callee(args)` of a plain call; a language may name the callee's path from the node. */
+    printCallHead(node, parsedExpression: string, parsedArgs: string): string {
+        return parsedExpression + "(" + parsedArgs + ")";
     }
 
     printClassBody(node, identation) {
