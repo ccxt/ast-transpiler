@@ -5050,7 +5050,9 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' ? !this.rustErrMsgMoves(n, declaration) : !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))
+                // ral-63k: the last key of a nested write on a plain-Dict parameter is the native insert's typed key text
+                || (form === 'mkey' && this.rust63kDictParamNestedKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -8031,6 +8033,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustScalarOptKeyUse(n)) return 'key';
         // ral-48i: a `networkIdToCode` result as the last key of `x['lit'][k] = v` on a typed map bearer (rustBearerChainedWrite)
         if (kind === 'ostr' && this.rust48iChainKeyUse(n)) return 'key';
+        // ral-63k: the key of a one-level statement write `x[n] = v` on a plain non-literal local that no native insert takes:
+        // the helper `add_element_to_object(&mut x, &<box>, v)` lends the box (coinbaseexchange pro `previousOrder[key]`)
+        if ((kind === 'str' || kind === 'ostr') && this.rust63kLocalFlatHelperKey(n)) return 'mkey';
         // an optional-string local keys a proven map read or an `in` test natively (a `None` key misses, as the `Null` did)
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         // ral-yg: an element key into the base-declared `this.urls['<lit>']` map reads it by the borrowed key
@@ -9203,14 +9208,20 @@ export class RustTranspiler extends BaseTranspiler {
         const write: any = access.parent;
         if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         let root: any = access.expression;
+        // ral-63k: a hop may also be keyed by another plain identifier (mergeBalanceAccount `result[code][field]`)
+        let identHop = false;
         while (isElementAccessExpression(root)) {
             const k: any = this.rustSkipWrappers(root.argumentExpression);
-            if (k === undefined || (!isStringLiteral(k) && !isNumericLiteral(k))) return false;
+            if (k !== undefined && isIdentifier(k) && this.rustSymbolOf(k) !== this.rustSymbolOf(n)) identHop = true;
+            else if (k === undefined || (!isStringLiteral(k) && !isNumericLiteral(k))) return false;
             root = root.expression;
         }
         if (!isIdentifier(root) || this.rustSymbolOf(root) === this.rustSymbolOf(n)) return false;
         const rd: any = this.rustDeclarationOfIdentifier(root);
-        if (rd === undefined || !isVariableDeclaration(rd)) return false;
+        // ral-63k: or the chain root is a plain-Dict parameter (its write prints through nestedDictWrite, whose insert key
+        // rustScalarInsertKeyArg types for 'mkey'); identifier hops only on such a parameter root
+        const dictParam = rd !== undefined && isParameterDeclaration(rd) && this.rustParamStaysPlainDict(rd);
+        if (rd === undefined || !(isVariableDeclaration(rd) && !identHop) && !dictParam) return false;
         const own = this.rustSymbolOf(n);
         let named = false;
         const visit = (x: any) => {
@@ -9219,6 +9230,39 @@ export class RustTranspiler extends BaseTranspiler {
         };
         visit(write.right);
         return !named;
+    }
+
+    /** ral-63k: `n` is the whole key of a statement write `x[n] = v` whose receiver is a local declared by a call (never an
+     *  object literal: ccxt's literal-map pass keys on the boxed key text), whose value never writes `n` and never names `this`. */
+    rust63kLocalFlatHelperKey(n: any): boolean {
+        if (!isIdentifier(n) || this.rustTestTierSource(n)) return false;
+        const keyNode: any = this.rustKeyWrapped(n);
+        const access: any = keyNode.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== keyNode || !isIdentifier(access.expression)) return false;
+        const write: any = access.parent;
+        if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        if (this.rustSymbolOf(access.expression) === this.rustSymbolOf(n)) return false;
+        const rd: any = this.rustDeclarationOfIdentifier(access.expression);
+        if (rd === undefined || !isVariableDeclaration(rd) || rd.initializer === undefined || !isCallExpression(this.rustSkipWrappers(rd.initializer))) return false;
+        if (this.rustInsertValueRewritesKey(String(n.text), write.right)) return false;
+        // a write some native insert prints (typed bearer, map param, proven dict local) keeps its own key rules
+        const base: any = access.expression; const key = String(n.text);
+        if ((this.rustBearerDictInsert(base, n, key, 'x') ?? this.rustMapParamDictInsert(base, n, key, 'x')
+            ?? this.printNativeDictInsert(base, n, key, 'x') ?? this.rustNativeDictInsert(base, n, key, 'x')) !== undefined) return false;
+        if (this.rustDeclaredLocalEntry(base) !== undefined) return false;
+        let self = false;
+        const visit = (x: any) => { if (x.kind === SyntaxKind.ThisKeyword || isFunctionLike(x)) self = true; x.forEachChild(visit); };
+        visit(write.right);
+        return !self;
+    }
+
+    /** ral-63k: `n` is the last key of a statement write `p[..][n] = v` whose chain root is a plain-Dict parameter. */
+    rust63kDictParamNestedKey(n: any): boolean {
+        if (!this.rust62kLocalNestedLastKey(n)) return false;
+        let root: any = this.rustKeyWrapped(n).parent;
+        while (isElementAccessExpression(root)) root = root.expression;
+        const rd: any = this.rustDeclarationOfIdentifier(root);
+        return rd !== undefined && isParameterDeclaration(rd) && this.rustParamStaysPlainDict(rd);
     }
 
     /** ral-61k: `n` keys a middle hop of a statement write `this.balance|options[..][n][..] = v`: an element read whose
@@ -11897,6 +11941,11 @@ export class RustTranspiler extends BaseTranspiler {
     /** The insert key of a `String` scalar local, else undefined. */
     rustScalarInsertKeyArg(keyNode): string | undefined {
         const key: any = this.rustSkipWrappers(keyNode);
+        // ral-63k: the lent last key of a nested write ('mkey') on the native nested insert takes the same insert-key text
+        // (`stringify_param` of the box it lends: the string, or \"null\" for `None`)
+        const mkind = isIdentifier(key) && this.rustScalarUseForms.get(key) === 'mkey' ? this.rustScalarLocalOf(key)?.kind : undefined;
+        if (mkind === 'ostr') return this.rustScalarOptKeyText(key);
+        if (mkind === 'str') return `${super.printIdentifier(key)}.clone()`;
         const kind = isIdentifier(key) && this.rustScalarUseForms.get(key) === 'key' ? this.rustScalarLocalOf(key)?.kind : undefined;
         if (kind === 'ostr') return this.rustScalarOptKeyText(key);
         // a field insert copies the key text like the `stringify_param` it replaces (one allocation either way)

@@ -21474,3 +21474,47 @@ describe('ral-63v: ts/src index scans ignore other processes temp copies', () =>
         }
     });
 });
+
+describe('ral-63k: the last key of a nested write on a plain-Dict parameter takes the typed insert key (base mergeBalanceAccount `field`)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = (target: string) => "    mergeAccount (result: Dict, code: string, account: Dict): Dict {\n        const fields = [ 'free', 'used' ];\n        for (let i = 0; i < fields.length; i++) {\n            const field = fields[i];\n            const incoming = this.safeString (account, field);\n            if (incoming !== undefined) {\n                " + target + " = incoming;\n            }\n        }\n        return result;\n    }\n";
+    test('the key is an Option<String> and the native nested insert takes its text, no stringify_param', () => {
+        const out = write ('63k-param', body ('result[code][field]'));
+        expect(out).not.toMatch(/let mut field: Value = /);
+        expect(out).toContain('.insert(field.as_deref().unwrap_or("null").to_string(), ');
+        expect(out).not.toContain('stringify_param(&field)');
+    });
+    test('negative: a one-level write on the parameter keeps its own rule (no nested insert)', () => {
+        const out = write ('63k-param-neg', body ('result[field]'));
+        expect(out).not.toContain('get_mut(&crate::runtime::stringify_param(&code))');
+    });
+});
+
+describe('ral-63k: the key of a one-level helper write on a call-declared local lends its box (coinbaseexchange pro `previousOrder[key]`)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): any { return o; }\n    parseOrder (o: any): Dict { return o; }\n    consume (x: any): void { }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    const body = (target: string) => "    update (orders: Dict, id: string, other: string, info: Dict) {\n        const order: Dict = this.parseOrder (info);\n        let previous = this.safeDict (orders, id);\n        if (previous === undefined) {\n            previous = this.safeDict (orders, other);\n        }\n        const keys = Object.keys (order);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            if (order[key] !== undefined) {\n                " + target + " = order[key];\n            }\n        }\n        previous['fee']['cost'] = 1;\n        this.consume (previous);\n        return previous;\n    }\n";
+    test('the key is typed and the helper write lends Value::from(key.as_deref())', () => {
+        const out = write ('63k-flat', body ('previous[key]'));
+        expect(out).not.toMatch(/let mut key: Value = /);
+        expect(out).toContain('add_element_to_object(&mut previous, &Value::from(key.as_deref()), ');
+    });
+    test('negative: a write whose value reads this keeps the boxed key', () => {
+        const out = write ('63k-flat-neg', body ('previous[key] = this.safeDict (order, key)'));
+        expect(out).toMatch(/let mut key: Value = /);
+    });
+});
