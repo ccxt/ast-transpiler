@@ -2258,6 +2258,9 @@ export class CSharpTranspiler extends BaseTranspiler {
     // spells a JSON-cell array, and every call the program resolves for it passes one (or omits it)
     csharpListParamCensus(): Map<string, boolean> {
         const program: any = this.getProgram();
+        if (program === undefined || typeof program.getSourceFileNames !== 'function') {
+            return new Map<string, boolean>(); // no census: every key declines, no base keys
+        }
         let census = csharpListParamCensuses.get(program);
         if (census !== undefined) {
             return census;
@@ -3560,6 +3563,9 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     printExpressionStatement(node, identation) {
         const printed = super.printExpressionStatement(node, identation);
+        if (printed === '') {
+            return printed;
+        }
         const refresh = this.csharpMemberRefreshStatement(node, identation);
         return (refresh === undefined) ? printed : printed + '\n' + refresh;
     }

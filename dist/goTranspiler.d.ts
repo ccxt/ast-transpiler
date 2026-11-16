@@ -1163,6 +1163,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNativeParameterTypeCandidates(param: any, isHandler?: boolean): string[];
     goMethodKeepsBaseSignature(fn: any): boolean;
     goHasTreeCallSite(fn: any): boolean;
+    goSliceArgumentType(arg: any): string | undefined;
     goParameterCallSitesPassType(fn: any, index: number, goType: string): boolean;
     goAsyncBooleanParameterType(fn: any, param: any, index: number): string | undefined;
     goCallSitesPassBooleanLiteral(fn: any, index: number): boolean;
