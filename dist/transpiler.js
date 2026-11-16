@@ -51869,6 +51869,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // the typed signature table (`Ticker`, `Order`, ..: a map at runtime) or a list of one, and every declaration of the name
     // in its venue family spells the same type. The local is then decided by the existing container-local rules.
     this.rustVenueContainerDecisions = /* @__PURE__ */ new WeakMap();
+    this.rustOptReaderPrint = /* @__PURE__ */ new WeakSet();
+    this.rustOptReaderPrinted = /* @__PURE__ */ new WeakSet();
     // ── lent string lists ────────────────────────────────────────────────────
     // A string-list local from a never-empty `marketSymbols (.., false, ..)`, `Object.keys/values`, or `marketIds` of
     // such a list holds the shared list (`crate::value::List`, moved out of the box). Length and element reads are
@@ -53987,6 +53989,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return `${indent}let mut ${varName}: Option<String> = ${signApi.receiver}.get(${signApi.index}).and_then(Value::as_str).map(str::to_owned)`;
     }
     if (typedStr) {
+      const optRead = nativeStr ? void 0 : this.rustOptReaderCallText(declaration.initializer, identation);
+      if (optRead !== void 0)
+        return `${indent}let mut ${varName}: Option<String> = ${optRead}`;
       return `${indent}let mut ${varName}: Option<String> = ${parsedValue}${nativeStr ? "" : ".as_str().map(str::to_owned)"}`;
     }
     return `${indent}let mut ${varName}: Value = ${nativeStr ? this.rustNativeStrValueBox(parsedValue) : parsedValue}`;
@@ -55042,7 +55047,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       if (peeled !== void 0 && peeled.startsWith("format!(") && peeled.endsWith(".into()")) {
         return `${name} = Some(${peeled.slice(0, -".into()".length)})`;
       }
-      return `${name} = ${text}.as_str().map(str::to_owned)`;
+      return `${name} = ${this.rustOptReaderCallText(node) ?? `${text}.as_str().map(str::to_owned)`}`;
     }
     if (local.kind === "int")
       return `${name} = ${text}.as_i64()`;
@@ -57342,7 +57347,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (kind === "oint")
       return `${text}.as_i64()`;
     if (kind === "ostr")
-      return `${text}.as_str().map(str::to_owned)`;
+      return this.rustOptReaderCallText(exp) ?? `${text}.as_str().map(str::to_owned)`;
     if (kind === "bool")
       return `${text}.as_bool().unwrap_or_default()`;
     return `${text}.as_str().unwrap_or_default().to_owned()`;
@@ -61610,7 +61615,7 @@ ${binding(plan.indent)}` : ""), head: "" };
     if (kind === "ostr" && this.rustBaseNativeStrCall(node))
       return this.rustBaseNativeStrBareText(node);
     if (kind === "ostr")
-      return `${text}.as_str().map(str::to_owned)`;
+      return this.rustOptReaderCallText(node) ?? `${text}.as_str().map(str::to_owned)`;
     if (kind === "oint")
       return `${text}.as_i64()`;
     if (kind === "onum")
@@ -66858,6 +66863,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     if (expr.expression.kind === SyntaxKind7.SuperKeyword && (/ts[/]src[/]pro[/]/.test(String(node.getSourceFile().fileName)) || /^network(?:CodeToId|IdToCode)$/.test(expr.name.text))) {
       return this.printRuntimeVariadicCall(node, "super", expr.name.text, identation) ?? this.printTranspiledVariadicCall(node, "super", expr.name.text, identation) ?? this.printSuperMarketSlotCall(node, expr.name.text, identation);
     }
+    const optNameArity = { safeString: 2, safeString2: 3, safeStringN: 2, safeStringLower: 2, safeStringUpper: 2 };
     if (expr.expression.kind === SyntaxKind7.ThisKeyword) {
       const methodName = expr.name.text;
       const sig = this.methodSignatures[methodName];
@@ -66871,7 +66877,14 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
         const ownedArgs = (list) => list.map((a, i) => this.rustOwnedArgText(a, this.rustWsWatchSlot(node, i) ? this.rustWsWatchSlotText(a, this.printNode(a, 0)) : printArg(a, i))).join(", ");
         const requiredArgs = [ownedArgs(args.slice(0, sig.requiredCount)), ...this.rustVenuePads(calleeParams, args.length, sig.requiredCount)].filter((a) => a !== "").join(", ");
         const reqPart = requiredArgs ? `${requiredArgs}, ` : "";
-        return `self.${methodName}(${reqPart}&[${args.slice(sig.requiredCount).map((a, i) => this.rustOwnedArgText(a, printArgs([a], sig.requiredCount + i))).join(", ")}])`;
+        const tail = args.slice(sig.requiredCount).map((a, i) => this.rustOwnedArgText(a, printArgs([a], sig.requiredCount + i))).join(", ");
+        const optName = this.rustOptReaderPrint.has(node) && sig.requiredCount === (optNameArity[methodName] ?? -1) ? this.rustOptReaderName(node) : void 0;
+        if (optName !== void 0) {
+          this.rustOptReaderPrinted.add(node);
+          const head = optName.key !== void 0 ? `${ownedArgs(args.slice(0, 1))}, ${optName.key}` : requiredArgs;
+          return `self.${optName.name}(${head}, &[${tail}])`;
+        }
+        return `self.${methodName}(${reqPart}&[${tail}])`;
       }
     }
     return void 0;
@@ -66905,7 +66918,13 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     if (args.length < fixed || args.length > 0 && args[args.length - 1].startsWith("&[") && !this.rustOmitLiteralKeys(node))
       return void 0;
     const params = this.rustCalleeParams(node);
+    const optName = receiver === "self" && this.rustOptReaderPrint.has(node) ? this.rustOptReaderName(node) : void 0;
     const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== void 0 || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== void 0 ? a : at < fixed && this.rustOwnedArgText(node.arguments[at], a) !== a ? `${a}` : this.rustSliceArgText(a));
+    if (optName !== void 0) {
+      this.rustOptReaderPrinted.add(node);
+      const head = optName.key !== void 0 ? [cloned[0], optName.key] : cloned.slice(0, fixed);
+      return `self.${optName.name}(${head.join(", ")}, &[${cloned.slice(fixed).join(", ")}])`;
+    }
     return `${receiver}.${methodName}(${cloned.slice(0, fixed).join(", ")}${fixed > 0 ? ", " : ""}&[${cloned.slice(fixed).join(", ")}])`;
   }
   /** A ws `super.parseX (x, market)` to a fixed-arity parser with a lent market slot: by-value locals are cloned
@@ -71139,6 +71158,9 @@ ${iden}}`;
       const formatted = this.rustStrNativeExpression(exp) ? void 0 : this.rustBoxedFormatInner(printed);
       if (formatted !== void 0)
         return `${idn}return Some(${formatted});`;
+      const optRead = this.rustStrNativeExpression(exp) ? void 0 : this.rustOptReaderCallText(exp);
+      if (optRead !== void 0)
+        return `${idn}return ${optRead};`;
       const suffix = this.rustStrNativeExpression(exp) ? "" : ".as_str().map(str::to_owned)";
       return `${idn}return ${printed}${suffix};`;
     }
@@ -76792,6 +76814,38 @@ ${iden}}`;
     const declaration = this.rustScalarCallee(call);
     return declaration !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName)) ? rust : void 0;
   }
+  /** The twin's name for a base reader call (and the `&str` key text of a `_k` twin), else undefined. */
+  rustOptReaderName(node) {
+    const callee = node?.expression;
+    if (!isCallExpression6(node) || !isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+      return void 0;
+    const twins = _RustTranspiler.RUST_OPT_READERS[String(callee.name.text)];
+    if (twins === void 0 || node.arguments.length < 2 || !this.rustCalleeIsRuntimeBase(node))
+      return void 0;
+    const key = node.arguments[1];
+    const literal2 = isStringLiteralLikeNode4(key) && !(String(key.text) in this.StringLiteralReplacements) && !/["\\]/.test(String(key.text));
+    if (literal2 && twins.k !== void 0)
+      return { name: twins.k, key: this.quotedStringLiteral(String(key.text)) };
+    return twins.any !== void 0 ? { name: twins.any } : void 0;
+  }
+  /** The `_opt` twin call of a base safeString-family reader node, printed by the reader's own printer; else undefined. */
+  rustOptReaderCallText(expr, identation = 0) {
+    const node = this.unwrapParens(expr);
+    if (node === void 0 || !isCallExpression6(node) || this.checkerOrUndefined() === void 0)
+      return void 0;
+    const borrowed = this.rustBorrowedDictReader(node);
+    if (borrowed === void 0 ? this.rustOptReaderName(node) === void 0 : !_RustTranspiler.RUST_OPT_K_READERS.has(borrowed))
+      return void 0;
+    this.rustOptReaderPrint.add(node);
+    this.rustOptReaderPrinted.delete(node);
+    let text;
+    try {
+      text = this.printNode(node, identation).trim();
+    } finally {
+      this.rustOptReaderPrint.delete(node);
+    }
+    return this.rustOptReaderPrinted.has(node) ? text : void 0;
+  }
   /** `self.safe_X_k(&x, "k", &[..])` when `x` is a borrowed dict local or a typed container local. */
   printBorrowedDictRead(node, identation) {
     if (!isCallExpression6(node))
@@ -76812,7 +76866,10 @@ ${iden}}`;
     const dflt = node.arguments.length === 3 ? this.printNode(node.arguments[2], identation).trim() : "";
     const text = String(recv.text);
     const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[text] ?? text);
-    return `self.${rust}(&${name}, ${this.quotedStringLiteral(String(key.text))}, &[${dflt}])`;
+    const opt = this.rustOptReaderPrint.has(node) && _RustTranspiler.RUST_OPT_K_READERS.has(rust);
+    if (opt)
+      this.rustOptReaderPrinted.add(node);
+    return `self.${rust}${opt ? "_opt" : ""}(&${name}, ${this.quotedStringLiteral(String(key.text))}, &[${dflt}])`;
   }
   rustLentListLocal(declaration) {
     if (declaration?.kind !== SyntaxKind7.VariableDeclaration)
@@ -88686,6 +88743,18 @@ _RustTranspiler.RUST_TEST_KEYREAD_READERS = /^safe(?:Value|String|Bool|Dict|List
 // ── rustRecordLookupSource: base record lookups (market / outcome resolvers) held as a shared map ──
 // Each returns a cached record map (or nothing); read only by key, the map form reads the same.
 _RustTranspiler.RUST_RECORD_LOOKUP_SOURCES = /* @__PURE__ */ new Set(["outcome", "safeOutcome", "loadOutcome", "getMarketFromSymbols", "safeMarket", "market"]);
+// ── ral-62o: `Option<String>` reader twins (rustOptReaderCallText / rustOptReaderName) ──
+// A typed `Option<String>` local, write or return fed by a base safeString-family reader prints the reader's
+// `_opt` twin (hand-written in exchange_stubs.rs: same lookup, empty-string and default rules, `None` where the boxed
+// helper yields `Null`), instead of `<boxed reader>.as_str().map(str::to_owned)`. Decided from the call node.
+_RustTranspiler.RUST_OPT_K_READERS = /* @__PURE__ */ new Set(["safe_string_k", "safe_string_lower_k", "safe_string_upper_k"]);
+_RustTranspiler.RUST_OPT_READERS = {
+  safeString: { k: "safe_string_k_opt", any: "safe_string_opt" },
+  safeString2: { any: "safe_string2_opt" },
+  safeStringN: { any: "safe_string_n_opt" },
+  safeStringLower: { k: "safe_string_lower_k_opt" },
+  safeStringUpper: { k: "safe_string_upper_k_opt" }
+};
 // ── typed list fields (rustTypedListField / printTypedListFieldRead) ──
 // Base `Exchange` fields declared `string[]` are held as `crate::value::List`: a write converts once
 // (`into_list`), `.length` reads the list, and every other read hands out the shared handle (an Arc bump).

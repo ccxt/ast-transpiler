@@ -3615,6 +3615,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustRecordLookupSource(call: any): boolean;
     /** Rust `_k` reader name of a base `this.safeX(obj, 'literal'[, default])` call, else undefined. */
     rustBorrowedDictReader(call: any): string | undefined;
+    private static readonly RUST_OPT_K_READERS;
+    private static readonly RUST_OPT_READERS;
+    private rustOptReaderPrint;
+    private rustOptReaderPrinted;
+    /** The twin's name for a base reader call (and the `&str` key text of a `_k` twin), else undefined. */
+    rustOptReaderName(node: any): {
+        name: string;
+        key?: string;
+    } | undefined;
+    /** The `_opt` twin call of a base safeString-family reader node, printed by the reader's own printer; else undefined. */
+    rustOptReaderCallText(expr: any, identation?: number): string | undefined;
     /** `self.safe_X_k(&x, "k", &[..])` when `x` is a borrowed dict local or a typed container local. */
     printBorrowedDictRead(node: any, identation: number): string | undefined;
     private rustLentListKinds;
