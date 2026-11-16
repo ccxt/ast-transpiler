@@ -4486,7 +4486,7 @@ function ccxtGoArrayLiteralDeclarationOf (goTranspiler, node) {
 }
 
 function installCcxtGoArrayLiteralWrites (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoArrayLiteralWritesInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoArrayLiteralWritesInstalled')) {
         return;
     }
     const shippedIsSafe = goTranspiler.goLocalIsSafeToType;
@@ -4507,7 +4507,6 @@ function installCcxtGoArrayLiteralWrites (goTranspiler) {
         }
         return shippedBinary.call (this, node, identation);
     };
-    goTranspiler.__ccxtGoArrayLiteralWritesInstalled = true;
 }
 
 // ----------------- identity tuple rebind: `[ request, params ] = this.handleUntilOption (k, request, params)` -----------------
@@ -4560,7 +4559,7 @@ function ccxtGoRebindLocalIsSafe (goTranspiler, scope, declaration, varName, isR
 
 // the type half admits the local, the value half prints the rebind through MapTyped (same map, no copy)
 function installCcxtGoIdentityTupleRebind (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoIdentityTupleRebindInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoIdentityTupleRebindInstalled')) {
         return;
     }
     const shippedIsSafe = goTranspiler.goLocalIsSafeToType;
@@ -4586,7 +4585,6 @@ function installCcxtGoIdentityTupleRebind (goTranspiler) {
         lines[index] = indent + this.printNode (target, 0) + ' = MapTyped(' + lines[index].trimStart ().substring (read.length - 'GetValue('.length) + ')';
         return lines.join ('\n');
     };
-    goTranspiler.__ccxtGoIdentityTupleRebindInstalled = true;
 }
 
 // --------------------- printer ternary-IIFE locals: name the scalar join type ---------------------
@@ -4924,7 +4922,7 @@ function ccxtGoClosureDefaultReadsAreSafe (goTranspiler, declaration, valueType)
 }
 
 function installCcxtGoClosureDefaultValue (goTranspiler) {
-    if (goTranspiler.__ccxtGoClosureDefaultValueInstalled) {
+    if (!goInstallOnce (goTranspiler, '__ccxtGoClosureDefaultValueInstalled')) {
         return;
     }
     const upstream = goTranspiler.printVariableDeclarationList.bind (goTranspiler);
@@ -4955,7 +4953,6 @@ function installCcxtGoClosureDefaultValue (goTranspiler) {
         lines[pointerLine] = expectedReturn.replace (/return (\w+)$/, 'return *$1');
         return lines.join ('\n');
     };
-    goTranspiler.__ccxtGoClosureDefaultValueInstalled = true;
 }
 
 // declared TypeScript type of a nil-defaulted parameter -> the Go type of its typed GetArg twin
@@ -5039,450 +5036,229 @@ export const CCXT_GO_GETARG_SAFE_CONSUMERS = {
 
 // Typed async receive: `x := <-this.FooAsync(..)` + PanicOnError(x) becomes
 // `var x T = MapTyped(PanicOnError(<-this.FooAsync(..)))`; the channel stays `chan any` and
-// PanicOnError runs first. Element types are per method (R1 body sends, R2 Promise<T>), fail closed.
+// PanicOnError runs first. Element types are per method (body sends or the Promise<T> annotation), fail closed.
 export const CCXT_GO_ASYNC_ELEM_TYPES = {
-    // R1 concrete container send in the body
     'AddMarginAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
     'ApproveBuilderCodeAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'CancelAllContractOrdersAsync': '[]any',
-    // R1 concrete container send in the body
     'CancelAllOrdersRequestAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'CancelAllSpotOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'CancelAllUtaOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CancelContractOrderAsync': 'map[string]any',
-    // concrete map[string]any; TS Promise<Order>
     'CancelOrderAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'CancelOrdersAsync': '[]any',
-    // R1 concrete container send in the body
     'CancelOrdersForSymbolsAsync': '[]any',
-    // R1 concrete container send in the body
     'CancelOrdersRequestAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'CancelOrdersWsAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CancelSpotOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CancelTwapOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CancelUtaOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'CancelUtaOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'ClosePositionAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
     'CompleteRawTopicsAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CreateContractOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'CreateContractOrdersAsync': '[]any',
-    // R1 concrete container send in the body
     'CreateExtendedOrderRequestAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CreateMarketOrderWithCostAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
     'CreateOrDeriveApiKeyAsync': 'map[string]any',
-    // bodies send map[string]any (concrete) e.g. ParseOrder(map[string]any); TS Promise<Order>
     'CreateOrderAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'CreateOrderRequestAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CreateOrderWsAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'CreateOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'CreateOrdersWsAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CreateSpotOrderAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'CreateSpotOrderRequestAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'CreateSpotOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CreateSwapOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CreateUtaOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'CreateUtaOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'EditContractOrderAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'EditOrderRequestAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'EditOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'EditSpotOrderAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'EstimateTxFeeAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Account>'] -> map[string]any
     'FetchAccountAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchAccountHelperAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Position[]>'] -> []any
     'FetchAccountPositionsAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchAccountsAsync': '[]any',
-    // R2 TS annotations ['Promise<Account[]>'] -> []any
     'FetchAccountsV2Async': '[]any',
-    // R2 TS annotations ['Promise<Account[]>'] -> []any
     'FetchAccountsV3Async': '[]any',
-    // R2 TS annotations ['Promise<PredictionOrder[]>'] -> []any
     'FetchAmmOrdersAsync': '[]any',
-    // TS Promise<Balances> (Dict-shaped); NewBalances(res) asserts map[string]any
     'FetchBalanceAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchCanceledAndClosedOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchClosedContractOrdersAsync': '[]any',
-    // concrete []any; TS Promise<Order[]>
     'FetchClosedOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchClosedSpotOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Balances>'] -> map[string]any
     'FetchContractBalanceAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchContractDepositAddressAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchContractDepositsAsync': '[]any',
-    // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
     'FetchContractOHLCVAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'FetchContractOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchContractOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchContractOrdersByStatusAsync': '[]any',
-    // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
     'FetchContractTickersAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchContractWithdrawalsAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchCrossBorrowRatesAsync': 'map[string]any',
-    // concrete map[string]any; TS Promise<Currencies>
     'FetchCurrenciesAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
     'FetchCurrenciesFromCacheAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchCurrenciesFromWebAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchCurrencyByIdAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchDefaultMarketsAsync': '[]any',
-    // TS Promise<DepositAddress>
     'FetchDepositAddressAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchDepositAddressesByNetworkAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict[]>'] -> []any
     'FetchDepositMethodsAsync': '[]any',
-    // concrete []any; TS Promise<Transaction[]>
     'FetchDepositsAsync': '[]any',
-    // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchDepositsOrWithdrawalsHelperAsync': '[]any',
-    // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchDepositsWithdrawalsAsync': '[]any',
-    // R2 TS annotations ['Promise<LeverageTier[]>'] -> []any
     'FetchDerivativesMarketLeverageTiersAsync': '[]any',
-    // R2 TS annotations ['Promise<OpenInterest[]>'] -> []any
     'FetchDerivativesOpenInterestHistoryAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchFundingRateAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchFundingRateHistoryAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchFundingRatesAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchL2OrderBookAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<LedgerEntry[]>'] -> []any
     'FetchLedgerAsync': '[]any',
-    // R2 TS annotations ['Promise<LedgerEntry[]>'] -> []any
     'FetchLedgerEntriesByIdsAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchLeverageAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchLeverageTiersAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
     'FetchMarkOHLCVAsync': '[]any',
-    // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
     'FetchMarkPricesAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Market>'] -> map[string]any
     'FetchMarketAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Market>'] -> map[string]any
     'FetchMarketByIdAsync': 'map[string]any',
-    // concrete []any (ParseMarkets); TS Promise<Market[]>
     'FetchMarketsAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchMarketsFromAPIAsync': '[]any',
-    // R2 TS annotations ['Promise<Dict[]>'] -> []any
     'FetchMarketsFromCacheAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchMarketsV1Async': '[]any',
-    // R1 concrete container send in the body
     'FetchMarketsV2Async': '[]any',
-    // R1 concrete container send in the body
     'FetchMarketsV3Async': '[]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
     'FetchMyContractTradesAsync': '[]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
     'FetchMySpotTradesAsync': '[]any',
-    // concrete []any; TS Promise<Trade[]>
     'FetchMyTradesAsync': '[]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
     'FetchMyUtaTradesAsync': '[]any',
-    // concrete []any; TS Promise<OHLCV[]>
     'FetchOHLCVAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'FetchOpenOrderAsync': 'map[string]any',
-    // concrete []any; TS Promise<Order[]>
     'FetchOpenOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOpenOrdersV1Async': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOpenOrdersV2Async': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOpenSpotOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOpenSwapOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
     'FetchOptionOHLCVAsync': '[]any',
-    // R2 TS annotations ['Promise<Position[]>'] -> []any
     'FetchOptionPositionsAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchOptionUnderlyingsAsync': '[]any',
-    // TS Promise<Order>
     'FetchOrderAsync': 'map[string]any',
-    // binance.go:fetchOrderBookBody `var orderbook map[string]any = this.ParseOrderBook(...)` then `ch <-
     'FetchOrderBookAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchOrderBooksAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'FetchOrderClassicAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'FetchOrderDefaultAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'FetchOrderSupplementAsync': 'map[string]any',
-    // concrete []any sends; TS Promise<Order[]>
     'FetchOrdersAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchOrdersByIdsAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOrdersByStateAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOrdersByStatesAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOrdersByStatusAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOrdersByStatusWsAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOrdersByTypeAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOrdersClassicAsync': '[]any',
-    // R2 TS annotations ['Promise<PredictionOrder[]>'] -> []any
     'FetchOrdersHelperAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOrdersWithMethodAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOrdersWsAsync': '[]any',
-    // same FilterBy* tail
     'FetchPaginatedCallCursorAsync': '[]any',
-    // every send is `this.FilterBySinceLimit(..)`, which answers a []any or nil
     'FetchPaginatedCallDeterministicAsync': '[]any',
     'FetchPaginatedCallIncrementalAsync': '[]any',
-    // loadOutcome sends a cached/fetched outcome dict (SafeOutcome / fetchOutcome)
     'LoadOutcomeAsync': 'map[string]any',
-    // exchange_generated.go fetchPaginatedCallDynamicBody `ch <- this.FilterBySinceLimit(sortedRes, since,
     'FetchPaginatedCallDynamicAsync': '[]any',
-    // R2 TS annotations ['Promise<Position>'] -> map[string]any
     'FetchPositionAsync': 'map[string]any',
-    // concrete []any; TS Promise<Position[]>
     'FetchPositionsAsync': '[]any',
-    // R2 TS annotations ['Promise<Position[]>'] -> []any
     'FetchPositionsForSymbolAsync': '[]any',
-    // R2 TS annotations ['Promise<Position[]>'] -> []any
     'FetchPositionsRiskAsync': '[]any',
-    // R2 TS annotations ['Promise<Position[]>'] -> []any
     'FetchPositionsWsAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchPrivateTradingFeeAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchPrivateTradingFeesAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchPrivateTransactionFeesAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchPublicTradingFeeAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchPublicTradingFeesAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchPublicTransactionFeesAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawActiveMarketsAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawEventsListAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawMarketsPagedAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawMarketsByTagsAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawTopicsAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchSpotMarketsAsync': '[]any',
-    // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
     'FetchSpotOHLCVAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'FetchSpotOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
     'FetchSpotOrderTradesAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchSpotOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchSpotOrdersByStatesAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchSpotOrdersByStatusAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchSwapMarketsAsync': '[]any',
-    // concrete map[string]any; TS Promise<Ticker>
     'FetchTickerAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchTickerV1AndV2Async': 'map[string]any',
-    // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
     'FetchTickerV1Async': 'map[string]any',
-    // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
     'FetchTickerV2Async': 'map[string]any',
-    // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
     'FetchTickerV3Async': 'map[string]any',
-    // concrete map[string]any sends; TS Promise<Tickers> (Dict) is contradicted by some []any impls -> map
     'FetchTickersAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
     'FetchTickersV2Async': 'map[string]any',
-    // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
     'FetchTickersV3Async': 'map[string]any',
-    // concrete []any; TS Promise<Trade[]>
     'FetchTradesAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchTradingFeesAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchTradingLimitsAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchTransactionFeesAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchTransactionsAsync': '[]any',
-    // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchTransactionsByTypeAsync': '[]any',
-    // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchTransactionsWithMethodAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchUTAMarketsAsync': '[]any',
-    // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
     'FetchUTAOHLCVAsync': '[]any',
-    // R2 TS annotations ['Promise<Balances>'] -> map[string]any
     'FetchUtaBalanceAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchUtaCanceledAndClosedOrdersAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchUtaMarketsAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'FetchUtaOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchUtaOrdersByStatusAsync': '[]any',
-    // concrete []any; TS Promise<Transaction[]>
     'FetchWithdrawalsAsync': '[]any',
-    // R1 concrete container send in the body
     'GetAssetHistoryRowsAsync': '[]any',
-    // R1 concrete container send in the body
     'HandleAccountIndexAsync': '[]any',
-    // R1 concrete container send in the body
     'HandleUTAAndParamsAsync': '[]any',
-    // R2 TS annotations ['Promise<TransferEntry[]>'] -> []any
     'InternalFetchTransfersAsync': '[]any',
-    // R1 concrete container send in the body
     'IsUnifiedEnabledAsync': '[]any',
-    // R2 TS annotations ['Promise<Account[]>'] -> []any
     'LoadAccountsAsync': '[]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
     'LoadLeverageBracketsAsync': 'map[string]any',
-    // exchange.go:414-443 sends `this.Markets` (*sync.Map) and `result := this.SetMarkets(...)` (any); Map
     'LoadMarketsAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
     'LoadQuoteTokenAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Market>'] -> map[string]any
     'LoadTradeMarketAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
     'ModifyLeverageAndMarginModeAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'ModifyMarginHelperAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'PrepareAccountRequestWithCurrencyCodeAsync': '[]any',
-    // R1 concrete container send in the body
     'PrepareParadexDomainAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
     'QueryContractsAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'QueryTransactionsByEventTypeAsync': '[]any',
-    // R1 concrete container send in the body
     'RequestWalletHistoryRowsAsync': '[]any',
-    // R2 TS annotations ['Promise<string[]>'] -> []any
     'ResolveEventSeriesTickersAsync': '[]any',
-    // R1 concrete container send in the body
     'SetContractLeverageAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'SetLeverageAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'SetMarginAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'SignAndCancelAllOrdersAsync': '[]any',
-    // R1 concrete container send in the body
     'SignAndCancelOrderAsync': '[]any',
-    // R1 concrete container send in the body
     'SignAndCreateOrderAsync': '[]any',
-    // R1 concrete container send in the body
     'SignInWithPrivateKeyAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'TransferAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
     'TransferClassicAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
     'TransferUtaAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<FundingRates>'] -> map[string]any
     'WatchFundingRatesAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
     'WatchLiquidationsForSymbolsAsync': '[]any',
-    // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
     'WatchMarkPricesAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
     'WatchMyLiquidationsForSymbolsAsync': '[]any',
-    // TS watchMyTrades -> Promise<Trade[]>
     'WatchMyTradesAsync': '[]any',
-    // TS watchOHLCV -> Promise<OHLCV[]>
     'WatchOHLCVAsync': '[]any',
-    // R2 TS annotations ['Promise<Dictionary<Dictionary<OHLCV[]>>>'] -> map[string]any
     'WatchOHLCVForSymbolsAsync': 'map[string]any',
-    // TS watchOrders -> Promise<Order[]>
     'WatchOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
     'WatchOrdersForSymbolsAsync': '[]any',
-    // pro/binance.go watchTickerBody `ch <- ccxt.GetValue(tickers, symbol)`
     'WatchTickerAsync': 'map[string]any',
-    // `ch <- this.FilterByArray(this.Tickers, "symbol", symbols)`
     'WatchTickersAsync': 'map[string]any',
-    // TS watchTrades -> Promise<Trade[]>
     'WatchTradesAsync': '[]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
     'WatchTradesForSymbolsAsync': '[]any',
-    // exchange_helpers.go:1946 `results := make([]any, len(tasks))` ... `ch <- results`; also a `ch <- nil
     'promiseAll': '[]any',
-    // every override sends a safeDict-with-default / applyEventFetchParams list
     'FetchDydxAccountAsync': 'map[string]any',
     'FetchExtendedAccountAsync': 'map[string]any',
     'FetchEventsAsync': '[]any',
 };
-
-// methods whose `return await this.X(..)` forward preserves the value, so X's element type carries over
-export const CCXT_GO_ASYNC_FORWARD_SAFE = [
-];
 
 // receivers whose element type is not nameable (the Watch family and interface results): never typed
 export const CCXT_GO_ASYNC_ELEM_EXCLUDED = [
@@ -5688,14 +5464,9 @@ export function ccxtGoEndpointElement (goTranspiler, call) {
     return element;
 }
 
-// A receive from an implicit endpoint whose declared Go type IS the stub's EndpointResult element
-// reads the carrier's typed view: Fetch2Result fills `Value: endpointValue[T](Raw)`, and
-// endpointValue[T] is MapTyped(Raw) for map[string]any (ListTyped(Raw) for []any), so
-// `MapTyped(PanicOnError((<-this.Stub(..)).Raw))` and `(<-this.Stub(..)).Checked()` read the same
-// map after the same failure check. The element comes from the receiver's own `*_api.go` stub
-// (ccxtGoEndpointElement), never from the stub name alone.
-// A []any receive printed on one line is bound to a named holder instead (ccxtGoEndpointListReceive);
-// only a receive that spans lines (a multi-line argument literal) is printed checked here.
+// An endpoint receive whose declared Go type is the stub's EndpointResult element (from its `*_api.go` stub)
+// prints `(<-this.Stub(..)).Checked()`: Value is endpointValue[T](Raw), the same map/list after the same check.
+// One-line []any receives use a named holder instead (ccxtGoEndpointListReceive).
 function ccxtGoEndpointCheckedRead (goTranspiler, awaitNode, goType, printed) {
     const text = (printed ?? '').trim ();
     if ((awaitNode?.kind !== ts.SyntaxKind.AwaitExpression) || !text.startsWith ('(<-') || !text.endsWith (').Raw')) {
@@ -5828,10 +5599,8 @@ function ccxtGoRecvHolderName (goTranspiler, awaitNode, target: string, cache, n
 
 // ----- async []any producers received through a named holder -----
 // `var h []any = ListTyped(PanicOnError((<-this.MAsync(..))))`, where M is a method of the receiving class
-// whose every return hands back nil, a `[]any{..}` literal, a once-declared `[]any` local, a typed `[]any`
-// forward or a same-class `[]any` method: the comma-ok assertion `hRecv, _ := PanicOnError(..).([]any)`
-// answers exactly what ListTyped did (nil -> nil slice, []any -> itself), so the receive is printed as
-// `hRecv, _ := PanicOnError((<-this.MAsync(..))).([]any)` + `var h []any = hRecv`.
+// whose every return is nil or a provable `[]any`: prints `hRecv, _ := PanicOnError(..).([]any)` + `var h []any = hRecv`,
+// the comma-ok assertion answering exactly what ListTyped did.
 const CCXT_GO_ASYNC_LIST_PRODUCER_PROOF = new WeakMap ();
 
 function ccxtGoAsyncListClassMember (cls, name: string) {
@@ -6015,7 +5784,7 @@ function ccxtGoParentPastParens (node) {
 // A typed stub yields EndpointResult[T]: every receive reads `.Raw` (the value the boxed channel
 // carried), and an un-received call handed on as a value is re-boxed into `<-chan any`.
 function installCcxtGoEndpointConsumers (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoEndpointConsumersInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoEndpointConsumersInstalled')) {
         return;
     }
     const printAwait = goTranspiler.printAwaitExpression;
@@ -6039,7 +5808,6 @@ function installCcxtGoEndpointConsumers (goTranspiler) {
         const lead = /^\s*/.exec (printed)[0];
         return lead + 'EndpointRaw(' + printed.slice (lead.length) + ')';
     };
-    goTranspiler.__ccxtGoEndpointConsumersInstalled = true;
 }
 
 // `const x = await Promise.all ([...])`: promiseAll sends a fresh non-nil `[]any` or a panic string
@@ -6329,7 +6097,7 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
     } else if (awaitNode.parent?.kind === ts.SyntaxKind.ReturnStatement) {
         // `return await this.X()` re-boxes through BoxAbsent (installCcxtGoAsyncForwardRebox); watch* results can be
         // cache objects that MapTyped/ListTyped would drop, so they are never forwarded typed
-        if ((CCXT_GO_ASYNC_FORWARD_SAFE.indexOf (method) < 0) && /^(un)?watch/i.test (method)) {
+        if (/^(un)?watch/i.test (method)) {
             return undefined;
         }
     }
@@ -6356,7 +6124,7 @@ function ccxtGoElideBoxedForward (printed) {
 }
 
 function installCcxtGoAsyncForwardRebox (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoAsyncForwardReboxInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoAsyncForwardReboxInstalled')) {
         return;
     }
     const printReturn = goTranspiler.printReturnStatement;
@@ -6376,17 +6144,15 @@ function installCcxtGoAsyncForwardRebox (goTranspiler) {
             return ind + 'if ' + m[2] + ' == nil {\n' + inner + 'ch <- nil\n' + ind + '} else {\n' + inner + 'ch <- ' + m[2] + tail + '\n' + ind + '}';
         });
     };
-    goTranspiler.__ccxtGoAsyncForwardReboxInstalled = true;
 }
 
 function installCcxtGoAsyncReceiveUnbox (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoAsyncReceiveUnboxInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoAsyncReceiveUnboxInstalled')) {
         return;
     }
     goTranspiler.goAwaitReceiveUnbox = function (awaitNode, printedInitializer) {
         return ccxtGoAwaitReceiveUnbox (this, awaitNode, printedInitializer);
     };
-    goTranspiler.__ccxtGoAsyncReceiveUnboxInstalled = true;
 }
 
 // R-FIELD: `this.<field>` reads of BaseExchange fields declared concretely in go/v4/exchange.go
@@ -6415,7 +6181,7 @@ function ccxtGoBaseFieldType (goTranspiler, initializer, printedValue) {
 // `request[k] = c ? Math.min (x, m) : x`: a pointer arm of a ternary stored as a value lands in
 // the same `any` dictionary as the bare store, so it reads like goGetArgPointerStoredAsValue
 function installCcxtGoGetArgTernaryStore (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoGetArgTernaryStoreInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoGetArgTernaryStoreInstalled')) {
         return;
     }
     const shipped = goTranspiler.goGetArgPointerStoredAsValue;
@@ -6437,14 +6203,13 @@ function installCcxtGoGetArgTernaryStore (goTranspiler) {
         }
         return shipped.call (this, whole, param);
     };
-    goTranspiler.__ccxtGoGetArgTernaryStoreInstalled = true;
 }
 
 // `const r = c ? this.safeMarket (id, market) : market` / `let r: Market = market`: the `any` alias
 // of a GetArgMap-bound map is nil-tested through IsEqual, and derefScalar reads a nil map box as
 // nil, so the alias's uses follow the unboxed rules (an alias with a native nil test is excluded)
 function installCcxtGoGetArgMapAlias (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoGetArgMapAliasInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoGetArgMapAliasInstalled')) {
         return;
     }
     const shipped = goTranspiler.goGetArgUsesAreSafe;
@@ -6453,16 +6218,12 @@ function installCcxtGoGetArgMapAlias (goTranspiler) {
             && (param?.kind === ts.SyntaxKind.VariableDeclaration) && !this.goAnyLocalHoldsNonPointer (param);
         return shipped.call (this, body, param, name, goType, nilable, seen, alias ? false : boxed);
     };
-    goTranspiler.__ccxtGoGetArgMapAliasInstalled = true;
 }
 
-// `since + d * 1000 - 1`: a GetArg pointer as an operand of a `+` the printer emits as the
-// runtime Add(...) helper, nested (through parentheses) inside the Subtract/Multiply/Divide/Mod
-// or comparison chain the shipped predicate already admits, or as a whole printed Add call.
-// Add derefScalar()s both operands at entry, exactly like those helpers, so the typed pointer
-// reads as the raw value did.
+// `since + d * 1000 - 1`: a GetArg pointer as an operand of a printed Add(...) inside an admitted arithmetic or
+// comparison chain (or a whole Add call); Add derefScalar()s its operands like those helpers do.
 function installCcxtGoGetArgAddArithmetic (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoGetArgAddArithmeticInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoGetArgAddArithmeticInstalled')) {
         return;
     }
     const shipped = goTranspiler.goGetArgPointerInHelperArithmetic;
@@ -6502,7 +6263,6 @@ function installCcxtGoGetArgAddArithmetic (goTranspiler) {
         addParents.set (parent, isAdd);
         return isAdd;
     };
-    goTranspiler.__ccxtGoGetArgAddArithmeticInstalled = true;
 }
 
 export { ccxtGoTupleResultJoin };
@@ -6625,7 +6385,7 @@ function installCcxtGoUnifiedInt64Params (goTranspiler, table) {
 // An overloaded callee (`marketSymbols`) resolves to its first signature, which carries no
 // defaults; the Go body is printed from the implementation, so its defaults decide GetArg binding.
 function installCcxtGoGetArgOverloadDefaults (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoGetArgOverloadDefaultsInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoGetArgOverloadDefaultsInstalled')) {
         return;
     }
     const shipped = goTranspiler.goGetArgPositionIsDefaulted;
@@ -6647,7 +6407,6 @@ function installCcxtGoGetArgOverloadDefaults (goTranspiler) {
         const param = (impls.length === 1) ? impls[0].parameters?.[argIndex] : undefined;
         return (param?.initializer !== undefined) && (param.dotDotDotToken === undefined);
     };
-    goTranspiler.__ccxtGoGetArgOverloadDefaultsInstalled = true;
 }
 
 // A unified string argument the printer proves a non-nil `*string` (checker narrowing or a
@@ -6783,10 +6542,8 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoTernaryLiftJoin (goTranspiler);
     installCcxtGoTernaryMapJoin (goTranspiler);
     installCcxtGoNilDeclaredParseNumberJoins (goTranspiler);
-    // the emitted signature of the same helpers: `any` → `*string` for the methods
-    // the predicate above accepts, so the coercion and the local typing can never
-    // disagree. Wrapping printMethodDefinition (not the file text) keeps it off
-    // every other method and matches what the classifier sees.
+    // the emitted signature of the same helpers: `any` → `*string` for the methods the predicate above accepts,
+    // so the coercion and the local typing never disagree
     const upstreamMethodDefinition = goTranspiler.printMethodDefinition;
     goTranspiler.printMethodDefinition = function (node, identation) {
         const methodDef = upstreamMethodDefinition.call (this, node, identation);
@@ -6850,7 +6607,7 @@ function ccxtGoCallDestructuredElement (decl) {
 }
 
 function installCcxtGoDestructuredPointerBoxes (goTranspiler) {
-    if ((goTranspiler === undefined) || goTranspiler.__ccxtGoDestructuredPointerBoxesInstalled) {
+    if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoDestructuredPointerBoxesInstalled')) {
         return;
     }
     const shipped = goTranspiler.goAnyLocalHoldsPointer;
@@ -6885,7 +6642,6 @@ function installCcxtGoDestructuredPointerBoxes (goTranspiler) {
             visiting.delete (decl);
         }
     };
-    goTranspiler.__ccxtGoDestructuredPointerBoxesInstalled = true;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -7677,15 +7433,14 @@ function ccxtGoStringConcatJoinIsSafe (goTranspiler, scope, declaration, varName
 }
 
 function ccxtGoStringConcatReadVetoes (n, parent) {
-    if (((parent.kind === ts.SyntaxKind.PrefixUnaryExpression) || (parent.kind === ts.SyntaxKind.PostfixUnaryExpression))
-        && ((parent.operator === ts.SyntaxKind.PlusPlusToken) || (parent.operator === ts.SyntaxKind.MinusMinusToken))) {
-        return true;
-    }
-    if ((parent.kind === ts.SyntaxKind.SpreadElement) || ((parent.kind === ts.SyntaxKind.CallExpression) && (parent.expression === n))
-        || isDestructuringTarget (n)) {
-        return true;
-    }
-    return false;
+    return ccxtGoValueUseVetoed (n, parent) || isDestructuringTarget (n);
+}
+
+// `x++` / `x--`, `...x`, `x(...)`: uses no typed scalar local survives
+function ccxtGoValueUseVetoed (n, parent) {
+    return (((parent.kind === ts.SyntaxKind.PrefixUnaryExpression) || (parent.kind === ts.SyntaxKind.PostfixUnaryExpression))
+        && ((parent.operator === ts.SyntaxKind.PlusPlusToken) || (parent.operator === ts.SyntaxKind.MinusMinusToken)))
+        || (parent.kind === ts.SyntaxKind.SpreadElement) || ((parent.kind === ts.SyntaxKind.CallExpression) && (parent.expression === n));
 }
 
 function installCcxtGoStringConcatJoin (goTranspiler) {
@@ -8439,16 +8194,10 @@ function ccxtGoScalarLiftVetoed (goTranspiler, declaration, varName, goType) {
                     return;
                 }
             }
-            if (((parent.kind === ts.SyntaxKind.PrefixUnaryExpression) || (parent.kind === ts.SyntaxKind.PostfixUnaryExpression))
-                && ((parent.operator === ts.SyntaxKind.PlusPlusToken) || (parent.operator === ts.SyntaxKind.MinusMinusToken))) {
-                vetoed = true; // `x++`
-                return;
-            }
-            if ((parent.kind === ts.SyntaxKind.SpreadElement)
+            if (ccxtGoValueUseVetoed (n, parent)
                 || ((parent.kind === ts.SyntaxKind.ArrayLiteralExpression) && (parent.parent?.left === parent))
-                || ((parent.kind === ts.SyntaxKind.CallExpression) && (parent.expression === n))
                 || ((parent.kind === ts.SyntaxKind.PropertyAccessExpression) && (parent.name === n))) {
-                vetoed = true; // `...x`, `[x] = ...`, `x(...)`, `o.x`
+                vetoed = true; // also `[x] = ...`, `o.x`
                 return;
             }
             if ((parent.kind === ts.SyntaxKind.BinaryExpression)
@@ -8460,8 +8209,6 @@ function ccxtGoScalarLiftVetoed (goTranspiler, declaration, varName, goType) {
                 vetoed = true; // `x == nil` does not compile against a Go string
                 return;
             }
-            const container = n;
-            const top = container?.parent;
         }
         n?.forEachChild (visit);
     };
