@@ -7950,6 +7950,10 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-61k: a middle key of `this.balance|options[..][k][..] = v` (a hop below and above it): the hop is
         // `get_value_mut(.., &<box>)`, whose key ccxt's chain passes never read (they take the receiver only); lent by reference
         if ((kind === 'str' || kind === 'ostr') && this.rust61kNestedFieldMiddleKey(n)) return 'mkey';
+        // ral-62k: the last key of a statement write `x[..][n] = v` on a plain local (not `this`): the helper chain
+        // `add_element_to_object(get_value_mut(&mut x, ..), &<box>, v)` lends the box; ccxt's field-chain passes read
+        // only `self.balance|ohlcvs|options` receivers
+        if ((kind === 'str' || kind === 'ostr') && this.rust62kLocalNestedLastKey(n)) return 'mkey';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -9117,6 +9121,33 @@ export class RustTranspiler extends BaseTranspiler {
             return `add_element_to_object(get_value_mut(&mut self.${field}, &Value::from(${uname}${ukind === 'str' ? '.as_str()' : '.as_deref()'})), &${lastKey}, ${value})`;
         }
         return insert;
+    }
+
+    /** ral-62k: `n` is the last key of a statement write `x[..][n] = v` whose chain root is a plain local identifier
+     *  (two or more hops) and whose value never names `n` or `this`. */
+    rust62kLocalNestedLastKey(n: any): boolean {
+        const keyNode: any = this.rustKeyWrapped(n);
+        const access: any = keyNode.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== keyNode || !isElementAccessExpression(access.expression)) return false;
+        const write: any = access.parent;
+        if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        let root: any = access.expression;
+        while (isElementAccessExpression(root)) {
+            const k: any = this.rustSkipWrappers(root.argumentExpression);
+            if (k === undefined || (!isStringLiteral(k) && !isNumericLiteral(k))) return false;
+            root = root.expression;
+        }
+        if (!isIdentifier(root) || this.rustSymbolOf(root) === this.rustSymbolOf(n)) return false;
+        const rd: any = this.rustDeclarationOfIdentifier(root);
+        if (rd === undefined || !isVariableDeclaration(rd)) return false;
+        const own = this.rustSymbolOf(n);
+        let named = false;
+        const visit = (x: any) => {
+            if (x.kind === SyntaxKind.ThisKeyword || (isIdentifier(x) && this.rustSymbolOf(x) === own)) named = true;
+            x.forEachChild(visit);
+        };
+        visit(write.right);
+        return !named;
     }
 
     /** ral-61k: `n` keys a middle hop of a statement write `this.balance|options[..][n][..] = v`: an element read whose
@@ -11857,12 +11888,32 @@ export class RustTranspiler extends BaseTranspiler {
             if (enumerated && this.rustSafeCurrencyCodeInit(local.initializer)) return this.rustScalarInsertKeyUse(n);
             // ral-61k: the only key reads of the map are the very slot `m[k]` read inside the value of this write `m[k] = f(m[k])`
             if (enumerated && keyRead && isElementAccessExpression(this.rustSkipWrappers(local.initializer)) && this.rust61kSelfReassignOnlyRead(declaration, name, n)) return this.rustScalarInsertKeyUse(n);
+            // ral-62k: every key read of the map is keyed by this very binding (anywhere after its write, e.g. safeBalance
+            // `entry['debt'] = debtBalance[code]`): each prints `m.get(k.as_deref().unwrap_or(""))` (rustBearerTypedStrReadKey)
+            if (enumerated && keyRead && isElementAccessExpression(this.rustSkipWrappers(local.initializer)) && this.rust62kOwnKeyOnlyRead(declaration, name, n)) return this.rustScalarInsertKeyUse(n);
             if (enumerated) return !keyRead && (isElementAccessExpression(this.rustSkipWrappers(local.initializer)) || this.rustTbNetworkCodeInit(local.initializer)
                 || this.rust55xGuardedSafeStringKey(n, local))
                 && this.rustScalarInsertKeyUse(n);
             return this.rustBearerWriteKeyOk(n, name) || this.rustScalarInsertKeyUse(n);
         }
         return this.rustScalarInsertKeyUse(n);
+    }
+
+    /** ral-62k: every element read of the map `m` (declared by `declaration`) is keyed by `n`'s own binding; write targets
+     *  (and hops of one) are not reads. */
+    rust62kOwnKeyOnlyRead(declaration: any, name: string, n: any): boolean {
+        const own = this.rustSymbolOf(n);
+        if (own === undefined) return false;
+        let ok = true;
+        this.rustLocalUsesAll(declaration, name, false, (u) => {
+            const acc: any = u.parent;
+            if (!isElementAccessExpression(acc) || acc.expression !== u) return true;
+            if ((isBinaryExpression(acc.parent) && acc.parent.left === acc) || this.isNativeWriteTargetBase(u)) return true;
+            const kk: any = this.rustSkipWrappers(acc.argumentExpression);
+            if (kk === undefined || !isIdentifier(kk) || this.rustSymbolOf(kk) !== own) ok = false;
+            return true;
+        });
+        return ok;
     }
 
     /** ral-61k: `n` keys a read `m[n]` inside `v` of the statement write `m[n] = v` (same map and key bindings) on a typed

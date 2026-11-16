@@ -20706,8 +20706,8 @@ describe('ral-61k: nested-write keys (htx parseCurrency middle options key; whit
         expect(out).toContain('hist.insert(code.as_deref().unwrap_or("null").to_string(), __be_tmp)');
         expect(out).not.toContain('stringify_param(&code)');
     });
-    test('negative: another read of the map by the key outside the write keeps it Value', () => {
-        const out = write ('61k-self-neg', selfRe ('            this.hold (fees[code]);\n'));
+    test('negative: another read of the map at another key outside the write keeps it Value', () => {
+        const out = write ('61k-self-neg', selfRe ('            this.hold (fees[\'USDT\']);\n'));
         expect(out).toContain("let mut code: Value = codes");
     });
 });
@@ -20975,5 +20975,49 @@ describe('ral-61x: a nil-declared Str accumulator (`x = a + b` then `x += ..`) t
     test('negative: an accumulator also written from an untyped element stays Value', () => {
         const { out } = build ('ral61x-neg', encode.replace ("result = key + '=' + value;", 'result = value;'));
         expect(out).not.toContain('let mut result: Option<String>');
+    });
+});
+
+describe('ral-62k: the key of an enumerated map read back only by that same key (base safeBalance `debtBalance[code]`)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    parseNumber (x: any): any { return x; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = (otherRead: string) => "    balanceOf (balances: Dict) {\n        const codes = Object.keys (balances);\n        const debtBalance: Dict = {};\n        for (let i = 0; i < codes.length; i++) {\n            const code = codes[i];\n            const debt = this.safeString (balances[code], 'debt');\n            const entry: Dict = {};\n            if (debt !== undefined) {\n                debtBalance[code] = this.parseNumber (debt);\n                entry['debt'] = debtBalance[code];\n            }\n" + otherRead + "        }\n        const all = Object.keys (debtBalance);\n        return all.length;\n    }\n";
+    test('insert and later read both take the typed key text, no stringify_param', () => {
+        const out = write ('62k-own', body (''));
+        expect(out).not.toMatch(/let mut code: Value = /);
+        expect(out).toContain('debtBalance.insert(code.as_deref().unwrap_or("null").to_string(), ');
+        expect(out).toContain('debtBalance.get(code.as_deref().unwrap_or(""))');
+        expect(out).not.toContain('stringify_param(&code)');
+    });
+    test('negative: a read of the same map at a literal key keeps the boxed key', () => {
+        const out = write ('62k-own-neg', body ("            entry['x'] = debtBalance['BTC'];\n"));
+        expect(out).toMatch(/let mut code: Value = /);
+    });
+});
+
+describe('ral-62k: the last key of a nested write on a plain local lends its box (digifinex / hitbtc networkCode)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    networkIdToCode (id: Str, code: Str = undefined): Str { return id; }\n    hold (x: any): any { return x; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = (value: string) => "    parse (entry: Dict, fees: Dict) {\n        const fee = fees['BTC'];\n        const networkId = this.safeString (entry, 'chain');\n        const networkCode = this.networkIdToCode (networkId);\n        if (networkCode !== undefined) {\n            fee['networks'][networkCode] = " + value + ";\n        }\n        return fee;\n    }\n";
+    test('the key is Option<String> and the helper chain borrows its box', () => {
+        const out = write ('62k-nk', body ("{ 'withdraw': 1 }"));
+        expect(out).toContain('let mut networkCode: Option<String> = ');
+        expect(out).toContain('&Value::from(networkCode.as_deref())');
+    });
+    test('negative: a value that names the key keeps it Value', () => {
+        const out = write ('62k-nk-neg', body ("this.hold (networkCode)"));
+        expect(out).toMatch(/let mut networkCode: Value = /);
     });
 });
