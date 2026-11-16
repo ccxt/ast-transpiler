@@ -3469,7 +3469,10 @@ export class RustTranspiler extends BaseTranspiler {
             // `Value` form printed `x.clone()`: lending there (`Value::from(x.as_deref())`) costs that same copy
             const literalSlot = (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === n) || this.rustDictWriteValue(n)
                 || (isArrayLiteralExpression(up) && !(isBinaryExpression(up.parent) && up.parent.left === up));
-            if ((isCallExpression(up) && up.expression !== n && !selfArg) || up?.kind === SyntaxKind.NewExpression) ok = false;
+            // ral-67e: a `Precise.string*` operand at the local's provable last use moves into its box (no copy); before
+            // it the box would clone, so it stays a veto there
+            const preciseOperand = isCallExpression(up) && up.expression !== n && this.rustScalarPreciseCall(up) && this.rustLocalLastUse(n, declaration);
+            if ((isCallExpression(up) && up.expression !== n && !selfArg && !preciseOperand) || up?.kind === SyntaxKind.NewExpression) ok = false;
             else if (!selfArg && !literalSlot && !this.rustScalarBoxMoves(n, form, declaration)) ok = false;
             return true;
         });
@@ -7194,7 +7197,15 @@ export class RustTranspiler extends BaseTranspiler {
                 && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && this.rustScalarSelfArgBox(n) && this.rustFormatLendLocal(declaration))
                 && !(form === 'box' && trial === 'str' && !this.rustStrNoLend && (this.rustClockString(this.unwrapParens(declaration.initializer)) || this.rustIdString(this.unwrapParens(declaration.initializer))) && this.rustLendSlot(n))
                 // ud: a reader string boxed at a lending slot lends there (the one copy the `Value` clone made)
-                && !(form === 'box' && !this.rustStrNoLend && this.rustUdReaderStr(declaration.initializer) && this.rustLendSlot(n) && this.rustUdLent.add(declaration))) return false;
+                && !(form === 'box' && !this.rustStrNoLend && this.rustUdReaderStr(declaration.initializer) && this.rustLendSlot(n) && this.rustUdLent.add(declaration))
+                // ral-67e: past a same-named sibling binding, a box at a by-value slot (literal value / element, dict write;
+                // never a `this.` argument: those keep their own lend rules) before the last use is where the `Value` form printed
+                // `x.clone()`: boxing there adds no copy
+                && !(form === 'box' && !this.rustScalarSelfArgBox(n) && this.rustLendSlot(n))
+                // ral-67e: a ternary arm (`c ? y : x`) before the last use: the `Value` form cloned it there (`x.clone()`) too
+                && !(form === 'box' && isConditionalExpression(n.parent) && n.parent.condition !== n && !this.rustLocalLastUse(n, declaration))
+                // ral-67e: a `Precise.string*` operand is lent (`&x`): the call borrows its operands, no copy in either form
+                && !(form === 'xbox' && isCallExpression(n.parent) && Array.from(n.parent.arguments).includes(n) && this.rustScalarPreciseCall(n.parent))) return false;
             // ral-43b: a string concat operand prints inside the concat's own `format!` (native Display of the typed local:
             // the bare `String`, or `as_deref().unwrap_or("null")` = the Display of the `Null` box): no boxed operand text
             // reaches a push / write pass, and the concat is a `String` whatever this local's type

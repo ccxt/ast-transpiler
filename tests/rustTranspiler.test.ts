@@ -1896,6 +1896,17 @@ ${body}
             expect(kept).toContain('let mut code: Value = Value::Null;');
         });
 
+        test('ral-67e: a box-only nil string whose last use is a Precise operand moves into that box', () => {
+            const out = transpiler.transpileRust(listCls(`        let code = undefined;
+        if (kind === 'a') { code = parts[1]; } else { code = 'USD'; }
+        const inner = { 'currency': code };
+        const n = Precise.stringAbs (code);
+        return { 'inner': inner, 'n': n };`)).content;
+            expect(out).toContain('let mut code: Option<String> = None;');
+            expect(out).toContain('m.insert("currency".to_string(), Value::from(code.as_deref()));');
+            expect(out).toMatch(/Precise::stringAbs\(&code\.map\(Value::from\)\.unwrap_or\(Value::Null\)\)/);
+        });
+
         test('a read outside the proven sinks keeps the Value box', () => {
             const out = transpiler.transpileRust(cls(`        let s = undefined;
         s = 'x';
@@ -22793,5 +22804,95 @@ class A {
     test('negative: an `any`-declared empty local keeps its Value box', () => {
         const out = transpiler.transpileRust(cls('let onePlus: any = undefined;')).content;
         expect(out).toContain('let mut onePlus: Value = Value::Null;');
+    });
+});
+
+describe('ral-67e: same-named sibling-block declarations are typed by their own scope', () => {
+    test('htx parseCancelOrders shape: a string element whose sibling-loop twin is a Dict boxes at both literal values', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-67e-'));
+        try {
+            const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] { return o; }\n    hold (x: any): any { return x; }\n}\n";
+            const venue = [
+                "import Exchange from './base/Exchange.js';",
+                "import type { Dict } from './base/Exchange.js';",
+                'export type Strings = string[] | undefined;',
+                'export default class venue extends Exchange {',
+                '    parseCancels (orders: Dict) {',
+                "        const success: Strings = this.safeList (orders, 'success', []);",
+                "        const data: Dict[] = this.safeList (orders, 'data', []);",
+                '        const result = [];',
+                '        for (let i = 0; i < data.length; i++) {',
+                '            const order = data[i];',
+                "            result.push (this.hold ({ 'info': order }));",
+                '        }',
+                '        for (let i = 0; i < success.length; i++) {',
+                '            const order = success[i];',
+                "            result.push (this.hold ({ 'info': order, 'id': order }));",
+                '        }',
+                '        return result;',
+                '    }',
+                '}',
+                '',
+            ].join('\n');
+            fs.mkdirSync (path.join (root, 'cancels', 'ts/src/base'), { recursive: true });
+            fs.writeFileSync (path.join (root, 'cancels', 'ts/src/base/Exchange.ts'), base);
+            fs.writeFileSync (path.join (root, 'cancels', 'ts/src/venue.ts'), venue);
+            const out = transpiler.transpileRustByPath (path.join (root, 'cancels', 'ts/src/venue.ts')).content;
+            expect(out).toContain('let mut order: Option<String> = success.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
+            expect(out).toContain('m.insert("info".to_string(), Value::from(order.as_deref()));');
+            expect(out).toContain('m.insert("id".to_string(), Value::from(order.as_deref()));');
+            // the sibling twin keeps its own (Dict) decision
+            expect(out).toContain('let mut order: Option<crate::value::Dict> = data.get(i as usize)');
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
+    });
+    const fx = (dir: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-67e-'));
+        const files: Record<string, string> = {
+            'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o; }\n    hold (x: any): any { return x; }\n}\n",
+            'ts/src/venue.ts': [
+                "import Exchange from './base/Exchange.js';",
+                "import type { Dict, Str } from './base/Exchange.js';",
+                'export default class venue extends Exchange {',
+                '    parseB (response: Dict, flag: boolean) {',
+                "        const a = this.safeString (response, 'a');",
+                "        const b = this.safeString (response, 'b');",
+                '        if (flag) {',
+                '            const total = (a !== undefined) ? a : b;',
+                '            const free = (b !== undefined) ? b : total;',
+                "            return { 'free': free, 'total': total };",
+                '        }',
+                "        const rows = this.safeList (response, 'rows', []);",
+                '        const result: Dict = {};',
+                '        for (let i = 0; i < rows.length; i++) {',
+                "            const total = this.hold (rows[i]);",
+                "            result['t'] = total;",
+                '        }',
+                '        return result;',
+                '    }',
+                '}',
+                '',
+            ].join('\n'),
+        };
+        for (const [rel, text] of Object.entries (files)) {
+            const out = path.join (root, dir, rel);
+            fs.mkdirSync (path.dirname (out), { recursive: true });
+            fs.writeFileSync (out, text);
+        }
+        return root;
+    };
+    test('a string ternary local whose sibling twin is a Value boxes at its literal-value hand-off', () => {
+        const root = fx ('sib');
+        try {
+            const out = transpiler.transpileRustByPath (path.join (root, 'sib', 'ts/src/venue.ts')).content;
+            expect(out).toMatch(/let mut total: Option<String> = \(if \(a\.is_some\(\)\) \{ a\.clone\(\) \} else \{ b\.clone\(\) \}\);/);
+            expect(out).toMatch(/let mut free: Option<String> = \(if \(b\.is_some\(\)\) \{ b\.clone\(\) \} else \{ total\.clone\(\) \}\);/);
+            expect(out).not.toMatch(/let mut free: Value/);
+            // the sibling twin stays the Value it is
+            expect(out).toMatch(/let mut total: Value = self\.hold\(/);
+        } finally {
+            fs.rmSync (root, { recursive: true, force: true });
+        }
     });
 });
