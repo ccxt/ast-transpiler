@@ -5134,7 +5134,7 @@ export class RustTranspiler extends BaseTranspiler {
         const handOff = nativeUses === 0 && boxed >= 1 && (copied === 0 || !strKind || (!this.rustStrNoLend && (this.rustStrLendSites(declaration)
             || (kind === 'str' && this.rustClockString(this.unwrapParens(declaration.initializer)) && this.rustReaderLendBoxes(declaration))
             || (this.rustScOwnSelfCall(declaration.initializer) && !this.rustOdExcludedCallee(declaration.initializer) && !this.rustVenueLocalHandedOn(declaration) && this.rustReaderLendBoxes(declaration)))))
-            && !this.rustStrReturnedLocal(declaration, scope);
+            && !this.rust66s3StrReturnedVeto(declaration, scope);
         const storeOnly = guarded && nativeUses === 0 && boxed === 1 && !handOff;
         const unused = typedUses === 0 && !handOff && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
         // a string handed once to a ws client call and nothing else stays a `Value`
@@ -5156,16 +5156,16 @@ export class RustTranspiler extends BaseTranspiler {
         // pg: a string the precision formatters write (or a precision override returns) stays boxed where it is a `Precise.*` operand
         // uc: unless every copying box is a lending slot or a `Precise` operand: the string is lent there (`&Value::from(x.as_deref())`)
         if (strKind && copied > 0 && this.rustPrecisionTouched(declaration, scope) && this.rustPreciseOperandLocal(declaration)) {
-            if (this.rustStrNoLend || this.rustStrReturnedLocal(declaration, scope) || this.rustVenueLocalHandedOn(declaration) || this.rustReaderDeclTooLong(declaration, kind) || !this.rustReaderLendBoxes(declaration, false, true)) return undefined;
+            if (this.rustStrNoLend || this.rust66s3StrReturnedVeto(declaration, scope) || this.rustVenueLocalHandedOn(declaration) || this.rustReaderDeclTooLong(declaration, kind) || !this.rustReaderLendBoxes(declaration, false, true)) return undefined;
             this.rustStrLentLocals.add(declaration);
         }
         if (this.rustVenueScalarSource(declaration.initializer) && ((boxed > 0 && !handOff) || this.rustVenueLocalHandedOn(declaration))) {
             // od: unless every copying box sits at a lending slot (`Value::from(x.as_deref())`: the copy the `Value` clone made)
-            if (!strKind || this.rustStrNoLend || this.rustOdExcludedCallee(declaration.initializer) || this.rustStrReturnedLocal(declaration, scope) || this.rustVenueLocalHandedOn(declaration) || this.rustReaderDeclTooLong(declaration, kind) || !this.rustReaderLendBoxes(declaration)) return undefined;
+            if (!strKind || this.rustStrNoLend || this.rustOdExcludedCallee(declaration.initializer) || this.rust66s3StrReturnedVeto(declaration, scope) || this.rustVenueLocalHandedOn(declaration) || this.rustReaderDeclTooLong(declaration, kind) || !this.rustReaderLendBoxes(declaration)) return undefined;
             this.rustStrLentLocals.add(declaration);
         }
         // od: a venue string whose copying boxes all sit at lending slots is lent there (`Value::from(x.as_deref())`: the copy the `Value` clone made)
-        const venueLent = kind === 'ostr' && copied > 0 && !this.rustStrNoLend && this.rustVenueTypedCall(declaration.initializer) !== undefined && !this.rustOdExcludedCallee(declaration.initializer) && !this.rustStrReturnedLocal(declaration, scope)
+        const venueLent = kind === 'ostr' && copied > 0 && !this.rustStrNoLend && this.rustVenueTypedCall(declaration.initializer) !== undefined && !this.rustOdExcludedCallee(declaration.initializer) && !this.rust66s3StrReturnedVeto(declaration, scope)
             && !this.rustVenueLocalHandedOn(declaration) && !this.rustReaderDeclTooLong(declaration, kind) && this.rustReaderLendBoxes(declaration);
         if (venueLent) this.rustStrLentLocals.add(declaration);
         else if (this.rustVenueTypedCostly(declaration, kind, copied)) return undefined;
@@ -5189,7 +5189,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ud: a local seeded from a venue override of a native-`Str` base method never copies where the `Value` moved
         // (lent at its copying boxes when every one sits at a lending slot: the copy the `Value` clone made)
         if (strKind && copied > 0 && this.rustUdOverrideStrSeed(declaration.initializer)) {
-            if (this.rustStrNoLend || this.rustStrReturnedLocal(declaration, scope) || !this.rustUdOverrideLendBoxes(declaration)) return undefined;
+            if (this.rustStrNoLend || this.rust66s3StrReturnedVeto(declaration, scope) || !this.rustUdOverrideLendBoxes(declaration)) return undefined;
             this.rustStrLentLocals.add(declaration);
         }
         // ud: a base string reader copied only at lending slots lends there (the one copy the `Value` clone made)
@@ -5394,6 +5394,38 @@ export class RustTranspiler extends BaseTranspiler {
         });
         return keyed;
     }
+
+    // ── ral-66s3: per-venue results returned whole ──
+    /** ral-66s3: a `const x = this.m (..)` local whose venue callee declares a `Str` return (rustVenueStrCall), returned
+     *  whole by its own sync venue method whose head prints `-> Option<String>` (rustNativeStrReturnHead): as an
+     *  `Option<String>` the `return x` is the payload itself (rustVenueStrReturnLocal), so the return is no copy and the
+     *  string-return veto does not apply. Decided from the AST: const declaration, venue callee, every return of the
+     *  local a bare `return x` in that method. */
+    rust66s3VenueStrReturnedWhole(declaration, scope): boolean {
+        if (scope?.kind !== SyntaxKind.MethodDeclaration || !isIdentifier(declaration?.name) || (declaration.parent.flags & NodeFlags.Const) === 0) return false;
+        if (this.rustTestTierSource(declaration) || !this.rustVenueStrCall(this.unwrapParens(declaration.initializer)) || !this.rustNativeStrReturnHead(scope)) return false;
+        let ok = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (isReturnStatement(n.parent) && n.parent.expression === n && findAncestor(n.parent.parent, isFunctionLike) !== scope) ok = false;
+            return true;
+        });
+        return ok;
+    }
+
+    /** The string-return veto of the hand-off rules, less the ral-66s3 returned-whole venue results. */
+    rust66s3StrReturnedVeto(declaration, scope): boolean {
+        return this.rustStrReturnedLocal(declaration, scope) && !this.rust66s3VenueStrReturnedWhole(declaration, scope);
+    }
+
+    /** ral-66s3: `x` read in a `return x` of the method owning a returned-whole venue `Str` local. */
+    rust66s3ReturnedWholeRead(n): boolean {
+        if (!isReturnStatement(n.parent) || n.parent.expression !== n) return false;
+        const declaration: any = this.rustDeclaredNode(n);
+        if (declaration === undefined || !isVariableDeclaration(declaration)) return false;
+        const scope: any = this.rustEnclosingFunction(declaration);
+        return scope === findAncestor(n.parent.parent, isFunctionLike) && this.rust66s3VenueStrReturnedWhole(declaration, scope);
+    }
+    // ── end ral-66s3 ──
 
     /** A local some `return` of a method with a declared string return hands back as-is. */
     rustStrReturnedLocal(declaration, scope): boolean {
@@ -13318,6 +13350,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // a local typed only through a per-venue string parameter keeps the decision its boxed form had
         if (this.rustVenueStrReturnLocal(inner) !== undefined && this.rustVenueStrParamLocal(inner)) return true;
+        // ral-66s3: a returned-whole venue `Str` result converts in either form (payload as `Option<String>`, checker-string `Value` boxed)
+        if (isIdentifier(inner) && this.rust66s3ReturnedWholeRead(inner)) return true;
         // a base-tier `Str` method's override returning a parameter the checker narrowed to `undefined` (it reads `None`)
         // ral-52k: the same for a venue `Str` method of the kept-arm table (hyperliquid `updateSpotCurrencyCode`: `return code` under `code === undefined`)
         if (isIdentifier(inner) && (this.rustBaseNativeStrMethod(findAncestor(inner, isFunctionLike) as any) || this.rustVenueKeptStrArm(findAncestor(inner, isFunctionLike) as any))

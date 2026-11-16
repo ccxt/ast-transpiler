@@ -22613,3 +22613,33 @@ describe('ral-66s2: a logical local over `x === true` / `x !== false` leaves of 
         expect(out).toMatch(/let mut active: Value = /);
     });
 });
+
+describe('ral-66s3: a venue `Str` result returned whole by its own `-> Option<String>` method is the payload itself', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    market (s: string): Dict { return {}; }\n}\n";
+    const build = (name: string, tail: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    dexOf (market: Dict): Str {\n        const id = market['id'];\n        if (id === undefined) {\n            return undefined;\n        }\n        return 'dex' + id;\n    }\n" +
+            "    dexFrom (symbols: string[]): Str {\n        const first = this.market (symbols[0]);\n        const dexName = this.dexOf (first);\n        for (let i = 1; i < symbols.length; i++) {\n            const current = this.dexOf (this.market (symbols[i]));\n            if (current !== dexName) {\n                throw new Error ('mixed');\n            }\n        }\n" + tail + "    }\n}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('the local is Option<String>, compared natively and returned as is', () => {
+        const out = build ('ral66s3-ret', "        return dexName;\n");
+        expect(out).toMatch(/fn dexFrom\([^)]*\) -> Option<String>/);
+        expect(out).toContain('let mut dexName: Option<String> = self.dexOf(');
+        expect(out).not.toContain('let mut dexName: Value');
+        expect(out).toContain('return dexName;');
+    });
+    test('a local also lent into a map before the return lends there (one copy, as the Value clone made)', () => {
+        const out = build ('ral66s3-ret-lend', "        const r: Dict = { 'dex': dexName };\n        this.market (r['dex']);\n        return dexName;\n");
+        expect(out).toContain('let mut dexName: Option<String> = self.dexOf(');
+        expect(out).toContain('Value::from(dexName.as_deref())');
+    });
+    test('negative: returned from a nested arrow function the local keeps the Value form', () => {
+        const out = build ('ral66s3-ret-neg', "        const f = () => dexName;\n        f ();\n        return dexName;\n");
+        expect(out).toMatch(/let mut dexName: Value = /);
+    });
+});
