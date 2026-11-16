@@ -14354,3 +14354,187 @@ describe ('ral-77g8 ws struct parser results', () => {
         expect (out).toContain ('defaultType = *this.SafeString(this.Options, "defaultType", defaultType)');
     });
 });
+
+describe ('84g1 nil-declared tuple bags re-bound by a self-omit', () => {
+    const PRELUDE = 'type Dict = { [key: string]: any };\n'
+        + 'type Bool = boolean | undefined;\n'
+        + 'class Base {\n'
+        + '    handleOptionBoolAndParams (params: Dict, m: string, k: string, d: boolean = false): [boolean, Dict] { return [ d, params ]; }\n'
+        + '    omit (a: any, ...k: any[]): any { return a; }\n'
+        + '    other (a: any): any { return a; }\n'
+        + '}\n';
+    const go = (body: string): string => {
+        const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoHooks(t.goTranspiler);
+        return t.transpileGo(PRELUDE + 'class V extends Base {\n' + body + '}\n').content;
+    };
+    test('`x = this.omit (x, ..)` after the tuple write keeps the bag a map', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + '        let paginate = undefined;\n'
+            + '        let paramsPaginate = undefined;\n'
+            + "        [ paginate, paramsPaginate ] = this.handleOptionBoolAndParams (params, 'f', 'paginate', false);\n"
+            + "        paramsPaginate = this.omit (paramsPaginate, 'until');\n"
+            + '        return this.other (paramsPaginate);\n'
+            + '    }\n');
+        expect(out).toContain('var paramsPaginate map[string]any = nil');
+    });
+    test('an omit of another local keeps the box', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + '        let paginate = undefined;\n'
+            + '        let paramsPaginate = undefined;\n'
+            + "        [ paginate, paramsPaginate ] = this.handleOptionBoolAndParams (params, 'f', 'paginate', false);\n"
+            + "        paramsPaginate = this.omit (params, 'until');\n"
+            + '        return this.other (paramsPaginate);\n'
+            + '    }\n');
+        expect(out).toContain('var paramsPaginate any = nil');
+    });
+});
+
+describe ('84g1 nil-declared *string slot handed to an optional parameter', () => {
+    const PRELUDE = 'type Dict = { [key: string]: any };\n'
+        + 'type Str = string | undefined;\n'
+        + 'class Base {\n'
+        + '    handleMarginModeAndParams (m: string, params: Dict = {}, d: Str = undefined): [Str, Dict] { return [ d, params ]; }\n'
+        + '}\n';
+    const go = (body: string): string => {
+        const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoHooks(t.goTranspiler);
+        return t.transpileGo(PRELUDE + 'class V extends Base {\n' + body + '}\n').content;
+    };
+    test('an optional-parameter slot reads a nil *string as omitted', () => {
+        const out = go('    g (a: boolean = false, mode: Str = undefined): Str { return mode; }\n'
+            + '    f (params: Dict = {}): any {\n'
+            + '        let marginMode: Str = undefined;\n'
+            + '        let rest = undefined;\n'
+            + "        [ marginMode, rest ] = this.handleMarginModeAndParams ('f', params);\n"
+            + "        if (marginMode === 'isolated') {\n"
+            + '            return 1;\n'
+            + '        }\n'
+            + '        return this.g (true, marginMode);\n'
+            + '    }\n');
+        expect(out).toContain('var marginMode *string = nil');
+    });
+});
+
+describe ('84g1 guards', () => {
+    const PRELUDE = 'type Dict = { [key: string]: any };\n'
+        + 'type Str = string | undefined;\n'
+        + 'class Base {\n'
+        + '    handleOptionBoolAndParams (params: Dict, m: string, k: string, d: boolean = false): [boolean, Dict] { return [ d, params ]; }\n'
+        + '    handleMarginModeAndParams (m: string, params: Dict = {}, d: Str = undefined): [Str, Dict] { return [ d, params ]; }\n'
+        + '    omit (a: any, ...k: any[]): any { return a; }\n'
+        + '}\n';
+    const go = (body: string): string => {
+        const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoHooks(t.goTranspiler);
+        return t.transpileGo(PRELUDE + 'class V extends Base {\n' + body + '}\n').content;
+    };
+    test('a self-omit bag returned in a tuple keeps the box', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + '        let p = undefined;\n'
+            + '        let rest = undefined;\n'
+            + "        [ p, rest ] = this.handleOptionBoolAndParams (params, 'f', 'p', false);\n"
+            + "        rest = this.omit (rest, 'k');\n"
+            + '        return [ p, rest ];\n'
+            + '    }\n');
+        expect(out).toContain('var rest any = nil');
+    });
+    test('a literal-written *string handed to an optional slot keeps the box', () => {
+        const out = go('    g (a: boolean = false, mode: Str = undefined): Str { return mode; }\n'
+            + '    f (params: Dict = {}): any {\n'
+            + '        let mode: Str = undefined;\n'
+            + "        if (params['x']) {\n"
+            + "            mode = 'cursor';\n"
+            + '        }\n'
+            + '        return this.g (true, mode);\n'
+            + '    }\n');
+        expect(out).not.toContain('var mode *string = nil');
+    });
+});
+
+describe ('84g1 bool join read through `!`', () => {
+    const PRELUDE = 'type Dict = { [key: string]: any };\n'
+        + 'class Base {\n'
+        + '    handleOptionBoolAndParams2 (params: Dict, m: string, a: string, b: string, d: boolean = false): [boolean, Dict] { return [ d, params ]; }\n'
+        + '}\n';
+    const go = (body: string): string => {
+        const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoHooks(t.goTranspiler);
+        return t.transpileGo(PRELUDE + 'class V extends Base {\n' + body + '}\n').content;
+    };
+    test('`!x` after the bool slot write keeps the bool join', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + '        let pm = undefined;\n'
+            + "        [ pm, params ] = this.handleOptionBoolAndParams2 (params, 'f', 'papi', 'pm', false);\n"
+            + '        if (!pm) {\n'
+            + '            return 1;\n'
+            + '        }\n'
+            + '        return 2;\n'
+            + '    }\n');
+        expect(out).toContain('var pm bool');
+        expect(out).toContain('if !pm {');
+    });
+    test('`!x` before any write keeps the box', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + '        let pm = undefined;\n'
+            + '        if (!pm) {\n'
+            + '            return 1;\n'
+            + '        }\n'
+            + "        [ pm, params ] = this.handleOptionBoolAndParams2 (params, 'f', 'papi', 'pm', false);\n"
+            + '        return 2;\n'
+            + '    }\n');
+        expect(out).toContain('var pm any = nil');
+    });
+});
+
+describe ('84g1 optional-slot rule leaves already-safe *string joins alone', () => {
+    const go = (body: string): string => {
+        const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoHooks(t.goTranspiler);
+        return t.transpileGo('type Str = string | undefined;\nclass V {\n'
+            + '    safeString (a: any, k: any = undefined): Str { return a; }\n' + body + '}\n').content;
+    };
+    test('a written *string local whose optional-slot read is already safe stays *string', () => {
+        const out = go('    f (m: any): any {\n'
+            + '        let side: Str = undefined;\n'
+            + "        if (m['x']) {\n"
+            + "            side = 'buy';\n"
+            + '        }\n'
+            + '        const v = this.safeString (m, side);\n'
+            + "        return { 'side': side, 'v': v };\n"
+            + '    }\n');
+        expect(out).toContain('var side *string = nil');
+    });
+});
+
+describe ('84g1 nil-declared *string handed to an optional slot', () => {
+    const go = (body: string): string => {
+        const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoHooks(t.goTranspiler);
+        return t.transpileGo('type Str = string | undefined;\nclass V {\n'
+            + '    safeString (a: any, k: any): Str { return a; }\n'
+            + '    filter (a: any, symbol: Str = undefined, n: any = undefined): any { return a; }\n' + body + '}\n').content;
+    };
+    test('a safeString-written local handed to an optional parameter types as *string', () => {
+        const out = go('    f (m: any, xs: any): any {\n'
+            + '        let s: Str = undefined;\n'
+            + '        if (m !== undefined) {\n'
+            + "            s = this.safeString (m, 'symbol');\n"
+            + '        }\n'
+            + '        return this.filter (xs, s, 1);\n'
+            + '    }\n');
+        expect(out).toContain('var s *string = nil');
+        expect(out).not.toContain('derefPtr');
+    });
+    test('a required parameter slot keeps the box', () => {
+        const out = go('    g (a: any, symbol: Str): any { return a; }\n'
+            + '    f (m: any, xs: any): any {\n'
+            + '        let s: Str = undefined;\n'
+            + '        if (m !== undefined) {\n'
+            + "            s = this.safeString (m, 'symbol');\n"
+            + '        }\n'
+            + '        return this.g (xs, s);\n'
+            + '    }\n');
+        expect(out).not.toContain('var s *string = nil');
+    });
+});

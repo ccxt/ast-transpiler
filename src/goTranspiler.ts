@@ -404,6 +404,11 @@ function tupleJoinPairResultWriteType (right, index) {
 // `x = holder[i]` where the holder is a local the printer already declared `[]map[string]any`
 // (the PromiseAllTyped destructuring): the element is that map on every path, no conversion needed
 function tupleJoinIndexWriteType (goTranspiler, right) {
+    // 84g1: `x = this.omit (x, ..)` re-binds the joined bag itself; the write-site family prints
+    // MapTyped(this.Omit(x, ..)) (folded to the OmitDict twin), a fresh non-nil map on every path
+    if (tupleJoinIsSelfOmit (right)) {
+        return GO_TUPLE_JOIN_TYPE;
+    }
     if ((right?.kind !== ts.SyntaxKind.ElementAccessExpression) || (right.expression?.kind !== ts.SyntaxKind.Identifier)) {
         return undefined;
     }
@@ -419,6 +424,44 @@ function tupleJoinIndexWriteType (goTranspiler, right) {
         return undefined;
     }
     return (holderType.substring (2) === GO_TUPLE_JOIN_TYPE) ? GO_TUPLE_JOIN_TYPE : undefined;
+}
+
+// 84g1: `this.omit (x, k..)` whose first argument is the assignment's own target `x`
+function tupleJoinIsSelfOmit (right) {
+    const target = right?.parent;
+    const callee = right?.expression;
+    return (right?.kind === ts.SyntaxKind.CallExpression) && (right.questionDotToken === undefined)
+        && !tupleJoinReturnedInTuple (target)
+        && (target?.kind === ts.SyntaxKind.BinaryExpression) && (target.right === right)
+        && (target.operatorToken.kind === ts.SyntaxKind.EqualsToken) && (target.left?.kind === ts.SyntaxKind.Identifier)
+        && (callee?.kind === ts.SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === ts.SyntaxKind.ThisKeyword)
+        && (callee.name?.text === 'omit') && (right.arguments.length >= 2)
+        && !right.arguments.some ((a) => a.kind === ts.SyntaxKind.SpreadElement)
+        && (right.arguments[0]?.kind === ts.SyntaxKind.Identifier) && (right.arguments[0].text === target.left.text);
+}
+
+// `return [ .., x, .. ]` in the function of the assignment: the method's []any result slot is read by ccxt's
+// tuple-holder pass at every caller, whose printed reads depend on the slot's Go type
+function tupleJoinReturnedInTuple (assignment) {
+    const name = assignment?.left?.text;
+    let scope = assignment;
+    while ((scope !== undefined) && !ts.isFunctionLike (scope)) {
+        scope = scope.parent;
+    }
+    let found = false;
+    const visit = (n) => {
+        if (found) {
+            return;
+        }
+        if ((n.kind === ts.SyntaxKind.ReturnStatement) && (n.expression?.kind === ts.SyntaxKind.ArrayLiteralExpression)
+            && n.expression.elements.some ((e) => (e.kind === ts.SyntaxKind.Identifier) && (e.text === name))) {
+            found = true;
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    scope?.body?.forEachChild (visit);
+    return (scope === undefined) || found;
 }
 
 // a callee whose first argument is read as a dictionary at entry
@@ -4653,6 +4696,7 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
     let readUnproven = false;
     let parsedNumberWrite = false;
     let elementWriteRead = false;
+    let stringOnlyRead = false;
     const visit = (n) => {
         if (readUnproven) {
             return;
@@ -4671,8 +4715,12 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
                 }
                 joinType = written;
             } else if (!nilDeclaredReadIsSafe (goTranspiler, n)) {
-                readUnproven = true;
-                return;
+                if (ccxtGoNilDeclaredStringArgumentRead (goTranspiler, n)) {
+                    stringOnlyRead = true;          // 84g1: admitted for a *string join only (checked below)
+                } else {
+                    readUnproven = true;
+                    return;
+                }
             } else if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.right === n)
                     && (parent.operatorToken.kind === ts.SyntaxKind.EqualsToken)) {
                 elementWriteRead = true;
@@ -4691,6 +4739,9 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
     if (NIL_DECLARED_SCALAR_POINTER_TYPES.indexOf (joinType) < 0) {
         return undefined;
     }
+    if (stringOnlyRead && (joinType !== '*string')) {
+        return undefined;
+    }
     // the upstream rejects (shadowed type name, `x.push`, `++`, spread, destructuring,
     // a write of another type) must all pass for the same type
     if (goTranspiler.goTypeNameIsShadowed (scope, joinType)
@@ -4698,6 +4749,30 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
         return undefined;
     }
     return joinType;
+}
+
+// 84g1: a read that hands a *string local to a slot reading a nil pointer as absent: an optional
+// parameter of a transpiled method (GetArgStringPtr / GetArg), or the symbol argument of a ws cache
+// `getLimit (symbol, limit)` (every Go GetLimit derefScalars it or ignores it)
+function ccxtGoNilDeclaredStringArgumentRead (goTranspiler, node) {
+    const call = node.parent;
+    if ((call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression === node)) {
+        return false;
+    }
+    const index = call.arguments.indexOf (node);
+    const callee = call.expression;
+    if ((index === 0) && (callee?.kind === ts.SyntaxKind.PropertyAccessExpression) && (callee.name?.text === 'getLimit')
+        && (callee.expression?.kind === ts.SyntaxKind.Identifier) && (call.arguments.length === 2)) {
+        let type;
+        try {
+            type = goTranspiler.getChecker ().getTypeAtLocation (callee.expression);
+        } catch (e) {
+            return false;
+        }
+        const text = String (goTranspiler.getChecker ().typeToString (type) ?? '');
+        return /^(?:ArrayCache\w*|ArrayCacheBy\w+)(?:\s*\|\s*undefined)?$/.test (text);
+    }
+    return ccxtGoNilJoinArgumentSeesAbsent (goTranspiler, call, index);
 }
 
 function installNilDeclaredJoin (goTranspiler) {
@@ -8936,6 +9011,14 @@ function ccxtGoTupleStringCopyTargetIsSafe (goTranspiler, target, source) {
     }
 }
 
+// 84g1: `this.m (.., x, ..)` where that slot is an optional parameter of a transpiled method: GetArg /
+// GetArgStringPtr read a nil *string as the omitted argument, exactly as they read the absent box
+function ccxtGoTupleStringOptionalArgument (goTranspiler, node) {
+    const call = node.parent;
+    return (call?.kind === ts.SyntaxKind.CallExpression) && (call.expression !== node)
+        && ccxtGoNilJoinArgumentSeesAbsent (goTranspiler, call, call.arguments.indexOf (node));
+}
+
 function ccxtGoTupleStringJoinTypeUncached (goTranspiler, declaration) {
     const name = declaration.name.text;
     const scope = goTranspiler.goEnclosingFunction (declaration);
@@ -8946,6 +9029,7 @@ function ccxtGoTupleStringJoinTypeUncached (goTranspiler, declaration) {
     let producers = 0;
     let writes = 0;
     let ok = true;
+    let optionalArgs = 0;
     const visit = (n) => {
         if (!ok) {
             return;
@@ -8968,13 +9052,24 @@ function ccxtGoTupleStringJoinTypeUncached (goTranspiler, declaration) {
                 && (parent.operatorToken.kind === ts.SyntaxKind.EqualsToken)) {
                 ok = ccxtGoTupleStringWriteIsProven (goTranspiler, parent.right);
                 writes += 1;
-            } else if (isDestructuringTarget (n) || !ccxtGoTupleStringReadIsSafe (goTranspiler, n)) {
+            } else if (isDestructuringTarget (n)) {
                 ok = false;
+            } else if (!ccxtGoTupleStringReadIsSafe (goTranspiler, n)) {
+                if (ccxtGoTupleStringOptionalArgument (goTranspiler, n)) {
+                    optionalArgs += 1;
+                } else {
+                    ok = false;
+                }
             }
         }
         n?.forEachChild (visit);
     };
     scope?.forEachChild (visit);
+    // 84g1: the optional-argument reads are admitted only for a local fed by producer slots alone (a plain
+    // write would need a SafeStringPtr conversion at the store)
+    if ((optionalArgs > 0) && (writes > 0)) {
+        return undefined;
+    }
     const bound = ((declaration.kind === ts.SyntaxKind.BindingElement) || ccxtGoTupleStringIsCopyDeclaration (declaration)) ? 1 : 0;
     if (!ok || (producers + bound + writes === 0)) {
         return undefined;
@@ -10817,6 +10912,14 @@ export class GoNilDeclaredValueAssignmentScan extends GoNilDeclaredAssignmentSca
             return slotWrite ? true : assigned;
         }
         const parent = node.parent;
+        // 84g1: `!x` on a bool join prints the native negation once x is assigned
+        if ((parent?.kind === ts.SyntaxKind.PrefixUnaryExpression) && (parent.operator === ts.SyntaxKind.ExclamationToken)
+                && (this.joinType === 'bool') && !this.inNestedFunction (node)) {
+            if (!assigned) {
+                this.rejected = true;
+            }
+            return assigned;
+        }
         if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && COMPARISON_TOKENS.includes (parent.operatorToken.kind)
                 && (this.joinType !== undefined) && !this.inNestedFunction (node)) {
             const other = (parent.left === node) ? parent.right : parent.left;
