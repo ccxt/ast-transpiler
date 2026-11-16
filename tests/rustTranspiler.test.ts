@@ -24028,3 +24028,30 @@ describe('ral-80g R2: a reassigned `c ? this.omit (params, k) : params` local of
         expect(out).toMatch(/let mut y: Value = /);
     });
 });
+
+describe('ral-80d: a safeValue result tested with Array.isArray splits into its list and its map', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeValue (o: any, k: any, d: any = undefined): any { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('phemex fetchOpenOrders: the list arm hands the list on, the other arm reads the map at a string key', () => {
+        const out = write ('ral-80d-a', "    m (response: any) {\n        const data = this.safeValue (response, 'data', {});\n        if (Array.isArray (data)) {\n            return this.keep (data);\n        } else {\n            const rows = this.safeList (data, 'rows', []);\n            return this.keep (rows);\n        }\n    }\n");
+        expect(out).toContain('let (mut data, data__map): (Option<crate::value::List>, Option<crate::value::Dict>) = (match ');
+        expect(out).toContain('{ Value::Arr(__l) => (Some(__l), None), __v => (None, __v.into_opt_dict()) });');
+        expect(out).toContain('&data__map');
+        expect(out).not.toMatch(/let (?:mut )?data: Value = /);
+    });
+    test('revolutx createOrder: a list read only in the true arm of the ternary holds Option<List>', () => {
+        const out = write ('ral-80d-b', "    m (response: any) {\n        const data = this.safeValue (response, 'data', {});\n        const orderData = Array.isArray (data) ? this.safeDict (data, 0, {}) : this.safeDict (response, 'data', {});\n        return this.keep (orderData);\n    }\n");
+        expect(out).toMatch(/let (?:mut )?data: Option<crate::value::List> = [\s\S]*?\.into_opt_list\(\)/);
+    });
+    test('negative: a list use outside the Array.isArray arm keeps the local Value', () => {
+        const out = write ('ral-80d-neg', "    m (response: any) {\n        const data = this.safeValue (response, 'data', {});\n        if (Array.isArray (data)) {\n            return this.keep (data);\n        }\n        return this.keep (data);\n    }\n");
+        expect(out).toMatch(/let (?:mut )?data: Value = /);
+    });
+});

@@ -31032,7 +31032,10 @@ export class RustTranspiler extends BaseTranspiler {
 
     private rustOptListDecisions = new WeakMap<any, boolean>();
 
-    private rustOptListBoxes = new WeakMap<any, 'clone' | 'move' | 'lend'>();
+    private rustOptListBoxes = new WeakMap<any, 'clone' | 'move' | 'lend' | 'map'>();
+
+    /** ral-80d: optional list locals held in the split list-vs-map-vs-null form (a second `<name>__map` binding). */
+    private rust80dSplitLocals = new WeakSet<any>();
 
     rustOptListLocal(declaration: any): boolean {
         if (declaration?.kind !== SyntaxKind.VariableDeclaration) return false;
@@ -31076,7 +31079,11 @@ export class RustTranspiler extends BaseTranspiler {
         const nil = this.rustOptListNilInit(declaration);
         // ral-80c R1: or a copy of an unwritten parameter whose typed signature slot is `Option<Vec<String>>` / `Vec<String>`
         const strVecAlias = !nil && this.rust80cStrVecParamAlias(init);
-        if (!nil && !strVecAlias && !this.rustOptListSource(init)) return false;
+        // ral-80d: a `const x = this.safeValue* (..)` tested with `Array.isArray (x)`: x splits once into the list it holds
+        // (`Option<List>`) and the map it holds (`x__map: Option<Dict>`); anything else (Null, scalars) is None in both
+        const split = !nil && !strVecAlias && !this.rustOptListSource(init) && (list.flags & NodeFlags.Const) !== 0 && init !== undefined && this.rustSafeValueKeyReadSource(init)
+            && String(init.getText()).split('\n')[0].length <= 240;
+        if (!nil && !strVecAlias && !split && !this.rustOptListSource(init)) return false;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
@@ -31088,7 +31095,18 @@ export class RustTranspiler extends BaseTranspiler {
         const boxes: [any, 'clone' | 'move' | 'lend'][] = [];
         let natives = 0;
         let writes = 0;
+        let mapReads = 0;
+        let isArrayTests = 0;
         const safe = this.rustLocalUsesAll(declaration, name, false, (n: any) => {
+            if (split && !this.rustIdentifierIsPropertyName(n) && this.rustIdentifierRefersToDeclaration(n, declaration) && this.rustEnclosingFunction(n) === fn) {
+                const use: any = n.parent;
+                if (isCallExpression(use) && use.arguments.length === 1 && use.arguments[0] === n && this.rustIsArrayIsArrayCallee(use)) { isArrayTests++; natives++; return true; }
+                // a string-key read answers Null for a list, Null and scalars exactly as the absent map does
+                if (this.rustSafeValueKeyReaderUse(n)) { mapReads++; this.rustOptListBoxes.set(n, 'map'); return true; }
+                // every other use reads the list, so it must sit where `Array.isArray (x)` held
+                if (!this.rust80dInListArm(n, declaration, fn)) return false;
+                if (isBinaryExpression(use) || isPropertyAccessExpression(use)) return false;
+            }
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
             let at: any = n;
@@ -31100,6 +31118,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
+                if (split) return false;
                 if (nil) writes++;
                 return up.parent?.kind === SyntaxKind.ExpressionStatement && (this.rustOptListSource(up.right) || this.rustOptListLiteralWrite(up.right)
                     || (nil && this.rustDefaultedListRead(this.rustSkipWrappers(up.right))) || (strVecAlias && this.rust80cBaseStrListField(up.right)));
@@ -31144,7 +31163,9 @@ export class RustTranspiler extends BaseTranspiler {
             return extra !== undefined;
         });
         // D11: a list that is only handed on is held too (the handle box replaces the Value box).
-        if (!safe || (nil && (writes === 0 || natives === 0))) return false;
+        if (!safe || (nil && (writes === 0 || natives === 0)) || (split && isArrayTests === 0)) return false;
+        // with no string-key read the list alone is kept (`into_opt_list`), else the map is split off as well
+        if (split && mapReads > 0) this.rust80dSplitLocals.add(declaration);
         // The only read inside a `return` statement moves the list (nothing runs after it).
         const finals = new Map<any, number>();
         for (const [n] of boxes) {
@@ -31217,6 +31238,32 @@ export class RustTranspiler extends BaseTranspiler {
         return node !== undefined && isElementAccessExpression(node) && isIdentifier(node.expression) && this.rustOptListParamRead(node);
     }
 
+    /** ral-80d: `n` sits in the arm where `Array.isArray (x)` held: the then-branch / true arm of `Array.isArray (x)`, or the
+     *  else-branch / false arm of `!Array.isArray (x)` (an `if` statement or a conditional expression inside `fn`). */
+    rust80dInListArm(n: any, declaration: any, fn: any): boolean {
+        const test = (e: any): boolean | undefined => {
+            e = this.rustSkipWrappers(e);
+            if (e !== undefined && e.kind === SyntaxKind.PrefixUnaryExpression && e.operator === SyntaxKind.ExclamationToken) {
+                const inner = test(e.operand);
+                return inner === undefined ? undefined : !inner;
+            }
+            if (e === undefined || !isCallExpression(e) || !this.rustIsArrayIsArrayCallee(e) || e.arguments.length !== 1) return undefined;
+            const arg: any = this.rustSkipWrappers(e.arguments[0]);
+            return isIdentifier(arg) && this.rustIdentifierRefersToDeclaration(arg, declaration) ? true : undefined;
+        };
+        for (let child: any = n, at: any = n.parent; at !== undefined && at !== fn; child = at, at = at.parent) {
+            if (isIfStatement(at) && child !== at.expression) {
+                const held = test(at.expression);
+                if (held !== undefined && (held ? at.thenStatement === child : at.elseStatement === child)) return true;
+            }
+            if (isConditionalExpression(at) && child !== at.condition) {
+                const held = test(at.condition);
+                if (held !== undefined && (held ? at.whenTrue === child : at.whenFalse === child)) return true;
+            }
+        }
+        return false;
+    }
+
     /** `Array.isArray`. */
     rustIsArrayIsArrayCallee(call: any): boolean {
         const callee: any = call.expression;
@@ -31253,6 +31300,9 @@ export class RustTranspiler extends BaseTranspiler {
     printOptListDeclaration(declaration: any, varName: string, indent: string): string | undefined {
         if (!this.rustOptListLocal(declaration)) return undefined;
         if (this.rustOptListNilInit(declaration)) return `${indent}let mut ${varName}: Option<crate::value::List> = None`;
+        if (this.rust80dSplitLocals.has(declaration)) {
+            return `${indent}let (mut ${varName}, ${varName}__map): (Option<crate::value::List>, Option<crate::value::Dict>) = (match ${this.printNode(declaration.initializer, 0).trim()} { Value::Arr(__l) => (Some(__l), None), __v => (None, __v.into_opt_dict()) })`;
+        }
         const seed = this.printNode(declaration.initializer, 0).trim();
         // ral-80c R1: the parameter's box is copied once (a handle bump) unless the alias is its last reader
         const source: Node | undefined = this.rust80cStrVecParamAlias(declaration.initializer) ? this.rustDeclaredNode(this.unwrapParens(declaration.initializer)) : undefined;
@@ -31298,6 +31348,7 @@ export class RustTranspiler extends BaseTranspiler {
         const form = this.rustOptListBoxes.get(node);
         if (form === undefined || this.rustOptListOf(node) === undefined) return undefined;
         if (form === 'lend') return `&${text}`;
+        if (form === 'map') return `&${text}__map`;
         return form === 'move' ? `${text}.map_or(Value::Null, Value::Arr)` : `${text}.clone().map_or(Value::Null, Value::Arr)`;
     }
 
