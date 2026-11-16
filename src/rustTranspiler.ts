@@ -3119,6 +3119,9 @@ export class RustTranspiler extends BaseTranspiler {
             const rhs: any = this.unwrapParens(parent.right);
             if (!this.rustNilDecodedWrite(rhs)) writes++;
             let write = isIdentifier(rhs) && this.literalKindOfNode(rhs) !== 'null' ? (this.rustScalarIdentifierKind(rhs) ?? (this.rustNilValueStrAlias(rhs) ? 'ostr' : undefined)) : this.rustScalarValueKind(rhs, true);
+            // ral-68a R1: `x = p` from an unwritten typed string parameter (`&str` / `Option<&str>` signature slot): the
+            // parameter's rebinding holds that string (or Null), read back once as `Option<String>` (rustOptParamText)
+            if (write === undefined && isIdentifier(rhs) && this.rust68aStrParamWrite(rhs)) write = 'ostr';
             // za: `x = c ? <scalar> : x` keeps x on one arm: the write's kind is the other arm's (joined below with x's own)
             if (write === undefined) write = this.rustNilSelfArmTernaryKind(rhs, declaration);
             // ral-45b: `x = x.slice(..)` / `x.toLowerCase()` keeps x's own optional string (the native
@@ -5255,7 +5258,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (clockLent && copied > 0) this.rustStrLentLocals.add(declaration);
         // tc: a `randomBytes` string (it was an `Option<String>` lent at its copying boxes) keeps lending there instead of cloning
         if (kind === 'str' && copied > 0 && this.rustRandomBytesCall(clockInit) && !this.rustStrNoLend && this.rustReaderLendBoxes(declaration)) this.rustStrLentLocals.add(declaration);
-        if (!numericSum && !clockLent && this.rustNewShapeCostly(declaration.initializer, typedUses, kind === 'str' || kind === 'ostr' ? copied : 0)) return undefined;
+        // ral-68a R4: `this.numberToString (x) as string` (rustStrCastCall over an `Option<String>` base return) read natively and
+        // copied only at lending slots lends there (`Value::from(x.as_deref())`: the one copy the `Value` clone made) (lighter)
+        const castLent = strKind && typedUses > 0 && copied > 0 && this.rustStrCastCall(clockInit) !== undefined && !this.rustStrNoLend
+            && !this.rust66s3StrReturnedVeto(declaration, scope) && this.rustReaderLendBoxes(declaration);
+        if (castLent) this.rustStrLentLocals.add(declaration);
+        if (!numericSum && !clockLent && !castLent && this.rustNewShapeCostly(declaration.initializer, typedUses, kind === 'str' || kind === 'ostr' ? copied : 0)) return undefined;
         if (this.rustFieldKeyCostly(declaration)) return undefined;
         if (this.rustStrRuntimeLocalCostly(declaration)) return undefined;
         // a case-converted `Value` place copies at every box but a moving last one, where the `Value` moved
@@ -5574,6 +5582,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-46c: `this.requestId().toString()` of an all-`int` venue method is the `i64`'s decimal text
         if (fresh && this.rustIdString(node) && !this.rustIntToStringShape(node)) return 'str';
         if (fresh && this.rustSbJoinShape(node)) return 'str';
+        // ral-68a R3: `x = recv.join('<sep>')` as a whole statement write: the same `Str` the initializer form proves
+        if (fresh && this.rust68aJoinWrite(node)) return 'str';
         if (this.rustArithCombinator(node)) return this.rustArithCallKind(node);
         if (fresh && isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.PlusToken
             && this.rustScalarFormatText(node) !== undefined) return 'str';
@@ -8007,6 +8017,25 @@ export class RustTranspiler extends BaseTranspiler {
 
     private rustSbJoinMemo = new Map<any, string>();
 
+    /** ral-68a R3: `recv.join('<sep>')` (an identifier or `this.<field>` receiver the checker types as an array) that is the
+     *  whole right side of a statement `x = ..` into an identifier: every printed join form answers a `Str` (a non-list
+     *  receiver joins to `""`), never `Null`. */
+    rust68aJoinWrite(node: any): boolean {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || String(node.expression.name.text) !== 'join'
+            || node.arguments.length !== 1 || this.literalKindOfNode(this.unwrapParens(node.arguments[0])) !== 'string') return false;
+        const recv: any = this.unwrapParens(node.expression.expression);
+        const thisField = isPropertyAccessExpression(recv) && recv.expression.kind === SyntaxKind.ThisKeyword;
+        if (!isIdentifier(recv) && !thisField) return false;
+        const checker: any = this.checkerOrUndefined();
+        const recvType: any = checker === undefined ? undefined : this.typeOfNodeIfAny(recv);
+        if (recvType === undefined || !checker.isArrayType?.(checker.getNonNullableType(recvType))) return false;
+        let top: any = node;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const write: any = top.parent;
+        return isBinaryExpression(write) && write.right === top && write.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(write.left)
+            && write.parent?.kind === SyntaxKind.ExpressionStatement;
+    }
+
     /** sb: `xs.join(sep)` as a local's initializer: every printed join form is `Value::Str(<String>.into())` (a non-list
      *  receiver joins to `""`, never `Null`), so the local is that `String`. Only at a declaration initializer. */
     rustSbJoinShape(node: any): boolean {
@@ -8245,6 +8274,10 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-65b: `(x as string).toString()` of an `Option<String>` local: the text the `Value` box displayed (`null` for
         // `Null`), read in place (cryptocom cancelOrdersForSymbols `id`; ccxt's narrowStrSinkLocals pass did this)
         if (kind === 'ostr' && this.rust65bCastToStringRecv(n)) return 'concat';
+        // ral-68a R2: a string value of an object literal (nested literals too) that is the whole value of `x['a']['b'] = {..}`
+        // on a typed map bearer: the printer's own guarded insert (rustBearerChainedWrite) takes the literal, no ccxt pass reads
+        // it; at the local's last use the box moves the string where the `Value` moved (grvt createOrder selectedType)
+        if ((kind === 'str' || kind === 'ostr') && this.rust68aBearerLitChainLiteralValue(n) && this.rustLocalLastUse(n, this.rustDeclaredNode(n))) return 'box';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -9212,6 +9245,20 @@ export class RustTranspiler extends BaseTranspiler {
         const outer: any = write.left;
         if (!isElementAccessExpression(outer) || !isElementAccessExpression(outer.expression)) return false;
         return this.rustNestedDictBearerDeclaration(outer.expression.expression) !== undefined;
+    }
+
+    /** ral-68a R2: `n` is a property value inside an object literal (possibly nested in further object literals) that is the
+     *  whole right-hand side of a statement `x['a']['b'] = {..}` the printer prints itself (rustBearerLitChainValue). */
+    rust68aBearerLitChainLiteralValue(n: any): boolean {
+        const prop: any = n.parent;
+        if (prop?.kind !== SyntaxKind.PropertyAssignment || prop.initializer !== n) return false;
+        let lit: any = prop.parent;
+        while (isObjectLiteralExpression(lit)) {
+            const up: any = lit.parent;
+            if (up?.kind === SyntaxKind.PropertyAssignment && up.initializer === lit && isObjectLiteralExpression(up.parent)) { lit = up.parent; continue; }
+            return this.rustBearerLitChainValue(lit);
+        }
+        return false;
     }
 
     /** ral-55k: `n` is the whole right side of a statement `x['a']['b'] = n` with `x` a typed one-level map bearer and both keys
@@ -10247,6 +10294,7 @@ export class RustTranspiler extends BaseTranspiler {
         const wrap = (t: string) => optional ? `Some(${t})` : t;
         if (this.literalKindOfNode(node) === 'null') return optional ? 'None' : undefined;
         if (kind === 'str' && this.rustSbJoinShape(node)) return this.rustSbJoinText(node);
+        if (base === 'str' && this.rust68aJoinWrite(node)) return wrap(this.rustSbJoinText(node));
         if (this.rustBaseTypedReturnKind(node) !== undefined && !(kind === 'int' && this.rustVenueParseToInt(node))) return this.rustBaseTypedText(kind, node);
         const paramText = this.rustOptParamText(kind, node); if (paramText !== undefined) return paramText;
         if (kind === 'oint' && this.rustLimitCall(node)) return this.rustLimitCallText(node);
@@ -11244,6 +11292,13 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     // the typed argument's own `Value` rebinding read back as the native kind the signature declared
+    /** ral-68a R1: an identifier read of an unwritten parameter whose typed signature slot is `&str` / `Option<&str>`
+     *  (decided from the signature table / per-venue string slot, never from printed text). */
+    rust68aStrParamWrite(node: any): boolean {
+        const kind = this.rustOptParamKind(node);
+        return kind === 'str' || kind === 'ostr';
+    }
+
     private static readonly RUST_PARAM_READ: Record<string, string> = { oint: 'as_i64()', onum: 'as_f64()', ostr: 'as_str().map(str::to_owned)',
         str: 'as_str().unwrap_or_default().to_string()', int: 'as_i64().unwrap_or_default()', num: 'as_f64().unwrap_or_default()', bool: 'as_bool().unwrap_or_default()' };
 
@@ -11335,6 +11390,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (narrowed !== undefined) return narrowed === kind || `o${narrowed}` === kind;
         }
         if (isIdentifier(node) && this.rustOptParamKind(node) === kind) return true;
+        // ral-68a R1: a required `&str` parameter into an `Option<String>` local (rustOptParamText prints `p.as_str().map(..)`)
+        if (kind === 'ostr' && isIdentifier(node) && this.rustOptParamKind(node) === 'str') return true;
         return kind === 'bool' && this.rustBoolNativeText(node) !== undefined;
     }
 

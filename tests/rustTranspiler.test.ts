@@ -22924,3 +22924,47 @@ describe('ral-67g: a typed Vec result read through base safeDict (rows, i) borro
         expect(out).toContain('let mut result: Value = crate::types::IntoRaw::into_raw(self.fetch_open_orders(');
     });
 });
+
+describe('ral-68a: string locals written from proven string sources', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    ids: string[] = [];\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    numberToString (x: any): Str { return String (x); }\n    marketIds (s: string[]): string[] { return s; }\n    hold (x: any): any { return x; }\n    use (a: string, b: string) { return a + b; }\n}\n";
+    const build = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Num } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const r1 = "    pick (name: string, messageHash: string, symbols: string[] = undefined) {\n        let symbolsHash: Str = undefined;\n        if (symbols === undefined) {\n            symbolsHash = messageHash;\n        } else {\n            symbolsHash = messageHash + '::' + name;\n        }\n        if (symbolsHash === 'x') {\n            return 1;\n        }\n        return this.hold (symbolsHash);\n    }\n";
+    test('R1: a write from a typed `&str` parameter reads the parameter back as Option<String>', () => {
+        const out = build ('ral68a-r1', r1);
+        expect(out).toContain('let mut symbolsHash: Option<String> = None;');
+        expect(out).toContain('symbolsHash = messageHash.as_str().map(str::to_owned);');
+    });
+    test('R1 negative: a write from an untyped (`any`) parameter keeps the Value form', () => {
+        const out = build ('ral68a-r1-neg', r1.replace ('messageHash: string', 'messageHash: any'));
+        expect(out).toContain('let mut symbolsHash: Value = Value::Null;');
+    });
+    const r2 = "    order (params: Dict, isBuy: boolean, stop: Str) {\n        const orderRequest: Dict = { 'metadata': {} };\n        let selectedType: Str = undefined;\n        if (stop !== undefined) {\n            selectedType = isBuy ? 'STOP_LOSS' : 'TAKE_PROFIT';\n        } else {\n            selectedType = isBuy ? 'TAKE_PROFIT' : 'STOP_LOSS';\n        }\n        orderRequest['metadata']['trigger'] = {\n            'trigger_type': selectedType,\n            'tpsl': { 'by': 'LAST' },\n        };\n        return orderRequest;\n    }\n";
+    test('R2: a literal-only local handed whole into a typed bearer chain insert is typed and boxed there', () => {
+        const out = build ('ral68a-r2', r2);
+        expect(out).toContain('let mut selectedType: Option<String> = None;');
+        expect(out).toContain('selectedType.map(Value::from).unwrap_or(Value::Null)');
+    });
+    const r3 = "    books (symbols: string[] = undefined) {\n        let ids: Str = undefined;\n        if (symbols === undefined) {\n            ids = this.ids.join (',');\n        } else {\n            const marketIds = this.marketIds (symbols);\n            ids = marketIds.join (',');\n        }\n        const request: Dict = { 'markets': ids };\n        return request;\n    }\n";
+    test('R3: `x = list.join(sep)` statement writes are Some(String)', () => {
+        const out = build ('ral68a-r3', r3);
+        expect(out).toContain('let mut ids: Option<String> = None;');
+        expect(out).toMatch(/ids = Some\(/);
+    });
+    test('R3 negative: a join over an `any` receiver keeps the Value form', () => {
+        const out = build ('ral68a-r3-neg', r3.replace ('const marketIds = this.marketIds (symbols);', 'const marketIds: any = this.hold (symbols);'));
+        expect(out).toContain('let mut ids: Value = Value::Null;');
+    });
+    const r4 = "    initAuth (a: string, b: string) {\n        this.options[a] = b;\n    }\n    load (accountIndex: Num, apiKeyIndex: Num) {\n        const strAccountIndex = this.numberToString (accountIndex) as string;\n        const strApiKeyIndex = this.numberToString (apiKeyIndex) as string;\n        this.initAuth (strAccountIndex, strApiKeyIndex);\n        const signer = this.safeDict (this.safeDict (this.options, strAccountIndex, {}), strApiKeyIndex, {});\n        this.initAuth (strAccountIndex, strApiKeyIndex);\n        return signer;\n    }\n";
+    test('R4: a `numberToString (x) as string` local copied at a lending slot lends there', () => {
+        const out = build ('ral68a-r4', r4);
+        expect(out).toContain('let mut strApiKeyIndex: Option<String> = self.numberToString(');
+        expect(out).toContain('Value::from(strApiKeyIndex.as_deref())');
+    });
+});
