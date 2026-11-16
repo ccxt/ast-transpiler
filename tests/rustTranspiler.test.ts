@@ -23887,3 +23887,19 @@ describe('ral-76e: a literal-defaulted integer reader ordered against its loop c
         expect(out).not.toContain('let mut maxRetries: i64');
     });
 });
+
+describe('ral-80h: a base optional-int local whose bare last-use write copies into the compared optional-int local', () => {
+    const base = (body: string) => "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    hold (m: any): any { return m; }\n" + body + "}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base (body));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+    };
+    test('base safeOrder lastTradeTimeTimestamp: Option<i64>, the write copies tradeTimestamp', () => {
+        const out = write ('ral-80h-a', "    order (o: Dict) {\n        let last = this.safeInteger (o, 'lastTradeTimestamp');\n        const parseLast = (last === undefined);\n        const trades = this.safeList (o, 'trades', []);\n        for (let i = 0; i < trades.length; i++) {\n            const ts = this.safeInteger (trades[i], 'timestamp');\n            if (parseLast && (ts !== undefined)) {\n                if (last === undefined || ts > last) {\n                    last = ts;\n                }\n            }\n        }\n        return this.hold ({ 'lastTradeTimestamp': last });\n    }\n");
+        expect(out).toContain('let mut last: Option<i64> = ');
+        expect(out).toContain('last = ts;');
+        expect(out).not.toContain('let mut last: Value');
+    });
+});

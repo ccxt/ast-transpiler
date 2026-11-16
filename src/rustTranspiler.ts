@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { NodeFlags, SyntaxKind, type Block, type CallExpression, type Declaration, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
-import { isArrayBindingPattern, isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
+import { NodeFlags, SyntaxKind, type BinaryExpression, type Block, type CallExpression, type Declaration, type ElementAccessExpression, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
+import { isArrayBindingPattern, isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyAssignment, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 import * as fs from 'fs';
@@ -5175,7 +5175,7 @@ export class RustTranspiler extends BaseTranspiler {
     private rustMarketLentLocals = new WeakSet<any>();
 
     /** ral-70f: ral-70f reader locals whose last use walk accepted every use (rustScalarLocalKindCore). */
-    private rust70fWalkOk = new WeakSet<any>();
+    private rust70fWalkOk = new WeakSet<Node>();
 
     rustScalarLocalKindUncached(declaration): string | undefined {
         this.rust70fWalkOk.delete(declaration);
@@ -6863,6 +6863,25 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** The local's last use is the whole right side of a statement `y = x;`: the boxed local moves there,
      *  a typed one keeps the clone ccxt adds to that write. */
+    /** ral-80h: every bare last-use write `y = x;` of the typed local `x` targets `other`, the compared optional-number local
+     *  (base safeOrder `lastTradeTimeTimestamp = tradeTimestamp` beside `tradeTimestamp > lastTradeTimeTimestamp`): both are
+     *  `Option<i64>` / `Option<f64>` of one kind, so the write copies a Copy value and no clone is ever added. */
+    rust80hCopyWriteInto(node: Node, other: Node): boolean {
+        const declaration = isIdentifier(node) ? this.rustDeclaredNode(node) : undefined;
+        const target = isIdentifier(other) ? this.rustDeclaredNode(other) : undefined;
+        if (declaration === undefined || target === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        const kind = this.rustScalarLocalOf(node)?.kind;
+        if ((kind !== 'oint' && kind !== 'onum') || this.rustScalarLocalOf(other)?.kind !== kind) return false;
+        let ok = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: Node) => {
+            const up = n.parent;
+            if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(up.left)
+                && up.parent?.kind === SyntaxKind.ExpressionStatement && this.rustLocalLastUse(n, declaration) && this.rustDeclaredNode(up.left) !== target) ok = false;
+            return true;
+        });
+        return ok;
+    }
+
     rustScalarBareLastWrite(node: any): boolean {
         const declaration: any = isIdentifier(node) ? this.rustDeclaredNode(node) : undefined;
         if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
@@ -7407,11 +7426,11 @@ export class RustTranspiler extends BaseTranspiler {
      *  `let` / `const` (bitget fetchTickers `market = this.market (symbol)` under the typed `market (&str)` signature): the
      *  argument prints `x.as_deref().unwrap_or_default()` whatever the target, the text ccxt's narrowStrNullLocals pass
      *  printed there. A parameter target (untyped `any`) keeps the refusal. */
-    rust70fTargLocalWrite(write: any): boolean {
+    rust70fTargLocalWrite(write: BinaryExpression): boolean {
         if (write.operatorToken?.kind !== SyntaxKind.EqualsToken) return false;
-        const target: any = this.unwrapParens(write.left);
+        const target: Node = this.unwrapParens(write.left);
         if (!isIdentifier(target)) return false;
-        const decl: any = this.rustDeclarationOfIdentifier(target);
+        const decl = this.rustDeclarationOfIdentifier(target);
         return decl !== undefined && isVariableDeclaration(decl) && (decl.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) !== 0;
     }
 
@@ -8134,41 +8153,41 @@ export class RustTranspiler extends BaseTranspiler {
      *  converts the `Str` / `Null` the boxed reader held, cloned unless it is the last use (ccxt's narrowStrNullLocals pass
      *  printed exactly `x[.clone()].map(Value::from).unwrap_or(Value::Null)` there). */
     /** ral-70f: the identifier under `(x as string)` / parentheses (or `n` itself). */
-    rust70fCastBase(n: any): any {
-        let at: any = n;
-        while (at !== undefined && (isParenthesizedExpression(at) || (at.kind === SyntaxKind.AsExpression && at.type?.kind === SyntaxKind.StringKeyword))) at = at.expression;
+    rust70fCastBase(n: Node): Identifier | undefined {
+        let at: Node = n;
+        while (at !== undefined && (isParenthesizedExpression(at) || (isAsExpression(at) && at.type?.kind === SyntaxKind.StringKeyword))) at = at.expression;
         return isIdentifier(at) ? at : undefined;
     }
 
     /** ral-70f: `access` is (through parentheses) the target of an assignment or update, or a `delete` operand. */
-    rust70fWriteTargetKey(access: any): boolean {
+    rust70fWriteTargetKey(access: Node): boolean {
         // climb a chain `a[k1][k2]..` whose head this access is: a key anywhere in a written chain is a write key
         while (isElementAccessExpression(access.parent) && access.parent.expression === access) access = access.parent;
-        const at: any = this.rustSkipWrappersUp(access.parent);
+        const at: Node = this.rustSkipWrappersUp(access.parent);
         return (isBinaryExpression(at) && at.left === access && at.operatorToken.kind >= SyntaxKind.FirstAssignment && at.operatorToken.kind <= SyntaxKind.LastAssignment)
             || isPrefixUnaryExpression(at) || isPostfixUnaryExpression(at) || isDeleteExpression(access.parent);
     }
 
     /** ral-70f: `n` reads a ral-70f reader local and is (through parentheses / `as string`) the whole key of a write target. */
-    rust70fWriteKey(n: any): boolean {
+    rust70fWriteKey(n: Node): boolean {
         if (!isIdentifier(n) || !this.rust70fReaderLocal(this.rustDeclaredNode(n), true)) return false;
-        let top: any = n;
-        while (isParenthesizedExpression(top.parent) || (top.parent?.kind === SyntaxKind.AsExpression && top.parent.type?.kind === SyntaxKind.StringKeyword)) top = top.parent;
+        let top: Node = n;
+        while (isParenthesizedExpression(top.parent) || (isAsExpression(top.parent) && top.parent.type?.kind === SyntaxKind.StringKeyword)) top = top.parent;
         return isElementAccessExpression(top.parent) && top.parent.argumentExpression === top && this.rust70fWriteTargetKey(top.parent);
     }
 
     /** ral-70f: `x[0] === 'c'` / `!==` (one-character literal, either side) on a ral-70f reader local: the boxed element read was
      *  the first character of the `Str` (`Null` for `None`, empty or out of range), so the test is
      *  `x.as_deref().unwrap_or("").starts_with("c")` (ccxt's narrowStrNullLocals pass printed this). */
-    rust70fFirstCharTest(node: any): string | undefined {
+    rust70fFirstCharTest(node: BinaryExpression): string | undefined {
         const op = node.operatorToken.kind;
         if (op !== SyntaxKind.EqualsEqualsEqualsToken && op !== SyntaxKind.ExclamationEqualsEqualsToken) return undefined;
-        const l: any = this.unwrapParens(node.left);
-        const r: any = this.unwrapParens(node.right);
+        const l: Node = this.unwrapParens(node.left);
+        const r: Node = this.unwrapParens(node.right);
         const [ access, lit ] = isElementAccessExpression(l) ? [ l, r ] : [ r, l ];
         if (!isElementAccessExpression(access) || !isStringLiteral(lit) || String(lit.text).length !== 1 || /["\\]/.test(String(lit.text)) || String(lit.text) in this.StringLiteralReplacements) return undefined;
-        const index: any = this.unwrapParens(access.argumentExpression);
-        const recv: any = this.unwrapParens(access.expression);
+        const index: Node = this.unwrapParens(access.argumentExpression);
+        const recv: Node = this.unwrapParens(access.expression);
         if (!isNumericLiteral(index) || String(index.text) !== '0' || !isIdentifier(recv) || this.rustScalarLocalOf(recv)?.kind !== 'ostr'
             || !this.rust70fReaderLocal(this.rustDeclaredNode(recv), true)) return undefined;
         const probe = `${super.printIdentifier(recv)}.as_deref().unwrap_or("").starts_with("${String(lit.text)}")`;
@@ -8176,23 +8195,23 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** ral-70f: `n` sits inside the left side (target chain) of an assignment. */
-    rust70fInWriteTarget(n: any): boolean {
-        for (let at: any = n; at?.parent !== undefined && !isStatement(at); at = at.parent) {
-            const up: any = at.parent;
+    rust70fInWriteTarget(n: Node): boolean {
+        for (let at: Node = n; at?.parent !== undefined && !isStatement(at); at = at.parent) {
+            const up: Node = at.parent;
             if (isBinaryExpression(up) && up.left === at && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return true;
         }
         return false;
     }
 
-    rust70fOperandBox(n: any): boolean {
+    rust70fOperandBox(n: Node): boolean {
         if (!isIdentifier(n) || this.rustIdentifierIsPropertyName(n) || !this.rust70fReaderLocal(this.rustDeclaredNode(n), true)) return false;
-        let top: any = n;
-        while (isParenthesizedExpression(top.parent) || (top.parent?.kind === SyntaxKind.AsExpression && top.parent.type?.kind === SyntaxKind.StringKeyword)) top = top.parent;
-        const up: any = top.parent;
+        let top: Node = n;
+        while (isParenthesizedExpression(top.parent) || (isAsExpression(top.parent) && top.parent.type?.kind === SyntaxKind.StringKeyword)) top = top.parent;
+        const up: Node = top.parent;
         if (up === undefined) return false;
-        if ((isCallExpression(up) || up.kind === SyntaxKind.NewExpression) && up.expression !== top) return (up.arguments ?? []).includes(top);
+        if ((isCallExpression(up) || isNewExpression(up)) && up.expression !== top) return (up.arguments ?? []).some((arg) => arg === top);
         if (isBinaryExpression(up) && up.right === top && up.operatorToken.kind === SyntaxKind.EqualsToken) return true;
-        if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === top;
+        if (isPropertyAssignment(up)) return up.initializer === top;
         // any other read where a `Value` operand is printed (element keys and receivers, concat operands, compares, `.toString()`
         // receivers): the box is the `Value` the local held; never a write target, update / `delete` / `typeof` operand
         if (isElementAccessExpression(up) && up.argumentExpression === top && this.rust70fWriteTargetKey(up)) return false;
@@ -9541,12 +9560,13 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-70f: a non-test local declared `this.safeString (o, k)` (any key) or `this.safeStringLower|Upper (o, 'lit')`, two
      *  arguments, base reader (rust64bReaderLocal): the boxed reader is `Str` or `Null`, exactly its `_opt` twin. */
-    rust70fReaderLocal(declaration: any, cast = false): boolean {
+    rust70fReaderLocal(declaration: Node, cast = false): boolean {
         if (declaration === undefined || !isVariableDeclaration(declaration) || this.rustTestTierSource(declaration)) return false;
-        let init: any = this.unwrapParens(declaration.initializer);
+        let init: Node = this.unwrapParens(declaration.initializer);
         // `x as string` of the reader (the const-initializer cast rustStrCastCall admits)
         if (cast && init !== undefined && isAsExpression(init) && init.type?.kind === SyntaxKind.StringKeyword) init = this.unwrapParens(init.expression);
-        if (!this.rustUdReaderStr(init) || String(init.expression.name.text) === 'safeCurrencyCode') return false;
+        // rustUdReaderStr admits only a `this.x (..)` call (init is already unwrapped), so the two kind tests are always true there
+        if (!this.rustUdReaderStr(init) || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || String(init.expression.name.text) === 'safeCurrencyCode') return false;
         const name = String(init.expression.name.text);
         if (init.arguments.length !== 2 || (name !== 'safeString' && name !== 'safeStringLower' && name !== 'safeStringUpper')) return false;
         if (name !== 'safeString' && this.rustOptReaderName(init)?.key === undefined) return false;
@@ -9554,15 +9574,15 @@ export class RustTranspiler extends BaseTranspiler {
         return !this.rust70fWritten(declaration);
     }
 
-    rust70fWritten(declaration: any): boolean {
-        const scope: any = this.rustEnclosingFunction(declaration);
+    rust70fWritten(declaration: VariableDeclaration): boolean {
+        const scope: Node = this.rustEnclosingFunction(declaration);
         const own = this.rustSymbolOf(declaration.name);
         if (scope === undefined || own === undefined) return true;
-        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text)) as any[]) {
+        for (const n of this.rustScopeNameNodes(scope, String(isIdentifier(declaration.name) ? declaration.name.text : undefined))) {
             if (n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n) || this.rustSymbolOf(n) !== own) continue;
-            let top: any = n;
+            let top: Node = n;
             while (isParenthesizedExpression(top.parent)) top = top.parent;
-            const up: any = top.parent;
+            const up: Node = top.parent;
             if (isBinaryExpression(up) && up.left === top && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return true;
             if (isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up)) return true;
         }
@@ -9885,12 +9905,14 @@ export class RustTranspiler extends BaseTranspiler {
      *  `this.balance[tradingAccountId]['info'] = message`): the bucket entry ccxt's plain-dict pass printed of the r05 insert
      *  when the key was the boxed local (`entry(stringify_param(&k1))`, narrowed by narrowStrNullLocals to the local's own
      *  text). A value reading `self` keeps the helper chain. */
-    print70fUpperEntryWrite(left: any, acc: string, value: string): string | undefined {
-        const upper: any = this.rustNestedFieldEntryKey(left);
+    print70fUpperEntryWrite(left: ElementAccessExpression, acc: string, value: string): string | undefined {
+        const upper: Node = this.rustNestedFieldEntryKey(left);
         if (upper === undefined || !isIdentifier(upper) || this.rustScalarLocalOf(upper)?.kind !== 'ostr' || !this.rust70fReaderLocal(this.rustDeclaredNode(upper), true)) return undefined;
+        // rustNestedFieldEntryKey answered, so `left.expression` is an element access of a property access
+        if (!isElementAccessExpression(left.expression) || !isPropertyAccessExpression(left.expression.expression)) return undefined;
         const field = String(left.expression.expression.name.text);
-        if (acc !== `get_value_mut(&mut self.${field}, &${this.printNode(upper, 0).trim()})` || this.rustValueBorrowsSelf(left.parent?.right)) return undefined;
-        const last: any = this.rustSkipWrappers(left.argumentExpression);
+        if (acc !== `get_value_mut(&mut self.${field}, &${this.printNode(upper, 0).trim()})` || this.rustValueBorrowsSelf(isBinaryExpression(left.parent) ? left.parent.right : undefined)) return undefined;
+        const last: Node = this.rustSkipWrappers(left.argumentExpression);
         const lastText = isStringLiteral(last) ? `${JSON.stringify(String(last.text))}.to_string()`
             : isIdentifier(last) && this.rustScalarLocalOf(last) === undefined && this.rustPlainValueBinding(last) ? `crate::runtime::stringify_param(&${super.printIdentifier(last)})` : undefined;
         if (lastText === undefined) return undefined;
@@ -11965,7 +11987,8 @@ export class RustTranspiler extends BaseTranspiler {
             // (ordered as `f64`, like the helper's `as_f64` of each `Int` / `Float`)
             if (!isIdentifier(left) || !isIdentifier(right)) return `matches!((${text(lk, left)}, ${text(rk, right)}), (Some(__l), Some(__r)) if (__l as f64) ${sign} (__r as f64))`;
             // base tier: the moved `Value` at a bare last-use write `y = x;` becomes a ccxt-added clone of the typed local
-            if (/ts[\\/]src[\\/]base[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? '')) && (this.rustScalarBareLastWrite(left) || this.rustScalarBareLastWrite(right))) return undefined;
+            if (/ts[\\/]src[\\/]base[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? '')) && ((this.rustScalarBareLastWrite(left) && !this.rust80hCopyWriteInto(left, right))
+                || (this.rustScalarBareLastWrite(right) && !this.rust80hCopyWriteInto(right, left)))) return undefined;
             return `(${text(lk, left)}.is_some() && ${text(rk, right)}.is_some() && ${text(lk, left)} ${sign} ${text(rk, right)})`;
         }
         if (lo || ro) {
@@ -18924,7 +18947,7 @@ export class RustTranspiler extends BaseTranspiler {
         const field = this.rustDictField(receiverNode);
         if (field === undefined || field === 'accounts' || this.isTestSource(receiverNode)) return undefined;
         // ral-70f: an `Option<String>` ral-70f reader key reads the map with its borrow (rustDictRead's lent form)
-        const k70f: any = this.rustSkipWrappers(keyNode);
+        const k70f: Node = this.rustSkipWrappers(keyNode);
         if (isIdentifier(k70f) && this.rustScalarLocalOf(k70f)?.kind === 'ostr' && this.rust70fReaderLocal(this.rustDeclaredNode(k70f), true)) {
             const k = `${super.printIdentifier(k70f)}.as_deref()`;
             return this.rustDictSite({ free: RUST_PLAIN_PLACE.test(receiverText) ? `(if let (Some(__m), Some(__k)) = (${receiverText}.as_map(), ${k}) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })` : undefined,
@@ -22497,8 +22520,8 @@ export class RustTranspiler extends BaseTranspiler {
      *  and no ws client-handle triple, so `get_value`'s store routes cannot fire and
      *  the read is the map lookup. */
     /** ral-70f: `key` is the whole key of a statement `m[key].push (v)` and reads an `Option<String>` ral-70f reader local. */
-    rust70fPushKey(key: any): boolean {
-        const access: any = key?.parent;
+    rust70fPushKey(key: Node): boolean {
+        const access: Node = key?.parent;
         return isIdentifier(key) && isElementAccessExpression(access) && access.argumentExpression === key && this.rustBearerElementPushCall(access.parent?.parent) === access
             && this.rust70fReaderLocal(this.rustDeclaredNode(key), true) && this.rustScalarLocalOf(key)?.kind === 'ostr';
     }
@@ -34905,7 +34928,7 @@ export class RustTranspiler extends BaseTranspiler {
         };
         // ral-70f: an `Option<String>` ral-70f reader operand reads `x.as_deref()` (what `x.as_str()` of its `Str` / `Null` box gave)
         const view = (arg) => {
-            const id: any = this.rustPeelCast(arg);
+            const id: Node = this.rustPeelCast(arg);
             if (id !== undefined && isIdentifier(id) && this.rustScalarLocalOf(id)?.kind === 'ostr' && this.rust70fReaderLocal(this.rustDeclaredNode(id), true)) return `${super.printIdentifier(id)}.as_deref()`;
             const text = operand(arg);
             return text === undefined ? undefined : `${text}.as_str()`;
