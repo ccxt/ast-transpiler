@@ -9378,7 +9378,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** ral-59k: `n` is the reader key of a statement `this.F[k] = v` that rust59kFieldSafeDictReread admits. */
     rust59kFieldSafeDictReaderKey(n: any): boolean {
         const call: any = n.parent;
-        if (!isCallExpression(call) || !isPropertyAccessExpression(call.arguments[0] ?? call) || !this.rust59kFieldSafeDictKeyArg(n, String((call.arguments[0] as any).name?.text))) return false;
+        const head = isCallExpression(call) ? call.arguments[0] : undefined;
+        if (head === undefined || !isPropertyAccessExpression(head) || !this.rust59kFieldSafeDictKeyArg(n, String(head.name.text))) return false;
         const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
         if (write === undefined || !isBinaryExpression(write) || write.parent?.kind !== SyntaxKind.ExpressionStatement || !this.isNodeInsideNode(n, write.right)) return false;
         const target: any = write.left;
@@ -16026,7 +16027,8 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration === node || declaration.name === node || !this.rustHandedDictLocal(declaration)) return undefined;
         // ral-59a: the widened (non-handle*) slot moves the map at its last use, as the plain box did before
-        const wide = !/^(?:handle\w+|fetchPaginatedCall\w+)$/.test(String((node.parent as any).expression.name.text));
+        const slot: any = node.parent;
+        const wide = !/^(?:handle\w+|fetchPaginatedCall\w+)$/.test(String(slot.expression.name.text));
         return wide && this.rustLocalLastUse(node, declaration) ? `Value::Dict(${text})` : `Value::from(&${text})`;
     }
 
@@ -30244,7 +30246,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-59a: a single-binding, never-reassigned `const x = this.omit (m, k)` whose head is a proven map. */
     rustOmitAliasSource(declaration: any): boolean {
-        return isVariableDeclaration(declaration) && isIdentifier(declaration.name) && (declaration.parent as any)?.declarations?.length === 1
+        return isVariableDeclaration(declaration) && isIdentifier(declaration.name) && declaration.parent !== undefined && isVariableDeclarationList(declaration.parent) && declaration.parent.declarations.length === 1
             && !this.rustNilSlotDictCandidate(declaration) && this.rustOmitOfDictInit(declaration) && !this.rustLocalIsReassigned(declaration, String(declaration.name.text));
     }
 
