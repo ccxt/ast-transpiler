@@ -3056,8 +3056,10 @@ export class RustTranspiler extends BaseTranspiler {
             || (list.flags & NodeFlags.Const) !== 0 || list.parent?.kind !== SyntaxKind.VariableStatement) return undefined;
         if (this.rustNilLocalKind(declaration) !== undefined) return undefined;
         const scope: any = this.rustEnclosingFunction(declaration);
-        if (scope === undefined || isSourceFile(scope) || this.rustNativeStrReturnKind(scope) === 'str') return undefined;
+        if (scope === undefined || isSourceFile(scope)) return undefined;
         const name = String(declaration.name.text);
+        // ral-61x: in a `-> Option<String>` method only the local its returns hand back as the payload itself
+        if (this.rustNativeStrReturnKind(scope) === 'str' && !(this.rustScopeNameNodes(scope, name) as any[]).some((n: any) => this.rust61xNilStrReturnLocal(n, scope) && this.rustDeclaredNode(n) === declaration)) return undefined;
         let joined: string | undefined = 'null';
         let writes = 0;
         for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
@@ -3094,7 +3096,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && !this.rustSiblingStrBoxesMove(declaration, scope)) return undefined;
         // ral-45b: a local the new self-slice / `+=` forms type keeps `Value` when a string-returning method returns it
         // (typing it would move the method's `-> Option<String>` signature back to `Value`)
-        if (kind === 'ostr' && this.rust45bUsesNewForm(declaration, scope, name) && this.rust45bReturnedFromStrMethod(declaration, scope, name)) return undefined;
+        // ral-61x: not when the method cannot print `-> Option<String>` (base tier) or keeps it with this local as its own
+        // returned payload (rust61xNilStrReturnLocal): neither signature moves
+        if (kind === 'ostr' && this.rust45bUsesNewForm(declaration, scope, name) && this.rust45bReturnedFromStrMethod(declaration, scope, name)
+            && this.rustNativeStrReturnHead(scope) && !this.rust57xStrReturnMethod(scope)) return undefined;
         // nc: while the function's solver seeds, assume the kind (as the initialised path does), so an alias chain
         // whose links hold each other converges to its largest consistent set; the later passes re-prove every link
         if (this.rustScalarSeeding) return kind;
@@ -3396,7 +3401,19 @@ export class RustTranspiler extends BaseTranspiler {
         return this.literalKindOfNode(this.unwrapParens(declaration.initializer)) === 'string' && this.rustEnclosingFunction(declaration) === fn;
     }
 
+    /** ral-61x: `return x` of the method's own nil-declared `let x: Str = undefined` local (an accumulator the body writes):
+     *  as an `Option<String>` it is the payload itself, as a `Value` a checker-string `Value` (converts either way). */
+    rust61xNilStrReturnLocal(n: any, fn: any): boolean {
+        if (n === undefined || !isIdentifier(n) || !isReturnStatement(n.parent) || findAncestor(n.parent.parent, isFunctionLike) !== fn) return false;
+        const declaration: any = this.rustDeclaredNode(n);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.type === undefined) return false;
+        if (declaration.initializer !== undefined && this.literalKindOfNode(this.unwrapParens(declaration.initializer)) !== 'null') return false;
+        if ((declaration.parent.flags & NodeFlags.Const) !== 0 || this.rustEnclosingFunction(declaration) !== fn) return false;
+        return this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) === 'string';
+    }
+
     rust56xStrReturnText(exp: any, fn: any): string | undefined {
+        if (exp !== undefined && this.rust61xNilStrReturnLocal(exp, fn) && this.rustScalarLocalOf(exp)?.kind === 'ostr') return super.printIdentifier(exp);
         if (exp === undefined || !isIdentifier(exp) || !this.rust56xStrReturnLocal(exp, fn)) return undefined;
         const kind = this.rustScalarLocalOf(exp)?.kind;
         if (kind === 'str') return `Some(${super.printIdentifier(exp)})`;
@@ -7990,6 +8007,7 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-57x: decided from the method itself (head + every return path), not from its cached decision: this use is
             // asked while that decision is still in progress (its return-path walk types this very local)
             if ((kind === 'str' || kind === 'ostr') && this.rust56xStrReturnLocal(n, fn) && this.rustStrReturnSignature(fn, n) && this.rust57xStrReturnMethod(fn)) return 'native';
+            if (kind === 'ostr' && this.rust61xNilStrReturnLocal(n, fn) && this.rust57xStrReturnMethod(fn)) return 'native';
             return this.rustNativeStrReturnKind(fn) === 'str' || this.rustStrReturnSignature(fn, n) ? undefined : 'box';
         }
         // ral-ua: the right operand of `acc += x` onto a `Value` string accumulator joins with `format!` like a `+` operand
@@ -12559,8 +12577,8 @@ export class RustTranspiler extends BaseTranspiler {
                 const inner: any = this.unwrapParensNode(n.expression);
                 // only a local the `-> Option<String>` signature itself held back (rustStrReturnSignature: its return use answered no form);
                 // a local other rules already type keeps the decision it had
-                const own = inner !== undefined && isIdentifier(inner) && this.rust56xStrReturnLocal(inner, fn) && this.rustStrReturnSignature(fn, inner)
-                    && this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string';
+                const own = (inner !== undefined && isIdentifier(inner) && this.rust56xStrReturnLocal(inner, fn) && this.rustStrReturnSignature(fn, inner)
+                    && this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string') || this.rust61xNilStrReturnLocal(inner, fn);
                 if (!own && !this.rustStrReturnValueConverts(n.expression)) { ok = false; return; }
             }
             n.forEachChild(visit);

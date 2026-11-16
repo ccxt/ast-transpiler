@@ -16795,10 +16795,11 @@ describe('ral-45b lift 2: `x += <string>` on a nil-declared Option<String> local
         expect(out).toContain('let mut id: Option<String> = None;');
         expect(out).toContain('id = Some(format!("{}{}", id.as_deref().unwrap_or("null"), ');
     });
-    test('returned from a Str method it keeps Value (the method keeps -> Option<String>)', () => {
+    test('returned from a Str method it is the method\'s own payload (ral-61x; the method keeps -> Option<String>)', () => {
         const out = run ("    m (t: Str, side: Str): Str {\n        let id: Str = undefined;\n        if (t !== undefined) {\n            id = 'a' + t;\n            if (side !== undefined) {\n                id += '-' + side;\n            }\n        }\n        return id;\n    }\n");
         expect(out).toContain('-> Option<String> {');
-        expect(out).toContain('let mut id: Value = Value::Null;');
+        expect(out).toContain('let mut id: Option<String> = None;');
+        expect(out).toContain('return id;');
     });
 });
 
@@ -20943,5 +20944,36 @@ describe('ral-61e: the string id of an optional currency local (nil-declared, wr
     });
     test('guard: an id not declared string stays a Value', () => {
         expect(build ('b', 'any')).toContain('let mut currencyId: Value = crate::value::KeyRead::key_read(&&currency, "id");');
+    });
+});
+
+describe('ral-61x: a nil-declared Str accumulator (`x = a + b` then `x += ..`) that the method returns is an Option<String>', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    numberToString (x: any): Str { return String (x); }\n    keysort (o: Dict): Dict { return o; }\n    makeTradeId (timestamp: Int = undefined, side: Str = undefined): Str {\n        let id: Str = undefined;\n        if (timestamp !== undefined) {\n            id = this.numberToString (timestamp);\n            if (side !== undefined) {\n                id += '-' + side;\n            }\n        }\n        return id;\n    }\n}\n";
+    const build = (name: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        const base = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        return { base, out };
+    };
+    const encode = "    encode (params: Dict): Str {\n        const sorted: Dict = this.keysort (params);\n        const keys = Object.keys (sorted);\n        let result: Str = undefined;\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const value = sorted[key];\n            if (i === 0) {\n                result = key + '=' + value;\n            } else {\n                result += '&' + key + '=' + value;\n            }\n        }\n        return result;\n    }\n    sign (params: Dict): string {\n        const q = this.encode (params);\n        return 'x' + q;\n    }\n";
+    test('the venue `-> Option<String>` method returns the typed local itself', () => {
+        const { out } = build ('ral61x-venue', encode);
+        expect(out).toContain('-> Option<String>');
+        expect(out).toContain('let mut result: Option<String> = None;');
+        expect(out).toContain('result = Some(format!("{}{}", result.as_deref().unwrap_or("null"), ');
+        expect(out).toContain('return result;');
+    });
+    test('the base-tier method keeps its `-> Value` signature and boxes the typed local once at its return', () => {
+        const { base } = build ('ral61x-base', encode);
+        expect(base).toContain('let mut id: Option<String> = None;');
+        expect(base).toContain('return id.map(Value::from).unwrap_or(Value::Null);');
+        expect(base).not.toMatch(/fn makeTradeId\([^)]*\) -> Option<String>/);
+    });
+    test('negative: an accumulator also written from an untyped element stays Value', () => {
+        const { out } = build ('ral61x-neg', encode.replace ("result = key + '=' + value;", 'result = value;'));
+        expect(out).not.toContain('let mut result: Option<String>');
     });
 });
