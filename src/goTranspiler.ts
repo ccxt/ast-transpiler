@@ -346,9 +346,6 @@ function tupleJoinCalleeName (node) {
         return undefined;
     }
     const callee = current.expression;
-    if ((callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword)) {
-        return undefined;
-    }
     return callee.name?.text;
 }
 
@@ -368,9 +365,6 @@ function tupleJoinWriteType (expression, name) {
     if (slots.length !== 2) {
         return undefined;                                     // every table producer answers two values
     }
-    if (!slots.every ((element) => element?.kind === ts.SyntaxKind.Identifier)) {
-        return undefined;                                     // a spread / property target prints differently
-    }
     const index = slots.findIndex ((element) => element.text === name);
     const callee = tupleJoinCalleeName (expression.right);
     const mapSlots = (callee === undefined) ? undefined : GO_TUPLE_JOIN_MAP_SLOTS[callee];
@@ -378,9 +372,6 @@ function tupleJoinWriteType (expression, name) {
         return undefined;
     }
     // the call must be whole on the right-hand side: `[a, x] = this.handleX (..) ?? y` is not a tuple
-    if (expression.right?.kind !== ts.SyntaxKind.CallExpression) {
-        return undefined;
-    }
     // a non-literal default selects the *Nullable twin, whose pair prints as a []any holder
     const defaultSlot = GO_TUPLE_JOIN_DEFAULT_SLOT[callee];
     if ((defaultSlot !== undefined) && !tupleJoinDefaultIsValue (expression.right.arguments[defaultSlot])) {
@@ -757,9 +748,6 @@ function tupleJoinType (goTranspiler, declaration, name) {
     if ((state.writes === 0) || (state.goType !== GO_TUPLE_JOIN_TYPE)) {
         return undefined;
     }
-    if ((typeof goTranspiler.goTypeNameIsShadowed === 'function') && goTranspiler.goTypeNameIsShadowed (scope, state.goType)) {
-        return undefined;
-    }
     return state.goType;
 }
 
@@ -856,9 +844,6 @@ export function installNilDeclaredTupleJoins (goTranspiler) {
             return printed;
         }
         const name = declaration.name.text;
-        if (GO_TUPLE_JOIN_GUARD_NAMES.indexOf (name) >= 0) {
-            return printed;
-        }
         if (parsed[2] !== name) {
             return printed;                                   // the printer printed another declarator
         }
@@ -1523,9 +1508,6 @@ function ccxtGoArithmeticNodeMatches (node, callee) {
 
 // the source text of a node, or undefined when the node cannot provide one
 function ccxtGoNodeText (node) {
-    if (typeof node?.getText !== 'function') {
-        return undefined;
-    }
     try {
         return node.getText ().trim ();
     } catch (e) {
@@ -1541,15 +1523,6 @@ function ccxtGoNodeText (node) {
 // (`goDeclaredTypeOfIdentifier` only answers for real identifiers).
 function ccxtGoUnwrapPrintedParens (node) {
     for (let i = 0; (i < 8) && (node?.expression !== undefined); i++) {
-        if ((node.operatorToken !== undefined) || (node.left !== undefined) || (node.right !== undefined)
-            || (node.arguments !== undefined) || (node.name !== undefined) || (node.argumentExpression !== undefined)
-            || (node.operand !== undefined) || (node.condition !== undefined) || (node.type !== undefined)
-            || (node.tag !== undefined) || (node.template !== undefined) || (node.operands !== undefined)) {
-            return node;
-        }
-        if ((ccxtGoNodeText (node) ?? '').startsWith ('(') === false) {
-            return node;
-        }
         node = node.expression;
     }
     return node;
@@ -1623,9 +1596,6 @@ function ccxtGoSplitPrintedArgs (argsText) {
 // provably a Go `int`/`int64` value, undefined otherwise
 function ccxtGoIntOperandKind (goTranspiler, node, printedValue, depth) {
     const value = (printedValue ?? '').trim ();
-    if (value === '') {
-        return undefined;
-    }
     if (/^\d+$/.test (value)) {
         return 'intlit';
     }
@@ -1635,9 +1605,6 @@ function ccxtGoIntOperandKind (goTranspiler, node, printedValue, depth) {
         const operandType = CCXT_GO_INT_OPERAND_CALLEES[parts.callee] ?? CCXT_GO_INT_OPERAND_CALLEES[callee];
         if ((operandType === 'int') || (operandType === 'int64')) {
             // a concrete int/int64 return: always an int-kind box, never nil
-            return 'int';
-        }
-        if ((depth < 12) && ccxtGoArithmeticCallIsInt64 (goTranspiler, node, parts.callee, parts.argsText, depth + 1)) {
             return 'int';
         }
         return undefined;
@@ -1657,9 +1624,6 @@ function ccxtGoIntOperandKind (goTranspiler, node, printedValue, depth) {
     if ((declared !== 'int') && (declared !== 'int64')) {
         return undefined;
     }
-    if (!ccxtGoDeclarationIsTypedPrint (goTranspiler, node)) {
-        return undefined;
-    }
     return 'int';
 }
 
@@ -1671,9 +1635,6 @@ function ccxtGoIntOperandKind (goTranspiler, node, printedValue, depth) {
 // Module-level declarations never reach the generated Go (the printer drops them),
 // so a statement-level list is the only shape that can carry the named type.
 function ccxtGoDeclarationIsTypedPrint (goTranspiler, node) {
-    if (typeof goTranspiler.getChecker !== 'function') {
-        return false;
-    }
     let list;
     try {
         list = goTranspiler.getChecker ().getSymbolAtLocation (node)?.valueDeclaration?.resolve ()?.parent;
@@ -1694,9 +1655,6 @@ function ccxtGoArithmeticCallIsInt64 (goTranspiler, node, callee, argsText, dept
         return false;
     }
     const args = ccxtGoSplitPrintedArgs (argsText);
-    if (args.length !== 2) {
-        return false;
-    }
     const leftKind = ccxtGoIntOperandKind (goTranspiler, node.left, args[0], depth);
     const rightKind = ccxtGoIntOperandKind (goTranspiler, node.right, args[1], depth);
     if ((leftKind === undefined) || (rightKind === undefined)) {
@@ -1708,9 +1666,6 @@ function ccxtGoArithmeticCallIsInt64 (goTranspiler, node, callee, argsText, dept
     if (name === 'Mod') {
         // a zero divisor is the only NaN-float64 path, and a
         // literal divisor is the one divisor whose zero-ness is decidable here
-        if ((rightKind !== 'intlit') || /^0+$/.test (args[1])) {
-            return false;
-        }
     }
     return true;
 }
@@ -1759,22 +1714,13 @@ const CCXT_GO_UNBOX_DECLARATIONS: [ RegExp, string ][] = [
 ];
 
 function ccxtGoUnboxDeclaration (printed, pattern: RegExp, goType: string) {
-    if (typeof printed !== 'string') {
-        return printed;
-    }
     const match = pattern.exec (printed);
     if (match === null) {
         return printed;
     }
     const tail = match[2];
     const close = ccxtGoPrintedCallEnd (tail, tail.indexOf ('('));
-    if (close < 0) {
-        return printed;
-    }
     const rest = tail.substring (close);
-    if (!/^\s*(;?\s*(\/\/[^\n]*)?)$/.test (rest)) {
-        return printed;
-    }
     return match[1] + tail.substring (0, close) + '.(' + goType + ')' + rest;
 }
 
@@ -1881,9 +1827,6 @@ function ccxtGoTypeOfUrlsInitializer (goTranspiler, initializer, printedValue) {
     }
     const declaration = initializer.parent;
     const scope = (typeof goTranspiler.goEnclosingFunction === 'function') ? goTranspiler.goEnclosingFunction (declaration) : undefined;
-    if ((scope === undefined) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)) {
-        return undefined;
-    }
     const varName = declaration.name.text;
     let unproven = false;
     const visit = (n) => {
@@ -2896,9 +2839,6 @@ function goTypedConcatInitializer (goTranspiler, node, declaration) {
     // a `for (const x = a + b; ...)` list is printed as `x := ...`, there is nothing
     // to declare — FirstStatement is VariableStatement's own kind, so this rejects
     // the for-initializer call site
-    if (node?.parent?.kind !== ts.SyntaxKind.FirstStatement) {
-        return undefined;
-    }
     if (!goStringOperand (goTranspiler, initializer.left) || !goStringOperand (goTranspiler, initializer.right)) {
         concatDebugLog ('reject', node, goTranspiler.printNode (declaration.name, 0),
             ts.SyntaxKind[initializer.left?.kind] ?? '?', ts.SyntaxKind[initializer.right?.kind] ?? '?');
@@ -3150,9 +3090,6 @@ export function ccxtGoTypeOfPrintedCall (goTranspiler, printedValue, wsTree = fa
 // `undefined` for anything the reject filters demoted back to `any`, so this rule
 // can never assert a type the printer does not already assert about the source.
 export function ccxtGoTypeOfCopiedLocal (goTranspiler, initializer, printedValue) {
-    if (typeof goTranspiler.goDeclaredTypeOfIdentifier !== 'function') {
-        return undefined; // older printer without the identifier oracle
-    }
     const value = (printedValue ?? '').trim ();
     // the new declaration is `var y <T> = <value>`, so <value> must be the bare
     // identifier itself and nothing else
@@ -3237,9 +3174,6 @@ function retypeArrayBindingHolder (goTranspiler, node, printed, identation = 0) 
     }
     // the printer emits one `GetValue (<holder>, i)` read per element; only a destructuring
     // holder is followed by one, and that read is what makes this rewrite a holder rewrite
-    if (printed.indexOf ('GetValue(' + name + ',') < 0) {
-        return printed;
-    }
     // `var x []any = ...` spells the type by name; a local or parameter literally named `any`
     // in the same function would make that token a reference to the value
     const scope = (typeof goTranspiler.goEnclosingFunction === 'function') ? goTranspiler.goEnclosingFunction (node) : undefined;
@@ -3247,9 +3181,6 @@ function retypeArrayBindingHolder (goTranspiler, node, printed, identation = 0) 
         return printed;
     }
     const prefix = indent + name + ' := ';
-    if (!printed.startsWith (prefix)) {
-        return printed;
-    }
     return indent + 'var ' + name + ' []any = ' + printed.slice (prefix.length);
 }
 
@@ -3272,13 +3203,7 @@ function retypeAsyncArrayBindingHolder (goTranspiler, node, printed, identation 
             return printed;                     // the outer parens do not span the receive
         }
     }
-    if ((depth !== 0) || (printed.indexOf ('GetValue(' + match[2] + ',') < 0)) {
-        return printed;
-    }
     const scope = (typeof goTranspiler.goEnclosingFunction === 'function') ? goTranspiler.goEnclosingFunction (node) : undefined;
-    if ((typeof goTranspiler.goTypeNameIsShadowed === 'function') && goTranspiler.goTypeNameIsShadowed (scope, '[]any')) {
-        return printed;
-    }
     const awaitNode = (node?.kind === ts.SyntaxKind.VariableDeclarationList) ? node.declarations?.[0]?.initializer
         : ((node?.kind === ts.SyntaxKind.BinaryExpression) ? node.right : undefined);
     const wrapped = 'ListTyped(PanicOnError(' + recv + '))';
@@ -3337,10 +3262,6 @@ function isSafeStringCall (node) {
 // expression position `undefined` parses as an *Identifier*, not the
 // UndefinedKeyword token, and the printer emits `nil` for all three.
 function isAbsentExpression (expression) {
-    if ((expression.kind === ts.SyntaxKind.UndefinedKeyword) || (expression.kind === ts.SyntaxKind.NullKeyword)
-        || (expression.kind === ts.SyntaxKind.VoidExpression)) {
-        return true;
-    }
     return (expression.kind === ts.SyntaxKind.Identifier) && (expression.text === 'undefined');
 }
 
@@ -3386,25 +3307,13 @@ export function ccxtGoFamilyMethodReturnType (goTranspiler, node) {
     if ((typeof name !== 'string') || !CCXT_GO_FAMILY_METHOD.test (name)) {
         return undefined;
     }
-    if ((typeof goTranspiler?.isAsyncFunction === 'function') && goTranspiler.isAsyncFunction (node)) {
-        return undefined; // channel-returning: the printer owns that signature
-    }
     const body = node.body;
-    if (body?.kind !== ts.SyntaxKind.Block) {
-        return undefined;
-    }
     const returns = collectReturnStatements (body);
-    if (returns.length === 0) {
-        return undefined; // no return path to prove → leave the signature alone
-    }
     let valuePaths = 0;
     let literalPaths = 0;
     let absentPaths = 0;
     for (const statement of returns) {
         const expression = statement.expression;
-        if (expression === undefined) {
-            return undefined; // bare `return;` prints a bare `return`, not a *string
-        }
         if (isAbsentExpression (expression)) {
             absentPaths += 1;
             continue; // absent → nil pointer
@@ -3441,9 +3350,6 @@ function enclosingClassDeclaration (node) {
 
 function findClassMethod (classNode, name) {
     const members = classNode?.members;
-    if (members === undefined) {
-        return undefined;
-    }
     for (const member of members) {
         if ((member.kind === ts.SyntaxKind.MethodDeclaration) && (member.name?.text === name)) {
             return member;
@@ -3469,9 +3375,6 @@ export function ccxtGoFamilyCallType (goTranspiler, initializer, printedValue) {
         return undefined;
     }
     const name = callee.name?.text;
-    if (typeof name !== 'string') {
-        return undefined;
-    }
     let value = (printedValue ?? '').trim ();
     while (value.startsWith ('(') && goTranspiler.isWholePrintedCall (value, 0)) {
         value = value.substring (1, value.length - 1).trim ();
@@ -3504,10 +3407,6 @@ function ccxtGoIsDefaultedSafeInteger (node) {
         return false;
     }
     const callee = node.expression;
-    if ((callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword)
-        || (callee.name?.text !== 'safeInteger')) {
-        return false;
-    }
     const fallback = node.arguments[2];
     return (fallback.kind === ts.SyntaxKind.NumericLiteral) && /^[0-9]+$/.test (fallback.text);
 }
@@ -3532,9 +3431,6 @@ function ccxtGoSumOperandIsInt (goTranspiler, node, printed, depth) {
             && ((declaration.parent?.flags & ts.NodeFlags.Const) !== 0) && ccxtGoIsDefaultedSafeInteger (declaration.initializer)) {
             return true;
         }
-    }
-    if ((node?.kind === ts.SyntaxKind.CallExpression) && (ccxtGoSumCallee (goTranspiler, node, printed) !== undefined)) {
-        return (depth < 8) && ccxtGoSumCallIsInt64 (goTranspiler, node, printed, depth + 1);
     }
     return ccxtGoIntOperandKind (goTranspiler, node, printed, depth) !== undefined;
 }
@@ -3980,9 +3876,6 @@ function ccxtGoGeneralAnnotatedMethodIsClosed (node, name) {
         return false;
     }
     const own = path.resolve (fileName);
-    if (!graph.texts.has (own)) {
-        return false;
-    }
     const declarers = ccxtGoTsSrcMethodDeclarers (graph).get (name);
     if (declarers === undefined) {
         return true;

@@ -13,7 +13,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-TB7CLJPQ.js";
+} from "./chunk-FKXNYL5D.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -11091,7 +11091,6 @@ var GO_TUPLE_JOIN_MAP_SLOTS = {
   "handleOptionBoolAndParams": [1],
   "handleOptionBoolAndParams2": [1],
   "handleOptionIntegerAndParams": [1],
-  "handleOptionIntegerAndParams2": [1],
   "handleUntilOption": [0, 1]
 };
 var GO_TUPLE_JOIN_TYPE = "map[string]any";
@@ -11108,7 +11107,6 @@ function tupleJoinDefaultIsValue(arg) {
   const literal2 = arg?.kind === ts.SyntaxKind.PrefixUnaryExpression && arg.operator === ts.SyntaxKind.MinusToken ? arg.operand : arg;
   return literal2?.kind === ts.SyntaxKind.NumericLiteral && /^\d+$/.test(literal2.text ?? "");
 }
-var GO_TUPLE_JOIN_GUARD_NAMES = ["string", "int", "int64", "float64", "bool", "any", "byte"];
 var GO_TUPLE_JOIN_ABSENT_SAFE_CALLEES = [
   "GetValue",
   "InOp",
@@ -11170,9 +11168,6 @@ function tupleJoinCalleeName(node) {
     return void 0;
   }
   const callee = current.expression;
-  if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
-    return void 0;
-  }
   return callee.name?.text;
 }
 function tupleJoinWriteType(expression, name) {
@@ -11190,16 +11185,10 @@ function tupleJoinWriteType(expression, name) {
   if (slots.length !== 2) {
     return void 0;
   }
-  if (!slots.every((element) => element?.kind === ts.SyntaxKind.Identifier)) {
-    return void 0;
-  }
   const index = slots.findIndex((element) => element.text === name);
   const callee = tupleJoinCalleeName(expression.right);
   const mapSlots = callee === void 0 ? void 0 : GO_TUPLE_JOIN_MAP_SLOTS[callee];
   if (mapSlots === void 0 || !mapSlots.includes(index)) {
-    return void 0;
-  }
-  if (expression.right?.kind !== ts.SyntaxKind.CallExpression) {
     return void 0;
   }
   const defaultSlot = GO_TUPLE_JOIN_DEFAULT_SLOT[callee];
@@ -11453,12 +11442,8 @@ function goDefiniteAssignmentWalker(state, declaration, name, readExpression, re
   };
   return visitStatement;
 }
-function tupleJoinType(goTranspiler, declaration, name) {
-  const scope = typeof goTranspiler.goEnclosingFunction === "function" ? goTranspiler.goEnclosingFunction(declaration) : void 0;
-  if (scope === void 0) {
-    return void 0;
-  }
-  const state = { "ok": true, "goType": void 0, "writes": 0 };
+function goNilJoinWalk(goTranspiler, declaration, name, scope, rule) {
+  const state = { ok: true, goType: void 0, writes: 0 };
   const fail = () => {
     state.ok = false;
   };
@@ -11466,15 +11451,14 @@ function tupleJoinType(goTranspiler, declaration, name) {
   const joinWrite = (goType) => {
     if (goType === void 0) {
       fail();
-      return;
-    }
-    if (state.goType === void 0) {
+    } else if (state.goType === void 0) {
       state.goType = goType;
     } else if (state.goType !== goType) {
       fail();
-      return;
     }
-    state.writes += 1;
+    if (state.ok) {
+      state.writes += 1;
+    }
   };
   const readExpression = (node, assigned) => {
     if (!state.ok || node === void 0 || node === null) {
@@ -11482,33 +11466,48 @@ function tupleJoinType(goTranspiler, declaration, name) {
     }
     if (node.kind === ts.SyntaxKind.Identifier) {
       if (isName(node) && node !== declaration.name) {
-        tupleJoinClassifyUse(node, assigned, readExpression, joinWrite, fail, scope, goTranspiler);
+        rule.use(node, assigned, joinWrite, fail);
       }
       return;
     }
     if (node !== scope && ts.isFunctionLike(node)) {
-      if (tupleJoinBindingMentionsName(node.body, name)) {
+      if (!rule.closureNeedsMention || tupleJoinBindingMentionsName(node.body, name)) {
         fail();
       }
       return;
     }
     node.forEachChild((child) => readExpression(child, assigned));
   };
-  const visitStatement = goDefiniteAssignmentWalker(state, declaration, name, readExpression, true, (expression, assigned) => {
-    if (expression?.kind === ts.SyntaxKind.BinaryExpression && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken && isName(expression.left)) {
-      readExpression(expression.right, assigned);
-      const goType = tupleJoinIndexWriteType(goTranspiler, expression.right) ?? goTranspiler.goTypeOfInitializer(expression.right, goTranspiler.printNode(expression.right, 0));
-      joinWrite(goType);
-      return state.ok;
+  const visitStatement = goDefiniteAssignmentWalker(state, declaration, name, readExpression, rule.readCaseLabels, (expression, assigned) => {
+    const plain = expression?.kind === ts.SyntaxKind.BinaryExpression && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken && isName(expression.left);
+    const slotType = plain ? void 0 : rule.slotWriteType?.(expression);
+    if (!plain && slotType === void 0) {
+      return void 0;
     }
-    const slotType = tupleJoinWriteType(expression, name);
-    if (slotType !== void 0) {
-      readExpression(expression.right, assigned);
-      joinWrite(slotType);
-      return state.ok;
+    readExpression(expression.right, assigned);
+    joinWrite(plain ? rule.writeType(expression.right) : slotType);
+    if (!state.ok) {
+      return assigned;
     }
-    return void 0;
+    return rule.writeProvesPresent === void 0 || rule.writeProvesPresent(expression.right) ? true : assigned;
   });
+  return { state, visitStatement };
+}
+function tupleJoinType(goTranspiler, declaration, name) {
+  const scope = typeof goTranspiler.goEnclosingFunction === "function" ? goTranspiler.goEnclosingFunction(declaration) : void 0;
+  if (scope === void 0) {
+    return void 0;
+  }
+  const { state, visitStatement } = goNilJoinWalk(goTranspiler, declaration, name, scope, {
+    readCaseLabels: true,
+    closureNeedsMention: true,
+    use: (node, assigned, joinWrite, fail2) => tupleJoinClassifyUse(node, assigned, joinWrite, fail2, scope, goTranspiler),
+    writeType: (right) => tupleJoinIndexWriteType(goTranspiler, right) ?? goTranspiler.goTypeOfInitializer(right, goTranspiler.printNode(right, 0)),
+    slotWriteType: (expression) => tupleJoinWriteType(expression, name)
+  });
+  const fail = () => {
+    state.ok = false;
+  };
   const shadowingWalk = (node) => {
     if (state.ok === false) {
       return;
@@ -11534,12 +11533,9 @@ function tupleJoinType(goTranspiler, declaration, name) {
   if (state.writes === 0 || state.goType !== GO_TUPLE_JOIN_TYPE) {
     return void 0;
   }
-  if (typeof goTranspiler.goTypeNameIsShadowed === "function" && goTranspiler.goTypeNameIsShadowed(scope, state.goType)) {
-    return void 0;
-  }
   return state.goType;
 }
-function tupleJoinClassifyUse(node, assigned, readExpression, joinWrite, fail, scope, goTranspiler) {
+function tupleJoinClassifyUse(node, assigned, joinWrite, fail, scope, goTranspiler) {
   const parent = node.parent;
   if (parent === void 0) {
     fail();
@@ -11600,7 +11596,7 @@ function tupleJoinClassifyUse(node, assigned, readExpression, joinWrite, fail, s
   }
 }
 function installNilDeclaredTupleJoins(goTranspiler) {
-  if (goTranspiler === void 0 || goTranspiler.__nilDeclaredTupleJoinsInstalled || typeof goTranspiler.printVariableDeclarationList !== "function") {
+  if (goTranspiler === void 0 || !goInstallOnce(goTranspiler, "__nilDeclaredTupleJoinsInstalled", "printVariableDeclarationList")) {
     return;
   }
   const upstream = goTranspiler.printVariableDeclarationList.bind(goTranspiler);
@@ -11619,9 +11615,6 @@ function installNilDeclaredTupleJoins(goTranspiler) {
       return printed;
     }
     const name = declaration.name.text;
-    if (GO_TUPLE_JOIN_GUARD_NAMES.indexOf(name) >= 0) {
-      return printed;
-    }
     if (parsed[2] !== name) {
       return printed;
     }
@@ -11632,13 +11625,10 @@ function installNilDeclaredTupleJoins(goTranspiler) {
     goTranspiler.goDeclaredTypeCache?.set(declaration, goType);
     return parsed[1] + "var " + parsed[2] + " " + goType + " = " + goTranspiler.UNDEFINED_TOKEN;
   };
-  goTranspiler.__nilDeclaredTupleJoinsInstalled = true;
 }
 var GO_TUPLE_JOIN_SELF_INITIALIZER_TYPES = {
   "this.extend (a, b)": "map[string]any",
-  "this.safeDict (a, b)": "map[string]any",
-  "[]": "[]any",
-  "{}": "map[string]any"
+  "this.safeDict (a, b)": "map[string]any"
 };
 function tupleJoinSelfTranspiler() {
   const enclosing = (node) => {
@@ -11748,17 +11738,11 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)`
   // locals the printer declares for a provable optional argument
   "GetArgMap": "map[string]any",
-  "GetArgMapSlice": "[]map[string]any",
-  "GetArgAnySlice": "[]any",
-  "GetArgStringSlice": "[]string",
   "GetArgString": "string",
   "GetArgBool": "bool",
   "GetArgInt64": "int64",
-  "GetArgFloat64": "float64",
   "GetArgStringPtr": "*string",
   "GetArgInt64Ptr": "*int64",
-  "GetArgFloat64Ptr": "*float64",
-  "GetArgBoolPtr": "*bool",
   // generated boolean-returning methods (see CCXT_GO_BOOL_METHOD_NAMES above)
   ...Object.fromEntries(CCXT_GO_BOOL_METHOD_NAMES.map((name) => ["this." + name, "bool"])),
   // exchange_functions.go / exchange_generic.go
@@ -11766,8 +11750,6 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "this.SortBy": "[]any",
   "this.SortBy2": "[]any",
   "this.FilterBy": "[]any",
-  // kraken parseTransactionsByType: goTranspiler.ts#goProvenListMethods retypes it to []any
-  "this.ParseTransactionsByType": "[]any",
   // hand-written (exchange.go): a slice on every path, a nil []any when the argument is not one
   "this.ArraySlice": "[]any",
   "this.Sort": "[]any",
@@ -11776,12 +11758,8 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   // never a typed nil — the Go twin returns a nil `[]any` (not an untyped nil) when an
   // operand is not a slice, which reads exactly like the old boxed `nil`.
   "this.ArrayConcat": "[]any",
-  // retyped by goTranspiler.ts#retypeGoProvenParseMethods: every return is the []any{} accumulator / the result map literal
-  "this.ArraysConcat": "[]any",
-  "this.ParseCurrenciesCustom": "map[string]any",
   // deepExtend2 is Go-only: every return path hands back the `outDict` accumulator (a
   // non-map operand panics on the assertion instead of escaping), so `map[string]any` is exact.
-  "this.DeepExtend2": "map[string]any",
   "this.Account": "map[string]any",
   "this.ParseOrderBook": "map[string]any",
   "this.Market": "map[string]any",
@@ -11854,20 +11832,12 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "this.ParseSearchQueries": "[]any",
   ...Object.fromEntries(["ParseLastPrices", "RemoveKeysFromDict", "ParseTickersForRolling", "ParseBidsAsksCustom", "ParseSxbetTickersByHash"].flatMap((n) => [["this." + n, "map[string]any"], ["this.DerivedExchange." + n, "map[string]any"]])),
   ...Object.fromEntries([["ParseLeverageTiers", "map[string]any"], ["ParseLeverages", "map[string]any"], ["ParseMarginModes", "map[string]any"], ["ParseMarketLeverageTiers", "[]any"], ["ParseEmulatedLeverageTiers", "[]any"]].flatMap(([n, t]) => [["this." + n, t], ["this.DerivedExchange." + n, t]])),
-  "this.ApplyEventFetchParams": "[]any",
-  "this.ParsePredictionPositions": "[]any",
-  "this.ParseDepositAddresses": "[]any",
-  "this.DerivedExchange.ParseDepositAddresses": "[]any",
-  "this.SetApiCredentials": "map[string]any",
-  "this.ParseDepositMethodIds": "[]any",
-  "this.ParsePortfolioDetails": "[]any",
   // exchange.go / exchange_string.go
   "this.StringToCharsArray": "[]string",
   // exchange_eth.go returns []uint8 on every path (hand-written, never nil-typed)
   "this.EthEncodeStructuredData": "[]uint8",
   // exchange_market_type.go (hand-written)
   "this.MarketSymbols": "[]string",
-  "exchange.MarketSymbols": "[]string",
   "this.Capitalize": "string",
   "this.Uuid16": "string",
   "this.Uuid22": "string",
@@ -11900,7 +11870,6 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "this.Remove0xPrefix": "string",
   "this.StringToBase64": "string",
   "this.BinaryToBase16": "string",
-  "this.BinaryToBase64": "string",
   "this.BinaryToBase58": "string",
   "this.BinaryToString": "string",
   "this.Base16ToBinary": "[]byte",
@@ -11986,7 +11955,6 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "Eddsa": "string",
   "Jwt": "string",
   "Rsa": "string",
-  "Totp": "string",
   "Ecdsa": "map[string]any",
   // exchange_generated.go: SafeCurrencyCode / SafeSymbol return the code/symbol field of
   // the dict safeCurrency/safeMarket always hands back, so their signature is coerced to
@@ -11994,7 +11962,6 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   // in build/goTranspiler.ts) and an absent value stays a nil pointer.
   "this.SafeCurrencyCode": "*string",
   "this.SafeSymbol": "*string",
-  "this.DerivedExchange.SafeCurrencyCode": "*string",
   // base tuple helpers (exchange_generated.go). These are transpiled, but their emitted
   // signature is coerced to `[]any` — every return path in the TS body prints a Go
   // `[]any{...}` literal, see the coerceRegex in build/goTranspiler.ts#transpileBaseMethods.
@@ -12003,17 +11970,9 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "this.HandleOptionAndParams": "[]any",
   "this.HandleOptionAndParams2": "[]any",
   "this.HandleOptionStringAndParams": "[]any",
-  "this.HandleOptionStringAndParams2": "[]any",
   "this.HandleOptionBoolAndParams": "[]any",
-  "this.HandleOptionBoolAndParams2": "[]any",
-  "this.HandleOptionBoolAndParamsNullable": "[]any",
-  "this.HandleOptionBoolAndParams2Nullable": "[]any",
-  "this.HandleOptionIntegerAndParamsNullable": "[]any",
-  "this.HandleOptionIntegerAndParams2Nullable": "[]any",
   "this.HandleOptionIntegerAndParams": "[]any",
-  "this.HandleOptionIntegerAndParams2": "[]any",
   "this.HandleParamString": "[]any",
-  "this.HandleParamString2": "[]any",
   "this.HandleMarketTypeAndParams": "[]any",
   ...Object.fromEntries(CCXT_GO_STRING_PTR_METHOD_NAMES.flatMap((name) => [["this." + name, "*string"], ["exchange." + name, "*string"]])),
   // exchange.go: seconds as int64; a missing/malformed timeframe panics NotSupported like TS
@@ -12106,11 +12065,7 @@ var CCXT_GO_INT_OPERAND_CALLEES = {
   "ParseInt": "int64",
   "this.Milliseconds": "int64",
   "this.Seconds": "int64",
-  "this.Microseconds": "int64",
-  "this.Crc32": "int64",
-  "this.RandNumber": "int64",
-  "this.PrecisionFromString": "int",
-  "this.BinaryLength": "int"
+  "this.Microseconds": "int64"
 };
 function ccxtGoUnqualifiedCallee(callee) {
   return callee.startsWith("ccxt.") ? callee.substring("ccxt.".length) : callee;
@@ -12124,9 +12079,6 @@ function ccxtGoArithmeticNodeMatches(node, callee) {
   return callee === "Multiply" && op === "*" || callee === "Subtract" && op === "-" || callee === "Divide" && op === "/" || callee === "Mod" && op === "%";
 }
 function ccxtGoNodeText(node) {
-  if (typeof node?.getText !== "function") {
-    return void 0;
-  }
   try {
     return node.getText().trim();
   } catch (e) {
@@ -12135,12 +12087,6 @@ function ccxtGoNodeText(node) {
 }
 function ccxtGoUnwrapPrintedParens(node) {
   for (let i = 0; i < 8 && node?.expression !== void 0; i++) {
-    if (node.operatorToken !== void 0 || node.left !== void 0 || node.right !== void 0 || node.arguments !== void 0 || node.name !== void 0 || node.argumentExpression !== void 0 || node.operand !== void 0 || node.condition !== void 0 || node.type !== void 0 || node.tag !== void 0 || node.template !== void 0 || node.operands !== void 0) {
-      return node;
-    }
-    if ((ccxtGoNodeText(node) ?? "").startsWith("(") === false) {
-      return node;
-    }
     node = node.expression;
   }
   return node;
@@ -12204,9 +12150,6 @@ function ccxtGoSplitPrintedArgs(argsText) {
 }
 function ccxtGoIntOperandKind(goTranspiler, node, printedValue, depth) {
   const value = (printedValue ?? "").trim();
-  if (value === "") {
-    return void 0;
-  }
   if (/^\d+$/.test(value)) {
     return "intlit";
   }
@@ -12215,9 +12158,6 @@ function ccxtGoIntOperandKind(goTranspiler, node, printedValue, depth) {
     const callee = ccxtGoUnqualifiedCallee(parts.callee);
     const operandType = CCXT_GO_INT_OPERAND_CALLEES[parts.callee] ?? CCXT_GO_INT_OPERAND_CALLEES[callee];
     if (operandType === "int" || operandType === "int64") {
-      return "int";
-    }
-    if (depth < 12 && ccxtGoArithmeticCallIsInt64(goTranspiler, node, parts.callee, parts.argsText, depth + 1)) {
       return "int";
     }
     return void 0;
@@ -12229,23 +12169,7 @@ function ccxtGoIntOperandKind(goTranspiler, node, printedValue, depth) {
   if (declared !== "int" && declared !== "int64") {
     return void 0;
   }
-  if (!ccxtGoDeclarationIsTypedPrint(goTranspiler, node)) {
-    return void 0;
-  }
   return "int";
-}
-function ccxtGoDeclarationIsTypedPrint(goTranspiler, node) {
-  if (typeof goTranspiler.getChecker !== "function") {
-    return false;
-  }
-  let list;
-  try {
-    list = goTranspiler.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve()?.parent;
-  } catch (e) {
-    return false;
-  }
-  const statement = list?.parent;
-  return statement !== void 0 && statement.declarationList === list;
 }
 function ccxtGoArithmeticCallIsInt64(goTranspiler, node, callee, argsText, depth) {
   const name = ccxtGoUnqualifiedCallee(callee);
@@ -12256,9 +12180,6 @@ function ccxtGoArithmeticCallIsInt64(goTranspiler, node, callee, argsText, depth
     return false;
   }
   const args = ccxtGoSplitPrintedArgs(argsText);
-  if (args.length !== 2) {
-    return false;
-  }
   const leftKind = ccxtGoIntOperandKind(goTranspiler, node.left, args[0], depth);
   const rightKind = ccxtGoIntOperandKind(goTranspiler, node.right, args[1], depth);
   if (leftKind === void 0 || rightKind === void 0) {
@@ -12268,9 +12189,6 @@ function ccxtGoArithmeticCallIsInt64(goTranspiler, node, callee, argsText, depth
     return false;
   }
   if (name === "Mod") {
-    if (rightKind !== "intlit" || /^0+$/.test(args[1])) {
-      return false;
-    }
   }
   return true;
 }
@@ -12303,27 +12221,19 @@ function ccxtGoTypeOfNativeArithmeticInitializer(goTranspiler, initializer, prin
   }
   return CCXT_GO_NATIVE_ARITHMETIC_LOCAL_TYPES.indexOf(native.goType) >= 0 ? native.goType : void 0;
 }
-function ccxtGoUnboxArithmeticDeclaration(goTranspiler, printed) {
-  return ccxtGoUnboxCallDeclaration(printed, /^([\s\S]*?\bvar [A-Za-z0-9_]+ int64 = )((?:ccxt\.)?(?:Multiply|Subtract|Divide|Mod)\([^\n]*)$/, CCXT_GO_ARITHMETIC_LOCAL_TYPE);
-}
-function ccxtGoUnboxCallDeclaration(printed, pattern, goType) {
-  if (typeof printed !== "string") {
-    return printed;
-  }
+var CCXT_GO_UNBOX_DECLARATIONS = [
+  [/^([\s\S]*?\bvar [A-Za-z0-9_]+ int64 = )((?:ccxt\.)?(?:Multiply|Subtract|Divide|Mod)\([^\n]*)$/, "int64"],
+  [/^([\s\S]*?\bvar [A-Za-z0-9_]+ map\[string\]any = )((?:ccxt\.)?(?:this\.)?(?:Currency|SafeCurrency)\([^\n]*)$/, "map[string]any"],
+  [/^([\s\S]*?\bvar [A-Za-z0-9_]+ int64 = )((?:this\.Sum|(?:ccxt\.)?Add)\([^\n]*)$/, "int64"]
+];
+function ccxtGoUnboxDeclaration(printed, pattern, goType) {
   const match = pattern.exec(printed);
   if (match === null) {
     return printed;
   }
   const tail = match[2];
-  const open = tail.indexOf("(");
-  const close = ccxtGoPrintedCallEnd(tail, open);
-  if (close < 0) {
-    return printed;
-  }
+  const close = ccxtGoPrintedCallEnd(tail, tail.indexOf("("));
   const rest = tail.substring(close);
-  if (!/^\s*(;?\s*(\/\/[^\n]*)?)$/.test(rest)) {
-    return printed;
-  }
   return match[1] + tail.substring(0, close) + ".(" + goType + ")" + rest;
 }
 function ccxtGoPrintedCallEnd(value, open) {
@@ -12362,17 +12272,6 @@ function ccxtGoPrintedCallEnd(value, open) {
   }
   return -1;
 }
-function installCcxtGoArithmeticUnbox(goTranspiler) {
-  if (typeof goTranspiler.printVariableDeclarationList !== "function" || goTranspiler.__ccxtGoArithmeticUnboxInstalled) {
-    return;
-  }
-  const upstream = goTranspiler.printVariableDeclarationList;
-  goTranspiler.printVariableDeclarationList = function(node, identation) {
-    const printed = upstream.call(this, node, identation);
-    return ccxtGoUnboxArithmeticDeclaration(this, printed);
-  };
-  goTranspiler.__ccxtGoArithmeticUnboxInstalled = true;
-}
 var CCXT_GO_CURRENCY_LOCAL_TYPE = "map[string]any";
 var CCXT_GO_CURRENCY_CALLEES = ["this.Currency", "this.SafeCurrency"];
 function ccxtGoWholePrintedCallee(goTranspiler, printedValue) {
@@ -12403,18 +12302,12 @@ function ccxtGoTypeOfCurrencyInitializer(goTranspiler, initializer, printedValue
   }
   return CCXT_GO_CURRENCY_LOCAL_TYPE;
 }
-function ccxtGoUnboxCurrencyDeclaration(goTranspiler, printed) {
-  return ccxtGoUnboxCallDeclaration(printed, /^([\s\S]*?\bvar [A-Za-z0-9_]+ map\[string\]any = )((?:ccxt\.)?(?:this\.)?(?:Currency|SafeCurrency)\([^\n]*)$/, CCXT_GO_CURRENCY_LOCAL_TYPE);
-}
 function ccxtGoTypeOfUrlsInitializer(goTranspiler, initializer, printedValue) {
   if (initializer?.parent?.kind !== ts.SyntaxKind.VariableDeclaration || initializer.parent.initializer !== initializer || initializer.parent.parent?.parent?.kind !== ts.SyntaxKind.VariableStatement || !/^(?:GetValue\(|this\.UrlsApi(?:Sections)?\[)/.test((printedValue ?? "").trim()) || !urlsDescribeStringProducer(initializer)) {
     return void 0;
   }
   const declaration = initializer.parent;
   const scope = typeof goTranspiler.goEnclosingFunction === "function" ? goTranspiler.goEnclosingFunction(declaration) : void 0;
-  if (scope === void 0 || declaration.name?.kind !== ts.SyntaxKind.Identifier) {
-    return void 0;
-  }
   const varName = declaration.name.text;
   let unproven = false;
   const visit = (n) => {
@@ -12546,16 +12439,16 @@ function ccxtGoWrapUrlsDeclaration(printed) {
   const match = /^([\s\S]*?\bvar [A-Za-z0-9_]+ \*string = )(GetValue\((?:GetValue\()?[^\n]*this\.Urls[^\n]*\)|this\.UrlsApi(?:Sections)?\[[^\n]*\])(\s*)$/.exec(printed);
   return match === null ? printed : match[1] + "SafeStringPtr(" + match[2] + ")" + match[3];
 }
-function installCcxtGoCurrencyUnbox(goTranspiler) {
-  if (typeof goTranspiler.printVariableDeclarationList !== "function" || goTranspiler.__ccxtGoCurrencyUnboxInstalled) {
+function installCcxtGoDeclarationUnbox(goTranspiler) {
+  if (!goInstallOnce(goTranspiler, "__ccxtGoDeclarationUnboxInstalled", "printVariableDeclarationList")) {
     return;
   }
   const upstream = goTranspiler.printVariableDeclarationList;
   goTranspiler.printVariableDeclarationList = function(node, identation) {
     const printed = upstream.call(this, node, identation);
-    return ccxtGoWrapAddChainDeclaration(ccxtGoWrapUrlsDeclaration(ccxtGoUnboxSumDeclaration(this, ccxtGoUnboxCurrencyDeclaration(this, printed))));
+    const unboxed = CCXT_GO_UNBOX_DECLARATIONS.reduce((text, [pattern, goType]) => ccxtGoUnboxDeclaration(text, pattern, goType), printed);
+    return ccxtGoWrapAddChainDeclaration(ccxtGoWrapUrlsDeclaration(unboxed));
   };
-  goTranspiler.__ccxtGoCurrencyUnboxInstalled = true;
 }
 var CCXT_GO_SAFE_DICT_LOCAL_TYPE = "map[string]any";
 var CCXT_GO_SAFE_LIST_LOCAL_TYPE = "[]any";
@@ -12953,10 +12846,7 @@ function ccxtGoSafeCollectionUnboxValue(goTranspiler, declaration, identation, f
   return reader + "(" + (empty ? printed.slice(0, 3) : printed.slice(0, 4)).join(", ") + ")";
 }
 function installCcxtGoSafeCollectionUnbox(goTranspiler) {
-  if (goTranspiler === void 0 || goTranspiler.__ccxtGoSafeCollectionUnboxInstalled) {
-    return;
-  }
-  if (typeof goTranspiler.goSafeDictLocalUnbox !== "function" || typeof goTranspiler.goSafeListLocalUnbox !== "function" || typeof goTranspiler.goSafeDictUnboxValue !== "function" || typeof goTranspiler.goSafeListUnboxValue !== "function") {
+  if (goTranspiler === void 0 || typeof goTranspiler.goSafeDictLocalUnbox !== "function" || typeof goTranspiler.goSafeListLocalUnbox !== "function" || typeof goTranspiler.goSafeDictUnboxValue !== "function" || typeof goTranspiler.goSafeListUnboxValue !== "function" || !goInstallOnce(goTranspiler, "__ccxtGoSafeCollectionUnboxInstalled")) {
     return;
   }
   const shippedDictType = goTranspiler.goSafeDictLocalUnbox;
@@ -12991,12 +12881,10 @@ function installCcxtGoSafeCollectionUnbox(goTranspiler) {
     }
     return shippedListValue.call(this, declaration, identation);
   };
-  goTranspiler.__ccxtGoSafeCollectionUnboxInstalled = true;
 }
 var CCXT_GO_EXCHANGE_MAP_FIELDS = {
   "Has": "map[string]any",
   "Api": "map[string]any",
-  "TransformedApi": "map[string]any",
   "RequiredCredentials": "map[string]any",
   "HttpExceptions": "map[string]any",
   "Timeframes": "map[string]any",
@@ -13004,8 +12892,6 @@ var CCXT_GO_EXCHANGE_MAP_FIELDS = {
   "Exceptions": "map[string]any",
   "Precision": "map[string]any",
   "UserAgents": "map[string]any",
-  "TokenBucket": "map[string]any",
-  "CommonCurrencies": "map[string]any",
   "Limits": "map[string]any",
   "Fees": "map[string]any",
   "Status": "map[string]any",
@@ -13023,10 +12909,7 @@ function ccxtGoIndexableThisField(goTranspiler, node) {
   return CCXT_GO_EXCHANGE_MAP_FIELDS[field];
 }
 function installCcxtGoIndexableTypes(goTranspiler) {
-  if (goTranspiler === void 0 || goTranspiler.__ccxtGoIndexableTypesInstalled) {
-    return;
-  }
-  if (typeof goTranspiler.goIndexableTypeOf !== "function") {
+  if (goTranspiler === void 0 || !goInstallOnce(goTranspiler, "__ccxtGoIndexableTypesInstalled", "goIndexableTypeOf")) {
     return;
   }
   const upstream = goTranspiler.goIndexableTypeOf;
@@ -13044,7 +12927,6 @@ function installCcxtGoIndexableTypes(goTranspiler) {
       return known === void 0 && ccxtGoIndexableThisField(this, node) !== void 0 && node.name?.text === "urls" ? "map[string]any" : known;
     };
   }
-  goTranspiler.__ccxtGoIndexableTypesInstalled = true;
   installCcxtGoPrintedMapDeclarations(goTranspiler);
 }
 function scopeMentionsIdentifier(scope, name) {
@@ -13203,9 +13085,6 @@ function goTypedConcatInitializer(goTranspiler, node, declaration) {
   if (declaration.name?.kind !== ts.SyntaxKind.Identifier) {
     return void 0;
   }
-  if (node?.parent?.kind !== ts.SyntaxKind.FirstStatement) {
-    return void 0;
-  }
   if (!goStringOperand(goTranspiler, initializer.left) || !goStringOperand(goTranspiler, initializer.right)) {
     concatDebugLog(
       "reject",
@@ -13343,7 +13222,7 @@ function goNativeConcatVetoed(goTranspiler, declaration, varName) {
   return vetoed;
 }
 function installCcxtGoTypedConcat(goTranspiler) {
-  if (goTranspiler.__ccxtGoTypedConcatInstalled || typeof goTranspiler.printVariableDeclarationList !== "function") {
+  if (!goInstallOnce(goTranspiler, "__ccxtGoTypedConcatInstalled", "printVariableDeclarationList")) {
     return;
   }
   const upstream = goTranspiler.printVariableDeclarationList.bind(goTranspiler);
@@ -13380,7 +13259,6 @@ function installCcxtGoTypedConcat(goTranspiler) {
     }
     return upstream(node, identation);
   };
-  goTranspiler.__ccxtGoTypedConcatInstalled = true;
 }
 function ccxtGoTypeOfPrintedCall(goTranspiler, printedValue, wsTree = false, initializer = void 0) {
   let value = (printedValue ?? "").trim();
@@ -13414,9 +13292,6 @@ function ccxtGoTypeOfPrintedCall(goTranspiler, printedValue, wsTree = false, ini
   return void 0;
 }
 function ccxtGoTypeOfCopiedLocal(goTranspiler, initializer, printedValue) {
-  if (typeof goTranspiler.goDeclaredTypeOfIdentifier !== "function") {
-    return void 0;
-  }
   const value = (printedValue ?? "").trim();
   if (!/^[A-Za-z_]\w*$/.test(value)) {
     return void 0;
@@ -13431,28 +13306,19 @@ var CCXT_GO_ARRAY_BINDING_HOLDERS = [
   "HandleOptionAndParams",
   "HandleOptionAndParams2",
   "HandleOptionStringAndParams",
-  "HandleOptionStringAndParams2",
   "HandleOptionBoolAndParams",
-  "HandleOptionBoolAndParams2",
   "HandleOptionBoolAndParamsNullable",
   "HandleOptionBoolAndParams2Nullable",
   "HandleOptionIntegerAndParamsNullable",
   "HandleOptionIntegerAndParams2Nullable",
   "HandleOptionIntegerAndParams",
-  "HandleOptionIntegerAndParams2",
   "HandleParamString",
-  "HandleParamString2",
   "HandleMarketTypeAndParams",
   "HandleUntilOption",
   "HandleMarginModeAndParams",
-  "HandleSubTypeAndParams",
-  "HandleNetworkCodeAndParams",
-  "HandleWithdrawTagAndParams",
   "HandlePostOnly",
   "HandleParamBool",
-  "HandleParamBool2",
   "HandleParamInteger",
-  "HandleParamInteger2",
   "HandleTriggerPricesAndParams",
   "HandleTriggerDirectionAndParams"
 ];
@@ -13472,17 +13338,11 @@ function retypeArrayBindingHolder(goTranspiler, node, printed, identation = 0) {
   if (CCXT_GO_ARRAY_BINDING_HOLDERS.indexOf(method) < 0) {
     return printed;
   }
-  if (printed.indexOf("GetValue(" + name + ",") < 0) {
-    return printed;
-  }
   const scope = typeof goTranspiler.goEnclosingFunction === "function" ? goTranspiler.goEnclosingFunction(node) : void 0;
   if (typeof goTranspiler.goTypeNameIsShadowed === "function" && goTranspiler.goTypeNameIsShadowed(scope, "[]any")) {
     return printed;
   }
   const prefix = indent + name + " := ";
-  if (!printed.startsWith(prefix)) {
-    return printed;
-  }
   return indent + "var " + name + " []any = " + printed.slice(prefix.length);
 }
 var ASYNC_ARRAY_BINDING_HOLDER_RE = /^([ \t]*)([A-Za-z_]\w*Variable) := (\(<-(?:this\.)?([A-Za-z_]\w*)\([^\n]*\)\))\n/;
@@ -13500,13 +13360,7 @@ function retypeAsyncArrayBindingHolder(goTranspiler, node, printed, identation =
       return printed;
     }
   }
-  if (depth !== 0 || printed.indexOf("GetValue(" + match[2] + ",") < 0) {
-    return printed;
-  }
   const scope = typeof goTranspiler.goEnclosingFunction === "function" ? goTranspiler.goEnclosingFunction(node) : void 0;
-  if (typeof goTranspiler.goTypeNameIsShadowed === "function" && goTranspiler.goTypeNameIsShadowed(scope, "[]any")) {
-    return printed;
-  }
   const awaitNode = node?.kind === ts.SyntaxKind.VariableDeclarationList ? node.declarations?.[0]?.initializer : node?.kind === ts.SyntaxKind.BinaryExpression ? node.right : void 0;
   const wrapped = "ListTyped(PanicOnError(" + recv + "))";
   const listHolder = ccxtGoAsyncListHolderLines(goTranspiler, awaitNode, match[2], "\n" + (match[1] === "" ? goTranspiler.getIden(identation) : match[1]), wrapped);
@@ -13516,7 +13370,7 @@ function retypeAsyncArrayBindingHolder(goTranspiler, node, printed, identation =
   return match[1] + "var " + match[2] + " []any = " + wrapped + "\n" + printed.slice(match[0].length);
 }
 function installCcxtGoArrayBindingHolders(goTranspiler) {
-  if (goTranspiler === void 0 || goTranspiler.__ccxtGoArrayBindingHoldersInstalled) {
+  if (goTranspiler === void 0 || !goInstallOnce(goTranspiler, "__ccxtGoArrayBindingHoldersInstalled")) {
     return;
   }
   if (typeof goTranspiler.printVariableDeclarationList === "function") {
@@ -13531,7 +13385,6 @@ function installCcxtGoArrayBindingHolders(goTranspiler) {
       return retypeArrayBindingHolder(this, node, upstreamBinary.call(this, node, identation), identation);
     };
   }
-  goTranspiler.__ccxtGoArrayBindingHoldersInstalled = true;
 }
 function isSafeStringCall(node) {
   if (node?.kind !== ts.SyntaxKind.CallExpression) {
@@ -13548,9 +13401,6 @@ function isSafeStringCall(node) {
   return typeof name === "string" && CCXT_GO_SAFE_STRING_METHOD.test(name);
 }
 function isAbsentExpression(expression) {
-  if (expression.kind === ts.SyntaxKind.UndefinedKeyword || expression.kind === ts.SyntaxKind.NullKeyword || expression.kind === ts.SyntaxKind.VoidExpression) {
-    return true;
-  }
   return expression.kind === ts.SyntaxKind.Identifier && expression.text === "undefined";
 }
 function collectReturnStatements(block) {
@@ -13585,25 +13435,13 @@ function ccxtGoFamilyMethodReturnType(goTranspiler, node) {
   if (typeof name !== "string" || !CCXT_GO_FAMILY_METHOD.test(name)) {
     return void 0;
   }
-  if (typeof goTranspiler?.isAsyncFunction === "function" && goTranspiler.isAsyncFunction(node)) {
-    return void 0;
-  }
   const body = node.body;
-  if (body?.kind !== ts.SyntaxKind.Block) {
-    return void 0;
-  }
   const returns = collectReturnStatements(body);
-  if (returns.length === 0) {
-    return void 0;
-  }
   let valuePaths = 0;
   let literalPaths = 0;
   let absentPaths = 0;
   for (const statement of returns) {
     const expression = statement.expression;
-    if (expression === void 0) {
-      return void 0;
-    }
     if (isAbsentExpression(expression)) {
       absentPaths += 1;
       continue;
@@ -13638,9 +13476,6 @@ function enclosingClassDeclaration(node) {
 }
 function findClassMethod(classNode, name) {
   const members = classNode?.members;
-  if (members === void 0) {
-    return void 0;
-  }
   for (const member of members) {
     if (member.kind === ts.SyntaxKind.MethodDeclaration && member.name?.text === name) {
       return member;
@@ -13660,9 +13495,6 @@ function ccxtGoFamilyCallType(goTranspiler, initializer, printedValue) {
     return void 0;
   }
   const name = callee.name?.text;
-  if (typeof name !== "string") {
-    return void 0;
-  }
   let value = (printedValue ?? "").trim();
   while (value.startsWith("(") && goTranspiler.isWholePrintedCall(value, 0)) {
     value = value.substring(1, value.length - 1).trim();
@@ -13684,9 +13516,6 @@ function ccxtGoIsDefaultedSafeInteger(node) {
     return false;
   }
   const callee = node.expression;
-  if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts.SyntaxKind.ThisKeyword || callee.name?.text !== "safeInteger") {
-    return false;
-  }
   const fallback = node.arguments[2];
   return fallback.kind === ts.SyntaxKind.NumericLiteral && /^[0-9]+$/.test(fallback.text);
 }
@@ -13707,9 +13536,6 @@ function ccxtGoSumOperandIsInt(goTranspiler, node, printed, depth) {
     if (declaration?.kind === ts.SyntaxKind.VariableDeclaration && declaration.name?.kind === ts.SyntaxKind.Identifier && (declaration.parent?.flags & ts.NodeFlags.Const) !== 0 && ccxtGoIsDefaultedSafeInteger(declaration.initializer)) {
       return true;
     }
-  }
-  if (node?.kind === ts.SyntaxKind.CallExpression && ccxtGoSumCallee(goTranspiler, node, printed) !== void 0) {
-    return depth < 8 && ccxtGoSumCallIsInt64(goTranspiler, node, printed, depth + 1);
   }
   return ccxtGoIntOperandKind(goTranspiler, node, printed, depth) !== void 0;
 }
@@ -13779,25 +13605,6 @@ function ccxtGoIsNonNilInt64Pointer(goTranspiler, node, printed) {
   }
   return declaration?.kind === ts.SyntaxKind.VariableDeclaration && declaration.name?.kind === ts.SyntaxKind.Identifier && (declaration.parent?.flags & ts.NodeFlags.Const) !== 0 && ccxtGoIsDefaultedSafeInteger(declaration.initializer);
 }
-function ccxtGoUnboxSumDeclaration(goTranspiler, printed) {
-  if (typeof printed !== "string") {
-    return printed;
-  }
-  const match = /^([\s\S]*?\bvar [A-Za-z0-9_]+ int64 = )((?:this\.Sum|(?:ccxt\.)?Add)\([^\n]*)$/.exec(printed);
-  if (match === null) {
-    return printed;
-  }
-  const tail = match[2];
-  const close = ccxtGoPrintedCallEnd(tail, tail.indexOf("("));
-  if (close < 0) {
-    return printed;
-  }
-  const rest = tail.substring(close);
-  if (!/^\s*(;?\s*(\/\/[^\n]*)?)$/.test(rest)) {
-    return printed;
-  }
-  return match[1] + tail.substring(0, close) + ".(" + CCXT_GO_SUM_LOCAL_TYPE + ")" + rest;
-}
 var CCXT_GO_COUNTER_METHODS = ["requestId"];
 var CCXT_GO_COUNTER_RETURN_TYPES = ["int64", "string"];
 var CCXT_GO_COUNTER_CACHE = /* @__PURE__ */ new Map();
@@ -13856,7 +13663,6 @@ function ccxtGoCounterCallType(goTranspiler, initializer, printedValue) {
 var CCXT_GO_ANNOTATED_RETURN_NATIVE = {
   "Str": ["*string", "string"],
   "Dict": ["map[string]any"],
-  "ExchangeOptions": ["map[string]any"],
   // `Market` is MarketInterface | undefined: the dict or nil, like a Dict return
   "Market": ["map[string]any"],
   "List": ["[]any"],
@@ -14094,9 +13900,6 @@ function ccxtGoGeneralAnnotatedMethodIsClosed(node, name) {
     return false;
   }
   const own = path2.resolve(fileName);
-  if (!graph.texts.has(own)) {
-    return false;
-  }
   const declarers = ccxtGoTsSrcMethodDeclarers(graph).get(name);
   if (declarers === void 0) {
     return true;
@@ -14545,66 +14348,34 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached(goTranspiler, declaration) {
   if (scope === void 0) {
     return void 0;
   }
-  const state = { ok: true, goType: void 0, writes: 0 };
-  const fail = () => {
-    state.ok = false;
-  };
-  const isName = (node) => node?.kind === ts.SyntaxKind.Identifier && node.text === name;
-  const readExpression = (node, assigned) => {
-    if (!state.ok || node === void 0 || node === null) {
-      return;
-    }
-    if (node.kind === ts.SyntaxKind.Identifier) {
-      if (isName(node) && node !== declaration.name) {
-        const kind = nilJoinOccurrenceKind(node);
-        if (kind === "read") {
-          state.mutated = state.mutated || ccxtGoNilJoinIsElementWrite(node);
-          if (ccxtGoNilJoinIsPush(node)) {
-            fail();
-          } else if (!assigned) {
-            if (!ccxtGoNilJoinReadSeesAbsent(goTranspiler, node)) {
-              fail();
-            }
-          }
-        } else if (kind !== "skip") {
+  const { state, visitStatement } = goNilJoinWalk(goTranspiler, declaration, name, scope, {
+    readCaseLabels: false,
+    closureNeedsMention: false,
+    use: (node, assigned, joinWrite, fail) => {
+      const kind = nilJoinOccurrenceKind(node);
+      if (kind === "read") {
+        state.mutated = state.mutated || ccxtGoNilJoinIsElementWrite(node);
+        if (ccxtGoNilJoinIsPush(node)) {
           fail();
+        } else if (!assigned) {
+          if (!ccxtGoNilJoinReadSeesAbsent(goTranspiler, node)) {
+            fail();
+          }
         }
+      } else if (kind !== "skip") {
+        fail();
       }
-      return;
+    },
+    writeType: (right) => {
+      const goType = goTranspiler.goTypeOfInitializer(right, goTranspiler.printNode(right, 0));
+      return NIL_JOIN_TYPES.indexOf(goType) >= 0 ? goType : NIL_JOIN_TYPES.find((t) => ccxtGoWriteSiteConversion(goTranspiler, t, right, true) !== void 0);
+    },
+    // a Safe* accessor may answer absent: the local is not proven present after it
+    writeProvesPresent: (right) => {
+      const mayBeAbsent = /^this\.Safe(?:Dict|List)2?$/.test(ccxtGoWriteSiteCallee(goTranspiler, right) ?? "");
+      state.copies = state.copies || mayBeAbsent;
+      return !mayBeAbsent;
     }
-    if (node !== scope && ts.isFunctionLike(node)) {
-      fail();
-      return;
-    }
-    node?.forEachChild((child) => readExpression(child, assigned));
-  };
-  const writeExpression = (right, assigned) => {
-    readExpression(right, assigned);
-    let goType = goTranspiler.goTypeOfInitializer(right, goTranspiler.printNode(right, 0));
-    if (NIL_JOIN_TYPES.indexOf(goType) < 0) {
-      goType = NIL_JOIN_TYPES.find((t) => ccxtGoWriteSiteConversion(goTranspiler, t, right, true) !== void 0);
-    }
-    if (goType === void 0) {
-      fail();
-      return;
-    }
-    if (state.goType === void 0) {
-      state.goType = goType;
-    } else if (state.goType !== goType) {
-      fail();
-      return;
-    }
-    state.writes += 1;
-    const callee = ccxtGoWriteSiteCallee(goTranspiler, right);
-    const mayBeAbsent = /^this\.Safe(?:Dict|List)2?$/.test(callee ?? "");
-    state.copies = state.copies || mayBeAbsent;
-    return !mayBeAbsent;
-  };
-  const visitStatement = goDefiniteAssignmentWalker(state, declaration, name, readExpression, false, (expression, assigned) => {
-    if (expression?.kind === ts.SyntaxKind.BinaryExpression && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken && isName(expression.left)) {
-      return writeExpression(expression.right, assigned) ? true : assigned;
-    }
-    return void 0;
   });
   visitStatement(scope.body, false);
   if (state.copies && state.mutated) {
@@ -14871,7 +14642,7 @@ function ccxtGoWriteSiteAssignment(goTranspiler, node, identation) {
   return leftVar + separator + "=" + separator + conversion + "(" + rightVar.trim() + ")";
 }
 function installCcxtGoWriteSiteConversions(goTranspiler) {
-  if (goTranspiler === void 0 || goTranspiler.__ccxtGoWriteSiteConversionsInstalled) {
+  if (goTranspiler === void 0 || !goInstallOnce(goTranspiler, "__ccxtGoWriteSiteConversionsInstalled")) {
     return;
   }
   const shippedIsSafe = goTranspiler.goLocalIsSafeToType;
@@ -14889,7 +14660,6 @@ function installCcxtGoWriteSiteConversions(goTranspiler) {
     }
     return shippedBinary.call(this, node, identation);
   };
-  goTranspiler.__ccxtGoWriteSiteConversionsInstalled = true;
 }
 function ccxtGoArrayLiteralIsEmpty(node) {
   return node?.kind === ts.SyntaxKind.ArrayLiteralExpression && node.elements.length === 0;
@@ -15488,9 +15258,6 @@ var CCXT_GO_GETARG_SAFE_CONSUMERS = {
   "WatchTradesForSymbolsAsync": "*",
   "WatchOrderBookForSymbolsAsync": "*",
   "WatchOHLCVForSymbolsAsync": "*",
-  // consumers that decide on the nil-ness of the box (container argument only)
-  "DeepExtend": { "*": "container" },
-  "SubstituteString": "*",
   // bodies read the value only through derefScalar-ing helpers (IsGreaterThan/IsEqual/
   // InArray/NumberToString/FilterByCurrencySinceLimit)
   "GetClosestLimit": { "0": "deref" },
@@ -15503,7 +15270,6 @@ var CCXT_GO_GETARG_SAFE_CONSUMERS = {
   "filterByArrayTickers": { "2": "deref" },
   "filterByArrayPositions": { "2": "deref" },
   // tag slot: IsDictionary/IsEqual deref it; a present value is handed back as the tuple's element 0
-  "handleWithdrawTagAndParams": { "0": "deref" },
   "FindNearestCeiling": { "1": "deref" },
   "ParseToInt": { "0": "deref" },
   "ParseToNumeric": { "0": "deref" },
@@ -15517,13 +15283,7 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   // R1 concrete container send in the body
   "CancelAllContractOrdersAsync": "[]any",
   // R1 concrete container send in the body
-  "CancelAllOrdersAfterAsync": "map[string]any",
-  // concrete []any
-  "CancelAllOrdersAsync": "[]any",
-  // R1 concrete container send in the body
   "CancelAllOrdersRequestAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Order[]>'] -> []any
-  "CancelAllOrdersWsAsync": "[]any",
   // R1 concrete container send in the body
   "CancelAllSpotOrdersAsync": "[]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
@@ -15532,8 +15292,6 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "CancelContractOrderAsync": "map[string]any",
   // concrete map[string]any; TS Promise<Order>
   "CancelOrderAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Order>'] -> map[string]any
-  "CancelOrderWsAsync": "map[string]any",
   // R1 concrete container send in the body
   "CancelOrdersAsync": "[]any",
   // R1 concrete container send in the body
@@ -15546,8 +15304,6 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "CancelSpotOrderAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order>'] -> map[string]any
   "CancelTwapOrderAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "CancelUnifiedOrderAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order>'] -> map[string]any
   "CancelUtaOrderAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
@@ -15556,26 +15312,14 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "ClosePositionAsync": "map[string]any",
   // R2 TS annotations ['Promise<any[]>'] -> []any
   "CompleteRawTopicsAsync": "[]any",
-  // R2 TS annotations ['Promise<Dict>'] -> map[string]any
-  "CreateApiKeyAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order>'] -> map[string]any
   "CreateContractOrderAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
   "CreateContractOrdersAsync": "[]any",
-  // R2 TS annotations ['Promise<Conversion>'] -> map[string]any
-  "CreateConvertTradeAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "CreateDepositAddressAsync": "map[string]any",
   // R1 concrete container send in the body
   "CreateExtendedOrderRequestAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "CreateGiftCodeAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "CreateMarketBuyOrderWithCostAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order>'] -> map[string]any
   "CreateMarketOrderWithCostAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Order>'] -> map[string]any
-  "CreateMarketSellOrderWithCostAsync": "map[string]any",
   // R2 TS annotations ['Promise<Dict>'] -> map[string]any
   "CreateOrDeriveApiKeyAsync": "map[string]any",
   // bodies send map[string]any (concrete) e.g. ParseOrder(map[string]any); TS Promise<Order>
@@ -15597,12 +15341,6 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   // R2 TS annotations ['Promise<Order>'] -> map[string]any
   "CreateSwapOrderAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order>'] -> map[string]any
-  "CreateTrailingAmountOrderAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "CreateTrailingPercentOrderAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Order>'] -> map[string]any
-  "CreateTwapOrderAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Order>'] -> map[string]any
   "CreateUtaOrderAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
   "CreateUtaOrdersAsync": "[]any",
@@ -15610,8 +15348,6 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "EditContractOrderAsync": "map[string]any",
   // R1 concrete container send in the body
   "EditOrderRequestAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Order>'] -> map[string]any
-  "EditOrderWsAsync": "map[string]any",
   // R1 concrete container send in the body
   "EditOrdersAsync": "[]any",
   // R2 TS annotations ['Promise<Order>'] -> map[string]any
@@ -15625,8 +15361,6 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   // R2 TS annotations ['Promise<Position[]>'] -> []any
   "FetchAccountPositionsAsync": "[]any",
   // R1 concrete container send in the body
-  "FetchAccountSettingsAsync": "map[string]any",
-  // R1 concrete container send in the body
   "FetchAccountsAsync": "[]any",
   // R2 TS annotations ['Promise<Account[]>'] -> []any
   "FetchAccountsV2Async": "[]any",
@@ -15634,34 +15368,14 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "FetchAccountsV3Async": "[]any",
   // R2 TS annotations ['Promise<PredictionOrder[]>'] -> []any
   "FetchAmmOrdersAsync": "[]any",
-  // R2 TS annotations ['Promise<Dict>'] -> map[string]any
-  "FetchApiKeyAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Dict>'] -> map[string]any
-  "FetchApiKeysAsync": "map[string]any",
   // TS Promise<Balances> (Dict-shaped); NewBalances(res) asserts map[string]any
   "FetchBalanceAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-  "FetchBalanceWsAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
-  "FetchBidsAsksAsync": "map[string]any",
-  // R2 TS annotations ['Promise<BorrowInterest[]>'] -> []any
-  "FetchBorrowInterestAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchBorrowRateHistoriesAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Dict[]>'] -> []any
-  "FetchBorrowRateHistoryAsync": "[]any",
   // R1 concrete container send in the body
   "FetchCanceledAndClosedOrdersAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchCanceledOrdersAsync": "[]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
   "FetchClosedContractOrdersAsync": "[]any",
-  // R2 TS annotations ['Promise<Order>'] -> map[string]any
-  "FetchClosedOrderAsync": "map[string]any",
   // concrete []any; TS Promise<Order[]>
   "FetchClosedOrdersAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchClosedOrdersWsAsync": "[]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
   "FetchClosedSpotOrdersAsync": "[]any",
   // R2 TS annotations ['Promise<Balances>'] -> map[string]any
@@ -15670,8 +15384,6 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "FetchContractDepositAddressAsync": "map[string]any",
   // R2 TS annotations ['Promise<Transaction[]>'] -> []any
   "FetchContractDepositsAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchContractMarketsAsync": "[]any",
   // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
   "FetchContractOHLCVAsync": "[]any",
   // R2 TS annotations ['Promise<Order>'] -> map[string]any
@@ -15685,14 +15397,6 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   // R2 TS annotations ['Promise<Transaction[]>'] -> []any
   "FetchContractWithdrawalsAsync": "[]any",
   // R1 concrete container send in the body
-  "FetchConvertCurrenciesAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Conversion>'] -> map[string]any
-  "FetchConvertQuoteAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Conversion>'] -> map[string]any
-  "FetchConvertTradeAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Conversion[]>'] -> []any
-  "FetchConvertTradeHistoryAsync": "[]any",
-  // R1 concrete container send in the body
   "FetchCrossBorrowRatesAsync": "map[string]any",
   // concrete map[string]any; TS Promise<Currencies>
   "FetchCurrenciesAsync": "map[string]any",
@@ -15701,53 +15405,25 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   // R1 concrete container send in the body
   "FetchCurrenciesFromWebAsync": "map[string]any",
   // R1 concrete container send in the body
-  "FetchCurrencyAsync": "map[string]any",
-  // R1 concrete container send in the body
   "FetchCurrencyByIdAsync": "map[string]any",
   // R1 concrete container send in the body
   "FetchDefaultMarketsAsync": "[]any",
   // TS Promise<DepositAddress>
   "FetchDepositAddressAsync": "map[string]any",
   // R1 concrete container send in the body
-  "FetchDepositAddressDefaultAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchDepositAddressSupplementAsync": "map[string]any",
-  // R1 concrete container send in the body
   "FetchDepositAddressesByNetworkAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Transaction>'] -> map[string]any
-  "FetchDepositAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchDepositMethodIdAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Dict[]>'] -> []any
-  "FetchDepositMethodIdsAsync": "[]any",
   // R2 TS annotations ['Promise<Dict[]>'] -> []any
   "FetchDepositMethodsAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchDepositWithdrawFeesAsync": "map[string]any",
   // concrete []any; TS Promise<Transaction[]>
   "FetchDepositsAsync": "[]any",
   // R2 TS annotations ['Promise<Transaction[]>'] -> []any
   "FetchDepositsOrWithdrawalsHelperAsync": "[]any",
   // R2 TS annotations ['Promise<Transaction[]>'] -> []any
   "FetchDepositsWithdrawalsAsync": "[]any",
-  // R2 TS annotations ['Promise<Transaction[]>'] -> []any
-  "FetchDepositsWsAsync": "[]any",
   // R2 TS annotations ['Promise<LeverageTier[]>'] -> []any
   "FetchDerivativesMarketLeverageTiersAsync": "[]any",
   // R2 TS annotations ['Promise<OpenInterest[]>'] -> []any
   "FetchDerivativesOpenInterestHistoryAsync": "[]any",
-  // R2 TS annotations ['Promise<any[]>'] -> []any
-  "FetchEventsByQueryAsync": "[]any",
-  // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-  "FetchFinancialBalanceAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchFundingHistoryAsync": "[]any",
-  // R2 TS annotations ['Promise<FundingRate>'] -> map[string]any
-  "FetchFundingIntervalAsync": "map[string]any",
-  // R2 TS annotations ['Promise<FundingRates>'] -> map[string]any
-  "FetchFundingIntervalsAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchFundingLimitsAsync": "map[string]any",
   // R1 concrete container send in the body
   "FetchFundingRateAsync": "map[string]any",
   // R1 concrete container send in the body
@@ -15755,63 +15431,29 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   // R1 concrete container send in the body
   "FetchFundingRatesAsync": "map[string]any",
   // R1 concrete container send in the body
-  "FetchFutureMarketsAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchGreeksAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchHip3MarketsAsync": "[]any",
-  // R2 TS annotations ['Promise<Market[]>'] -> []any
-  "FetchInverseSwapMarketsAsync": "[]any",
-  // R1 concrete container send in the body
   "FetchL2OrderBookAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchL3OrderBookAsync": "map[string]any",
   // R2 TS annotations ['Promise<LedgerEntry[]>'] -> []any
   "FetchLedgerAsync": "[]any",
   // R2 TS annotations ['Promise<LedgerEntry[]>'] -> []any
-  "FetchLedgerByEntriesAsync": "[]any",
-  // R2 TS annotations ['Promise<LedgerEntry[]>'] -> []any
   "FetchLedgerEntriesByIdsAsync": "[]any",
-  // R2 TS annotations ['Promise<LedgerEntry>'] -> map[string]any
-  "FetchLedgerEntryAsync": "map[string]any",
   // R1 concrete container send in the body
   "FetchLeverageAsync": "map[string]any",
   // R1 concrete container send in the body
   "FetchLeverageTiersAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
-  "FetchLiquidationsAsync": "[]any",
-  // R2 TS annotations ['Promise<LongShortRatio[]>'] -> []any
-  "FetchLongShortRatioHistoryAsync": "[]any",
-  // R2 TS annotations ['Promise<MarginModification[]>'] -> []any
-  "FetchMarginAdjustmentHistoryAsync": "[]any",
-  // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-  "FetchMarginBalanceAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchMarginModeAsync": "map[string]any",
   // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
   "FetchMarkOHLCVAsync": "[]any",
-  // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
-  "FetchMarkPriceAsync": "map[string]any",
   // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
   "FetchMarkPricesAsync": "map[string]any",
   // R2 TS annotations ['Promise<Market>'] -> map[string]any
   "FetchMarketAsync": "map[string]any",
   // R2 TS annotations ['Promise<Market>'] -> map[string]any
   "FetchMarketByIdAsync": "map[string]any",
-  // R2 TS annotations ['Promise<LeverageTier[]>'] -> []any
-  "FetchMarketLeverageTiersAsync": "[]any",
   // concrete []any (ParseMarkets); TS Promise<Market[]>
   "FetchMarketsAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchMarketsByTypeAndSubTypeAsync": "[]any",
-  // R2 TS annotations ['Promise<Market[]>'] -> []any
-  "FetchMarketsByTypeAsync": "[]any",
   // R1 concrete container send in the body
   "FetchMarketsFromAPIAsync": "[]any",
   // R2 TS annotations ['Promise<Dict[]>'] -> []any
   "FetchMarketsFromCacheAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchMarketsFromWebAsync": "[]any",
   // R1 concrete container send in the body
   "FetchMarketsV1Async": "[]any",
   // R1 concrete container send in the body
@@ -15819,35 +15461,15 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   // R1 concrete container send in the body
   "FetchMarketsV3Async": "[]any",
   // R2 TS annotations ['Promise<Trade[]>'] -> []any
-  "FetchMyBuysAsync": "[]any",
-  // R2 TS annotations ['Promise<Trade[]>'] -> []any
   "FetchMyContractTradesAsync": "[]any",
-  // R2 TS annotations ['Promise<Trade[]>'] -> []any
-  "FetchMyDustTradesAsync": "[]any",
-  // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
-  "FetchMyLiquidationsAsync": "[]any",
-  // R2 TS annotations ['Promise<Trade[]>'] -> []any
-  "FetchMySellsAsync": "[]any",
-  // R2 TS annotations ['Promise<Dict[]>'] -> []any
-  "FetchMySettlementHistoryAsync": "[]any",
   // R2 TS annotations ['Promise<Trade[]>'] -> []any
   "FetchMySpotTradesAsync": "[]any",
   // concrete []any; TS Promise<Trade[]>
   "FetchMyTradesAsync": "[]any",
   // R2 TS annotations ['Promise<Trade[]>'] -> []any
-  "FetchMyTradesWsAsync": "[]any",
-  // R2 TS annotations ['Promise<Trade[]>'] -> []any
   "FetchMyUtaTradesAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchNetworkDepositAddressAsync": "map[string]any",
   // concrete []any; TS Promise<OHLCV[]>
   "FetchOHLCVAsync": "[]any",
-  // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
-  "FetchOHLCVWsAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchOpenInterestAsync": "map[string]any",
-  // R2 TS annotations ['Promise<OpenInterest[]>'] -> []any
-  "FetchOpenInterestHistoryAsync": "[]any",
   // R2 TS annotations ['Promise<Order>'] -> map[string]any
   "FetchOpenOrderAsync": "map[string]any",
   // concrete []any; TS Promise<Order[]>
@@ -15856,18 +15478,10 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "FetchOpenOrdersV1Async": "[]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
   "FetchOpenOrdersV2Async": "[]any",
-  // R1 concrete container send in the body
-  "FetchOpenOrdersWsAsync": "[]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
   "FetchOpenSpotOrdersAsync": "[]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
   "FetchOpenSwapOrdersAsync": "[]any",
-  // R2 TS annotations ['Promise<Option>'] -> map[string]any
-  "FetchOptionAsync": "map[string]any",
-  // R2 TS annotations ['Promise<OptionChain>'] -> map[string]any
-  "FetchOptionChainAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchOptionMarketsAsync": "[]any",
   // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
   "FetchOptionOHLCVAsync": "[]any",
   // R2 TS annotations ['Promise<Position[]>'] -> []any
@@ -15886,10 +15500,6 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "FetchOrderDefaultAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order>'] -> map[string]any
   "FetchOrderSupplementAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchOrderTradesAsync": "[]any",
-  // R2 TS annotations ['Promise<Order>'] -> map[string]any
-  "FetchOrderWsAsync": "map[string]any",
   // concrete []any sends; TS Promise<Order[]>
   "FetchOrdersAsync": "[]any",
   // R1 concrete container send in the body
@@ -15921,24 +15531,12 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "LoadOutcomeAsync": "map[string]any",
   // exchange_generated.go fetchPaginatedCallDynamicBody `ch <- this.FilterBySinceLimit(sortedRes, since,
   "FetchPaginatedCallDynamicAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchPortfoliosAsync": "[]any",
   // R2 TS annotations ['Promise<Position>'] -> map[string]any
   "FetchPositionAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Position[]>'] -> []any
-  "FetchPositionHistoryAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchPositionModeAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Position[]>'] -> []any
-  "FetchPositionWsAsync": "[]any",
-  // R2 TS annotations ['Promise<ADL[]>'] -> []any
-  "FetchPositionsADLRankAsync": "[]any",
   // concrete []any; TS Promise<Position[]>
   "FetchPositionsAsync": "[]any",
   // R2 TS annotations ['Promise<Position[]>'] -> []any
   "FetchPositionsForSymbolAsync": "[]any",
-  // R2 TS annotations ['Promise<Position[]>'] -> []any
-  "FetchPositionsHistoryAsync": "[]any",
   // R2 TS annotations ['Promise<Position[]>'] -> []any
   "FetchPositionsRiskAsync": "[]any",
   // R2 TS annotations ['Promise<Position[]>'] -> []any
@@ -15958,31 +15556,13 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   // R2 TS annotations ['Promise<any[]>'] -> []any
   "FetchRawActiveMarketsAsync": "[]any",
   // R2 TS annotations ['Promise<any[]>'] -> []any
-  "FetchRawEventsBySearchAsync": "[]any",
-  // R2 TS annotations ['Promise<any[]>'] -> []any
   "FetchRawEventsListAsync": "[]any",
-  // R2 TS annotations ['Promise<any[]>'] -> []any
-  "FetchRawMarketsBySearchAsync": "[]any",
   // R2 TS annotations ['Promise<any[]>'] -> []any
   "FetchRawMarketsPagedAsync": "[]any",
   // R2 TS annotations ['Promise<any[]>'] -> []any
   "FetchRawMarketsByTagsAsync": "[]any",
   // R2 TS annotations ['Promise<any[]>'] -> []any
-  "FetchRawMarketsListAsync": "[]any",
-  // R2 TS annotations ['Promise<any[]>'] -> []any
-  "FetchRawQuestionsBySearchAsync": "[]any",
-  // R2 TS annotations ['Promise<any[]>'] -> []any
-  "FetchRawQuestionsListAsync": "[]any",
-  // R2 TS annotations ['Promise<any[]>'] -> []any
   "FetchRawTopicsAsync": "[]any",
-  // R2 TS annotations ['Promise<any[]>'] -> []any
-  "FetchRawTopicsByQueriesAsync": "[]any",
-  // R2 TS annotations ['Promise<any[]>'] -> []any
-  "FetchSeriesEventsAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchSettlementHistoryAsync": "[]any",
-  // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-  "FetchSpotBalanceAsync": "map[string]any",
   // R1 concrete container send in the body
   "FetchSpotMarketsAsync": "[]any",
   // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
@@ -15998,15 +15578,7 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   // R2 TS annotations ['Promise<Order[]>'] -> []any
   "FetchSpotOrdersByStatusAsync": "[]any",
   // R1 concrete container send in the body
-  "FetchStatusAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Market[]>'] -> []any
-  "FetchSwapAndFutureMarketsAsync": "[]any",
-  // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-  "FetchSwapBalanceAsync": "map[string]any",
-  // R1 concrete container send in the body
   "FetchSwapMarketsAsync": "[]any",
-  // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
-  "FetchTicker2Async": "map[string]any",
   // concrete map[string]any; TS Promise<Ticker>
   "FetchTickerAsync": "map[string]any",
   // R1 concrete container send in the body
@@ -16017,32 +15589,18 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "FetchTickerV2Async": "map[string]any",
   // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
   "FetchTickerV3Async": "map[string]any",
-  // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
-  "FetchTickerWsAsync": "map[string]any",
   // concrete map[string]any sends; TS Promise<Tickers> (Dict) is contradicted by some []any impls -> map
   "FetchTickersAsync": "map[string]any",
   // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
   "FetchTickersV2Async": "map[string]any",
   // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
   "FetchTickersV3Async": "map[string]any",
-  // R2 TS annotations ['Promise<Dict>'] -> map[string]any
-  "FetchTradeQuoteAsync": "map[string]any",
   // concrete []any; TS Promise<Trade[]>
   "FetchTradesAsync": "[]any",
-  // R2 TS annotations ['Promise<Trade[]>'] -> []any
-  "FetchTradesWsAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchTradingFeeAsync": "map[string]any",
   // R1 concrete container send in the body
   "FetchTradingFeesAsync": "map[string]any",
-  // R2 TS annotations ['Promise<TradingFees>'] -> map[string]any
-  "FetchTradingFeesWsAsync": "map[string]any",
   // R1 concrete container send in the body
   "FetchTradingLimitsAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchTradingLimitsByIdAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchTransactionFeeAsync": "map[string]any",
   // R1 concrete container send in the body
   "FetchTransactionFeesAsync": "map[string]any",
   // R1 concrete container send in the body
@@ -16051,18 +15609,10 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "FetchTransactionsByTypeAsync": "[]any",
   // R2 TS annotations ['Promise<Transaction[]>'] -> []any
   "FetchTransactionsWithMethodAsync": "[]any",
-  // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
-  "FetchTransferAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "FetchTransfersAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchUSDTMarketsAsync": "[]any",
   // R1 concrete container send in the body
   "FetchUTAMarketsAsync": "[]any",
   // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
   "FetchUTAOHLCVAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchUnderlyingAssetsAsync": "[]any",
   // R2 TS annotations ['Promise<Balances>'] -> map[string]any
   "FetchUtaBalanceAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
@@ -16073,24 +15623,12 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "FetchUtaOrderAsync": "map[string]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
   "FetchUtaOrdersByStatusAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchVolatilityHistoryAsync": "[]any",
-  // R1 concrete container send in the body
-  "FetchWithdrawAddressesAsync": "[]any",
-  // R2 TS annotations ['Promise<Transaction>'] -> map[string]any
-  "FetchWithdrawalAsync": "map[string]any",
   // concrete []any; TS Promise<Transaction[]>
   "FetchWithdrawalsAsync": "[]any",
-  // R2 TS annotations ['Promise<Transaction[]>'] -> []any
-  "FetchWithdrawalsWsAsync": "[]any",
   // R1 concrete container send in the body
   "GetAssetHistoryRowsAsync": "[]any",
   // R1 concrete container send in the body
   "HandleAccountIndexAsync": "[]any",
-  // R1 concrete container send in the body
-  "HandleNetworkIdAndParamsAsync": "[]any",
-  // R1 concrete container send in the body
-  "HandlePortfolioAndParamsAsync": "[]any",
   // R1 concrete container send in the body
   "HandleUTAAndParamsAsync": "[]any",
   // R2 TS annotations ['Promise<TransferEntry[]>'] -> []any
@@ -16140,41 +15678,19 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   // R1 concrete container send in the body
   "TransferAsync": "map[string]any",
   // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
-  "TransferBetweenMainAndSubAccountAsync": "map[string]any",
-  // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
-  "TransferBetweenSubAccountsAsync": "map[string]any",
-  // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
   "TransferClassicAsync": "map[string]any",
   // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
-  "TransferInAsync": "map[string]any",
-  // R1 concrete container send in the body
-  "TransferOutAsync": "map[string]any",
-  // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
   "TransferUtaAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-  "WatchBalanceAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
-  "WatchBidsAsksAsync": "map[string]any",
-  // R2 TS annotations ['Promise<FundingRate>'] -> map[string]any
-  "WatchFundingRateAsync": "map[string]any",
   // R2 TS annotations ['Promise<FundingRates>'] -> map[string]any
   "WatchFundingRatesAsync": "map[string]any",
   // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
-  "WatchLiquidationsAsync": "[]any",
-  // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
   "WatchLiquidationsForSymbolsAsync": "[]any",
-  // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
-  "WatchMarkPriceAsync": "map[string]any",
   // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
   "WatchMarkPricesAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
-  "WatchMyLiquidationsAsync": "[]any",
   // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
   "WatchMyLiquidationsForSymbolsAsync": "[]any",
   // TS watchMyTrades -> Promise<Trade[]>
   "WatchMyTradesAsync": "[]any",
-  // R2 TS annotations ['Promise<Trade[]>'] -> []any
-  "WatchMyTradesForSymbolsAsync": "[]any",
   // TS watchOHLCV -> Promise<OHLCV[]>
   "WatchOHLCVAsync": "[]any",
   // R2 TS annotations ['Promise<Dictionary<Dictionary<OHLCV[]>>>'] -> map[string]any
@@ -16183,10 +15699,6 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "WatchOrdersAsync": "[]any",
   // R2 TS annotations ['Promise<Order[]>'] -> []any
   "WatchOrdersForSymbolsAsync": "[]any",
-  // R2 TS annotations ['Promise<Position>'] -> map[string]any
-  "WatchPositionAsync": "map[string]any",
-  // TS watchPositions -> Promise<Position[]>
-  "WatchPositionsAsync": "[]any",
   // pro/binance.go watchTickerBody `ch <- ccxt.GetValue(tickers, symbol)`
   "WatchTickerAsync": "map[string]any",
   // `ch <- this.FilterByArray(this.Tickers, "symbol", symbols)`
@@ -16195,10 +15707,6 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
   "WatchTradesAsync": "[]any",
   // R2 TS annotations ['Promise<Trade[]>'] -> []any
   "WatchTradesForSymbolsAsync": "[]any",
-  // concrete map[string]any; TS Promise<Transaction>
-  "WithdrawAsync": "map[string]any",
-  // R2 TS annotations ['Promise<Transaction>'] -> map[string]any
-  "WithdrawWsAsync": "map[string]any",
   // exchange_helpers.go:1946 `results := make([]any, len(tasks))` ... `ch <- results`; also a `ch <- nil
   "promiseAll": "[]any",
   // every override sends a safeDict-with-default / applyEventFetchParams list
@@ -16208,162 +15716,24 @@ var CCXT_GO_ASYNC_ELEM_TYPES = {
 };
 var CCXT_GO_ASYNC_FORWARD_SAFE = [];
 var CCXT_GO_ASYNC_ELEM_EXCLUDED = [
-  "ApproveBuilderFeeAsync",
-  "AuthenticateAsync",
-  "AuthenticateRestAsync",
-  "AuthenticateUtaAsync",
   "CallDynamically",
-  "ChangeApiKeyAsync",
-  "ConnectCentrifugoAsync",
-  "CreateAmmOrderAsync",
-  "CreateOrderbookOrderAsync",
-  "CreateSubAccountAsync",
-  "EditOrderAsync",
-  "EnsureErc20AllowanceAsync",
-  "EnsureUserDataStreamWsSubscribeListenTokenAsync",
-  "EnsureUserDataStreamWsSubscribeSignatureAsync",
-  "EthRpcAsync",
   "Fetch2Async",
-  "FetchADLRankAsync",
-  "FetchAccountIdByTypeAsync",
-  "FetchAllGreeksAsync",
   "FetchAsync",
-  "FetchBuilderApprovalsAsync",
-  "FetchCrossBorrowRateAsync",
-  "FetchDepositWithdrawFeeAsync",
-  "FetchEventAsync",
-  "FetchIsolatedBorrowRateAsync",
-  "FetchIsolatedBorrowRatesAsync",
-  "FetchLastPricesAsync",
-  "FetchLatestBlockHeightAsync",
-  "FetchLeveragesAsync",
-  "FetchMarginModesAsync",
-  "FetchNonceAsync",
-  "FetchOpenInterestsAsync",
-  "FetchOrderBookWsAsync",
-  "FetchOrderStatusAsync",
-  "FetchOutcomeAsync",
-  "FetchOutcomesAsync",
-  "FetchPaymentMethodsAsync",
-  "FetchPrivateDepositWithdrawFeesAsync",
-  "FetchPublicDepositWithdrawFeesAsync",
-  "FetchQuoteAsync",
-  "FetchRawEventByTickerAsync",
-  "FetchRawMarketByIdAsync",
-  "FetchRawQuestionByIdAsync",
-  "FetchRawTopicDetailAsync",
-  "FetchRestOrderBookSafeAsync",
-  "FetchSettlementsAsync",
   "FetchTimeAsync",
-  "FetchWalletAsync",
-  "FetchWebEndpointAsync",
-  "FetchWithdrawalWhitelistAsync",
-  "GetAccountIdAsync",
-  "GetListenKeyAsync",
-  "GetSystemConfigAsync",
-  "GetUrlByMarketTypeAsync",
-  "GetUtaUrlAsync",
-  "GetWithdrawNonceAsync",
-  "GetZKContractSignatureObjAsync",
-  "GetZKTransferSignatureObjAsync",
-  "HandleBuilderFeeApprovalAsync",
-  "HelperForWatchMultipleConstructAsync",
-  "InitializeClientAsync",
-  "IsUTAEnabledAsync",
-  "LoadAccountAsync",
-  "LoadAccountInfosAsync",
-  "LoadAccountSettingsAsync",
-  "LoadApiCredentialsAsync",
-  "LoadApiKeyAsync",
-  "LoadCurrencyNetworksAsync",
-  "LoadDydxProtosAsync",
-  "LoadMarketsAndSignInAsync",
-  "LoadMultiSignAddressAsync",
-  "LoadOutcomesAsync",
-  "LoadTimeDifferenceAsync",
-  "LoadUnifiedStatusAsync",
-  "NegotiateAsync",
-  "PreLoadLighterLibraryAsync",
   "PromiseAll",
   "RequestAsync",
-  "RequestPrivateAsync",
-  "RetrieveAccountAsync",
-  "SeedOrderBookAsync",
-  "SeedPositionBalancesAsync",
-  "SendEvmTransactionAsync",
-  "SetMarginModeAsync",
-  "SetPositionModeAsync",
-  "SignInAsync",
   "SubscribeAsync",
-  "SubscribeMultipleAsync",
-  "SubscribeMyriadChannelAsync",
-  "SubscribeOpinionChannelAsync",
-  "SubscribePrivateAsync",
-  "SubscribePrivateUtaAsync",
-  "SubscribePublicAsync",
-  "SubscribePublicMultipleAsync",
-  "SubscribePublicMultipleUtaAsync",
-  "SubscribePublicUtaAsync",
-  "SubscribeUserChannelAsync",
-  "TradeRequestAsync",
   "UnSubscribeAsync",
-  "UnSubscribeMultipleAsync",
-  "UnSubscribePublicMultipleAsync",
   "UnWatchAsync",
-  "UnWatchBalanceAsync",
-  "UnWatchBidsAsksAsync",
-  "UnWatchChannelAsync",
-  "UnWatchChannelsAsync",
-  "UnWatchFundingRateAsync",
-  "UnWatchMarkPriceAsync",
-  "UnWatchMarkPricesAsync",
-  "UnWatchMyTradesAsync",
-  "UnWatchOHLCVAsync",
-  "UnWatchOHLCVForSymbolsAsync",
   "UnWatchOrderBookAsync",
   "UnWatchOrderBookForSymbolsAsync",
-  "UnWatchOrdersAsync",
-  "UnWatchPositionsAsync",
-  "UnWatchPrivateAsync",
-  "UnWatchPublicAsync",
-  "UnWatchPublicMultipleAsync",
-  "UnWatchTickerAsync",
-  "UnWatchTickersAsync",
-  "UnWatchTopicsAsync",
   "UnWatchTradesAsync",
   "UnWatchTradesForSymbolsAsync",
-  "UnWatchWalletEventsAsync",
   "UnsubscribeAsync",
-  "UnsubscribePublicAsync",
-  "UnwatchPublicAsync",
-  "WaitForTransactionReceiptAsync",
-  "WalletEventsTopicAsync",
   "Watch",
-  "WatchExecuteRequestAsync",
-  "WatchHeartbeatAsync",
-  "WatchManyAsync",
-  "WatchMultiHelperAsync",
-  "WatchMultiTickerHelperAsync",
-  "WatchMultiple",
-  "WatchMultipleSubscriptionAsync",
-  "WatchMultipleWrapperAsync",
   "WatchOrderBookAsync",
   "WatchOrderBookForSymbolsAsync",
-  "WatchPrivateAsync",
-  "WatchPrivateMultipleAsync",
-  "WatchPrivateRequestAsync",
-  "WatchPrivateSubscribeAsync",
-  "WatchPublicAsync",
-  "WatchPublicMultipleAsync",
-  "WatchRequestAsync",
-  "WatchSpotPrivateAsync",
-  "WatchSpotPublicAsync",
-  "WatchStockMarketStreamAsync",
-  "WatchSwapPrivateAsync",
-  "WatchSwapPublicAsync",
-  "WatchTopicsAsync",
-  "WatchWalletEventsAsync",
-  "WathPublicAsync"
+  "WatchPublicAsync"
 ];
 var CCXT_GO_ASYNC_RECV_CALL = /^\(\s*<-\s*(?:this|ccxt)\.([A-Za-z_]\w*)\s*\(/;
 var CCXT_GO_ASYNC_UNBOX = { "map[string]any": "MapTyped", "[]any": "ListTyped" };
@@ -17443,8 +16813,7 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0) {
     return methodDef.replace(/(\)\s+)any(\s*)$/, "$1" + goType + "$2");
   };
   goTranspiler.__ccxtGoLocalTypesInstalled = true;
-  installCcxtGoArithmeticUnbox(goTranspiler);
-  installCcxtGoCurrencyUnbox(goTranspiler);
+  installCcxtGoDeclarationUnbox(goTranspiler);
   installCcxtGoWriteSiteConversions(goTranspiler);
   installCcxtGoIdentityTupleRebind(goTranspiler);
   installCcxtGoArrayLiteralWrites(goTranspiler);
@@ -17534,11 +16903,7 @@ var CCXT_GO_TUPLE_PARAMS_PRODUCERS = {
   "this.HandleOptionStringAndParams": 0,
   "this.HandleOptionStringAndParams2": 0,
   "this.HandleOptionBoolAndParams": 0,
-  "this.HandleOptionBoolAndParams2": 0,
-  "this.HandleOptionBoolAndParamsNullable": 0,
-  "this.HandleOptionBoolAndParams2Nullable": 0,
-  "this.HandleOptionIntegerAndParamsNullable": 0,
-  "this.HandleOptionIntegerAndParams2Nullable": 0
+  "this.HandleOptionBoolAndParams2": 0
 };
 var CCXT_GO_TUPLE_ELEMENT_NATIVE = { "Dict": "map[string]any", "Str": "*string", "string": "*string", "Num": "*float64" };
 var CCXT_GO_TUPLE_OVERRIDE_CACHE = /* @__PURE__ */ new Map();
@@ -18320,15 +17685,12 @@ var CCXT_GO_PRODUCER_DECLARATIONS = {
   "this.OpinionOrderRawAmounts": "map",
   "this.ParseBinaryMarketToOutcomes": "list",
   "this.ParseCancelOrders": "list",
-  "this.ParseBorrowRateHistory": "list",
   "this.ParsePredictionOrders": "list",
   "this.FilterByOutcomeSinceLimit": "list",
   "this.ParsePredictionTrades": "list",
   "this.ParseFundingRate": "map",
   "this.ParseMarketLeverageTiers": "list",
   "this.ParseOHLCVs": "list",
-  "this.InsertMissingCandles": "list",
-  "this.ParseTradingViewOHLCV": "list",
   "this.ParseTrade": "map",
   "this.ParseOrder": "map",
   "this.ParseTicker": "map",
@@ -18337,7 +17699,6 @@ var CCXT_GO_PRODUCER_DECLARATIONS = {
   "this.Omit": "map",
   "this.SafeMarket": "map",
   "this.ParseTransaction": "map",
-  "this.ParseWsOHLCVs": "list",
   "this.PolymarketOrderRawAmounts": "map",
   "this.SignPredictfunOrder": "map",
   "this.AddKeyInArrayItems": "list",
@@ -18406,12 +17767,6 @@ var CCXT_GO_PRODUCER_DECLARATIONS = {
   "this.ParseADLRanks": "list",
   "this.FilterByArrayADLRanks": "list",
   "this.ParseOpenInterests": "map",
-  "this.ParseConversions": "list",
-  "this.ParseLongShortRatioHistory": "list",
-  "this.ParseAccounts": "list",
-  "this.ParseAllGreeks": "map",
-  "this.ParseOptionChain": "map",
-  "this.ParseAccount": "map",
   "this.ParseFundingRateHistories": "list",
   "this.ParseIncomes": "list",
   "this.ParseFundingHistories": "list",
@@ -22914,7 +22269,6 @@ var GO_HELPER_RETURN_TYPES = {
   "MathRound": "float64",
   "MathAbs": "float64",
   "MathPow": "float64",
-  "ToFloat64": "float64",
   "EvalTruthy": "bool",
   "IsEqual": "bool",
   "IsGreaterThan": "bool",
@@ -22923,11 +22277,7 @@ var GO_HELPER_RETURN_TYPES = {
   "IsLessThanOrEqual": "bool",
   "InOp": "bool",
   "IsArray": "bool",
-  "IsString": "bool",
   "IsInt": "bool",
-  "IsBool": "bool",
-  "IsNumber": "bool",
-  "IsObject": "bool",
   "IsDictionary": "bool",
   "StartsWith": "bool",
   "EndsWith": "bool",
@@ -22943,7 +22293,6 @@ var GO_HELPER_RETURN_TYPES = {
   "strings.HasSuffix": "bool",
   "strconv.FormatInt": "string",
   "IsInstance": "bool",
-  "IsInteger": "bool",
   "this.InArray": "bool",
   "this.ValueIsDefined": "bool",
   "Precise.StringGt": "bool",
@@ -23458,12 +22807,7 @@ var GO_BASE_PAIR_TWINS = {
 };
 var GO_PARAMS_TUPLE_HELPERS = {
   "handleUntilOption": 1,
-  "handleNetworkCodeAndParams": 1,
-  "handleWithdrawTagAndParams": 1,
-  "handleTriggerAndParams": 1,
-  "handleTriggerDirectionAndParams": 1,
-  "handlePostOnly": 1,
-  "handleTriggerPricesAndParams": 3
+  "handlePostOnly": 1
 };
 var GO_TUPLE_NATIVE_BINDING_PRODUCERS = [
   "HandleMarketTypeAndParams",
@@ -23478,10 +22822,6 @@ var GO_TUPLE_NATIVE_BINDING_PRODUCERS = [
   "HandleOptionStringAndParams2",
   "HandleOptionAndParams",
   "HandleOptionAndParams2",
-  "HandleOptionBoolAndParamsNullable",
-  "HandleOptionBoolAndParams2Nullable",
-  "HandleOptionIntegerAndParamsNullable",
-  "HandleOptionIntegerAndParams2Nullable",
   "HandleNetworkCodeAndParams",
   "HandleWithdrawTagAndParams",
   "HandlePostOnly",
