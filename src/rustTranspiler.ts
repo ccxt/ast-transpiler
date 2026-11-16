@@ -22977,6 +22977,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (init !== undefined && isCallExpression(init) && this.rustVenueContainerReturnKind(init)?.nullable === false && this.rustLentEndpointSlot(up, n, from)) return ++lentResponses > 0 && ++reads > 0;
             // a lent params slot (`watch` message, a lent `params`) takes the built map by reference, as the handed rule lends it
             if (from === 'dict' && isCallExpression(up) && this.rustLentParamsSlot(up, n) && (extendReuse || init !== undefined && isCallExpression(init) && this.rustBuiltReturnSourceKind(init) === 'dict')) return ++reads > 0;
+            // ral-73g: a shared-map params alias (sb: a proven map on every path, rewritten only with maps) lent to a lent-params
+            // slot (`handleOptionAndParams (x, ..)`): `&x` lends the very map the boxed alias handed over, no copy
+            if (sbAlias && !nilDeclared && from === 'dict' && isCallExpression(up) && this.rustLentParamsSlot(up, n) && !this.rustTestTierSource(n)) return ++reads > 0;
             // ral-oc: the runtime `jwt(request: impl Into<Value>, ..)` takes the request map lent (an Arc bump)
             if (from === 'dict' && this.rustJwtRequestSlot(up, n)) return ++jwtLends > 0 && ++reads > 0;
             // ral-43f: the source of `t = x` whose target holds the optional form of the same kind: the alias shares x's handle

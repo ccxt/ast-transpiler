@@ -23358,3 +23358,33 @@ describe('ral-73a: a literal map stored whole into a this-field at its last use'
         expect(body).toMatch(/let mut kept: Value = /);
     });
 });
+
+describe('ral-73g: a params alias lent to a lent-params slot holds the map', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    extend (...args: any[]): any { return Object.assign ({}, ...args); }\n    omit (x: any, ...args: any[]): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    async publicGetX (p: any = {}): Promise<any> { return p; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionAndParams (params: object, methodName: Str, optionName: string, defaultValue: any = undefined): [any, Dict] {\n        const value = this.safeString (params, optionName, defaultValue);\n        return [ value, this.omit (params, optionName) ];\n    }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    async cancelAllOrders (outcome: Str = undefined, params: Dict = {}): Promise<any> {\n        let paramsValue: Dict = params;\n        if (outcome !== undefined) {\n            let warn = true;\n            [ warn, paramsValue ] = this.handleOptionAndParams (paramsValue, 'cancelAllOrders', 'warn', warn);\n        }\n        const slug = this.safeString (paramsValue, 'slug');\n        return await this.publicGetX (this.extend ({ 's': slug }, paramsValue));\n    }\n"
+            + "    rebound (x: any) {\n        let y = x;\n        let w = true;\n        [ w, y ] = this.handleOptionAndParams (y, 'rebound', 'w', w);\n        return this.publicGetX (this.extend ({}, y));\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-73g-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['cancelAllOrders'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('limitless cancelAllOrders paramsValue: `let y: Dict = params` rewritten from the slot and lent `&y` to the handle* params', () => {
+        expect(out).toContain('let mut paramsValue: crate::value::Dict = params.into_dict();');
+        expect(out).toMatch(/handleOptionAndParams\(&paramsValue, /);
+        expect(out).toContain('self.safe_string_k_opt(&paramsValue, "slug", &[])');
+        expect(out).not.toContain('let mut paramsValue: Value');
+    });
+    test('negative: an alias of an untyped parameter keeps its box', () => {
+        expect(out).toContain('let mut y: Value =');
+    });
+});
