@@ -34437,10 +34437,15 @@ GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
             || ((callee.name?.text !== 'resolve') && (callee.name?.text !== 'reject')) || !clientIsInterfaceFrame(node)) {
             return printed;
         }
+        // decided on the receiver identifier's source name (a future binding), not on its printed text
+        const receiverName: string = callee.expression.text ?? '';
+        if (!receiverName.endsWith('future')) {
+            return printed;
+        }
         const receiver = this.printNode(callee.expression, 0);
         const head = `${receiver}.${callee.name.text === 'resolve' ? 'Resolve' : 'Reject'}(`;
         const lead = /^\s*/.exec(printed)[0];
-        if (!/future$/.test(receiver) || !printed.startsWith(head, lead.length)) {
+        if (!printed.startsWith(head, lead.length)) {
             return printed;
         }
         const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(callee.expression)?.valueDeclaration?.resolve?.();
