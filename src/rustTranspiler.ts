@@ -12215,8 +12215,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(read.expression)) return false;
         const recvDecl: any = this.rustDeclaredNode(read.expression);
         if (recvDecl === undefined || !(isVariableDeclaration(recvDecl) || isParameterDeclaration(recvDecl)) || recvDecl.type === undefined) return false;
+        // INT-71: the receiver was proven above from the AST to be an annotated local / parameter identifier (a plain place),
+        // so no test of its printed text is needed (that test was a text pass)
         const kind = this.rustOkeyKind(read.expression, read);
-        return kind === 'map' || (kind === 'value' && RUST_PLAIN_PLACE.test(this.printNode(read.expression, 0).trim()));
+        return kind === 'map' || kind === 'value';
     }
 
     /** A one-level read `m[k]` (not a write target, not a chain link) on an `rustOkeyKind` receiver. */
