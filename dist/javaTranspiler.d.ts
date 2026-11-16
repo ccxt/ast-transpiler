@@ -63,6 +63,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNonSharedSourceVerdicts: WeakMap<any, boolean>;
     javaMapSourceInProgress: Set<any>;
     getChecker(): Checker;
+    javaCalleeDeclaration(node: any, checker?: Checker | undefined): any;
+    javaCalleeFileName(node: any, checker?: Checker | undefined): string | undefined;
     checkerOrUndefined(): Checker | undefined;
     constructor(config?: {});
     initConfig(): void;
@@ -121,6 +123,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaThisCallName(node: any): any;
     javaCalleeResolves(node: any): boolean;
     javaNativeParameterType(node: any): string | undefined;
+    javaOverridesAgree(override: any, agrees: (method: any) => boolean): boolean;
     javaFixedParameterPrintedType(node: any): string | undefined;
     javaAncestorParameterType(node: any, typeOf: (param: any) => string | undefined, next: (method: any) => any): string | undefined;
     javaOptionalParameterJavaType(node: any): string;
@@ -188,8 +191,12 @@ export declare class JavaTranspiler extends BaseTranspiler {
     restoreFinalVarMutations(): void;
     objectLiteralCapturedKeys(node: any): string[];
     javaReassignsParameter(node: any): boolean;
+    javaWriteSiteSome(root: any, rule: {
+        write: (target: any, site: any) => boolean;
+        assigns?: (op: any) => boolean;
+        node?: (n: any) => boolean;
+    }): boolean;
     javaSymbolOf(node: any): any | undefined;
-    javaWritesSymbol(node: any, symbols: Set<any>): boolean;
     javaTargetWritesSymbol(target: any, symbols: Set<any>, destructuring: boolean): boolean;
     printFinalOutsideMethodVariableWrappersIfAny(node: any, identation: any): string;
     printInsideMethodVariableWrappersIfAny(node: any, identation: any): string;
@@ -274,7 +281,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaWsClientMapField(expression: any): string | undefined;
     javaWsClientDeclaredMapField(expression: any): string | undefined;
     javaWsClientTypedMapField(expression: any): string | undefined;
-    javaWsClientUntypedMapField(expression: any): string | undefined;
     javaWsClientAliasLocalType(declaration: any): string | undefined;
     javaWsClientMapReceiverField(expression: any): string | undefined;
     javaWsClientReceiverIsAny(expression: any): boolean;
@@ -291,7 +297,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaFieldMapReadIfAllowed(node: any): string | undefined;
     printCheckerTypedElementAccessRead(node: any): string;
     printElementAccessExpression(node: any, identation: any): any;
-    javaLibraryTierNode(node: any): boolean;
     javaClassTypedElementRead(node: any): string;
     elementWriteTargetsMap(container: any, base: any, keys: any, value: any): boolean;
     elementWriteValueMayBeNull(value: any): boolean;
@@ -424,7 +429,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaConcatOtherOperandIsSafe(node: any): boolean;
     javaConcatOperandPrintsAsValue(node: any): any;
     javaConcatOperandCanBeDouble(node: any): boolean;
-    javaSplitTernaryReceiver(node: any): boolean;
     javaNativeSplitCall(node: any, name: any, parsedArg: any): string | undefined;
     javaNativeSplitText(name: any, parsedArg: any): string;
     javaNativeSplitIndexRead(node: any, index: number): string | undefined;

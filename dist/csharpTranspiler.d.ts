@@ -169,6 +169,10 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpFunctionStringListParamType(node: any): string | undefined;
     csharpListSpellingOfType(type: any, unionArms?: number, anyCell?: boolean): string | undefined;
     csharpListParamCensus(): Map<string, boolean>;
+    csharpParamCensus(rule: {
+        walks: ((node: any) => void)[];
+        settle: () => void;
+    }): void;
     csharpListParamBodyReadsAsList(parameter: any): boolean;
     csharpArgumentMayBeList(type: any): boolean;
     printArgsForCallExpression(node: any, identation: any): string;
@@ -196,7 +200,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         key: string;
         arguments: any[];
     } | undefined;
-    csharpBooleanParamCandidateRows(node: any, candidates: any, byName: any): void;
     csharpParamIsBooleanTyped(parameter: any): boolean;
     csharpBooleanArgumentProven(call: any, index: any, accepted: any): boolean;
     printParameter(node: any, defaultValue?: boolean): string;
@@ -215,7 +218,9 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         getter?: string;
     } | undefined;
     csharpIsDeclaredDictMemberRead(node: any): boolean;
-    csharpDeclaredDictMemberReceiverIsParameter(member: any): boolean;
+    csharpDeclaredDictMemberOfParameter(member: any): {
+        getter?: string;
+    } | undefined;
     csharpDeclaredDictMemberKey(key: any): string | undefined;
     csharpDeclaredDictMemberElementRead(node: any): string | undefined;
     csharpDeclaredDictMemberCall(node: any): string | undefined;
@@ -296,7 +301,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIndexOfReceiverIsCheckedString(receiver: any): boolean;
     csharpReceiverDeclaredNonNullString(receiver: any): boolean;
     csharpDeclarationIsNonNullString(declaration: any): boolean;
-    csharpInitializerIsUndefined(initializer: any): boolean;
     csharpNullGuardAdmitsRead(node: any, receiver: any): boolean;
     csharpEarlyExitNonNullGuarded(block: any, statement: any, symbol: any, scope: any): boolean;
     csharpTestIsNonNullCheck(test: any, symbol: any, truthy: any): boolean;
@@ -445,8 +449,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeModExpression(left: any, right: any, leftText: any): string;
     csharpNativeNegatedLocal(operand: any, leftSide: any): string;
     csharpNativeElementLiteralEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
-    csharpStringLiteralEquality(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
-    csharpNullLiteralEquality(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
+    csharpLiteralEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
+    csharpArrayDestructuringAssignment(left: any, right: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printMathFloorCall(node: any, identation: any, parsedArg?: any): string;
     printMathRoundCall(node: any, identation: any, parsedArg?: any): string;
@@ -548,7 +552,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpGuardIsNegated(guard: any): boolean;
     csharpAlwaysExits(statement: any): boolean;
     csharpElementAccessReceiverIsList(node: any): boolean;
-    csharpIndexWriteReceiverType(node: any): string | undefined;
     csharpIsPlainIndexWrite(node: any): boolean;
     csharpDictionaryIndexWriteNeedsNoCast(node: any): boolean | undefined;
     csharpElementAccessTypedReceiver(node: any): string | undefined;
@@ -571,7 +574,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsArrayType(type: any): boolean;
     csharpNullableDictionaryType(type: any): boolean;
     csharpIsAnyValuedDictionaryType(type: any): boolean;
-    csharpDictionaryParamsBag(node: any): boolean;
     csharpNativeDictionaryReceiver(obj: any): {
         text: string;
         nullTest?: string;
