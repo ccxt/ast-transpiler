@@ -912,6 +912,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `n.toString()` of an `i64` scalar local. */
     rustIntToStringShape(node: any): boolean;
     rustStrCastCall(node: any): any;
+    /** ral-68f: `node` is the whole initializer of a single-declarator `const` statement. */
+    rust68fConstInit(node: any): boolean;
+    /** ral-68f: a base safeString-family reader call (not safeCurrencyCode) with no default argument (rust64bReaderLocal's call test). */
+    rust68fNoDefaultReader(init: any): boolean;
     rustParseNumberStrCall(call: any): boolean;
     rustDerivedScalarKind(call: any): string | undefined;
     rustListLengthInit(node: any): boolean;
@@ -1034,6 +1038,12 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  local: only uses bound to its own symbol are walked. Any other second binding keeps the plain walk. */
     rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar?: boolean, skipPropertyNames?: boolean): boolean;
     rustBindingUsesWalk(declaration: any, nodes: any[], own: any, home: any, skip: any[], skipPropertyNames: boolean, acceptUse: (n: any) => boolean, scalar: boolean): boolean;
+    /** ral-68f: an `Option<String>` base-reader local boxed at its moving last use as a bare argument of the `this.` call
+     *  that is the whole source of a write (mexc pro `timeframe = this.findTimeframe (timeframeId, ..)`): the box is
+     *  `x.map(Value::from).unwrap_or(Value::Null)`, the `Str` / `Null` the `Value` local moved there (ccxt's
+     *  rustStr2LocalOptionString pass printed this); the write's own source text is the call, unchanged otherwise. Also the
+     *  local itself as the whole source of a write to a plain `Value` local, at its last use. */
+    rust68fReaderSelfArgWrite(n: any, write: any, form: string, declaration: any): boolean;
     /** ral-64n: a typed-signature argument (`targ`: printed `x.as_deref().unwrap_or_default()` / `x.as_deref()` / the Copy
      *  payload, never a boxed operand) of the call that is the whole source of a write to a typed scalar local (bitflyer
      *  `expiry = this.parseExpiryDate (expiryDate)` with `expiryDate` declared in two sibling blocks): the written local
@@ -1359,6 +1369,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     printElemKeyInOp(key: any, obj: any): string | undefined;
     /** ral-58k: `n` is the whole right side of a statement `this.f[k] = n`, `k` another identifier (decided from the AST). */
     rust58kThisFieldIdentKeyWrite(n: any): boolean;
+    /** ral-68f: `n` (or `(n as string)`, through parentheses) is an argument of a `new X (..)` / `new m[k] (..)` expression that is
+     *  not thrown, and `n` reads a base-reader local. */
+    rust68fNewArgCast(n: any): boolean;
     /** ral-64b: a local declared from a base safeString-family reader with no default argument (its box is `Str` or `Null`). */
     rust64bReaderLocal(declaration: any): boolean;
     rustThisFieldLiteralWrite(n: any): boolean;
@@ -2883,7 +2896,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): string;
+    printLogicalInBooleanContext(node: any): any;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
