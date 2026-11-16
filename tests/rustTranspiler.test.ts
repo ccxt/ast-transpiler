@@ -21251,3 +21251,89 @@ describe('ral-62i: a no-default safeDict local defaulted to {} by a ternary on i
         expect(out).not.toContain('let mut rawOrder: Option<crate::value::Dict>');
     });
 });
+
+describe('ral-62p: a client.subscriptions key read by a typed indexOf with a cast needle', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    keep (o: any): any { return o; }\n}\n";
+    const client = "export default class Client {\n    subscriptions: Dict = {};\n}\ninterface Dict { [key: string]: any }\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base/ws'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/base/ws/Client.ts'), client);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return path.join (dir, 'ts/src/pro/venue.ts');
+    };
+    const loop = (needle: string) => "    m (client: Client, message: Dict) {\n        const topicSymbol = this.safeString (message, 'symbol');\n        const subscriptions = Object.keys (client.subscriptions);\n        let subscription = undefined;\n        for (let i = 0; i < subscriptions.length; i++) {\n            const key = subscriptions[i];\n            if (key.indexOf (" + needle + ") >= 0) {\n                subscription = client.subscriptions[key];\n                break;\n            }\n        }\n        return this.keep (subscription);\n    }\n";
+    test('the key is an Option<String> found natively and lent to the subscription read (kucoin pro handleOrderBook)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62p-subkey-cast', loop ('(topicSymbol as string)'))).content;
+        expect(out).toContain('let mut key: Option<String> = subscriptions.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('if let (Some(__h), Some(__n)) = (key.as_deref(), ');
+        expect(out).toContain('get_subscription(key.as_deref())');
+    });
+    test('the same without the cast', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62p-subkey-plain', loop ('topicSymbol'))).content;
+        expect(out).toContain('let mut key: Option<String> = subscriptions.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
+    });
+    test('negative: a key that is the needle of a find on a Value stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62p-subkey-neg', loop ('(topicSymbol as string)').replace ('key.indexOf (', 'this.keep (message).indexOf (key, '))).content;
+        expect(out).toContain('let mut key: Value = ');
+    });
+});
+
+describe('ral-62p: Object.keys element read as a key inside a base call that rewrites a declared Dict / List local', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = Array<any>;\nconst arrayConcat = (a: any[], b: any[]): any[] => a.concat (b);\nexport default class Exchange {\n    arrayConcat = arrayConcat;\n    safeDict (o: any, k: any, d: any = undefined): Dict | undefined { return d; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const loop = (decl: string) => "    m (data: Dict) {\n        const withdraw = this.safeDict (data, 'withdraw', {});\n        let transactions" + decl + " = [];\n        const withdrawKeys = Object.keys (withdraw);\n        for (let i = 0; i < withdrawKeys.length; i++) {\n            const key = withdrawKeys[i];\n            transactions = this.arrayConcat (transactions, withdraw[key]);\n        }\n        const depositKeys = Object.keys (data);\n        for (let i = 0; i < depositKeys.length; i++) {\n            const key = depositKeys[i];\n            transactions = this.arrayConcat (transactions, data[key]);\n        }\n        return transactions;\n    }\n";
+    test('the key is a borrowed string (indodax fetchDepositsWithdrawals)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62p-concat-key', loop (': List'))).content;
+        expect(out).toMatch(/let mut key: Option<(&str|String)> = withdrawKeys\.get\(i as usize\)/);
+    });
+    test('negative: the written local is declared any', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62p-concat-key-neg', loop (': any'))).content;
+        expect(out).toContain('let mut key: Value = ');
+    });
+});
+
+describe('ral-62p: a base handleOption with a bool literal default (cast or annotated) is an Option<bool>', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    handleOption (methodName: string, optionName: string, defaultValue: any = undefined) { return this.options[optionName] ?? defaultValue; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Bool } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('`as Bool` with a strict true test (binance createOrderRequest quoteOrderQty)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62p-opt-bool-cast', "    m (x: Dict) {\n        const q = this.handleOption ('createOrder', 'q', true) as Bool;\n        if (q === true) {\n            return this.keep (x);\n        }\n        return undefined;\n    }\n")).content;
+        expect(out).toContain('let mut q: Option<bool> = self.handleOption(');
+        expect(out).toContain('.as_bool();');
+    });
+    test('`: boolean` annotation read in a logical condition (independentreserve pro checksum)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62p-opt-bool-ann', "    m (x: Dict, snap: boolean) {\n        const c: boolean = this.handleOption ('watchOrderBook', 'checksum', true);\n        if ((c) && (snap)) {\n            return this.keep (x);\n        }\n        return undefined;\n    }\n")).content;
+        expect(out).toContain('let mut c: Option<bool> = self.handleOption(');
+        expect(out).toContain('(c == Some(true))');
+    });
+    test('negative: a bool option only boxed straight back stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62p-opt-bool-box', "    m (x: Dict) {\n        const c: boolean = this.handleOption ('m', 'c', false);\n        return this.keep (c);\n    }\n")).content;
+        expect(out).toContain('let mut c: Value = ');
+    });
+});
+
+describe('ral-62p: a base parseDate result is an Option<i64>', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst parseDate = (x) => {\n    if (typeof x !== 'string' || !x) {\n        return undefined;\n    }\n    return Date.parse (x);\n};\nexport default class Exchange {\n    parseDate = parseDate;\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    iso8601 (t: any): Str { return t; }\n}\n";
+    test('declared from parseDate, boxed into a dict and handed to iso8601 (foxbit / paymium parse*)', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-62p-parse-date');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (t: Dict): Dict {\n        const timestamp = this.parseDate (this.safeString (t, 'created_at'));\n        return {\n            'timestamp': timestamp,\n            'datetime': this.iso8601 (timestamp),\n        };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut timestamp: Option<i64> = self\.parse_?[dD]ate\(.*\)\.as_i64\(\);/);
+    });
+});

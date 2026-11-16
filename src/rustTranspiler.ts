@@ -4936,6 +4936,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarInitShape(init): boolean {
         const node: any = this.unwrapParens(init);
         if (node === undefined) return false;
+        // ral-62p: `this.handleOption (..) as Bool`: the cast prints nothing, the candidate is the call (its kind still has to be proven)
+        if (this.rust62pBoolCastOption(node)) return true;
         if (this.literalKindOfNode(node) !== undefined || this.rustScalarIntLiteral(node) !== undefined || this.rustScalarFloatLiteral(node) !== undefined) return true;
         if (isBinaryExpression(node)) return RustTranspiler.RUST_SCALAR_ARITH_OPS.has(node.operatorToken.kind) || this.rustBoolLeafLogical(node);
         if (isPrefixUnaryExpression(node) && node.operator === SyntaxKind.ExclamationToken) return this.rustBoolLeafLogical(node);
@@ -5051,6 +5053,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (anyLength && typedUses === 0) return undefined;
         // ral-61p: a handleOption local typed from its default literal only for its native uses (boxed-straight-back stays `Value`)
         if (optionDefault && typedUses === 0) return undefined;
+        // ral-62p: likewise a bool-default handleOption local, annotated or cast (boxed-straight-back stays `Value`)
+        if (kind === 'obool' && typedUses === 0 && this.rustHandleOptionLiteralKind(this.rust62pBoolCastOption(this.unwrapParens(declaration.initializer)) ? this.unwrapParens(declaration.initializer).expression : declaration.initializer) === 'obool') return undefined;
         // ral-54x K1: a cased reader `String` with no native use would only be boxed straight back (boxed-straight-back stays `Value`)
         if (nativeUses === 0 && kind === 'str' && this.rustReaderCaseStrRecv(this.unwrapParens(declaration.initializer)) !== undefined) return undefined;
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration) || this.rust59pDeleteKeyInboxed(declaration)) return undefined;
@@ -5173,7 +5177,9 @@ export class RustTranspiler extends BaseTranspiler {
     // an Int 1 option equalled `true`; a `Bool`-annotated one already printed `x.as_bool() == Some(b)`).
     rustAnyBoolTestedLocal(declaration): boolean {
         if ((declaration.parent?.flags & NodeFlags.Const) === 0) return false;
-        const init: any = this.unwrapParens(declaration.initializer);
+        // ral-62p: `this.handleOption (..) as Bool` is the call itself (the cast prints nothing)
+        const cast: any = this.unwrapParens(declaration.initializer);
+        const init: any = this.rust62pBoolCastOption(cast) ? this.unwrapParens(cast.expression) : cast;
         if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee: any = this.rustScalarCallee(init);
         if (callee === undefined || callee.kind !== SyntaxKind.MethodDeclaration || this.isAsyncFunction(callee)
@@ -5506,6 +5512,16 @@ export class RustTranspiler extends BaseTranspiler {
     /** ral-61p: `this.handleOption (m, o, <literal>)` resolved to the base tier: the option value or the default argument.
      *  A string literal default names `ostr` (the runtime answers the stored option or that literal; a stored option of
      *  another kind reads as `None`, the same miss the `Value` form's `.as_str()` compare made). */
+    /** ral-62p: `this.handleOption (m, o, d) as Bool` (or `as boolean`) on the base handleOption. */
+    rust62pBoolCastOption(node: any): boolean {
+        if (node === undefined || !isAsExpression(node) || ![ 'Bool', 'boolean' ].includes(String(node.type?.getText?.() ?? ''))) return false;
+        const call: any = this.unwrapParens(node.expression);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(call.expression.name.text) !== 'handleOption') return false;
+        const declaration: any = this.rustScalarCallee(call);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
+    }
+
     rustHandleOptionLiteralKind(expr): string | undefined {
         const node: any = this.unwrapParens(expr);
         if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword
@@ -5514,6 +5530,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return undefined;
         const fallback: any = this.unwrapParens(node.arguments[2]);
         if (this.literalKindOfNode(fallback) === 'string' && !(fallback.text in this.StringLiteralReplacements)) return 'ostr';
+        // ral-62p: a `true` / `false` default: the local is `Option<bool>` (`.as_bool()`), each test prints the `== Some(true)`
+        // truth the `Value` form's own condition printed (`x.as_bool() == Some(true)`), so a non-Bool stored option stays falsy alike
+        if (fallback?.kind === SyntaxKind.TrueKeyword || fallback?.kind === SyntaxKind.FalseKeyword) return 'obool';
         // an int literal default stays `Value`: an option stored as a `Float` (5.0) equals the `Int` in TS, and the existing
         // f64-payload compare keeps that truth (ral-58n kucoin pro snapshotDelay); `.as_i64()` would miss it
         return undefined;
@@ -5524,6 +5543,8 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_SCALAR_RETURNS: { [name: string]: string } = {
         safeCurrencyCode: 'ostr', safeSymbol: 'ostr', numberToString: 'ostr', iso8601: 'ostr',
         networkIdToCode: 'ostr', marketId: 'ostr', currencyId: 'ostr', milliseconds: 'oint', seconds: 'oint',
+        // ral-62p: the hand-written `parse_date` answers `Value::Int` (epoch ms) or `Value::Null`, the TS `number | undefined`
+        parseDate: 'oint',
     };
 
     /** Base `parseNumber(s)` with no default over a string (literal, string local, `Precise.string*`): the
@@ -6976,7 +6997,8 @@ export class RustTranspiler extends BaseTranspiler {
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
                 && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration) && !this.rustScalarCacheFieldCtor(n, write)
-                && !this.rustScalarSumOperandWrite(n, write) && !this.rust58kDictReaderKeyWrite(n, write) && !this.rust60kBaseCallArgDictWrite(n, write)) return false;
+                && !this.rustScalarSumOperandWrite(n, write) && !this.rust58kDictReaderKeyWrite(n, write) && !this.rust60kBaseCallArgDictWrite(n, write)
+                && !this.rust62pBaseCallArgKeyWrite(n, write)) return false;
         }
         return true;
     }
@@ -6992,6 +7014,24 @@ export class RustTranspiler extends BaseTranspiler {
             || !this.rustCalleeIsRuntimeBase(call) || !call.arguments.some((a: any) => this.unwrapParens(a) === n)) return false;
         const d: any = this.rustDeclaredNode(target);
         return d !== undefined && isVariableDeclaration(d) && d.type !== undefined && String(d.type.getText()) === 'Dict';
+    }
+
+    /** ral-62p: the key of an element read `m[k]` that is a direct argument of a base-class `this.f (..)` call, the call the
+     *  whole source of a write to a local declared `Dict` / `List` (indodax fetchDepositsWithdrawals
+     *  `transactions = this.arrayConcat (transactions, withdraw[key])`): the written local's type is its annotation, the
+     *  element read prints its own key form and the call takes the read's `Value` either way, never this key's box. */
+    rust62pBaseCallArgKeyWrite(n: any, write: any): boolean {
+        if (write.operatorToken?.kind !== SyntaxKind.EqualsToken || this.rustTestTierSource(n)) return false;
+        let up: any = n;
+        while (isParenthesizedExpression(up.parent) || isAsExpression(up.parent) || isNonNullExpression(up.parent)) up = up.parent;
+        const access: any = up.parent;
+        if (access === undefined || !isElementAccessExpression(access) || access.argumentExpression !== up) return false;
+        const target: any = this.unwrapParens(write.left);
+        const call: any = this.unwrapParens(write.right);
+        if (!isIdentifier(target) || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !this.rustCalleeIsRuntimeBase(call) || !call.arguments.some((a: any) => this.unwrapParens(a) === access)) return false;
+        const d: any = this.rustDeclaredNode(target);
+        return d !== undefined && isVariableDeclaration(d) && d.type !== undefined && [ 'Dict', 'List' ].includes(String(d.type.getText()));
     }
 
     /** ral-58k: the key argument of a base `this.safeDict (src, k, dflt)` that is the whole source of a write to a local
@@ -9819,6 +9859,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** The native value of a scalar expression for a local of `kind` (`Some(..)` for optional kinds). */
     rustScalarNativeText(kind: string, expr): string | undefined {
+        // ral-62p: `this.handleOption (..) as Bool` converts the call itself
+        if (this.rust62pBoolCastOption(this.unwrapParens(expr))) return this.rustScalarNativeText(kind, this.unwrapParens(expr).expression);
         const node: any = this.unwrapParens(expr);
         const optional = kind.startsWith('o');
         const base = optional ? kind.slice(1) : kind;
@@ -10261,7 +10303,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `indexOf` needle as an `Option<&str>`: a non-empty literal, a typed string local, or a string-typed `Value` expression. */
     rustStrFindNeedle(node, syntactic: boolean): string | undefined {
-        const inner: any = this.unwrapParens(node);
+        // ral-62p: `(x as string)`: a type assertion prints nothing and never changes the runtime value, the needle is `x`
+        const inner: any = this.rustStripWrappers(node);
         if (inner === undefined) return undefined;
         const lit = this.rustNativeStringLiteralArg(inner);
         if (lit !== undefined) return inner.text === '' ? undefined : `Some("${lit}")`;
