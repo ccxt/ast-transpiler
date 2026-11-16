@@ -21337,3 +21337,26 @@ describe('ral-62p: a base parseDate result is an Option<i64>', () => {
         expect(out).toMatch(/let mut timestamp: Option<i64> = self\.parse_?[dD]ate\(.*\)\.as_i64\(\);/);
     });
 });
+
+describe('ral-62x: a required typed `string` parameter seeds an optional (`Str`-widened) local of its own kind', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    extend (...args: any[]): any { return args[0]; }\n}\n";
+    const build = (name: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = "    cancelRequest (id: string, params: Dict = {}): Dict {\n        const clientOrderId = this.safeString (params, 'clientOrderId');\n        const idValue = (clientOrderId !== undefined) ? clientOrderId : id;\n        const request: Dict = { 'id': idValue };\n        return request;\n    }\n    cancel (id: string): Dict {\n        return this.cancelRequest (id);\n    }\n";
+    test('a ternary arm reading the `&str` parameter prints its Option<String> read', () => {
+        const out = build ('ral62x-ternary', body);
+        expect(out).toContain('id: &str');
+        expect(out).toContain('let mut idValue: Option<String> = (if (clientOrderId.is_some()) { clientOrderId.clone() } else { id.as_str().map(str::to_owned) });');
+        expect(out).not.toMatch(/let mut idValue: Value/);
+    });
+    test('negative: an untyped (`any`) parameter arm keeps the local Value', () => {
+        const out = build ('ral62x-neg', body.replace ('cancelRequest (id: string,', 'cancelRequest (id: any,'));
+        expect(out).not.toContain('let mut idValue: Option<String>');
+    });
+});

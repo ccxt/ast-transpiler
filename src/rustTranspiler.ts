@@ -10804,6 +10804,9 @@ export class RustTranspiler extends BaseTranspiler {
         const narrowed = isConditionalExpression(node) ? this.rustOptParamDefault(node) : undefined;
         if (narrowed !== undefined && (narrowed.kind === kind || `o${narrowed.kind}` === kind)) return kind === narrowed.kind ? narrowed.text : `Some(${narrowed.text})`;
         const own = this.rustOptParamKind(node);
+        // ral-62x: a required typed parameter (`&str` / `i64` / `f64`) seeding an optional local of the same base kind
+        // (the local is widened by a later `Str` / `Int` / `Num` write): its rebinding always holds that variant
+        if (own !== undefined && kind === `o${own}` && (own === 'str' || own === 'int' || own === 'num')) return `${super.printIdentifier(node)}.${RustTranspiler.RUST_PARAM_READ[kind]}`;
         if (own === undefined || own !== kind) return undefined;
         return `${super.printIdentifier(node)}.${RustTranspiler.RUST_PARAM_READ[own]}`;
     }
