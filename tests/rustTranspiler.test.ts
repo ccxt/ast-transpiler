@@ -6391,9 +6391,11 @@ describe('optional params slots', () => {
         expect(out).not.toContain('otherType: Value');
     });
 
-    test('negative: a string slot written into a dict inside a loop keeps its box', () => {
+    test('a string slot written into a dict inside a loop is typed and boxed per pass (ral-66s1: was a negative before user decision 1)', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'optional-params-slots', 'ts/src/venue.ts')).content;
-        expect(out).toMatch(/let mut kind: Value = /);
+        expect(out).toMatch(/let mut kind: Option<String> = kindrestVariable\.get\(0\)\.and_then\(Value::as_str\)\.map\(str::to_owned\);/);
+        expect(out).toContain('kind.clone().map(Value::from).unwrap_or(Value::Null));');
+        expect(out).toContain('Value::Bool(kind.as_deref() == Some("spot"))');
     });
 });
 
@@ -22565,5 +22567,28 @@ describe('ral-65x: `x.toString()` of an Option<String> local that is never None 
     test('negative: a write the checker types possibly undefined keeps the formatted Value read', () => {
         const out = build ('ral65x-tostr-neg', body ('this.safeString (params, \'x\')'));
         expect(out).not.toMatch(/orderId\.map\(Value::from\)/);
+    });
+});
+
+describe('ral-66s1: tuple slots handed straight on', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    extend (a: any, b: any = undefined): any { return a; }\n    hold (x: any, y: any = undefined): any { return x; }\n    getUrl (c: any, a: any = undefined): Str { return c; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionStringAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Str = undefined): [Str, Dict] { return [ defaultValue, params ]; }\n    handleMarginModeAndParams (methodName: string, params: Dict = {}, defaultValue: Str = undefined): [Str, Dict] { return [ defaultValue, params ]; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('hitbtc / mexc / digifinex handleMarginModeAndParams override: slot 1 of the super call is the params Dict, boxed in the returned tuple', () => {
+        const out = write ('ral-66s1-super', "    handleMarginModeAndParams (methodName: string, params: Dict = {}, defaultValue: Str = undefined): [Str, Dict] {\n        const [ marginMode, paramsMarginMode ] = super.handleMarginModeAndParams (methodName, params, defaultValue);\n        if (marginMode === undefined) {\n            return [ 'isolated', paramsMarginMode ];\n        }\n        return [ marginMode, paramsMarginMode ];\n    }\n");
+        expect(out).toMatch(/let mut paramsMarginMode: crate::value::Dict = [^;]*\.get\(1\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+        expect(out).toContain('Value::from(&paramsMarginMode)]');
+        expect(out).toContain('Value::Dict(paramsMarginMode)]');
+    });
+    test('okx pro watchBidsAsks: a string slot boxed at a call and inside a loop is Option<String>, boxed per hand-off', () => {
+        const out = write ('ral-66s1-loop', "    m (params: Dict = {}, ids: string[] = []) {\n        const [ channel, paramsChannel ] = this.handleOptionStringAndParams (params, 'watchBidsAsks', 'channel', 'bbo-tbt');\n        const url = this.getUrl (channel, 'public');\n        const args = [];\n        for (let i = 0; i < ids.length; i++) {\n            const arg: Dict = {\n                'channel': channel,\n                'instId': ids[i],\n            };\n            args.push (this.extend (arg, paramsChannel));\n        }\n        return this.hold (url, args);\n    }\n");
+        expect(out).toContain('let mut channel: Option<String> = ');
+        expect(out).toContain('channel.clone().map(Value::from).unwrap_or(Value::Null)');
     });
 });
