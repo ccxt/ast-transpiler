@@ -20807,3 +20807,53 @@ describe('ral-61n: an optional safeList stored whole at a literal key of a cast 
         expect(out).not.toContain('let mut fees: Option<crate::value::List>');
     });
 });
+
+describe('ral-61p: a handleOption local typed from its literal default argument', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    handleOption (methodName: string, optionName: string, defaultValue: any = undefined) { return this.options[optionName] ?? defaultValue; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('a string literal default compared and reassigned is an Option<String> (blofin cancelOrders method)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-61p-str', "    m (trigger: boolean) {\n        let method = this.handleOption ('cancelOrders', 'method', 'a');\n        if (trigger) {\n            method = 'b';\n        }\n        if (method === 'b') {\n            return 1;\n        }\n        return 2;\n    }\n")).content;
+        expect(out).toContain('let mut method: Option<String> = ');
+        expect(out).toContain('.as_str().map(str::to_owned);');
+        expect(out).toContain("method = Some(\"b\".to_string());");
+    });
+    test('negative: an Int-annotated int literal default stays Value (a Float option must still equal; ral-58n f64 compare)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-61p-int', "    m (xs: any[]) {\n        const n = xs.length;\n        const delay: Int = this.handleOption ('watchOrderBook', 'snapshotDelay', 5);\n        if (n === delay) {\n            return 1;\n        }\n        return 2;\n    }\n")).content;
+        expect(out).toContain('let mut delay: Value = ');
+    });
+    test('negative: an un-annotated int literal default stays Value (an option stored as a float)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-61p-int-bare', "    m (xs: any[]) {\n        const n = xs.length;\n        const delay = this.handleOption ('watchOrderBook', 'snapshotDelay', 5);\n        if (n === delay) {\n            return 1;\n        }\n        return 2;\n    }\n")).content;
+        expect(out).toContain('let mut delay: Value = ');
+    });
+    test('negative: a string default only handed back to a Value slot stays Value (bitfinex precision)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-61p-box', "    m () {\n        const precision = this.handleOption ('fetchOrderBook', 'precision', 'R0');\n        const request: Dict = { 'precision': precision };\n        return this.keep (request);\n    }\n")).content;
+        expect(out).toContain('let mut precision: Value = ');
+    });
+});
+
+describe('ral-61p: getSupportedMapping over a literal map of string literals is a String', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    getSupportedMapping (key: Str, mapping: Dict = {}) { if (key in mapping) { return mapping[key]; } throw new Error (key); }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('compared and concatenated (gate pro watchOrders typeId)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-61p-gsm', "    m (type: Str) {\n        const typeId: string = this.getSupportedMapping (type, {\n            'spot': 'spot',\n            'swap': 'futures',\n        });\n        if (typeId === 'spot') {\n            return 1;\n        }\n        return typeId + '.orders';\n    }\n")).content;
+        expect(out).toContain('let mut typeId: String = ');
+        expect(out).toContain('.as_str().unwrap_or_default().to_string();');
+        expect(out).toContain('(typeId == "spot")');
+    });
+    test('negative: a mapping with a non-literal value stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-61p-gsm-neg', "    m (type: Str, other: string) {\n        const typeId: string = this.getSupportedMapping (type, {\n            'spot': other,\n            'swap': 'futures',\n        });\n        if (typeId === 'spot') {\n            return 1;\n        }\n        return typeId + '.orders';\n    }\n")).content;
+        expect(out).toContain('let mut typeId: Value = ');
+    });
+});

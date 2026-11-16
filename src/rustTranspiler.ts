@@ -4978,7 +4978,9 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-51n: `xs.length` of an untyped list always prints a `Value::Int` (`get_array_length` answers Int for every
         // receiver), so an `any`-typed length local is an `i64` exactly; the checker's `any` is only the receiver's type
         const anyLength = kind === 'int' && checked === undefined && this.rustListLengthInit(this.unwrapParens(declaration.initializer));
-        if (checked !== expected && !boolTested && !anyLength && !(kind === 'ostr' && this.rustOptDictStrKeyTernary(declaration.initializer)) && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(combinatorKind !== undefined && combinatorKind === kind && (kind === 'int' || checked === undefined))
+        // ral-61p: an `any` handleOption local whose kind its literal default argument names (rustHandleOptionLiteralKind)
+        const optionDefault = checked === undefined && this.rustHandleOptionLiteralKind(declaration.initializer) === kind;
+        if (checked !== expected && !boolTested && !anyLength && !optionDefault && !(kind === 'ostr' && this.rustOptDictStrKeyTernary(declaration.initializer)) && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(combinatorKind !== undefined && combinatorKind === kind && (kind === 'int' || checked === undefined))
             && !(kind === 'int' && checked === undefined && this.rustSafeDictKeyOnlyLocal(declaration))) return undefined;
         const seeded = kind;
         kind = this.rustScalarWidenedKind(declaration, kind);
@@ -5027,6 +5029,8 @@ export class RustTranspiler extends BaseTranspiler {
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
         // ral-51n: an any-list length typed only for its native uses (a box-only length stays the `Value` it is handed as)
         if (anyLength && typedUses === 0) return undefined;
+        // ral-61p: a handleOption local typed from its default literal only for its native uses (boxed-straight-back stays `Value`)
+        if (optionDefault && typedUses === 0) return undefined;
         // ral-54x K1: a cased reader `String` with no native use would only be boxed straight back (boxed-straight-back stays `Value`)
         if (nativeUses === 0 && kind === 'str' && this.rustReaderCaseStrRecv(this.unwrapParens(declaration.initializer)) !== undefined) return undefined;
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration) || this.rust59pDeleteKeyInboxed(declaration)) return undefined;
@@ -5440,6 +5444,11 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustScalarCallee(node);
         if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return undefined;
         const readerKind = this.rustReaderDefaultKind(name, args, fresh); if (readerKind !== undefined) return readerKind;
+        // ral-61p: base `handleOption (m, o, <literal>)` answers the option or the declared default argument; the default
+        // string literal names the option's kind (`Option<String>`), as handleOptionStringAndParams does. Bool defaults stay
+        // with the bool rules (rustAnyBoolTestedLocal / `as Bool`); int defaults stay `Value` (rustHandleOptionLiteralKind).
+        if (fresh) { const optionKind = this.rustHandleOptionLiteralKind(node); if (optionKind !== undefined) return optionKind; }
+        if (fresh && this.rustSupportedMappingStr(node)) return 'str';
         if (this.rustParseNumberOfString(node) && this.rustTernaryArm(node)) return 'onum';
         // a literal default is returned for every missing key, so the reader is never `Null`
         if (RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(name)) {
@@ -5456,6 +5465,37 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_SCALAR_NUM_HELPERS[name] !== undefined) return args.length === RustTranspiler.RUST_SCALAR_NUM_HELPERS[name] ? 'onum' : undefined;
         const boolBase = RustTranspiler.RUST_SCALAR_BOOL_HELPERS[name];
         if (fresh && boolBase !== undefined) return args.length === boolBase + 1 && this.literalKindOfNode(args[boolBase]) === 'boolean' ? 'bool' : undefined;
+        return undefined;
+    }
+
+    /** ral-61p: base `this.getSupportedMapping (key, { 'k': 'v', .. })` at a declaration whose mapping is an object literal of
+     *  string-literal values: the base body throws unless `key in mapping` and then answers `mapping[key]`, so the result
+     *  is always one of those literals (a `String`, never `Null`). */
+    rustSupportedMappingStr(expr): boolean {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(node.expression.name.text) !== 'getSupportedMapping' || node.arguments.length !== 2 || !this.rustDeclInitPosition(node)) return false;
+        const declaration: any = this.rustScalarCallee(node);
+        if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return false;
+        const mapping: any = this.unwrapParens(node.arguments[1]);
+        if (mapping?.kind !== SyntaxKind.ObjectLiteralExpression || mapping.properties.length === 0) return false;
+        return Array.from(mapping.properties).every((p: any) => p.kind === SyntaxKind.PropertyAssignment && this.literalKindOfNode(this.unwrapParens(p.initializer)) === 'string'
+            && !(this.unwrapParens(p.initializer).text in this.StringLiteralReplacements));
+    }
+
+    /** ral-61p: `this.handleOption (m, o, <literal>)` resolved to the base tier: the option value or the default argument.
+     *  A string literal default names `ostr` (the runtime answers the stored option or that literal; a stored option of
+     *  another kind reads as `None`, the same miss the `Value` form's `.as_str()` compare made). */
+    rustHandleOptionLiteralKind(expr): string | undefined {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(node.expression.name.text) !== 'handleOption' || node.arguments.length !== 3) return undefined;
+        const declaration: any = this.rustScalarCallee(node);
+        if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return undefined;
+        const fallback: any = this.unwrapParens(node.arguments[2]);
+        if (this.literalKindOfNode(fallback) === 'string' && !(fallback.text in this.StringLiteralReplacements)) return 'ostr';
+        // an int literal default stays `Value`: an option stored as a `Float` (5.0) equals the `Int` in TS, and the existing
+        // f64-payload compare keeps that truth (ral-58n kucoin pro snapshotDelay); `.as_i64()` would miss it
         return undefined;
     }
 
@@ -9820,6 +9860,7 @@ export class RustTranspiler extends BaseTranspiler {
         const defaulted = this.rustScalarValueKind(node, true) === base;
         if (kind === 'int' && this.rustVenueParseToInt(node) && this.rustBaseTypedReturnKind(node) === 'oint') return `${this.rustBaseTypedBareText(node)}.unwrap_or_default()`;
         if (kind === 'int' && (this.rustVenueIntCall(node) || this.rustVenueParseToInt(node))) return `${text}.as_i64().unwrap_or_default()`;
+        if (kind === 'str' && this.rustSupportedMappingStr(node)) return `${text}.as_str().unwrap_or_default().to_string()`;
         if (kind === 'str' && defaulted) return `${text}.as_str().unwrap_or(${this.quotedStringLiteral(fallback.text)}).to_string()`;
         if (kind === 'int' && defaulted) return `${text}.as_i64().unwrap_or(${this.rustScalarIntLiteral(fallback)})`;
         if (kind === 'ostr' && this.rustVenueStrCall(node)) return this.rustVenueStrCallText(node);
