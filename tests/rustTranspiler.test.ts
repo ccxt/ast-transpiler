@@ -22212,3 +22212,25 @@ describe('ral-65b: build-pass locals typed by the printer (second round)', () =>
         expect(o).toContain('m.insert("order_id".to_string(), Value::Str(format!("{}", id.as_deref().unwrap_or("null")).into()));');
     });
 });
+
+describe('ral-65e: a markets_by_id row read off a const store local is the typed by-id row slice', () => {
+    const base = (body: string) => "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; [key: string]: any }\nexport default class Exchange {\n    markets_by_id: Dict = undefined;\n    options: Dict = {};\n    safeString2 (o: any, k: any, k2: any, d: Str = undefined): Str { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    market (symbol: string): MarketInterface {\n        const marketsById = this.markets_by_id;\n        if ((marketsById !== undefined) && (symbol in marketsById)) {\n            const marketsList = marketsById[symbol];\n" + body + "        }\n        return undefined;\n    }\n}\n";
+    const run = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base(body));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+    };
+    test('positive: the row is a &[Market] slice, its element borrowed, both returned as the shared raw', () => {
+        const out = run('ral65e-byid', "            const defaultType = this.safeString2 (this.options, 'defaultType', 'defaultSubType', 'spot');\n            for (let i = 0; i < marketsList.length; i++) {\n                const market = marketsList[i];\n                if (this.safeString (market, defaultType) !== undefined) {\n                    return market;\n                }\n            }\n            return marketsList[0];\n");
+        expect(out).toContain('let mut marketsList: &[crate::types::Market] = __marketsById.records_by_id(symbol.as_str().unwrap_or_default()).unwrap_or_default()');
+        expect(out).toContain('let mut market: &crate::types::Market = &marketsList[i as usize]');
+        expect(out).toContain('return Value::from(market);');
+        expect(out).toContain('return marketsList.first().map(Value::from).unwrap_or(Value::Null);');
+        expect(out).not.toContain('let mut marketsList: Value');
+    });
+    test('guard: a row handed on whole stays a Value', () => {
+        const out = run('ral65e-byid-guard', "            return marketsList;\n");
+        expect(out).toContain('let mut marketsList: Value = ');
+    });
+});
