@@ -73,7 +73,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printNumericLiteral(node: any): any;
     printIdentifier(node: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
-    injectLeadingInBody(body: any, firstLine: any): any;
     printNode(node: any, identation?: number): string;
     printThisKeyword(node: any, identation: any): string;
     printPropertyAccessModifiers(node: any): string;
@@ -119,7 +118,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaThisCallNumericKind(node: any): string | undefined;
     javaThisCallName(node: any): any;
     javaCalleeResolves(node: any): boolean;
-    javaOptionalParameterTypeCached(node: any): string | undefined;
     javaNativeParameterType(node: any): string | undefined;
     javaParameterPrintsType(baseParam: any, type: string): boolean;
     javaInheritedParameterType(node: any): string | undefined;
@@ -147,7 +145,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPlainParameterTypeOf(node: any, type: any, checker: any): string | undefined;
     printCustomDefaultValueIfNeeded(node: any): string;
     printOptionalArgExpression(index: any, initializer: any): string;
-    printOptionalArgInit(paramName: any, index: any, initializer: any): string;
     isPureInitializer(node: any): any;
     javaDefaultedParameterLocals(node: any): string[];
     javaIsLiteralDefault(initializer: any): boolean;
@@ -160,7 +157,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printMethodParameters(node: any): any;
     printMethodDeclaration(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any, paramsPrinter?: any): string;
-    javaUntypedNullishDefault(operand: any): boolean;
     javaBooleanParameterBox(node: any): string | undefined;
     callAlwaysReturnsPlainHashMap(node: any, depth: number): boolean;
     returnTypePrintsAsHashMap(declaration: any): boolean;
@@ -169,7 +165,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeReturnType(node: any): string | undefined;
     javaNativeReturnTypeUncached(node: any): string | undefined;
     javaNativeReturnTypeTarget(node: any): string | undefined;
-    javaTupleAnnotation(node: any): boolean;
     javaArrayReturnType(type: any): boolean;
     javaReturnSitesPrintType(method: any, target: string): boolean;
     javaReturnTypeFromBody(method: any): string | undefined;
@@ -188,7 +183,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     private isIncDecOperator;
     analyzeFinalVars(fnBody: Node): void;
     restoreFinalVarMutations(): void;
-    objectLiteralCapturesReassigned(node: any): boolean;
     objectLiteralCapturedKeys(node: any): string[];
     javaReassignsParameter(node: any): boolean;
     javaSymbolOf(node: any): any | undefined;
@@ -200,11 +194,15 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaLocalDeclaredAs(node: any, printed: string, type: string): boolean;
     javaDeclaredListContains(right: any, left: any, objText: string, keyText: string): string | undefined;
     handleTypeOfInsideBinaryExpression(node: any, _identation: any): string;
-    getVarMethodIfAny(node: any): string;
-    getVarClassIfAny(node: any): string;
+    javaEnclosingName(node: any, test: (current: any) => boolean, fallback: string): string;
     getVarKey(node: any): string;
     javaNativeLengthKind(node: any): string;
     expressionReferencesSymbol(node: any, symbol: any): boolean;
+    javaMemo<T>(cache: WeakMap<object, T | typeof JAVA_MEMO_UNDEFINED>, key: any, compute: () => T): T;
+    javaTry<T>(read: () => T, fallback?: T): T;
+    javaTreeSome(root: any, test: (node: any) => boolean | undefined): boolean;
+    javaFunctionOrFile(node: any): any;
+    javaEveryReturn(body: any, test: (statement: any) => boolean): boolean;
     enclosingFunctionLike(node: any): any;
     javaObjectValuesLocalType(declaration: any): string | undefined;
     javaJsonBoxType(type: any): boolean;
@@ -215,6 +213,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaLocalUsesKeepContainerType(node: any): boolean;
     javaContainerNeutralIdentifierUse(node: any): boolean;
     javaLocalHasWriteAtAll(node: any): boolean;
+    javaLoopRebinds(node: any, symbol: any): boolean;
     unwrapPrintTransparentExpression(node: any): any;
     javaLocalIsReassigned(node: any, admitsWrite?: (rhs: any) => boolean): boolean;
     isDictionaryType(node: any): boolean;
@@ -238,7 +237,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredReturnTarget(node: any, target: string): boolean;
     javaConcreteStructureType(type: any): boolean;
     isJavaMapStructureType(type: any): boolean;
-    isJavaListStructureType(type: any): boolean;
     tupleRequiredElementCount(type: any): number;
     isJavaArrayStructureType(type: any): boolean;
     javaSideEffectFreeReference(node: any): any;
@@ -252,9 +250,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printVariableDeclarationList(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printAsExpression(node: any, identation: any): string;
-    javaOperandType(operand: any): import("typescript/unstable/sync").Type;
-    javaScalarType(type: any): boolean;
-    javaNonArrayType(type: any): boolean;
     javaTypeFlagsOnly(type: any, mask: number, depth?: number): boolean;
     isConstBoundIdentifier(node: any): boolean;
     printLengthProperty(node: any, _identation: any, _name?: any): string;
@@ -276,7 +271,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaWsClientDeclaredMapField(expression: any): string | undefined;
     javaWsClientTypedMapField(expression: any): string | undefined;
     javaWsClientUntypedMapField(expression: any): string | undefined;
-    javaWsClientFieldMapType(field: string): string;
     javaWsClientAliasLocalType(declaration: any): string | undefined;
     javaWsClientMapReceiverField(expression: any): string | undefined;
     javaWsClientReceiverIsAny(expression: any): boolean;
