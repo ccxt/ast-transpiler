@@ -390,6 +390,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustVirtualDispatch: Record<string, string[]>;
     /** Virtual base methods whose overrides call `super.X()`: the base body prints as `X_non_virtual`. */
     rustNonVirtualShims: Set<string>;
+    /** `DerivedExchange` slots whose first parameter is `impl Into<crate::Value>`: every venue override takes it lent. */
+    rustLentSlots: Set<string>;
     /** ccxt error classes with a subclass (`errorHierarchy`): `e instanceof K` on a caught error walks the hierarchy. */
     rustErrorClassesWithSubclasses: Set<string>;
 
@@ -399,6 +401,7 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustTypedUnified = new Set(config['typedUnified'] ?? []);
         this.rustVirtualDispatch = config['virtualDispatch'] ?? {};
         this.rustNonVirtualShims = new Set(config['nonVirtualShims'] ?? []);
+        this.rustLentSlots = new Set(config['lentSlots'] ?? []);
         this.rustErrorClassesWithSubclasses = new Set(config['errorClassesWithSubclasses'] ?? []);
 
         this.requiresParameterType = true;
@@ -3887,7 +3890,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustParamPrintsMap(param)) return '&mut indexmap::IndexMap<String, Value>';
         if (this.rustParamPrintsStrVec(param)) return 'Vec<String>';
         if (this.rustParamReadsByReference(param)) return 'impl KeyRead';
-        if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param) || this.rustSafeDictKeyParam(param)) return 'impl Into<crate::Value>';
+        if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param) || this.rustSafeDictKeyParam(param) || this.rustLentSlotParam(param)) return 'impl Into<crate::Value>';
         if (this.rustBookSideParam(param)) return this.rustWsBookPath(param, 'pro::order_book::Side');
         return this.rustVenueStrParamType(param) ?? 'Value';
     }
@@ -13642,6 +13645,11 @@ export class RustTranspiler extends BaseTranspiler {
     // `await this.<typed unified>(args)` inside a `Value` body: bind each argument, call the typed method and
     // box the `Result` back to `Value` (an `Err` re-raises as the panic the untyped call raised).
     printTypedUnifiedCall(node): string | undefined {
+        const text = this.printTypedUnifiedCallUnlifted(node);
+        return text === undefined ? undefined : this.rustLentSlotCallText(node, text);
+    }
+
+    printTypedUnifiedCallUnlifted(node): string | undefined {
         const callee = node.expression;
         if (!isPropertyAccessExpression(callee)) return undefined;
         // a ws class reaches its REST parent through `self.parent` (ccxt rewrites `self.super_X(`), so its `super.X()` is typed too
@@ -15442,7 +15450,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // By-value callees (`self.m(..)`, the test-harness helpers, the signers) take their `Value` arguments by move:
     // a bare local argument is printed `x.clone()` so the local stays usable after the call.
-    private static readonly RUST_BY_VALUE_CALLEE = /(?:\b(?:self|super)\.[a-zA-Z_][a-zA-Z0-9_]*|\bexchange\d*\.[a-zA-Z_][a-zA-Z0-9_]*|\brsa|\beddsa|\becdsa|\bjwt|\btotp|\bhelper[A-Z][a-zA-Z0-9_]*|\bprecise[A-Z][a-zA-Z0-9_]*|\btest[A-Z][a-zA-Z0-9_]*|\b[a-z][a-zA-Z0-9_]*(?:Helper(?:Test)?|Test)|\bassert[A-Z][a-zA-Z0-9_]*|\b(?:equals|deepEqual|assert|dump|callMethod|callMethodSync|callExchangeMethodDynamically|callExchangeMethodDynamicallySync|getExchangeProp|setExchangeProp|setFetchResponse|setFetchResponseByUrl|initExchange|close|jsonStringify|jsonParse|exceptionMessage|convertAscii|isNullValue|ioFileExists|ioFileRead|ioDirRead|setupWsMockTransport|getWsSentMessages|injectWsMessage|wsClientHasPendingFutures|markWsTestCompleted|isWsTestCompleted|rejectPendingWsFutures|preloadWsMessages|wsHasQueuedMessages))\(/;
+    private static readonly RUST_BY_VALUE_CALLEE = /(?:\b(?:self|super)\.[a-zA-Z_][a-zA-Z0-9_]*|<Self as crate::(?:exchange::DerivedExchange|exchange_generated::ExchangeBase|prediction_exchange_generated::PredictionBase)>::[a-zA-Z_][a-zA-Z0-9_]*|\bexchange\d*\.[a-zA-Z_][a-zA-Z0-9_]*|\brsa|\beddsa|\becdsa|\bjwt|\btotp|\bhelper[A-Z][a-zA-Z0-9_]*|\bprecise[A-Z][a-zA-Z0-9_]*|\btest[A-Z][a-zA-Z0-9_]*|\b[a-z][a-zA-Z0-9_]*(?:Helper(?:Test)?|Test)|\bassert[A-Z][a-zA-Z0-9_]*|\b(?:equals|deepEqual|assert|dump|callMethod|callMethodSync|callExchangeMethodDynamically|callExchangeMethodDynamicallySync|getExchangeProp|setExchangeProp|setFetchResponse|setFetchResponseByUrl|initExchange|close|jsonStringify|jsonParse|exceptionMessage|convertAscii|isNullValue|ioFileExists|ioFileRead|ioDirRead|setupWsMockTransport|getWsSentMessages|injectWsMessage|wsClientHasPendingFutures|markWsTestCompleted|isWsTestCompleted|rejectPendingWsFutures|preloadWsMessages|wsHasQueuedMessages))\(/;
 
 
     /** `x = y;` / `let mut x: Value = y;` on its own line moves `y`: the source is cloned so it stays usable. */
@@ -15585,6 +15593,63 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printCallExpression(node, identation) {
+        return this.rustLentSlotCallText(node, this.printCallExpressionUnlifted(node, identation));
+    }
+
+    /** First parameter of a venue override of a lent `DerivedExchange` slot (same arity as the slot): `impl Into<crate::Value>`. */
+    rustLentSlotParam(param: any): boolean {
+        const method: any = param?.parent;
+        if (param?.kind !== SyntaxKind.Parameter || !isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || method.parameters?.[0] !== param) return false;
+        if (!isIdentifier(param.name) || param.initializer !== undefined || param.questionToken !== undefined || param.dotDotDotToken !== undefined) return false;
+        if (!isClassDeclaration(method.parent) || (method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
+        return this.rustLentSlotOverride(method) && !this.rustParamPrintsBool(param) && !this.rustParamIsLentDict(param) && !this.rustParamIsLentList(param)
+            && !this.rustParamPrintsMap(param) && !this.rustParamPrintsStrVec(param) && !this.rustParamReadsByReference(param);
+    }
+
+    /** A venue (not base-tier) method overriding a lent slot with the slot's arity. */
+    rustLentSlotOverride(method: any): boolean {
+        if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || this.isAsyncFunction(method)) return false;
+        const snake = this.toSnakeCaseName(String(method.name.text));
+        const slots = this.rustLentSlots.has(snake) ? this.rustVirtualDispatch[snake] : undefined;
+        const file = String(method.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        return slots !== undefined && method.parameters.length === slots.length && file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/) >= 0
+            && this.rustTypedSignature(method) === undefined && !this.rustMethodReferencedAsValue(method);
+    }
+
+    /** `this.m(..)` to the calling file's own override of a lent slot: that override lives only in the
+     *  `DerivedExchange` impl, so the call names the trait (the base method of the same name takes a `Value`). */
+    rustLentSlotCallText(node: any, text: string): string {
+        if (this.rustLentSlots.size === 0 || !isPropertyAccessExpression(node.expression)) return text;
+        const name = String(node.expression.name.text);
+        if (node.expression.expression.kind === SyntaxKind.SuperKeyword) {
+            // a ws `super.m(..)` to the REST parent's lifted override: the parent core implements it on the trait only
+            const target: any = this.rustScalarCallee(node);
+            const head = `super.${name}(`;
+            if (!this.rustLentSlots.has(this.toSnakeCaseName(name)) || !text.startsWith(head) || !/ts[/]src[/]pro[/]/.test(String(node.getSourceFile?.()?.fileName ?? ''))
+                || target === undefined || target.getSourceFile?.() === node.getSourceFile?.() || !this.rustLentSlotOverride(target)) return text;
+            const rest = text.slice(head.length);
+            return `crate::exchange::DerivedExchange::${this.toSnakeCaseName(name)}(&self.parent${rest.startsWith(')') ? '' : ', '}${rest}`;
+        }
+        if (node.expression.expression.kind !== SyntaxKind.ThisKeyword) return text;
+        const snake = this.toSnakeCaseName(name);
+        const at = [ `self.${name}(`, `self.${snake}(` ].map((h) => ({ h, i: text.indexOf(h) })).filter((x) => x.i >= 0).sort((x, y) => x.i - y.i)[0];
+        if (!(snake in this.rustVirtualDispatch) || at === undefined) return text;
+        const callee: any = this.rustScalarCallee(node);
+        if (callee === undefined) return text;
+        let path: string | undefined;
+        if (this.rustLentSlots.has(snake) && callee.getSourceFile?.() === node.getSourceFile?.() && this.rustLentSlotOverride(callee)) path = 'crate::exchange::DerivedExchange';
+        // inside a lifted override the trait is in scope too: a base slot method is named by its base trait
+        else if (this.rustLentSlotOverride(this.rustEnclosingFunction(node))) {
+            const file = String(callee.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+            path = /\/ts\/src\/base\/PredictionExchange\.ts$/.test(file) ? 'crate::prediction_exchange_generated::PredictionBase'
+                : RustTranspiler.RUST_BASE_TIER_FILE.test(file) ? 'crate::exchange_generated::ExchangeBase' : undefined;
+        }
+        if (path === undefined) return text;
+        const rest = text.slice(at.i + at.h.length);
+        return `${text.slice(0, at.i)}<Self as ${path}>::${snake}(self${rest.startsWith(')') ? '' : ', '}${rest}`;
+    }
+
+    printCallExpressionUnlifted(node, identation) {
         this.rustFormatPrints.delete(node);
         const expression = node.expression;
         const bookCall = this.printWsBookMapRead(node) ?? this.printWsBookCtorCall(node, identation); if (bookCall !== undefined) return bookCall;
@@ -30817,7 +30882,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string {
-        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p) || this.rustSafeDictKeyParam(p)
+        const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p) || this.rustSafeDictKeyParam(p) || this.rustLentSlotParam(p)
             || (this.rustVenueStrParamType(p) !== undefined && !this.rustVenueStrParamUnbound(p)));
         return lent.map((p: any) => {
             const name = this.printNode(p.name, 0);

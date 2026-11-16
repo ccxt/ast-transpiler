@@ -10361,6 +10361,33 @@ describe('rust by-name dispatch signature table', () => {
         expect(out.content).toContain('pub fn market_non_virtual(&self, symbol: &str) -> crate::Result<crate::types::Market>');
         expect((out.rustSignatures ?? []).map((s) => s.name)).toEqual([ 'parse_ticker', 'market', 'market_non_virtual' ]);
     });
+
+    test('a venue override of a lent slot takes `impl Into` and its own file calls it through the trait', () => {
+        const lent = new Transpiler({ 'verbose': false, 'rust': { 'virtualDispatch': { parse_order: [ 'order', 'market' ] }, 'lentSlots': [ 'parse_order' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), 'export type Dict = { [key: string]: any };\nexport default class Exchange {\n'
+            + '    parseOrder (order: Dict, market: any = undefined): any { return order; }\n    safeValue (o: any, k: any): any { return o; }\n}\n');
+        const venue = path.join(root, 'ts/src/venue.ts');
+        fs.writeFileSync(venue, "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    override parseOrder (order: Dict, market: any = undefined): any { return this.safeValue (order, 'x'); }\n"
+            + "    load (): any { const result = { 'a': 1 }; return this.parseOrder (result, undefined); }\n}\n");
+        const out = lent.transpileRustByPath(venue).content;
+        expect(out).toContain('pub fn parseOrder(&self, order: impl Into<crate::Value>');
+        expect(out).toContain('let mut order: Value = order.into();');
+        expect(out).toContain('return <Self as crate::exchange::DerivedExchange>::parse_order(self, Value::Map(result)');
+        // inside the lifted override a base slot-free method stays a method call; a base slot method names its base trait
+        expect(out).not.toContain('ExchangeBase>::safe_value(');
+        // a ws `super.m (..)` to the REST parent's moved override goes through the trait on the parent core
+        fs.mkdirSync(path.join(root, 'ts/src/pro'), { recursive: true });
+        const ws = path.join(root, 'ts/src/pro/venue.ts');
+        fs.writeFileSync(ws, "import venueRest from '../venue.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default class venue extends venueRest {\n"
+            + "    override parseOrder (order: Dict, market: any = undefined): any { const o = super.parseOrder (order, market); return o; }\n}\n");
+        expect(lent.transpileRustByPath(ws).content).toContain('crate::exchange::DerivedExchange::parse_order(&self.parent, order');
+        // without the slot the call stays a method call
+        const plain = new Transpiler({ 'verbose': false, 'rust': { 'virtualDispatch': { parse_order: [ 'order', 'market' ] }, 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        expect(plain.transpileRustByPath(venue).content).not.toContain('crate::exchange::DerivedExchange>::parse_order(');
+    });
 });
 
 describe('typed list fields', () => {
