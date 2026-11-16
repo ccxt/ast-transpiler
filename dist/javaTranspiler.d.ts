@@ -482,6 +482,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printMathCeilCall(node: any, _identation: any, parsedArg?: any): string;
     printNumberIsIntegerCall(_node: any, _identation: any, parsedArg?: any): string;
     printShiftCall(_node: any, _identation: any, name?: any): string;
+    printReverseCall(_node: any, _identation: any, name?: any): string;
+    printPopCall(_node: any, _identation: any, name?: any): string;
     printAssertCall(_node: any, _identation: any, parsedArgs: any): string;
     printDateNowCall(_node: any, _identation: any): string;
     printThrowStatement(node: any, identation: any): string;

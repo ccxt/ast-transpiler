@@ -8684,6 +8684,14 @@ export class JavaTranspiler extends BaseTranspiler {
         return `((java.util.List<Object>)${name}).get(0)`;
     }
 
+    printReverseCall(_node, _identation, name = undefined) {
+        return `java.util.Collections.reverse((java.util.List<Object>)${name})`;
+    }
+
+    printPopCall(_node, _identation, name = undefined) {
+        return `((java.util.List<Object>)${name}).get(((java.util.List<Object>)${name}).size()-1)`;
+    }
+
     printAssertCall(_node, _identation, parsedArgs) {
         return `assert(${parsedArgs})`;
     }
