@@ -2319,7 +2319,10 @@ export class RustTranspiler extends BaseTranspiler {
             for (const key of keyStrs.slice(0, -1)) acc = `get_value_mut(${acc}, &${key})`;
             const rhs = this.printNode(right, 0);
             // ral-48b: a typed map local (`Dict` / `Option<Dict>`) written through the runtime helper (`impl AddTarget`)
-            if (keyStrs.length === 1 && this.rustAeoWrites.has(node)) return `add_element_to_object(${acc}, &${keyStrs[0]}, ${this.rustOwnedArgText(right, rhs.trim())})`;
+            if (keyStrs.length === 1 && this.rustAeoWrites.has(node)) {
+                return this.rustHelperWriteReadsRoot(baseExpr, right) ? `{ let __be_tmp = ${rhs.trim()}; add_element_to_object(${acc}, &${keyStrs[0]}, \u0004__be_tmp); }`
+                    : `add_element_to_object(${acc}, &${keyStrs[0]}, ${RustTranspiler.cloneIfBareLocal(rhs.trim())})`;
+            }
             const nestedKeyWrite = keyStrs.length > 1 ? this.printNestedFieldKeyWrite(left, acc, ((owned) => owned.startsWith('\u0004') ? owned : RustTranspiler.cloneIfBareLocal(owned))(this.rustOwnedArgText(right, rhs.trim()))) : undefined; if (nestedKeyWrite !== undefined) return nestedKeyWrite;
             const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) ?? this.printReuseDynamicKeyWrite(left, right, rhs) ?? this.printNilMapKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
             const slotNested = keyStrs.length > 1 ? this.printSlotNestedInsert(left, right, this.rustOwnedArgText(right, rhs.trim())) : undefined; if (slotNested !== undefined) return slotNested;
@@ -2328,10 +2331,13 @@ export class RustTranspiler extends BaseTranspiler {
             // when this helper write is what prints)
             const counterKey: any = keyStrs.length === 1 ? this.rustSkipWrappers(keys[0]) : undefined;
             const counterKeyText = counterKey !== undefined && this.rustI64CounterOperand(counterKey) ? `Value::Int(${String(counterKey.text)})` : undefined;
-            const helperCall = `add_element_to_object(${acc}, &${counterKeyText ?? keyStrs[keyStrs.length - 1]}, ${this.rustOwnedArgText(right, rhs.trim())})`;
+            // ral-67f: the helper takes the value by move; a bare local value is always cloned (ccxt's splitAddElementBorrowConflicts did it on the text)
+            const helperCall = `add_element_to_object(${acc}, &${counterKeyText ?? keyStrs[keyStrs.length - 1]}, ${RustTranspiler.cloneIfBareLocal(rhs.trim())})`;
             // a nested helper write whose value was read natively binds the value first, like the ccxt hoist did
-            const helperWrite = this.rustDictHoistHosts.has(node)
-                ? `{ let __be_tmp = ${rhs}; add_element_to_object(${acc}, &${counterKeyText ?? keyStrs[keyStrs.length - 1]}, __be_tmp); }` : helperCall;
+            // ral-67f: the value reads the written receiver (the same local, or `this` for a `this.x` root): `&mut x` would
+            // overlap the read, so the value is bound first (was ccxt's splitAddElementBorrowConflicts text pass)
+            const helperWrite = this.rustDictHoistHosts.has(node) || this.rustHelperWriteReadsRoot(baseExpr, right)
+                ? `{ let __be_tmp = ${rhs.trim()}; add_element_to_object(${acc}, &${counterKeyText ?? keyStrs[keyStrs.length - 1]}, ${this.rustDictHoistHosts.has(node) ? '' : '\u0004'}__be_tmp); }` : helperCall;
             const nestedInsert = keyStrs.length === 2
                 ? (this.rustNestedBearerInsert(baseExpr, keys[0], keyStrs[0], keys[1], keyStrs[1], rhs)
                     ?? this.nestedDictWrite(baseExpr, keys, keyStrs, rhs, helperWrite))
@@ -15949,6 +15955,27 @@ export class RustTranspiler extends BaseTranspiler {
     // the truthiness the callee's own use sites applied.
     printArgsForCallExpression(node, identation) {
         return this.rustPrintedArgs(node, identation).map((text, at) => (at < node.arguments.length ? this.rustOwnedArgText(node.arguments[at], text) : text)).join(', ');
+    }
+
+    /** ral-67f: true when the value of a helper write `r[..][k] = v` reads the write's root: the same local identifier, or
+     *  any `this` / `super` when the root is a `this.x` field (`&mut self.x` borrows all of `self`). */
+    rustHelperWriteReadsRoot(baseExpr: any, value: any): boolean {
+        let root: any = baseExpr;
+        while (isElementAccessExpression(root) || isPropertyAccessExpression(root) || isParenthesizedExpression(root)) root = root.expression;
+        const self = root.kind === SyntaxKind.ThisKeyword;
+        if (!self && !isIdentifier(root)) return false;
+        const name = self ? undefined : String(root.text);
+        const reads = (x: any): boolean => {
+            if (self && (x.kind === SyntaxKind.ThisKeyword || x.kind === SyntaxKind.SuperKeyword)) return true;
+            if (!self && isIdentifier(x) && String(x.text) === name) {
+                const p: any = x.parent;
+                const isName = (isPropertyAccessExpression(p) && p.name === x) || (p?.kind === SyntaxKind.PropertyAssignment && p.name === x);
+                if (!isName) return true;
+            }
+            return x.forEachChild(reads) ?? false;
+        };
+        // a bare root local as the whole value keeps the clone hand-off (`x[k] = y` with `y` a different local is no read)
+        return reads(value);
     }
 
     /** A bare local argument whose hand-off needs no clone (`rustOwnedUseIsFree`) carries the owned-use mark. */

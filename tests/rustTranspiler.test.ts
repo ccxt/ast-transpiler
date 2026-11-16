@@ -397,7 +397,7 @@ describe('rust transpiling tests', () => {
         expect(clone('stored.append(trade);', false, true)).toBe('stored.append(trade);');
     });
 
-    test('a helper write clones a value read again and moves one at its last use', () => {
+    test('a helper write clones a bare local value, also at its last use (ral-67f: identical to the removed ccxt pass)', () => {
         const ts = [
             'class A {',
             '    run (d: any, x: any, y: any) {',
@@ -409,7 +409,8 @@ describe('rust transpiling tests', () => {
         ].join('\n');
         const out = transpiler.transpileRust(ts).content;
         expect(out).toMatch(/\(&mut d, &Value::Str\("a"\.into\(\)\), x\.clone\(\)\)/);
-        expect(out).toMatch(/\(&mut d, &Value::Str\("b"\.into\(\)\), y\)/);
+        // ral-67f: the helper write clones every bare local value (ccxt's splitAddElementBorrowConflicts always did on the file text)
+        expect(out).toMatch(/\(&mut d, &Value::Str\("b"\.into\(\)\), y\.clone\(\)\)/);
     });
 
     test('a for-loop counter handed off by value is cloned (the next pass reads it again)', () => {
@@ -6234,7 +6235,8 @@ describe('typed dict bearers', () => {
     test('negative: a numeric key keeps the box', () => {
         const num = rs("        const d = {};\n        d[0] = v;\n        return d[0];");
         expect(num).toContain('let mut d: Value = Value::Map({');
-        expect(num).toContain('add_element_to_object(&mut d, &Value::Int(0), v)');
+        // ral-67f: bare local value cloned in the printer (was the ccxt text pass)
+        expect(num).toContain('add_element_to_object(&mut d, &Value::Int(0), v.clone())');
     });
 
     test('a chained write on a one-level bearer types the local', () => {
@@ -7043,7 +7045,8 @@ describe('two-level dict bearers', () => {
         // the hop key of the chain root is unproven: a numeric literal
         const num = rs("        const d = {};\n        d[0][1] = v;\n        return d[0];");
         expect(num).toContain('let mut d: Value = Value::Map({');
-        expect(num).toContain('add_element_to_object(get_value_mut(&mut d, &Value::Int(0)), &Value::Int(1), v);');
+        // ral-67f: bare local value cloned in the printer (was the ccxt text pass)
+        expect(num).toContain('add_element_to_object(get_value_mut(&mut d, &Value::Int(0)), &Value::Int(1), v.clone());');
         const self = rs("        const d = {};\n        d['a']['b'] = d['a'];\n        return d;");
         expect(self).toContain('let mut d: Value = Value::Map({');
     });
@@ -18142,7 +18145,8 @@ describe('ral-52e: list index write at an i64 expression key (kraken addPaginati
         const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         const a = out.slice(out.indexOf('fn cursorA'), out.indexOf('fn cursorC'));
         expect(a).not.toContain('let mut data: Value');
-        expect(a).toContain('add_element_to_object(&mut data, &Value::Int((dataLength - 1)), last);');
+        // ral-67f: bare local value cloned in the printer (was the ccxt text pass)
+        expect(a).toContain('add_element_to_object(&mut data, &Value::Int((dataLength - 1)), last.clone());');
         const b = out.slice(out.indexOf('fn cursorB'));
         expect(b).toContain('let mut data: Value');
         // a bind mutated with no write-back keeps the boxed write-back pass
@@ -22641,5 +22645,32 @@ describe('ral-66s3: a venue `Str` result returned whole by its own `-> Option<St
     test('negative: returned from a nested arrow function the local keeps the Value form', () => {
         const out = build ('ral66s3-ret-neg', "        const f = () => dexName;\n        f ();\n        return dexName;\n");
         expect(out).toMatch(/let mut dexName: Value = /);
+    });
+});
+
+describe('ral-67f: helper writes whose value reads the written root bind the value first (was ccxt splitAddElementBorrowConflicts)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    features: any = {};\n    safeNumber (o: any, k: any): any { return o[k]; }\n    keep (o: any): any { return o; }\n    mapper (a: any, b: any): any { return a; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('local root read by the value: `{ let __be_tmp = ..; add_element_to_object(&mut fee, .., __be_tmp); }`', () => {
+        const out = write ('ral-67f-local', "    m (raw: any) {\n        const fee = this.keep (raw);\n        fee['cost'] = this.safeNumber (fee, 'cost');\n        return fee;\n    }\n");
+        expect(out).toMatch(/\{ let __be_tmp = self\.safeNumber\(fee\.clone\(\), [^;]*\); add_element_to_object\(&mut fee, &Value::Str\("cost"\.into\(\)\), __be_tmp\); \}/);
+        expect(out).not.toContain('__be_tmp.clone()');
+    });
+    test('this-field root and a value reading `this`: bound first', () => {
+        const out = write ('ral-67f-self', "    m (a: any, b: any) {\n        this.features[a][b] = this.mapper (a, b);\n    }\n");
+        expect(out).toMatch(/\{ let __be_tmp = self\.mapper\([^;]*\); add_element_to_object\(get_value_mut\(&mut self\.features, &a\), &b, __be_tmp\); \}/);
+    });
+    test('a bare other local as the value is cloned in place; a value not reading the root is not bound', () => {
+        const out = write ('ral-67f-clone', "    m (raw: any, other: any) {\n        const fee = this.keep (raw);\n        const v = this.keep (other);\n        fee['a'] = v;\n        fee['b'] = this.keep (other);\n        return [ fee, v ];\n    }\n");
+        expect(out).toContain('add_element_to_object(&mut fee, &Value::Str("a".into()), v.clone());');
+        expect(out).toMatch(/add_element_to_object\(&mut fee, &Value::Str\("b"\.into\(\)\), self\.keep\(/);
+        expect(out).not.toContain('__be_tmp');
     });
 });
