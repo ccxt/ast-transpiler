@@ -2285,7 +2285,7 @@ export class RustTranspiler extends BaseTranspiler {
         const marketWrite = isAssign ? this.printTypedMarketWrite(left, right) : undefined;
         if (marketWrite !== undefined) return marketWrite;
         if (isAssign && this.rustTypedListField(left)) return `${this.printNode(left, 0)} = ${this.printNode(right, 0).trim()}.into_list()`;
-        const optContainerWrite = isAssign && isIdentifier(left) ? this.printOptContainerWrite(left, right) ?? this.printOptListWrite(left, right) ?? this.printExtendReuseWrite(left, right) ?? this.printSbAliasWrite(node, left, right) : undefined;
+        const optContainerWrite = isAssign && isIdentifier(left) ? this.printOptContainerWrite(left, right, identation) ?? this.printOptListWrite(left, right) ?? this.printExtendReuseWrite(left, right) ?? this.printSbAliasWrite(node, left, right) : undefined;
         if (optContainerWrite !== undefined) return optContainerWrite;
         const nilMapWrite = isAssign && isIdentifier(left) ? this.printNilMapWrite(left, right, identation) : undefined; if (nilMapWrite !== undefined) return nilMapWrite;
         // ral-ra: a reassigned handed map takes the written map back (`omit (x, k)` of itself moves the map through the call)
@@ -23143,6 +23143,7 @@ export class RustTranspiler extends BaseTranspiler {
         let castLengths = 0;
         let nullWrites = 0;
         let endpointBoxes = 0;
+        let literal76bWrites = 0;
         let plainReads = 0;
         let aliasBoxes = 0;
         let optAliasWrites = 0;
@@ -23230,6 +23231,14 @@ export class RustTranspiler extends BaseTranspiler {
                     if (from !== undefined && from !== venueKind) mixed = true;
                     from = from ?? venueKind;
                     return String(rhs.getText()).split('\n')[0].length <= 240;
+                }
+                // ral-76b R2: a tag-free plain map literal written into a nil local filled otherwise by declared `Promise<Dict>`
+                // endpoints (binance setMarginMode `{ code, msg }`): a map on its path, `Some` in the optional form, like an endpoint map
+                if (nilDeclared && (from === undefined || from === 'dict') && this.rustSameKindRewrite(rhs, 'dict') && isObjectLiteralExpression(rhs) && rhs.properties.length > 0) {
+                    declaredEndpointWrites++;
+                    literal76bWrites++;
+                    from = 'dict';
+                    return true;
                 }
                 const kind = this.rustNilResponseWriteKind(rhs, nilDeclared, declaration);
                 const declaredWrite = nilDeclared && this.rustDeclaredEndpointWrite(rhs);
@@ -23414,6 +23423,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-va: the same for an all-declared `Promise<List>` endpoint local: a null test reads the optional list (`is_none()`)
         const declaredListTested = nilDeclared && from === 'list' && !mixed && nullTests > 0 && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes
             && !this.rustNilResponseLocals.has(declaration) && lengths === 0 && castLengths === 0;
+        // ral-76b R2: the literal joins only next to a real declared endpoint write (else the map-literal rules own the local)
+        if (literal76bWrites > 0 && declaredEndpointWrites === literal76bWrites) return undefined;
         const endpointBoxOnly = endpointBoxes > 0 && (nullTests === 0 || declaredDictOnly) && declaredEndpointWrites > 0 && declaredEndpointWrites + nullWrites === writes
             && !this.rustNilResponseLocals.has(declaration) && boxedElementUses.every((u: any) => this.rustBoxLineOk(u));
         if (endpointBoxes > 0 && !endpointBoxOnly) return undefined;
@@ -25517,12 +25528,14 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
-    printOptContainerWrite(left: any, right: any): string | undefined {
+    printOptContainerWrite(left: any, right: any, identation = 0): string | undefined {
         const local = this.rustOptContainerOf(left);
         if (local === undefined) return undefined;
         const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
         const rhs: any = this.rustSkipWrappers(right);
         if (this.literalKindOfNode(rhs) === 'null') return `${name} = None`;
+        // ral-76b R2: a plain map literal builds the map straight into `Some` (no box and convert)
+        if (local.kind === 'dict' && isObjectLiteralExpression(rhs) && rhs.properties.length > 0 && this.rustSameKindRewrite(rhs, 'dict')) return `${name} = Some(crate::value::Dict::new(${this.rustObjectLiteralBlock(rhs, identation)}))`;
         // ral-43f: an optional source of the same kind is handed over as is (moved at its last use, else an Arc bump)
         const src = this.rustOptContainerOf(rhs);
         if (src !== undefined && src.kind === local.kind && this.rustPrintedOptional.has(src.declaration)) {
@@ -25771,11 +25784,35 @@ export class RustTranspiler extends BaseTranspiler {
         return file !== undefined && file === call.getSourceFile?.() && !RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName));
     }
 
+    /** ral-76b: `t[k] = x` (statement, one level, `t` a plain local or `this` field read) or `t = x` / `let t = x` whose
+     *  target local is untyped (no typed decision of its own), so the right side is a plain `Value` place. */
+    rust76bWholeHandOff(n: any): boolean {
+        const up: any = n.parent;
+        if (up?.kind === SyntaxKind.VariableDeclaration && up.initializer === n) return isIdentifier(up.name) && this.rust76bUntypedTarget(up);
+        if (!isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const left: any = up.left;
+        if (isIdentifier(left)) {
+            const target: any = this.rustDeclaredNode(left);
+            return target !== undefined && isVariableDeclaration(target) && isIdentifier(target.name) && target !== this.rustDeclaredNode(n) && this.rust76bUntypedTarget(target);
+        }
+        if (!isElementAccessExpression(left) || !isIdentifier(left.expression)) return false;
+        const holder: any = this.rustDeclaredNode(left.expression);
+        return holder !== undefined && holder !== this.rustDeclaredNode(n) && (isVariableDeclaration(holder) || holder.kind === SyntaxKind.Parameter);
+    }
+
+    rust76bUntypedTarget(target: any): boolean {
+        return this.rustNilLocalKind(target) === undefined && this.rustScalarLocalKind(target) === undefined && this.rustBorrowedLocalKind(target) === undefined
+            && !this.rustDictLocalIsTyped(target) && !this.rustVecLocalIsTyped(target) && this.rustMarketLocalKind(target) === false && !this.rustOptListLocal(target);
+    }
+
     rustDeclaredEndpointBoxUse(n: any): boolean {
         const up: any = n.parent;
         if (up === undefined || this.rustScalarInNestedWrite(n, true)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n && isObjectLiteralExpression(up.parent) && !this.rustInDestructureWrite(n);
         if (isReturnStatement(up)) return up.expression === n;
+        // ral-76b: a whole hand-off into a plain `Value` place: `t[k] = x` (one level, statement), `t = x` / `let t = x` into an
+        // untyped local: the box `x.map_or(Value::Null, Value::Dict|Arr)` stores the answer of the declared shape, Null for `None`
+        if (this.rust76bWholeHandOff(n)) return true;
         // ral-63i: an argument of a same-class venue method (`this.m (.., x)`) at a plain by-value `Value` slot (no native
         // map / list / str / bool slot, not a typed unified method): the box hands over the map the boxed local held, Null for `None`
         if (isCallExpression(up) && up.expression !== n && isPropertyAccessExpression(up.expression) && up.expression.expression.kind === SyntaxKind.ThisKeyword
