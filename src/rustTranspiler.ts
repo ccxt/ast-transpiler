@@ -24238,8 +24238,27 @@ export class RustTranspiler extends BaseTranspiler {
         } else if (!this.getChecker().isArrayType(listType)) return false;
         const element: any = this.typeOfNodeIfAny(init);
         if (element === undefined || (element.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Union)) !== 0) return false;
+        // ral-73d: a row of a list of unified records (`Trade[]`, `Position[]`, `Account[]`: interfaces declared in the base
+        // `types.ts`) is a map row the same way: every producer of such a list answers maps (the parse* builders, the base tables)
+        if (isNumericLiteral(key) || this.primitiveKindOfType(this.typeOfNodeIfAny(key)) === 'number') {
+            // (a ral-tg record element handle off a typed `Vec<T>` result keeps its own `Option<&T>` form)
+            let top: any = init;
+            while (top.parent !== undefined && (isParenthesizedExpression(top.parent) || top.parent.kind === SyntaxKind.AsExpression)) top = top.parent;
+            const owner: any = isVariableDeclaration(top.parent) && top.parent.initializer === top ? top.parent : undefined;
+            if (this.rust73dBaseRecordType(element)) return owner === undefined || this.rustRecordElemLocal(owner) === undefined;
+        }
         return this.primitiveKindOfType(element) === undefined && this.getChecker().getIndexTypeOfType(element, IndexKind.String) !== undefined
             && !this.getChecker().isArrayType(element);
+    }
+
+    /** ral-73d: an object interface declared only in the base `ts/src/base/types.ts` (a unified record such as `Trade`,
+     *  `Position`, `Account`, `PredictionPosition`): no call signature, no array, no union. */
+    rust73dBaseRecordType(type: any): boolean {
+        if (type === undefined || (type.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Union)) !== 0 || this.getChecker().isArrayType(type)) return false;
+        if ((type.flags & TypeFlags.Object) === 0 || this.primitiveKindOfType(type) !== undefined) return false;
+        const declarations = symbolDeclarations(this.typeSymbolOf(type));
+        if (declarations.length === 0 || !declarations.every((d: any) => d.kind === SyntaxKind.InterfaceDeclaration && /ts[\\/]src[\\/]base[\\/]types\.ts$/.test(String(d.getSourceFile?.()?.fileName ?? '')))) return false;
+        return this.getChecker().getSignaturesOfType(type, SignatureKind.Call).length === 0;
     }
 
     /** te: `this.urls['<lit>']` where the base `Exchange` declaration types that entry as a string-keyed map
@@ -25989,6 +26008,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  ral-qa use rule), a non-map row (Null, list, scalar, out of range) reads Null there exactly as the empty map `into_dict()`
      *  leaves; the local owns its map (an Arc bump of the row), so nothing borrows the list while it lives. */
     rustListRowKeyReadSource(init: any): boolean {
+        if (this.rust73dBaseRecordFieldRow(init)) return true;
         if (!isElementAccessExpression(init) || !isIdentifier(init.expression) || this.checkerOrUndefined() === undefined || this.rustTestTierSource(init)) return false;
         const key: any = this.rustSkipWrappers(init.argumentExpression);
         if (key === undefined || (!isNumericLiteral(key) && this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== 'number')) return false;
@@ -25999,6 +26019,21 @@ export class RustTranspiler extends BaseTranspiler {
         // the list's producer names no ws client state nor a market / currency table (ral-qa's receiver exclusion)
         const names = (x: any): boolean => (isPropertyAccessExpression(x) && /^(?:markets|markets_by_id|currencies|currencies_by_id|clients|futures|subscriptions|orderbooks|cache)$/.test(String(x.name.text))) || (x.forEachChild(names) ?? false);
         return !(isVariableDeclaration(owner) && owner.initializer !== undefined && names(owner.initializer));
+    }
+
+    /** ral-73d: `this.<f>[i]` (a numeric index) where `f` is a field declared only in the base tier as a list of a unified
+     *  record (`accounts!: Account[]`): the row a counter loop binds; read only at literal string keys (ral-42g's use rule). */
+    rust73dBaseRecordFieldRow(init: any): boolean {
+        if (init === undefined || !isElementAccessExpression(init) || this.checkerOrUndefined() === undefined || this.rustTestTierSource(init)) return false;
+        const field: any = this.rustSkipWrappers(init.expression);
+        if (!isPropertyAccessExpression(field) || field.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(field.name)) return false;
+        const key: any = this.rustSkipWrappers(init.argumentExpression);
+        if (key === undefined || (!isNumericLiteral(key) && this.primitiveKindOfType(this.typeOfNodeIfAny(key)) !== 'number')) return false;
+        const declarations = symbolDeclarations(this.getChecker().getSymbolAtLocation(field.name));
+        if (declarations.length === 0 || !declarations.every((d: any) => d.kind === SyntaxKind.PropertyDeclaration && RustTranspiler.RUST_BASE_TIER_FILE.test(String(d.getSourceFile().fileName)))) return false;
+        const listType: any = this.typeOfNodeIfAny(field);
+        if (listType === undefined || !this.getChecker().isArrayType(listType) || this.getChecker().isTupleType(listType)) return false;
+        return this.rust73dBaseRecordType(this.typeOfNodeIfAny(init));
     }
 
     /** `this.safeX (o, '<k>'[, d])`: a base by-reference reader whose container is `o`, at a literal non-index string key. */
