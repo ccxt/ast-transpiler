@@ -106,7 +106,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpEnclosingFunction(node: any): any;
     csharpNodeText(node: any): string;
     csharpNodePositionKey(node: any): string;
-    csharpCallSiteFunctionType(node: any): string;
+    csharpCallSiteFunctionType(node: any): any;
     isOverrideMethod(node: any): boolean;
     csharpIsFunctionLike(node: any): boolean;
     csharpSameBinding(node: any, symbol: any): boolean;
@@ -476,7 +476,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsStringValued(node: any, depth?: number): boolean;
     csharpCheckedStringOrNull(node: any): boolean;
     csharpEvaluationHasEffects(node: any): boolean;
-    printFunctionType(node: any): string;
+    printFunctionType(node: any): any;
     printReturnStatement(node: any, identation: any): string;
     csharpReturnValuePrintsType(expression: any, declared: string): boolean;
     printUnboxedReturnStatement(node: any, identation: any, declaredType: string, forgiving: string): string;

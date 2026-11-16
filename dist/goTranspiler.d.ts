@@ -976,7 +976,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printMethodParameters(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
     printParameterType(node: any): string;
-    printFunctionType(node: any): string;
+    printFunctionType(node: any): any;
     isWholePrintedCall(value: string, open: number): boolean;
     goTypeOfInitializer(initializer: any, printedValue: string): string | undefined;
     goUnwrapPrintedParens(printedText: string): string;
