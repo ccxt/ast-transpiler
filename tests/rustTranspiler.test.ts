@@ -21835,3 +21835,28 @@ describe('ral-62o: an Option<String> reader local prints the `_opt` twin of the 
         expect(build ()).toContain('let mut f: Option<String> = self.safeStringLower2(o.clone(), Value::Str("x".into()), Value::Str("y".into()), &[]).as_str().map(str::to_owned);');
     });
 });
+
+describe('ral-64b: build-pass locals typed by the printer', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    extend (...args: any[]): any { return args[0]; }\n}\n";
+    const build = (name: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    // ndax signIn: stored whole into `this.options` before a later re-read (strLocalReassign's one local)
+    const signIn = "    signIn (response: Dict, responseInner: Dict): Dict {\n        let sessionToken = this.safeString (response, 'SessionToken');\n        if (sessionToken !== undefined) {\n            this.options['sessionToken'] = sessionToken;\n            return response;\n        }\n        sessionToken = this.safeString (responseInner, 'SessionToken');\n        this.options['sessionToken'] = sessionToken;\n        return responseInner;\n    }\n";
+    test('a reader local stored at a literal `this.` field key before a later use is Option<String> (copy at the store)', () => {
+        const out = build ('ral64b-reassign', signIn);
+        expect(out).toMatch(/let mut sessionToken: Option<String> = self\.\w+\(response\.clone\(\), Value::Str\("SessionToken"\.into\(\)\), &\[\]\)/);
+        expect(out).toContain('insert("sessionToken".into(), sessionToken.clone().map(Value::from).unwrap_or(Value::Null));');
+        expect(out).toContain('insert("sessionToken".into(), sessionToken.map(Value::from).unwrap_or(Value::Null));');
+        expect(out).not.toContain('let mut sessionToken: Value');
+    });
+    test('negative: a reader with a default argument keeps the Value local', () => {
+        const out = build ('ral64b-reassign-neg', signIn.replace ("this.safeString (response, 'SessionToken')", "this.safeString (response, 'SessionToken', 'x')"));
+        expect(out).not.toMatch(/let mut sessionToken: Option<String>/);
+    });
+});

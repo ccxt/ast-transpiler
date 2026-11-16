@@ -7990,6 +7990,9 @@ export class RustTranspiler extends BaseTranspiler {
         // (a string only where the write moves it: an earlier box would copy where the `Value` was shared)
         if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustThisFieldLiteralWrite(n)) return 'box';
         if ((kind === 'str' || kind === 'ostr') && this.rustThisFieldLiteralWrite(n) && this.rustLocalLastUse(n, this.rustDeclaredNode(n))) return 'box';
+        // ral-64b: an `Option<String>` base-reader local stored whole at a literal key of a `this.` field before a later use boxes
+        // there with a copy (`x.clone()`: the `Value` local was cloned at that insert too); ccxt's strLocalReassign pass did this
+        if (kind === 'ostr' && this.rustThisFieldLiteralWrite(n) && this.rust64bReaderLocal(this.rustDeclaredNode(n))) return 'box';
         // ral-58k: `this.f[k] = n` keyed by a typed string identifier (kraken `this.commonCurrencies[id] = code`): the value
         // boxes once into the printer's own insert, as the `Value` local was cloned there
         if ((kind === 'str' || kind === 'ostr') && this.rust58kThisFieldIdentKeyWrite(n)) return 'box';
@@ -8930,6 +8933,14 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isElementAccessExpression(left) || !isPropertyAccessExpression(left.expression) || left.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const key: any = this.rustSkipWrappers(left.argumentExpression);
         return key !== undefined && isIdentifier(key) && key.text !== n.text && key.text !== 'undefined';
+    }
+
+    /** ral-64b: a local declared from a base safeString-family reader with no default argument (its box is `Str` or `Null`). */
+    rust64bReaderLocal(declaration: any): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.initializer === undefined) return false;
+        const init: any = this.unwrapParens(declaration.initializer);
+        if (!this.rustUdReaderStr(init) || String(init.expression.name.text) === 'safeCurrencyCode') return false;
+        return init.arguments.length <= (RustTranspiler.RUST_SAFE_STRING_KEY_ARGS[String(init.expression.name.text)] ?? 2);
     }
 
     rustThisFieldLiteralWrite(n): boolean {
