@@ -4998,7 +4998,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' ? !this.rustErrMsgMoves(n, declaration) : !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -8449,6 +8449,10 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustFieldKeyReceiver(this.rustStripWrappers(up.right)) !== undefined ? 'fin' : undefined;
         }
         if (!isElementAccessExpression(up) || up.argumentExpression !== wrapped) return undefined;
+        // ral-59k: the OUTER key of a plain two-level READ `this.F[k0][k]` (rustFieldBucketChainRead on the bucket
+        // `this.F[k0]`): the outer read takes the key by reference (`get_value(&<bucket>, k.as_deref())`), the lend the
+        // boxed `&k` made (decided from the AST: the bucket node and its field receiver)
+        if (isElementAccessExpression(up.expression) && this.rustFieldKeyReceiver(up.expression.expression) !== undefined && this.rustFieldBucketChainRead(up.expression)) return 'fok';
         const write: any = up.parent;
         // ral-46b: a checker dict-shaped field (`fundingRates: Dictionary<FundingRate>`) takes the same native insert
         // (rustDictShapedFieldInsert: `if let Value::Dict(__d) = &mut self.f { .. insert(<key text>, ..) }`), so a typed key
@@ -8479,6 +8483,7 @@ export class RustTranspiler extends BaseTranspiler {
             // first, `{ let __be_tmp = ..; .. insert(<k text>, __be_tmp) }`), for a key that is the upper key of the field's
             // two-level writes (rustNestedFieldUpperKeyUse): k is read, never written, by the value
             if (this.rustFieldBucketReread(n, up, write.right)) return 'key';
+            if (this.rust59kFieldSafeDictReread(n, up, write.right)) return 'key';
             if (!this.rustBorrowStrElemShape(this.rustDeclaredNode(n))) return undefined;
             this.rustWgKeyReadInValue.add(n);
         }
@@ -8558,7 +8563,9 @@ export class RustTranspiler extends BaseTranspiler {
             else if ((form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)) {
                 boxed = true;
                 // a `this.` / `super.` argument cloned the `Value`: lending the string there costs that same one copy
-                if (form !== 'box' || !this.rustSelfCallArg(n) || this.rustLoopAfterDeclaration(n, declaration) || this.rustStatementReadsTwice(n, declaration)) lendable = false;
+                // ral-59k: the reader key of `this.F[k] = .. this.safeDict (this.F, k, ..) ..` reads k twice in one statement, but
+                // the other read is the insert key text (one fresh String, as `stringify_param` made): still one copy each
+                if (form !== 'box' || !this.rustSelfCallArg(n) || this.rustLoopAfterDeclaration(n, declaration) || (this.rustStatementReadsTwice(n, declaration) && !this.rust59kFieldSafeDictReaderKey(n))) lendable = false;
             }
             return true;
         });
@@ -9345,6 +9352,47 @@ export class RustTranspiler extends BaseTranspiler {
         return isIdentifier(tkey) && String(tkey.text) === String(this.rustSkipWrappers(wrapped).text) && this.rustFieldBucketReread(tkey, target, call);
     }
 
+    /** ral-59k: `this.F[k] = v` where every read of `k` in `v` is the key argument of a base `this.safeDict (this.F, k, ..)`
+     *  on the same field (woo pro handleBalance `this.balance[code] = this.extend (this.safeDict (this.balance, code, {}), account)`):
+     *  the printer binds the value before the insert, so the reader's boxed key and the insert key text are one copy each,
+     *  as the `Value` key cloned at the reader and stringified at the insert. Non-test sources; decided from the AST. */
+    rust59kFieldSafeDictReread(n: any, access: any, value: any): boolean {
+        if (this.rustTestTierSource(n) || !isPropertyAccessExpression(access.expression) || access.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const field = String(access.expression.name.text);
+        const key = String(n.text);
+        let ok = true;
+        let seen = 0;
+        const visit = (m: any) => {
+            if (!ok) return;
+            if (isIdentifier(m) && String(m.text) === key) {
+                if (!this.rust59kFieldSafeDictKeyArg(m, field)) ok = false; else seen++;
+            }
+            m.forEachChild?.(visit);
+        };
+        visit(value);
+        return ok && seen > 0;
+    }
+
+    /** ral-59k: `n` is the reader key of a statement `this.F[k] = v` that rust59kFieldSafeDictReread admits. */
+    rust59kFieldSafeDictReaderKey(n: any): boolean {
+        const call: any = n.parent;
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.arguments[0] ?? call) || !this.rust59kFieldSafeDictKeyArg(n, String((call.arguments[0] as any).name?.text))) return false;
+        const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
+        if (write === undefined || !isBinaryExpression(write) || write.parent?.kind !== SyntaxKind.ExpressionStatement || !this.isNodeInsideNode(n, write.right)) return false;
+        const target: any = write.left;
+        const tkey: any = isElementAccessExpression(target) ? this.rustSkipWrappers(target.argumentExpression) : undefined;
+        return tkey !== undefined && isIdentifier(tkey) && String(tkey.text) === String(n.text) && this.rust59kFieldSafeDictReread(tkey, target, write.right);
+    }
+
+    /** ral-59k: `m` is the key argument of a base `this.safeDict (this.<field>, m, ..)`. */
+    rust59kFieldSafeDictKeyArg(m: any, field: string): boolean {
+        const call: any = m.parent;
+        if (!isCallExpression(call) || call.arguments.length < 2 || call.arguments[1] !== m || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword || String(call.expression.name.text) !== 'safeDict') return false;
+        const src: any = call.arguments[0];
+        return isPropertyAccessExpression(src) && src.expression.kind === SyntaxKind.ThisKeyword && String(src.name.text) === field;
+    }
+
     /** ral-56f: every read of `k` in `value` is `this.F[k]` on the written field (no write of `k`), and some other use of
      *  `k` is a two-level upper key of the same field (rustNestedFieldUpperKeyUse). Non-test sources. */
     rustFieldBucketReread(n: any, access: any, value: any): boolean {
@@ -9609,7 +9657,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === 'parg' && this.rustInArrayNeedle(node)) return `&${super.printIdentifier(node)}`;
         // zd: a cache-constructor size boxes the `Copy` integer itself, so no argument pass clones a bare name there
         if ((form === 'box' || form === 'targ') && (local.kind === 'int' || local.kind === 'oint') && this.rustCacheCtorLimitArg(node, local.kind)) return `Value::from(${super.printIdentifier(node)})`;
-        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg') return super.printIdentifier(node);
+        if (form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'key' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg') return super.printIdentifier(node);
         if (form === 'err') return this.rustErrMsgMoves(node, local.declaration) ? super.printIdentifier(node) : `${super.printIdentifier(node)}.clone()`;
         if (form === 'inbox') return local.kind === 'ostr' ? `Value::from(&${super.printIdentifier(node)})` : `Value::from(${super.printIdentifier(node)}.as_str())`;
         if (form !== 'box' && form !== 'xbox') return undefined;
@@ -17888,6 +17936,12 @@ export class RustTranspiler extends BaseTranspiler {
                 const borrowedKey = isIdentifier(key) && this.rustBorrowedStrElems.has(this.rustDeclarationOfIdentifier(key));
                 acc = `crate::value::KeyRead::read(&&${super.printIdentifier(receiver)}, &${borrowedKey ? `Value::from(${super.printIdentifier(key)})` : (this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0))})`;
                 continue;
+            }
+            // ral-59k: the outer key of a two-level field READ lends the typed key (rustFieldKeyUseForm 'fok')
+            const outerKey: any = this.rustSkipWrappers(key);
+            if (link !== chain[0] && isIdentifier(outerKey) && this.rustScalarUseForms.get(outerKey) === 'fok') {
+                const kind = this.rustScalarLocalOf(outerKey)?.kind;
+                if (kind === 'str' || kind === 'ostr') { acc = `get_value(&${acc}, ${super.printIdentifier(outerKey)}${kind === 'str' ? '.as_str()' : '.as_deref()'})`; continue; }
             }
             const native = nativeAllowed ? this.printNativeContainerAccess(acc, receiver, key)
                 : (this.rustDictReadInNativeInsert(acc, receiver, key, node) ?? this.rustFieldLengthRead(acc, receiver, key, node));

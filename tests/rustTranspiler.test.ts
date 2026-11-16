@@ -19760,7 +19760,7 @@ describe('ral-57f: the bucket of a two-level READ this.F[k][k2] lends a String u
         fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleBalance (client: any, message: Dict) {\n        const accountType = this.pickType (Object.keys (message));\n        const messageHash = accountType + ':balance';\n        if (this.balance[accountType] === undefined) {\n            this.balance[accountType] = {};\n        }\n        this.balance[accountType]['info'] = message;\n        const code = this.safeCurrencyCode (this.safeString (message, 'a'));\n        const account = this.account ();\n        if ((code !== undefined) && (code in this.balance[accountType])) {\n            const previousValue = this.safeValue (this.balance[accountType][code], 'free');\n            account['free'] = previousValue;\n        }\n        if (code !== undefined) {\n            this.balance[accountType][code] = account;\n        }\n        this.balance[accountType]['timestamp'] = 1;\n        this.balance[accountType] = this.safeBalance (this.balance[accountType]);\n        this.hold (this.balance[accountType], messageHash);\n    }\n\n    pickType (keys: string[]): string {\n        let accountType = '';\n        for (let i = 0; i < keys.length; i++) {\n            if (keys[i] === 'spot') {\n                accountType = keys[i];\n                break;\n            }\n        }\n        return accountType;\n    }\n}\n");
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).not.toMatch(/let mut accountType: Value = self\.pickType/);
-        expect(out).toContain('get_value(&(if let (Some(__m), Some(__k)) = (self.balance.as_map(), accountType.as_deref()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null }), &code)');
+        expect(out).toContain('get_value(&(if let (Some(__m), Some(__k)) = (self.balance.as_map(), accountType.as_deref()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null }), code.as_deref())');
         expect(out).not.toContain('accountType.as_str()');
         expect(out).not.toContain('get_value_mut(&mut self.balance, &accountType)');
         for (const line of out.split('\n')) expect(line.length).toBeLessThanOrEqual(400);
@@ -20330,5 +20330,46 @@ describe('ral-59x: an Option<String> reader receiver lends at a same-function st
         expect(out).toContain('m.insert("base".to_string(), base.clone().map(Value::from).unwrap_or(Value::Null));');
         expect(out).toContain('m.insert("baseId".to_string(), base.map(Value::from).unwrap_or(Value::Null));');
         expect(out).not.toMatch(/let mut (?:ms|base): Value/);
+    });
+});
+
+describe('ral-59k: the outer key of a two-level field READ this.F[k0][k] lends a typed currency code (binance pro handleBalance code)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: Dict = {};\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k]; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeCurrencyCode (id: Str, c: any = undefined): Str { return id; }\n    account (): Dict { return {}; }\n}\n";
+    const write = (name: string, read: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleBalance (client: any, message: Dict) {\n        const accountType = this.pickType (Object.keys (message));\n        if (this.balance[accountType] === undefined) {\n            this.balance[accountType] = {};\n        }\n        const code = this.safeCurrencyCode (this.safeString (message, 'a'));\n        const account = this.account ();\n        if ((code !== undefined) && (code in this.balance[accountType])) {\n            const previousValue = " + read + ";\n            account['free'] = previousValue;\n        }\n        if (code !== undefined) {\n            this.balance[accountType][code] = account;\n        }\n    }\n\n    pickType (keys: string[]): string {\n        let accountType = '';\n        for (let i = 0; i < keys.length; i++) {\n            if (keys[i] === 'spot') {\n                accountType = keys[i];\n            }\n        }\n        return accountType;\n    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('the outer read takes the key by reference and the local is Option<String>', () => {
+        const out = write ('59k-outer-key', "this.safeValue (this.balance[accountType][code], 'free')");
+        expect(out).toContain('let mut code: Option<String> = ');
+        expect(out).toContain('{ Value::Null }), code.as_deref())');
+        expect(out).not.toContain('stringify_param(&code)');
+    });
+    test('negative: a three-level read keeps the local Value', () => {
+        const out = write ('59k-outer-key-neg', "this.safeValue (this.balance[accountType][code]['x'], 'free')");
+        expect(out).toContain('let mut code: Value = ');
+    });
+});
+
+describe('ral-59k: a field write whose value re-reads the bucket through this.safeDict (this.F, k, ..) takes a typed key (woo pro handleBalance code)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: Dict = {};\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o[k]; }\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k]; }\n    safeCurrencyCode (id: Str, c: any = undefined): Str { return id; }\n    extend (a: any, b: any): Dict { return a; }\n    account (): Dict { return {}; }\n}\n";
+    const write = (name: string, value: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleBalance (client: any, message: Dict) {\n        const keys = Object.keys (message);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const code = this.safeCurrencyCode (key);\n            const account = this.account ();\n            account['free'] = this.safeString (message, key);\n            if (code !== undefined) {\n                this.balance[code] = " + value + ";\n            }\n        }\n    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('the reader key boxes once and the insert takes the key text', () => {
+        const out = write ('59k-field-safedict', 'this.extend (this.safeDict (this.balance, code, {}), account)');
+        expect(out).toContain('let mut code: Option<String> = ');
+        expect(out).toContain('insert(code.as_deref().unwrap_or("null").to_string(), __be_tmp)');
+    });
+    test('negative: a read of another field keeps the local Value', () => {
+        const out = write ('59k-field-safedict-neg', 'this.extend (this.safeDict (message, code, {}), account)');
+        expect(out).toContain('let mut code: Value = ');
     });
 });
