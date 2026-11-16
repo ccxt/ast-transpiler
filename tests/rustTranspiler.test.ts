@@ -22337,3 +22337,54 @@ describe('ral-65i: a reassigned base filterBy initializer whose every write is a
         expect(out).not.toContain('let mut candidates: crate::value::List');
     });
 });
+
+describe('ral-65k: a String key local reads a typed Tickers / OHLCVsBySymbol result by its text (pro watchTicker / watchOHLCV `symbolValue`)', () => {
+    const run = (name: string, key: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport interface Ticker { symbol: string }\nexport type Tickers = Dict;\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n" +
+            "    symbol (s: string): string { return s; }\n    safeSymbol (s: Str): Str { return s; }\n" +
+            "    async watchTickers (symbols: Strings = undefined, params: Dict = {}): Promise<Tickers> { return {}; }\n" +
+            "    async watchOHLCVForSymbols (symbolsAndTimeframes: string[][], since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any> { return {}; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    async watchTicker (symbol: string, params: Dict = {}): Promise<any> {\n" +
+            "        const symbolValue" + key + ";\n        const tickers = await this.watchTickers ([ symbolValue ], params);\n        return tickers[symbolValue];\n    }\n" +
+            "    async watchOHLCV (symbol: string, timeframe = '1m', since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any[]> {\n" +
+            "        const symbolValue" + key + ";\n        const result = await this.watchOHLCVForSymbols ([ [ symbolValue, timeframe ] ], since, limit, params);\n        return result[symbolValue][timeframe];\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['watchTickers', 'watchOHLCVForSymbols'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a string key is a String local and both reads lend its text', () => {
+        const out = run ('65k-tickers', ': string = this.symbol (symbol)');
+        expect(out).not.toMatch(/let mut symbolValue: Value = /);
+        expect(out).toContain('return crate::value::KeyRead::key_read(&&tickers, symbolValue.as_str());');
+        expect(out).toContain('get_value(&crate::value::KeyRead::key_read(&&result, symbolValue.as_str()), &timeframe)');
+    });
+    test('negative: an optional-string key keeps the Value key and the boxed read', () => {
+        const out = run ('65k-tickers-neg', ': Str = this.safeSymbol (symbol)');
+        expect(out).toMatch(/let mut symbolValue: Value = /);
+        expect(out).toContain('get_value(&crate::value::KeyRead::read(&&result, &symbolValue), &timeframe)');
+    });
+});
+
+describe('ral-65k: the literal-ternary key of a flat helper write whose value reads this lends its box (hollaex pro `account[freeOrTotal]`)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    account (): any { return {}; }\n    consume (x: any): void { }\n}\n";
+    const write = (name: string, value: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" +
+            "    handle (data: Dict, second: Str, key: Str) {\n        let account = this.account ();\n        if (key in data) {\n            account = data[key];\n        }\n        const freeOrTotal = (second === 'available') ? 'free' : 'total';\n        account[freeOrTotal] = " + value + ";\n        this.consume (account);\n    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    test('the key is a String local and the helper write lends Value::from(freeOrTotal.as_str())', () => {
+        const out = write ('65k-ternary-this', 'this.safeString (data, key)');
+        expect(out).not.toMatch(/let mut freeOrTotal: Value = /);
+        expect(out).toContain('add_element_to_object(&mut account, &Value::from(freeOrTotal.as_str()), ');
+    });
+    test('negative: a value naming the receiver keeps the boxed key', () => {
+        const out = write ('65k-ternary-this-neg', 'this.safeString (account, key)');
+        expect(out).toMatch(/let mut freeOrTotal: Value = /);
+    });
+});

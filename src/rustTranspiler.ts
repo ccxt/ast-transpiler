@@ -8067,6 +8067,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rust63eChainLinkKeyRead(n)) return 'okey';
         // ral-64k: the key of `const y = book[k]` on a typed ws order-book local is handed to `get_value` as is
         if ((kind === 'str' || kind === 'ostr') && this.rust64kBookKeyRead(n)) return 'bkey';
+        // ral-65k: a `String` local that is the whole key of a read on a typed `Tickers` / `OHLCVsBySymbol` result local
+        if (kind === 'str' && this.rust65kTypedResultKey(n)) return 'bkey';
         // ral-yg: an element key into the base-declared `this.urls['<lit>']` map reads it by the borrowed key
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustUrlsKeyReadUse(n)) return 'okey';
         // uh: a ternary of two string literals keys a proven map read natively (`m.get(k)` is the entry `get_value` reads)
@@ -9314,9 +9316,26 @@ export class RustTranspiler extends BaseTranspiler {
             ?? this.printNativeDictInsert(base, n, key, 'x') ?? this.rustNativeDictInsert(base, n, key, 'x')) !== undefined) return false;
         if (this.rustDeclaredLocalEntry(base) !== undefined) return false;
         let self = false;
-        const visit = (x: any) => { if (x.kind === SyntaxKind.ThisKeyword || isFunctionLike(x)) self = true; x.forEachChild(visit); };
+        // ral-65k: a value reading `this` is accepted when it never names the receiver local: the printed helper write then
+        // borrows only `self` in its value, as the boxed-key write did (hollaex pro `account[freeOrTotal] = this.safeString (..)`)
+        const recvSym = this.rustSymbolOf(base);
+        let reads = false;
+        let named = false;
+        const visit = (x: any) => {
+            if (isFunctionLike(x)) self = true;
+            if (x.kind === SyntaxKind.ThisKeyword) reads = true;
+            if (isIdentifier(x) && recvSym !== undefined && this.rustSymbolOf(x) === recvSym) named = true;
+            x.forEachChild(visit);
+        };
         visit(write.right);
-        return !self;
+        return !self && (!reads || (!named && this.rust65kThisValueOk(write)));
+    }
+
+    /** ral-65k: the flat helper write `x[k] = v` (rust63kLocalFlatHelperKey) whose value may read `this`: the key is a
+     *  `String` local initialised by a ternary of two string literals, so its lent box is the very `Str` the `Value` held. */
+    rust65kThisValueOk(write: any): boolean {
+        const key: any = this.rustSkipWrappers(write.left.argumentExpression);
+        return isIdentifier(key) && this.rustStrLiteralTernaryLocal(key);
     }
 
     /** ral-63k: `n` is the last key of a statement write `p[..][n] = v` whose chain root is a plain-Dict parameter. */
@@ -12445,6 +12464,20 @@ export class RustTranspiler extends BaseTranspiler {
         return isVariableDeclaration(up.parent) && up.parent.initializer === up;
     }
 
+    /** ral-65k: `n` is the whole key of `r[n]` where `r` is a const typed `Tickers` / `OHLCVsBySymbol` result local read
+     *  through `KeyRead` (printTypedResultElemRead): both impls answer `read(&Value::Str(k))` with `key_read(k)`, so the
+     *  borrowed `String` key reads the very entry the `Value` key did. */
+    rust65kTypedResultKey(n: any): boolean {
+        if (!isIdentifier(n) || this.rustTestTierSource(n)) return false;
+        const read: any = n.parent;
+        if (read === undefined || !isElementAccessExpression(read) || read.argumentExpression !== n) return false;
+        const recv: any = read.expression;
+        const declaration = isIdentifier(recv) ? this.rustCallLocalOf(recv) : undefined;
+        if (declaration === undefined) return false;
+        const elem = this.rustTypedResultElemKind(declaration.initializer);
+        return (elem === 'map' || elem === 'map2') && this.rust65kPlainStringKey(n) && this.rustTypedResultElemUse(recv, elem);
+    }
+
     /** ral-64k: the read of a `bkey` use: `get_value(&<book box>, k.as_str() | k.as_deref())`. */
     print64kBookKeyRead(node: any): string | undefined {
         const key: any = node.argumentExpression;
@@ -14355,7 +14388,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(key)) return false;
         const keyDecl: any = this.rustDeclaredNode(key);
         if (keyDecl === undefined || !(isVariableDeclaration(keyDecl) || isParameterDeclaration(keyDecl))) return false;
-        return this.rustScalarLocalOf(key) === undefined;
+        // ral-65k: a `String` key local of checker type `string` reads by its text (printTypedResultElemRead)
+        const keyLocal = this.rustScalarLocalOf(key);
+        return keyLocal === undefined || (keyLocal.kind === 'str' && this.rust65kPlainStringKey(key));
+    }
+
+    /** ral-65k: the checker types `k` as plain `string` (no `undefined` / `null` member). */
+    rust65kPlainStringKey(k: any): boolean {
+        const type: any = this.getCheckedTypeOf(k);
+        return type !== undefined && (type.flags & TypeFlags.String) !== 0 && !(type.flags & TypeFlags.Union);
     }
 
     /** `x` is read only: not written, deleted, updated or called. */
@@ -14376,6 +14417,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (elem === undefined || !this.rustTypedResultElemUse(recv, elem)) return undefined;
         const name = super.printIdentifier(recv);
         const key: any = this.rustSkipWrappers(node.argumentExpression);
+        // ral-65k: a borrowed `String` key (rust65kTypedResultKey) reads the entry by its text
+        if ((elem === 'map' || elem === 'map2') && isIdentifier(key) && this.rustScalarLocalOf(key)?.kind === 'str') {
+            return `crate::value::KeyRead::key_read(&&${name}, ${super.printIdentifier(key)}.as_str())`;
+        }
         if (elem === 'map' || elem === 'map2') return `crate::value::KeyRead::read(&&${name}, &${this.printNode(key, 0).trim()})`;
         return `${name}.get(${this.printTypedResultIndex(key)}).map(crate::Value::from).unwrap_or_default()`;
     }
