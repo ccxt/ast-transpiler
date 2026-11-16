@@ -987,6 +987,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  local: only uses bound to its own symbol are walked. Any other second binding keeps the plain walk. */
     rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar?: boolean, skipPropertyNames?: boolean): boolean;
     rustBindingUsesWalk(declaration: any, nodes: any[], own: any, home: any, skip: any[], skipPropertyNames: boolean, acceptUse: (n: any) => boolean, scalar: boolean): boolean;
+    /** ral-64n: a typed-signature argument (`targ`: printed `x.as_deref().unwrap_or_default()` / `x.as_deref()` / the Copy
+     *  payload, never a boxed operand) of the call that is the whole source of a write to a typed scalar local (bitflyer
+     *  `expiry = this.parseExpiryDate (expiryDate)` with `expiryDate` declared in two sibling blocks): the written local
+     *  prints its own conversion of the call's `Value`, so no build/ pass reads a boxed text of this argument there. */
+    rust64nTypedArgWrite(n: any, write: any, form: string | undefined): boolean;
     /** ral-60k: a direct argument of a base-class `this.m (..)` call that is the whole source of a write to a local declared
      *  `Dict` (kucoin fetchBalance `result = this.mergeBalanceAccount (result, currencyCode, ..)` in a sibling block): the
      *  written local's type is its annotation and the argument boxes into the call, as the plain walk already prints it. */
@@ -1299,6 +1304,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     printElemKeyInOp(key: any, obj: any): string | undefined;
     /** ral-58k: `n` is the whole right side of a statement `this.f[k] = n`, `k` another identifier (decided from the AST). */
     rust58kThisFieldIdentKeyWrite(n: any): boolean;
+    /** ral-64b: a local declared from a base safeString-family reader with no default argument (its box is `Str` or `Null`). */
+    rust64bReaderLocal(declaration: any): boolean;
     rustThisFieldLiteralWrite(n: any): boolean;
     /** ud: `n` is the whole right side of `x[k1][k2] = n` with `x` a typed two-level local map (`rustNestedBearerInsert`). */
     rustUdNestedBearerValue(n: any): boolean;
@@ -1560,6 +1567,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrFindText(recvKind: string, name: string, needle: any): string;
     /** `s.split(d)` on a typed string local with a literal or `String` delimiter: the helper's array of parts, empty for null. */
     rustStrLocalSplitText(node: any): string | undefined;
+    /** ral-64n: the sole argument of `s.split(..)` when it is `(d as string)` (parentheses / a `string` assertion only) over an
+     *  `Option<String>` local `d`; a bare identifier keeps the old decision (no assertion, no new form). */
+    rust64nOptSplitDelim(call: any): any;
+    /** ral-64n: `n` (through its parentheses / `as string`) is the delimiter `rust64nOptSplitDelim` prints from the local. */
+    rust64nOptSplitDelimUse(n: any): boolean;
     /** `s.slice(a)` / `s.slice(a, b)` on a typed string local with literal bounds (a non-negative end): the runtime's
      *  char-indexed slice without a closure. A start past the end clamps to an empty `skip`, `b < a` takes nothing (the
      *  helper's `i <= j` arm), a negative start counts from the char length floored at 0; a `None` receiver is `Null`. */
@@ -1798,6 +1810,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  typed-container rule holds: the boxed read is `get_value(&m, &k)`; the typed key is handed to `get_value` as is
      *  (`impl ValueKey` boxes it inside, so the lookup is the same `Str` / `Null` key the boxed read took). */
     rustAnyGetValueKeyUse(n: any): boolean;
+    /** ral-64e: the bind `const b = m[k]` is a single-declaration statement whose next sibling statement is a compound
+     *  statement (`if` / loop / block), not an expression statement: the local's mutation sits only inside that statement
+     *  (base featuresMapper `featureBlock`), so no write-back statement follows the bind directly, and the element is read
+     *  with the same `get_value(&m, &k)` call whatever the key's type (`impl ValueKey`). */
+    rust64eNestedOnlyMutationBind(read: any): boolean;
     /** ral-49e: the read's checker type is a declared record (`Dictionary<Dict>` receiver): its bind prints as the held
      *  `Option<Dict>` form, which ccxt's `Value`-bind write-back pass never matched, so the borrowed key changes no write-back. */
     rustOwnKeysTypedRowRead(read: any): boolean;
@@ -1810,6 +1827,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustUrlsKeyReadUse(n: any): boolean;
     /** uh: the use's local is initialised by `c ? 'a' : 'b'` (both arms string literals). */
     rustStrLiteralTernaryLocal(n: any): boolean;
+    /** ral-64k: `n` is the whole key of an element read `book[n]` (through `( .. as T)` wrappers) that initialises a local,
+     *  on a typed ws order-book local whose use there is its `Value` box: `get_value` takes the key as `impl ValueKey`
+     *  (`&str` / `Option<&str>` box to the very `Str` / `Null` key the `Value` local held), so the lookup is unchanged. */
+    rust64kBookKeyRead(n: any): boolean;
+    /** ral-64k: the read of a `bkey` use: `get_value(&<book box>, k.as_str() | k.as_deref())`. */
+    print64kBookKeyRead(node: any): string | undefined;
     /** Element-access hook: the native read of an `okey` use. */
     printOkeyRead(node: any): string | undefined;
     private static readonly RUST_SCALAR_VALUE_OPERAND_OPS;
@@ -2024,7 +2047,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTypedIsAsync(node: any): boolean;
     rustTypedBody(node: any, typed: any, identation: number, inner: string): string;
     printTypedUnifiedCall(node: any): string | undefined;
-    printTypedUnifiedCallUnlifted(node: any): string | undefined;
     /** `await this.loadMarkets ();` as its own statement (the value is dropped). */
     rustTypedCallIsDiscarded(node: any): boolean;
     private static readonly RUST_MARKET_STR_FIELDS;
@@ -2251,19 +2273,33 @@ export declare class RustTranspiler extends BaseTranspiler {
     static cloneHelperWriteValues(text: string): string;
     private static rustBalancedClose;
     private static rustSplitTopLevel;
-    printCallExpression(node: any, identation: any): string;
+    printCallHead(node: any, parsedExpression: string, parsedArgs: string): string;
     /** First parameter of a venue override of a lent `DerivedExchange` slot (same arity as the slot): `impl Into<crate::Value>`. */
     rustLentSlotParam(param: any): boolean;
+    /** Parameters a method prints: a sync venue override of a `DerivedExchange` slot drops a trailing run of optional
+     *  parameters its body never names when that leaves exactly the slot's arity (foxbit `parseTransaction (t, currency,
+     *  since, limit)`): the override then matches the slot and is printed once, inside the trait impl. */
+    rustPrintedParams(method: any): any[];
     /** A venue (not base-tier) method overriding a lent slot with the slot's arity. */
     rustLentSlotOverride(method: any): boolean;
     /** A sync venue method overriding a `DerivedExchange` slot with the slot's arity (its body may sit in the trait impl). */
     rustSlotOverrideBody(method: any): boolean;
     /** File of the base-tier class above the venue override `method` when it declares `name` (its base trait has the method). */
     rustBaseTierDeclarer(method: any, name: string): string | undefined;
-    /** `this.m(..)` to the calling file's own override of a lent slot: that override lives only in the
-     *  `DerivedExchange` impl, so the call names the trait (the base method of the same name takes a `Value`). */
-    rustLentSlotCallText(node: any, text: string): string;
-    printCallExpressionUnlifted(node: any, identation: any): string;
+    /** Trait path of a `this.m(..)` / ws `super.m(..)` call whose callee only one trait reaches unambiguously, from the AST:
+     *  the calling file's own lent slot override lives only in the `DerivedExchange` impl (the base method of the same
+     *  name takes a `Value`); inside any slot override (printed in the trait impl, closures included) both traits are in
+     *  scope, so a base slot or another venue override is named by its base trait (what the inherent body resolved to;
+     *  its preamble reaches the override). A ws `super.m(..)` to the REST parent's lifted override goes through the
+     *  trait on the parent core (`receiver` 'parent'). */
+    rustSlotCallPath(node: any): {
+        path: string;
+        snake: string;
+        receiver: 'self' | 'parent';
+    } | undefined;
+    /** The whole call printed through its trait path (`rustSlotCallPath`), or undefined when method syntax stays. */
+    rustSlotCallHead(node: any, args: string): string | undefined;
+    printCallExpression(node: any, identation: any): string;
     printFreeFnDefaultArgsCall(node: any, identation: any): string | undefined;
     printDynamicSelfRead(node: any): string | undefined;
     printDynamicSelfCall(node: any, identation: any): string | undefined;
@@ -3637,6 +3673,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  literal: the write prints `add_element_to_object(get_value_mut(&mut xs, &Value::Int(i)), ..)` as before, and the
      *  runtime `get_value_mut` hops a held `List` exactly as the `Value::Arr` arm did (the same padded slot). */
     rustLentListRowWrite(access: any): boolean;
+    /** ral-64i: a never-reassigned local initialised from a base `this.arraySlice (src, ..)` whose `src` is an identifier the
+     *  checker types `string[]` (a split): every element is a `Str`, so `Display` joins exactly what the helper joined. */
+    rust64iStringSliceDeclaration(declaration: any): boolean;
+    /** ral-64i: `this.arraySlice (..)` of the base tier (no venue redeclares it), outside the test tier. */
+    rust64iBaseSliceInit(init: any): boolean;
     /** A base `safeList*` read with an empty `[]` default: a list on every path. */
     rustDefaultedListRead(init: any): boolean;
     rustLentListLocalUncached(declaration: any): boolean;
@@ -4737,6 +4778,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  handler arm) and no override, trait slot or typed-return entry. Its string parameters may print typed; should
      *  the return still print `Value`, a string slot is one an arm decodes (rustDispatch.wsArg `str` / `optstr`). */
     rust63xNoArmStrMethod(method: any): boolean;
+    /** ral-64x: `n` is a whole argument of a `this.m (..)` call whose parameter at that index prints `Option<i64>`
+     *  (rustVenueStrParamType). The slot local is passed as it is (Copy, no box). */
+    rust64xOintParamArg(n: any): boolean;
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS;
     private static readonly RUST_BASE_ASYNC_SCALAR_PARAM_METHODS;
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
@@ -4754,6 +4798,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  source alone: `null` only for an `Option`, and an `i64` slot takes an integer literal or a value declared
      *  `int` / `Int` (a `number` could carry a fraction). */
     rustVenueScalarArgExact(arg: any, rustType: string): boolean;
+    /** ral-64x: `arg` is the caller's own required `&str` parameter, and every read of it is either a ws url / hash
+     *  slot or the argument at `at` of a call to `method` (syntactic, so deciding `method`'s slot does not ask back). */
+    rust64xLentStrParamArg(arg: any, method: any, at: number): boolean;
+    /** ral-64x: every read of `param` is a ws url / hash slot (ral-yc) or a call argument `other` accepts. */
+    rust64xStrParamReadsLent(param: any, other: (call: any, at: number) => boolean): boolean;
     /** `this.<m>(..)` / `super.<m>(..)` calls in the method's own file that resolve to it. */
     rustVenueStrCallSites(method: any): any[];
     /** ral-ve: an identifier bound once (`const`) to a `this.urls[..]` literal-key read: a url string or Null. */
