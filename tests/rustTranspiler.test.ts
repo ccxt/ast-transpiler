@@ -20623,3 +20623,37 @@ describe('ral-60k: a sibling-block currency code handed to a base call whose res
         expect(out).toContain('let mut currencyCode: Value = ');
     });
 });
+
+describe('ral-60e: the string id of a typed currency record is an optional string local', () => {
+    const build = (name: string, idType: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-60e-' + name + '-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        const file = path.join (root, 'ts/src/base/Exchange.ts');
+        fs.writeFileSync (file, 'type Str = string | undefined;\n'
+            + 'type Dict = any;\n'
+            + 'interface CurrencyInterface { id: ' + idType + '; code: Str; }\n'
+            + 'export default class Exchange {\n'
+            + '    currencies: Dict = {};\n'
+            + '    currency (code: Str): CurrencyInterface {\n'
+            + '        const currencies = this.currencies;\n'
+            + '        if (code in currencies) {\n'
+            + '            return currencies[code];\n'
+            + '        }\n'
+            + "        throw new Error ('no currency');\n"
+            + '    }\n'
+            + '    fetchIt (code: Str): any {\n'
+            + '        const currency = this.currency (code);\n'
+            + "        const currencyId = currency['id'];\n"
+            + "        const request: Dict = { 'coin': currencyId };\n"
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n');
+        return new Transpiler({ 'verbose': false }).transpileRustByPath (file).content;
+    };
+    test('positive: `currency[\'id\']` declared string reads the record as Option<String>', () => {
+        expect(build ('a', 'string')).toContain('let mut currencyId: Option<String> = crate::value::KeyRead::key_read(&&currency, "id").as_str().map(str::to_owned);');
+    });
+    test('guard: an id not declared string stays a Value', () => {
+        expect(build ('b', 'any')).toContain('let mut currencyId: Value = crate::value::KeyRead::key_read(&&currency, "id");');
+    });
+});

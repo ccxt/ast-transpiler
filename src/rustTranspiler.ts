@@ -14631,8 +14631,11 @@ export class RustTranspiler extends BaseTranspiler {
         const currency = this.rustCurrencyLocalOf(node.expression);
         if (currency !== undefined) {
             // lf: `c['code']` off a `crate::types::Currency` record read off its own map as the optional string the box held
-            if (this.rustCurrencyLocalKind(currency) !== 'cstruct' || this.rustCurrencyKeyReadKey(node.expression) !== 'code') return undefined;
-            return { kind: 'ostr', text: `crate::value::KeyRead::key_read(&&${this.printNode(currency.name, 0)}, "code").as_str().map(str::to_owned)` };
+            // ral-60e: also `c['id']` (CurrencyInterface declares `id: string`; every currency structure stores it as a
+            // safeString / safeString2 result or the code string itself): the same `KeyRead` read as the optional string
+            const currencyKey = this.rustCurrencyKeyReadKey(node.expression);
+            if (this.rustCurrencyLocalKind(currency) !== 'cstruct' || (currencyKey !== 'code' && (currencyKey !== 'id' || this.primitiveKindOfType(this.typeOfNodeIfAny(node)) !== 'string'))) return undefined;
+            return { kind: 'ostr', text: `crate::value::KeyRead::key_read(&&${this.printNode(currency.name, 0)}, "${currencyKey}").as_str().map(str::to_owned)` };
         }
         // ral-46e: a flag read off an `Option<Market>` local (`getMarketFromSymbols`: undefined or a loaded market).
         // The boxed `KeyRead` read was Null for `None` and the loaded market's own flag otherwise; every consumer of the
