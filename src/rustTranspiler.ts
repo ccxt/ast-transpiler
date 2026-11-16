@@ -30603,10 +30603,11 @@ export class RustTranspiler extends BaseTranspiler {
         const block: any = statement.parent;
         const statements: any[] = Array.from(block?.statements ?? []);
         let at = statements.indexOf(statement) + 1;
-        while (at < statements.length && statements[at].kind === SyntaxKind.VariableStatement && !mentions(statements[at])) at++;
+        // ral-67d: past any statement that does not name the local (no read of it can happen there)
+        while (at < statements.length && !mentions(statements[at])) at++;
         const first: any = statements[at];
         const write: any = first?.kind === SyntaxKind.ExpressionStatement ? first.expression : undefined;
-        if (!isBinaryExpression(write) || !isArrayLiteralExpression(write.left) || write.operatorToken.kind !== SyntaxKind.EqualsToken || mentions(write.right)) return false;
+        if (write === undefined || !isBinaryExpression(write) || !isArrayLiteralExpression(write.left) || write.operatorToken.kind !== SyntaxKind.EqualsToken || mentions(write.right)) return false;
         const slot: any = write.left.elements.find((e: any) => isIdentifier(e) && e.text === name);
         if (slot === undefined || this.rustDeclaredNode(slot) !== declaration || !this.rustDictSlotOfWrite(slot)) return false;
         const fn: any = this.rustEnclosingFunction(declaration);
@@ -30619,8 +30620,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (isBinaryExpression(up) && up.left === id) {
                 if (up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
                 const rhs: any = this.rustSkipWrappers(up.right);
-                return isCallExpression(rhs) && rhs.arguments.length === 2 && isIdentifier(rhs.arguments[0]) && rhs.arguments[0].text === name
-                    && this.rustBaseCallNamed(rhs, RustTranspiler.RUST_HANDED_DICT_OMIT);
+                // ral-67d: or a base `extend` / `indexBy` / `groupBy`, which always builds a map
+                return isCallExpression(rhs) && ((rhs.arguments.length === 2 && isIdentifier(rhs.arguments[0]) && rhs.arguments[0].text === name
+                    && this.rustBaseCallNamed(rhs, RustTranspiler.RUST_HANDED_DICT_OMIT)) || (this.rustBaseCallNamed(rhs, RustTranspiler.RUST_ALWAYS_MAP_HELPERS) && String(up.getText()).length <= 240));
             }
             return true; // reads are decided by the handed rule
         });
@@ -31963,6 +31965,11 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `native` for a literal-key read / statement write / `in` test of a params slot, `box` for a whole-value hand-off. */
     rustMutableSlotUse(n: any, declaration: any): 'native' | 'box' | undefined {
+        // ral-67d: a nil-declared params slot (`let p = undefined; [ a, p ] = this.handle*AndParams (..)`, rustNilSlotDictCandidate)
+        // holds the map from its first write on: its literal-key writes and reads take the map in place like a slot's
+        if (isVariableDeclaration(declaration) && this.rustDeclaredNode(n) === declaration && n !== declaration.name && this.rustNilSlotDictCandidate(declaration)) {
+            return this.rustDictKeyReadUse(n) || this.rustUntilHeadKeyWrite(n) !== undefined ? 'native' : undefined;
+        }
         if (declaration?.kind !== SyntaxKind.BindingElement || this.rustDeclaredNode(n) !== declaration) return undefined;
         const up: any = n.parent;
         if (this.rustDictKeyReadUse(n) || this.rustUntilHeadKeyWrite(n) !== undefined || this.rustSlotNestedInsertKeys(n) !== undefined) return 'native';
@@ -31988,7 +31995,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustMutableDictSlot(declaration: any): boolean {
-        if (declaration?.kind === SyntaxKind.VariableDeclaration) return this.rustBorrowedLocalKind(declaration) === 'dict' && this.rustMutableBuiltLocals.has(declaration);
+        if (declaration?.kind === SyntaxKind.VariableDeclaration) return (this.rustBorrowedLocalKind(declaration) === 'dict' && this.rustMutableBuiltLocals.has(declaration)) || this.rustNilSlotDictLocal(declaration);
         return declaration?.kind === SyntaxKind.BindingElement && this.rustHandedDictLocal(declaration);
     }
 
