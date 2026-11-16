@@ -22674,3 +22674,37 @@ describe('ral-67f: helper writes whose value reads the written root bind the val
         expect(out).not.toContain('__be_tmp');
     });
 });
+
+describe('ral-67b: declared-empty Int / Bool locals typed in TypeScript', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Bool = boolean | undefined;\nexport default class Exchange {\n    keep (o: any): any { return o; }\n    parseJson (s: any): any { return s; }\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o[k] ?? d; }\n    safeBool (o: any, k: any, d: boolean = undefined): Bool { return o[k] ?? d; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Bool } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const lengthBody = (recv: string) => "    m (market: Dict) {\n        const parsed = this.parseJson (this.safeString (market, 'outcomes', '[]'));\n        let parsedLength: Int = undefined;\n        if (parsed !== undefined) {\n            parsedLength = " + recv + ".length;\n        }\n        if ((parsed !== undefined) && (parsedLength !== undefined)) {\n            return this.keep (parsed);\n        }\n        return this.keep (undefined);\n    }\n";
+    test('polymarket parsed*Length: `(x as any[]).length` written into an Int local is Option<i64>', () => {
+        const out = write ('ral-67b-cast-length', lengthBody ('(parsed as any[])'));
+        expect(out).toContain('let mut parsedLength: Option<i64> = None;');
+        expect(out).toContain('parsedLength = Some(parsed.len() as i64);');
+        expect(out).toContain('(parsedLength.is_some())');
+    });
+    test('negative: a cast to a non-array type keeps the local Value', () => {
+        const out = write ('ral-67b-cast-length-neg', lengthBody ('(parsed as string)'));
+        expect(out).toContain('let mut parsedLength: Value = Value::Null;');
+    });
+    const boolBody = (rhs: string) => "    m (raw: Dict) {\n        const rawActive = this.safeBool (raw, 'active');\n        const closed = this.safeBool (raw, 'closed', false);\n        let active: Bool = undefined;\n        if (rawActive !== undefined) {\n            active = " + rhs + ";\n        }\n        return { 'active': active };\n    }\n";
+    test('polymarket parseEvent `active`: a checker-boolean logical over locals is Option<bool>', () => {
+        const out = write ('ral-67b-bool-logical', boolBody ('(rawActive) && (!closed)'));
+        expect(out).toContain('let mut active: Option<bool> = None;');
+        expect(out).toMatch(/active = Some\(.*rawActive.*closed.*\);/);
+        expect(out).toContain('active.map_or(Value::Null, Value::Bool)');
+    });
+    test('negative: a logical whose checker type is not boolean (`||` with a string) keeps Value', () => {
+        const out = write ('ral-67b-bool-logical-neg', boolBody ('(rawActive) || (this.safeString (raw, \'x\') as any)'));
+        expect(out).toContain('let mut active: Value = Value::Null;');
+    });
+});

@@ -3120,6 +3120,8 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-45b: `x = x.slice(..)` / `x.toLowerCase()` keeps x's own optional string (the native
             // forms map `None` through), so the self write adds no kind of its own
             if (write === undefined && this.rust45bSelfStrWrite(rhs, declaration)) write = 'ostr';
+            // ral-67b: `x = a && !b` over same-function locals whose checker type (narrowed at the write) is exactly `boolean`
+            if (write === undefined && this.rust67bBoolLogicalWrite(rhs)) { joined = this.rustScalarJoinKinds(joined, 'bool', true); if (joined === undefined) return undefined; continue; }
             // ral-47d: `x = y` between two nil-declared string locals of the function (bybit sellLeverage / buyLeverage):
             // neither seeds before the other, so while the solver seeds assume the partner's optional string; the later
             // passes re-prove the write against the partner's settled decision (a partner left `Value` drops both)
@@ -3221,6 +3223,17 @@ export class RustTranspiler extends BaseTranspiler {
         if (d === undefined || !isVariableDeclaration(d) || d.initializer === undefined || (d.parent?.flags & NodeFlags.Const) === 0) return undefined;
         const init: any = this.unwrapParens(d.initializer);
         return this.rustArithCombinator(init) ? this.rustArithCallKind(init) : undefined;
+    }
+
+    /** ral-67b: the right side of a write into a declared-empty `Bool` local: `a && b` / `a || !b` (rustBoolLeafLogical: every
+     *  leaf a local of the same function) whose checker type at the write is exactly `boolean`. JS hands back an operand, and
+     *  every operand the checker narrows to `boolean` is a JS boolean there, so the condition's native `bool` is the value. */
+    rust67bBoolLogicalWrite(expr: any): boolean {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || this.checkerOrUndefined() === undefined || !isBinaryExpression(node) || !this.isLogicalOp(node.operatorToken.kind)) return false;
+        if (!this.rustBoolLeafLogical(node)) return false;
+        const t: any = this.typeOfNodeIfAny(node);
+        return t !== undefined && (t.flags & TypeFlags.Boolean) !== 0 && this.primitiveKindOfType(t) === 'boolean';
     }
 
     /** ral-47d: `rhs` names another nil-declared (`let y: Str = undefined`) string local of the same function. */
@@ -6438,8 +6451,18 @@ export class RustTranspiler extends BaseTranspiler {
     // so the local is an `i64` exactly; the string-local `.length` stays the expression rule's.
     rustListLengthInit(node): boolean {
         if (node === undefined || !isPropertyAccessExpression(node) || !isIdentifier(node.name) || node.name.text !== 'length') return false;
+        if (this.rust67bCastListLengthRecv(node.expression)) return true;
         if (!isIdentifier(node.expression)) return this.rustSelfRootedLengthRecv(node.expression) || this.rustLocalRootedLengthRecv(node.expression);
         return this.checkerOrUndefined() !== undefined && this.rustScalarLengthRecv(node) === undefined;
+    }
+
+    /** ral-67b: `(x as T[]).length` (any array type T): the receiver is a local or parameter cast to an array type in the
+     *  source, so the read prints the same native `len()` (or `get_array_length`) as a list receiver, an `Int` every time. */
+    rust67bCastListLengthRecv(recv): boolean {
+        if (this.checkerOrUndefined() === undefined || !isParenthesizedExpression(recv)) return false;
+        const cast: any = recv.expression;
+        if (!isAsExpression(cast) || cast.type?.kind !== SyntaxKind.ArrayType || !isIdentifier(cast.expression) || cast.expression.text === 'undefined') return false;
+        return this.rustDeclaredNode(cast.expression) !== undefined;
     }
 
     // ral-52n: `this.orders.length` / `this.options['k'].length` print `get_array_length(&..)`, which answers a
@@ -9546,6 +9569,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (depth === 0 && this.rustScalarAsWrite(node) !== undefined) return this.rustScalarWriteOk(kind, this.rustScalarAsWrite(node), 0);
         if (this.rustOptParamWriteOk(kind, node)) return true;
         if (kind === 'oint' && this.rustLimitCall(node)) return true;
+        // ral-67b: a checker-`boolean` logical over same-function locals written into an `Option<bool>` local
+        if (kind === 'obool' && depth === 0 && this.rust67bBoolLogicalWrite(node)) return true;
         if (isConditionalExpression(node)) return this.rustScalarWriteOk(kind, node.whenTrue, depth + 1) && this.rustScalarWriteOk(kind, node.whenFalse, depth + 1);
         const optional = kind.startsWith('o');
         if (isIdentifier(node) && node.text !== 'undefined') {
@@ -10210,6 +10235,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (expressionText !== undefined) return expressionText;
         const marketFieldInit = this.rustMarketFieldScalar(node); if (marketFieldInit !== undefined) return marketFieldInit.kind === kind ? marketFieldInit.text : undefined;
         const boolText = kind === 'bool' && this.literalKindOfNode(node) !== 'boolean' ? this.rustBoolNativeText(node) : undefined; if (boolText !== undefined) return boolText;
+        if (kind === 'obool' && this.rust67bBoolLogicalWrite(node)) return wrap(this.printCondition(node, 0).trim());
         if (base === 'str' && this.literalKindOfNode(node) === 'string') return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
         if (base === 'bool' && this.literalKindOfNode(node) === 'boolean') return wrap(node.kind === SyntaxKind.TrueKeyword ? 'true' : 'false');
         const int = base === 'int' ? this.rustScalarIntLiteral(node) : undefined;
@@ -10221,6 +10247,8 @@ export class RustTranspiler extends BaseTranspiler {
             return format === undefined ? undefined : wrap(format);
         }
         if (kind === 'int' && this.rustListLengthInit(node)) return this.rustListLengthText(node);
+        // ral-67b: a cast-receiver length written into a declared-empty `Int` local (`Option<i64>`)
+        if (kind === 'oint' && this.rustListLengthInit(node) && this.rust67bCastListLengthRecv(node.expression)) return wrap(this.rustListLengthText(node));
         // ral-52k: a base credential field (`Value` in the struct, `Str` or `Null`) read once as its text
         if (kind === 'ostr' && this.rustTernaryArm(node) && this.rustBaseStrFieldRead(node)) return `${this.printNode(node, 0).trim()}.as_str().map(str::to_owned)`;
         if (kind === 'ostr' && this.rustTernaryArm(node) && this.rust65nBaseStrParamArm(node)) return `${super.printIdentifier(node)}.as_str().map(str::to_owned)`;
