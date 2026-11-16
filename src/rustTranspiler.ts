@@ -21681,7 +21681,12 @@ export class RustTranspiler extends BaseTranspiler {
         // a `handle*` params slot takes a `Value`: the map boxes there (the plain form only, its map is never Null)
         if (paramsBoxes > 0 && (optional || from !== 'dict')) return undefined;
         const onlySafeDictWrites = keyWrites > 0 && safeDictKeyWrites === keyWrites && keySets === 0;
-        if ((keySets > 0 || keyWrites > 0) && (from !== 'dict' || (optional && !onlySafeDictWrites) || (init !== undefined && !extendReuse && this.rustInitReadsTaggedStore(init)))) return undefined;
+        // ral-61n: key-set uses (`Object.keys (x)`, `k in x`) on a never-rewritten no-default base `safeDict*` result that is
+        // null-tested: the optional map answers both off `x.as_deref()` (`None` lists no key and contains none, as Null did)
+        const optKeySetsOnly = keySets > 0 && keyWrites === 0 && writes === 0 && !nilDeclared && nullTests > 0 && from === 'dict'
+            && this.rustNullTestedDictLocal(init, nullTests, writes);
+        if (optKeySetsOnly) this.rustOptKeySetLocals.add(declaration);
+        if ((keySets > 0 || keyWrites > 0) && (from !== 'dict' || (optional && !onlySafeDictWrites && !optKeySetsOnly) || (init !== undefined && !extendReuse && this.rustInitReadsTaggedStore(init)))) return undefined;
         if (keyWriteUses.some((n: any) => !this.rustBuiltKeyWriteLineOk(n, optional ? 30 : 0))) return undefined;
         if (extendReuse && (keySets > 0 || boxedElementUses.some((n: any) => !this.rustBoxLineOk(n)))) return undefined;
         // ral-vf: a `safeDict` result shares the response's Arc; a key write copies on write in both forms (the helper's
@@ -21716,6 +21721,8 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustOptContainerLocals = new WeakSet<any>();
+    /** ral-61n: optional map locals whose key-set uses (`Object.keys`, `in`) print off `x.as_deref()`. */
+    private rustOptKeySetLocals = new WeakSet<any>();
 
     // ── ral-60n: null test of a never-null container local ──
     // `const x = this.safeList (o, k, [])` / `this.safeDict (o, k, {})` (base reader, literal container default, x never
@@ -23077,8 +23084,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-ra: `m['k'] = x` / `m.k = x` one level on another local `m` (not `x` itself): the store takes the value by
      *  value, so the shared container is boxed there once (moved at its last use, else the Arc bump the `Value` paid). */
-    rustLocalKeyPlace(place: any, n: any): boolean {
-        const recv: any = place.expression;
+    rustLocalKeyPlace(place: any, n: any, castRecv = false): boolean {
+        // ral-61n: `castRecv` also takes `(m as T)['k'] = x` (the assertion only retypes the TS side; the write prints on `m`)
+        const recv: any = castRecv ? this.rustSkipWrappers(place.expression) : place.expression;
         if (!isIdentifier(recv) || recv.text === n.text || isElementAccessExpression(recv) || isPropertyAccessExpression(recv)) return false;
         if (isElementAccessExpression(place) && !isStringLiteralLikeNode(this.rustSkipWrappers(place.argumentExpression))) return false;
         const d: any = this.rustDeclarationOfIdentifier(recv);
@@ -23187,23 +23195,45 @@ export class RustTranspiler extends BaseTranspiler {
         return super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
     }
 
+    /** ral-61n: the printed name of an optional map local admitted for key-set uses (see rustOptKeySetLocals). */
+    rustOptKeySetDictName(node: any): string | undefined {
+        const recv: any = this.rustSkipWrappers(node);
+        const opt = recv === undefined ? undefined : this.rustOptContainerOf(recv);
+        if (opt === undefined || opt.kind !== 'dict' || !this.rustOptKeySetLocals.has(opt.declaration)) return undefined;
+        return super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+    }
+
     printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined {
         const arg = this.bearerEnumArg(node);
+        // ral-61n: `None` enumerates nothing, exactly the empty list `object_keys` / `object_values` answer for Null
+        const opt = arg === undefined ? undefined : this.rustOptKeySetDictName(arg);
+        if (opt !== undefined) return kind === 'keys' ? `Value::Array(${opt}.as_deref().into_iter().flat_map(crate::value::HashMap::keys).cloned().map(Value::from).collect())` : `Value::Array(${opt}.as_deref().into_iter().flat_map(crate::value::HashMap::values).cloned().collect())`;
         const name = arg === undefined ? undefined : this.rustBorrowedDictName(arg);
         if (name === undefined) return undefined;
         return kind === 'keys' ? `Value::Array(${name}.keys().cloned().map(Value::from).collect())` : `Value::Array(${name}.values().cloned().collect())`;
     }
 
     printBorrowedInOp(key: any, obj: any): string | undefined {
-        const name = this.rustBorrowedDictName(obj);
+        // ral-61n: `k in x` on an admitted optional map: `None` contains no key, as `in_op` answered for Null
+        const opt = this.rustOptKeySetDictName(obj);
+        if (opt !== undefined) {
+            const inner = this.printBorrowedInOpOn('__d', key);
+            return inner === undefined ? undefined : `Value::Bool(matches!(${opt}.as_deref(), Some(__d) if ${inner}))`;
+        }
+        return this.printBorrowedInOpOn(this.rustBorrowedDictName(obj), key, true);
+    }
+
+    /** The `contains_key` test of `key` on the map printed as `name` (boxed `Value::Bool(..)` when `boxed`). */
+    printBorrowedInOpOn(name: string | undefined, key: any, boxed = false): string | undefined {
+        const wrap = (t: string) => boxed ? `Value::Bool(${t})` : t;
         const k = name === undefined ? undefined : this.rustBorrowedInOpKey(key);
         if (k === undefined) return undefined;
-        if (k.literal) return `Value::Bool(${name}.contains_key(${k.text}))`;
+        if (k.literal) return wrap(`${name}.contains_key(${k.text})`);
         const inner: any = this.rustSkipWrappers(key);
-        if (this.bearerInOpKeyText(key) === undefined && isIdentifier(inner)) return `Value::Bool(${this.rustBorrowedStrKeyTest(name, inner)})`;
+        if (this.bearerInOpKeyText(key) === undefined && isIdentifier(inner)) return wrap(this.rustBorrowedStrKeyTest(name, inner));
         // td: a typed string key under an `as string` cast reads its own decision (no box)
-        if (isIdentifier(inner) && this.rustInKeyTypedText(key) !== undefined) return `Value::Bool(${this.rustBorrowedStrKeyTest(name, inner)})`;
-        return `Value::Bool(matches!(&${k.text}, Value::Str(__k) if ${name}.contains_key(__k.as_ref())))`;
+        if (isIdentifier(inner) && this.rustInKeyTypedText(key) !== undefined) return wrap(this.rustBorrowedStrKeyTest(name, inner));
+        return wrap(`matches!(&${k.text}, Value::Str(__k) if ${name}.contains_key(__k.as_ref()))`);
     }
 
     // ── rustDictKeyReadUse / printDictKeyRead: direct literal-key reads (`m['k']`, `m.k`) on a dict local ──
@@ -28811,7 +28841,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
             && !this.rustScalarInNestedWrite(n, true) && !this.rustInDestructureWrite(n)) {
             const place: any = up.left;
-            const keyed = (isElementAccessExpression(place) || isPropertyAccessExpression(place)) && (this.rustThisRootedPlace(place) || this.rustLocalKeyPlace(place, n));
+            const keyed = (isElementAccessExpression(place) || isPropertyAccessExpression(place)) && (this.rustThisRootedPlace(place) || this.rustLocalKeyPlace(place, n, true));
             const alias = isIdentifier(place) && place.text !== n.text && this.rustOptListAliasTarget(place);
             if (keyed || alias) return this.rustLocalLastUse(n, declaration) ? 'move' : 'clone';
         }

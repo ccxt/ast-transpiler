@@ -20710,3 +20710,100 @@ describe('ral-61k: nested-write keys (htx parseCurrency middle options key; whit
         expect(out).toContain("let mut code: Value = codes");
     });
 });
+
+describe('ral-61n: key-set uses on a null-tested optional safeDict map print off the optional form', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-61n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table. The boxed local held what `safeDict` answered: a `Value::Dict` or `Value::Null` (no default). The runtime
+    // `object_keys` answers the map's keys for a Dict and `[]` for anything else; `in_op (obj, key)` answers `contains_key`
+    // for (Dict, Str) and false for every other pair. `Option<Dict>` holds Some(map) for the Dict and None for Null, and
+    // `x.as_deref().into_iter().flat_map(keys)` / `matches!(x.as_deref(), Some(__d) if <contains_key>)` give the same rows.
+    // The key side keeps its old print, so a non-string key (Int, Float, Null) still misses. No number is compared.
+    type Held = { kind: 'Null' } | { kind: 'Dict', keys: string[] };
+    type Key = { kind: 'Str', s: string } | { kind: 'Int' } | { kind: 'Float' } | { kind: 'Null' };
+    const oldKeys = (h: Held) => h.kind === 'Dict' ? h.keys : [];
+    const newKeys = (h: Held) => { const opt = h.kind === 'Dict' ? [ h.keys ] : []; return opt.flatMap((k) => k); };
+    const oldIn = (h: Held, k: Key) => h.kind === 'Dict' && k.kind === 'Str' && h.keys.includes(k.s);
+    const newIn = (h: Held, k: Key) => { const d = h.kind === 'Dict' ? h.keys : undefined; return d !== undefined && k.kind === 'Str' && d.includes(k.s); };
+    const helds: Held[] = [ { kind: 'Null' }, { kind: 'Dict', keys: [] }, { kind: 'Dict', keys: [ 'a', '1' ] } ];
+    const keys: Key[] = [ { kind: 'Str', s: 'a' }, { kind: 'Str', s: 'zz' }, { kind: 'Str', s: '1' }, { kind: 'Int' }, { kind: 'Float' }, { kind: 'Null' } ];
+    test('truth table: keys and `in` on Null / Dict with every key kind', () => {
+        for (const h of helds) {
+            expect(newKeys(h)).toEqual(oldKeys(h));
+            for (const k of keys) expect([ h, k, newIn(h, k) ]).toEqual([ h, k, oldIn(h, k) ]);
+        }
+        // Null on the map side: no key, `in` false for every key (including a Str key)
+        expect(newKeys({ kind: 'Null' })).toEqual([]);
+        expect(newIn({ kind: 'Null' }, { kind: 'Str', s: 'a' })).toBe(false);
+        // a number key against a string-keyed map: misses on both forms (no string-to-number coercion)
+        expect(newIn({ kind: 'Dict', keys: [ '1' ] }, { kind: 'Int' })).toBe(false);
+        expect(newIn({ kind: 'Dict', keys: [ '1' ] }, { kind: 'Float' })).toBe(false);
+    });
+    test('Object.keys of a null-tested no-default safeDict local reads the optional map', () => {
+        const out = run("    a (fee: Dict): any {\n        const fees = this.safeDict (fee, 'withdrawal_fees');\n        let n = 0;\n        if (fees !== undefined) {\n            const keys = Object.keys (fees);\n            n = keys.length;\n        }\n        return n;\n    }\n");
+        expect(out).toContain('let mut fees: Option<crate::value::Dict> = ');
+        expect(out).toContain('fees.is_some()');
+        expect(out).toContain('fees.as_deref().into_iter().flat_map(crate::value::HashMap::keys).cloned().map(Value::from).collect()');
+        expect(out).not.toContain('object_keys(&fees)');
+    });
+    test('`in` with a literal and a string key on a null-tested no-default safeDict local', () => {
+        const out = run("    b (message: Dict, id: string): any {\n        const data = this.safeDict (message, 'data');\n        const k = this.safeString (message, id);\n        let m = 0;\n        if ((data !== undefined) && (('oi' in data) || (k in data))) {\n            m = 1;\n        }\n        return m;\n    }\n");
+        expect(out).toContain('let mut data: Option<crate::value::Dict> = ');
+        expect(out).toContain('matches!(data.as_deref(), Some(__d) if __d.contains_key("oi"))');
+        expect(out).toContain('matches!(data.as_deref(), Some(__d) if matches!(k.as_deref(), Some(__k) if __d.contains_key(__k)))');
+    });
+    test('guard: a rewritten local keeps the box', () => {
+        const out = run("    c (message: Dict): any {\n        let data = this.safeDict (message, 'data');\n        if (data === undefined) {\n            data = this.hold (message);\n        }\n        return Object.keys (data).length;\n    }\n");
+        expect(out).not.toContain('let mut data: Option<crate::value::Dict>');
+    });
+    test('guard: key sets with no null test keep the old decision', () => {
+        const out = run("    d (message: Dict): any {\n        const data = this.safeDict (message, 'data');\n        return Object.keys (data).length;\n    }\n");
+        expect(out).not.toContain('data.as_deref().into_iter()');
+    });
+});
+
+describe('ral-61n: an optional safeList stored whole at a literal key of a cast local receiver', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-61n2-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table. safeList with no default answers a `Value::Arr` or `Value::Null`; `Option<List>` holds Some / None and
+    // `x.map_or(Value::Null, Value::Arr)` boxes back exactly that value, so the stored entry and the null test
+    // (`is_some()` for `!== undefined`) give the same rows as the boxed local. No number or string is compared.
+    test('truth table: the stored box and the test equal the boxed local for Null and a list', () => {
+        const box = (held: unknown[] | null) => (held === null ? null : held);
+        for (const held of [ null, [], [ 1, 'a' ] ] as (unknown[] | null)[]) {
+            const opt = held === null ? undefined : held;
+            expect(box(opt === undefined ? null : opt)).toEqual(box(held));
+            expect(opt !== undefined).toBe(held !== null);
+        }
+    });
+    test('`(parsed as Dict)[\'fees\'] = fees` keeps fees an optional list', () => {
+        const out = run("    a (order: Dict, parsed: Dict): any {\n        const fees = this.safeList (order, 'fees');\n        if (fees !== undefined) {\n            (parsed as Dict)['fees'] = fees;\n        }\n        return parsed;\n    }\n");
+        expect(out).toContain('let mut fees: Option<crate::value::List> = ');
+        expect(out).toContain('fees.is_some()');
+        expect(out).toContain('fees.map_or(Value::Null, Value::Arr)');
+    });
+    test('guard: a dynamic key on the cast receiver keeps the box', () => {
+        const out = run("    b (order: Dict, parsed: Dict, k: string): any {\n        const fees = this.safeList (order, 'fees');\n        if (fees !== undefined) {\n            (parsed as Dict)[k] = fees;\n        }\n        return parsed;\n    }\n");
+        expect(out).not.toContain('let mut fees: Option<crate::value::List>');
+    });
+});
