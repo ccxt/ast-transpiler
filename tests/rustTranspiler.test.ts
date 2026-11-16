@@ -20904,3 +20904,44 @@ describe('ral-61i: a nil-declared let filled only by declared Promise<Dict> endp
         expect(out).not.toContain('let mut book: Option<crate::value::Dict>');
     });
 });
+
+describe('ral-61e: the string id of an optional currency local (nil-declared, written from this.currency) is an optional string local', () => {
+    const build = (name: string, idType: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-61e-' + name + '-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        const file = path.join (root, 'ts/src/base/Exchange.ts');
+        fs.writeFileSync (file, 'type Str = string | undefined;\n'
+            + 'type Dict = any;\n'
+            + 'interface CurrencyInterface { id: ' + idType + '; code: Str; }\n'
+            + 'type Currency = CurrencyInterface | undefined;\n'
+            + 'export default class Exchange {\n'
+            + '    currencies: Dict = {};\n'
+            + '    currency (code: Str): CurrencyInterface {\n'
+            + '        const currencies = this.currencies;\n'
+            + '        if (code in currencies) {\n'
+            + '            return currencies[code];\n'
+            + '        }\n'
+            + "        throw new Error ('no currency');\n"
+            + '    }\n'
+            + '    fetchIt (code: Str): any {\n'
+            + '        const request: Dict = {};\n'
+            + '        let currency: Currency = undefined;\n'
+            + '        if (code !== undefined) {\n'
+            + '            currency = this.currency (code);\n'
+            + "            const currencyId: string = currency['id'];\n"
+            + "            request['coin'] = currencyId;\n"
+            + '        }\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n');
+        return new Transpiler({ 'verbose': false }).transpileRustByPath (file).content;
+    };
+    test('positive: `currency[\'id\']` off an Option<Currency> local reads as Option<String>', () => {
+        const out = build ('a', 'string');
+        expect(out).toContain('Option<crate::types::Currency>');
+        expect(out).toContain('let mut currencyId: Option<String> = crate::value::KeyRead::key_read(&&currency, "id").as_str().map(str::to_owned);');
+    });
+    test('guard: an id not declared string stays a Value', () => {
+        expect(build ('b', 'any')).toContain('let mut currencyId: Value = crate::value::KeyRead::key_read(&&currency, "id");');
+    });
+});

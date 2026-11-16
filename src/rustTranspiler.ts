@@ -14744,7 +14744,9 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-60e: also `c['id']` (CurrencyInterface declares `id: string`; every currency structure stores it as a
             // safeString / safeString2 result or the code string itself): the same `KeyRead` read as the optional string
             const currencyKey = this.rustCurrencyKeyReadKey(node.expression);
-            if (this.rustCurrencyLocalKind(currency) !== 'cstruct' || (currencyKey !== 'code' && (currencyKey !== 'id' || this.primitiveKindOfType(this.typeOfNodeIfAny(node)) !== 'string'))) return undefined;
+            // ral-61e: an `Option<Currency>` local ('copt': nil-declared, written from `this.currency(code)`) reads the same
+            // `KeyRead` way (None answers Null, so the optional string is None exactly where the box held Null)
+            if (this.rustCurrencyLocalKind(currency) === false || (currencyKey !== 'code' && (currencyKey !== 'id' || this.primitiveKindOfType(this.typeOfNodeIfAny(node)) !== 'string'))) return undefined;
             return { kind: 'ostr', text: `crate::value::KeyRead::key_read(&&${this.printNode(currency.name, 0)}, "${currencyKey}").as_str().map(str::to_owned)` };
         }
         // ral-46e: a flag read off an `Option<Market>` local (`getMarketFromSymbols`: undefined or a loaded market).
