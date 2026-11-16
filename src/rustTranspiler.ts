@@ -27869,10 +27869,13 @@ export class RustTranspiler extends BaseTranspiler {
         };
         let matched = 0;
         for (const r of table) {
-            if (!r.pats.some((rp) => hashes!.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
+            // ral-80a: the refined resolve-side patterns (found-hash containment, request-id echo, caller arguments) are
+            // sound for the resolve's own hash text, so the slot proof reads them as `await client.future (h)` does
+            if (!(r.rpats ?? r.pats).some((rp) => hashes!.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
             // ral-55w: a Null settle or a plain map (a balance, never a cache / book marker) has no element at the slot:
             // the slot read is Null either way, which the Option conversion maps to None (TS throws destructuring it)
-            if (r.kind === 'none' || (r.kind === 'dict' && r.plainMap === true)) continue;
+            // ral-80a: so has a boolean settle (`cleanUnsubscription`'s `client.resolve (true, h)`, `x.resolve (false)`)
+            if (r.kind === 'none' || r.scalar === true || (r.kind === 'dict' && r.plainMap === true)) continue;
             const t = r.kind === 'list' && r.value !== undefined ? tuple(r.value) : undefined;
             const e: any = t?.elements[index];
             if (e === undefined || e.kind === SyntaxKind.SpreadElement || t.elements.some((x: any) => x.kind === SyntaxKind.SpreadElement)) return false;
@@ -28319,7 +28322,7 @@ export class RustTranspiler extends BaseTranspiler {
     // cache field, a cache-map read, a cache constructor or a typed cache local). A hash that is not built from
     // literals and locals of the method, a class with ws subclasses or a ws parent, or any other resolve under a
     // matching hash fails the proof and the local stays `Value`.
-    private rustWsResolveTables = new WeakMap<Node, Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string, value?: any, plainMap?: boolean }> | null>();
+    private rustWsResolveTables = new WeakMap<Node, Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string, value?: any, plainMap?: boolean, scalar?: boolean }> | null>();
     private rustWsWatchKinds = new WeakMap<Node, 'book' | 'cache' | 'dict' | 'list' | null>();
     // wrapper parameter -> the caller's argument (and the caller's own bindings) while a wrapper hash is read
     private rustWsHashEnv: Map<Node, { arg: any, env: Map<Node, any> | undefined }> | undefined = undefined;
@@ -28961,7 +28964,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** Every resolve of the ws class with its hash patterns and kind; null when the class has ws relatives. */
-    rustWsResolveTable(cls: any): Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string, value?: any, plainMap?: boolean }> | null {
+    rustWsResolveTable(cls: any): Array<{ pats: Array<Array<string | null>>, rpats?: Array<Array<string | null>>, kind: string, value?: any, plainMap?: boolean, scalar?: boolean }> | null {
         let table = this.rustWsResolveTables.get(cls);
         if (table !== undefined) return table;
         table = [];
@@ -28984,11 +28987,13 @@ export class RustTranspiler extends BaseTranspiler {
         // a resolve with no value (or `undefined`) settles the await with Null, which the Option conversion maps to None
         const nothing = (x: any) => x === undefined || this.rustStripWrappers(x)?.kind === SyntaxKind.UndefinedKeyword || (isIdentifier(this.rustStripWrappers(x)) && this.rustStripWrappers(x).text === 'undefined');
         const kindOf = (x: any) => (nothing(x) ? 'none' : (this.rustWsResolvedKind(x) ?? 'other'));
-        const add = (hash: any, x: any, kind?: string, site?: any) => {
+        // ral-80a: a boolean literal settles a scalar, never a list (no element at any tuple slot)
+        const boolean = (x: Node | undefined): boolean => { const v: Node | undefined = x === undefined ? undefined : this.rustStripWrappers(x); return v !== undefined && (v.kind === SyntaxKind.TrueKeyword || v.kind === SyntaxKind.FalseKeyword); };
+        const add = (hash: any, x: any, kind?: string, site?: any, scalar = false) => {
             // ral-ye: a fixed-kind resolve (cleanUnsubscription's `true`) reads its hash per caller too
             const sites = site !== undefined ? this.rustWsHelperCallSites(cls, site, [ hash, x ]) : undefined;
             if (sites === undefined) {
-                table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(x), value: kind === undefined ? x : undefined, plainMap: kind === undefined && this.rustWsPlainMapResolve(x) });
+                table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(x), value: kind === undefined ? x : undefined, plainMap: kind === undefined && this.rustWsPlainMapResolve(x), scalar: scalar || (kind === undefined && boolean(x)) });
                 return;
             }
             // a helper's parameter stands for each caller's argument: one entry per call site
@@ -28997,7 +29002,7 @@ export class RustTranspiler extends BaseTranspiler {
                 this.rustWsHashEnv = env;
                 try {
                     const bound = (e: any) => { const d: any = e !== undefined && isIdentifier(this.rustStripWrappers(e)) ? this.rustDeclarationOfIdentifier(this.rustStripWrappers(e)) : undefined; return d !== undefined && env.has(d) ? env.get(d)!.arg : e; };
-                    table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(bound(x)), plainMap: kind === undefined && this.rustWsPlainMapResolve(bound(x)) });
+                    table!.push({ pats: hash === null ? [[ null ]] : this.rustWsHashPatterns(hash, 0, new Set()), rpats: hash === null ? [[ null ]] : this.rustWsRefinedHashPatterns(hash), kind: kind ?? kindOf(bound(x)), value: kind === undefined ? this.rustWsSiteTupleValue(bound(x)) : undefined, plainMap: kind === undefined && this.rustWsPlainMapResolve(bound(x)), scalar: scalar || (kind === undefined && boolean(bound(x))) });
                 } finally {
                     this.rustWsHashEnv = save;
                 }
@@ -29008,7 +29013,7 @@ export class RustTranspiler extends BaseTranspiler {
             const name = String(n.expression.name.text);
             const recv: any = this.rustStripWrappers(n.expression.expression);
             if (recv.kind === SyntaxKind.ThisKeyword) {
-                if (name === 'cleanUnsubscription') add(n.arguments[2] ?? null, undefined, 'other', n);
+                if (name === 'cleanUnsubscription') add(n.arguments[2] ?? null, undefined, 'other', n, this.rustWsBaseCleanUnsubscription(n));
                 else if (name === 'loadOrderBook') add(n.arguments[1] ?? null, undefined, 'book');
                 else if (name === 'spawn' || name === 'delay') {
                     const target: any = this.rustStripWrappers(n.arguments[name === 'delay' ? 1 : 0]);
@@ -29025,6 +29030,24 @@ export class RustTranspiler extends BaseTranspiler {
         });
         this.rustWsResolveTables.set(cls, table);
         return table;
+    }
+
+    /** ral-80a: a helper's resolved value kept for the tuple-slot proof only when it is an array literal whose elements name
+     *  no parameter of the helper (so reading them outside the caller's bindings reads the same nodes). */
+    rustWsSiteTupleValue(x: Node | undefined): Node | undefined {
+        const v: Node | undefined = x === undefined ? undefined : this.rustStripWrappers(x);
+        if (v === undefined || !isArrayLiteralExpression(v)) return undefined;
+        let param = false;
+        const visit = (n: Node): void => { if (isIdentifier(n) && this.rustDeclarationOfIdentifier(n)?.kind === SyntaxKind.Parameter) param = true; n.forEachChild(visit); };
+        visit(v);
+        return param ? undefined : v;
+    }
+
+    /** ral-80a: `this.cleanUnsubscription (..)` bound to the base tier's method, whose only resolve is `client.resolve (true, unsubHash)`
+     *  (a venue override may resolve anything, so it is not this). */
+    rustWsBaseCleanUnsubscription(call: CallExpression): boolean {
+        const callee: Node | undefined = this.rustScalarCallee(call);
+        return callee !== undefined && isMethodDeclaration(callee) && RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile().fileName));
     }
 
     /** When `site` sits in a method of `cls` with parameters: the parameter bindings of every call of that method
