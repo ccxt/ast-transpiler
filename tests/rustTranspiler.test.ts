@@ -20857,3 +20857,50 @@ describe('ral-61p: getSupportedMapping over a literal map of string literals is 
         expect(out).toContain('let mut typeId: Value = ');
     });
 });
+
+describe('ral-61i: an optional endpoint map handed over whole to a typed reuse map (endpoint alias write)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    publicGetA (params = {}): Promise<Dict> { return this.keep (params); }\n    publicGetB (params = {}): Promise<Dict> { return this.keep (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends venueApi {\n    async m (flag: boolean, params: Dict = {}) {\n        let response = undefined;\n        let data: Dict = {};\n        if (flag) {\n            response = await this.publicGetA (params);\n            data = response;\n        } else {\n            response = await this.publicGetB (params);\n            data = this.safeDict (response, 'data', {});\n        }\n" + body + "    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('the endpoint alias write takes the optional map over', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-61i-pos', "        const status = this.safeString (data, 'status');\n        return { 'status': status, 'info': response };\n")).content;
+        expect(out).toContain('let mut response: Option<crate::value::Dict> = None;');
+        expect(out).toContain('data = response.clone().unwrap_or_default();');
+        expect(out).toContain('response.map_or(Value::Null, Value::Dict)');
+    });
+    test('a source read again as a plain Value keeps its box', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-61i-neg', "        return this.keep (response);\n")).content;
+        expect(out).not.toContain('let mut response: Option<crate::value::Dict>');
+    });
+});
+
+describe('ral-61i: a nil-declared let filled only by declared Promise<Dict> endpoints is an optional-map alias source', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeInteger (o: any, k: any, d: any = undefined): number | undefined { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, second: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    publicGetA (params = {}): Promise<Dict> { return this.keep (params); }\n    publicGetB (params = {}): Promise<Dict> { return this.keep (params); }\n    publicGetC (params = {}): Promise<List> { return this.keep (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends venueApi {\n    async m (flag: boolean, params: Dict = {}) {\n        let response = undefined;\n        if (flag) {\n            response = await this.publicGetA (params);\n        } else {\n            response = await this.publicGet" + second + " (params);\n        }\n        let book: Dict = undefined;\n        if (flag) {\n            book = this.safeDict (response, 'data', {});\n        } else {\n            book = response;\n        }\n        const ts = this.safeInteger (book, 'ts');\n        const id = this.safeInteger (response, 'id');\n        return [ ts, id ];\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('both locals hold the optional map', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-61i-ep-pos', 'B')).content;
+        expect(out).toContain('let mut response: Option<crate::value::Dict> = None;');
+        expect(out).toContain('let mut book: Option<crate::value::Dict> = None;');
+        expect(out).toContain('book = response.clone();');
+    });
+    test('a declared Promise<List> write keeps both Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-61i-ep-neg', 'C')).content;
+        expect(out).not.toContain('let mut response: Option<crate::value::Dict>');
+        expect(out).not.toContain('let mut book: Option<crate::value::Dict>');
+    });
+});
