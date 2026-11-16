@@ -23828,3 +23828,21 @@ describe('ral-76b: declared-endpoint responses seeded undefined and handed on wh
         expect(out).toContain('response.is_none()');
     });
 });
+
+describe('ral-76c R1: an element of a local string[] read through string methods and lending boxes is Option<String>', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    keep (o: any, k: any = undefined): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('whitebit-like `entry = ids[i]` split natively and lent to a reader key', () => {
+        const out = write ('ral-76c-r1', "    m (response: Dict) {\n        const fees: Dict = {};\n        const ids = Object.keys (response);\n        for (let i = 0; i < ids.length; i++) {\n            const entry = ids[i];\n            const parts = entry.split (' ');\n            const code = parts[0];\n            const info = this.safeDict (response, entry);\n            fees[code] = { 'info': {} };\n            fees[code]['info'][entry] = info;\n        }\n        return fees;\n    }\n");
+        expect(out).toMatch(/let mut entry: Option<String> = ids\.get\(i as usize\)/);
+        expect(out).toContain('entry.as_deref()');
+        expect(out).not.toMatch(/let mut entry: Value/);
+    });
+});

@@ -5374,7 +5374,10 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-59x: an `Option<String>` reader receiver aliased by `const y = x` into a string candidate of the same function
             // (rustStrHandOffDecided `solved`) lends at that declaration too: the typed copy is the copy the `Value` clone made
             const aliasLent = kind === 'ostr' && !this.rustTestTierSource(declaration) && this.rustReaderLendBoxes(declaration, false, false, true);
-            if (this.rustStrNoLend || !this.rustUdReaderStr(declaration.initializer) || this.rustStrReturnedLocal(declaration, scope) || !(this.rustReaderLendBoxes(declaration) || aliasLent)) return undefined;
+            // ral-76c R1: an element of a local `string[]` (checker-proven, rustElementReadScalarKind) is a copied `Option<String>`
+            // like a reader string: its copying boxes lend at lending slots (`Value::from(x.as_deref())`: the copy the `Value` clone made)
+            const strElem = kind === 'ostr' && this.rust76cLocalStrListElement(declaration.initializer);
+            if (this.rustStrNoLend || !(this.rustUdReaderStr(declaration.initializer) || strElem) || this.rustStrReturnedLocal(declaration, scope) || !(this.rustReaderLendBoxes(declaration) || aliasLent)) return undefined;
             this.rustStrLentLocals.add(declaration);
         }
         // an element of a typed list parameter keeps the 400-char guard and never copies at a box
@@ -7192,6 +7195,17 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ud: reader strings admitted only through the lending-slot exemption of `rustBlockLocalUsesAll`. */
     private rustUdLent = new WeakSet<any>();
+
+    /** ral-76c R1: `xs[i]` over a local (never a parameter) whose checker type is an array of `string`, in a non-test source. */
+    rust76cLocalStrListElement(init: any): boolean {
+        const node: any = this.unwrapParens(init);
+        if (node === undefined || !isElementAccessExpression(node) || !isIdentifier(node.expression) || this.rustTestTierSource(node)) return false;
+        const owner: any = this.rustDeclaredNode(node.expression);
+        if (owner === undefined || !isVariableDeclaration(owner) || !isIdentifier(owner.name)) return false;
+        const listType: any = this.typeOfNodeIfAny(node.expression);
+        return listType !== undefined && this.getChecker().isArrayType(listType) && this.rustElementReadScalarKind(node) === 'ostr'
+            && this.primitiveKindOfType(this.typeOfNodeIfAny(node)) === 'string';
+    }
 
     /** ud: a base-tier string reader (`safeString*`, `safeCurrencyCode`) initialiser, with or without a default. */
     rustUdReaderStr(init): boolean {
