@@ -156,10 +156,9 @@ export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.CountedOrderBook': string;
     'this.Client': string;
 };
-export declare function ccxtGoElementAccessType(goTranspiler: any, initializer: any, printedValue: any): string;
 export declare const CCXT_GO_FAMILY_RETURN_TYPE = "*string";
 export declare const CCXT_GO_FAMILY_LITERAL_RETURN_TYPE = "string";
-export declare function ccxtGoTernaryType(goTranspiler: any, printedValue: any): "bool" | "float64" | "int" | "string";
+export declare function ccxtGoTernaryType(goTranspiler: any, printedValue: any): any;
 export declare function ccxtGoTernaryDeclaration(node: any): any;
 export declare function ccxtGoTypeOfArithmeticInitializer(goTranspiler: any, initializer: any, printedValue: any): string;
 export declare function ccxtGoUnboxArithmeticDeclaration(goTranspiler: any, printed: any): any;
@@ -878,11 +877,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     DEFAULT_IDENTATION: string;
     constructor(config?: {});
     initConfig(): void;
-    printSuperCallInsideConstructor(node: any, identation: any): string;
     printStringLiteral(node: any): any;
-    transformFunctionNameIfNeeded(name: any): string;
     getStructFieldCells(node: any): string[];
-    printPropertyDeclaration(node: any, identation: any): string;
     printStruct(node: any, indentation: any): string;
     printNewStructMethod(node: any): string;
     printClass(node: any, identation: any): string;
@@ -906,7 +902,6 @@ export declare class GoTranspiler extends BaseTranspiler {
      * whitespace, so an indented *blank* line (only the indentation of a blank source
      * line) must stay empty instead of becoming whitespace-only text.
      */
-    printPropertyAccessModifiers(node: any): string;
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     goProvenReturnRetype(node: any, printed: string): string;
@@ -976,7 +971,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printMethodParameters(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
     printParameterType(node: any): string;
-    printFunctionType(node: any): any;
+    printFunctionType(node: any): string;
     isWholePrintedCall(value: string, open: number): boolean;
     goTypeOfInitializer(initializer: any, printedValue: string): string | undefined;
     goUnwrapPrintedParens(printedText: string): string;
@@ -1222,7 +1217,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     appendGoTrailingComma(entry: any): string;
     getGoRuneLength(text: any): number;
     getGoByteLength(text: any): number;
-    printConstructorDeclaration(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     printElementAccessExpressionExceptionIfAny(node: any): string;
     printWrappedUnknownThisProperty(node: any, identation?: number): string;
@@ -1283,6 +1277,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWsTradesField(node: any): boolean;
     goBaseExchangeFieldOfType(node: any, typeText: string): boolean;
     goWsTradesRead(node: any): boolean;
+    goIsBaseExchangeMethod(name: any): boolean;
+    goIsPlainEntryRead(inner: any): boolean;
     goNilInitCacheLocalType(declaration: any): string | undefined;
     goNilInitOrderBookLocalType(declaration: any): string | undefined;
     goIsEqualityToken(kind: any): boolean;
@@ -1400,7 +1396,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     } | undefined;
     goArrayLiteralSliceType(node: any, depth?: number): string | undefined;
     goSliceElementIsString(node: any): boolean;
-    goSliceArgumentType(arg: any): string | undefined;
     goResolvedCallParameter(node: any, index: number): any;
     goCallSliceArgumentType(node: any, calleeName: string, index: number): string | undefined;
     goSliceCallArgs(node: any, identation: any): string | undefined;
@@ -1457,11 +1452,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goCacheField(node: any): boolean;
     goCacheNilCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean, lFam: any, rFam: any): string | undefined;
     goBalanceEntryNilCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean, lFam: any, rFam: any): string | undefined;
-    goCacheKeyText(keyNode: any, keyStr: string): string | undefined;
-    goIndexBoundedBy(index: any, list: any, use: any): boolean;
     goCacheKeysRange(declaration: any, declaredType: string, varName: string, identation: any): string | undefined;
     goCacheDuplicateNilTest(node: any): string | undefined;
-    goCacheKeysElementRead(node: any, baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string | undefined;
     goCacheRead(node: any, baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string | undefined;
     goCacheWrite(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound: boolean, valueNode: any): string | undefined;
     goCacheInitializedBefore(access: any): boolean;

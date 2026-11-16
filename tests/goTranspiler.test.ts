@@ -11273,36 +11273,6 @@ describe ('goTypedSliceArgs', () => {
     }
 
     describe('go typed slice arguments and the slice table', () => {
-        test('a proven literal at a table slot prints the slice and the native length', () => {
-            const ts = PRELUDE +
-                'class ex extends Exchange {\n' +
-                '    wrapper () {\n' +
-                "        const s = 'BTC/USDT';\n" +
-                '        return this.unWatchTradesForSymbols ([ s ], {});\n' +
-                '    }\n' +
-                '}\n';
-            const out = go(ts);
-            expect(out).toContain('func (this *Exchange) UnWatchTradesForSymbols(symbols []string');
-            expect(out).toContain('unWatchTradesForSymbolsBody(ch chan any, symbols []string');
-            expect(out).toContain('ch <- len(symbols)');
-            expect(out).not.toContain('unWatchTradesForSymbolsBody(ch chan any, symbols any');
-            expect(out).toContain('[]string{s}');
-            expect(out).not.toContain('[]any{s}');
-        });
-
-        test('a two-dimensional slot prints the nested slice', () => {
-            const ts = PRELUDE +
-                'class ex extends Exchange {\n' +
-                '    wrapper () {\n' +
-                "        return this.watchOHLCVForSymbols ([ [ 'BTC/USDT', '1m' ] ], undefined, {});\n" +
-                '    }\n' +
-                '}\n';
-            const out = go(ts);
-            expect(out).toContain('symbolsAndTimeframes [][]string');
-            expect(out).toContain('ch <- len(symbolsAndTimeframes)');
-            expect(out).toContain('[][]string{[]string{"BTC/USDT", "1m"}}');
-        });
-
         test('a method outside the table keeps the box and the helper', () => {
             const ts = PRELUDE +
                 'class ex extends Exchange {\n' +
