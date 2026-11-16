@@ -20670,3 +20670,43 @@ describe('ral-60x: a Str parameter whose caller passes `this.safeString (this.<f
         expect(out).not.toMatch(/let mut accountId: Value/);
     });
 });
+
+describe('ral-61k: nested-write keys (htx parseCurrency middle options key; whitebit / okx `m[k] = f(m[k])` self-reassign)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n    hold (x: any, y: any = undefined): any { return x; }\n    currency (code: string): any { return {}; }\n    assignDefault (fee: any, currency: any = undefined): any { return fee; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const middle = (reader: string) => "    parse (raw: Dict, chains: Dict[]) {\n        const code = " + reader + " (this.safeString (raw, 'currency'));\n        if (code !== undefined) {\n            this.options['byNames'][code] = {};\n        }\n        for (let j = 0; j < chains.length; j++) {\n            const title = this.safeString (chains[j], 'title');\n            if (code !== undefined && title !== undefined) {\n                this.options['byNames'][code][title] = j;\n            }\n        }\n        return { 'code': code };\n    }\n";
+    test('a middle key of a three-level options write is Option<String> and lends its box to the hop', () => {
+        const out = write ('61k-mid', middle ('this.safeCurrencyCode'));
+        expect(out).toContain('let mut code: Option<String> = ');
+        expect(out).toContain(', &Value::from(code.as_deref()))');
+        expect(out).not.toContain('&code)');
+    });
+    test('negative: a hold() key stays Value', () => {
+        const out = write ('61k-mid-neg', middle ('this.hold'));
+        expect(out).toMatch(/let mut code: Value = /);
+    });
+    const selfRe = (extra: string) => "    parse (response: Dict) {\n        const fees: Dict = {};\n        const ids = Object.keys (response);\n        for (let i = 0; i < ids.length; i++) {\n            const code = this.safeCurrencyCode (ids[i]);\n            fees[code] = { 'info': {} };\n            fees[code]['info'][ids[i]] = response[ids[i]];\n        }\n        const codes = Object.keys (fees);\n        for (let i = 0; i < codes.length; i++) {\n            const code = codes[i];\n            const currency = this.currency (code);\n            fees[code] = this.assignDefault (fees[code], currency);\n" + extra + "        }\n        return fees;\n    }\n";
+    test('the key of m[k] = f(m[k]) on a map bearer is typed: read and insert take its text, no stringify_param', () => {
+        const out = write ('61k-self', selfRe (''));
+        expect(out).not.toMatch(/let mut code: Value = /);
+        expect(out).toContain('fees.get(code.as_deref().unwrap_or("")).cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('fees.insert(code.as_deref().unwrap_or("null").to_string(), __be_tmp)');
+        expect(out).not.toContain('stringify_param(&code)');
+    });
+    test('a read of the map keyed by a sibling loop\'s own binding does not hold this key (kucoin / okx borrow-rate histories)', () => {
+        const body = "    parse (response: Dict[]) {\n        const hist: Dict = {};\n        for (let i = 0; i < response.length; i++) {\n            const code = this.safeCurrencyCode (this.safeString (response[i], 'currency'));\n            if (code !== undefined) {\n                if (!(code in hist)) {\n                    hist[code] = [];\n                }\n                const bucket = hist[code];\n                bucket.push (response[i]);\n            }\n        }\n        const keys = Object.keys (hist);\n        for (let i = 0; i < keys.length; i++) {\n            const code = keys[i];\n            hist[code] = this.assignDefault (hist[code], code);\n        }\n        return hist;\n    }\n";
+        const out = write ('61k-sib', body);
+        expect(out).toContain('hist.insert(code.as_deref().unwrap_or("null").to_string(), __be_tmp)');
+        expect(out).not.toContain('stringify_param(&code)');
+    });
+    test('negative: another read of the map by the key outside the write keeps it Value', () => {
+        const out = write ('61k-self-neg', selfRe ('            this.hold (fees[code]);\n'));
+        expect(out).toContain("let mut code: Value = codes");
+    });
+});

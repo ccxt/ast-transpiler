@@ -7887,6 +7887,12 @@ export class RustTranspiler extends BaseTranspiler {
             if (deep === 'first') return 'key';
             if (deep === 'later') return 'box';
         }
+        // ral-61k: the slot read `m[k]` inside the value of its own write `m[k] = f(m[k])` on a typed map bearer: the printer's
+        // bearer read takes the typed key text (`get(k.as_deref().unwrap_or(""))`, rustBearerTypedStrReadKey), no ccxt pass reads it
+        if ((kind === 'str' || kind === 'ostr') && this.rustInitKeyLocal(n) && this.rust61kSelfReassignRead(n)) return 'okey';
+        // ral-61k: a middle key of `this.balance|options[..][k][..] = v` (a hop below and above it): the hop is
+        // `get_value_mut(.., &<box>)`, whose key ccxt's chain passes never read (they take the receiver only); lent by reference
+        if ((kind === 'str' || kind === 'ostr') && this.rust61kNestedFieldMiddleKey(n)) return 'mkey';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -9055,6 +9061,21 @@ export class RustTranspiler extends BaseTranspiler {
         return insert;
     }
 
+    /** ral-61k: `n` keys a middle hop of a statement write `this.balance|options[..][n][..] = v`: an element read whose
+     *  receiver is itself an element read and which is itself the receiver of the outermost written element access. */
+    rust61kNestedFieldMiddleKey(n: any): boolean {
+        const keyNode: any = this.rustKeyWrapped(n);
+        const access: any = keyNode.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== keyNode || !isElementAccessExpression(access.expression)) return false;
+        const below: any = access.parent;
+        if (!isElementAccessExpression(below) || below.expression !== access) return false;
+        let outer: any = below;
+        while (isElementAccessExpression(outer.parent) && outer.parent.expression === outer) outer = outer.parent;
+        const write: any = outer.parent;
+        if (!isBinaryExpression(write) || write.left !== outer || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        return this.rustNestedFieldChain(outer);
+    }
+
     /** `this.f` (one level, no element read in between). */
     rustThisFieldTarget(node): boolean {
         return isPropertyAccessExpression(node) && (node as any).expression.kind === SyntaxKind.ThisKeyword;
@@ -9668,6 +9689,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (local?.kind === 'ostr' && this.rustBorrowedStrElems.has(local.declaration) && (form === 'key' || form === 'inbox' || form === 'box' || form === 'xbox' || (form === 'parg' && this.rustInArrayNeedle(node)))) return `Value::from(${super.printIdentifier(node)}.as_deref())`;
         if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}${this.rustLocalLastUse(node, local.declaration) ? '' : '.clone()'}.map(Value::from).unwrap_or(Value::Null)`;
         // ral-59p: a delete key the native `shift_remove` did not take boxes by reference into `remove` (no copy)
+        if (form === 'mkey') return local.kind === 'ostr' ? `Value::from(${super.printIdentifier(node)}.as_deref())` : `Value::from(${super.printIdentifier(node)}.as_str())`;
         if (form === 'dkey') return local.kind === 'ostr' ? `Value::from(${super.printIdentifier(node)}.as_deref())` : `Value::from(${super.printIdentifier(node)}.as_str())`;
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form === 'concat' && local.kind === 'ostr') return `${super.printIdentifier(node)}.as_deref().unwrap_or("null")`;
@@ -11774,12 +11796,59 @@ export class RustTranspiler extends BaseTranspiler {
             // and the push on the bucket read is printed natively by arrPush (rustLitKeyBearerReadLocal), not by a ccxt pass
             // ral-56k: and a map only enumerated (never read back by key: btse fetchBalance `totals[code] = ..`): same key text
             if (enumerated && this.rustSafeCurrencyCodeInit(local.initializer)) return this.rustScalarInsertKeyUse(n);
+            // ral-61k: the only key reads of the map are the very slot `m[k]` read inside the value of this write `m[k] = f(m[k])`
+            if (enumerated && keyRead && isElementAccessExpression(this.rustSkipWrappers(local.initializer)) && this.rust61kSelfReassignOnlyRead(declaration, name, n)) return this.rustScalarInsertKeyUse(n);
             if (enumerated) return !keyRead && (isElementAccessExpression(this.rustSkipWrappers(local.initializer)) || this.rustTbNetworkCodeInit(local.initializer)
                 || this.rust55xGuardedSafeStringKey(n, local))
                 && this.rustScalarInsertKeyUse(n);
             return this.rustBearerWriteKeyOk(n, name) || this.rustScalarInsertKeyUse(n);
         }
         return this.rustScalarInsertKeyUse(n);
+    }
+
+    /** ral-61k: `n` keys a read `m[n]` inside `v` of the statement write `m[n] = v` (same map and key bindings) on a typed
+     *  one-level map bearer. */
+    rust61kSelfReassignRead(n: any): boolean {
+        const keyNode: any = this.rustKeyWrapped(n);
+        const read: any = keyNode.parent;
+        if (!isElementAccessExpression(read) || read.argumentExpression !== keyNode || !isIdentifier(read.expression)) return false;
+        if (isElementAccessExpression(read.parent) && read.parent.expression === read) return false;
+        let up: any = read.parent;
+        while (up !== undefined && !isStatement(up) && !(isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken)) up = up.parent;
+        if (up === undefined || isStatement(up) || up.parent?.kind !== SyntaxKind.ExpressionStatement || !isElementAccessExpression(up.left) || !this.isNodeInsideNode(read, up.right)) return false;
+        const wk: any = this.rustSkipWrappers(up.left.argumentExpression);
+        if (!isIdentifier(up.left.expression) || this.rustSymbolOf(up.left.expression) !== this.rustSymbolOf(read.expression)
+            || wk === undefined || !isIdentifier(wk) || this.rustSymbolOf(wk) !== this.rustSymbolOf(n)) return false;
+        // the bearer decision of `m` leans on this very key (as in rustDeepBearerChainKey), so it is asked syntactically: a
+        // never-reassigned object-literal local
+        const md: any = this.rustDeclarationOfIdentifier(read.expression);
+        return md !== undefined && isVariableDeclaration(md) && isObjectLiteralExpression(this.rustSkipWrappers(md.initializer)) && !this.rustLocalReassigned(md);
+    }
+
+    /** ral-61k: `n` keys a statement write `m[n] = v` and every element read of the map `m` (declared by `declaration`) keyed
+     *  by `n`'s own binding sits inside `v` of a write `m[n] = v` (the `m[k] = f(m[k])` self-reassign). */
+    rust61kSelfReassignOnlyRead(declaration: any, name: string, n: any): boolean {
+        const own = this.rustSymbolOf(n);
+        const sameKey = (k: any): boolean => { const kk: any = this.rustSkipWrappers(k); return kk !== undefined && isIdentifier(kk) && this.rustSymbolOf(kk) === own; };
+        let ok = true;
+        this.rustLocalUsesAll(declaration, name, false, (u) => {
+            const acc: any = u.parent;
+            if (!isElementAccessExpression(acc) || acc.expression !== u) return true;
+            // a write target, or a hop of one (`m[k]['a'][e] = v`: printed by the bearer's own chained write)
+            if ((isBinaryExpression(acc.parent) && acc.parent.left === acc) || this.isNativeWriteTargetBase(u)) return true;
+            // a read keyed by another binding (a sibling loop's own `code`) is that binding's use, not this key's
+            if (!sameKey(acc.argumentExpression)) {
+                const other: any = this.rustSkipWrappers(acc.argumentExpression);
+                if (other === undefined || !isIdentifier(other) || String(other.text) !== String(n.text)) ok = false;
+                return true;
+            }
+            let up: any = acc.parent;
+            while (up !== undefined && !isStatement(up) && !(isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(up.left))) up = up.parent;
+            if (up === undefined || isStatement(up) || up.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(up.left.expression)
+                || this.rustSymbolOf(up.left.expression) !== this.rustSymbolOf(u) || !sameKey(up.left.argumentExpression) || !this.isNodeInsideNode(acc, up.right)) ok = false;
+            return true;
+        });
+        return ok;
     }
 
     rustScalarOptKeyArg(key): string | undefined {
