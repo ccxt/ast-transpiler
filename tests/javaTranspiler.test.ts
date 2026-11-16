@@ -10383,3 +10383,45 @@ describe('Promise.all over a list in the ts/src tiers', () => {
         expect(testTier).toContain('Helpers.promiseAll(tasks)');
     });
 });
+
+describe('ral-77j3 primitive base numeric fields in comparisons', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'java-77j3-fields-'));
+    const write = (relative: string, content: string): string => {
+        const file = path.join(root, relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, content);
+        return file;
+    };
+    const base = 'export default class Exchange {\n'
+        + '    minFundingAddressLength: number = 1;\n'
+        + '    fetchHistoryCacheSize: number = 0;\n'
+        + '    rateLimit: number = 2000;\n'
+        + '    other: number = 3;\n'
+        + '    check (address: string) {\n'
+        + '        if (address.length < this.minFundingAddressLength) {\n'
+        + '            return 1;\n'
+        + '        }\n'
+        + '        const enabled = this.fetchHistoryCacheSize > 0;\n'
+        + '        if (this.rateLimit > 0) {\n'
+        + '            return enabled;\n'
+        + '        }\n'
+        + '        return this.other > 0;\n'
+        + '    }\n'
+        + '}\n';
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileJavaByPath(write('ts/src/base/Exchange.ts', base)).content;
+    });
+    afterAll(() => {
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+    test('a field the hand-written base declares as a primitive compares natively', () => {
+        expect(out).toContain('.length() < this.minFundingAddressLength');
+        expect(out).toContain('(this.fetchHistoryCacheSize > 0)');
+        expect(out).toContain('(this.rateLimit > 0)');
+    });
+    test('any other numeric field keeps the helper', () => {
+        expect(out).toMatch(/Helpers\.isGreaterThan\(this\.other, 0\)|BiPredicate/);
+        expect(out).not.toContain('(this.other > 0)');
+    });
+});

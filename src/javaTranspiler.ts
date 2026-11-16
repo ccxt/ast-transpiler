@@ -7581,6 +7581,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (primitive !== undefined) {
             return { kind: primitive === 'double' ? 'double' : 'long', boxed: false };
         }
+        const baseField = this.javaPrimitiveBaseFieldKind(inner);
+        if (baseField !== undefined) {
+            return { kind: baseField, boxed: false };
+        }
         if (!isIdentifier(inner) || !this.javaIdentifierPrintsDeclaredName(inner)) {
             return undefined;
         }
@@ -7593,6 +7597,27 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const kind = (declared === 'Double' || declared === 'double') ? 'double' : 'long';
         return { kind, boxed: JAVA_BOXED_NUMERIC_TYPES.has(declared) };
+    }
+
+    // ral-77j3: `this.<field>` read of a numeric field the hand-written BaseExchange declares as a Java
+    // primitive (`public int minFundingAddressLength`, `public double rateLimit`): never null, and
+    // its static kind is fixed whatever a venue's describe() writes into it. Only a field whose TS
+    // declaration is the base class's own (no venue redeclares it) qualifies.
+    javaPrimitiveBaseFieldKind(node): 'long' | 'double' | undefined {
+        if (node === undefined || !isPropertyAccessExpression(node) || node.expression.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const kind = ({ minFundingAddressLength: 'long', fetchHistoryCacheSize: 'long', rateLimit: 'double' } as const)[String(node.name.text)];
+        if (kind === undefined) {
+            return undefined;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const declaration = checker?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+        const file = String(declaration?.getSourceFile?.()?.fileName ?? '');
+        if (!/(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(file)) {
+            return undefined;
+        }
+        return kind;
     }
 
     printDeclaredNumericComparison(left, right, op): string | undefined {
