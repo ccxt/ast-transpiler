@@ -20456,3 +20456,61 @@ describe('ral-60p: a pro-tier Object.keys element that is an indexOf needle and 
         expect(out).toContain('let mut key: Value = ');
     });
 });
+
+describe('ral-60n: a null test of a never-null reader container local prints its one answer', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    handleRows (c: any, x: any): any { return x; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-60n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table. The runtime reader `safe_list_k` / `safe_dict_k` (and the generated safeList / safeDict) answers the read
+    // when it is a `Value::Arr` / `Value::Dict`, else the default. With a literal `[]` / `{}` default every read row lands on a
+    // container, so the boxed test `x != Value::Null` was true and `x == Value::Null` false on every row; the new print is
+    // that constant. Rows: [read value, reader kind, boxed held value, old `!= Null`, new print for `!==`].
+    type V = 'Null' | 'Missing' | 'Str' | 'Int' | 'Float' | 'Bool' | 'Arr' | 'Dict';
+    // safe_list_k: `if matches!(v, Value::Arr(_)) { v } else { arg_default(optional_args) }` (safe_dict_k the same with Dict);
+    // the default is the literal `[]` / `{}` the rule requires
+    const reader = (kind: 'list' | 'dict', v: V): V => { const want: V = kind === 'list' ? 'Arr' : 'Dict'; const dflt: V = want; return v === want ? v : dflt; };
+    const rows: V[] = [ 'Null', 'Missing', 'Str', 'Int', 'Float', 'Bool', 'Arr', 'Dict' ];
+    test('truth table: every read row answers the container, so the boxed null test is constant', () => {
+        for (const kind of [ 'list', 'dict' ] as const) {
+            for (const v of rows) {
+                const held = reader(kind, v);
+                const oldNotNull = held !== 'Null';
+                expect([ kind, v, oldNotNull ]).toEqual([ kind, v, true ]);
+                expect([ kind, v, !oldNotNull ]).toEqual([ kind, v, false ]);
+            }
+        }
+    });
+    test('a defaulted safeList local tested !== undefined holds a List and the test prints true', () => {
+        const out = run("    a (message: Dict): any {\n        const fills = this.safeList (message, 'fills', []);\n        if (fills !== undefined) {\n            this.handleRows (undefined, fills);\n        }\n        return 1;\n    }\n");
+        expect(out).toContain('let mut fills: crate::value::List = ');
+        expect(out).toContain('if (true) {');
+        expect(out).not.toContain('fills != Value::Null');
+    });
+    test('a defaulted safeDict local tested === undefined holds a Dict and the test prints false', () => {
+        const out = run("    b (message: Dict): any {\n        const mids = this.safeDict (message, 'mids', {});\n        if (mids === undefined) {\n            return undefined;\n        }\n        const keys = Object.keys (mids);\n        return this.hold (mids['price']) + keys.length;\n    }\n");
+        expect(out).toContain('let mut mids: crate::value::Dict = ');
+        expect(out).toContain('if (false) {');
+    });
+    test('guard: a reader local without a default keeps the optional is_none test', () => {
+        const out = run("    c (message: Dict): any {\n        const d = this.safeDict (message, 'data');\n        if (d === undefined) {\n            return undefined;\n        }\n        return this.hold (d);\n    }\n");
+        expect(out).toContain('d.is_none()');
+        expect(out).not.toContain('if (false)');
+    });
+    test('guard: a non-empty literal default is not taken by this rule', () => {
+        const out = run("    f (message: Dict): any {\n        const filled = this.safeDict (message, 'filled', { 'x': 1 });\n        if (filled !== undefined) {\n            return this.hold (filled['x']);\n        }\n        return 1;\n    }\n");
+        expect(out).not.toContain('if (true)');
+    });
+    test('guard: a rewritten defaulted local keeps a real null test', () => {
+        const out = run("    e (message: Dict, other: Dict): any {\n        let rows = this.safeList (message, 'rows', []);\n        rows = this.safeList (other, 'rows');\n        if (rows !== undefined) {\n            this.handleRows (undefined, rows);\n        }\n        return 1;\n    }\n");
+        expect(out).not.toContain('if (true)');
+    });
+});

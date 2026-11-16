@@ -1108,6 +1108,7 @@ export class RustTranspiler extends BaseTranspiler {
     printNativeEqualityComparison(left, right, op): string {
         const counterTest = isBinaryExpression(left?.parent) && left.parent.right === right ? this.printI64CounterCompare(left.parent) : undefined;
         if (counterTest !== undefined) return counterTest.startsWith('Value::Bool(') ? counterTest.slice('Value::Bool('.length, -1) : counterTest;
+        const neverNull = this.printNeverNullContainerTest(left, op); if (neverNull !== undefined) return neverNull;
         const presence = this.printPresenceFlagTest(left, right, op); if (presence !== undefined) return presence;
         const nilLocal = this.printRustNilLocalEquality(left, right, op); if (nilLocal !== undefined) return nilLocal;
         const bookTest = this.printWsBookNullTest(left, right, op) ?? this.printWsFlightNullTest(left, right); if (bookTest !== undefined) return bookTest;
@@ -21322,12 +21323,20 @@ export class RustTranspiler extends BaseTranspiler {
         const indexReadUses: any[] = [];
         const aeoWriteUses: any[] = [];
         let listIndexWrites = 0;
+        // ral-60n: never-null reader initializer (checked once more after the walk: no whole write may follow)
+        const neverNullInit = !nilDeclared && allSlot === undefined && init !== undefined && (from === 'dict' || from === 'list')
+            && this.rustContainerInitNeverNull(init, from === 'list' ? 'list' : 'map') && this.rustBaseCallNamed(init, RustTranspiler.RUST_NEVER_NULL_TEST_READERS)
+            && this.rustEmptyContainerLiteral(init.arguments[init.arguments.length - 1], from);
+        const neverNullTests: any[] = [];
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
             const up: any = n.parent;
             if (isBinaryExpression(up) && this.isEqualityOp(up.operatorToken.kind)) {
                 if (this.literalKindOfNode(this.unwrapParens(up.left === n ? up.right : up.left)) !== 'null') return false;
+                // ral-60n: a null test of a never-null reader result (`safeList (o, k, [])` / `safeDict (o, k, {})`, never rewritten):
+                // the reader answers its container on every path, so the test has one answer (`!==` true, `===` false)
+                if (neverNullInit) return neverNullTests.push(up) > 0;
                 nullTests++;
                 return true;
             }
@@ -21516,6 +21525,9 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustOwnNameSkip = ownNameSkip;
         }
         // a fresh built container handed on whole (D11): every use is a box, the declaration converts once
+        // ral-60n: a rewritten local may hold Null after all: its tests count as real null tests again (the optional form decides)
+        if (neverNullTests.length > 0 && writes > 0) nullTests += neverNullTests.length;
+        const constTests = writes === 0 ? neverNullTests : [];
         const builtBoxOnly = reads === 0 && boxedElementUses.length > 0 && nullTests === 0 && writes === 0 && init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) !== undefined
             || (paramsBoxes === boxedElementUses.length && this.rustOmitOfDict(init))
             // a never-null `safeDict*` / `safeList*` container handed on whole (D11): `into_*` keeps the exact map / list
@@ -21607,6 +21619,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !((zgRow || elementKeyWrites > 0) && this.rustDictElementSource(init)) && !optMapInit && !this.rustOptContainerSourceOk(init, from))) return undefined;
             this.rustOptContainerLocals.add(declaration);
         }
+        for (const t of constTests) this.rustNeverNullTests.set(t, declaration);
         for (const n of boxedElementUses) this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) || (n.parent?.kind === SyntaxKind.ConditionalExpression && this.rustOwnedLastUse(n, declaration)) ? 'move' : 'share');
         if (extendReuse || neverNullRewrites) this.rustExtendReuseLocals.add(declaration);
         for (const w of reuseProducerWrites) this.rustReuseProducerWrites.add(w);
@@ -21614,6 +21627,31 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustOptContainerLocals = new WeakSet<any>();
+
+    // ── ral-60n: null test of a never-null container local ──
+    // `const x = this.safeList (o, k, [])` / `this.safeDict (o, k, {})` (base reader, literal container default, x never
+    // rewritten): the reader answers a `Value::Arr` / `Value::Dict` on every path (the read when it is that container, else
+    // the default), so the boxed `x != Value::Null` was always true and `x == Value::Null` always false. Truth table in the
+    // jest test 'ral-60n ... truth table'. The test prints that constant; the local keeps the plain container form.
+    static readonly RUST_NEVER_NULL_TEST_READERS = new Set([ 'safeList', 'safeList2', 'safeListN', 'safeDict', 'safeDict2', 'safeDictN' ]);
+    private rustNeverNullTests = new WeakMap<any, any>();
+
+    /** ral-60n: the reader's default is the empty literal of the local's kind (`[]` for a list, `{}` for a map). */
+    rustEmptyContainerLiteral(node: any, from: string): boolean {
+        const d: any = this.rustSkipWrappers(node);
+        if (d === undefined) return false;
+        return from === 'list' ? isArrayLiteralExpression(d) && d.elements.length === 0 : isObjectLiteralExpression(d) && d.properties.length === 0;
+    }
+
+    /** `true` / `false` for a null test the never-null rule recorded on a local that kept its plain container form. */
+    printNeverNullContainerTest(left: any, op: any): string | undefined {
+        const test: any = left?.parent;
+        if (test === undefined || !isBinaryExpression(test)) return undefined;
+        const declaration = this.rustNeverNullTests.get(test);
+        if (declaration === undefined || this.rustBorrowedLocalKind(declaration) === undefined || this.rustOptContainerLocals.has(declaration)) return undefined;
+        const equal = op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken;
+        return equal ? 'false' : 'true';
+    }
 
     // ── ral-43f: optional-container alias fixed point ──
     // `let t: NullableDict = undefined; .. t = s;` where `s` is `const s = this.safeDict (o, k)` (nullable default) in the
