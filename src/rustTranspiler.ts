@@ -8236,6 +8236,9 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-53e: an int / Option<i64> local keying a plain element read `xs[k]` boxes there (`Value::from(k)`: the Int / Null the `Value` held)
         if ((kind === 'int' || kind === 'oint') && this.rust53eElemReadKey(n)) return 'box';
         if ((kind === 'str' || kind === 'ostr') && this.rustWsCacheMapKeyUse(n)) return 'fin';
+        // ral-68h: the receiver of `x.padStart|padEnd (w, c)` at its last use boxes there (`&Value::from(x)`: the Str / Null
+        // the `Value` local held, moved); the runtime pad helper it is handed to is unchanged
+        if ((kind === 'str' || kind === 'ostr') && this.rust68hPadReceiver(n) && this.rustLocalLastUse(n, this.rustDeclaredNode(n))) return 'box';
         if (kind === 'bool' && this.rustScalarBoolLogicalText(this.rustClimbLogicalWrappers(n)) !== undefined) return 'cond';
         if (kind === 'bool' && isPrefixUnaryExpression(parent) && this.rustValueNotOfBoolLocal(parent) !== undefined) return 'cond';
         // ral-54x S7: `let y = x;` copies a literal-seeded `bool` local into a `Value` local: the box is the `Bool` the
@@ -9502,8 +9505,31 @@ export class RustTranspiler extends BaseTranspiler {
         const write: any = n.parent;
         if (!isBinaryExpression(write) || write.right !== n || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         const access: any = write.left;
-        return isElementAccessExpression(access) && isStringLiteral(access.argumentExpression) && this.rustNestedFieldChain(access)
-            && !/\bthis\b/.test(String(access.expression.getText()).replace(/^this\./, ''));
+        if (!isElementAccessExpression(access) || !this.rustNestedFieldChain(access) || /\bthis\b/.test(String(access.expression.getText()).replace(/^this\./, ''))) return false;
+        return isStringLiteral(access.argumentExpression) || this.rust68hNestedParamKey(access, n);
+    }
+
+    /** ral-68h: `n` is the receiver of a two-argument `n.padStart|padEnd (..)` call (TS `String.prototype` method). */
+    rust68hPadReceiver(n: any): boolean {
+        const access: any = n.parent;
+        if (!isPropertyAccessExpression(access) || access.expression !== n) return false;
+        const method = String(access.name.text);
+        const call: any = access.parent;
+        return (method === 'padStart' || method === 'padEnd') && isCallExpression(call) && call.expression === access && call.arguments.length === 2
+            && this.primitiveKindOfType(this.typeOfNodeIfAny(n)) === 'string';
+    }
+
+    /** ral-68h: the last key of `this.F[..][k] = n` is a string parameter of the enclosing method (pro requestId
+     *  `this.options['requestId'][url] = newValue`): the insert prints the same helper call with its own key text, the
+     *  value slot takes `Value::from(n)` (the Int / Float the `Value` local held). Decided from the parameter's
+     *  declaration (checker type `string`, never reassigned in the body) and `n` not naming the key. */
+    rust68hNestedParamKey(access: any, n: any): boolean {
+        const key: any = this.rustSkipWrappers(access.argumentExpression);
+        if (!isIdentifier(key) || String(key.text) === String(n.text)) return false;
+        const decl: any = this.rustDeclaredNode(key);
+        if (decl === undefined || !isParameterDeclaration(decl) || decl.dotDotDotToken !== undefined || decl.questionToken !== undefined || decl.initializer !== undefined) return false;
+        if (this.rustEnclosingFunction(decl) !== this.rustEnclosingFunction(access)) return false;
+        return this.primitiveKindOfType(this.typeOfNodeIfAny(decl.name)) === 'string';
     }
 
     /** Assignment hook: the r05 insert of a nested plain-field write keyed by a typed string local. */

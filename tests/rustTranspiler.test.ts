@@ -6040,7 +6040,9 @@ describe('scalar locals from base safe readers and literals', () => {
         expect(out).toContain('req.insert("spot".into(), Value::Bool(spot));');
     });
     test('a local with another use stays Value', () => {
-        expect(out).toMatch(/let mut kept: Value = /);
+        // ral-68h: the padStart receiver at its last use now boxes there, so `kept` is typed (moved, no copy)
+        expect(out).toContain('let mut kept: Option<String> = ');
+        expect(out).toContain('pad_start(&kept.map(Value::from).unwrap_or(Value::Null), ');
     });
 });
 
@@ -23035,5 +23037,38 @@ describe('ral-68b: declared-empty Int locals typed from TypeScript (typed-slot n
     test('negative: parseInt times a float literal keeps Value (a Float product)', () => {
         const out = write ('ral-68b-parseint-neg', parseBody ('parseInt (rawTimestamp as string) * 1.5'));
         expect(out).toContain('let mut timestamp: Value = Value::Null;');
+    });
+});
+
+describe('ral-68h: scalar locals whose one remaining use had no native form', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    sum (...args: any[]): any { return 0; }\n    hold (x: any): any { return x; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const requestId = (key: string) => "    requestId (url: string): number {\n        const options = this.safeDict (this.options, 'requestId', {});\n        const previousValue = this.safeInteger (options, url, 0);\n        const newValue = this.sum (previousValue, 1);\n        this.options['requestId'][" + key + "] = newValue;\n        return newValue;\n    }\n";
+    test('pro requestId `newValue`: an i64 boxed into `this.options[..][url]` keyed by a string parameter', () => {
+        const out = write ('ral-68h-reqid', requestId ('url'));
+        expect(out).toContain('let mut newValue: i64 = ');
+        expect(out).toContain('Value::from(newValue));');
+        expect(out).not.toContain('let mut newValue: Value');
+    });
+    test('negative: keyed by a local (not a parameter) the local keeps the Value form', () => {
+        const out = write ('ral-68h-reqid-neg', requestId ('options[\'k\']'));
+        expect(out).toMatch(/let mut newValue: Value = /);
+    });
+    test('derive withdraw `one`: a String local boxed as the receiver of padEnd at its last use', () => {
+        const out = write ('ral-68h-pad', "    scaleOf (decimals: number) {\n        const one = '1';\n        const scale = one.padEnd (decimals + 1, '0');\n        return this.hold (scale);\n    }\n");
+        expect(out).toContain('let mut one: String = "1".to_string();');
+        expect(out).toContain('pad_end(&Value::from(one), ');
+    });
+    test('negative: a padEnd receiver read again later keeps the Value form', () => {
+        const out = write ('ral-68h-pad-neg', "    scaleOf (decimals: number) {\n        const one = '1';\n        const scale = one.padEnd (decimals + 1, '0');\n        return this.hold ([ scale, one.padStart (decimals, '0') ]);\n    }\n");
+        expect(out).toMatch(/let mut one: Value = /);
     });
 });
