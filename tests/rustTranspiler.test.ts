@@ -21708,3 +21708,25 @@ describe('ral-63n: a no-default safeInteger local ordered against a number-typed
         expect(out).not.toContain('let mut ts: Option<i64> = ');
     });
 });
+
+describe('ral-63p: an i64 base sum bounding a counter loop that starts at an i64 local', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nconst sum = (...args) => {\n    const result = args.filter ((x) => x !== undefined);\n    return (result.length > 0) ? result.reduce ((a, b) => a + b, 0) : undefined;\n};\nexport default class Exchange {\n    options: Dict = {};\n    sum = sum;\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return d; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const loop = (cmp: string) => "    m (tokenIds: string[]) {\n        const n = tokenIds.length;\n        const chunkSize = this.safeInteger (this.options, 'batch', 50);\n        let startIndex = 0;\n        while (startIndex < n) {\n            let endIndex = this.sum (startIndex, chunkSize);\n            if (endIndex > n) {\n                endIndex = n;\n            }\n            const chunk = [];\n            for (let i = startIndex; " + cmp + "; i++) {\n                chunk.push (tokenIds[i]);\n            }\n            this.keep (chunk);\n            startIndex = endIndex;\n        }\n    }\n";
+    test('polymarket fetchOutcomes / fetchTickers `endIndex` (and the length it is clamped to) are i64', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-63p-sum-bound', loop ('i < endIndex'))).content;
+        expect(out).toContain('let mut endIndex: i64 = (startIndex + chunkSize);');
+        expect(out).toContain('let mut n: i64 = ');
+        expect(out).toContain('i < endIndex }');
+    });
+    test('negative: the counter written in the body keeps the bound a Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-63p-sum-bound-w', loop ('i < endIndex').replace ('chunk.push (tokenIds[i]);', 'chunk.push (tokenIds[i]);\n                i = i + 1;'))).content;
+        expect(out).toContain('let mut endIndex: Value = ');
+    });
+});

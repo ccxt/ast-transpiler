@@ -12510,6 +12510,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustTbCounterBound(cond: any, n: any, kind: string): any {
         if ((kind !== 'int' && kind !== 'oint') || !isBinaryExpression(cond) || this.unwrapParens(cond.right) !== n && cond.right !== n) return undefined;
         if (RustTranspiler.NATIVE_COMPARISON_OPERATORS[cond.operatorToken.kind] === undefined || this.isEqualityOp(cond.operatorToken.kind)) return undefined;
+        // ral-63p: an `i64` base `sum` bound of a counter loop (rust63pSumCounterBound) has its own proof
+        if (isIdentifier(n) && kind === 'int' && this.rust63pSumCounterBound(cond, n)) return cond.left;
         if (!isIdentifier(n) || !(this.rustTbParseToIntInit(this.rustDeclaredNode(n)) || this.rustTbExactIntSlot(this.rustDeclaredNode(n)) || this.rustIntReaderLitDefault(this.rustDeclaredNode(n))) || this.rustTbBoundHasPartner(this.rustDeclaredNode(n), cond)) return undefined;
         const counter: any = cond.left;
         if (!isIdentifier(counter)) return undefined;
@@ -12517,6 +12519,38 @@ export class RustTranspiler extends BaseTranspiler {
         const loop: any = d?.parent?.parent;
         if (d === undefined || !isVariableDeclaration(d) || loop?.kind !== SyntaxKind.ForStatement || loop.condition !== cond) return undefined;
         return this.rustValueIntCounter(counter) ? counter : undefined;
+    }
+
+    /** ral-63p: `i OP n` as the condition of `for (let i = s; ..; i++)` where `n` is a local initialised by a base
+     *  `this.sum (..)` whose operands the scalar rule proves `i64` (rustArithCallKind 'int': the runtime sum of two `Int`s is
+     *  that `Int`), and the counter `i` starts at an int literal or at an `i64` local (ral-58n) and is written only by its
+     *  step, so it always holds an `Int`. Ordered compares of two `Int` payloads (`is_less_than` / `as_f64`) are the `as f64`
+     *  compare of the two `i64`s, which printTbCounterBound prints (or the i64 counter plan's own `i < n`). */
+    rust63pSumCounterBound(cond: any, n: any): boolean {
+        if (!isBinaryExpression(cond) || this.unwrapParens(cond.right) !== n || this.isEqualityOp(cond.operatorToken.kind)
+            || RustTranspiler.NATIVE_COMPARISON_OPERATORS[cond.operatorToken.kind] === undefined || this.rustTestTierSource(cond)) return false;
+        const bound: any = this.rustDeclaredNode(n);
+        const init: any = bound === undefined || !isVariableDeclaration(bound) || bound.initializer === undefined ? undefined : this.unwrapParens(bound.initializer);
+        if (init === undefined || !this.rustSumShape(init) || this.rustArithCallKind(init) !== 'int') return false;
+        const counter: any = cond.left;
+        if (!isIdentifier(counter)) return false;
+        const d: any = this.rustDeclaredNode(counter);
+        const loop: any = d?.parent?.parent;
+        if (d === undefined || !isVariableDeclaration(d) || !isIdentifier(d.name) || loop?.kind !== SyntaxKind.ForStatement || loop.condition !== cond) return false;
+        if (this.rustValueIntCounter(counter)) return true;
+        const start: any = d.initializer === undefined ? undefined : this.unwrapParens(d.initializer);
+        if (start === undefined || !isIdentifier(start) || this.rustScalarLocalOf(start)?.kind !== 'int') return false;
+        const incr: any = loop.incrementor;
+        if (incr === undefined || !(incr.kind === SyntaxKind.PostfixUnaryExpression || incr.kind === SyntaxKind.PrefixUnaryExpression)
+            || (incr.operator !== SyntaxKind.PlusPlusToken && incr.operator !== SyntaxKind.MinusMinusToken) || !isIdentifier(incr.operand)) return false;
+        const symbol = this.rustSymbolOf(d.name);
+        if (symbol === undefined || this.rustSymbolOf(incr.operand) !== symbol) return false;
+        const uses: any[] = this.rustScopeNameNodes(loop, String(d.name.text));
+        for (const m of uses) {
+            if (m === d.name || !isIdentifier(m) || this.rustSymbolOf(m) !== symbol || this.isNodeInsideNode(m, incr)) continue;
+            if (this.rustIdentifierIsWritten(m)) return false;
+        }
+        return true;
     }
 
     /** tb: a use of the bound outside that for-condition meets another local (an operand, a write, another local's initializer or
