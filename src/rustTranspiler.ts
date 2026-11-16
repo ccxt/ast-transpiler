@@ -3117,6 +3117,10 @@ export class RustTranspiler extends BaseTranspiler {
             // neither seeds before the other, so while the solver seeds assume the partner's optional string; the later
             // passes re-prove the write against the partner's settled decision (a partner left `Value` drops both)
             if (write === undefined && this.rustScalarSeeding && this.rustNilStrPartner(rhs, declaration, scope)) write = 'ostr';
+            // ral-64p: `x = (x === undefined) ? y : Math.min|max (x, y)` (okx handleTradingStatisticsWindow `end`): x's own
+            // kind is not seeded yet, so while the solver seeds assume the other arm's integer kind; the later passes
+            // re-prove the whole ternary against x's settled decision (x left `Value` drops it)
+            if (write === undefined) write = this.rust64pSelfMinTernaryKind(rhs, declaration);
             // ral-55x O1: `x = Precise.stringEq|..(a, b)` into a nil-declared local: a `Bool` each time, so the local is an `Option<bool>`
             joined = this.rustScalarJoinKinds(joined, write, write === 'bool' && this.rustPreciseCompareCall(rhs));
             if (joined === undefined) return undefined;
@@ -3156,6 +3160,60 @@ export class RustTranspiler extends BaseTranspiler {
         // boxed uses are checked against the printed method lines
         if (boxed.length > 0) this.rustScalarGuarded.add(declaration);
         return kind;
+    }
+
+    /** ral-64p: the integer kind (`oint`) of `(x === undefined) ? y : Math.min|max (x, y)` (or `y` / `x` swapped in the
+     *  call) written to the nil-declared local x, where y's own kind is `int` / `oint`; else undefined. Seeding only. */
+    rust64pSelfMinTernaryKind(rhs: any, declaration: any): string | undefined {
+        if (rhs === undefined || !isConditionalExpression(rhs)) return undefined;
+        const self = (a: any) => { const u: any = this.unwrapParens(a); return u !== undefined && isIdentifier(u) && this.rustDeclaredNode(u) === declaration; };
+        const cond: any = this.unwrapParens(rhs.condition);
+        if (!isBinaryExpression(cond) || cond.operatorToken.kind !== SyntaxKind.EqualsEqualsEqualsToken || !self(cond.left) || this.literalKindOfNode(cond.right) !== 'null') return undefined;
+        const call: any = this.unwrapParens(rhs.whenFalse);
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || !isIdentifier(call.expression.expression) || call.expression.expression.text !== 'Math') return undefined;
+        const fn = String(call.expression.name.text);
+        if ((fn !== 'min' && fn !== 'max') || call.arguments.length !== 2) return undefined;
+        const a: any = call.arguments[0];
+        const b: any = call.arguments[1];
+        const other: any = self(a) ? b : (self(b) ? a : undefined);
+        if (other === undefined || self(other)) return undefined;
+        // ral-65p: the combinator fallback only while seeding; the settled passes read y's own decision
+        const k = this.rustScalarValueKind(rhs.whenTrue, true) ?? (this.rustScalarSeeding ? this.rust64pConstArithKind(rhs.whenTrue) : undefined);
+        const o = this.rustArithOperandKind(other) ?? (this.rustScalarSeeding ? this.rust64pConstArithKind(other) : undefined);
+        return (k === 'int' || k === 'oint') && (o === 'int' || o === 'oint') ? 'oint' : undefined;
+    }
+
+    /** ral-65p: `-x` (prefix minus) where x is a scalar local the solver types `int` / `oint`: its kind and printed name. */
+    rust65pNegatedIntLocal(node: any): { kind: string, name: string } | undefined {
+        const inner: any = this.unwrapParens(node);
+        if (inner === undefined || !isPrefixUnaryExpression(inner) || inner.operator !== SyntaxKind.MinusToken || !isIdentifier(inner.operand)) return undefined;
+        const kind = this.rustScalarLocalOf(inner.operand)?.kind;
+        return kind === 'int' || kind === 'oint' ? { kind, name: super.printIdentifier(inner.operand) } : undefined;
+    }
+
+    /** ral-65p: `n` is x's own operand of the `Math.min|max (x, y)` arm of a `x = (x === undefined) ? y : Math.min|max (x, y)`
+     *  statement write that rust64pSelfMinTernaryKind types `oint`. */
+    rust65pSelfMinOperand(n: any): boolean {
+        const call: any = n.parent;
+        if (!isIdentifier(n) || call === undefined || !isCallExpression(call) || call.expression === n) return false;
+        const tern: any = this.rustSkipWrappersUp(call.parent);
+        if (tern === undefined || !isConditionalExpression(tern) || this.unwrapParens(tern.whenFalse) !== call) return false;
+        const write: any = this.rustSkipWrappersUp(tern.parent);
+        if (write === undefined || !isBinaryExpression(write) || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const left: any = this.unwrapParens(write.left);
+        const declaration: any = isIdentifier(left) ? this.rustDeclaredNode(left) : undefined;
+        return declaration !== undefined && this.rustDeclaredNode(n) === declaration && this.rust64pSelfMinTernaryKind(tern, declaration) === 'oint';
+    }
+
+    /** ral-64p: while seeding, a `const y = this.sum (..)` / `Math.min|max (..)` local's kind is its initializer's
+     *  combinator kind (rustArithCallKind), before y's own decision is seeded. */
+    rust64pConstArithKind(node: any): string | undefined {
+        const u: any = this.unwrapParens(node);
+        if (u === undefined || !isIdentifier(u)) return undefined;
+        const d: any = this.rustDeclaredNode(u);
+        if (d === undefined || !isVariableDeclaration(d) || d.initializer === undefined || (d.parent?.flags & NodeFlags.Const) === 0) return undefined;
+        const init: any = this.unwrapParens(d.initializer);
+        return this.rustArithCombinator(init) ? this.rustArithCallKind(init) : undefined;
     }
 
     /** ral-47d: `rhs` names another nil-declared (`let y: Str = undefined`) string local of the same function. */
@@ -7989,6 +8047,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustStrSlotWrite(n)) return 'slot';
         if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
             if (parent.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
+            // ral-65p: `x = (x === undefined) ? y : Math.min|max (x, y)` into an `Option<i64>` x: y's own integer kind, x's arm
+            // is x itself (the solver's settled kind), so the write is exact
+            if (kind === 'oint' && this.rust64pSelfMinTernaryKind(this.unwrapParens(parent.right), this.rustDeclaredNode(n)) === 'oint') return 'write';
             return this.rustScalarWriteOk(kind, parent.right, 0) ? (this.rustLimitCall(parent.right) ? 'lwrite' : 'write') : undefined;
         }
         if (isBinaryExpression(parent) && this.isEqualityOp(parent.operatorToken.kind)) {
@@ -8120,6 +8181,11 @@ export class RustTranspiler extends BaseTranspiler {
         if ((kind === 'str' || kind === 'ostr') && this.rustInKeyTop(n) !== undefined && !this.rustTestTierSource(n)
             && this.rustInKeyInitialised(n)) return 'inbox';
         if (isCallExpression(parent) && parent.expression !== n && this.rustArithCombinator(parent) && this.rustArithCallKind(parent) !== undefined) return 'native';
+        // ral-65p: x's own operand in `x = (x === undefined) ? y : Math.min|max (x, y)` (rust64pSelfMinTernaryKind): the call's
+        // kind reads x's decision, which the solver is deciding right now; the write proves both operands `Option<i64>`
+        if (kind === 'oint' && this.rust65pSelfMinOperand(n)) return 'native';
+        // ral-65p: the operand of `-x` (rust65pNegatedIntLocal prints the negation itself, natively or boxed)
+        if ((kind === 'int' || kind === 'oint') && n.parent?.kind === SyntaxKind.PrefixUnaryExpression && this.rust65pNegatedIntLocal(n.parent) !== undefined) return 'native';
         // qb: a numeric local as an operand of `Math.min|max` over a `Value` operand boxes once (`&Value::from(x)`:
         // the Int / Float / Null the `Value` local held; `Copy`, so no clone)
         if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustMathMinMaxValueOperand(n) && this.rustInlineIfMatchInit(this.rustDeclaredNode(n))) return 'box';
@@ -10764,6 +10830,8 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return this.rustScalarCompareText(node, true) !== undefined ? 'bool' : undefined;
         }
+        // ral-65p: `-x` over an `i64` / `Option<i64>` scalar local is that kind (`Int(-x)`, `Null` stays `Null`)
+        const negated = this.rust65pNegatedIntLocal(node); if (negated !== undefined) return negated.kind;
         if (this.rustScalarLengthRecv(node, true) !== undefined) return 'int';
         const method = this.rustScalarStrMethod(node, false, true);
         if (method !== undefined) return method.kind;
@@ -11619,6 +11687,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (own === undefined) return undefined;
         const optional = kind.startsWith('o');
         const wrap = (t: string) => own === kind ? t : (optional && own === kind.slice(1) ? `Some(${t})` : undefined);
+        const negated = this.rust65pNegatedIntLocal(node);
+        if (negated !== undefined) return wrap(negated.kind === 'int' ? `(-${negated.name})` : `(if let Some(__v) = ${negated.name} { Some(-__v) } else { None })`);
         // 51k: `a % b` with a typed non-literal divisor: the `i64` remainder (truncating like `mod_val` on Int), `None` for a zero / `None` side
         if (this.rust51kLitModKind(node) !== undefined) {
             if (own !== kind) return undefined;
@@ -19432,6 +19502,9 @@ export class RustTranspiler extends BaseTranspiler {
             return idn + '!' + this.printCondition(operand, 0);
         }
         if (operator !== SyntaxKind.MinusToken) return idn + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
+        // ral-65p: a typed integer local boxes its negation (the `Int(-x)` / `Null` the match on its box answered)
+        const negated = this.rust65pNegatedIntLocal(node);
+        if (negated !== undefined) return idn + (negated.kind === 'int' ? `Value::Int(-${negated.name})` : `Value::from((if let Some(__v) = ${negated.name} { Some(-__v) } else { None }))`);
         const operandText = this.printNode(operand, 0);
         return idn + (this.foldNegateLiteral(operandText) ?? this.printRustNativeNegate(operand, operandText) ?? `negate(&${operandText})`);
     }

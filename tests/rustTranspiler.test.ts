@@ -22457,3 +22457,56 @@ describe('ral-65n: a never-written base `Str` parameter as a ternary arm, and `O
         expect(out).not.toContain('let mut networkIdOrCode: Option<String>');
     });
 });
+
+describe('ral-65p: `x = (x === undefined) ? y : Math.min (x, y)` over integer locals is Option<i64>', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nconst sum = (...args) => {\n    const result = args.filter ((x) => x !== undefined);\n    return (result.length > 0) ? result.reduce ((a, b) => a + b, 0) : undefined;\n};\nexport default class Exchange {\n    sum = sum;\n    numberToString (n: any): string { return String (n); }\n    parseToInt (number: any): number {\n        const stringifiedNumber = this.numberToString (number) as string;\n        return parseInt (stringifiedNumber);\n    }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k] ?? d; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = (duration: string) => "    m (request: Dict, since: Int = undefined, limit: Int = undefined, params: Dict = {}) {\n        const until = this.safeInteger (params, 'until');\n        let end: Int = undefined;\n        if (until !== undefined) {\n            end = this.sum (until, 1);\n        }\n        if (since !== undefined) {\n            let windowDuration: Int = undefined;\n            windowDuration = " + duration + ";\n            const windowEnd = this.sum (since, windowDuration);\n            end = (end === undefined) ? windowEnd : Math.min (end, windowEnd);\n        }\n        if (end !== undefined) {\n            request['end'] = end;\n        }\n        return this.keep (request);\n    }\n";
+    test('okx handleTradingStatisticsWindow `end` / `windowEnd`: the self min write keeps both Option<i64>', () => {
+        const out = write ('ral-65p-self-min', body ('this.parseToInt (limit) * 1000'));
+        expect(out).toContain('let mut end: Option<i64> = None;');
+        expect(out).toMatch(/let mut windowEnd: Option<i64> = /);
+        expect(out).toContain('end = (if (end.is_none()) { windowEnd } else { (if let (Some(__m0), Some(__m1)) = (end, windowEnd) { Some(i64::min(__m0, __m1)) } else { None }) });');
+        expect(out).not.toContain('Math::min');
+    });
+    test('negative: an untyped (`any`) window keeps `end` Value and the runtime min', () => {
+        const out = write ('ral-65p-self-min-neg', body ('this.keep (limit)'));
+        expect(out).toContain('let mut end: Value = Value::Null;');
+        expect(out).toContain('crate::runtime::Math::min(&end, &windowEnd)');
+    });
+});
+
+describe('ral-65p: `-x` over an i64 / Option<i64> scalar local keeps the local typed', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    numberToString (n: any): string { return String (n); }\n    parseToInt (number: any): number {\n        const stringifiedNumber = this.numberToString (number) as string;\n        return parseInt (stringifiedNumber);\n    }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o[k] ?? d; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('hyperliquid modifyMarginHelper `szAbs` / `sz`: the negated Option<i64> is native', () => {
+        const out = write ('ral-65p-neg-oint', "    m (raw: Dict, type: string) {\n        const szAbs: number = this.parseToInt (raw['a']);\n        const sz: number = (type === 'reduce') ? -szAbs : szAbs;\n        return this.keep ({ 'ntli': sz });\n    }\n");
+        expect(out).toMatch(/let mut szAbs: Option<i64> = /);
+        expect(out).toContain('let mut sz: Option<i64> = (if (type_var.as_str() == Some("reduce")) { (if let Some(__v) = szAbs { Some(-__v) } else { None }) } else { szAbs });');
+        expect(out).not.toContain('Value::Int(-x)');
+    });
+    test('limitless `decimals`: an i64 literal-default reader negated in a Value slot boxes `Value::Int(-x)`', () => {
+        const out = write ('ral-65p-neg-int', "    m (o: Dict) {\n        const decimals = this.safeInteger (o, 'd', 6);\n        return this.numberToString (-decimals);\n    }\n");
+        expect(out).toContain('let mut decimals: i64 = ');
+        expect(out).toContain('Value::Int(-decimals)');
+    });
+    test('negative: `-x` over an untyped (`any`) local keeps the boxed match', () => {
+        const out = write ('ral-65p-neg-any', "    m (o: Dict) {\n        const v = this.keep (o['d']);\n        return this.numberToString (-v);\n    }\n");
+        expect(out).toContain('let mut v: Value = ');
+        expect(out).toContain('negate(&v)');
+    });
+});
