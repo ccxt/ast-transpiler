@@ -23072,3 +23072,39 @@ describe('ral-68h: scalar locals whose one remaining use had no native form', ()
         expect(out).toMatch(/let mut one: Value = /);
     });
 });
+
+describe('ral-68d: tuple slots with `a || b` uses, one-operand extend and `return query`', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Bool = boolean | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    handleOptionAndParams (params: object, methodName: Str, optionName: string, defaultValue: any = undefined): [any, Dict] { return [ defaultValue, params as Dict ]; }\n    checkOptionBool (m: Str, o: string, v: any): Bool { return v; }\n    handleOptionBoolAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Bool = undefined): [Bool, Dict] {\n        const [ value, newParams ] = this.handleOptionAndParams (params, methodName, optionName, defaultValue);\n        return [ this.checkOptionBool (methodName, optionName, value), newParams ];\n    }\n    extend (...args: any[]): Dict { return {}; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    parseToInt (x: any): number { return 0; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Bool } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    getInstType (m: string, flag: boolean, params: Dict): Dict { return params; }\n    async watchBalance (params: Dict = {}): Promise<Dict> {\n        const [ uta, paramsUta ] = this.handleOptionBoolAndParams (params, 'watchBalance', 'uta', false);\n        const [ stock, paramsStock ] = this.handleOptionBoolAndParams (paramsUta, 'watchBalance', 'stock', false);\n        const isStockSpot = this.safeString (params, 'k') === 'spot';\n        const isStockOrUta = (isStockSpot || uta);\n        const both = (stock || isStockSpot);\n        return this.getInstType ('watchBalance', isStockOrUta || both, paramsStock);\n    }\n    handleWalletAddress (methodName: string, params: Dict): [Str, Dict] {\n        const [ wallet, paramsWallet ] = this.handleOptionAndParams (params, methodName, 'wallet');\n        if (wallet !== undefined) {\n            return [ wallet, this.extend (paramsWallet) ];\n        }\n        return [ this.safeString (this.options, 'wallet'), this.extend (paramsWallet) ];\n    }\n    async prepareStockParams (methodName: string, params: Dict): Promise<Dict> {\n        const [ stock, query ] = this.handleOptionBoolAndParams (params, methodName, 'stock');\n        if (stock === undefined) {\n            return query;\n        }\n        return this.extend (query, { 'stock': stock });\n    }\n}\n";
+    const emit = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-68d-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('bool slots read only as leaves of a `boolean` local\'s `a || b` initializer print `bool`', () => {
+        const out = emit();
+        const fn = out.slice(out.indexOf('fn watchBalance'), out.indexOf('fn handleWalletAddress'));
+        expect(fn).toMatch(/let mut uta: bool = \w+\.get\(0\)\.and_then\(Value::as_bool\) == Some\(true\);/);
+        expect(fn).toContain('isStockSpot) || uta)');
+        // guard: a logical whose leftmost leaf is itself a slot would lose the leading truthiness call the box keys on
+        expect(fn).toMatch(/let mut stock: Value = /);
+        expect(fn).toContain('(is_true(&stock) || is_true(&isStockSpot))');
+    });
+    test('a params slot read only through one-operand extend is a typed map lent to the extend head', () => {
+        const out = emit();
+        const fn = out.slice(out.indexOf('fn handleWalletAddress'), out.indexOf('fn prepareStockParams'));
+        expect(fn).toMatch(/let mut paramsWallet: crate::value::Dict = \w+\.get\(1\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+        expect(fn).toContain('self.extend(&paramsWallet, &[])');
+        expect(fn).not.toContain('paramsWallet.clone()');
+    });
+    test('a params slot returned whole from its own method body is a typed map boxed at the return', () => {
+        const out = emit();
+        const fn = out.slice(out.indexOf('fn prepareStockParams'));
+        expect(fn).toMatch(/let mut query: crate::value::Dict = \w+\.get\(1\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+        expect(fn).toContain('return Value::from(&query);');
+        expect(fn).not.toContain('query.clone()');
+    });
+});

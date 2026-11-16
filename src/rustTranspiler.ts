@@ -17119,7 +17119,27 @@ export class RustTranspiler extends BaseTranspiler {
     /** wi: a bare read under `!` / `&&` / `||` whose whole logical sits in a slot the printer already prints `bool`
      *  (a condition, `Value::Bool(..)`, a `bool` local): the slot's truthiness, `None` (Null) false as `is_true`. */
     rustBoolSlotLogicalUse(n: any): boolean {
-        return this.rustClimbLogicalWrappers(n) !== n && this.rustConditionBoolSlot(n);
+        return this.rustClimbLogicalWrappers(n) !== n && (this.rustConditionBoolSlot(n) || this.rust68dBoolSlotLogicalInit(n));
+    }
+
+    /** ral-68d: the whole `&&` / `||` the leaf sits in is the initializer of a single-binding local the checker types
+     *  `boolean` (or `Bool`), every leaf a boolean-or-undefined identifier / call (`const isStockOrUta = (isStockSpot || uta)`):
+     *  the logical prints native (`is_true` over a `bool` is the identity), so the slot's truthiness reads the same. */
+    rust68dBoolSlotLogicalInit(n: any): boolean {
+        const top: any = this.rustClimbLogicalWrappers(n);
+        const declaration: any = top?.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer !== top || !isIdentifier(declaration.name)
+            || (declaration.parent as any)?.declarations?.length !== 1) return false;
+        const inner: any = this.unwrapParens(top);
+        if (inner === undefined || !isBinaryExpression(inner) || !this.isLogicalOp(inner.operatorToken.kind)
+            || !this.isBooleanOrUndefinedType(this.typeOfNodeIfAny(top)) || !this.rustOptBoolChain(top)) return false;
+        // the `Value` local is boxed `Value::Bool(..)` after printing, keyed on its leading truthiness call: the leftmost leaf
+        // must stay a boxed `Value` local (not a tuple slot, not a printer `bool`), so it keeps its `is_true(&..)` head
+        let first: any = inner;
+        while (first !== undefined && (isParenthesizedExpression(first) || (isBinaryExpression(first) && this.isLogicalOp(first.operatorToken.kind)))) first = isParenthesizedExpression(first) ? first.expression : first.left;
+        if (first === undefined || !isIdentifier(first) || first === n) return false;
+        const lead: any = this.rustDeclaredNode(first);
+        return lead !== undefined && isVariableDeclaration(lead) && lead.name !== first && !this.rustDeclarationPrintsNativeBool(lead);
     }
 
     /** qe: `x === true` / `x !== true` on a bool tuple slot: the slot reads `as_bool() == Some(true)`, so the native
@@ -31041,8 +31061,10 @@ export class RustTranspiler extends BaseTranspiler {
     /** `n` is the first operand of a two-operand base `this.extend (n, x)`. */
     rustExtendHeadUse(n: any): boolean {
         const call: any = n.parent;
-        return isCallExpression(call) && call.arguments.length === 2 && call.arguments[0] === n && isIdentifier(n)
-            && this.rustBaseCallNamed(call, RustTranspiler.RUST_EXTEND_HEAD_CALLS);
+        return isCallExpression(call) && call.arguments[0] === n && isIdentifier(n)
+            // ral-68d: a one-operand base `this.extend (x)` is a shallow copy of its head (`impl ExtendHead`, `&[]` rest)
+            && (call.arguments.length === 2 && this.rustBaseCallNamed(call, RustTranspiler.RUST_EXTEND_HEAD_CALLS)
+                || call.arguments.length === 1 && this.rustBaseCallNamed(call, RustTranspiler.RUST_OPT_EXTEND));
     }
 
     private static readonly RUST_EXTEND_HEAD_CALLS = new Set([ 'extend', 'deepExtend' ]);
@@ -32109,6 +32131,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(up) && isReturnStatement(up.parent) && this.rustHandedReassignedMap(declaration)) return true;
         // wi: the params slot of a destructure handed back whole in the returned tuple: moved there (its last use)
         if (isArrayLiteralExpression(up) && isReturnStatement(up.parent) && declaration?.kind === SyntaxKind.BindingElement && declaration.parent?.elements?.indexOf(declaration) === 1) return true;
+        // ral-68d: the params slot returned whole (`return query`) from its own method body: moved into the `Value` return
+        if (isReturnStatement(up) && up.expression === n && declaration?.kind === SyntaxKind.BindingElement && declaration.parent?.elements?.indexOf(declaration) === 1
+            && this.rustEnclosingFunction(up) === this.rustEnclosingFunction(declaration) && this.rust68dReturnedParamsSlot(declaration)) return true;
         // ral-53a: a `c ? <map> : <map>` local read whole as the initializer of a further single `let y = x` (same function, no loop
         // in between) that no typed rule claims: y keeps its `Value` box (`Value::from(&x)`, or `Value::Dict(x)` at the last use)
         if (isVariableDeclaration(up) && up.initializer === n && isVariableDeclaration(declaration) && this.rustHandedTernaryLocal(declaration)
@@ -32121,6 +32146,27 @@ export class RustTranspiler extends BaseTranspiler {
         // the `impl Into<crate::Params>` slot of a typed unified call takes the boxed map as it took the `Value` local
         if (this.rustTypedParamsSlot(up, Array.from(up.arguments).indexOf(n))) return true;
         return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+    }
+
+    /** ral-68d: a params slot of `const [ a, p ] = this.handle*AndParams (x, ..)` returned whole: `x` is an identifier the
+     *  checker types a `Dict` (the base helper hands back that map or a copy of it), and `p` is never written at a key. */
+    rust68dReturnedParamsSlot(declaration: any): boolean {
+        const owner: any = declaration.parent?.parent;
+        const init: any = isVariableDeclaration(owner) ? this.rustAwaitedCall(owner.initializer) : undefined;
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !/^handle\w*AndParams\d*$/.test(String(init.expression.name.text)) || !this.rustCalleeIsRuntimeBase(init)) return false;
+        const source: any = this.rustSkipWrappers(init.arguments[0]);
+        if (source === undefined || !isIdentifier(source)) return false;
+        let declared: string | undefined;
+        try { declared = this.getChecker().typeToString(this.getChecker().getTypeAtLocation(source)); } catch (e) { return false; }
+        if (declared !== 'Dict') return false;
+        let written = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => {
+            const up: any = n.parent;
+            if (isElementAccessExpression(up) && up.expression === n && isBinaryExpression(up.parent) && up.parent.left === up) written = true;
+            return true;
+        });
+        return !written;
     }
 
     /** ral-59a: a local initialised or rewritten whole from another identifier (`let x = y` / `x = y`): handing it to a
