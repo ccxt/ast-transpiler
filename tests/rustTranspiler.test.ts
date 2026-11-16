@@ -20401,3 +20401,31 @@ describe('ral-59i: a nil-declared list assigned before any read from declared Pr
         expect(out).not.toContain('let mut response: crate::value::List');
     });
 });
+
+describe('ral-59e: the listed async base method fetchPaginatedCallDeterministic takes typed since / symbol / limit / timeframe', () => {
+    const build = (name: string) => {
+        const files: Record<string, string> = {
+            'ts/src/base/Exchange.ts': "export type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Dict = { [key: string]: any };\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    async fetchPaginatedCallDeterministic (method: string, symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, timeframe: Str = undefined, params: Dict = {}, maxEntriesPerRequest: Int = undefined): Promise<any[]> {\n        let currentSince = 5;\n        if (since !== undefined) {\n            currentSince = since;\n        }\n        return [ method, symbol, currentSince, limit, timeframe, params, maxEntriesPerRequest ];\n    }\n    async fetchPaginatedCallDynamic (method: string, symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any[]> {\n        return [ method, symbol, since, limit, params ];\n    }\n}\n",
+            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchX (symbol: string, timeframe: string = '1m', since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<any> {\n        return await this.fetchPaginatedCallDeterministic ('fetchX', symbol, since, limit, timeframe, params, 1000);\n    }\n}\n",
+        };
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-59e-' + name + '-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false });
+        const base = t.transpileRustByPath (path.join (root, 'ts/src/base/Exchange.ts')).content;
+        const out = t.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+        return { base, out };
+    };
+    test('the base signature is typed and the venue call passes its own parameters natively', () => {
+        const { base, out } = build ('a');
+        expect(base).toContain('pub fn fetchPaginatedCallDeterministic(&self, method: &str, symbol: Option<&str>, since: Option<i64>, limit: Option<i64>, timeframe: Option<&str>, optional_args: &[Value])');
+        expect(out).toContain('self.fetchPaginatedCallDeterministic("fetchX", symbol.as_str(), since.as_i64(), limit.as_i64(), timeframe.as_str(), &[params, Value::Int(1000)])');
+    });
+    test('an unlisted async base method keeps its Value slice', () => {
+        const { base } = build ('b');
+        expect(base).toContain('pub fn fetchPaginatedCallDynamic(&self, method: Value, optional_args: &[Value])');
+    });
+});

@@ -32972,6 +32972,10 @@ export class RustTranspiler extends BaseTranspiler {
     // conversions at its callers); a method listed here must have no venue override and no hand-written body.
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS: string[] = [ 'convertExpireDate', 'convertExpireDateToMarketIdDate', 'convertMarketIdExpireDate' ];
 
+    // ral-59e: async base methods typed the same way (no venue override, no trait slot); every caller in ts/src passes
+    // its own unwritten `since: Int` / `symbol: Str` / `limit: Int` parameter (52 call sites of fetchPaginatedCallDeterministic)
+    private static readonly RUST_BASE_ASYNC_SCALAR_PARAM_METHODS: string[] = [ 'fetchPaginatedCallDeterministic' ];
+
     // Trait-slot override groups typed together: method -> its first parameter, printed `&str` by the base, every
     // override, the `DerivedExchange` slot (rustDispatch.isSlotStr) and every forwarder.
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS: Record<string, string> = { 'sign': 'path' };
@@ -33017,9 +33021,9 @@ export class RustTranspiler extends BaseTranspiler {
      *  signature: every call resolves to this one body, so typing its parameter changes no other declaration. */
     rustBaseOnlyMethod(method: any, file: string): boolean {
         const at = file.search(/(?:^|\/)ts\/src\/base\/(?:Exchange|\.__ExchangeNoOverloads)\.ts$/);
-        if (at < 0 || this.isAsyncFunction(method)) return false;
+        if (at < 0) return false;
         const name = String(method.name.text);
-        if (!RustTranspiler.RUST_BASE_SCALAR_PARAM_METHODS.includes(name)) return false;
+        if (!(this.isAsyncFunction(method) ? RustTranspiler.RUST_BASE_ASYNC_SCALAR_PARAM_METHODS : RustTranspiler.RUST_BASE_SCALAR_PARAM_METHODS).includes(name)) return false;
         if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
         const root = file.slice(0, file.indexOf('ts/src/', at)) + 'ts/src';
         let predictionOverride = false;
