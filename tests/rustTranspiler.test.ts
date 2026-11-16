@@ -20429,3 +20429,30 @@ describe('ral-59e: the listed async base method fetchPaginatedCallDeterministic 
         expect(base).toContain('pub fn fetchPaginatedCallDynamic(&self, method: Value, optional_args: &[Value])');
     });
 });
+
+describe('ral-60p: a pro-tier Object.keys element that is an indexOf needle and keys a read of a function-local map', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    tickers: Dict = {};\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return d; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return path.join (dir, 'ts/src/pro/venue.ts');
+    };
+    const loop = (read: string) => "    m (message: Dict) {\n        const channel = this.safeString (message, 'channel');\n        if (channel === undefined) {\n            return undefined;\n        }\n        const methods: Dict = { 'a': 'x', 'b': 'y' };\n        const keys = Object.keys (methods);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            if (channel.indexOf (key) > -1) {\n                return this.keep (" + read + ");\n            }\n        }\n        return undefined;\n    }\n";
+    test('the needle is an Option<String> lent to the find (bitstamp / bybit pro handleMessage)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-60p-needle-local', loop ('methods[key]'))).content;
+        expect(out).toContain('let mut key: Option<String> = keys.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('(channel.as_deref(), key.as_deref())');
+    });
+    test('the needle of a find on a string Value parameter (gate pro getMarketTypeByUrl) is an Option<String> too', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-60p-needle-param', "    m (url: string) {\n        const findBy: Dict = { 'op-': 'option', 'delivery': 'future' };\n        const keys = Object.keys (findBy);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const value = findBy[key];\n            if (url.indexOf (key) >= 0) {\n                return value;\n            }\n        }\n        return 'spot';\n    }\n")).content;
+        expect(out).toContain('let mut key: Option<String> = keys.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('url.as_str().zip(key.as_deref())');
+    });
+    test('negative: a key that also reads a this field cache stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-60p-needle-field', loop ('this.tickers[key]'))).content;
+        expect(out).toContain('let mut key: Value = ');
+    });
+});
