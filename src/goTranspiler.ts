@@ -33584,3 +33584,69 @@ GoTranspiler.prototype.goReusableFutureLocal = function (declaration) {
     };
 }
 // ===== end 77g3 =====
+
+// ---------------------------------------------------------------------------------------------
+// ral-77g6: copies of a parameter and omit rebinds keep the source's Go type.
+// (A) `const x = p` where p is a defaulted parameter bound through a map GetArg twin
+//     (`var p map[string]any = GetArgMap(..)`): the alias holds exactly that map, so it is
+//     declared `map[string]any` and reads it natively (the boxed copy already held a typed map,
+//     so nil tests and hand-offs keep their meaning).
+// (B) a map local whose only foreign writes are `x = this.omit (m, ..)` of a proven map m: the
+//     write-site table prints those as MapTyped(this.Omit(m, ..)), which the ccxt build folds
+//     to the OmitDict twin, so every value the local holds is a map.
+const ral77g6ShippedTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = ral77g6ShippedTypeOfInitializer.call(this, initializer, printedValue);
+    return (known !== undefined) ? known : ral77g6CopiedParameterType(this, initializer);
+};
+function ral77g6CopiedParameterType(goTranspiler: GoTranspiler, node): string | undefined {
+    if (node?.kind !== SyntaxKind.Identifier) {
+        return undefined;
+    }
+    const decl: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    if (decl?.kind !== SyntaxKind.Parameter) {
+        return undefined;
+    }
+    return (goTranspiler.goGetArgParameterType(decl) === GO_SAFE_DICT_LOCAL_TYPE) ? GO_SAFE_DICT_LOCAL_TYPE : undefined;
+}
+// `this.omit (m, ..)` whose first argument is a proven Go map
+function ral77g6IsOmitOfMap(goTranspiler: GoTranspiler, node): boolean {
+    while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+        node = node.expression;
+    }
+    const callee: any = node?.expression;
+    return (node?.kind === SyntaxKind.CallExpression) && (node.questionDotToken === undefined)
+        && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+        && (callee.name?.text === 'omit') && (node.arguments?.length >= 2)
+        && !node.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)
+        && ccxtGoProducerArgIsMap(goTranspiler, node.arguments[0]);
+}
+const ral77g6ShippedLocalIsSafeToType = GoTranspiler.prototype.goLocalIsSafeToType;
+GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false): boolean {
+    if (ral77g6ShippedLocalIsSafeToType.call(this, scope, declaration, varName, goType, stringWriteProven)) {
+        return true;
+    }
+    if ((goType !== GO_SAFE_DICT_LOCAL_TYPE) || (scope === undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.initializer === undefined)) {
+        return false;
+    }
+    let omits = 0;
+    const unsafe = this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== varName) || (n === declaration.name)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) === goType) {
+                return false;
+            }
+            if (ral77g6IsOmitOfMap(this, parent.right)) {
+                omits += 1;
+                return false;
+            }
+            return true;
+        }
+        return ccxtGoWriteSiteShippedVeto(this, n, parent, goType);
+    });
+    return !unsafe && (omits > 0);
+};

@@ -10218,7 +10218,8 @@ describe ('goMapWriteOnProvenLocal', () => {
                 "        params['b'] = 2;\n" +
                 '        return params;\n' +
                 '    }\n'));
-            expect(out).toContain('AddElementToObject(request, "a", 1)');
+            // ral-77g6: the copy of the GetArgMap-bound map is itself a map local and stores natively
+            expect(out).toContain('request["a"] = 1');
             expect(out).toContain('params["b"] = 2');
         });
 
@@ -14231,5 +14232,48 @@ describe('go 77g3 ws reusable-future locals', () => {
         const out = goPath ("export class ex extends Exchange {\n    async authenticate (url: string) {\n        const client: Client = this.client (url);\n        const future = client.reusableFuture ('authenticated');\n        client.subscriptions['a'] = future;\n        return await future;\n    }\n}\n");
         expect (out).toContain ('var future any = ');
         expect (out).not.toContain ('future.Await()');
+    });
+});
+
+describe('ral-77g6 copies and omit rebinds keep the source Go type', () => {
+    test('a copy of a GetArgMap-bound parameter rebound to an omit of a map is a map local', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    omit (a, ...k) { return a; }\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    f (symbol: string, params: Dict = {}) {\n" +
+        "        let query = params;\n" +
+        "        if (symbol !== undefined) {\n" +
+        "            query = this.omit (params, 'symbol');\n" +
+        "        }\n" +
+        "        return this.safeString (query, 'x');\n" +
+        "    }\n" +
+        "}\n"
+        const output = inst.transpileGo(input).content;
+        expect(output).toContain("var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})");
+        expect(output).toContain("var query map[string]any = params");
+        expect(output).not.toContain("var query any = params");
+    });
+    test('a copy rebound to an omit of an untyped value keeps the box', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    omit (a, ...k) { return a; }\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    f (symbol: string, other, params: Dict = {}) {\n" +
+        "        let query = params;\n" +
+        "        if (symbol !== undefined) {\n" +
+        "            query = this.omit (other, 'symbol');\n" +
+        "        }\n" +
+        "        return this.safeString (query, 'x');\n" +
+        "    }\n" +
+        "}\n"
+        const output = inst.transpileGo(input).content;
+        expect(output).toContain("var query any = params");
     });
 });
