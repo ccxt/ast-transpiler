@@ -5115,7 +5115,10 @@ export class RustTranspiler extends BaseTranspiler {
         // a local typed for its string-method reads must not copy where the `Value` moved
         if (copied > 0 && (kind === 'str' || kind === 'ostr') && this.rustStrMethodRecvLocal(declaration)) {
             // ud: a reader string receiver whose copying boxes all sit at lending slots lends there (the copy the `Value` clone made)
-            if (this.rustStrNoLend || !this.rustUdReaderStr(declaration.initializer) || this.rustStrReturnedLocal(declaration, scope) || !this.rustReaderLendBoxes(declaration)) return undefined;
+            // ral-59x: an `Option<String>` reader receiver aliased by `const y = x` into a string candidate of the same function
+            // (rustStrHandOffDecided `solved`) lends at that declaration too: the typed copy is the copy the `Value` clone made
+            const aliasLent = kind === 'ostr' && !this.rustTestTierSource(declaration) && this.rustReaderLendBoxes(declaration, false, false, true);
+            if (this.rustStrNoLend || !this.rustUdReaderStr(declaration.initializer) || this.rustStrReturnedLocal(declaration, scope) || !(this.rustReaderLendBoxes(declaration) || aliasLent)) return undefined;
             this.rustStrLentLocals.add(declaration);
         }
         // an element of a typed list parameter keeps the 400-char guard and never copies at a box
@@ -9612,7 +9615,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (form !== 'box' && form !== 'xbox') return undefined;
         const name = super.printIdentifier(node);
         const last = isReturnStatement(node.parent) || this.rustWsClientLastUse(node, local.declaration)
-            || this.rustLocalLastUse(node, local.declaration) || (form === 'box' && this.rustOwnedHandOff(node) && this.rustOwnedLastUse(node, local.declaration));
+            || this.rustLocalLastUse(node, local.declaration) || (form === 'box' && this.rustOwnedHandOff(node) && this.rustOwnedLastUse(node, local.declaration))
+            // ral-59x: a string alias (`let y = x`) boxed as the value of the last property of an object literal that reads it
+            // moves there, as its `Value` form did (rustOwnedLastUse orders the literal's inserts)
+            || (form === 'box' && this.rust59xAliasDecl(local.declaration) && node.parent?.kind === SyntaxKind.PropertyAssignment && node.parent.initializer === node
+                && this.rustOwnedLastUse(node, local.declaration));
         const moved = last ? name : `${name}.clone()`;
         // a string boxed more than once is lent before its last box (`From<&str>`: the one copy the `Value` clone made)
         const lent = !last && (this.rustStrLentLocals.has(local.declaration) || local.kind === 'ostr' && this.rustNilStrLentLocals.has(local.declaration));
@@ -9622,6 +9629,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (local.kind === 'str') return lent ? `Value::from(${name}.as_str())` : `Value::from(${moved})`;
         if (local.kind === 'obool') return `${name}.map_or(Value::Null, Value::Bool)`;
         return local.kind === 'bool' ? `Value::Bool(${name})` : `Value::from(${name})`;
+    }
+
+    /** ral-59x: a local declared `let y = x` / `const y = x` from another local (an alias of it). */
+    rust59xAliasDecl(declaration: any): boolean {
+        const init: any = declaration === undefined ? undefined : this.unwrapParens(declaration.initializer);
+        return init !== undefined && isIdentifier(init) && init.text !== 'undefined' && isVariableDeclaration(this.rustDeclaredNode(init));
     }
 
     /** The native value of a scalar expression for a local of `kind` (`Some(..)` for optional kinds). */

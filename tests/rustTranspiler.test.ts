@@ -20317,3 +20317,18 @@ describe('ral-59a: omit results lent to a three-argument omit, a Value alias, or
         expect(out).not.toContain('let mut rest: crate::value::Dict');
     });
 });
+
+describe('ral-59x: an Option<String> reader receiver lends at a same-function string alias, which is typed with it', () => {
+    test('`const ms = this.safeString (..); let base = ms; base = ms.slice (..)`: both Option<String>, no added copy, the alias moves at its last object-literal box', () => {
+        const dir = path.join (rustFixtureRoot, 'ral59x-alias');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeMarketStructure (m: Dict): Dict { return m; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseMarket (asset: Dict): Dict {\n        const ms = this.safeString (asset, 'symbol');\n        let base = ms;\n        if (ms !== undefined && ms.endsWith ('USDT')) {\n            base = ms.slice (0, -4);\n        }\n        let symbol: Str = undefined;\n        if (base !== undefined) {\n            symbol = base + '/USDT';\n        }\n        return this.safeMarketStructure ({\n            'id': ms,\n            'symbol': symbol,\n            'base': base,\n            'baseId': base,\n        });\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut ms: Option<String> = ');
+        expect(out).toContain('let mut base: Option<String> = ms.clone();');
+        expect(out).toContain('m.insert("base".to_string(), base.clone().map(Value::from).unwrap_or(Value::Null));');
+        expect(out).toContain('m.insert("baseId".to_string(), base.map(Value::from).unwrap_or(Value::Null));');
+        expect(out).not.toMatch(/let mut (?:ms|base): Value/);
+    });
+});
