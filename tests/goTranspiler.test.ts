@@ -4122,7 +4122,7 @@ describe('go redundant parentheses', () => {
         "    return a;\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("func() string {\n\t\tif x == \"delivery\" {\n\t\t\treturn \"yes\"\n\t\t}\n\t\treturn \"no\"\n\t}()");
+        expect(output).toContain("\tvar a string\n\tif x == \"delivery\" {\n\t\ta = \"yes\"\n\t} else {\n\t\ta = \"no\"\n\t}");
         expect(output).not.toContain("Ternary(((x == \"delivery\")");
     });
     test('parentheses that are not redundant stay: call arguments and operand pairs', () => {
@@ -5092,7 +5092,7 @@ describe('go ternary func literal typing', () => {
         "    return b;\n" +
         "}\n";
         const output = ternaryGo(input);
-        expect(output).toContain("\tvar b string = func() string {\n\t\tif EvalTruthy(a) {\n\t\t\treturn \"x\"\n\t\t}\n\t\treturn \"y\"\n\t}()");
+        expect(output).toContain("\tvar b string\n\tif EvalTruthy(a) {\n\t\tb = \"x\"\n\t} else {\n\t\tb = \"y\"\n\t}");
         expect(output).not.toContain('Ternary(');
     });
     test('two arms of one declared local type stay typed', () => {
@@ -5104,7 +5104,7 @@ describe('go ternary func literal typing', () => {
         "    return b;\n" +
         "}\n";
         const output = ternaryGo(input);
-        expect(output).toContain("\tvar b string = func() string {\n\t\tif EvalTruthy(a) {\n\t\t\treturn x\n\t\t}\n\t\treturn y\n\t}()");
+        expect(output).toContain("\tvar b string\n\tif EvalTruthy(a) {\n\t\tb = x\n\t} else {\n\t\tb = y\n\t}");
     });
     test('a bool pair prints func() bool', () => {
         const input =
@@ -5113,7 +5113,7 @@ describe('go ternary func literal typing', () => {
         "    return b;\n" +
         "}\n";
         const output = ternaryGo(input);
-        expect(output).toContain("\tvar b bool = func() bool {\n\t\tif EvalTruthy(a) {\n\t\t\treturn true\n\t\t}\n\t\treturn (IsEqual(c, 1))\n\t}()");
+        expect(output).toContain("\tvar b bool\n\tif EvalTruthy(a) {\n\t\tb = true\n\t} else {\n\t\tb = (IsEqual(c, 1))\n\t}");
     });
     test('an int64 pair from two typed calls prints func() int64', () => {
         const input =
@@ -5126,7 +5126,7 @@ describe('go ternary func literal typing', () => {
         "    }\n" +
         "}\n";
         const output = ternaryGo(input);
-        expect(output).toContain("\tvar b int64 = func() int64 {\n\t\tif EvalTruthy(a) {\n\t\t\treturn this.Milliseconds()\n\t\t}\n\t\treturn this.Seconds()\n\t}()");
+        expect(output).toContain("\tvar b int64\n\tif EvalTruthy(a) {\n\t\tb = this.Milliseconds()\n\t} else {\n\t\tb = this.Seconds()\n\t}");
     });
     test('a nested literal is parenthesised and keeps its own type', () => {
         const input =
@@ -14275,5 +14275,25 @@ describe('ral-77g6 copies and omit rebinds keep the source Go type', () => {
         "}\n"
         const output = inst.transpileGo(input).content;
         expect(output).toContain("var query any = params");
+    });
+});
+
+describe('77g7 typed ternary locals', () => {
+    test('a ternary whose arms print one Go type declares the typed local with an if/else, no func literal', () => {
+        const ts = 'class X {\n'
+            + '    f (flag: boolean, a: string, b: string, limit: number = undefined) {\n'
+            + '        const s = flag ? a : b;\n'
+            + '        const n = (limit === undefined) ? 100 : limit;\n'
+            + '        const k = flag ? \'x\' : \'y\';\n'
+            + '        const w = flag ? 0 : \'t\';\n'
+            + '        return [ s + \'!\', n, k, w ];\n'
+            + '    }\n'
+            + '}\n';
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('var k string\n');
+        expect(output).toContain('\tif EvalTruthy(flag) {\n\t\tk = "x"\n\t} else {\n\t\tk = "y"\n\t}');
+        expect(output).not.toContain('var k any = func() any {');
+        // two arms of different Go types keep the boxed literal
+        expect(output).toContain('var w any = func() any {');
     });
 });

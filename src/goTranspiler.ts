@@ -33650,3 +33650,230 @@ GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varNa
     });
     return !unsafe && (omits > 0);
 };
+
+// ---- 77g7: a typed ternary local prints as `var x T` + if/else, no func literal -------------------
+// `const x = c ? a : b` printed `var x any = func() any { if c { return a }; return b }()`. When both
+// arms provably print one Go type T (or one arm is `undefined` and T is a pointer, or one arm is a
+// pointer the condition proves non-nil and the other a value of its pointee), the local is declared
+// `var x T` and assigned in a plain if/else: each arm is evaluated only on the branch TypeScript takes,
+// exactly like the literal, and the local reads natively through its type afterwards.
+const GO_TERNARY_JOIN_TYPES = [ 'string', 'int64', 'float64', 'bool', 'int', 'map[string]any', '[]any', '[]string',
+    '*string', '*int64', '*float64', '*bool' ];
+const GO_TERNARY_POINTEE: { [pointer: string]: string } = { '*string': 'string', '*int64': 'int64', '*float64': 'float64', '*bool': 'bool' };
+
+export interface GoTranspiler {
+    goTernaryJoinParts(declaration): { goType: string, derefTrue: boolean, derefFalse: boolean } | undefined;
+    goTernaryJoinPartsUncached(declaration): { goType: string, derefTrue: boolean, derefFalse: boolean } | undefined;
+    goTernaryJoinHasForeignComparison(declaration, goType: string): boolean;
+    goTernaryJoinArmType(node): string | undefined;
+    goTernaryJoinConditionDefines(condition, name: string, outcome: boolean): boolean;
+    goTernaryJoinDeclaration(statement, declaration, identation: number): string | undefined;
+}
+
+// the declaration a ternary initializer belongs to, or undefined when the ternary sits anywhere else
+function goTernaryJoinOwner (node) {
+    let current = node;
+    while (current?.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        current = current.parent;
+    }
+    const declaration = current?.parent;
+    return ((declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.initializer === current)
+        && (declaration.name?.kind === SyntaxKind.Identifier) && (declaration.parent?.parent?.kind === SyntaxKind.FirstStatement)
+        && (declaration.parent.declarations?.length === 1)) ? declaration : undefined;
+}
+
+// 'nil', 'const-int', 'const-float' or the Go type the arm's printed text statically holds
+GoTranspiler.prototype.goTernaryJoinArmType = function (node) {
+    const arm: any = this.goUnwrapParenthesizedNode(node);
+    if ((arm?.kind === SyntaxKind.NullKeyword) || ((arm?.kind === SyntaxKind.Identifier) && (arm.text === 'undefined'))) {
+        return 'nil';
+    }
+    if ((arm?.kind === SyntaxKind.NumericLiteral) || this.goIsSignedNumericLiteral(arm)) {
+        const kind = this.goNumericLiteralKind(arm);
+        return (kind === 'int') ? (this.goLiteralFitsKind(arm, 'int') ? 'const-int' : undefined) : ((kind === 'float64') ? 'const-float' : undefined);
+    }
+    if ((arm?.kind === SyntaxKind.ConditionalExpression) || (arm?.kind === SyntaxKind.AwaitExpression)) {
+        return undefined; // a nested literal / a receive keeps its own statement shape
+    }
+    const printed = this.printNode(arm, 0);
+    if (printed.includes('\n')) {
+        return undefined;
+    }
+    const goType = this.goTypeOfInitializer(arm, printed) ?? this.goOperandStaticType(arm, printed);
+    return ((goType === 'const-int') || (goType === 'const-float') || (GO_TERNARY_JOIN_TYPES.indexOf(goType) >= 0)) ? goType : undefined;
+};
+
+// does the condition evaluating to `outcome` prove the local `name` is not undefined?
+GoTranspiler.prototype.goTernaryJoinConditionDefines = function (condition, name: string, outcome: boolean): boolean {
+    const node: any = this.goUnwrapParenthesizedNode(condition);
+    if (node?.kind === SyntaxKind.PrefixUnaryExpression && node.operator === SyntaxKind.ExclamationToken) {
+        return this.goTernaryJoinConditionDefines(node.operand, name, !outcome);
+    }
+    if (node?.kind !== SyntaxKind.BinaryExpression) {
+        return false;
+    }
+    const op = node.operatorToken.kind;
+    if ((op === SyntaxKind.AmpersandAmpersandToken) && outcome) {
+        return this.goTernaryJoinConditionDefines(node.left, name, true) || this.goTernaryJoinConditionDefines(node.right, name, true);
+    }
+    if ((op === SyntaxKind.BarBarToken) && !outcome) {
+        return this.goTernaryJoinConditionDefines(node.left, name, false) || this.goTernaryJoinConditionDefines(node.right, name, false);
+    }
+    const equal = (op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken);
+    const notEqual = (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken);
+    if (!equal && !notEqual) {
+        return false;
+    }
+    const isNil = (n) => { const u: any = this.goUnwrapParenthesizedNode(n); return (u?.kind === SyntaxKind.NullKeyword) || ((u?.kind === SyntaxKind.Identifier) && (u.text === 'undefined')); };
+    const isName = (n) => { const u: any = this.goUnwrapParenthesizedNode(n); return (u?.kind === SyntaxKind.Identifier) && (u.text === name); };
+    if (!((isName(node.left) && isNil(node.right)) || (isName(node.right) && isNil(node.left)))) {
+        return false;
+    }
+    return notEqual ? outcome : !outcome;
+};
+
+// one answer per declaration: the arms can first be classified while another local's resolution is in
+// flight (its guard answers undefined), and every reader and the declaration must agree on that answer
+const GO_TERNARY_JOIN_MEMO = new WeakMap<object, { parts: { goType: string, derefTrue: boolean, derefFalse: boolean } | undefined }>();
+GoTranspiler.prototype.goTernaryJoinParts = function (declaration) {
+    if (declaration === undefined) {
+        return undefined;
+    }
+    const memo = GO_TERNARY_JOIN_MEMO.get(declaration);
+    if (memo !== undefined) {
+        return memo.parts;
+    }
+    GO_TERNARY_JOIN_MEMO.set(declaration, { parts: undefined }); // re-entry answers the box
+    let parts = this.goTernaryJoinPartsUncached(declaration);
+    if ((parts !== undefined) && this.goTernaryJoinHasForeignComparison(declaration, parts.goType)) {
+        parts = undefined;
+    }
+    GO_TERNARY_JOIN_MEMO.set(declaration, { parts: parts });
+    return parts;
+};
+
+// a comparison the printer inlines as the Go operator against an operand of another static Go type
+// (`dataLength == pageSize` with an `int` length) compiled only while the local was `any`; keep the box
+GoTranspiler.prototype.goTernaryJoinHasForeignComparison = function (declaration, goType: string): boolean {
+    const scope = this.goEnclosingFunction(declaration);
+    const name = declaration.name;
+    if (scope === undefined) {
+        return true;
+    }
+    return this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)) {
+            return false;
+        }
+        let current: any = n;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        const parent: any = current.parent;
+        if ((parent?.kind !== SyntaxKind.BinaryExpression) || ((COMPARISON_TOKENS.indexOf(parent.operatorToken.kind) < 0)
+            && (ORDERED_COMPARISON_OPERATORS[parent.operatorToken.kind] === undefined))) {
+            return false;
+        }
+        const other: any = this.goUnwrapParenthesizedNode((parent.left === current) ? parent.right : parent.left);
+        if ((other?.kind === SyntaxKind.NullKeyword) || ((other?.kind === SyntaxKind.Identifier) && (other.text === 'undefined'))
+            || (other?.kind === SyntaxKind.NumericLiteral) || (other?.kind === SyntaxKind.StringLiteral) || this.goIsSignedNumericLiteral(other)) {
+            return false;
+        }
+        const otherType = this.goOperandStaticType(other, this.printNode(other, 0));
+        return (otherType !== undefined) && (otherType !== goType);
+    });
+};
+
+GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
+    const ternary: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if (ternary?.kind !== SyntaxKind.ConditionalExpression) {
+        return undefined;
+    }
+    const whenTrue = this.goTernaryJoinArmType(ternary.whenTrue);
+    const whenFalse = this.goTernaryJoinArmType(ternary.whenFalse);
+    // the if/else needs a one-line condition, as the literal did
+    if ((whenTrue === undefined) || (whenFalse === undefined) || this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0)).includes('\n')) {
+        return undefined;
+    }
+    const plain = (goType: string) => ({ goType: goType, derefTrue: false, derefFalse: false });
+    if (whenTrue === whenFalse) {
+        return (whenTrue.startsWith('const-') || (whenTrue === 'nil')) ? undefined : plain(whenTrue);
+    }
+    // an absent arm stays with the closure pointer-join family (installCcxtGoClosurePointerJoin), whose
+    // read scan proves the typed nil pointer transparent at every use
+    if ((whenTrue === 'nil') || (whenFalse === 'nil')) {
+        return undefined;
+    }
+    // an untyped constant takes the other arm's numeric type
+    // (an integer constant never joins float64: the literal boxed an int there, not a float)
+    const constantFits = (constant: string, goType: string) => ((constant === 'const-int') && ((goType === 'int64') || (goType === 'int')))
+        || ((constant === 'const-float') && (goType === 'float64'));
+    if (constantFits(whenTrue, whenFalse)) {
+        return plain(whenFalse);
+    }
+    if (constantFits(whenFalse, whenTrue)) {
+        return plain(whenTrue);
+    }
+    // a pointer arm the condition proves non-nil reads as its pointee value
+    const derefs = (armNode, pointer: string, outcome: boolean, other: string) => {
+        const pointee = GO_TERNARY_POINTEE[pointer];
+        const arm: any = this.goUnwrapParenthesizedNode(armNode);
+        if ((pointee === undefined) || (arm?.kind !== SyntaxKind.Identifier) || !((other === pointee) || constantFits(other, pointee)
+            || ((pointee === 'string') && (other === 'string')))) {
+            return undefined;
+        }
+        return this.goTernaryJoinConditionDefines(ternary.condition, arm.text, outcome) ? pointee : undefined;
+    };
+    const trueValue = derefs(ternary.whenTrue, whenTrue, true, whenFalse);
+    if (trueValue !== undefined) {
+        return { goType: trueValue, derefTrue: true, derefFalse: false };
+    }
+    const falseValue = derefs(ternary.whenFalse, whenFalse, false, whenTrue);
+    if (falseValue !== undefined) {
+        return { goType: falseValue, derefTrue: false, derefFalse: true };
+    }
+    return undefined;
+};
+
+const goTernaryJoinUpstreamTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = goTernaryJoinUpstreamTypeOfInitializer.call(this, initializer, printedValue);
+    if (known !== undefined) {
+        return known;
+    }
+    const declaration = goTernaryJoinOwner(initializer);
+    return (declaration === undefined) ? undefined : this.goTernaryJoinParts(declaration)?.goType;
+};
+
+GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declaration, identation: number) {
+    if ((statement?.parent?.kind !== SyntaxKind.FirstStatement) || (statement.declarations?.length !== 1)
+        || (goTernaryJoinOwner(declaration.initializer) !== declaration)) {
+        return undefined;
+    }
+    const parts = this.goTernaryJoinParts(declaration);
+    if ((parts === undefined) || (this.getGoLocalType(declaration, this.printNode(declaration.initializer, identation)) !== parts.goType)) {
+        return undefined; // the local's own safety scan (writes, pushes, shadowed type name) kept the box
+    }
+    const ternary: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const condition = this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0));
+    const arm = (node, deref: boolean) => {
+        const printed = this.goPrintTernaryBranch(node, 1).trim();
+        return deref ? ('*' + printed) : printed;
+    };
+    const whenTrue = arm(ternary.whenTrue, parts.derefTrue);
+    const whenFalse = arm(ternary.whenFalse, parts.derefFalse);
+    const name = this.printNode(declaration.name, 0);
+    const iden = this.getIden(identation);
+    return `${iden}var ${name} ${parts.goType}\n${iden}if ${this.goStripControlClauseParens(condition)} {\n${iden}\t${name} = ${whenTrue}\n${iden}} else {\n${iden}\t${name} = ${whenFalse}\n${iden}}`;
+};
+
+const goTernaryJoinUpstreamPrintDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const declaration = node?.declarations?.[0];
+    if ((declaration?.initializer !== undefined) && (declaration.name?.kind === SyntaxKind.Identifier)) {
+        const joined = this.goTernaryJoinDeclaration(node, declaration, identation);
+        if (joined !== undefined) {
+            return joined;
+        }
+    }
+    return goTernaryJoinUpstreamPrintDeclarationList.call(this, node, identation);
+};
