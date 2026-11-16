@@ -23866,3 +23866,24 @@ describe('ral-76d: safeDict results whose default is another never-null base rea
         expect(out).toMatch(/let (?:mut )?data: Value = /);
     });
 });
+
+describe('ral-76e: a literal-defaulted integer reader ordered against its loop counter plus a literal', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    hold (m: any): any { return m; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('base fetchWebEndpoint maxRetries: `retry + 1 >= maxRetries` orders the two i64 payloads', () => {
+        const out = write ('ral-76e-a', "    a (options: Dict) {\n        const maxRetries = this.safeInteger (options, 'webApiRetries', 10);\n        let response = undefined;\n        for (let retry = 0; retry < maxRetries; retry++) {\n            if (retry + 1 >= maxRetries) {\n                throw new Error ('x');\n            }\n            response = this.hold (retry);\n        }\n        return response;\n    }\n");
+        expect(out).toContain('let mut maxRetries: i64 = ');
+        expect(out).toContain('retry < maxRetries');
+        expect(out).not.toContain('maxRetries.as_f64()');
+    });
+    test('a negative: a no-default reader (Int or Null) keeps the Value', () => {
+        const out = write ('ral-76e-a-neg', "    a (options: Dict) {\n        const maxRetries = this.safeInteger (options, 'webApiRetries');\n        let response = undefined;\n        for (let retry = 0; retry < 3; retry++) {\n            if (retry + 1 >= maxRetries) {\n                throw new Error ('x');\n            }\n            response = this.hold (retry);\n        }\n        return response;\n    }\n");
+        expect(out).not.toContain('let mut maxRetries: i64');
+    });
+});

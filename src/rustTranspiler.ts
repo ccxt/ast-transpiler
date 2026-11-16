@@ -11924,6 +11924,14 @@ export class RustTranspiler extends BaseTranspiler {
                 const test = lk === undefined ? `${value} ${sign} (__p as f64)` : `(__p as f64) ${sign} ${value}`;
                 return `matches!(${text(k, typed)}, Some(__p) if ${test})`;
             }
+            // ral-76e: an `i64` literal-defaulted integer reader local ordered against its loop's always-`Int` counter plus or minus an
+            // int literal (`retry + 1 >= maxRetries`): both sides are `Int` payloads, so the i64 compare is the helper's `as_f64` one
+            if (k === 'int' && own !== undefined && this.rustIntReaderLitDefault(own.declaration) && this.rust76eCounterStep(other)) {
+                if (dry) return '_';
+                const value = `${this.printNode(other, 0).trim()}.as_f64().unwrap_or(f64::NAN)`;
+                const mine = `(${text(k, typed)} as f64)`;
+                return lk === undefined ? `${value} ${sign} ${mine}` : `${mine} ${sign} ${value}`;
+            }
             // ral-54n: also an `i64` `safeInteger*` local with an integer-literal default (40d rustIntReaderLitDefault): the reader
             // answers an `Int` on every path, so `(x as f64)` is the very `as_f64` payload the boxed local compared with
             if ((k !== 'int' && k !== 'num') || own === undefined || !(this.rustRdOwnInit(own.declaration) || (k === 'int' && this.rustIntReaderLitDefault(own.declaration))) || !this.rustScalarValueNumber(other)) return undefined;
@@ -13308,6 +13316,17 @@ export class RustTranspiler extends BaseTranspiler {
             && isIdentifier(incr.operand) && this.rustSymbolOf(incr.operand) === symbol;
     }
 
+    /** ral-76e: `c`, `c + k` or `c - k` (parentheses skipped) where `c` is an always-`Int` for counter (rustValueIntCounter) and
+     *  `k` an int literal: the runtime value is an `Int` on every path. */
+    rust76eCounterStep(node: any): boolean {
+        const inner: any = this.unwrapParens(node);
+        if (inner === undefined) return false;
+        if (isIdentifier(inner)) return this.rustValueIntCounter(inner);
+        if (!isBinaryExpression(inner) || (inner.operatorToken.kind !== SyntaxKind.PlusToken && inner.operatorToken.kind !== SyntaxKind.MinusToken)) return false;
+        const left: any = this.unwrapParens(inner.left);
+        return isIdentifier(left) && this.rustValueIntCounter(left) && this.rustScalarIntLiteral(this.unwrapParens(inner.right)) !== undefined;
+    }
+
     /** tb: `const b = this.parseToInt (..)` (an `Int`-or-`Null` producer, `i64` / `Option<i64>`). */
     rustTbParseToIntInit(declaration: any): boolean {
         const init: any = declaration === undefined || !isVariableDeclaration(declaration) ? undefined : this.unwrapParens(declaration.initializer);
@@ -13570,6 +13589,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (kind === 'int' && this.rust56nTernaryCounterBound(parent, n)) return 'native';
             // ral-56n: a `Math.ceil (a / b)` `Option<f64>` const ordered against a `for` counter (print56nCeilCompare)
             if (kind === 'onum' && this.rust56nCeilCounterCompare(parent) !== undefined) return 'native';
+            // ral-76e: a literal-defaulted `i64` reader ordered against its loop counter plus or minus a literal (rustScalarCompareText)
+            if (kind === 'int' && !this.isEqualityOp(op) && RustTranspiler.NATIVE_COMPARISON_OPERATORS[op] !== undefined && this.rust76eCounterStep(parent.left === n ? parent.right : parent.left)
+                && this.rustIntReaderLitDefault(this.rustDeclaredNode(n))) return 'native';
             // the other operand is still a `Value`: the runtime arithmetic reads this one boxed
             // (`Value::from` of a Copy number is the Int / Float / Null the `Value` local held), decided with that operand
             if (this.rustScalarValueOperandUse(parent, n, kind)) return 'xbox';
