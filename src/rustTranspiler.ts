@@ -5267,6 +5267,8 @@ export class RustTranspiler extends BaseTranspiler {
             || (this.rustScOwnSelfCall(declaration.initializer) && !this.rustOdExcludedCallee(declaration.initializer) && !this.rustVenueLocalHandedOn(declaration) && this.rustReaderLendBoxes(declaration)))))
             && !this.rust66s3StrReturnedVeto(declaration, scope);
         const storeOnly = guarded && nativeUses === 0 && boxed === 1 && !handOff;
+        // ral-84e: a record-arm ternary string is typed only for a native use (boxed straight back it stays the `Value` it is handed as)
+        if (ok && nativeUses === 0 && kind === 'ostr' && this.rust84eRecordArmTernary(declaration.initializer)) return undefined;
         const unused = typedUses === 0 && !handOff && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
         // a string handed once to a ws client call and nothing else stays a `Value`
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
@@ -5898,10 +5900,26 @@ export class RustTranspiler extends BaseTranspiler {
         if (!RustTranspiler.RUST_NIL_ELEM_STR_KEYS.has(String(node.argumentExpression.text))) return undefined;
         if (/[/]test[/]/.test(String(node.getSourceFile?.()?.fileName ?? ''))) return undefined;
         const local = this.rustOptContainerOf(node.expression);
-        if (local === undefined || local.kind !== 'dict') return undefined;
+        // ral-84e: also an optional market / currency record (`Option<Market>` local, lent `Option<&Market>` / currency slot):
+        // its `KeyRead` reads the record's own map and answers `Null` when absent, the same `Value` the boxed arm held
+        if ((local === undefined || local.kind !== 'dict') && !this.rust84eOptRecordRecv(node.expression)) return undefined;
         const read = this.printNode(node, 0).trim();
         if (!/^(?:crate|ccxt)::value::KeyRead::key_read\(&{1,2}[A-Za-z_][A-Za-z0-9_]*, "[A-Za-z]+"\)$/.test(read)) return undefined;
         return `${read}.into_opt_string()`;
+    }
+
+    /** ral-84e: an optional market / currency record (`Option<Market>` local, lent `Option<&Market>` / currency slot, currency
+     *  local): its `KeyRead` reads the record's own map and answers `Null` when absent, the same `Value` the boxed read held. */
+    rust84eOptRecordRecv(recv: any): boolean {
+        return this.rustOptContainerOf(recv) === undefined && (this.rustOptMarketLocalOf(recv) !== undefined || this.rustMarketSlotParamOf(recv) !== undefined
+            || this.rustCurrencySlotParamOf(recv) !== undefined || this.rustCurrencyLocalOf(recv) !== undefined);
+    }
+
+    /** ral-84e: a ternary initializer with an arm `r['k']` read off such a record (rust84eOptRecordRecv). */
+    rust84eRecordArmTernary(init: any): boolean {
+        const node: any = this.unwrapParens(init);
+        if (node === undefined || !isConditionalExpression(node)) return false;
+        return [ node.whenTrue, node.whenFalse ].some((a: any) => { const arm: any = this.unwrapParens(a); return isElementAccessExpression(arm) && this.rust84eOptRecordRecv(arm.expression); });
     }
 
     /** True when `node` (through parens) is the `whenTrue`/`whenFalse` arm of a ternary that initialises a declaration. */
@@ -8472,6 +8490,16 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** ral-80e: `n` names a single-binding `const` local with an initializer (no later write is possible). */
+    /** ral-84e: `n` is a leaf (through `!`, parentheses, `&&` / `||`) of the right side of a statement `y = <logical>` whose
+     *  target y is an `Option<bool>` local and whose logical rust67bBoolLogicalWrite admits (printed `Some(<condition>)`). */
+    rust84eOptBoolWriteLeaf(n: any): boolean {
+        const top: any = this.rustClimbLogicalWrappers(n);
+        const write: any = top?.parent;
+        if (top === n || !isBinaryExpression(write) || write.right !== top || write.operatorToken.kind !== SyntaxKind.EqualsToken) return false;
+        if (write.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(write.left)) return false;
+        return this.rust67bBoolLogicalWrite(top) && this.rustScalarLocalOf(write.left)?.kind === 'obool';
+    }
+
     rust80eConstDecl(n: any): boolean {
         const d: any = this.rustDeclaredNode(n);
         const list: any = d?.parent;
@@ -8539,7 +8567,10 @@ export class RustTranspiler extends BaseTranspiler {
         // the `Value` local held, moved); the runtime pad helper it is handed to is unchanged
         if ((kind === 'str' || kind === 'ostr') && this.rust68hPadReceiver(n) && this.rustLocalLastUse(n, this.rustDeclaredNode(n))) return 'box';
         if (kind === 'bool' && this.rustScalarBoolLogicalText(this.rustClimbLogicalWrappers(n)) !== undefined) return 'cond';
-        if (kind === 'bool' && isPrefixUnaryExpression(parent) && this.rustValueNotOfBoolLocal(parent) !== undefined) return 'cond';
+        if ((kind === 'bool' || kind === 'obool') && isPrefixUnaryExpression(parent) && this.rustValueNotOfBoolLocal(parent) !== undefined) return 'cond';
+        // ral-84e: a bool / `Option<bool>` leaf of `y = <logical>` written into an `Option<bool>` local y (rust67bBoolLogicalWrite:
+        // the write prints `Some(<printCondition>)`, whose leaves read their truthiness: `x` / `(x == Some(true))`, as `is_true(&x)` did)
+        if ((kind === 'bool' || kind === 'obool') && this.rust84eOptBoolWriteLeaf(n)) return 'cond';
         // ral-54x S7: `let y = x;` copies a literal-seeded `bool` local into a `Value` local: the box is the `Bool` the
         // `Value` local held (Copy, no clone); the nil-local rule (za) already boxes the same alias of an `Option<bool>`
         // (a `bool` alias of a `bool` local copies natively: `let y: bool = x;`)
@@ -10857,6 +10888,7 @@ export class RustTranspiler extends BaseTranspiler {
         const caseRecv = kind === 'ostr' ? this.rustValueCaseRecv(node) : undefined;
         const caseCallee: any = node.expression;
         if (caseRecv !== undefined) return `${caseRecv}.as_str().map(str::${String(caseCallee.name.text) === 'toUpperCase' ? 'to_uppercase' : 'to_lowercase'})`;
+        const optBool = kind === 'bool' || kind === 'obool' ? this.rustOptBoolReaderText(kind, node) : undefined; if (optBool !== undefined) return optBool;
         const text = this.printNode(node, 0).trim();
         if (this.rustClockCall(node)) return kind === 'int' || kind === 'oint' ? wrap(`${text}.as_i64().unwrap_or_default()`) : undefined;
         const clock: any = base === 'str' && (this.rustClockString(node) || (this.rustIdString(node) && !this.rustIntToStringShape(node))) && isPropertyAccessExpression(node.expression) ? node.expression.expression : undefined;
@@ -11467,8 +11499,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isIdentifier(node)) return this.rustScalarIdentifierKind(node);
         if (isConditionalExpression(node)) {
             const narrowed = this.rustOptParamDefault(node)?.kind; if (narrowed !== undefined) return narrowed;
-            const a = this.rustScalarValueKind(node.whenTrue, true) ?? this.rustOptParamKind(node.whenTrue);
-            const b = this.rustScalarValueKind(node.whenFalse, true) ?? this.rustOptParamKind(node.whenFalse);
+            const a = this.rustScalarValueKind(node.whenTrue, true) ?? this.rustOptParamKind(node.whenTrue) ?? this.rust84eBoolArmKind(node.whenTrue);
+            const b = this.rustScalarValueKind(node.whenFalse, true) ?? this.rustOptParamKind(node.whenFalse) ?? this.rust84eBoolArmKind(node.whenFalse);
             const joined = this.rustScalarJoinKinds(a, b, true);
             return joined === 'null' ? undefined : joined;
         }
@@ -11887,9 +11919,11 @@ export class RustTranspiler extends BaseTranspiler {
     rustValueNotOfBoolLocal(node: any): string | undefined {
         if (!isPrefixUnaryExpression(node) || node.operator !== SyntaxKind.ExclamationToken) return undefined;
         const operand: any = this.unwrapParens(node.operand);
-        if (!isIdentifier(operand) || this.rustScalarLocalOf(operand)?.kind !== 'bool') return undefined;
+        const kind = isIdentifier(operand) ? this.rustScalarLocalOf(operand)?.kind : undefined;
+        if (kind !== 'bool' && kind !== 'obool') return undefined;
         if (this.rustClimbLogicalWrappers(node) !== node || this.isBooleanPosition(node)) return undefined;
-        return `Value::Bool(!${super.printIdentifier(operand)})`;
+        // ral-84e: an `Option<bool>` operand negates its truthiness (`!undefined` is `true`, as `!(None == Some(true))`)
+        return kind === 'obool' ? `Value::Bool(!(${super.printIdentifier(operand)} == Some(true)))` : `Value::Bool(!${super.printIdentifier(operand)})`;
     }
 
     /** `a || b` / `a && b` whose every leaf is a native `bool` and one is a `bool` scalar local: JS returns an
@@ -16151,6 +16185,17 @@ export class RustTranspiler extends BaseTranspiler {
         return value === undefined ? undefined : `${indent}let mut ${varName}: crate::types::Market = ${value}`;
     }
 
+    /** ral-84e: an equality arm (`m['inverse'] === true`, `t === 'inverse'`) of a ternary initializer of a `boolean` local whose
+     *  native text exists: the arm prints that `bool` (rustScalarNativeText's ternary arm), the very `Bool` its box held. */
+    rust84eBoolArmKind(arm: any): string | undefined {
+        const node: any = this.unwrapParens(arm);
+        if (node === undefined || !isBinaryExpression(node) || !this.isEqualityOp(node.operatorToken.kind) || !this.rustTernaryArm(node)) return undefined;
+        let top: any = node;
+        while (isParenthesizedExpression(top.parent) || (isConditionalExpression(top.parent) && top.parent.condition !== top)) top = top.parent;
+        if (!isVariableDeclaration(top.parent) || !isIdentifier(top.parent.name) || this.primitiveKindOfType(this.typeOfNodeIfAny(top.parent.name)) !== 'boolean') return undefined;
+        return this.nativeEqualityText(node) !== undefined ? 'bool' : undefined;
+    }
+
     /** A `const x = <comparison>` initializer whose native text exists and whose local's checker type is `boolean`. */
     rustBoolCompareSeed(node: any): boolean {
         let top: any = node;
@@ -16484,7 +16529,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
 
         // Handle this.method(...) calls with optional params
-        const optNameArity: Record<string, number> = { safeString: 2, safeString2: 3, safeStringN: 2, safeStringLower: 2, safeStringUpper: 2, safeStringLower2: 3, safeStringUpper2: 3, safeStringLowerN: 2, safeStringUpperN: 2 };
+        const optNameArity: Record<string, number> = { safeBool: 2, safeBool2: 3, safeBoolN: 2, safeString: 2, safeString2: 3, safeStringN: 2, safeStringLower: 2, safeStringUpper: 2, safeStringLower2: 3, safeStringUpper2: 3, safeStringLowerN: 2, safeStringUpperN: 2 };
         if (expr.expression.kind === SyntaxKind.ThisKeyword) {
             const methodName = expr.name.text;
             const sig = this.methodSignatures[methodName];
@@ -27018,6 +27063,15 @@ export class RustTranspiler extends BaseTranspiler {
         safeStringLowerN: { any: 'safe_string_lower_n_opt' },
         safeStringUpperN: { any: 'safe_string_upper_n_opt' },
     };
+    // ral-84e: the `Option<bool>` twins of the base safeBool readers (hand-written in exchange_stubs.rs: `Some` only for a
+    // real `Bool`, so `.unwrap_or(<literal>)` is exactly the boxed reader with that literal default). Consulted only while
+    // rustOptBoolReaderText prints (rustOptBoolReading), never by the string-twin callers.
+    private static readonly RUST_OPT_BOOL_READERS: Record<string, { k?: string, any?: string }> = {
+        safeBool: { k: 'safe_bool_k_opt', any: 'safe_bool_opt' },
+        safeBool2: { any: 'safe_bool2_opt' },
+        safeBoolN: { any: 'safe_bool_n_opt' },
+    };
+    private rustOptBoolReading = false;
     // ral-65o: the test crate's `ExchangeOps` surface (rust/tests test_helpers.rs) has these twins only, Value keys
     private static readonly RUST_TEST_OPT_READERS: Record<string, { k?: string, any?: string }> = {
         safeString: { any: 'safe_string_opt' },
@@ -27032,8 +27086,8 @@ export class RustTranspiler extends BaseTranspiler {
         const callee: any = node?.expression;
         if (!isCallExpression(node) || !isPropertyAccessExpression(callee)) return undefined;
         const onSelf = callee.expression.kind === SyntaxKind.ThisKeyword;
-        if (!onSelf && !(isIdentifier(callee.expression) && this.rustCallsTestExchange(node))) return undefined;
-        const twins = (onSelf ? RustTranspiler.RUST_OPT_READERS : RustTranspiler.RUST_TEST_OPT_READERS)[String(callee.name.text)];
+        if (!onSelf && (this.rustOptBoolReading || !(isIdentifier(callee.expression) && this.rustCallsTestExchange(node)))) return undefined;
+        const twins = (onSelf ? (this.rustOptBoolReading ? RustTranspiler.RUST_OPT_BOOL_READERS : RustTranspiler.RUST_OPT_READERS) : RustTranspiler.RUST_TEST_OPT_READERS)[String(callee.name.text)];
         if (twins === undefined || node.arguments.length < 2 || !this.rustCalleeIsRuntimeBase(node)) return undefined;
         const key: any = node.arguments[1];
         const literal = isStringLiteralLikeNode(key) && !(String(key.text) in this.StringLiteralReplacements) && !/["\\]/.test(String(key.text));
@@ -27041,12 +27095,39 @@ export class RustTranspiler extends BaseTranspiler {
         return twins.any !== undefined ? { name: twins.any } : undefined;
     }
 
+    /** A borrowed `_k` reader with an `_opt` twin in the current print (`safe_bool_k` only while a bool twin prints). */
+    rustOptKReader(rust: string): boolean {
+        return this.rustOptBoolReading ? rust === 'safe_bool_k' : RustTranspiler.RUST_OPT_K_READERS.has(rust);
+    }
+
+    /** ral-84e: `self.safe_bool*_opt(..)` for a base safeBool / safeBool2 / safeBoolN call: `Option<bool>` as is for an
+     *  `obool` local with no default, `.unwrap_or(<literal>)` for a `bool` local with a literal boolean default (the boxed
+     *  reader returns the member only when it is a `Bool`, else that default: the twin's `None` then unwraps to it). */
+    rustOptBoolReaderText(kind: string, node: any): string | undefined {
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const required = RustTranspiler.RUST_SCALAR_BOOL_HELPERS[String(node.expression.name.text)];
+        if (required === undefined) return undefined;
+        const args: any[] = Array.from(node.arguments ?? []);
+        const fallback: any = args.length === required + 1 ? this.unwrapParens(args[required]) : undefined;
+        if (kind === 'obool' ? args.length !== required : (fallback === undefined || this.literalKindOfNode(fallback) !== 'boolean')) return undefined;
+        const saved = this.rustOptBoolReading;
+        this.rustOptBoolReading = true;
+        let text: string | undefined;
+        try {
+            text = this.rustOptReaderCallText(node);
+        } finally {
+            this.rustOptBoolReading = saved;
+        }
+        if (text === undefined) return undefined;
+        return kind === 'obool' ? text : `${text}.unwrap_or(${fallback.kind === SyntaxKind.TrueKeyword ? 'true' : 'false'})`;
+    }
+
     /** The `_opt` twin call of a base safeString-family reader node, printed by the reader's own printer; else undefined. */
     rustOptReaderCallText(expr: any, identation = 0): string | undefined {
         const node: any = this.unwrapParens(expr);
         if (node === undefined || !isCallExpression(node) || this.checkerOrUndefined() === undefined) return undefined;
         const borrowed = this.rustBorrowedDictReader(node);
-        if (borrowed === undefined ? this.rustOptReaderName(node) === undefined : !RustTranspiler.RUST_OPT_K_READERS.has(borrowed)) return undefined;
+        if (borrowed === undefined ? this.rustOptReaderName(node) === undefined : !this.rustOptKReader(borrowed)) return undefined;
         this.rustOptReaderPrint.add(node);
         this.rustOptReaderPrinted.delete(node);
         let text: string;
@@ -27078,7 +27159,7 @@ export class RustTranspiler extends BaseTranspiler {
         const dflt = node.arguments.length === 3 ? this.printNode(node.arguments[2], identation).trim() : '';
         const text = String(recv.text);
         const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[text] ?? text);
-        const opt = this.rustOptReaderPrint.has(node) && RustTranspiler.RUST_OPT_K_READERS.has(rust);
+        const opt = this.rustOptReaderPrint.has(node) && this.rustOptKReader(rust);
         if (opt) this.rustOptReaderPrinted.add(node);
         return `self.${rust}${opt ? '_opt' : ''}(&${name}, ${this.quotedStringLiteral(String(key.text))}, &[${dflt}])`;
     }

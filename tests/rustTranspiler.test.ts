@@ -8902,7 +8902,7 @@ describe('rust reader default locals', () => {
 
     test('readers whose default has the reader kind, and a bool reader without default, get native types', () => {
         const text = out();
-        expect(text).toMatch(/let mut flag: Option<bool> = self\.safe_?[bB]ool[^;]*\.as_bool\(\);/);
+        expect(text).toContain('let mut flag: Option<bool> = self.safe_bool_k_opt(o.clone(), "flag", &[]);');
         expect(text).toContain('if (flag == Some(true)) {');
         expect(text).toMatch(/let mut name: Option<String> = self\.safe_string_k_opt\([^;]*\);/);
         expect(text).toMatch(/let mut limit: Option<i64> = self\.safe_?[iI]nteger[^;]*\.as_i64\(\);/);
@@ -10526,7 +10526,7 @@ describe('typed safeMarket and market slots', () => {
         expect(base).toContain('let mut markets: &[crate::types::Market] = __marketsById.records_by_id(');
         expect(base).toContain('return markets[0].clone();');
         expect(base).toContain('market: Option<&crate::types::Market>');
-        expect(base).toContain('self.safe_bool_k(&market, "inverse"');
+        expect(base).toContain('self.safe_bool_k_opt(&market, "inverse"');
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut resolved: crate::types::Market = self.safeMarket(');
         expect(out).toContain('crate::value::KeyRead::key_read(&&resolved, "symbol")');
@@ -24501,5 +24501,68 @@ describe('ral-84d R4: an Array.isArray-tested safeValue local reads its length i
     test('negative: a length read outside the arm keeps the local Value', () => {
         const out = write ('ral-84d-r4n', "    m (query: Dict, key: string): number {\n        const value = this.safeValue (query, key);\n        if (Array.isArray (value)) {\n            return this.keep (value);\n        }\n        return value.length;\n    }\n");
         expect(out).toMatch(/let (?:mut )?value: Value = /);
+    });
+});
+describe('ral-84e: safeBool locals print the Option<bool> reader twin', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    safeBool (o: any, k: any, d: any = undefined): boolean { return o; }\n    safeBool2 (o: any, k1: any, k2: any, d: any = undefined): boolean { return o; }\n    hold (m: any): any { return m; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a literal default unwraps the twin to that literal; no default keeps Option<bool>', () => {
+        const out = write ('ral-84e-a', "    a (p: Dict, m: Dict) {\n        const params = this.hold (p);\n        const market = this.hold (m);\n        const fast = this.safeBool (params, 'fast', false);\n        const trig = this.safeBool2 (params, 'trigger', 'stop', true);\n        const delisted = this.safeBool (market, 'isDelisted');\n        let active = true;\n        if (delisted !== undefined) {\n            active = !delisted;\n        }\n        if (fast && trig) {\n            return this.hold (active);\n        }\n        return 1;\n    }\n");
+        expect(out).toContain('let mut fast: bool = self.safe_bool_k_opt(');
+        expect(out).toContain('\"fast\", &[Value::Bool(false)]).unwrap_or(false);');
+        expect(out).toContain('let mut trig: bool = self.safe_bool2_opt(');
+        expect(out).toContain('.unwrap_or(true);');
+        expect(out).toContain('let mut delisted: Option<bool> = self.safe_bool_k_opt(');
+        expect(out).toContain('Value::Bool(!(delisted == Some(true)))');
+        expect(out).not.toContain('.as_bool().unwrap_or(false)');
+    });
+    test('an Option<bool> leaf of a write into an Option<bool> local reads its truthiness', () => {
+        const out = write ('ral-84e-b', "    b (r: Dict) {\n        const raw = this.hold (r);\n        const rawActive = this.safeBool (raw, 'active');\n        const closed = this.safeBool (raw, 'closed', false);\n        let active: boolean = undefined;\n        if (rawActive !== undefined) {\n            active = (rawActive) && (!closed);\n        }\n        return this.hold (active);\n    }\n");
+        expect(out).toContain('let mut rawActive: Option<bool> = self.safe_bool_k_opt(');
+        expect(out).toContain('(rawActive == Some(true))');
+        expect(out).not.toContain('let mut rawActive: Value');
+    });
+    test('negative: a non-literal default keeps the boxed reader', () => {
+        const out = write ('ral-84e-c', "    c (p: Dict, d: boolean) {\n        const params = this.hold (p);\n        const fast = this.safeBool (params, 'fast', d);\n        if (fast) {\n            return 1;\n        }\n        return 2;\n    }\n");
+        expect(out).not.toContain('safe_bool_k_opt');
+    });
+});
+describe('ral-84e: a ternary of an optional market record field and undefined is an Option<String>', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: Str; base: Str; quote: Str; [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    markets: Dict = {};\n    market (symbol: string): Market { return this.markets[symbol]; }\n    hold (m: any): any { return m; }\n    filterBySymbol (rows: any, symbol: Str = undefined): any { return rows; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Market } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('derive fetchSettlementHistory symbolResolved', () => {
+        const out = write ('ral-84e-t1', "    f (symbol: Str = undefined, rows: any = undefined) {\n        let market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n        }\n        const symbolResolved = (market !== undefined) ? market['symbol'] : undefined;\n        if (symbolResolved === 'BTC/USDT') {\n            return 1;\n        }\n        return this.filterBySymbol (rows, symbolResolved);\n    }\n");
+        expect(out).toMatch(/let mut symbolResolved: Option<String> = \(if \(market\.is_some\(\)\) \{ crate::value::KeyRead::key_read\(&+market, "symbol"\)\.into_opt_string\(\) \} else \{ None \}\);/);
+        expect(out).not.toContain('let mut symbolResolved: Value');
+    });    test('negative: boxed straight back (no native use) it stays Value', () => {
+        const out = write ('ral-84e-t2', "    g (symbol: Str = undefined) {\n        let market = undefined;\n        if (symbol !== undefined) {\n            market = this.market (symbol);\n        }\n        const symbolResolved = (market !== undefined) ? market['symbol'] : undefined;\n        return { 'symbol': symbolResolved };\n    }\n");
+        expect(out).toContain('let mut symbolResolved: Value');
+    });
+});
+describe('ral-84e: a boolean ternary whose arms are native equality tests is a bool', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeBool (o: any, k: any, d: any = undefined): boolean { return o; }\n    hold (m: any): any { return m; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('lighter parseTrade isMaker', () => {
+        const out = write ('ral-84e-b1', "    p (t: Dict) {\n        const trade = this.hold (t);\n        const side = this.safeString (trade, 'side');\n        const isMakerAsk = this.safeBool (trade, 'is_maker_ask');\n        const isMaker = (side === 'sell') ? (isMakerAsk === true) : (isMakerAsk === false);\n        return { 'takerOrMaker': isMaker ? 'maker' : 'taker' };\n    }\n");
+        expect(out).toContain('let mut isMaker: bool = (if (side.as_deref() == Some(\"sell\")) { (isMakerAsk == Some(true)) } else { (isMakerAsk == Some(false)) });');
     });
 });
