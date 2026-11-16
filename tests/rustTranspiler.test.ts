@@ -8704,7 +8704,7 @@ describe('rust test-source locals', () => {
         const out = fresh.transpileRustByPath(path.join (rustFixtureRoot, 'test-tier-locals', 'ts/src/test/Exchange/test.locals.ts')).content;
         expect(out).toContain('let mut ok: bool = true;');
         expect(out).toContain('let mut i: i64 = 0;');
-        expect(out).toMatch(/let mut id: Option<String> = exchange\.safe_?[sS]tring\(/);
+        expect(out).toMatch(/let mut id: Option<String> = exchange\.safe_string_opt\(/);
         // a literal only handed to the by-value harness moves into its box at the last use (D11)
         expect(out).toContain('let mut kept: String = ');
         expect(out).toContain('exchange.hold(Value::from(kept))');
@@ -21831,8 +21831,73 @@ describe('ral-62o: an Option<String> reader local prints the `_opt` twin of the 
         expect(out).toMatch(/return self\.safe_string_k_opt\([^;]*"token", &\[\]\);/);
         expect(out).not.toMatch(/return self\.safe_string[a-z0-9_]*\([^;]*\)\.as_str\(\)\.map\(str::to_owned\);/);
     });
-    test('guard: a reader with no `_opt` twin (safeStringLower2) keeps its boxed call and the unwrap', () => {
-        expect(build ()).toContain('let mut f: Option<String> = self.safeStringLower2(o.clone(), Value::Str("x".into()), Value::Str("y".into()), &[]).as_str().map(str::to_owned);');
+    test('ral-65o: safeStringLower2 now has its `_opt` twin (was the no-twin guard)', () => {
+        expect(build ()).toContain('let mut f: Option<String> = self.safe_string_lower2_opt(o.clone(), Value::Str("x".into()), Value::Str("y".into()), &[]);');
+    });
+});
+
+describe('ral-65o: the lower / upper readers and the test-crate ExchangeOps readers print their `_opt` twins', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n"
+        + "    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n"
+        + "    safeStringN (o: any, ks: any[], d: Str = undefined): Str { return o[ks[0]]; }\n"
+        + "    safeStringLower (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n"
+        + "    safeStringUpper (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n"
+        + "    safeStringLower2 (o: any, a: any, b: any, d: Str = undefined): Str { return o[a]; }\n"
+        + "    safeStringUpper2 (o: any, a: any, b: any, d: Str = undefined): Str { return o[a]; }\n"
+        + "    safeStringLowerN (o: any, ks: any[], d: Str = undefined): Str { return o[ks[0]]; }\n"
+        + "    safeStringUpperN (o: any, ks: any[], d: Str = undefined): Str { return o[ks[0]]; }\n}\n";
+    test('venue: Value-key lower / upper, lower2 / upper2, lowerN / upperN readers print the twin; literal keys keep `_k_opt`', () => {
+        const dir = path.join (rustFixtureRoot, 'ral65o-venue');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    pick (o: Dict, i: number, t: Str): string {\n"
+            + "        const a = this.safeStringLower (o, i);\n"
+            + "        const b = this.safeStringUpper (o, t, t);\n"
+            + "        const c = this.safeStringLower2 (o, 'x', 'y');\n"
+            + "        const d = this.safeStringUpper2 (o, 'x', 'y', b);\n"
+            + "        const e = this.safeStringLowerN (o, [ 'x', 'y' ]);\n"
+            + "        const f = this.safeStringUpperN (o, [ 'x', 'y' ]);\n"
+            + "        const g = this.safeStringUpper (o, 'side');\n"
+            + "        let h = this.safeStringLower2 (o, 'p', 'q');\n"
+            + "        if (h === undefined) {\n"
+            + "            h = this.safeStringLower (o, i);\n"
+            + "        }\n"
+            + "        if (a === undefined || b === undefined || c === 'x' || d === 'y' || e === undefined || f === undefined || g === 'BUY' || h === undefined) {\n"
+            + "            return 'none';\n"
+            + "        }\n"
+            + "        return a;\n"
+            + "    }\n"
+            + "    parseType (t: Str): Str {\n        const types: Dict = { 'a': 'LIMIT' };\n        return this.safeStringLower (types, t, t);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut a: Option<String> = self\.safe_string_lower_opt\(o\.clone\(\), [^;]*i[^;]*, &\[\]\);/);
+        expect(out).toMatch(/let mut b: Option<String> = self\.safe_string_upper_opt\(o\.clone\(\), [^;]*\);/);
+        expect(out).toContain('let mut c: Option<String> = self.safe_string_lower2_opt(o.clone(), Value::Str("x".into()), Value::Str("y".into()), &[]);');
+        expect(out).toMatch(/let mut d: Option<String> = self\.safe_string_upper2_opt\(o\.clone\(\), Value::Str\("x"\.into\(\)\), Value::Str\("y"\.into\(\)\), &\[[^;]*\]\);/);
+        expect(out).toMatch(/let mut e: Option<String> = self\.safe_string_lower_n_opt\(o\.clone\(\), [^;]*, &\[\]\);/);
+        expect(out).toMatch(/let mut f: Option<String> = self\.safe_string_upper_n_opt\(o\.clone\(\), [^;]*, &\[\]\);/);
+        expect(out).toContain('let mut g: Option<String> = self.safe_string_upper_k_opt(o.clone(), "side", &[]);');
+        expect(out).toMatch(/h = self\.safe_string_lower_opt\(o(?:\.clone\(\))?, [^;]*\);/);
+        expect(out).toMatch(/return self\.safe_string_lower_opt\(&?types[^;]*\);/);
+        expect(out).not.toMatch(/self\.safe(?:_s|S)tring[A-Za-z0-9_]*\([^;]*\)\.as_str\(\)\.map\(str::to_owned\)/);
+    });
+    test('test crate: `exchange.safeString` / `safeStringN` read into Str locals print the ExchangeOps `_opt` twin (Value key kept)', () => {
+        const dir = path.join (rustFixtureRoot, 'ral65o-tests');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/test/Exchange'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/test/Exchange/test.reader.ts'), "import Exchange from '../../base/Exchange';\nfunction testReader (exchange: Exchange, entry: any, i: number) {\n"
+            + "    const side = exchange.safeString (entry, 'side');\n"
+            + "    const high = exchange.safeString (entry, i);\n"
+            + "    const approx = exchange.safeStringN (entry, [ 'open', 'close' ]);\n"
+            + "    if (side === undefined || high === undefined || approx === undefined) {\n        return false;\n    }\n"
+            + "    return side + high + approx;\n}\nexport default testReader;\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/test/Exchange/test.reader.ts')).content;
+        expect(out).toMatch(/let mut side: Option<String> = exchange\.safe_string_opt\([^;]*Value::Str\("side"\.into\(\)\), &\[\]\);/);
+        expect(out).toMatch(/let mut high: Option<String> = exchange\.safe_string_opt\([^;]*, &\[\]\);/);
+        expect(out).toMatch(/let mut approx: Option<String> = exchange\.safe_string_n_opt\([^;]*, &\[\]\);/);
+        expect(out).not.toContain('.as_str().map(str::to_owned)');
+        expect(out).not.toContain('safe_string_k_opt');
     });
 });
 
