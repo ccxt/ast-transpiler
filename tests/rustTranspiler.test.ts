@@ -21610,3 +21610,23 @@ describe('ral-63x: a sync ws `string` method with no arm types a `&str` paramete
         expect(out).toMatch(/let mut hash: Value/);
     });
 });
+
+describe('ral-63e: a split-element key of a pure read chain on an annotated dict (`m[k][j]`, `j in m[k]`) is an Option<String> local', () => {
+    const src = (recvType: string, tail: string) => "export type Str = string | undefined;\nexport interface Dict { [key: string]: any }\nclass T {\n    safeString (o: any, k: any, d: Str = undefined): Str { return undefined; }\n    safeDict (o: any, k: any, d: any = undefined): Dict | undefined { return undefined; }\n    fv (paramName: string, x: any): any {\n        const methodDict" + recvType + " = x;\n        const splited = paramName.split ('.');\n        const parentKey = splited[0];\n        const subKey = this.safeString (splited, 1);\n        if (!(parentKey in methodDict)) { return 2; }\n        if (this.safeDict (methodDict, parentKey) === undefined) {\n            return methodDict[parentKey];\n        }\n" + tail + "    }\n}\n";
+    const both = "        if (!(subKey in methodDict[parentKey])) { return 3; }\n        return methodDict[parentKey][subKey];\n";
+    test('positive: the chain links print the native okey read with the typed key', () => {
+        const out = transpiler.transpileRust(src(': Dict', both)).content;
+        expect(out).toContain('let mut parentKey: Option<String> = splited.get(0).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('in_op(&(if let (Some(__m), Some(__k)) = (methodDict.as_map(), parentKey.as_deref()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null }), &subKey)');
+        expect(out).toContain('return get_value(&(if let (Some(__m), Some(__k)) = (methodDict.as_map(), parentKey.as_deref()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null }), &subKey);');
+        expect(out).not.toContain('parentKey.as_str()');
+    });
+    test('guard: an unannotated receiver keeps the key a Value', () => {
+        const out = transpiler.transpileRust(src('', both)).content;
+        expect(out).toContain('let mut parentKey: Value = ');
+    });
+    test('guard: a chain that is written (`m[k][j] = v`) keeps the key a Value', () => {
+        const out = transpiler.transpileRust(src(': Dict', "        methodDict[parentKey][subKey] = 1;\n        return 1;\n")).content;
+        expect(out).toContain('let mut parentKey: Value = ');
+    });
+});

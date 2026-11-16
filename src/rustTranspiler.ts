@@ -8038,6 +8038,7 @@ export class RustTranspiler extends BaseTranspiler {
         if ((kind === 'str' || kind === 'ostr') && this.rust63kLocalFlatHelperKey(n)) return 'mkey';
         // an optional-string local keys a proven map read or an `in` test natively (a `None` key misses, as the `Null` did)
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
+        if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rust63eChainLinkKeyRead(n)) return 'okey';
         // ral-yg: an element key into the base-declared `this.urls['<lit>']` map reads it by the borrowed key
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustUrlsKeyReadUse(n)) return 'okey';
         // uh: a ternary of two string literals keys a proven map read natively (`m.get(k)` is the entry `get_value` reads)
@@ -12180,6 +12181,34 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustProvenDictThisField(receiver) !== undefined || this.rustProvenDictThisFieldElement(receiver)
             || this.rustDictLocalProof(receiver) === 'plain') return 'value';
         return undefined;
+    }
+
+    /** ral-63e: `m[k]` as the inner link of a pure read chain `m[k][j]` / `j in m[k]` (base featureValueByType `parentKey`):
+     *  the link prints the same native map read a one-level `okey` read prints (`(if let (Some(__m), Some(__k)) = ..)`), only
+     *  handed to the outer `get_value` / `in_op` by reference; the chain is never a write target, delete or update. */
+    rust63eChainLinkKeyRead(n: any): boolean {
+        const read: any = n.parent;
+        if (!isElementAccessExpression(read) || read.argumentExpression !== n || isElementAccessExpression(read.expression)) return false;
+        const up: any = read.parent;
+        let top: any;
+        if (isElementAccessExpression(up) && up.expression === read) top = up;
+        else if (isBinaryExpression(up) && up.right === read && up.operatorToken.kind === SyntaxKind.InKeyword) top = up;
+        else return false;
+        if (isElementAccessExpression(top)) {
+            const above: any = top.parent;
+            if (above === undefined || isElementAccessExpression(above) && above.expression === top || above.kind === SyntaxKind.DeleteExpression
+                || isPrefixUnaryExpression(above) || above.kind === SyntaxKind.PostfixUnaryExpression) return false;
+            if (isBinaryExpression(above) && above.left === top && rustIsAssignmentOperator(above.operatorToken.kind)) return false;
+            if (!this.isNativeAccessPositionSafe(top) || this.isNativeWriteTargetBase(top) || this.isWriteBackBindRead(top)) return false;
+        }
+        if (this.isNativeWriteTargetBase(read) || this.isWriteBackBindRead(read)) return false;
+        // the receiver is a local or parameter with a written type annotation (`const methodDict: Dict = ..`): an unannotated
+        // receiver would be typed re-entrantly from here and cached early (pro aster `result` lost its typed OHLCVsBySymbol)
+        if (!isIdentifier(read.expression)) return false;
+        const recvDecl: any = this.rustDeclaredNode(read.expression);
+        if (recvDecl === undefined || !(isVariableDeclaration(recvDecl) || isParameterDeclaration(recvDecl)) || recvDecl.type === undefined) return false;
+        const kind = this.rustOkeyKind(read.expression, read);
+        return kind === 'map' || (kind === 'value' && RUST_PLAIN_PLACE.test(this.printNode(read.expression, 0).trim()));
     }
 
     /** A one-level read `m[k]` (not a write target, not a chain link) on an `rustOkeyKind` receiver. */
@@ -18378,6 +18407,12 @@ export class RustTranspiler extends BaseTranspiler {
                 const typedKey = isIdentifier(key) && !borrowedKey ? this.rust62nTypedStrKey(key) : undefined;
                 acc = `crate::value::KeyRead::read(&&${super.printIdentifier(receiver)}, &${borrowedKey ? `Value::from(${super.printIdentifier(key)})` : (typedKey ?? this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0))})`;
                 continue;
+            }
+            // ral-63e: the inner link of a pure read chain keyed by a typed `okey` local (rust63eChainLinkKeyRead) prints its
+            // own native okey read (the very read the `Value` key's link printed, with the typed key text)
+            if (link === chain[0] && chain.length > 1 && isIdentifier(key) && this.rustScalarUseForms.get(key) === 'okey' && this.rust63eChainLinkKeyRead(key)) {
+                const okeyLink = this.printOkeyRead(link);
+                if (okeyLink !== undefined) { acc = okeyLink; continue; }
             }
             // ral-59k: the outer key of a two-level field READ lends the typed key (rustFieldKeyUseForm 'fok')
             const outerKey: any = this.rustSkipWrappers(key);
