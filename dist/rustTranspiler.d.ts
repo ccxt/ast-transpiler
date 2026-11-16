@@ -708,7 +708,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustStrLentLocals;
     /** md: market-field strings lent at their boxes (guarded by their printed name: `type` prints `type_var`). */
     private rustMarketLentLocals;
+    /** ral-70f: ral-70f reader locals whose last use walk accepted every use (rustScalarLocalKindCore). */
+    private rust70fWalkOk;
     rustScalarLocalKindUncached(declaration: any): string | undefined;
+    rustScalarLocalKindCore(declaration: any): string | undefined;
     rustAnyBoolTestedLocal(declaration: any): boolean;
     private rustStrNoLend;
     rustStrLendOnly(declaration: any): boolean;
@@ -1044,6 +1047,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  rustStr2LocalOptionString pass printed this); the write's own source text is the call, unchanged otherwise. Also the
      *  local itself as the whole source of a write to a plain `Value` local, at its last use. */
     rust68fReaderSelfArgWrite(n: any, write: any, form: string, declaration: any): boolean;
+    /** ral-70f: the write a ral-70f reader local's typed-signature argument (`targ`) feeds targets a local declared with
+     *  `let` / `const` (bitget fetchTickers `market = this.market (symbol)` under the typed `market (&str)` signature): the
+     *  argument prints `x.as_deref().unwrap_or_default()` whatever the target, the text ccxt's narrowStrNullLocals pass
+     *  printed there. A parameter target (untyped `any`) keeps the refusal. */
+    rust70fTargLocalWrite(write: any): boolean;
     /** ral-64n: a typed-signature argument (`targ`: printed `x.as_deref().unwrap_or_default()` / `x.as_deref()` / the Copy
      *  payload, never a boxed operand) of the call that is the whole source of a write to a typed scalar local (bitflyer
      *  `expiry = this.parseExpiryDate (expiryDate)` with `expiryDate` declared in two sibling blocks): the written local
@@ -1196,6 +1204,23 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** How a use of a scalar local prints: `test` (literal/null compare), `cond` (bool condition),
      *  `write` (same-kind assignment statement), `concat` (a `format!` operand) or `box` (a by-value `Value` slot). */
     rustScalarUseForm(n: any, kind: string): string | undefined;
+    /** ral-70f: a read of a ral-70f reader local (rust70fReaderLocal) no other rule prints, used whole as a call argument, the
+     *  value of `a = x` / `a[..] = x`, a property value or an array element (through parentheses and `as string`): the box
+     *  converts the `Str` / `Null` the boxed reader held, cloned unless it is the last use (ccxt's narrowStrNullLocals pass
+     *  printed exactly `x[.clone()].map(Value::from).unwrap_or(Value::Null)` there). */
+    /** ral-70f: the identifier under `(x as string)` / parentheses (or `n` itself). */
+    rust70fCastBase(n: any): any;
+    /** ral-70f: `access` is (through parentheses) the target of an assignment or update, or a `delete` operand. */
+    rust70fWriteTargetKey(access: any): boolean;
+    /** ral-70f: `n` reads a ral-70f reader local and is (through parentheses / `as string`) the whole key of a write target. */
+    rust70fWriteKey(n: any): boolean;
+    /** ral-70f: `x[0] === 'c'` / `!==` (one-character literal, either side) on a ral-70f reader local: the boxed element read was
+     *  the first character of the `Str` (`Null` for `None`, empty or out of range), so the test is
+     *  `x.as_deref().unwrap_or("").starts_with("c")` (ccxt's narrowStrNullLocals pass printed this). */
+    rust70fFirstCharTest(node: any): string | undefined;
+    /** ral-70f: `n` sits inside the left side (target chain) of an assignment. */
+    rust70fInWriteTarget(n: any): boolean;
+    rust70fOperandBox(n: any): boolean;
     /** sb: a Copy number local (`i64` / `f64` / `Option<..>`) initialised from a typed base call that the `Value` local only boxed
      *  (`Value::from(self.parse_to_int(..))`) keeps the typed value and boxes it at any plain read no other rule prints natively:
      *  `Value::from(x)` is the Int / Float / Null the `Value` local held (the same conversion the initialiser did), and a Copy
@@ -1379,6 +1404,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-68f: `n` (or `(n as string)`, through parentheses) is an argument of a `new X (..)` / `new m[k] (..)` expression that is
      *  not thrown, and `n` reads a base-reader local. */
     rust68fNewArgCast(n: any): boolean;
+    /** ral-70f: a non-test local declared `this.safeString (o, k)` (any key) or `this.safeStringLower|Upper (o, 'lit')`, two
+     *  arguments, base reader (rust64bReaderLocal): the boxed reader is `Str` or `Null`, exactly its `_opt` twin. */
+    rust70fReaderLocal(declaration: any, cast?: boolean): boolean;
+    rust70fWritten(declaration: any): boolean;
     /** ral-64b: a local declared from a base safeString-family reader with no default argument (its box is `Str` or `Null`). */
     rust64bReaderLocal(declaration: any): boolean;
     rustThisFieldLiteralWrite(n: any): boolean;
@@ -1435,6 +1464,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust68hNestedParamKey(access: any, n: any): boolean;
     /** Assignment hook: the r05 insert of a nested plain-field write keyed by a typed string local. */
     printNestedFieldKeyWrite(left: any, acc: string, value: string): string | undefined;
+    /** ral-70f: `this.F[k1][k2] = v` (F balance / options, one upper hop) whose upper key `k1` is an `Option<String>` ral-70f
+     *  reader local (int37 key) and whose last key is a string literal or a plain `Value` binding (bullish handleBalance
+     *  `this.balance[tradingAccountId]['info'] = message`): the bucket entry ccxt's plain-dict pass printed of the r05 insert
+     *  when the key was the boxed local (`entry(stringify_param(&k1))`, narrowed by narrowStrNullLocals to the local's own
+     *  text). A value reading `self` keeps the helper chain. */
+    print70fUpperEntryWrite(left: any, acc: string, value: string): string | undefined;
     /** ral-56f: the bucket entry of a `ukey` upper key (rustNestedFieldUpperKeyUse), keyed by the local's own text (the
      *  string `stringify_param` made of the boxed local, `"null"` for `None`); a value reading `self` is bound first. Over
      *  the line budget the helper chain takes the key as a `Value` (`From<Option<&str>>`, the one allocation). */
@@ -3215,6 +3250,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  object literal carries no marker key (`__book_id`, `__cacheKind`, `__live_id`)
      *  and no ws client-handle triple, so `get_value`'s store routes cannot fire and
      *  the read is the map lookup. */
+    /** ral-70f: `key` is the whole key of a statement `m[key].push (v)` and reads an `Option<String>` ral-70f reader local. */
+    rust70fPushKey(key: any): boolean;
     rustDictBearerKeyOk(keyNode: any): boolean;
     /** ral-xf: a book-meta-named key place (`symbol`, `timestamp`, `datetime`, `nonce`, `checksum`) indexing a map-literal
      *  local. `get_value` / `set_value` route such a key to the book store only on a map holding `__book_id`; a literal
