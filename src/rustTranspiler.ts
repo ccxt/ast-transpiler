@@ -5299,7 +5299,9 @@ export class RustTranspiler extends BaseTranspiler {
         else if (this.rustVenueTypedCostly(declaration, kind, copied)) return undefined;
         // pd: a box-only alias of a typed numeric / bool parameter is stored and boxed back (D11): the Copy scalar boxes
         // with `Value::from` and no copy, where the `Value` alias cloned the parameter's binding; strings keep the veto
-        if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined && !RustTranspiler.RUST_COPY_SCALAR_KINDS.has(kind)) return undefined;
+        // ral-76f: a string alias with a native use whose every box moves (no copying box) keeps the one copy the `Value` clone made
+        if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined && !RustTranspiler.RUST_COPY_SCALAR_KINDS.has(kind)
+            && !(strKind && copied === 0 && nativeUses > 0 && !this.rust76fSourceMethodWrite(declaration, scope))) return undefined;
         // ral-52n: a box that is an argument of a `number`-typed parameter reads back through `as_f64()`, so an Int default
         // and its Float spelling hand the callee the same `f64`
         if ((boxed > 0 && !this.rustNumParamBoxesOnly(declaration) || (expressionUses && !this.rustCompareOnlyNumUses(declaration))) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
@@ -5581,6 +5583,19 @@ export class RustTranspiler extends BaseTranspiler {
     // A local initialised as a plain alias of a typed optional `i64`/`f64` parameter takes the
     // parameter's kind (`p.as_i64()` is a copy, the `Value` is never cloned); it must earn a native use.
     private static readonly RUST_COPY_SCALAR_KINDS = new Set([ 'int', 'oint', 'num', 'onum', 'bool', 'obool' ]);
+
+    /** ral-76f: a write `x = p.m(..)` of a string alias `x = p` calls a method on its own source parameter: the typed
+     *  write would copy the parameter again (a second copy), so such an alias keeps the `Value` binding. */
+    rust76fSourceMethodWrite(declaration, scope): boolean {
+        const source: any = this.unwrapParens(declaration.initializer);
+        return this.rustScopeNameNodes(scope, String(declaration.name.text)).some((n: any) => {
+            const up: any = n.parent;
+            if (n === declaration.name || !isBinaryExpression(up) || up.left !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken) return false;
+            const rhs: any = this.unwrapParens(up.right);
+            return isCallExpression(rhs) && isPropertyAccessExpression(rhs.expression) && isIdentifier(rhs.expression.expression)
+                && this.rustDeclaredNode(rhs.expression.expression) === this.rustDeclaredNode(source);
+        });
+    }
 
     rustParamAliasSeedKind(declaration): string | undefined {
         const init: any = this.unwrapParens(declaration?.initializer);

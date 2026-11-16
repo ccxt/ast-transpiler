@@ -23744,3 +23744,32 @@ describe('ral-76h R1: a Precise string result lent to later Precise calls before
         expect(text).not.toContain('let mut ratio: Value');
     });
 });
+
+describe('ral-76f: a string alias of a typed parameter with a native use keeps the one copy', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    async privatePostX (p: any = {}): Promise<any> { return p; }\n    async withdraw (code: string, amount: number, address: string, params: Dict = {}): Promise<any> { return undefined; }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    async withdraw (code: string, amount: number, address: string, params: Dict = {}): Promise<any> {\n        const tag = this.safeString (params, 'tag');\n        let addressWithTag = address;\n        if (tag !== undefined) {\n            addressWithTag = address + ':' + tag;\n        }\n        return await this.privatePostX ({ 'address': addressWithTag });\n    }\n"
+            + "    async fetchDepositAddress (code: string, params: Dict = {}): Promise<any> {\n        let codeId = code;\n        if (code.indexOf (':') >= 0) {\n            codeId = code.replace (':', '-');\n        }\n        return await this.privatePostX ({ 'c': codeId });\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-76f-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['withdraw', 'fetchDepositAddress'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('hollaex/okx withdraw addressWithTag: a String seeded once from the `&str` parameter, moved into its one box', () => {
+        expect(out).toContain('let mut addressWithTag: String = address.as_str().unwrap_or_default().to_string();');
+        expect(out).toContain('Value::from(addressWithTag)');
+        expect(out).not.toContain('let mut addressWithTag: Value');
+    });
+    test('negative: an alias rewritten from a method on its own source parameter keeps its box (no second copy)', () => {
+        expect(out).toContain('let mut codeId: Value =');
+    });
+});
