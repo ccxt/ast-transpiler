@@ -24333,3 +24333,92 @@ describe('ral-84b: an implodeParams path appended into a String url builder is a
         expect(out).toMatch(/let mut pathWithParams: String = /);
     });
 });
+
+describe('ral-84c R1: a nil-declared Str local written once from a concatenation keys an in test natively', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export interface Dictionary<T> { [key: string]: T }\nexport type Str = string | undefined;\nexport default class Exchange {\n    markets: Dictionary<any> = undefined;\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    safeTicker (t: any): any { return t; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n",
+        "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseTicker (ticker: any, market: any = undefined): any {\n        const base = this.safeString (ticker, 'b');\n        const quote = this.safeString (ticker, 'q');\n        let symbol: Str = undefined;\n        if ((base !== undefined) && (quote !== undefined)) {\n            symbol = base + '/' + quote;\n        }\n        const known = (symbol !== undefined) && (this.markets !== undefined) && (symbol in this.markets);\n        return this.safeTicker ({ 'symbol': symbol, 'known': known });\n    }\n}\n"
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84c1-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the local is an Option<String> and the in test reads its as_deref key', () => {
+        expect(out).toMatch(/let mut symbol: Option<String> = None;/);
+        expect(out).toMatch(/symbol\.as_deref\(\)/);
+        expect(out).not.toMatch(/let mut symbol: Value/);
+    });
+});
+
+describe('ral-84c R2: a nil-declared Str local keys an insert into a typed literal map', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export interface Dictionary<T> { [key: string]: T }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    networkIdToCode (id: Str, code: Str = undefined): string { return id; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n",
+        "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseNetworks (raw: any, code: Str = undefined): any {\n        const networks = {};\n        const networkId = this.safeString (raw, 'n');\n        let networkCode: Str = undefined;\n        if (networkId !== undefined) {\n            networkCode = this.networkIdToCode (networkId, code);\n            if (networkCode !== undefined) {\n                networks[networkCode] = {\n                    'id': networkId,\n                    'network': networkCode,\n                };\n            }\n        }\n        return this.hold ({ 'all': networks, 'id': networkCode, 'last': networkCode });\n    }\n}\n"
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84c2-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the key local is an Option<String> printed as the insert key text', () => {
+        expect(out).toMatch(/let mut networkCode: Option<String> = None;/);
+        expect(out).toMatch(/networks\.insert\(networkCode\.as_deref\(\)\.unwrap_or\("null"\)\.to_string\(\)/);
+    });
+    test('the last box in an object literal moves the local, earlier boxes clone it', () => {
+        expect(out).toMatch(/"id"\.to_string\(\), networkCode\.clone\(\)\.map\(Value::from\)/);
+        expect(out).toMatch(/"last"\.to_string\(\), networkCode\.map\(Value::from\)/);
+    });
+});
+
+describe('ral-84c R3: a nil-declared Str local keys a read of a typed literal-defaulted map', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    pick (params: Dict): [Str, Dict] { return [ undefined, params ]; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n",
+        "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    build (params: Dict = {}): any {\n        const request: Dict = {};\n        let marginMode: Str = undefined;\n        let rest: Dict = params;\n        [ marginMode, rest ] = this.pick (rest);\n        if (marginMode === 'cross') {\n            const modes: Dict = this.safeDict (this.options, 'modes', {});\n            request['tradeType'] = modes[marginMode];\n        }\n        return this.hold ([ request, rest ]);\n    }\n}\n"
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84c3-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the key local is an Option<String> borrowed by the map read', () => {
+        expect(out).toMatch(/let mut marginMode: Option<String> = None;/);
+        expect(out).toMatch(/modes\.get\(marginMode\.as_deref\(\)\.unwrap_or\(""\)\)/);
+    });
+});
+
+describe('ral-84c R4: a nil-declared Str local with a same-named sibling declaration moves its last literal box', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export type Str = string | undefined;\nexport default class Exchange {\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    safeCurrencyCode (id: Str): string { return id; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n",
+        "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseRows (rows: any[]): any[] {\n        const result = [];\n        for (let i = 0; i < rows.length; i++) {\n            const marketId = this.safeString (rows[i], 'm');\n            let base: Str = undefined;\n            if (marketId !== undefined) {\n                base = this.safeCurrencyCode (marketId);\n            }\n            if (base === undefined) {\n                continue;\n            }\n            result.push ({ 'symbol': base + '/X', 'base': base });\n        }\n        for (let j = 0; j < rows.length; j++) {\n            const base = this.safeString (rows[j], 'b');\n            result.push ({ 'base': base });\n        }\n        return result;\n    }\n}\n"
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84c4-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the nil-declared base is an Option<String> moved into its last literal slot', () => {
+        expect(out).toMatch(/let mut base: Option<String> = None;/);
+        expect(out).toMatch(/"base"\.to_string\(\), base\.map\(Value::from\)/);
+    });
+});

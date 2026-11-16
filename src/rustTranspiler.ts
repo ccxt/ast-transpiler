@@ -2876,7 +2876,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustIdentifierIsPropertyName(n)) return true;
             const parent: any = n.parent;
             const box = (parent?.kind === SyntaxKind.PropertyAssignment && parent.initializer === n) || isArrayLiteralExpression(parent);
-            if (box && !this.rustLocalLastUse(n, declaration)) moves = false;
+            // ral-84c R4: a nil-declared `Str` local's last property box in an object literal moves (the ral-84c R2 print arm)
+            const ownedLast = parent?.kind === SyntaxKind.PropertyAssignment && isVariableDeclaration(declaration) && this.rust84cNilStrInKey(declaration) && this.rustOwnedLastUse(n, declaration);
+            if (box && !this.rustLocalLastUse(n, declaration) && !ownedLast) moves = false;
             return true;
         });
         return walked && moves;
@@ -8623,6 +8625,8 @@ export class RustTranspiler extends BaseTranspiler {
         if ((kind === 'str' || kind === 'ostr') && this.rust63kLocalFlatHelperKey(n)) return 'mkey';
         // an optional-string local keys a proven map read or an `in` test natively (a `None` key misses, as the `Null` did)
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
+        // ral-84c R3: a nil-declared `let k: Str = undefined` keys a proven map read the same way (`None` misses, as `Null` did)
+        if (kind === 'ostr' && this.rust84cNilStrKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rust63eChainLinkKeyRead(n)) return 'okey';
         // ral-64k: the key of `const y = book[k]` on a typed ws order-book local is handed to `get_value` as is
         if ((kind === 'str' || kind === 'ostr') && this.rust64kBookKeyRead(n)) return 'bkey';
@@ -10743,8 +10747,9 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustLocalLastUse(node, local.declaration) || (form === 'box' && this.rustOwnedHandOff(node) && this.rustOwnedLastUse(node, local.declaration))
             // ral-59x: a string alias (`let y = x`) boxed as the value of the last property of an object literal that reads it
             // moves there, as its `Value` form did (rustOwnedLastUse orders the literal's inserts)
-            || (form === 'box' && this.rust59xAliasDecl(local.declaration) && node.parent?.kind === SyntaxKind.PropertyAssignment && node.parent.initializer === node
-                && this.rustOwnedLastUse(node, local.declaration));
+            // ral-84c R2: likewise a nil-declared `let x: Str = undefined` local (its `Value` form moved there too)
+            || (form === 'box' && (this.rust59xAliasDecl(local.declaration) || (isVariableDeclaration(local.declaration) && this.rust84cNilStrInKey(local.declaration)))
+                && node.parent?.kind === SyntaxKind.PropertyAssignment && node.parent.initializer === node && this.rustOwnedLastUse(node, local.declaration));
         const moved = last ? name : `${name}.clone()`;
         // a string boxed more than once is lent before its last box (`From<&str>`: the one copy the `Value` clone made)
         const lent = !last && (this.rustStrLentLocals.has(local.declaration) || local.kind === 'ostr' && this.rustNilStrLentLocals.has(local.declaration));
@@ -12185,8 +12190,27 @@ export class RustTranspiler extends BaseTranspiler {
         const recv: any = this.unwrapParens(this.rustInKeyTop(n).parent.right);
         if (isPropertyAccessExpression(recv) && /^(?:subscriptions|futures)$/.test(String(recv.name.text)) && this.rustIsWsClientType(this.typeOfNodeIfAny(recv.expression))) return false;
         const declaration: any = this.rustDeclaredNode(n);
+        if (declaration !== undefined && isVariableDeclaration(declaration) && this.rust84cNilStrInKey(declaration)) return true;
         return declaration !== undefined && isVariableDeclaration(declaration) && declaration.initializer !== undefined
             && this.literalKindOfNode(this.unwrapParens(declaration.initializer)) !== 'null';
+    }
+
+    /** ral-84c R3: `n` names a nil-declared `let k: Str = undefined` local (rust84cNilStrInKey). */
+    rust84cNilStrKeyLocal(n: Node): boolean {
+        const declaration = this.rustDeclaredNode(n);
+        return declaration !== undefined && isVariableDeclaration(declaration) && this.rust84cNilStrInKey(declaration);
+    }
+
+    /** ral-84c R1: a nil-declared `let k: Str = undefined` (one declarator, a `let` statement) keys an `in` test too: the
+     *  nil-scalar rule types it `Option<String>`, and the `inbox` key reads `None` as a miss exactly as `in_op` read the
+     *  `Null` the `Value` local held (latoken parseTicker / parseTrade / parseOrder `symbol in this.markets`). */
+    rust84cNilStrInKey(declaration: VariableDeclaration): boolean {
+        const init = declaration.initializer;
+        if (init !== undefined && this.literalKindOfNode(this.unwrapParens(init)) !== 'null') return false;
+        const list = declaration.parent;
+        if (!isIdentifier(declaration.name) || !isVariableDeclarationList(list) || list.declarations.length !== 1
+            || (list.flags & NodeFlags.Const) !== 0 || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
+        return declaration.type !== undefined && this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) === 'string';
     }
 
     /** qf: a typed local against an untyped `Value` partner (a local or parameter) that the checker types like the local:
@@ -12959,7 +12983,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustScalarOptKeyUse(n): boolean {
         const local: any = this.rustDeclaredNode(n);
-        if (local === undefined || !isVariableDeclaration(local) || local.initializer === undefined || this.literalKindOfNode(local.initializer) === 'null') return false;
+        // ral-84c R2: a nil-declared `let k: Str = undefined` keys the insert by the same `Option<String>` text (`None` keys
+        // as "null", exactly the `stringify_param(&Null)` the boxed local gave)
+        if (local === undefined || !isVariableDeclaration(local) || ((local.initializer === undefined || this.literalKindOfNode(local.initializer) === 'null') && !this.rust84cNilStrInKey(local))) return false;
         const keyNode = this.rustKeyWrapped(n);
         const access: any = keyNode.parent;
         if (!isElementAccessExpression(access) || access.argumentExpression !== keyNode || !isIdentifier(access.expression)) return false;
