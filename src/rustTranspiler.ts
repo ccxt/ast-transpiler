@@ -33326,7 +33326,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.literalKindOfNode(inner) !== undefined || inner.kind === SyntaxKind.NoSubstitutionTemplateLiteral || isIdentifier(inner)) return true;
         if (isPropertyAccessExpression(inner) || isElementAccessExpression(inner)) return true;
         return isCallExpression(inner) && isPropertyAccessExpression(inner.expression) && inner.expression.expression.kind === SyntaxKind.ThisKeyword
-            && Array.from(inner.arguments).every((a: any) => this.literalKindOfNode(this.unwrapParens(a)) !== undefined || isIdentifier(this.unwrapParens(a)));
+            && Array.from(inner.arguments).every((a: any) => this.literalKindOfNode(this.unwrapParens(a)) !== undefined || isIdentifier(this.unwrapParens(a))
+                // ral-60x: or a plain `this.<field>` read (`this.safeString (this.options, 'k')`)
+                || (isPropertyAccessExpression(this.unwrapParens(a)) && this.unwrapParens(a).expression.kind === SyntaxKind.ThisKeyword));
     }
 
     /** The argument node lands in a per-venue string slot of its call. */
