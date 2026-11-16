@@ -3,8 +3,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { SyntaxKind, getLeadingCommentRanges } from 'typescript/unstable/ast';
 import { isArrowFunction, isBinaryExpression, isBlock, isBooleanLiteral, isCallExpression, isClassDeclaration as isClassDeclarationNode, isElementAccessExpression, isExpressionStatement, isFunctionDeclaration, isFunctionExpression, isIfStatement, isMethodDeclaration, isReturnStatement, isSourceFile, isStatement as isStatementNode, isThrowStatement, isTryStatement } from 'typescript/unstable/ast/is';
-import { Checker, IndexKind, SymbolFlags, TypeFlags } from 'typescript/unstable/sync';
-import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
+import { Checker, IndexKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from 'typescript/unstable/sync';
+import type { BinaryExpression, CallExpression, ClassDeclaration, Node, NodeArray, Statement, VariableDeclaration } from 'typescript/unstable/ast';
 import { getAllSuperTypeNodes, isFunctionLike } from './tsUtils.js';
 import { Transpiler } from './transpiler.js';
 import os from 'os';
@@ -34130,7 +34130,7 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
 {
     const sinkReads = GoTranspiler.prototype.goListLocalSinkReadsAsList;
     GoTranspiler.prototype.goListLocalSinkReadsAsList = function (node, nilTestSafe: boolean) {
-        let outer: any = node;
+        let outer = node;
         while (((outer.parent?.kind === SyntaxKind.AsExpression) || (outer.parent?.kind === SyntaxKind.ParenthesizedExpression)
             || (outer.parent?.kind === SyntaxKind.NonNullExpression)) && (outer.parent.expression === outer)) {
             outer = outer.parent;
@@ -34144,11 +34144,11 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
 {
     const trueLocal = GoTranspiler.prototype.goHandleOptionTrueLocal;
     GoTranspiler.prototype.goHandleOptionTrueLocal = function (declaration) {
-        const annotation: any = declaration?.type;
+        const annotation = declaration?.type;
         if (annotation === undefined) {
             return trueLocal.call(this, declaration);
         }
-        const call: any = declaration.initializer;
+        const call = declaration.initializer;
         const boolAnnotation = (annotation.kind === SyntaxKind.BooleanKeyword)
             || ((annotation.kind === SyntaxKind.TypeReference) && (annotation.typeName?.kind === SyntaxKind.Identifier) && (annotation.typeName.text === 'Bool'));
         if (!boolAnnotation || (declaration.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
@@ -34158,8 +34158,8 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
             || (call.arguments.length < 2) || (call.arguments.length > 3)) {
             return false;
         }
-        const comparesWithTrue = (n: any): boolean => {
-            const parent: any = n.parent;
+        const comparesWithTrue = (n): boolean => {
+            const parent = n.parent;
             const op = parent?.operatorToken?.kind;
             if ((parent?.kind !== SyntaxKind.BinaryExpression) || ((op !== SyntaxKind.EqualsEqualsEqualsToken) && (op !== SyntaxKind.EqualsEqualsToken)
                 && (op !== SyntaxKind.ExclamationEqualsEqualsToken) && (op !== SyntaxKind.ExclamationEqualsToken))) {
@@ -34168,7 +34168,7 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
             return (((parent.left === n) ? parent.right : parent.left)?.kind === SyntaxKind.TrueKeyword);
         };
         return this.goDeclaredLocalTypeIfSafe(declaration, 'bool', comparesWithTrue,
-            (n: any) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+            (n) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
                 || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n))) === 'bool';
     };
 }
@@ -34179,7 +34179,7 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
 // hand-out keeps the box. At least one native read (length / element) is required.
 {
     const listUnbox = GoTranspiler.prototype.goSafeListLocalUnbox;
-    const isConcat = (call: any): boolean => (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+    const isConcat = (call): boolean => (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
         && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && (call.expression.name?.text === 'arrayConcat') && (call.arguments.length === 2);
     GoTranspiler.prototype.goSafeListLocalUnbox = function (declaration) {
         const shipped = listUnbox.call(this, declaration);
@@ -34187,15 +34187,15 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
             || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (this.goSafeListLocalArgs(declaration.initializer) === undefined)) {
             return shipped;
         }
-        const scope: any = this.goEnclosingFunction(declaration);
+        const scope: Node | undefined = this.goEnclosingFunction(declaration);
         if (scope === undefined) {
             return undefined;
         }
         let rebinds = 0;
         let natives = 0;
-        const reads = (n: any): boolean => {
+        const reads = (n): boolean => {
             const outer = ccxtGoSafeCollectionTypeOnlyWrapper(n);
-            const parent: any = outer.parent;
+            const parent = outer.parent;
             if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === outer) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
                 if (isConcat(parent.right)) {
                     rebinds++;
@@ -34217,7 +34217,7 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
             return ccxtGoSafeCollectionUseReads(this, outer, 'list', true);
         };
         const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, reads,
-            (n: any) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+            (n) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
                 || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n)));
         if ((typed === undefined) || (rebinds === 0) || (natives === 0)) {
             return undefined;
@@ -34231,17 +34231,17 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
 // an element read of a typed list local prints `xs[i]` bare (no DerefScalar) only when the checker proves the
 // local's elements are objects; true when the local has no element read at all
 function ccxtGoListElementReadsAreBare (goTranspiler, scope, declaration) {
-    const elementRead = goTranspiler.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.ElementAccessExpression)
+    const elementRead = goTranspiler.hasNodeWhere(scope, (n) => (n.kind === SyntaxKind.ElementAccessExpression)
         && (ccxtGoUnwrapTypeOnly(n.expression)?.kind === SyntaxKind.Identifier) && (ccxtGoUnwrapTypeOnly(n.expression).text === declaration.name.text));
     if (!elementRead) {
         return true;
     }
-    const checker: any = goTranspiler.checkerOrUndefined();
+    const checker: Checker | undefined = goTranspiler.checkerOrUndefined();
     try {
-        const type: any = checker?.getTypeAtLocation(declaration.name);
-        const element: any = ((type !== undefined) && checker.isArrayType(type)) ? checker.getIndexTypeOfType(type, IndexKind.Number) : undefined;
-        const parts: any[] = (element === undefined) ? [] : (((typeof element.isUnionType === 'function') && element.isUnionType()) ? element.getTypes().slice() : [element]);
-        return (parts.length > 0) && parts.every((p: any) => (p.flags & TypeFlags.Object) !== 0);
+        const type: Type | undefined = checker?.getTypeAtLocation(declaration.name);
+        const element: Type | undefined = ((type !== undefined) && checker.isArrayType(type)) ? checker.getIndexTypeOfType(type, IndexKind.Number) : undefined;
+        const parts: Type[] = (element === undefined) ? [] : (((typeof element.isUnionType === 'function') && element.isUnionType()) ? element.getTypes().slice() : [element]);
+        return (parts.length > 0) && parts.every((p: Type) => (p.flags & TypeFlags.Object) !== 0);
     } catch (e) {
         return false;
     }
@@ -34261,12 +34261,12 @@ function ccxtGoUnwrapTypeOnly (node) {
         if (listReads.call(this, node)) {
             return true;
         }
-        const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(node) : undefined;
+        const declaration = (node?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(node) : undefined;
         if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (this.goSafeListLocalArgs(declaration.initializer) === undefined)) {
             return false; // only a safeList-seeded local: another producer would need a conversion at the declaration
         }
         const outer = ccxtGoSafeCollectionTypeOnlyWrapper(node);
-        const call: any = outer.parent;
+        const call = outer.parent;
         return (call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 1) && (call.arguments[0] === outer)
             && (call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.expression?.kind === SyntaxKind.ThisKeyword)
             && (call.expression.name?.text === 'isEmpty');
@@ -34286,9 +34286,9 @@ function ccxtGoUnwrapTypeOnly (node) {
             return shipped;
         }
         let natives = 0;
-        const reads = (n: any): boolean => {
+        const reads = (n): boolean => {
             const outer = ccxtGoSafeCollectionTypeOnlyWrapper(n);
-            const parent: any = outer.parent;
+            const parent = outer.parent;
             if (this.goIsNilComparisonOperand(outer, parent)) {
                 return true;
             }
@@ -34301,7 +34301,7 @@ function ccxtGoUnwrapTypeOnly (node) {
             return true;
         };
         const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, reads,
-            (n: any) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+            (n) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
                 || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n)));
         // the base class's element reads carry no JSON-origin proof and print DerefScalar on a typed slice: keep its box
         const baseTree = /(^|[\\/])ts[\\/]src[\\/]base[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
@@ -34326,7 +34326,7 @@ function ccxtGoUnwrapTypeOnly (node) {
 // here: a still-boxed receiver whose name ends in `future` prints the assertion itself, so the regex goes.
 export interface GoTranspiler {
     goClientFuturesTable(node): boolean;
-    goClientFutureReadKey(initializer): any;
+    goClientFutureReadKey(initializer): Node | undefined;
     goClientFutureLocal(declaration): boolean;
     goClientFutureLocalCache: WeakMap<object, boolean>;
 }
@@ -34335,19 +34335,19 @@ GoTranspiler.prototype.goClientFuturesTable = function (node) {
         || (node.expression?.kind !== SyntaxKind.Identifier) || (node.expression.text !== 'client') || !clientIsInterfaceFrame(node)) {
         return false;
     }
-    const checker: any = this.checkerOrUndefined();
-    const symbol: any = checker?.getSymbolAtLocation(node.name);
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    const symbol: TsSymbol | undefined = checker?.getSymbolAtLocation(node.name);
     if (symbol === undefined) {
         return ((checker?.getTypeAtLocation(node.expression)?.flags ?? 0) & TypeFlags.Any) !== 0;
     }
-    const decl: any = symbol.valueDeclaration?.resolve();
+    const decl = symbol.valueDeclaration?.resolve();
     return ((decl?.kind === SyntaxKind.PropertyDeclaration) || (decl?.kind === SyntaxKind.PropertySignature))
-        && (decl.parent?.name?.text === SUBSCRIPTIONS_CLASS);
+        && ((decl.parent as ClassDeclaration | undefined)?.name?.text === SUBSCRIPTIONS_CLASS);
 };
 GoTranspiler.prototype.goClientFutureReadKey = function (initializer) {
-    const read: any = this.goUnwrapParenthesizedNode(initializer);
-    let table: any;
-    let key: any;
+    const read = this.goUnwrapParenthesizedNode(initializer);
+    let table;
+    let key;
     if (read?.kind === SyntaxKind.ElementAccessExpression) {
         table = read.expression;
         key = read.argumentExpression;
@@ -34381,15 +34381,15 @@ GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
     let verdict = false;
     try {
         if (this.goClientFutureReadKey(declaration.initializer) !== undefined) {
-            const checker: any = this.checkerOrUndefined();
-            const own: any = checker?.getSymbolAtLocation(declaration.name);
-            const scope: any = this.goEnclosingFunction(declaration);
+            const checker: Checker | undefined = this.checkerOrUndefined();
+            const own: TsSymbol | undefined = checker?.getSymbolAtLocation(declaration.name);
+            const scope: Node | undefined = this.goEnclosingFunction(declaration);
             const name = declaration.name.text;
-            verdict = (own !== undefined) && (scope !== undefined) && !this.goTypeNameIsShadowed(scope, '*Future') && !this.hasNodeWhere(scope, (n: any) => {
+            verdict = (own !== undefined) && (scope !== undefined) && !this.goTypeNameIsShadowed(scope, '*Future') && !this.hasNodeWhere(scope, (n) => {
                 if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
                     return false;
                 }
-                const parent: any = n.parent;
+                const parent = n.parent;
                 if (((parent?.kind === SyntaxKind.PropertyAccessExpression) || (parent?.kind === SyntaxKind.PropertyAssignment)) && (parent.name === n)) {
                     return false; // a member name, not the local
                 }
@@ -34412,7 +34412,7 @@ GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
 {
     const goTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
     GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
-        const declaration: any = initializer?.parent;
+        const declaration = initializer?.parent;
         if ((declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.initializer === initializer) && this.goClientFutureLocal(declaration)) {
             return '*Future';
         }
@@ -34420,9 +34420,9 @@ GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
     };
     const printVariableDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
     GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
-        const declaration: any = node?.declarations?.[0];
+        const declaration = node?.declarations?.[0];
         if ((node?.declarations?.length === 1) && this.goClientFutureLocal(declaration)) {
-            const key: any = this.goClientFutureReadKey(declaration.initializer);
+            const key = this.goClientFutureReadKey(declaration.initializer);
             if (this.getGoLocalType(declaration, '') === '*Future') {
                 return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)} *Future = client.Futures[${this.printNode(key, 0)}]`;
             }
@@ -34432,7 +34432,7 @@ GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
     const printCallExpression = GoTranspiler.prototype.printCallExpression;
     GoTranspiler.prototype.printCallExpression = function (node, identation) {
         const printed: string = printCallExpression.call(this, node, identation);
-        const callee: any = node?.expression;
+        const callee = node?.expression;
         if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.Identifier)
             || ((callee.name?.text !== 'resolve') && (callee.name?.text !== 'reject')) || !clientIsInterfaceFrame(node)) {
             return printed;
@@ -34443,7 +34443,7 @@ GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
         if (!/future$/.test(receiver) || !printed.startsWith(head, lead.length)) {
             return printed;
         }
-        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(callee.expression)?.valueDeclaration?.resolve?.();
+        const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(callee.expression)?.valueDeclaration?.resolve?.();
         if (this.goClientFutureLocal(declaration) && (this.goDeclaredTypeOfIdentifier(callee.expression) === '*Future')) {
             return printed;
         }
@@ -34463,7 +34463,7 @@ export interface GoTranspiler {
     goSubscriptionPresenceCache: WeakMap<object, boolean>;
 }
 GoTranspiler.prototype.goSubscriptionPresenceLocal = function (declaration) {
-    const call: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    const call = this.goUnwrapParenthesizedNode(declaration?.initializer);
     if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
         || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.type !== undefined)
         || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)
@@ -34481,10 +34481,10 @@ GoTranspiler.prototype.goSubscriptionPresenceLocal = function (declaration) {
     this.goSubscriptionPresenceCache.set(declaration, false);
     let verdict = false;
     try {
-        const key: any = call.arguments[1];
+        const key = call.arguments[1];
         if ((key.kind === SyntaxKind.StringLiteral) || ((key.kind === SyntaxKind.Identifier) && this.goIsStringKeyExpression(key))) {
-            verdict = this.goDeclaredLocalTypeIfSafe(declaration, 'bool', (n: any) => this.goIsNilComparisonOperand(n, n.parent),
-                (n: any) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+            verdict = this.goDeclaredLocalTypeIfSafe(declaration, 'bool', (n) => this.goIsNilComparisonOperand(n, n.parent),
+                (n) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
                     || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n))) === 'bool';
         }
     } finally {
@@ -34506,9 +34506,9 @@ GoTranspiler.prototype.goSubscriptionPresenceLocal = function (declaration) {
         const op = node?.operatorToken?.kind;
         if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken)
             || (op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
-            const operand: any = (node.left?.kind === SyntaxKind.Identifier) ? node.left : node.right;
+            const operand: Node | undefined = (node.left?.kind === SyntaxKind.Identifier) ? node.left : node.right;
             if ((operand?.kind === SyntaxKind.Identifier) && this.goIsNilComparisonOperand(operand, node)) {
-                const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(operand)?.valueDeclaration?.resolve?.();
+                const declaration: Node | undefined = this.checkerOrUndefined()?.getSymbolAtLocation(operand)?.valueDeclaration?.resolve?.();
                 if (this.goSubscriptionPresenceLocal(declaration) && (this.goDeclaredTypeOfIdentifier(operand) === 'bool')) {
                     const absent = (op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken);
                     return (absent ? '!' : '') + this.printNode(operand, 0);
@@ -34549,7 +34549,7 @@ GoTranspiler.prototype.goOhlcvsReadCacheType = function (declaration) {
         return undefined;
     }
     // the same shapes and key proofs goOhlcvsReadDeclaration prints natively (an unproven key keeps the helper read, so the box)
-    const init: any = this.goUnwrapPrintedAssertions(declaration.initializer);
+    const init = this.goUnwrapPrintedAssertions(declaration.initializer);
     const flat = this.goOhlcvsFlatKeyNode(declaration);
     let shape = false;
     if (flat !== undefined) {
@@ -34584,7 +34584,7 @@ GoTranspiler.prototype.goOhlcvsReadCacheType = function (declaration) {
         if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name) || (this.goDeclarationOfIdentifier(n) !== declaration)) {
             continue;
         }
-        const parent: any = n.parent;
+        const parent = n.parent;
         if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)) {
             const op = parent.operatorToken.kind;
             if (op === SyntaxKind.EqualsToken) {
@@ -34641,15 +34641,15 @@ GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: stri
 // (2) the same local may be rebound only with `x = this.omit (m2, ..)` of another proven map (the
 //     write-site table prints MapTyped there too); any other write or a destructuring keeps the box.
 const ral84g6OmitVerdicts = new WeakMap<object, string | undefined>();
-function ral84g6OmitCall(node): any {
+function ral84g6OmitCall(node): CallExpression | undefined {
     while (node?.kind === SyntaxKind.ParenthesizedExpression) {
         node = node.expression;
     }
-    const callee: any = node?.expression;
+    const callee = node?.expression;
     const ok = (node?.kind === SyntaxKind.CallExpression) && (node.questionDotToken === undefined)
         && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
         && (callee.name?.text === 'omit') && (node.arguments?.length >= 2) && (node.arguments[0]?.kind === SyntaxKind.Identifier)
-        && !node.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement);
+        && !node.arguments.some((a: Node) => a.kind === SyntaxKind.SpreadElement);
     return ok ? node : undefined;
 }
 function ral84g6OmitArgIsMap(goTranspiler: GoTranspiler, arg): boolean {
@@ -34664,7 +34664,7 @@ function ral84g6NameBacksIn(goTranspiler: GoTranspiler, scope, name: string, dep
     if (depth > 4) {
         return true;
     }
-    return goTranspiler.hasNodeWhere(scope, (n: any) => {
+    return goTranspiler.hasNodeWhere(scope, (n) => {
         if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.InKeyword)
             && (n.right?.kind === SyntaxKind.Identifier) && (n.right.text === name)) {
             return true;
@@ -34672,14 +34672,14 @@ function ral84g6NameBacksIn(goTranspiler: GoTranspiler, scope, name: string, dep
         if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name)) {
             return false;
         }
-        const parent: any = n.parent;
+        const parent = n.parent;
         if ((parent?.kind === SyntaxKind.ArrayLiteralExpression) && (parent.parent?.kind === SyntaxKind.ReturnStatement)) {
             return true;
         }
-        const omit: any = ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments?.[0] === n)) ? ral84g6OmitCall(parent) : undefined;
-        const value: any = (omit !== undefined) ? omit : n;
-        const holder: any = value.parent;
-        const target: any = ((holder?.kind === SyntaxKind.VariableDeclaration) && (holder.initializer === value)) ? holder.name
+        const omit = ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments?.[0] === n)) ? ral84g6OmitCall(parent) : undefined;
+        const value = (omit !== undefined) ? omit : n;
+        const holder = value.parent;
+        const target = ((holder?.kind === SyntaxKind.VariableDeclaration) && (holder.initializer === value)) ? holder.name
             : (((holder?.kind === SyntaxKind.BinaryExpression) && (holder.right === value) && (holder.operatorToken?.kind === SyntaxKind.EqualsToken)) ? holder.left : undefined);
         return (target?.kind === SyntaxKind.Identifier) && (target.text !== name) && ral84g6NameBacksIn(goTranspiler, scope, target.text, depth + 1);
     });
@@ -34689,13 +34689,13 @@ function ral84g6NameBacksIn(goTranspiler: GoTranspiler, scope, name: string, dep
 // `this.omit (x, ..)` (prints OmitDict), or a rebind `x = this.omit (..)` (prints the OmitDict write)
 function ral84g6HasNativeUse(goTranspiler: GoTranspiler, scope, declaration): boolean {
     const name = declaration.name.text;
-    const isNil = (e: any) => (e?.kind === SyntaxKind.NullKeyword) || ((e?.kind === SyntaxKind.Identifier) && (e.text === 'undefined'));
-    return goTranspiler.hasNodeWhere(scope, (n: any) => {
+    const isNil = (e) => (e?.kind === SyntaxKind.NullKeyword) || ((e?.kind === SyntaxKind.Identifier) && (e.text === 'undefined'));
+    return goTranspiler.hasNodeWhere(scope, (n) => {
         if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)
             || (ccxtGoParamDeclarationOf(goTranspiler, n) !== declaration)) {
             return false;
         }
-        const parent: any = n.parent;
+        const parent = n.parent;
         if (parent?.kind === SyntaxKind.BinaryExpression) {
             const op = parent.operatorToken?.kind;
             if (((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)
@@ -34722,22 +34722,22 @@ function ral84g6OmitLocalType(goTranspiler: GoTranspiler, declaration): string |
     ral84g6OmitVerdicts.set(declaration, undefined); // re-entry answers the box
     const call = ral84g6OmitCall(declaration.initializer);
     let verdict: string | undefined;
-    const scope: any = goTranspiler.goEnclosingFunction(declaration);
+    const scope = goTranspiler.goEnclosingFunction(declaration);
     if ((call !== undefined) && (scope !== undefined) && ral84g6OmitArgIsMap(goTranspiler, call.arguments[0])
         && !goTranspiler.goTypeNameIsShadowed(scope, GO_SAFE_DICT_LOCAL_TYPE)
         && !ral84g6NameBacksIn(goTranspiler, scope, declaration.name.text) && ral84g6HasNativeUse(goTranspiler, scope, declaration)) {
         const name = declaration.name.text;
         // uses resolved through the checker: a same-named local of a sibling block is another declaration
-        const unsafe = goTranspiler.hasNodeWhere(scope, (n: any) => {
+        const unsafe = goTranspiler.hasNodeWhere(scope, (n) => {
             if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
                 return false;
             }
-            const parent: any = n.parent;
+            const parent = n.parent;
             if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n))
                 || ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.name === n))) {
                 return false; // a member name
             }
-            const target: any = ccxtGoParamDeclarationOf(goTranspiler, n);
+            const target = ccxtGoParamDeclarationOf(goTranspiler, n);
             if (target !== declaration) {
                 return (target === undefined); // unresolved: fail closed
             }
@@ -34752,7 +34752,7 @@ function ral84g6OmitLocalType(goTranspiler: GoTranspiler, declaration): string |
                 return true;
             }
             // a copy (`const y = x` / `y = x`) takes the map type too: its own `in` reads count here
-            const copyTarget: any = ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === n)) ? parent.name
+            const copyTarget = ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === n)) ? parent.name
                 : (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) ? parent.left : undefined);
             if ((copyTarget?.kind === SyntaxKind.Identifier) && ral84g6NameBacksIn(goTranspiler, scope, copyTarget.text)) {
                 return true;
@@ -34786,8 +34786,8 @@ GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue
         return known;
     }
     // the copy target: a declaration's name, or the left side of a plain `y = m` write
-    const parent: any = initializer.parent;
-    const target: any = ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === initializer)) ? parent.name
+    const parent = initializer.parent;
+    const target = ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === initializer)) ? parent.name
         : (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === initializer)
             && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) ? parent.left : undefined);
     if ((target?.kind !== SyntaxKind.Identifier) || !ral84g6OmitArgIsMap(this, initializer)) {
@@ -34807,7 +34807,7 @@ function ral84g6MapWriteIsMap(goTranspiler: GoTranspiler, declaration, n, parent
         return false;
     }
     const write = ral84g6OmitCall(parent.right);
-    const arg: any = write?.arguments[0];
+    const arg = write?.arguments[0];
     return (arg?.kind === SyntaxKind.Identifier)
         && ((ccxtGoParamDeclarationOf(goTranspiler, arg) === declaration) || ral84g6OmitArgIsMap(goTranspiler, arg));
 }
@@ -34821,16 +34821,16 @@ GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varNa
         return false;
     }
     let rebinds = 0;
-    const unsafe = this.hasNodeWhere(scope, (n: any) => {
+    const unsafe = this.hasNodeWhere(scope, (n) => {
         if ((n.kind !== SyntaxKind.Identifier) || (n.text !== varName) || (n === declaration.name)) {
             return false;
         }
-        const parent: any = n.parent;
+        const parent = n.parent;
         if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n))
             || ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.name === n))) {
             return false;
         }
-        const target: any = ccxtGoParamDeclarationOf(this, n);
+        const target: Node | undefined = ccxtGoParamDeclarationOf(this, n);
         if (target !== declaration) {
             return target === undefined;
         }
@@ -34894,11 +34894,11 @@ GoTranspiler.prototype.goTernaryJoinParts = function (declaration) {
 GoTranspiler.prototype.goTernaryJoinFeedsAnotherTernary = function (declaration): boolean {
     const scope = this.goEnclosingFunction(declaration);
     const name = declaration.name;
-    return (scope === undefined) || this.hasNodeWhere(scope, (n: any) => {
+    return (scope === undefined) || this.hasNodeWhere(scope, (n) => {
         if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)) {
             return false;
         }
-        let current: any = n;
+        let current = n;
         while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
             current = current.parent;
         }
@@ -34911,7 +34911,7 @@ GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node) {
     if (!this.goTernaryJoinProvisional() || (node?.kind !== SyntaxKind.Identifier)) {
         return goTernaryJoinSettledDeclaredType.call(this, node);
     }
-    const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
     const owner = ((declaration?.kind === SyntaxKind.VariableDeclaration)
         && (this.goUnwrapParenthesizedNode(declaration.initializer)?.kind === SyntaxKind.ConditionalExpression))
         ? goTernaryJoinOwner(declaration.initializer) : undefined;
@@ -34941,7 +34941,7 @@ GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
     if ((known !== undefined) || this.goTernaryJoinProvisional()) {
         return known;
     }
-    const ternary: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    const ternary = this.goUnwrapParenthesizedNode(declaration?.initializer);
     if (ternary?.kind !== SyntaxKind.ConditionalExpression) {
         return undefined;
     }
@@ -34951,7 +34951,7 @@ GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
         return undefined;
     }
     const pointerArm = (armNode, armType: string, otherType: string, outcome: boolean): boolean => {
-        const arm: any = this.goUnwrapParenthesizedNode(armNode);
+        const arm = this.goUnwrapParenthesizedNode(armNode);
         return (armType === '*int64') && (otherType === 'int') && (arm?.kind === SyntaxKind.Identifier)
             && this.goTernaryJoinConditionDefines(ternary.condition, arm.text, outcome);
     };
@@ -34976,17 +34976,17 @@ export interface GoTranspiler {
 GoTranspiler.prototype.goTernaryJoinFeedsParameterCopy = function (declaration): boolean {
     const scope = this.goEnclosingFunction(declaration);
     const name = declaration.name.text;
-    const checker: any = this.checkerOrUndefined();
+    const checker: Checker | undefined = this.checkerOrUndefined();
     if ((scope === undefined) || (checker === undefined)) {
         return true;
     }
-    return this.hasNodeWhere(scope, (n: any) => {
+    return this.hasNodeWhere(scope, (n) => {
         if ((n.kind !== SyntaxKind.BinaryExpression) || (n.operatorToken?.kind !== SyntaxKind.EqualsToken) || (n.left?.kind !== SyntaxKind.Identifier)
-            || !this.hasNodeWhere(n.right, (r: any) => (r.kind === SyntaxKind.Identifier) && (r.text === name))) {
+            || !this.hasNodeWhere(n.right, (r) => (r.kind === SyntaxKind.Identifier) && (r.text === name))) {
             return false;
         }
-        const target: any = checker.getSymbolAtLocation(n.left)?.valueDeclaration?.resolve();
-        const source: any = this.goUnwrapParenthesizedNode(target?.initializer);
+        const target = checker.getSymbolAtLocation(n.left)?.valueDeclaration?.resolve();
+        const source = this.goUnwrapParenthesizedNode((target as VariableDeclaration | undefined)?.initializer);
         return (target?.kind === SyntaxKind.VariableDeclaration) && (source?.kind === SyntaxKind.Identifier)
             && (checker.getSymbolAtLocation(source)?.valueDeclaration?.resolve()?.kind === SyntaxKind.Parameter);
     });
@@ -35002,7 +35002,7 @@ GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declarati
         || (this.getGoLocalType(declaration, this.printNode(declaration.initializer, identation)) !== parts.goType)) {
         return undefined;
     }
-    const ternary: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const ternary = this.goUnwrapParenthesizedNode(declaration.initializer);
     const condition = this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0));
     const arm = (node, deref: boolean, widen: boolean) => {
         const printed = this.goPrintTernaryBranch(node, 1).trim();
@@ -35024,11 +35024,11 @@ GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declarati
 // another declaration is not one of our uses. Parameters, var-scoped, nested or unresolved names
 // still refuse.
 function goBlockScopedDeclaration84g8(decl): boolean {
-    const list: any = decl?.parent;
+    const list: Node | undefined = decl?.parent;
     return (list?.kind === SyntaxKind.VariableDeclarationList) && ((list.flags & (NodeFlags.Let | NodeFlags.Const)) !== 0)
         && (decl.name?.kind === SyntaxKind.Identifier);
 }
-function goEnclosingBlock84g8(node): any {
+function goEnclosingBlock84g8(node): Node | undefined {
     let current = node?.parent;
     while ((current !== undefined) && (current.kind !== SyntaxKind.Block) && (current.kind !== SyntaxKind.SourceFile)) {
         current = current.parent;
@@ -35053,27 +35053,27 @@ function goSiblingProducerReturns84g8(goName: string, goType: string): boolean {
         || ((goType === 'map[string]any') && (GO_84G8_SIBLING_MAP_PRODUCERS.indexOf(goName) >= 0));
 }
 const goDeclaredLocalTypeIfSafeBase84g8 = GoTranspiler.prototype.goDeclaredLocalTypeIfSafe;
-GoTranspiler.prototype.goDeclaredLocalTypeIfSafe = function (declaration, goType: string, readsTheValue: (n: any) => boolean, skipUse?: (n: any) => boolean): string | undefined {
+GoTranspiler.prototype.goDeclaredLocalTypeIfSafe = function (declaration, goType: string, readsTheValue: (n) => boolean, skipUse?: (n) => boolean): string | undefined {
     const shipped = goDeclaredLocalTypeIfSafeBase84g8.call(this, declaration, goType, readsTheValue, skipUse);
     if ((shipped !== undefined) || !goBlockScopedDeclaration84g8(declaration)) {
         return shipped;
     }
     // only a producer whose Go signature already hands back goType: the declaration needs no conversion
-    const init: any = declaration.initializer;
-    const callee: any = init?.expression;
+    const init = declaration.initializer;
+    const callee = init?.expression;
     if ((init?.kind !== SyntaxKind.CallExpression) || (init.questionDotToken !== undefined) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
         || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (typeof callee.name?.text !== 'string')
         || !goSiblingProducerReturns84g8(callee.name.text.charAt(0).toUpperCase() + callee.name.text.slice(1), goType)) {
         return undefined;
     }
     const sourceName = declaration.name.text as string;
-    const scope: any = this.goEnclosingFunction(declaration);
+    const scope: Node | undefined = this.goEnclosingFunction(declaration);
     const ownBlock = goEnclosingBlock84g8(declaration);
     if ((scope === undefined) || (ownBlock === undefined) || (ownBlock === scope)) {
         return undefined;
     }
     let siblings = 0;
-    const unsafe = this.hasNodeWhere(scope, (n: any) => {
+    const unsafe = this.hasNodeWhere(scope, (n) => {
         if ((n.kind === SyntaxKind.Parameter) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === sourceName)) {
             return true;
         }
@@ -35089,7 +35089,7 @@ GoTranspiler.prototype.goDeclaredLocalTypeIfSafe = function (declaration, goType
         if ((n.kind !== SyntaxKind.Identifier) || (n.text !== sourceName) || (n === declaration.name)) {
             return false;
         }
-        const parent: any = n.parent;
+        const parent = n.parent;
         if (((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.name === n))
             || ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n))
             || ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.name === n))) {
@@ -35117,7 +35117,7 @@ GoTranspiler.prototype.goDeclaredLocalTypeIfSafe = function (declaration, goType
 // embeds the REST one); when ccxtGoFamilyMethodReturnType proves that method's emitted signature is
 // `*string`, the local holds exactly that pointer.
 function goInheritedFamilyCallType84g8(goTranspiler, initializer, printedValue: string): string | undefined {
-    const callee: any = initializer?.expression;
+    const callee = initializer?.expression;
     if ((initializer?.kind !== SyntaxKind.CallExpression) || (initializer.questionDotToken !== undefined)
         || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
         || !CCXT_GO_FAMILY_METHOD.test(String(callee.name?.text ?? ''))) {
@@ -35130,15 +35130,15 @@ function goInheritedFamilyCallType84g8(goTranspiler, initializer, printedValue: 
         || (value.substring(0, open) !== 'this.' + name.charAt(0).toUpperCase() + name.slice(1))) {
         return undefined;
     }
-    let resolved: any = undefined;
+    let resolved: Node | undefined = undefined;
     try {
         resolved = goTranspiler.getChecker().getResolvedSignature(initializer)?.declaration?.resolve();
     } catch (e) {
         return undefined;
     }
-    const owner: any = resolved?.parent;
+    const owner = resolved?.parent;
     if ((resolved?.kind !== SyntaxKind.MethodDeclaration) || (owner?.kind !== SyntaxKind.ClassDeclaration)
-        || (owner === enclosingClassDeclaration(initializer)) || (['Exchange', 'BaseExchange'].indexOf(String(owner.name?.text ?? '')) >= 0)) {
+        || (owner === enclosingClassDeclaration(initializer)) || (['Exchange', 'BaseExchange'].indexOf(String((owner as ClassDeclaration).name?.text ?? '')) >= 0)) {
         return undefined;
     }
     return (ccxtGoFamilyMethodReturnType(goTranspiler, resolved) === CCXT_GO_FAMILY_RETURN_TYPE) ? CCXT_GO_FAMILY_RETURN_TYPE : undefined;
@@ -35157,7 +35157,7 @@ GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue
 // write / use scan of getGoLocalType still runs on the result.
 const GO_84G8_INHERITED_RESULT_TYPES = [ 'string', '*string', 'map[string]any' ];
 function goInheritedAnnotatedCallType84g8(goTranspiler, initializer, printedValue: string): string | undefined {
-    const callee: any = initializer?.expression;
+    const callee = initializer?.expression;
     if ((initializer?.kind !== SyntaxKind.CallExpression) || (initializer.questionDotToken !== undefined)
         || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
         || (typeof callee.name?.text !== 'string') || CCXT_GO_FAMILY_METHOD.test(callee.name.text)) {
@@ -35170,15 +35170,15 @@ function goInheritedAnnotatedCallType84g8(goTranspiler, initializer, printedValu
         || (value.substring(0, open) !== 'this.' + name.charAt(0).toUpperCase() + name.slice(1))) {
         return undefined;
     }
-    let resolved: any = undefined;
+    let resolved: Node | undefined = undefined;
     try {
         resolved = goTranspiler.getChecker().getResolvedSignature(initializer)?.declaration?.resolve();
     } catch (e) {
         return undefined;
     }
-    const owner: any = resolved?.parent;
+    const owner = resolved?.parent;
     if ((resolved?.kind !== SyntaxKind.MethodDeclaration) || (owner?.kind !== SyntaxKind.ClassDeclaration)
-        || (owner === enclosingClassDeclaration(initializer)) || (['Exchange', 'BaseExchange', 'PredictionExchange'].indexOf(String(owner.name?.text ?? '')) >= 0)) {
+        || (owner === enclosingClassDeclaration(initializer)) || (['Exchange', 'BaseExchange', 'PredictionExchange'].indexOf(String((owner as ClassDeclaration).name?.text ?? '')) >= 0)) {
         return undefined;
     }
     const goType = ccxtGoFamilyMethodReturnType(goTranspiler, resolved);
