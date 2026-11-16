@@ -23432,3 +23432,26 @@ describe('ral-73h: a typed string local parsed by parseInt / parseFloat reads in
         expect(text).not.toContain('let mut size: Option<String>');
     });
 });
+
+describe('ral-73b R1: a nil-declared string local written from a typed market / currency field', () => {
+    const fx = (name: string, base: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('`x = market[\'symbol\']` / `x = market[\'id\']` into a `Str` local seeded with undefined is Option<String>', () => {
+        const file = fx ('r73b-market-field-write',
+            "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; spot: boolean; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n",
+            "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    one (symbol: Str = undefined) {\n        let symbolResolved: Str = undefined;\n        if (symbol !== undefined) {\n            const market = this.market (symbol);\n            symbolResolved = market['symbol'];\n        }\n        if (symbolResolved === undefined) {\n            return this.hold (1);\n        }\n        return this.hold (symbolResolved);\n    }\n    two (symbol: Str = undefined) {\n        let marketId: Str = undefined;\n        if (symbol !== undefined) {\n            const market = this.market (symbol);\n            marketId = market['id'];\n        }\n        if (marketId === undefined) {\n            return this.hold (2);\n        }\n        return this.hold (marketId);\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = typed.transpileRustByPath (file).content;
+        expect(out).toContain('let mut symbolResolved: Option<String> = None;');
+        expect(out).toContain('symbolResolved = Some((market).symbol.clone());');
+        expect(out).toContain('symbolResolved.is_none()');
+        expect(out).toContain('let mut marketId: Option<String> = None;');
+        expect(out).toContain('marketId = (market).id.as_deref().map(str::to_owned);');
+        expect(out).not.toContain(': Value = Value::Null;');
+    });
+});

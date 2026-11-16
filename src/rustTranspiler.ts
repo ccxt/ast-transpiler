@@ -10461,7 +10461,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const expressionText = this.rustScalarExpressionText(kind, node);
         if (expressionText !== undefined) return expressionText;
-        const marketFieldInit = this.rustMarketFieldScalar(node); if (marketFieldInit !== undefined) return marketFieldInit.kind === kind ? marketFieldInit.text : undefined;
+        const marketFieldInit = this.rustMarketFieldScalar(node);
+        // ral-73b R1: a never-null `String` field written into an optional string local is that string's `Some`
+        if (marketFieldInit !== undefined) return marketFieldInit.kind === kind ? marketFieldInit.text : (kind === `o${marketFieldInit.kind}` && marketFieldInit.kind === 'str' && this.rustNilVenueWrite(node) ? `Some(${marketFieldInit.text})` : undefined);
         const boolText = kind === 'bool' && this.literalKindOfNode(node) !== 'boolean' ? this.rustBoolNativeText(node) : undefined; if (boolText !== undefined) return boolText;
         if (kind === 'obool' && this.rust67bBoolLogicalWrite(node)) return wrap(this.printCondition(node, 0).trim());
         if (base === 'str' && this.literalKindOfNode(node) === 'string') return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
@@ -15748,7 +15750,13 @@ export class RustTranspiler extends BaseTranspiler {
         // only as a `const`/`let` initializer: a write into another (nil-declared) local keeps that rule's decision
         let top: any = node;
         while (top.parent !== undefined && (isParenthesizedExpression(top.parent) || top.parent.kind === SyntaxKind.AsExpression)) top = top.parent;
-        if (placed && !(isVariableDeclaration(top.parent) && top.parent.initializer === top) && !this.rust57kMarketTernaryArm(top)) return undefined;
+        // ral-73b R1: or the whole right side of `x = m['k'];` into a nil-declared local (rustNilVenueWrite): the write takes
+        // the very field read an initializer would (its `Option` when the local is optional)
+        const declInit = isVariableDeclaration(top.parent) && top.parent.initializer === top;
+        const nilWrite = placed && !declInit && !this.rust57kMarketTernaryArm(top) && this.rustNilVenueWrite(top);
+        if (placed && !declInit && !this.rust57kMarketTernaryArm(top) && !nilWrite) return undefined;
+        // a `key_read` temporary is owned: the nil write moves its string out (`into_opt_string`, ral-xa's form), no copy
+        const keyReadTail = nilWrite ? '.into_opt_string()' : '.as_str().map(str::to_owned)';
         const currency = this.rustCurrencyLocalOf(node.expression);
         if (currency !== undefined) {
             // lf: `c['code']` off a `crate::types::Currency` record read off its own map as the optional string the box held
@@ -15758,7 +15766,7 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-61e: an `Option<Currency>` local ('copt': nil-declared, written from `this.currency(code)`) reads the same
             // `KeyRead` way (None answers Null, so the optional string is None exactly where the box held Null)
             if (this.rustCurrencyLocalKind(currency) === false || (currencyKey !== 'code' && (currencyKey !== 'id' || this.primitiveKindOfType(this.typeOfNodeIfAny(node)) !== 'string'))) return undefined;
-            return { kind: 'ostr', text: `crate::value::KeyRead::key_read(&&${this.printNode(currency.name, 0)}, "${currencyKey}").as_str().map(str::to_owned)` };
+            return { kind: 'ostr', text: `crate::value::KeyRead::key_read(&&${this.printNode(currency.name, 0)}, "${currencyKey}")${keyReadTail}` };
         }
         // ral-46e: a flag read off an `Option<Market>` local (`getMarketFromSymbols`: undefined or a loaded market).
         // The boxed `KeyRead` read was Null for `None` and the loaded market's own flag otherwise; every consumer of the
@@ -15779,7 +15787,7 @@ export class RustTranspiler extends BaseTranspiler {
             // as the optional string the boxed read held (a string or Null), never the struct's defaulted field
             // (unified string keys only: an exchange id key may hold a number, which `as_str` would drop)
             if (RustTranspiler.RUST_MARKET_STR_FIELDS[key] === undefined && key !== 'settle') return undefined;
-            return { kind: 'ostr', text: `crate::value::KeyRead::key_read(&&${this.printNode(declaration.name, 0)}, ${JSON.stringify(key)}).as_str().map(str::to_owned)` };
+            return { kind: 'ostr', text: `crate::value::KeyRead::key_read(&&${this.printNode(declaration.name, 0)}, ${JSON.stringify(key)})${keyReadTail}` };
         }
         const recv = `(${this.printNode(declaration.name, 0)})`;
         // ne: a loaded struct's flag is the `bool` its boxed read wraps (`Value::Bool((m).swap)`), read by rustMarketBoolFlagRead
