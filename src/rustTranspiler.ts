@@ -21498,7 +21498,10 @@ export class RustTranspiler extends BaseTranspiler {
             if (!isCallExpression(up) || up.arguments[0] !== n) return handed();
             // An endpoint response may be a list or a map: only string-key reads agree for both.
             const keyArgs: any[] = up.arguments.slice(1, isPropertyAccessExpression(up.expression) && /2$/.test(String(up.expression.name.text)) ? 3 : 2).map((a: any) => this.rustSkipWrappers(a));
-            const stringKey = keyArgs.every((k: any) => k !== undefined && isStringLiteralLikeNode(k) && !/^\d+$/.test(String(k.text)) && !(String(k.text) in this.StringLiteralReplacements));
+            // ral-60i: on an element of a declared `Dict[]` (rustDictElementSource) a key the checker types `string` reads a
+            // string key too: the declared map row reads the same entry boxed or shared (a missing row is Null at every key)
+            const stringKey = keyArgs.every((k: any) => k !== undefined && (isStringLiteralLikeNode(k) && !/^\d+$/.test(String(k.text)) && !(String(k.text) in this.StringLiteralReplacements)
+                || isIdentifier(k) && from === 'dict' && this.rustDictElementSource(init) && this.primitiveKindOfType(this.typeOfNodeIfAny(k)) === 'string'));
             const literalKey = this.rustBorrowedDictReader(up) !== undefined;
             if (!literalKey && !((from !== 'api' || stringKey) && this.rustBorrowedAnyKeyReader(up))) return handed();
             // a list answer reads a digit key as an index, the optional map reads nothing
@@ -21830,6 +21833,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private static readonly RUST_REUSE_SAFE_DICT = new Set([ 'safeDict' ]);
+    private static readonly RUST_SAFE_LIST_SELF_DEFAULT = new Set([ 'safeList' ]);
 
     /** ral-44d: `n` is the default (third) operand of a base `safeDict (o, k, n)`: the `&[Value]` default slot takes the box
      *  (`Value::from(&n)`, the Arc bump the `.clone()` paid), and `safeDict` hands that very map back when the key misses. */
@@ -23643,6 +23647,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (up.kind === SyntaxKind.ConditionalExpression && up.condition !== n) {
             const other: any = this.unwrapParens(up.whenTrue === n ? up.whenFalse : up.whenTrue);
             return isObjectLiteralExpression(other) || this.literalKindOfNode(other) !== undefined;
+        }
+        // ral-60i: the default of `safeDict (x, k, x)` (its own head): the optional box hands back the map the boxed local
+        // held, Null for `None`, so a missing key answers exactly what the boxed default answered
+        if (this.rustSafeDictDefaultUse(n) && isIdentifier(this.rustSkipWrappers(up.arguments[0]))) {
+            const head: any = this.rustSkipWrappers(up.arguments[0]);
+            const declaration: any = this.rustDeclarationOfIdentifier(n);
+            return declaration !== undefined && this.rustDeclarationOfIdentifier(head) === declaration;
         }
         return isAsExpression(up) && up.expression === n && isReturnStatement(up.parent);
     }
@@ -27585,6 +27596,15 @@ export class RustTranspiler extends BaseTranspiler {
                 }
                 if (isCallExpression(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) {
                     natives++;
+                    return true;
+                }
+                // ral-60i: `this.safeList (x, k, x as any)` of a nil-assigned list (the list itself as its own default): the
+                // default slot takes the box (`Value::Arr(x.clone())`, the copy the boxed local paid), the head is lent above;
+                // a missing key hands the very list back, as the boxed default did
+                if (nilAssigned && isAsExpression(up) && up.expression === n && isCallExpression(up.parent) && up.parent.arguments.length === 3
+                    && up.parent.arguments[2] === up && this.rustBaseCallNamed(up.parent, RustTranspiler.RUST_SAFE_LIST_SELF_DEFAULT)
+                    && isIdentifier(this.rustSkipWrappers(up.parent.arguments[0])) && this.rustIdentifierRefersToDeclaration(this.rustSkipWrappers(up.parent.arguments[0]), declaration)) {
+                    boxes.push([n, 'clone']);
                     return true;
                 }
                 if (isReturnStatement(up) && up.expression === n) {
