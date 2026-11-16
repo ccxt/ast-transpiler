@@ -13256,6 +13256,8 @@ export class RustTranspiler extends BaseTranspiler {
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
     rustScalarExpressionUseForm(n, kind: string): string | undefined {
         const parent: any = n.parent;
+        // ral-73h: a string local parsed by `parseInt` / `parseFloat (x)` reads in place (printNativeParseCall)
+        if ((kind === 'str' || kind === 'ostr') && this.rust73hParseArgUse(n)) return 'native';
         // ral-40a: `(x as string)` as a ws `watch` url / hash slot: the slot reads the string local through the cast
         if ((kind === 'str' || kind === 'ostr') && isAsExpression(parent) && this.rustStrCastLocal(parent) === n) {
             let top: any = parent;
@@ -19092,6 +19094,20 @@ export class RustTranspiler extends BaseTranspiler {
             && call.arguments.length === 1 && call.arguments[0] === top;
     }
 
+    /** ral-73h: `str` / `ostr` when `arg` is a bare identifier of a typed string local (the one argument of `parseInt` / `parseFloat`). */
+    rust73hParseStrLocalKind(arg: any): string | undefined {
+        if (arg === undefined || !isIdentifier(arg)) return undefined;
+        const kind = this.rustScalarIdentifierKind(arg);
+        return kind === 'str' || kind === 'ostr' ? kind : undefined;
+    }
+
+    /** ral-73h: `n` is the sole bare argument of a global `parseInt` / `parseFloat` call. */
+    rust73hParseArgUse(n: any): boolean {
+        const call: any = n?.parent;
+        return call !== undefined && isCallExpression(call) && isIdentifier(call.expression) && RustTranspiler.RUST_PARSE_HELPERS[String(call.expression.text)] !== undefined
+            && call.arguments.length === 1 && call.arguments[0] === n && isIdentifier(n);
+    }
+
     printNativeParseCall(node: CallExpression): string | undefined {
         const callee = node.expression;
         if (!isIdentifier(callee)) return undefined;
@@ -19105,6 +19121,14 @@ export class RustTranspiler extends BaseTranspiler {
             return `(match ${super.printIdentifier(optLocal)}.as_deref() { Some(__parse_s) => __parse_s.trim().parse::<i64>().map(Value::Int).unwrap_or(Value::Null), None => Value::Null })`;
         }
         const arg = node.arguments[0];
+        // ral-73h: a bare `String` / `Option<String>` local parses in place (the `Str` / `Null` arms runtime parse_int/parse_float take)
+        const strLocal = this.rust73hParseStrLocalKind(arg);
+        if (strLocal !== undefined) {
+            const [ ty, ctor ] = helper === 'i64' ? [ 'i64', 'Int' ] : [ 'f64', 'Float' ];
+            const name = super.printIdentifier(arg);
+            if (strLocal === 'str') return `${name}.trim().parse::<${ty}>().map(Value::${ctor}).unwrap_or(Value::Null)`;
+            return `(match ${name}.as_deref() { Some(__parse_s) => __parse_s.trim().parse::<${ty}>().map(Value::${ctor}).unwrap_or(Value::Null), None => Value::Null })`;
+        }
         const type = this.getCheckedTypeOf(arg);
         if (type === undefined || !this.isStringType(type.flags)) return undefined;
         if (isStringLiteralLikeNode(arg)) {

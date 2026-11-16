@@ -23410,3 +23410,25 @@ describe('ral-73f: safe reader locals whose one vetoing use had no native form',
         expect(out).toMatch(/let mut aski1: Value = /);
     });
 });
+
+describe('ral-73h: a typed string local parsed by parseInt / parseFloat reads in place', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k]; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    const out = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-73h-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue(body));
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('an Option<String> reader local tested and parsed by parseFloat is typed; the parse matches its payload', () => {
+        const text = out("    priceOf (params: Dict) {\n        const price = this.safeString (params, 'price');\n        if (price !== undefined) {\n            return this.hold (parseFloat (price));\n        }\n        return undefined;\n    }\n");
+        expect(text).toContain('let mut price: Option<String> = ');
+        expect(text).toContain('(match price.as_deref() { Some(__parse_s) => __parse_s.trim().parse::<f64>().map(Value::Float).unwrap_or(Value::Null), None => Value::Null })');
+    });
+    test('parseInt with a radix keeps the boxed local', () => {
+        const text = out("    sizeOf (params: Dict) {\n        const size = this.safeString (params, 'size');\n        return this.hold (parseInt (size, 10));\n    }\n");
+        expect(text).not.toContain('let mut size: Option<String>');
+    });
+});
