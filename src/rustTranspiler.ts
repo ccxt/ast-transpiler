@@ -2455,6 +2455,8 @@ export class RustTranspiler extends BaseTranspiler {
             return `${indent}let mut ${varName}: ${type} = ${this.printNode(declaration.initializer, 0).trim()}`;
         }
         if (!declaration.initializer) {
+            const builtNil = node.declarations.length === 1 ? this.printBuiltListDeclaration(declaration, indent, varName) : undefined;
+            if (builtNil !== undefined) return builtNil;
             return `${indent}let mut ${varName}: Value = Value::Null`;
         }
         // the test crate reaches the runtime's types through `ccxt::`
@@ -24522,6 +24524,9 @@ export class RustTranspiler extends BaseTranspiler {
         const source: any = declaration.getSourceFile?.()?.fileName;
         if (typeof source === 'string' && /[\\/]test[\\/]/.test(source)) return false;
         const init: any = this.rustSkipWrappers(declaration.initializer);
+        // ral-59i: a nil-declared `let` written only from declared `Promise<List>` endpoints and assigned before any read
+        if (this.rustNilListAssignedFirst(declaration)) return this.rustBuiltListLocal(declaration);
+        if (init === undefined) return false;
         if (isArrayLiteralExpression(init)) return this.rustBuiltListLocal(declaration);
         // ral-ra: a reassigned `[]`-defaulted `safeList*` read whose every write is a list producer is a built list too
         if (this.rustDefaultedListRead(init) && isIdentifier(declaration.name) && this.rustLocalIsReassigned(declaration, String(declaration.name.text))) return this.rustBuiltListLocal(declaration);
@@ -27456,11 +27461,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1 || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
         if (/[\\/]test[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? ''))) return false;
         const init: any = declaration.initializer;
+        // ral-59i: no initial list is ever read (rustNilListAssignedFirst): the writes alone prove the kind
+        const nilAssigned = this.rustNilListAssignedFirst(declaration);
         // ral-56s: a base `arrayConcat (a, b)` initializer answers a `Value::Arr` on every path, like a `[]`-defaulted read
         const read = init !== undefined && (this.rustDefaultedListRead(this.rustSkipWrappers(init)) || this.rustBuiltListConcatInit(this.rustSkipWrappers(init)));
-        if (init === undefined || !read && (!isArrayLiteralExpression(init) || init.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement))) return false;
-        const type: any = this.typeOfNodeIfAny(read ? init : declaration.name);
-        if (type === undefined || !this.getChecker().isArrayType(type)) return false;
+        if (!nilAssigned && (init === undefined || !read && (!isArrayLiteralExpression(init) || init.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement)))) return false;
+        const type: any = nilAssigned ? undefined : this.typeOfNodeIfAny(read ? init : declaration.name);
+        if (!nilAssigned && (type === undefined || !this.getChecker().isArrayType(type))) return false;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
@@ -27468,7 +27475,7 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustBorrowedDictLocal(declaration)
             || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
         this.rustBuiltListCopiedElement = false;
-        if (String(init.getText()).split('\n')[0].length > (read ? 240 : 120) || !this.rustBuiltListWriteSource(init)) return false;
+        if (!nilAssigned && (String(init.getText()).split('\n')[0].length > (read ? 240 : 120) || !this.rustBuiltListWriteSource(init))) return false;
         const boxes: [any, 'clone' | 'move' | 'lend'][] = [];
         let natives = 0;
         let handOffs = 0;
@@ -27498,6 +27505,14 @@ export class RustTranspiler extends BaseTranspiler {
                 if (isElementAccessExpression(up) && up.expression === n) {
                     natives++;
                     return !(isElementAccessExpression(up.parent) && up.parent.expression === up) && this.rustReadBearerElementUse(up, 'list');
+                }
+                // ral-59i: `(x as T).length` of a nil-assigned list reads the same list (the cast prints nothing)
+                if (nilAssigned && isAsExpression(up) && up.expression === n && isParenthesizedExpression(up.parent) && isPropertyAccessExpression(up.parent.parent)
+                    && up.parent.parent.expression === up.parent && String(up.parent.parent.name.text) === 'length') {
+                    const use: any = up.parent.parent.parent;
+                    natives++;
+                    return use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
+                        && !(isBinaryExpression(use) && use.left === up.parent.parent && rustIsAssignmentOperator(use.operatorToken.kind));
                 }
                 if (isPropertyAccessExpression(up) && up.expression === n) {
                     const member = String(up.name.text);
@@ -28230,8 +28245,78 @@ export class RustTranspiler extends BaseTranspiler {
     printBuiltListDeclaration(declaration: any, indent: string, varName: string): string | undefined {
         if (!this.rustLentListLocal(declaration) || !this.rustBuiltLists.has(declaration)) return undefined;
         const init: any = this.rustSkipWrappers(declaration.initializer);
+        // ral-59i: assigned before any read, so the empty list is never observed
+        if (this.rustNilListAssignedFirst(declaration)) return `${indent}let mut ${varName}: crate::value::List = std::sync::Arc::new(Vec::new())`;
         if (!isArrayLiteralExpression(init)) return `${indent}let mut ${varName}: crate::value::List = ${this.printNode(declaration.initializer, 0).trim()}.into_list()`;
         return `${indent}let mut ${varName}: crate::value::List = ${this.printBuiltListLiteral(declaration.initializer)}`;
+    }
+
+    // ── ral-59i: nil-declared list local assigned before any read ──
+    // `let x = undefined;` (or `let x: T;`, a plain `let`, one declarator) whose every write is `x = await this.<endpoint> (..)`
+    // with the abstract declaration spelling `Promise<List>` (rustDeclaredListProducer: `.into_list()` moves the answer), and
+    // whose first later statement of the same block that mentions x assigns it on every path that falls through (an `if`
+    // with both branches assigning, a block holding an assignment; a branch ending in `throw` / `return` never falls
+    // through) without reading it. Every read then sees a written list: the initial value is never observed.
+    private rustNilListFirstCache = new WeakMap<any, boolean>();
+    rustNilListAssignedFirst(declaration: any): boolean {
+        if (!this.rustNilListFirstCache.has(declaration)) {
+            let ok = false;
+            try { ok = this.rustNilListAssignedFirstUncached(declaration); } catch (e) { ok = false; }
+            this.rustNilListFirstCache.set(declaration, ok);
+        }
+        return this.rustNilListFirstCache.get(declaration) as boolean;
+    }
+
+    rustNilListAssignedFirstUncached(declaration: any): boolean {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        const list: any = declaration.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1 || (list.flags & NodeFlags.Const) !== 0) return false;
+        const statement: any = list.parent;
+        if (statement?.kind !== SyntaxKind.VariableStatement || !isBlock(statement.parent) || this.rustTestTierSource(declaration)) return false;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        if (init !== undefined && this.literalKindOfNode(init) !== 'null') return false;
+        const name = String(declaration.name.text);
+        const refs = (root: any): any[] => {
+            const out: any[] = [];
+            const visit = (n: any) => {
+                if (isIdentifier(n) && String(n.text) === name && n !== declaration.name && !this.rustIdentifierIsPropertyName(n) && this.rustIdentifierRefersToDeclaration(n, declaration)) out.push(n);
+                n.forEachChild(visit);
+            };
+            visit(root);
+            return out;
+        };
+        const isWrite = (n: any): boolean => isBinaryExpression(n.parent) && n.parent.left === n && n.parent.operatorToken.kind === SyntaxKind.EqualsToken
+            && n.parent.parent?.kind === SyntaxKind.ExpressionStatement;
+        const statements: any[] = Array.from(statement.parent.statements);
+        const at = statements.indexOf(statement);
+        let first: any = undefined;
+        let writes = 0;
+        for (const st of statements.slice(at + 1)) {
+            const own = refs(st);
+            if (own.length === 0) continue;
+            if (first === undefined) {
+                first = st;
+                if (own.some((n: any) => !isWrite(n))) return false;
+            }
+            for (const n of own) {
+                if (!isWrite(n)) continue;
+                if (!this.rustDeclaredListProducer(this.rustSkipWrappers(n.parent.right))) return false;
+                writes++;
+            }
+        }
+        if (first === undefined || writes === 0) return false;
+        const assigns = (st: any): boolean => {
+            if (st === undefined) return false;
+            if (st.kind === SyntaxKind.ThrowStatement || st.kind === SyntaxKind.ReturnStatement) return true;
+            if (st.kind === SyntaxKind.ExpressionStatement) {
+                const e: any = this.rustSkipWrappers(st.expression);
+                return isBinaryExpression(e) && e.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(e.left) && refs(e.left).length === 1;
+            }
+            if (isBlock(st)) return Array.from(st.statements).some((x: any) => assigns(x));
+            if (isIfStatement(st)) return st.elseStatement !== undefined && assigns(st.thenStatement) && assigns(st.elseStatement);
+            return false;
+        };
+        return assigns(first);
     }
 
     // ── ral-tf: `x = y` under `if (y !== undefined)`, y an optional list local (`Option<List>`) at its last use ──

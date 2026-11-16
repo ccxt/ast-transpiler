@@ -20373,3 +20373,31 @@ describe('ral-59k: a field write whose value re-reads the bucket through this.sa
         expect(out).toContain('let mut code: Value = ');
     });
 });
+
+describe('ral-59i: a nil-declared list assigned before any read from declared Promise<List> endpoints', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    publicGetA (params = {}): Promise<List> { return this.keep (params); }\n    publicGetB (params = {}): Promise<List> { return this.keep (params); }\n    publicGetC (params = {}): Promise<Dict> { return this.keep (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends venueApi {\n    async m (flag: boolean, params: Dict = {}) {\n" + body + "        const rows = [];\n        for (let i = 0; i < (response as List).length; i++) {\n            rows.push (this.safeString (response[i], 's'));\n        }\n        return rows;\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const branches = (second: string, elseBranch = true) => "        let response = undefined;\n        if (flag) {\n            response = await this.publicGetA (params);\n        }" + (elseBranch ? " else {\n            response = await this." + second + " (params);\n        }" : "") + "\n";
+    test('both branches write a declared List: the local is a List and the writes take the list', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-59i-pos', branches ('publicGetB'))).content;
+        expect(out).toContain('let mut response: crate::value::List = std::sync::Arc::new(Vec::new());');
+        expect(out).toContain('.await.into_list();');
+        expect(out).toContain('response.len()');
+    });
+    test('a branch that leaves the local unwritten keeps it Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-59i-neg-else', branches ('publicGetB', false))).content;
+        expect(out).not.toContain('let mut response: crate::value::List');
+    });
+    test('a write from a declared Dict endpoint keeps it Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-59i-neg-dict', branches ('publicGetC'))).content;
+        expect(out).not.toContain('let mut response: crate::value::List');
+    });
+});
