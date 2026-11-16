@@ -10539,3 +10539,38 @@ class T {
         }
     });
 });
+
+describe('ral-84j7: length of a declared List local prints a bare .size()', () => {
+    const LIST_TYPE = 'java.util.List<Object>';
+    const withResolver = (resolver: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = resolver;
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    const input =
+    "class T {\\n" +
+    "    test(): number {\\n" +
+    "        const xs = this.make();\\n" +
+    "        return xs.length;\\n" +
+    "    }\\n" +
+    "    make(): string[][] { return []; }\\n" +
+    "}";
+    test('declared List local: no receiver cast', () => {
+        withResolver((d: any) => (d?.name?.text === 'xs' ? LIST_TYPE : undefined), () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('xs.size()');
+            expect(output).not.toContain('((java.util.List<?>)xs).size()');
+        });
+    });
+    test('no declared type: the cast stays', () => {
+        withResolver(() => undefined, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('((java.util.List<?>)xs).size()');
+        });
+    });
+});

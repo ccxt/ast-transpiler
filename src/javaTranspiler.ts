@@ -4813,6 +4813,14 @@ export class JavaTranspiler extends BaseTranspiler {
     // shared by printLengthProperty and transformPropertyAcessExpressionIfNeeded
     printJavaLength(expression, leftSide) {
         const kind = this.javaLengthKind(expression);
+        if (kind === 'List' && isIdentifier(expression)) {
+            // ral-84j7: a local the embedding layer declared a java.util.List (a typed
+            // parse*/filter return) needs no receiver cast; same int, same NPE on null
+            const declaredList = this.javaDeclaredTypeOf(expression);
+            if (declaredList !== undefined && JAVA_DECLARED_LIST_TYPES.test(declaredList)) {
+                return `${leftSide}.size()`;
+            }
+        }
         if (kind !== undefined) {
             const read = kind.startsWith('String') ? `${this.javaStringReceiverText(expression, leftSide)}.length()` : `((java.util.List<?>)${leftSide}).size()`;
             return kind.endsWith('OrNull') ? `(${leftSide} == null ? 0 : ${read})` : read;
