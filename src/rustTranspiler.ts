@@ -6916,9 +6916,22 @@ export class RustTranspiler extends BaseTranspiler {
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
                 && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration) && !this.rustScalarCacheFieldCtor(n, write)
-                && !this.rustScalarSumOperandWrite(n, write) && !this.rust58kDictReaderKeyWrite(n, write)) return false;
+                && !this.rustScalarSumOperandWrite(n, write) && !this.rust58kDictReaderKeyWrite(n, write) && !this.rust60kBaseCallArgDictWrite(n, write)) return false;
         }
         return true;
+    }
+
+    /** ral-60k: a direct argument of a base-class `this.m (..)` call that is the whole source of a write to a local declared
+     *  `Dict` (kucoin fetchBalance `result = this.mergeBalanceAccount (result, currencyCode, ..)` in a sibling block): the
+     *  written local's type is its annotation and the argument boxes into the call, as the plain walk already prints it. */
+    rust60kBaseCallArgDictWrite(n: any, write: any): boolean {
+        if (write.operatorToken?.kind !== SyntaxKind.EqualsToken || this.rustTestTierSource(n)) return false;
+        const target: any = this.unwrapParens(write.left);
+        const call: any = this.unwrapParens(write.right);
+        if (!isIdentifier(target) || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !this.rustCalleeIsRuntimeBase(call) || !call.arguments.some((a: any) => this.unwrapParens(a) === n)) return false;
+        const d: any = this.rustDeclaredNode(target);
+        return d !== undefined && isVariableDeclaration(d) && d.type !== undefined && String(d.type.getText()) === 'Dict';
     }
 
     /** ral-58k: the key argument of a base `this.safeDict (src, k, dflt)` that is the whole source of a write to a local
@@ -8817,7 +8830,8 @@ export class RustTranspiler extends BaseTranspiler {
         let base: any = outer;
         let depth = 0;
         while (isElementAccessExpression(base)) { base = base.expression; depth++; }
-        if (depth < 3 || !isIdentifier(base)) return undefined;
+        // ral-60k: a two-key write `x[k1][k2] = v` prints through the same rustBearerChainedWrite first hop (`x.entry(<k1>)`); only k1 is asked
+        if (depth < 2 || !isIdentifier(base) || (depth === 2 && access.expression !== base)) return undefined;
         // the bearer decision of `x` leans on this very key (rustBearerChainHopArg), so it is asked syntactically here: a never
         // reassigned object-literal local; a local the bearer proof then refuses for another reason keeps the boxed chain,
         // whose key `&k` is the typed local's box (rustDeepBearerChainKeyText)
