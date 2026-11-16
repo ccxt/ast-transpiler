@@ -639,7 +639,7 @@ export class RustTranspiler extends BaseTranspiler {
         // a closure below the declaration that names the local may still hold it
         const scope: any = this.rustEnclosingFunction(declaration);
         const own = this.rustSymbolOf(node);
-        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text)) as any[]) {
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
             if (n === node || n === declaration.name || this.rustSymbolOf(n) !== own) continue;
             if (this.rustEnclosingFunction(n) !== scope) return false;
         }
@@ -5123,7 +5123,17 @@ export class RustTranspiler extends BaseTranspiler {
     /** md: market-field strings lent at their boxes (guarded by their printed name: `type` prints `type_var`). */
     private rustMarketLentLocals = new WeakSet<any>();
 
+    /** ral-70f: ral-70f reader locals whose last use walk accepted every use (rustScalarLocalKindCore). */
+    private rust70fWalkOk = new WeakSet<any>();
+
     rustScalarLocalKindUncached(declaration): string | undefined {
+        this.rust70fWalkOk.delete(declaration);
+        const kind = this.rustScalarLocalKindCore(declaration);
+        // ral-70f: the cost vetoes refused a ral-70f reader local whose every use has an `Option<String>` form: typed anyway
+        return kind === undefined && this.rust70fWalkOk.has(declaration) ? 'ostr' : kind;
+    }
+
+    rustScalarLocalKindCore(declaration): string | undefined {
         if (this.rustScalarVetoed.has(declaration)) return undefined;
         if (declaration.initializer === undefined || this.literalKindOfNode(declaration.initializer) === 'null') return this.rustNilScalarKind(declaration);
         if (!this.rustScalarInitShape(declaration.initializer)) return undefined;
@@ -5187,6 +5197,11 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustBorrowedStrElems.delete(declaration);
         if (ok && kind === 'ostr' && this.rustBorrowStrElem(declaration)) { this.rustBorrowedStrElems.add(declaration); return kind; }
         if (ok && this.rustWgKeyReadInValueUse(declaration)) return undefined;
+        // ral-70f: a no-default `safeString` / `safeStringLower|Upper` (literal key) reader local whose every use has an
+        // `Option<String>` form is typed whatever the cost vetoes below say (rustScalarLocalKindUncached takes it when they refuse): each box converts the `Str` / `Null` the boxed
+        // reader held (ccxt's narrowStrNullLocals pass printed exactly these locals). Not guarded: the 400-char guard reads the
+        // raw method text, which ccxt's passes shorten; the pass judged the final text
+        if (ok && kind === 'ostr' && this.rust70fReaderLocal(declaration, true)) this.rust70fWalkOk.add(declaration);
         // boxed uses of the expression shapes are checked against the printed method lines
         const guarded = (widened || expressionUses || this.rustOptListParamInit(declaration.initializer)) && boxed > 0;
         // a local only handed back to `Value` slots keeps its producer's type: one conversion per box, no extra string copy
@@ -6484,6 +6499,9 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-68f: also a base safeString-family reader with no default (bithumb pro `this.safeString2 (m, a, b) as string`):
         // the cast prints nothing, the reader's box is `Str` or `Null`, exactly its `_opt` twin
         if (String(inner.expression.name.text) === 'safeString2' && this.rust68fNoDefaultReader(inner) && this.rust68fConstInit(node)) return inner;
+        // ral-70f: likewise `const x = this.safeString (o, k) as string` (and the Lower / Upper literal-key readers) of a local the
+        // ral-70f reader rule admits (ccxt's narrowStrNullLocals pass typed these): the cast prints nothing
+        if (this.rust68fConstInit(node) && this.rust70fReaderLocal(this.rust65nClimbParens(node).parent, true)) return inner;
         return RustTranspiler.RUST_BASE_SCALAR_RETURNS[String(inner.expression.name.text)] === 'ostr' ? inner : undefined;
     }
 
@@ -7226,6 +7244,10 @@ export class RustTranspiler extends BaseTranspiler {
         const siblings = nodes.filter((n) => n !== declaration && this.rustBindsName(n, name));
         if (siblings.length === 0) return plain();
         for (const n of siblings) {
+            // ral-70f: a `catch (x)` binding beside a ral-70f reader local declared outside that catch clause is its own Rust
+            // binding (the walk below follows the local's own symbol)
+            if (scalar && isVariableDeclaration(n) && n.parent?.kind === SyntaxKind.CatchClause && !this.isNodeInsideNode(declaration, n.parent)
+                && this.rust70fReaderLocal(declaration, true)) continue;
             if (!isVariableDeclaration(n) || (n.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) === 0 || this.rustEnclosingFunction(n) !== scope
                 || this.isNodeInsideNode(declaration, n.parent?.parent ?? n) || this.isNodeInsideNode(n, declaration.parent?.parent ?? declaration)) return false;
         }
@@ -7248,6 +7270,10 @@ export class RustTranspiler extends BaseTranspiler {
             // (a `this.` / `super.` argument is no such slot: ccxt clones the bare `Value` there too)
             const trial = this.rustScalarDecisions.get(declaration);
             const form = this.rustScalarUseForms.get(n);
+            // ral-70f: a ral-70f reader local's box / native read is the text ccxt's narrowStrNullLocals pass printed there
+            // (a clone before the last use, exactly where the `Value` form cloned): the vetoes below do not refuse it (each is still
+            // evaluated first, so its lend marks are taken as before), except a typed-signature argument (`targ`) feeding a write
+            const r70f = trial === 'ostr' && this.rust70fReaderLocal(declaration, true);
             if ((trial === 'str' || trial === 'ostr') && (form === 'box' || form === 'xbox' || form === 'err' || form === 'key') && !this.rustScalarBoxMoves(n, form, declaration)
                 // 40d: an optional-string insert key prints its key text (`as_deref().unwrap_or("null").to_string()`): one fresh
                 // `String`, exactly the allocation the `stringify_param(&k)` of the boxed key made, so no copy where the `Value` moved
@@ -7266,20 +7292,20 @@ export class RustTranspiler extends BaseTranspiler {
                 // ral-67e: a ternary arm (`c ? y : x`) before the last use: the `Value` form cloned it there (`x.clone()`) too
                 && !(form === 'box' && isConditionalExpression(n.parent) && n.parent.condition !== n && !this.rustLocalLastUse(n, declaration))
                 // ral-67e: a `Precise.string*` operand is lent (`&x`): the call borrows its operands, no copy in either form
-                && !(form === 'xbox' && isCallExpression(n.parent) && Array.from(n.parent.arguments).includes(n) && this.rustScalarPreciseCall(n.parent))) return false;
+                && !(form === 'xbox' && isCallExpression(n.parent) && Array.from(n.parent.arguments).includes(n) && this.rustScalarPreciseCall(n.parent)) && !r70f) return false;
             // ral-43b: a string concat operand prints inside the concat's own `format!` (native Display of the typed local:
             // the bare `String`, or `as_deref().unwrap_or("null")` = the Display of the `Null` box): no boxed operand text
             // reaches a push / write pass, and the concat is a `String` whatever this local's type
             if (form === 'concat' && (trial === 'str' || trial === 'ostr')) continue;
             // a `.push(..)` argument: ccxt's native-push pass keys on the boxed operand text
             const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
-            if (push !== undefined && isCallExpression(push) && !this.rustCopyPushPairElement(n, push, trial) && !this.rustPushSelfCallArgUse(n, push, trial)) return false;
+            if (push !== undefined && isCallExpression(push) && !this.rustCopyPushPairElement(n, push, trial) && !this.rustPushSelfCallArgUse(n, push, trial) && !r70f) return false;
             // nor when it feeds a write to another local (ccxt passes read that write's printed source)
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
                 && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration) && !this.rustScalarCacheFieldCtor(n, write)
                 && !this.rustScalarSumOperandWrite(n, write) && !this.rust58kDictReaderKeyWrite(n, write) && !this.rust60kBaseCallArgDictWrite(n, write)
-                && !this.rust62pBaseCallArgKeyWrite(n, write) && !this.rust64nTypedArgWrite(n, write, form) && !this.rust68fReaderSelfArgWrite(n, write, form, declaration)) return false;
+                && !this.rust62pBaseCallArgKeyWrite(n, write) && !this.rust64nTypedArgWrite(n, write, form) && !this.rust68fReaderSelfArgWrite(n, write, form, declaration) && !(r70f && (form !== 'targ' || this.rust70fTargLocalWrite(write)))) return false;
         }
         return true;
     }
@@ -7295,6 +7321,18 @@ export class RustTranspiler extends BaseTranspiler {
         // moved (`x.take()`) when the target is an `Option<String>` local too (`native`); either way its last use
         if (form === 'xbox' || form === 'native') return this.unwrapParens(write.right) === n && isIdentifier(this.unwrapParens(write.left));
         return form === 'box' && this.unwrapParens(write.right) === n.parent && this.rustScalarSelfArgBox(n);
+    }
+
+    /** ral-70f: the write a ral-70f reader local's typed-signature argument (`targ`) feeds targets a local declared with
+     *  `let` / `const` (bitget fetchTickers `market = this.market (symbol)` under the typed `market (&str)` signature): the
+     *  argument prints `x.as_deref().unwrap_or_default()` whatever the target, the text ccxt's narrowStrNullLocals pass
+     *  printed there. A parameter target (untyped `any`) keeps the refusal. */
+    rust70fTargLocalWrite(write: any): boolean {
+        if (write.operatorToken?.kind !== SyntaxKind.EqualsToken) return false;
+        const target: any = this.unwrapParens(write.left);
+        if (!isIdentifier(target)) return false;
+        const decl: any = this.rustDeclarationOfIdentifier(target);
+        return decl !== undefined && isVariableDeclaration(decl) && (decl.parent?.flags & (NodeFlags.Let | NodeFlags.Const)) !== 0;
     }
 
     /** ral-64n: a typed-signature argument (`targ`: printed `x.as_deref().unwrap_or_default()` / `x.as_deref()` / the Copy
@@ -8002,7 +8040,86 @@ export class RustTranspiler extends BaseTranspiler {
      *  `write` (same-kind assignment statement), `concat` (a `format!` operand) or `box` (a by-value `Value` slot). */
     rustScalarUseForm(n, kind: string): string | undefined {
         const form = this.rustScalarUseFormOwn(n, kind);
+        if (form === undefined && kind === 'ostr' && this.rust70fOperandBox(n)) return 'box';
+        if (form === undefined && kind === 'ostr' && this.rust70fPushKey(n)) return 'native';
+        if (form === undefined && kind === 'ostr' && isElementAccessExpression(n.parent) && n.parent.expression === n && this.rust70fFirstCharTest(this.rustSkipWrappersUp(n.parent.parent) ?? {}) !== undefined) return 'native';
+        // ral-70f: the key of a write `m[x] = v` / `delete m[x]` keeps the key form (the insert prints its key text, the helper its box)
+        if (form === undefined && kind === 'ostr' && this.rust70fWriteKey(n)) return 'key';
         return form === undefined && this.rustSbCopyBoxUse(n, kind) ? 'xbox' : form;
+    }
+
+    /** ral-70f: a read of a ral-70f reader local (rust70fReaderLocal) no other rule prints, used whole as a call argument, the
+     *  value of `a = x` / `a[..] = x`, a property value or an array element (through parentheses and `as string`): the box
+     *  converts the `Str` / `Null` the boxed reader held, cloned unless it is the last use (ccxt's narrowStrNullLocals pass
+     *  printed exactly `x[.clone()].map(Value::from).unwrap_or(Value::Null)` there). */
+    /** ral-70f: the identifier under `(x as string)` / parentheses (or `n` itself). */
+    rust70fCastBase(n: any): any {
+        let at: any = n;
+        while (at !== undefined && (isParenthesizedExpression(at) || (at.kind === SyntaxKind.AsExpression && at.type?.kind === SyntaxKind.StringKeyword))) at = at.expression;
+        return isIdentifier(at) ? at : undefined;
+    }
+
+    /** ral-70f: `access` is (through parentheses) the target of an assignment or update, or a `delete` operand. */
+    rust70fWriteTargetKey(access: any): boolean {
+        // climb a chain `a[k1][k2]..` whose head this access is: a key anywhere in a written chain is a write key
+        while (isElementAccessExpression(access.parent) && access.parent.expression === access) access = access.parent;
+        const at: any = this.rustSkipWrappersUp(access.parent);
+        return (isBinaryExpression(at) && at.left === access && at.operatorToken.kind >= SyntaxKind.FirstAssignment && at.operatorToken.kind <= SyntaxKind.LastAssignment)
+            || isPrefixUnaryExpression(at) || isPostfixUnaryExpression(at) || isDeleteExpression(access.parent);
+    }
+
+    /** ral-70f: `n` reads a ral-70f reader local and is (through parentheses / `as string`) the whole key of a write target. */
+    rust70fWriteKey(n: any): boolean {
+        if (!isIdentifier(n) || !this.rust70fReaderLocal(this.rustDeclaredNode(n), true)) return false;
+        let top: any = n;
+        while (isParenthesizedExpression(top.parent) || (top.parent?.kind === SyntaxKind.AsExpression && top.parent.type?.kind === SyntaxKind.StringKeyword)) top = top.parent;
+        return isElementAccessExpression(top.parent) && top.parent.argumentExpression === top && this.rust70fWriteTargetKey(top.parent);
+    }
+
+    /** ral-70f: `x[0] === 'c'` / `!==` (one-character literal, either side) on a ral-70f reader local: the boxed element read was
+     *  the first character of the `Str` (`Null` for `None`, empty or out of range), so the test is
+     *  `x.as_deref().unwrap_or("").starts_with("c")` (ccxt's narrowStrNullLocals pass printed this). */
+    rust70fFirstCharTest(node: any): string | undefined {
+        const op = node.operatorToken.kind;
+        if (op !== SyntaxKind.EqualsEqualsEqualsToken && op !== SyntaxKind.ExclamationEqualsEqualsToken) return undefined;
+        const l: any = this.unwrapParens(node.left);
+        const r: any = this.unwrapParens(node.right);
+        const [ access, lit ] = isElementAccessExpression(l) ? [ l, r ] : [ r, l ];
+        if (!isElementAccessExpression(access) || !isStringLiteral(lit) || String(lit.text).length !== 1 || /["\\]/.test(String(lit.text)) || String(lit.text) in this.StringLiteralReplacements) return undefined;
+        const index: any = this.unwrapParens(access.argumentExpression);
+        const recv: any = this.unwrapParens(access.expression);
+        if (!isNumericLiteral(index) || String(index.text) !== '0' || !isIdentifier(recv) || this.rustScalarLocalOf(recv)?.kind !== 'ostr'
+            || !this.rust70fReaderLocal(this.rustDeclaredNode(recv), true)) return undefined;
+        const probe = `${super.printIdentifier(recv)}.as_deref().unwrap_or("").starts_with("${String(lit.text)}")`;
+        return op === SyntaxKind.EqualsEqualsEqualsToken ? probe : `!${probe}`;
+    }
+
+    /** ral-70f: `n` sits inside the left side (target chain) of an assignment. */
+    rust70fInWriteTarget(n: any): boolean {
+        for (let at: any = n; at?.parent !== undefined && !isStatement(at); at = at.parent) {
+            const up: any = at.parent;
+            if (isBinaryExpression(up) && up.left === at && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return true;
+        }
+        return false;
+    }
+
+    rust70fOperandBox(n: any): boolean {
+        if (!isIdentifier(n) || this.rustIdentifierIsPropertyName(n) || !this.rust70fReaderLocal(this.rustDeclaredNode(n), true)) return false;
+        let top: any = n;
+        while (isParenthesizedExpression(top.parent) || (top.parent?.kind === SyntaxKind.AsExpression && top.parent.type?.kind === SyntaxKind.StringKeyword)) top = top.parent;
+        const up: any = top.parent;
+        if (up === undefined) return false;
+        if ((isCallExpression(up) || up.kind === SyntaxKind.NewExpression) && up.expression !== top) return (up.arguments ?? []).includes(top);
+        if (isBinaryExpression(up) && up.right === top && up.operatorToken.kind === SyntaxKind.EqualsToken) return true;
+        if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === top;
+        // any other read where a `Value` operand is printed (element keys and receivers, concat operands, compares, `.toString()`
+        // receivers): the box is the `Value` the local held; never a write target, update / `delete` / `typeof` operand
+        if (isElementAccessExpression(up) && up.argumentExpression === top && this.rust70fWriteTargetKey(up)) return false;
+        if (isBinaryExpression(up) && up.left === top && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return false;
+        if (isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up) || isDeleteExpression(up) || up.kind === SyntaxKind.TypeOfExpression) return false;
+        if (up.kind === SyntaxKind.ShorthandPropertyAssignment || up.kind === SyntaxKind.SpreadElement || up.kind === SyntaxKind.SpreadAssignment) return false;
+        return isElementAccessExpression(up) || isBinaryExpression(up) || isArrayLiteralExpression(up) || isConditionalExpression(up) || isReturnStatement(up)
+            || (isPropertyAccessExpression(up) && up.expression === top && up.name.text === 'toString');
     }
 
     /** sb: a Copy number local (`i64` / `f64` / `Option<..>`) initialised from a typed base call that the `Value` local only boxed
@@ -8350,7 +8467,9 @@ export class RustTranspiler extends BaseTranspiler {
         // one allocation `stringify_param(&k)` of the boxed key made (ccxt's rustStr2LocalOptionString pass printed this)
         if (kind === 'ostr' && this.rust64bReaderLocal(this.rustDeclaredNode(n)) && this.rustPlainFieldInsertKey(n)) return 'key';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
-        if (this.rustScalarInNestedWrite(n)) return undefined;
+        // ral-70f: a ral-70f reader local keeps its own native / box form inside a nested write too (ccxt's narrowStrNullLocals
+        // pass printed those operands natively, before the nested-write passes ran)
+        if (this.rustScalarInNestedWrite(n) && !(kind === 'ostr' && this.rust70fReaderLocal(this.rustDeclaredNode(this.rust70fCastBase(n)), true) && !this.rust70fInWriteTarget(n))) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
         if (kind === 'ostr' && this.rustScalarOptKeyUse(n)) return 'key';
         // ral-48i: a `networkIdToCode` result as the last key of `x['lit'][k] = v` on a typed map bearer (rustBearerChainedWrite)
@@ -9339,6 +9458,36 @@ export class RustTranspiler extends BaseTranspiler {
             && this.rust64bReaderLocal(this.rustDeclaredNode(n));
     }
 
+    /** ral-70f: a non-test local declared `this.safeString (o, k)` (any key) or `this.safeStringLower|Upper (o, 'lit')`, two
+     *  arguments, base reader (rust64bReaderLocal): the boxed reader is `Str` or `Null`, exactly its `_opt` twin. */
+    rust70fReaderLocal(declaration: any, cast = false): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || this.rustTestTierSource(declaration)) return false;
+        let init: any = this.unwrapParens(declaration.initializer);
+        // `x as string` of the reader (the const-initializer cast rustStrCastCall admits)
+        if (cast && init !== undefined && isAsExpression(init) && init.type?.kind === SyntaxKind.StringKeyword) init = this.unwrapParens(init.expression);
+        if (!this.rustUdReaderStr(init) || String(init.expression.name.text) === 'safeCurrencyCode') return false;
+        const name = String(init.expression.name.text);
+        if (init.arguments.length !== 2 || (name !== 'safeString' && name !== 'safeStringLower' && name !== 'safeStringUpper')) return false;
+        if (name !== 'safeString' && this.rustOptReaderName(init)?.key === undefined) return false;
+        // never written after its declaration (an assigned local was never narrowed by the pass)
+        return !this.rust70fWritten(declaration);
+    }
+
+    rust70fWritten(declaration: any): boolean {
+        const scope: any = this.rustEnclosingFunction(declaration);
+        const own = this.rustSymbolOf(declaration.name);
+        if (scope === undefined || own === undefined) return true;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text)) as any[]) {
+            if (n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n) || this.rustSymbolOf(n) !== own) continue;
+            let top: any = n;
+            while (isParenthesizedExpression(top.parent)) top = top.parent;
+            const up: any = top.parent;
+            if (isBinaryExpression(up) && up.left === top && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return true;
+            if (isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up)) return true;
+        }
+        return false;
+    }
+
     /** ral-64b: a local declared from a base safeString-family reader with no default argument (its box is `Str` or `Null`). */
     rust64bReaderLocal(declaration: any): boolean {
         if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.initializer === undefined) return false;
@@ -9624,6 +9773,8 @@ export class RustTranspiler extends BaseTranspiler {
         const upperTyped = this.printNestedFieldUpperKeyWrite(left, acc, value);
         if (upperTyped !== undefined) return upperTyped;
         const key: any = this.rustSkipWrappers(left.argumentExpression);
+        const entry70f = this.print70fUpperEntryWrite(left, acc, value);
+        if (entry70f !== undefined) return entry70f;
         if (!isIdentifier(key) || this.rustScalarUseForms.get(key) !== 'nkey') return undefined;
         const kind = this.rustScalarLocalOf(key)?.kind;
         const name = super.printIdentifier(key);
@@ -9634,13 +9785,38 @@ export class RustTranspiler extends BaseTranspiler {
         // `stringify_param(&k1)`, which ccxt's narrowStrNullLocals narrows, so no pass reads a boxed `&code` key any more
         const upper: any = this.rustNestedFieldEntryKey(left);
         const field: string = upper !== undefined ? String(left.expression.expression.name.text) : '';
-        const insert = upper !== undefined && acc === `get_value_mut(&mut self.${field}, &${super.printIdentifier(upper)})`
-            ? `if let Value::Dict(__bf03d0) = &mut self.${field} { let __bf03e1 = std::sync::Arc::make_mut(__bf03d0).entry(crate::runtime::stringify_param(&${super.printIdentifier(upper)})).or_insert(Value::Null); `
+        // ral-70f: an `Option<String>` ral-70f reader upper key boxes in `acc`; its entry key is the text `stringify_param` of that
+        // box made (`k.as_deref().unwrap_or("null").to_string()`, what ccxt's narrowStrNullLocals pass printed there)
+        const upper70f = upper !== undefined && isIdentifier(upper) && this.rustScalarLocalOf(upper)?.kind === 'ostr' && this.rust70fReaderLocal(this.rustDeclaredNode(upper), true);
+        const upperBox = upper70f ? this.printNode(upper, 0).trim() : (upper !== undefined ? super.printIdentifier(upper) : '');
+        const upperKey = upper70f ? `${super.printIdentifier(upper)}.as_deref().unwrap_or("null").to_string()` : `crate::runtime::stringify_param(&${upperBox})`;
+        const insert = upper !== undefined && acc === `get_value_mut(&mut self.${field}, &${upperBox})`
+            ? `if let Value::Dict(__bf03d0) = &mut self.${field} { let __bf03e1 = std::sync::Arc::make_mut(__bf03d0).entry(${upperKey}).or_insert(Value::Null); `
                 + `if let Value::Dict(__r05d) = __bf03e1 { std::sync::Arc::make_mut(__r05d).insert(${keyText}, ${value}); } }`
             : `if let Value::Dict(__r05d) = ${acc} { std::sync::Arc::make_mut(__r05d).insert(${keyText}, ${value}); }`;
         // over the line budget ccxt's r05 keeps the helper: lend the key to it (`From<Option<&str>>`, the one allocation)
         if (insert.split('\n')[0].length + 40 > 400) return `add_element_to_object(${acc}, &Value::from(${name}${kind === 'str' ? '.as_str()' : '.as_deref()'}), ${value})`;
         return insert;
+    }
+
+    /** ral-70f: `this.F[k1][k2] = v` (F balance / options, one upper hop) whose upper key `k1` is an `Option<String>` ral-70f
+     *  reader local (int37 key) and whose last key is a string literal or a plain `Value` binding (bullish handleBalance
+     *  `this.balance[tradingAccountId]['info'] = message`): the bucket entry ccxt's plain-dict pass printed of the r05 insert
+     *  when the key was the boxed local (`entry(stringify_param(&k1))`, narrowed by narrowStrNullLocals to the local's own
+     *  text). A value reading `self` keeps the helper chain. */
+    print70fUpperEntryWrite(left: any, acc: string, value: string): string | undefined {
+        const upper: any = this.rustNestedFieldEntryKey(left);
+        if (upper === undefined || !isIdentifier(upper) || this.rustScalarLocalOf(upper)?.kind !== 'ostr' || !this.rust70fReaderLocal(this.rustDeclaredNode(upper), true)) return undefined;
+        const field = String(left.expression.expression.name.text);
+        if (acc !== `get_value_mut(&mut self.${field}, &${this.printNode(upper, 0).trim()})` || this.rustValueBorrowsSelf(left.parent?.right)) return undefined;
+        const last: any = this.rustSkipWrappers(left.argumentExpression);
+        const lastText = isStringLiteral(last) ? `${JSON.stringify(String(last.text))}.to_string()`
+            : isIdentifier(last) && this.rustScalarLocalOf(last) === undefined && this.rustPlainValueBinding(last) ? `crate::runtime::stringify_param(&${super.printIdentifier(last)})` : undefined;
+        if (lastText === undefined) return undefined;
+        const insert = `if let Value::Dict(__bf03d0) = &mut self.${field} { let __bf03e1 = std::sync::Arc::make_mut(__bf03d0).entry(${super.printIdentifier(upper)}.as_deref().unwrap_or("null").to_string()).or_insert(Value::Null); `
+            + `if let Value::Dict(__r05d) = __bf03e1 { std::sync::Arc::make_mut(__r05d).insert(${lastText}, ${value}); } }`;
+        // the entry form is the text ccxt's plain-dict pass printed in its place; 10 chars of headroom as for ral-56f
+        return insert.split('\n').some((l) => l.length + 10 > 400) ? undefined : insert;
     }
 
     /** ral-56f: the bucket entry of a `ukey` upper key (rustNestedFieldUpperKeyUse), keyed by the local's own text (the
@@ -11631,7 +11807,20 @@ export class RustTranspiler extends BaseTranspiler {
         const rk = literal(right) ?? this.rustScalarCompareKind(right);
         const sign = equality ? (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken ? '==' : '!=') : symbol;
         // of: a typed local against an equality partner its own veto keeps a `Value` (proven `Str|Null` / `Int|Null`)
-        if ((lk === undefined) !== (rk === undefined) && equality) return this.rustScalarValuePartnerTest(lk === undefined ? right : left, lk === undefined ? left : right, lk ?? rk, sign, dry);
+        const partnerTest = (lk === undefined) !== (rk === undefined) && equality ? this.rustScalarValuePartnerTest(lk === undefined ? right : left, lk === undefined ? left : right, lk ?? rk, sign, dry) : undefined;
+        if (partnerTest !== undefined) return partnerTest;
+        // ral-70f: a ral-70f reader local strictly compared with a checker-string `Value` partner: `x.as_deref() == p.as_str()`,
+        // the comparison ccxt's string-equality pass printed from the boxed pair (a non-`Str` partner and `None` never meet)
+        if ((lk === undefined) !== (rk === undefined) && equality && partnerTest === undefined && (op === SyntaxKind.EqualsEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+            const [ typed, other, k ] = lk === undefined ? [ right, left, rk ] : [ left, right, lk ];
+            if (k === 'ostr' && isIdentifier(typed) && this.rust70fReaderLocal(this.rustDeclaredNode(typed), true) && this.primitiveKindOfType(this.typeOfNodeIfAny(other)) === 'string' && this.printsValueExpression(other)) {
+                if (dry) return '_';
+                const mine = `${super.printIdentifier(typed)}.as_deref()`;
+                const theirs = `${this.printNode(other, 0).trim()}.as_str()`;
+                return lk === undefined ? `(${theirs} ${sign} ${mine})` : `(${mine} ${sign} ${theirs})`;
+            }
+        }
+        if ((lk === undefined) !== (rk === undefined) && equality) return undefined;
         // rd: an `i64` / `f64` local ordered against a number-typed `Value` (`Int|Float|Null`): the helper compares the two
         // `as_f64` payloads and answers false for `Null`, which is the f64 compare with a NaN stand-in
         if ((lk === undefined) !== (rk === undefined) && !equality) {
@@ -13789,7 +13978,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Binding symbol of an identifier, or undefined when the checker cannot
      *  answer (ByContent probes without a class context, for instance). */
-    private rustSymbolOf(node: Identifier): TsSymbol | undefined {
+    private rustSymbolOf(node: Node): TsSymbol | undefined {
         return this.checkerOrUndefined()?.getSymbolAtLocation(node);
     }
 
@@ -18609,6 +18798,13 @@ export class RustTranspiler extends BaseTranspiler {
     rustFieldDynamicRead(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined {
         const field = this.rustDictField(receiverNode);
         if (field === undefined || field === 'accounts' || this.isTestSource(receiverNode)) return undefined;
+        // ral-70f: an `Option<String>` ral-70f reader key reads the map with its borrow (rustDictRead's lent form)
+        const k70f: any = this.rustSkipWrappers(keyNode);
+        if (isIdentifier(k70f) && this.rustScalarLocalOf(k70f)?.kind === 'ostr' && this.rust70fReaderLocal(this.rustDeclaredNode(k70f), true)) {
+            const k = `${super.printIdentifier(k70f)}.as_deref()`;
+            return this.rustDictSite({ free: RUST_PLAIN_PLACE.test(receiverText) ? `(if let (Some(__m), Some(__k)) = (${receiverText}.as_map(), ${k}) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })` : undefined,
+                helper: `get_value(&${receiverText}, &Value::from(${k}))`, closure: `${receiverText}.as_map().and_then(|__m| ${k}.and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)` });
+        }
         const key = this.rustDictKeyText(keyNode);
         if (key === undefined) return undefined;
         return this.rustDictRead(receiverText, key, receiverNode);
@@ -19904,6 +20100,8 @@ export class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node) {
         const inner = this.unwrapParens(node);
         if (inner === undefined || inner.kind !== SyntaxKind.BinaryExpression || !this.isEqualityOp(inner.operatorToken.kind)) return undefined;
+        const first = this.rust70fFirstCharTest(inner);
+        if (first !== undefined) return first;
         return this.printNativeEqualityComparison(inner.left, inner.right, inner.operatorToken.kind);
     }
 
@@ -22069,7 +22267,9 @@ export class RustTranspiler extends BaseTranspiler {
             head = `if let Value::Arr(__a) = ${name}.entry("${this.escapeRustStringLiteral(String(key.text))}".to_string())`;
         } else {
             if (!this.rustDictBearerKeyOk(access.argumentExpression)) return undefined;
-            head = `if let Some(__k) = ${this.printNode(key, 0).trim()}.as_str() { if let Value::Arr(__a) = ${name}.entry(__k.to_string())`;
+            // ral-70f: an `Option<String>` reader key reads its text in place (`as_deref()` is `Some` where the box was a `Str`)
+            head = this.rust70fPushKey(key) ? `if let Some(__k) = ${super.printIdentifier(key)}.as_deref() { if let Value::Arr(__a) = ${name}.entry(__k.to_string())`
+                : `if let Some(__k) = ${this.printNode(key, 0).trim()}.as_str() { if let Value::Arr(__a) = ${name}.entry(__k.to_string())`;
         }
         if (!this.rustBearerValuesNeverMap(declaration, literal, name)) return undefined;
         // a map also handed to a `this.` call would box an `IndexMap` copy there (the shared box was a refcount): no added copy
@@ -22151,6 +22351,13 @@ export class RustTranspiler extends BaseTranspiler {
      *  object literal carries no marker key (`__book_id`, `__cacheKind`, `__live_id`)
      *  and no ws client-handle triple, so `get_value`'s store routes cannot fire and
      *  the read is the map lookup. */
+    /** ral-70f: `key` is the whole key of a statement `m[key].push (v)` and reads an `Option<String>` ral-70f reader local. */
+    rust70fPushKey(key: any): boolean {
+        const access: any = key?.parent;
+        return isIdentifier(key) && isElementAccessExpression(access) && access.argumentExpression === key && this.rustBearerElementPushCall(access.parent?.parent) === access
+            && this.rust70fReaderLocal(this.rustDeclaredNode(key), true) && this.rustScalarLocalOf(key)?.kind === 'ostr';
+    }
+
     rustDictBearerKeyOk(keyNode: any): boolean {
         const key: any = this.rustSkipWrappers(keyNode);
         if (key === undefined) return false;
@@ -22161,6 +22368,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-53i: a string scalar key (typed, or still being decided) in a bucket seed / two-level write position: that
         // write prints the key through rustNestedBearerWriteKey (its own insert key text, or stringify_param of the box)
         if (this.rustNestedWriteKeyPosition(key) && ['str', 'ostr'].includes(this.rustScalarLocalOf(key)?.kind)) return true;
+        // ral-70f: a ral-70f reader local key (`Option<String>`): the push prints its `as_deref()` (rustBearerElementPushText)
+        if (this.rust70fPushKey(key)) return true;
         return /^[A-Za-z_][A-Za-z0-9_]*$/.test(this.printNode(key, 0).trim());
     }
 
@@ -33520,6 +33729,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (sbLocal !== undefined && this.rustScalarUseForms.get(receiver) === 'xbox' && this.rustSbCopyBoxUse(receiver, sbLocal.kind)) return this.rustRecordFormatToString(node, name);
         // xb: an `i64` counter displays as the `Int` box it replaces (`Display` of `Value::Int(n)` is `n`'s)
         if (receiver !== undefined && this.rustI64CounterOperand(this.unwrapParens(receiver)) && this.rustI64CounterUse(this.unwrapParens(receiver))) return this.rustRecordFormatToString(node, name);
+        // ral-70f: a ral-70f reader local boxed at its `.toString()` read displays its `Str` / `Null` box (`format!("{}", <box>)`),
+        // the Display `to_string_val` gave the same box (ccxt's narrowStrNullLocals pass printed this)
+        if (receiver !== undefined && isIdentifier(receiver) && this.rustScalarUseForms.get(receiver) === 'box' && this.rust70fOperandBox(receiver)) return this.rustRecordFormatToString(node, name);
         const kind = this.rustOperandKind(receiver);
         if (kind !== 'number' && kind !== 'string') return undefined;
         const inner = this.unwrapParensNode(receiver);
@@ -34501,10 +34713,17 @@ export class RustTranspiler extends BaseTranspiler {
             const literal = this.rustNativeStringLiteralArg(arg);
             return literal !== undefined ? `Value::Str("${literal}".into())` : this.rustStrOperand(arg, true);
         };
-        const from = operand(node.arguments[0]);
-        const to = operand(node.arguments[1]);
+        // ral-70f: an `Option<String>` ral-70f reader operand reads `x.as_deref()` (what `x.as_str()` of its `Str` / `Null` box gave)
+        const view = (arg) => {
+            const id: any = this.rustPeelCast(arg);
+            if (id !== undefined && isIdentifier(id) && this.rustScalarLocalOf(id)?.kind === 'ostr' && this.rust70fReaderLocal(this.rustDeclaredNode(id), true)) return `${super.printIdentifier(id)}.as_deref()`;
+            const text = operand(arg);
+            return text === undefined ? undefined : `${text}.as_str()`;
+        };
+        const from = view(node.arguments[0]);
+        const to = view(node.arguments[1]);
         if (from === undefined || to === undefined) return undefined;
-        return `match (${receiver}.as_str(), ${from}.as_str(), ${to}.as_str()) { (Some(__s), Some(__p), Some(__r)) => Value::Str(__s.replace(__p, __r).into()), _ => ${receiver}.clone() }`;
+        return `match (${receiver}.as_str(), ${from}, ${to}) { (Some(__s), Some(__p), Some(__r)) => Value::Str(__s.replace(__p, __r).into()), _ => ${receiver}.clone() }`;
     }
 
     // Collection helpers on locals whose runtime shape is proven: `"k" in x` on a plain-dict
