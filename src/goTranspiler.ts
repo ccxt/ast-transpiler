@@ -25050,15 +25050,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return (callee !== undefined && GO_BOOL_CALL_NAMES_NATIVE.indexOf(callee) >= 0) ? printed : undefined;
     }
 
-    // gofmt prints the condition of every `if`/`for`/`switch` through
-    // go/printer/nodes.go controlClause() -> stripParens(): the single outermost,
-    // fully enclosing parentheses pair is dropped, and the rule applies again to the
-    // enclosed expression while that one is parenthesized as well
-    // (`if (x == 1) {` -> `if x == 1 {`, `if ((x == 1)) {` -> `if x == 1 {`).
-    // Parentheses survive when the enclosed expression holds an unparenthesized
-    // composite literal whose type is a type name, because `if T{} == x {` does not
-    // parse. The printer emits text instead of an ast.Expr, so stripParens runs over
-    // the printed condition text here.
+    // gofmt's controlClause() stripParens() on the printed condition text: drop every fully enclosing
+    // parentheses pair (`if ((x == 1)) {` -> `if x == 1 {`), except around an unparenthesized
+    // composite literal with a type name (`if T{} == x {` does not parse).
     goControlClauseParens(node, expression: string): string {
         return this.goIsControlClauseCondition(node) ? this.goStripControlClauseParens(expression) : expression;
     }
@@ -25383,15 +25377,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return super.printCondition(node, identation);
     }
 
-    // === / !== inlined to plain Go operators when both sides are concrete Go
-    // values or real pointers. Everything else — in particular anything that is
-    // still `any` in Go — falls through to the existing IsEqual helper.
-    // `(a == b || *a == *b)` is rejected: a nil *T panics on the second clause.
-    // Go has no implicit numeric conversion: `*limit == length` does not compile
-    // when limit is *int64 and length is int, even though TypeScript calls both
-    // `number`. Dereferencing is therefore only safe against an untyped constant
-    // (a literal, which adapts to the pointee) or an operand of the very same Go
-    // type. Anything else — including any `any` operand — keeps IsEqual.
+    // a pointer may be dereferenced in a native ===/!== only against an untyped constant (a literal
+    // adapts to the pointee) or an operand of the very same Go type: Go has no implicit numeric
+    // conversion (`*limit == length` with *int64 and int does not compile); anything else keeps IsEqual.
     goDerefComparableWith(ptrNode, ptrText: string, otherNode): boolean {
         const pointee = this.goPointerTypeOfExpression(ptrNode, ptrText)?.substring(1);
         if (pointee === undefined) {
@@ -25765,13 +25753,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
-    // `<` `>` `<=` `>=` between two operands the checker proves to be numbers of the
-    // same Go kind is exactly the comparison the helper performs, minus the interface
-    // round-trip, so the call carries no information. A `*int64` / `*float64` operand
-    // joins them with its deref written out, and the helper's nil predicate with it.
-    // Everything else — `any` boxes, mixed kinds, strings — keeps the helper. float64
-    // keeps IsLessThan/IsLessThanOrEqual: the helper answers true whenever an operand
-    // is NaN while Go (and JS) answer false, and only those two operators differ.
+    // `<` `>` `<=` `>=` between numbers of the same Go kind (a `*int64`/`*float64` with its deref and
+    // the helper's nil predicate) prints natively; float64 keeps IsLessThan/IsLessThanOrEqual, which
+    // answer true for a NaN operand where Go answers false. Everything else keeps the helper.
     printInlineOrderedComparison(left, right, leftText: string, rightText: string, op): string | undefined {
         const operator = ORDERED_COMPARISON_OPERATORS[op];
         if (operator === undefined) {
@@ -25994,13 +25978,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return false;
     }
 
-    // Go's printer never wraps an already parenthesised expression: gofmt prints a
-    // ParenExpr whose child is itself a ParenExpr without its own parentheses
-    // (`((x))` prints as `(x)`), because the text it is handed is re-parsed that way.
-    // Our output is re-parsed exactly like that, so a source parenthesis around an
-    // expression that already prints parenthesised -- an inlined comparison, a nested
-    // parenthesised expression, an EvalTruthy(...) arm -- must emit the single pair
-    // gofmt keeps instead of doubling it.
+    // gofmt prints `((x))` as `(x)`: a source parenthesis around an expression that already prints
+    // parenthesised (an inlined comparison, a nested paren, an EvalTruthy(...) arm) emits one pair.
     printParenthesizedExpression(node, identation) {
         const expression = node.expression;
         if (expression?.kind === SyntaxKind.AsExpression) {
@@ -26515,15 +26494,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                         safe = true;
                         return;
                     }
-                    if (parent?.kind === SyntaxKind.ExpressionStatement) {
-                        safe = true;                 // `_ = x` and other inert statements
-                        return;
-                    }
-                    if (pointer && this.goGetArgPointerStoredAsValue(n, param)) {
-                        safe = true;
-                        return;
-                    }
-                    if (pointer && this.goGetArgPointerInHelperArithmetic(n)) {
+                    // `_ = x` and other inert statements
+                    if ((parent?.kind === SyntaxKind.ExpressionStatement)
+                        || (pointer && (this.goGetArgPointerStoredAsValue(n, param) || this.goGetArgPointerInHelperArithmetic(n)))) {
                         safe = true;
                         return;
                     }
@@ -26732,26 +26705,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if ((parent.kind === SyntaxKind.VariableDeclaration) && (parent.name === node)) {
                 return parent !== declaration;
             }
-            if ((parent.kind === SyntaxKind.Parameter) || (parent.kind === SyntaxKind.FunctionDeclaration)
-                || (parent.kind === SyntaxKind.MethodDeclaration)) {
-                return true;
-            }
             if ((parent.kind === SyntaxKind.BinaryExpression) && (unwrapped(parent.left) === node)) {
                 return true; // an assignment or a compound write
-            }
-            if ((parent.kind === SyntaxKind.PrefixUnaryExpression) || (parent.kind === SyntaxKind.PostfixUnaryExpression)) {
-                return true; // ++, --, or an address-of `&x` the printer emits through a prefix form
             }
             if ((parent.kind === SyntaxKind.SwitchStatement) && (parent.expression === node)) {
                 return true;
             }
-            if ((parent.kind === SyntaxKind.CaseClause) || (parent.kind === SyntaxKind.ElementAccessExpression)) {
-                return true;
-            }
-            if ((parent.kind === SyntaxKind.ForOfStatement) || (parent.kind === SyntaxKind.ForInStatement)) {
-                return true;
-            }
-            return false;
+            // a declaration, ++/--/`&x` (prefix forms), a case label, an index or a loop binding
+            return GO_TUPLE_SLOT_UNSAFE_PARENTS.has(parent.kind);
         });
     }
 
@@ -28518,23 +28479,9 @@ ${this.getIden(identation)}${returnStatement}`;
         }
     }
 
-    // -----------------------------------------------------------------------
-    // gofmt-compatible spacing of the binary expressions this printer emits
-    // -----------------------------------------------------------------------
-    // go/printer (nodes.go) prints a binary expression with blanks around the
-    // operator unless the expression sits deeper than the top level of a
-    // statement: binaryExpr() asks cutoff() - which inspects the operator tree
-    // through walkBinary() - and drops *both* blanks when the operator
-    // precedence is below that cutoff. Level 4/5 operators (`+ - * / % & | ^
-    // << >>`) therefore print as `a + b` at the top level but as `a+b`, `a[i+1]`
-    // one level down; comparisons and `&&`/`||` (level 3 and below) always keep
-    // their blanks.
-    //
-    // goExprDepth mirrors the depth go/printer tracks over the Go AST it is
-    // about to emit: 1 at the start of every statement, +1 for an argument list
-    // with more than one argument, +1 for an index expression, +1 for the right
-    // operand of a binary expression, -1 inside parentheses (never below 1), and
-    // back to 1 for composite literal elements.
+    // gofmt binary spacing: go/printer binaryExpr()/cutoff() drops both blanks around a level 4/5
+    // operator below the statement top level (`a + b` vs `a[i+1]`). goExprDepth mirrors its depth:
+    // 1 per statement, +1 for a multi-arg list, an index or a right operand, -1 in parens (min 1).
     goExprDepth = 1;
 
     goWithExprDepth<T>(depth: number, callback: () => T): T {
@@ -29507,15 +29454,8 @@ ${tryBodyBlock}
         return `func() any {\n${body}if ${keyStr} >= 0 && ${keyStr} < len(${containerStr}) {\n${this.getIden(level + 2)}return DerefScalar(${containerStr}[${keyStr}])\n${body}}\n${body}return nil\n${this.getIden(level)}}()`;
     }
 
-    // Go native reads on proven list receivers.
-    // (1) A call `this.<name>(...)` to a method the host declares as returning a Go `[]any` (config
-    //     `generatedListCallees`: the venue-uniform list producers) whose TS result type is an array
-    //     type is a `[]any`: a local initialised by it is declared `[]any`, so `.length` prints
-    //     `len(x)` and element reads take the native-list path.
-    // (2) `xs[i]` on a local declared `[]string`, read inside `for (let i = 0; i < xs.length; i++)`
-    //     with neither `i` nor `xs` written (or rebound) in the loop body and no function boundary
-    //     between loop and read, is the slice index `xs[i]`: i < len(xs) holds at every statement of
-    //     the body, a string element cannot box a pointer, so it is the very value GetValue returns.
+    // host-declared `[]any` producers (config `generatedListCallees`) whose TS result is an array:
+    // a local they initialise is declared `[]any`, so `.length` and element reads go native.
     generatedListCallees: Set<string> = new Set<string>();
 
     goHostListCalleeType(callee: string, initializer): string | undefined {
@@ -29769,14 +29709,9 @@ ${tryBodyBlock}
         return (real.length > 0) && real.every((p) => ((p.flags & TypeFlags.Object) !== 0) && ((p.flags & (TypeFlags.Any | TypeFlags.Unknown)) === 0));
     }
 
-    // ===== JSON-origin list reads =====
-    // A `[]any` unboxed from `this.safeList(R, k)` where R is a decoded JSON document holds JSON values only
-    // (maps, slices, strings, float64), never a *string/*int64/*float64/*bool, so derefScalar answers the
-    // element unchanged and a counting-loop read is the slice index itself. R is JSON when it is
-    //   - the await of an implicit endpoint (the `<-chan any` wrapper over callEndpointAsync), or
-    //   - `this.safeDict(R2, 'literal')` of such an R2 the printer unboxes to a map,
-    // is bound once and never written, and is read only as the container of an unboxed safeList/safeDict
-    // local or in a nil test (anything else may store a pointer into it or hand it out).
+    // JSON-origin list reads: `this.safeList(R, k)` of a decoded JSON document R (an awaited endpoint, or
+    // an unboxed `this.safeDict(R2, 'lit')` of one) holds no scalar pointer, so its index read is native.
+    // R must be bound once, never written, and read only as such a container or in a nil test.
     goJsonOriginUseIsReadOnly(node, name: string): boolean {
         const parent: any = node.parent;
         if (this.goWritesOrRebindsName(node, name, [])) {
@@ -29972,13 +29907,9 @@ ${tryBodyBlock}
         return (printedValue.trim() === index) && (this.goLoopBoundedSliceRead(node, base, key, base.text, key.text) === index) ? 'string' : undefined;
     }
 
-    // ===== the prediction tier's dead bounds guard =====
-    // `list[i]` inside `for (let i = 0; i < list.length; i++)` (or `i < n` with `const n = list.length`)
-    // can never leave the slice, so the guard closure's nil branch is unreachable. Proof, all on the AST:
-    // the counter starts at a non-negative literal and only the incrementor `i++` writes it, the list
-    // local is never rebound in its function and no method call on it can resize it while the bound
-    // is live. 'native' = `list[i]` (the list is a SafeList unbox or `[]` whose every write is a
-    // dictionary, so DerefScalar cannot warp an element); 'deref' = `DerefScalar(list[i])`.
+    // the prediction tier's dead bounds guard: `list[i]` in `for (let i = 0; i < list.length; i++)`, with
+    // only `i++` writing i and nothing rebinding or resizing list while the bound is live, stays in range.
+    // 'native' = `list[i]` (SafeList unbox or dict-only `[]`); 'deref' = `DerefScalar(list[i])`.
     goGb08PredictionFile(): boolean {
         const fileName = String(this.getSrc()?.fileName ?? '').replace(/\\/g, '/');
         return /(^|\/)ts\/src\/(prediction\/[^/]+|base\/PredictionExchange(\.nooverloads[^/]*)?)\.ts$/.test(fileName);
@@ -30759,7 +30690,7 @@ export interface GoTranspiler {
 }
 // A required parameter of an exchange-local method whose TS type is `Str`/`string`, `Dict`-shaped or
 // `List`: the Go type every call site passes (`string` first, then *string / map / []any), when the body
-// never writes another type, never nil-tests it and never `??`-defaults it (D2, D5)
+// never writes another type, never nil-tests it and never `??`-defaults it
 GoTranspiler.prototype.goRequiredParameterNativeType = function (fn, param, index: number) {
     const asyncMethod = this.isAsyncFunction(fn);
     if (!this.goHasTreeCallSite(fn)) {
@@ -30806,7 +30737,6 @@ GoTranspiler.prototype.goRequiredParameterNativeType = function (fn, param, inde
 export interface GoTranspiler {
     goCallSiteParameterCandidates(fn, param, index: number): string[];
     goFeedsNullableSlot(fn, param): boolean;
-    goHasDynamicCallee(fn, name: string): boolean;
     goAnnotateMethodTypes(methodsTypes: any[], file): void;
 }
 // An async venue method also emits a public delegating wrapper, and ccxt builds that wrapper's
@@ -30849,14 +30779,12 @@ GoTranspiler.prototype.goAnnotateMethodTypes = function (methodsTypes, file) {
 // the value types an async parameter takes: a map is passed as a map everywhere; a string is passed
 // as a string unless the body feeds it into a nullable (`*string`) parameter slot
 const GO_ASYNC_PARAMETER_TYPES = [ 'map[string]any', 'string' ];
-// the aliases that print a `*T` Go type for a required parameter (g11NativeParameterTypeCandidates)
+// the aliases that print a `*T` Go type for a required parameter
 const GO_NULLABLE_PARAM_ALIASES = /^(?:Str|Int|Num|Bool)$/;
-// `this['name'](...)` resolves to no declaration, so a dynamic site can pass any value at any
-// position; one file-wide scan per source file answers the veto
 // The Go type the printed argument of every same-file call site carries when they agree on one the
 // printer passes through unchanged; empty for disagreeing sites and for a site the index cannot see.
 GoTranspiler.prototype.goCallSiteParameterCandidates = function (fn, param, index: number) {
-    if (this.goHasDynamicCallee(fn, fn.name.text)) {
+    if (goHasDynamicCall(fn, fn.name.text)) {
         return [];
     }
     const sites = this.goSameFileCallsOf(fn, fn.name.text);
@@ -30925,10 +30853,6 @@ GoTranspiler.prototype.goFeedsNullableSlot = function (fn, param): boolean {
     return found;
 };
 
-GoTranspiler.prototype.goHasDynamicCallee = function (fn, name: string): boolean {
-    return goDynamicCallees(fn).has(name);
-};
-
 // `x ?? d` / `x || d` reads the parameter's absent state, which a non-nilable Go type cannot hold
 GoTranspiler.prototype.goParameterHasNullishDefault = function (body, param) {
     const name = param.name.text;
@@ -30956,6 +30880,10 @@ GoTranspiler.prototype.goNumericParameterCandidates = function (param) {
 };
 
 // BaseExchange map fields (go/v4/exchange.go) a `delete this.<field>[k]` removes from with the builtin delete
+// parents that make a typed tuple-slot local unsafe whatever the child position (goTupleSlotNameIsSafe)
+const GO_TUPLE_SLOT_UNSAFE_PARENTS = new Set<SyntaxKind>([ SyntaxKind.Parameter, SyntaxKind.FunctionDeclaration, SyntaxKind.MethodDeclaration,
+    SyntaxKind.PrefixUnaryExpression, SyntaxKind.PostfixUnaryExpression, SyntaxKind.CaseClause, SyntaxKind.ElementAccessExpression,
+    SyntaxKind.ForOfStatement, SyntaxKind.ForInStatement ]);
 const GO_DELETABLE_MAP_FIELDS = new Set<string>([ 'Options', 'Clients', 'Tickers', 'Bidsasks', 'FundingRates', 'Ohlcvs', 'Trades' ]);
 
 // ---- ws cache fields -------------------------------------------------
