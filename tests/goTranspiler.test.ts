@@ -14602,3 +14602,55 @@ describe ('ral-84g2 reader-result locals', () => {
         expect(run(body.replace('return n;', 'const ys = xs;\n        return [ n, ys ];'), 'ts/src/pro')).not.toContain('var xs []any');
     });
 });
+
+describe('go 84g3 client futures read locals', () => {
+    const root = fs.mkdtempSync (path.join (os.tmpdir (), 'go84g3-'));
+    const src = path.join (root, 'ts', 'src');
+    fs.mkdirSync (path.join (src, 'base', 'ws'), { recursive: true });
+    fs.mkdirSync (path.join (src, 'pro'), { recursive: true });
+    fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), "export class Exchange {\n    safeValue (o, k, d = undefined) { return o; }\n}\n");
+    fs.writeFileSync (path.join (src, 'base', 'ws', 'Client.ts'), "export class Client {\n    futures: any = {};\n    subscriptions: any = {};\n}\n");
+    const goPath = (body: string) => {
+        const file = path.join (src, 'pro', 'ex.ts');
+        fs.writeFileSync (file, "import { Exchange } from '../base/Exchange';\nimport { Client } from '../base/ws/Client';\n" + body);
+        return new Transpiler ({ verbose: false, go: {} }).transpileGoByPath (file).content;
+    };
+    afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
+    test ('a string-keyed futures read resolved or nil-tested declares *Future', () => {
+        const out = goPath ("export class ex extends Exchange {\n    handle (client: Client, message) {\n        const messageHash = 'authenticated';\n        const future = this.safeValue (client.futures, messageHash);\n        if (future !== undefined) {\n            future.resolve (true);\n        }\n    }\n}\n");
+        expect (out).toContain ('var future *Future = client.Futures[messageHash]');
+        expect (out).toContain ('future.Resolve(true)');
+        expect (out).not.toContain ('(*Future)');
+    });
+    test ('a futures read handed out keeps the box and asserts at resolve', () => {
+        const out = goPath ("export class ex extends Exchange {\n    handle (client: Client, message) {\n        const future = client.futures['a'];\n        future.resolve (true);\n        return future;\n    }\n}\n");
+        expect (out).toContain ('var future any = ');
+        expect (out).toContain ('future.(*Future).Resolve(true)');
+    });
+});
+
+describe('go 84g3 subscription presence locals', () => {
+    const root = fs.mkdtempSync (path.join (os.tmpdir (), 'go84g3b-'));
+    const src = path.join (root, 'ts', 'src');
+    fs.mkdirSync (path.join (src, 'base', 'ws'), { recursive: true });
+    fs.mkdirSync (path.join (src, 'pro'), { recursive: true });
+    fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), "export class Exchange {\n    safeValue (o, k, d = undefined) { return o; }\n    watch (a, b) { return undefined; }\n}\n");
+    fs.writeFileSync (path.join (src, 'base', 'ws', 'Client.ts'), "export class Client {\n    futures: any = {};\n    subscriptions: any = {};\n}\n");
+    const goPath = (body: string) => {
+        const file = path.join (src, 'pro', 'ex.ts');
+        fs.writeFileSync (file, "import { Exchange } from '../base/Exchange';\nimport { Client } from '../base/ws/Client';\n" + body);
+        const x = new Transpiler ({ verbose: false, go: {} });
+        installFmGo5G01 (x.goTranspiler);
+        return x.transpileGoByPath (file).content;
+    };
+    afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
+    test ('a subscription read only nil-tested is a presence bool', () => {
+        const out = goPath ("export class ex extends Exchange {\n    auth (client: Client) {\n        const messageHash = 'authenticated';\n        const authenticated = this.safeValue (client.subscriptions, messageHash);\n        if (authenticated === undefined) {\n            this.watch (1, 2);\n        }\n    }\n}\n");
+        expect (out).toContain ('var authenticated bool = this.SafeValue(client.(ClientInterface).SubscriptionsSnapshot(), messageHash) != nil');
+        expect (out).toContain ('if !authenticated {');
+    });
+    test ('a subscription read handed on keeps the box', () => {
+        const out = goPath ("export class ex extends Exchange {\n    auth (client: Client) {\n        const messageHash = 'authenticated';\n        const authenticated = this.safeValue (client.subscriptions, messageHash);\n        if (authenticated === undefined) {\n            this.watch (authenticated, 2);\n        }\n    }\n}\n");
+        expect (out).toContain ('var authenticated any = ');
+    });
+});

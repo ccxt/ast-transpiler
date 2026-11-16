@@ -34291,3 +34291,211 @@ function ccxtGoUnwrapTypeOnly (node) {
         return typed;
     };
 }
+
+// ===== 84g3: client futures read locals =====
+// R1. `const future = client.futures[k]` / `this.safeValue (client.futures, k)` in a pro / prediction source,
+// where `client.futures` is the ws Client table (checker: property of class Client, or an `any`-typed
+// `client` frame) and k is a Go string (literal or a local / parameter the printer declares `string`):
+// the hand-written `GetFutures()` is a `map[string]*Future` published snapshot, so the read
+// `client.Futures[k]` (made `client.(ClientInterface).GetFutures()[k]` by the ws regexes) is a `*Future`,
+// nil exactly when FutureGet / SafeValue answered absent (a futures value is never "" or nil). The local
+// declares `*Future` when every use is the receiver of `.resolve (..)` / `.reject (..)` or a nil test;
+// those print as native pointer calls / compares. Any other use, a rebinding, a non-string key or a
+// `*promise` name (the ws regexes wrap its Resolve argument) keeps the `any` local.
+// The `future.(Resolve|Reject)` -> `future.(*Future).$1` ws regex of ccxt build/goTranspiler.ts is folded
+// here: a still-boxed receiver whose name ends in `future` prints the assertion itself, so the regex goes.
+export interface GoTranspiler {
+    goClientFuturesTable(node): boolean;
+    goClientFutureReadKey(initializer): any;
+    goClientFutureLocal(declaration): boolean;
+    goClientFutureLocalCache: WeakMap<object, boolean>;
+}
+GoTranspiler.prototype.goClientFuturesTable = function (node) {
+    if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.name?.text !== 'futures')
+        || (node.expression?.kind !== SyntaxKind.Identifier) || (node.expression.text !== 'client') || !clientIsInterfaceFrame(node)) {
+        return false;
+    }
+    const checker: any = this.checkerOrUndefined();
+    const symbol: any = checker?.getSymbolAtLocation(node.name);
+    if (symbol === undefined) {
+        return ((checker?.getTypeAtLocation(node.expression)?.flags ?? 0) & TypeFlags.Any) !== 0;
+    }
+    const decl: any = symbol.valueDeclaration?.resolve();
+    return ((decl?.kind === SyntaxKind.PropertyDeclaration) || (decl?.kind === SyntaxKind.PropertySignature))
+        && (decl.parent?.name?.text === SUBSCRIPTIONS_CLASS);
+};
+GoTranspiler.prototype.goClientFutureReadKey = function (initializer) {
+    const read: any = this.goUnwrapParenthesizedNode(initializer);
+    let table: any;
+    let key: any;
+    if (read?.kind === SyntaxKind.ElementAccessExpression) {
+        table = read.expression;
+        key = read.argumentExpression;
+    } else if ((read?.kind === SyntaxKind.CallExpression) && (read.arguments?.length === 2)
+        && (read.expression?.kind === SyntaxKind.PropertyAccessExpression) && (read.expression.expression?.kind === SyntaxKind.ThisKeyword)
+        && (read.expression.name?.text === 'safeValue')) {
+        table = read.arguments[0];
+        key = read.arguments[1];
+    }
+    if ((key === undefined) || !this.goClientFuturesTable(table)) {
+        return undefined;
+    }
+    if ((key.kind === SyntaxKind.StringLiteral) || ((key.kind === SyntaxKind.Identifier) && this.goIsStringKeyExpression(key))) {
+        return key;
+    }
+    return undefined;
+};
+GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.type !== undefined)
+        || /promise$/i.test(declaration.name.text)) {
+        return false;
+    }
+    if (this.goClientFutureLocalCache === undefined) {
+        this.goClientFutureLocalCache = new WeakMap<object, boolean>();
+    }
+    if (this.goClientFutureLocalCache.has(declaration)) {
+        return this.goClientFutureLocalCache.get(declaration);
+    }
+    this.goClientFutureLocalCache.set(declaration, false); // re-entry answers box
+    let verdict = false;
+    try {
+        if (this.goClientFutureReadKey(declaration.initializer) !== undefined) {
+            const checker: any = this.checkerOrUndefined();
+            const own: any = checker?.getSymbolAtLocation(declaration.name);
+            const scope: any = this.goEnclosingFunction(declaration);
+            const name = declaration.name.text;
+            verdict = (own !== undefined) && (scope !== undefined) && !this.goTypeNameIsShadowed(scope, '*Future') && !this.hasNodeWhere(scope, (n: any) => {
+                if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+                    return false;
+                }
+                const parent: any = n.parent;
+                if (((parent?.kind === SyntaxKind.PropertyAccessExpression) || (parent?.kind === SyntaxKind.PropertyAssignment)) && (parent.name === n)) {
+                    return false; // a member name, not the local
+                }
+                if (checker.getSymbolAtLocation(n) !== own) {
+                    return true; // another binding of the name
+                }
+                if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)
+                    && ((parent.name?.text === 'resolve') || (parent.name?.text === 'reject'))
+                    && (parent.parent?.kind === SyntaxKind.CallExpression) && (parent.parent.expression === parent)) {
+                    return false;
+                }
+                return !this.goIsNilComparisonOperand(n, parent);
+            });
+        }
+    } finally {
+        this.goClientFutureLocalCache.set(declaration, verdict);
+    }
+    return verdict;
+};
+{
+    const goTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+    GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+        const declaration: any = initializer?.parent;
+        if ((declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.initializer === initializer) && this.goClientFutureLocal(declaration)) {
+            return '*Future';
+        }
+        return goTypeOfInitializer.call(this, initializer, printedValue);
+    };
+    const printVariableDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const declaration: any = node?.declarations?.[0];
+        if ((node?.declarations?.length === 1) && this.goClientFutureLocal(declaration)) {
+            const key: any = this.goClientFutureReadKey(declaration.initializer);
+            if (this.getGoLocalType(declaration, '') === '*Future') {
+                return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)} *Future = client.Futures[${this.printNode(key, 0)}]`;
+            }
+        }
+        return printVariableDeclarationList.call(this, node, identation);
+    };
+    const printCallExpression = GoTranspiler.prototype.printCallExpression;
+    GoTranspiler.prototype.printCallExpression = function (node, identation) {
+        const printed: string = printCallExpression.call(this, node, identation);
+        const callee: any = node?.expression;
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.Identifier)
+            || ((callee.name?.text !== 'resolve') && (callee.name?.text !== 'reject')) || !clientIsInterfaceFrame(node)) {
+            return printed;
+        }
+        const receiver = this.printNode(callee.expression, 0);
+        const head = `${receiver}.${callee.name.text === 'resolve' ? 'Resolve' : 'Reject'}(`;
+        const lead = /^\s*/.exec(printed)[0];
+        if (!/future$/.test(receiver) || !printed.startsWith(head, lead.length)) {
+            return printed;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(callee.expression)?.valueDeclaration?.resolve?.();
+        if (this.goClientFutureLocal(declaration) && (this.goDeclaredTypeOfIdentifier(callee.expression) === '*Future')) {
+            return printed;
+        }
+        return lead + `${receiver}.(*Future).` + printed.slice(lead.length + receiver.length + 1);
+    };
+}
+// ===== end 84g3 R1 =====
+
+// ===== 84g3 R2: subscription presence locals =====
+// `const x = this.safeValue (client.subscriptions, k)` (k a Go string key or literal, client the ws Client
+// table per clientSubscriptions) read only in nil tests: SubscriptionSafe / SafeValue answer an untyped nil
+// exactly when the entry is absent or "" and never a typed nil, so the local is the presence bit. It declares
+// `var x bool = <read> != nil` and each `x === undefined` / `x !== undefined` prints `!x` / `x`.
+// A rebinding, any other read or a shadowing binding keeps the box.
+export interface GoTranspiler {
+    goSubscriptionPresenceLocal(declaration): boolean;
+    goSubscriptionPresenceCache: WeakMap<object, boolean>;
+}
+GoTranspiler.prototype.goSubscriptionPresenceLocal = function (declaration) {
+    const call: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.type !== undefined)
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'safeValue') || (clientSubscriptions(this, call.arguments[0]) === undefined)
+        || !clientIsInterfaceFrame(declaration)) {
+        return false;
+    }
+    if (this.goSubscriptionPresenceCache === undefined) {
+        this.goSubscriptionPresenceCache = new WeakMap<object, boolean>();
+    }
+    if (this.goSubscriptionPresenceCache.has(declaration)) {
+        return this.goSubscriptionPresenceCache.get(declaration);
+    }
+    this.goSubscriptionPresenceCache.set(declaration, false);
+    let verdict = false;
+    try {
+        const key: any = call.arguments[1];
+        if ((key.kind === SyntaxKind.StringLiteral) || ((key.kind === SyntaxKind.Identifier) && this.goIsStringKeyExpression(key))) {
+            verdict = this.goDeclaredLocalTypeIfSafe(declaration, 'bool', (n: any) => this.goIsNilComparisonOperand(n, n.parent),
+                (n: any) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+                    || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n))) === 'bool';
+        }
+    } finally {
+        this.goSubscriptionPresenceCache.set(declaration, verdict);
+    }
+    return verdict;
+};
+{
+    const marketLocal = GoTranspiler.prototype.goMarketLocalUnbox;
+    GoTranspiler.prototype.goMarketLocalUnbox = function (declaration) {
+        return this.goSubscriptionPresenceLocal(declaration) ? 'bool' : marketLocal.call(this, declaration);
+    };
+    const marketValue = GoTranspiler.prototype.goMarketUnboxValue;
+    GoTranspiler.prototype.goMarketUnboxValue = function (declaration, parsedValue) {
+        return this.goSubscriptionPresenceLocal(declaration) ? `${parsedValue.trim()} != nil` : marketValue.call(this, declaration, parsedValue);
+    };
+    const printBinaryExpression = GoTranspiler.prototype.printBinaryExpression;
+    GoTranspiler.prototype.printBinaryExpression = function (node, identation) {
+        const op = node?.operatorToken?.kind;
+        if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken)
+            || (op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+            const operand: any = (node.left?.kind === SyntaxKind.Identifier) ? node.left : node.right;
+            if ((operand?.kind === SyntaxKind.Identifier) && this.goIsNilComparisonOperand(operand, node)) {
+                const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(operand)?.valueDeclaration?.resolve?.();
+                if (this.goSubscriptionPresenceLocal(declaration) && (this.goDeclaredTypeOfIdentifier(operand) === 'bool')) {
+                    const absent = (op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken);
+                    return (absent ? '!' : '') + this.printNode(operand, 0);
+                }
+            }
+        }
+        return printBinaryExpression.call(this, node, identation);
+    };
+}
+// ===== end 84g3 R2 =====
