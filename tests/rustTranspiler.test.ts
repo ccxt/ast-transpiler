@@ -23938,3 +23938,44 @@ describe('ral-80c R1: a copy of a typed string-list parameter holds Option<List>
         expect(out).toContain('let mut held: Value =');
     });
 });
+describe('ral-80e: a native bool local as the leaf of a logical the printer prints as a native bool', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    options: Dict = {};\n    safeBool (o: any, k: any, d: any = undefined): boolean { return o; }\n    hold (m: any): any { return m; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('coinbaseinternational isOption: `isFuture || isOption` into a bool local reads the leaf bare', () => {
+        const out = write ('ral-80e-a', "    a (market: Dict, kind: string, isPerpetual: boolean) {\n        const isFuture = !isPerpetual && (kind.indexOf ('future') >= 0);\n        const isOption = (kind.indexOf ('option') >= 0);\n        const isFutureOrOption = isFuture || isOption;\n        const expiry = isFutureOrOption ? this.hold (market) : undefined;\n        return { 'option': isOption, 'future': isFuture, 'e': expiry };\n    }\n");
+        expect(out).toContain('let mut isOption: bool = ');
+        expect(out).toContain('|| isOption');
+        expect(out).not.toContain('is_true(&isOption)');
+        expect(out).toContain('Value::Bool(isOption)');
+    });
+    test('a negative: a bool local whose logical is a Value (an `any` operand) keeps the Value', () => {
+        const out = write ('ral-80e-a-neg', "    a (market: Dict, kind: string, x: Dict) {\n        const isOption = (kind.indexOf ('option') >= 0);\n        const v = isOption || this.hold (x);\n        return { 'option': isOption, 'v': v };\n    }\n");
+        expect(out).not.toContain('let mut isOption: bool');
+    });
+});
+describe('ral-80e: a typed number reader local as a whole Math.min / Math.max argument', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Num } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('polymarket fetchOHLCV price: the null test is native and the Math argument boxes the Float / Null once', () => {
+        const out = write ('ral-80e-b', "    a (item: Dict, candle: any[]) {\n        const price = this.safeNumber (item, 'p');\n        if (price === undefined) {\n            return undefined;\n        }\n        candle[2] = Math.max (candle[2], price);\n        return candle;\n    }\n");
+        expect(out).toContain('let mut price: Option<f64> = ');
+        expect(out).toContain('price.is_none()');
+        expect(out).toContain('&Value::from(price))');
+    });
+    test('a negative: a local read only as a Math argument stays Value (the conversion would only move)', () => {
+        const out = write ('ral-80e-b-neg', "    a (market: Dict, d: number) {\n        const pricePlaces = this.safeInteger (market, 'pricePlace');\n        const m = Math.max (d, pricePlaces as number);\n        return m;\n    }\n");
+        expect(out).not.toContain('let mut pricePlaces: Option<i64>');
+    });
+});
