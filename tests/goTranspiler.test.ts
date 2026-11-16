@@ -14097,3 +14097,49 @@ describe('go proven return families (config provenReturnFamilies)', () => {
         expect(output).not.toContain('other == int64(0)');
     });
 });
+
+describe ('77g1 nil-declared tuple-slot joins', () => {
+    const PRELUDE = 'type Dict = { [key: string]: any };\n'
+        + 'type Str = string | undefined;\ntype Bool = boolean | undefined;\n'
+        + 'class Base {\n'
+        + '    handleMarginModeAndParams (m: string, params: Dict = {}, d: Str = undefined): [Str, Dict] { return [ d, params ]; }\n'
+        + '    handleOptionBoolAndParams2 (params: Dict, m: string, a: string, b: string, d: Bool = undefined): [Bool, Dict] { return [ d, params ]; }\n'
+        + '    other (a: any): any { return a; }\n'
+        + '}\n';
+    const go = (body: string): string => {
+        const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoHooks(t.goTranspiler);
+        return t.transpileGo(PRELUDE + 'class V extends Base {\n' + body + '}\n').content;
+    };
+    test('slot 1 of a hand-written (*string, map) pair types the nil-declared params bag', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + '        let marginMode: Str = undefined;\n'
+            + '        let paramsMargin = undefined;\n'
+            + "        [ marginMode, paramsMargin ] = this.handleMarginModeAndParams ('f', params);\n"
+            + '        return this.other (paramsMargin);\n'
+            + '    }\n');
+        expect(out).toContain('var paramsMargin map[string]any = nil');
+        expect(out).not.toContain('var paramsMargin any = nil');
+    });
+    test('slot 0 of a literal-default bool pair types the nil-declared flag as bool', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + '        let pm = undefined;\n'
+            + "        [ pm, params ] = this.handleOptionBoolAndParams2 (params, 'f', 'papi', 'pm', false);\n"
+            + '        if (pm) {\n'
+            + '            return 1;\n'
+            + '        }\n'
+            + '        return 2;\n'
+            + '    }\n');
+        expect(out).toContain('var pm bool');
+        expect(out).not.toContain('var pm any = nil');
+    });
+    test('a read before the bool slot write keeps the box', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + '        let pm = undefined;\n'
+            + '        this.other (pm);\n'
+            + "        [ pm, params ] = this.handleOptionBoolAndParams2 (params, 'f', 'papi', 'pm', false);\n"
+            + '        return pm;\n'
+            + '    }\n');
+        expect(out).toContain('var pm any = nil');
+    });
+});

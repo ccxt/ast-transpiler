@@ -376,7 +376,7 @@ function tupleJoinWriteType (expression, name) {
     const callee = tupleJoinCalleeName (expression.right);
     const mapSlots = (callee === undefined) ? undefined : GO_TUPLE_JOIN_MAP_SLOTS[callee];
     if ((mapSlots === undefined) || !mapSlots.includes (index)) {
-        return undefined;
+        return tupleJoinPairResultWriteType (expression.right, index);
     }
     // the call must be whole on the right-hand side: `[a, x] = this.handleX (..) ?? y` is not a tuple
     if (expression.right?.kind !== ts.SyntaxKind.CallExpression) {
@@ -385,6 +385,17 @@ function tupleJoinWriteType (expression, name) {
     // a non-literal default selects the *Nullable twin, whose pair prints as a []any holder
     const defaultSlot = GO_TUPLE_JOIN_DEFAULT_SLOT[callee];
     if ((defaultSlot !== undefined) && !tupleJoinDefaultIsValue (expression.right.arguments[defaultSlot])) {
+        return undefined;
+    }
+    return GO_TUPLE_JOIN_TYPE;
+}
+
+// 77g1: the other pair producers whose Go twin is hand-written `(*string|*bool, map[string]any)`
+// (go/v4/exchange_market_type.go; the printed base twins handleParamString/Bool/Integer and
+// handleNetworkCodeAndParams): the tuple-result join prints `a, x = this.HandleX (..)`, so slot 1
+// is that map with no conversion. The *Nullable twins (non-literal default) keep their []any holder.
+function tupleJoinPairResultWriteType (right, index) {
+    if ((index !== 1) || (right?.kind !== ts.SyntaxKind.CallExpression) || !ccxtGoTupleResultCall (right)) {
         return undefined;
     }
     return GO_TUPLE_JOIN_TYPE;
@@ -924,10 +935,11 @@ export function goNilJoinTypeSelfTest () {
     joins (method ('let bag = undefined;\n        [ a, bag ] = this.handleUntilOption (a, b);\n        [ c, bag ] = this.handleUntilOption (a, c);\n        return bag;'), 'bag map[string]any');
     // a variable default selects the *Nullable twin: its holder costs a MapTyped, so it stays `any`
     joins (method ('let bag = undefined;\n        let flag = false;\n        [ flag, bag ] = this.handleOptionBoolAndParams (a, b, c, a);\n        return bag;'), '');
-    // a producer whose pair cannot be absorbed (a *string element) stays `any`
-    joins (method ('let bag = undefined;\n        [ a, bag ] = this.handleMarginModeAndParams (a, b);\n        return bag;'), '');
+    // 77g1: a (*string, map) pair the tuple-result join binds natively types slot 1 as well
+    joins (method ('let bag = undefined;\n        [ a, bag ] = this.handleMarginModeAndParams (a, b);\n        return bag;'), 'bag map[string]any');
+    joins (method ('let bag = undefined;\n        [ a, bag ] = this.handleParamString (a, b);\n        return bag;'), 'bag map[string]any');
+    // a producer whose Go twin answers a []any holder stays `any`
     joins (method ('let bag = undefined;\n        [ a, bag ] = this.handlePostOnly (a, b);\n        return bag;'), '');
-    joins (method ('let bag = undefined;\n        [ a, bag ] = this.handleParamString (a, b);\n        return bag;'), '');
     // a read reached without a write keeps the box
     joins (method ('let bag = undefined;\n        if (a) {\n            [ a, bag ] = this.handleUntilOption (a, b);\n        }\n        return bag;'), '');
     // reads the typed nil answers the same way are admitted before the write
@@ -10800,6 +10812,10 @@ export class GoNilDeclaredValueAssignmentScan extends GoNilDeclaredAssignmentSca
 
     // `x == true` / `x === 1` against a literal of the joined kind compiles on the value type
     classifyIdentifier (node, assigned) {
+        const slotWrite = this.boolSlotWrite (node);
+        if (slotWrite !== undefined) {
+            return slotWrite ? true : assigned;
+        }
         const parent = node.parent;
         if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && COMPARISON_TOKENS.includes (parent.operatorToken.kind)
                 && (this.joinType !== undefined) && !this.inNestedFunction (node)) {
@@ -10821,6 +10837,35 @@ export class GoNilDeclaredValueAssignmentScan extends GoNilDeclaredAssignmentSca
             return false;
         }
         this.joinType = goType;
+        return true;
+    }
+
+    // 77g1: slot 0 of a statement-level `[ x, p ] = this.handleOptionBoolAndParams[2] (.., <bool literal>)`.
+    // The tuple-result join prints `x, p = this.HandleOptionBoolAndParams(..)`, whose hand-written Go twin
+    // returns (bool, map[string]any): the box only ever held that bool, so x joins as a bool write.
+    // undefined = not this shape; false = this shape but another join type (rejected).
+    boolSlotWrite (node) {
+        const pattern = node.parent;
+        const assignment = pattern?.parent;
+        if ((pattern?.kind !== ts.SyntaxKind.ArrayLiteralExpression) || (pattern.elements[0] !== node)
+                || (assignment?.kind !== ts.SyntaxKind.BinaryExpression) || (assignment.left !== pattern)
+                || (assignment.operatorToken.kind !== ts.SyntaxKind.EqualsToken)
+                || (assignment.parent?.kind !== ts.SyntaxKind.ExpressionStatement)) {
+            return undefined;
+        }
+        const call = assignment.right;
+        const callee = call?.expression?.name?.text;
+        if ((pattern.elements.length !== 2) || !pattern.elements.every ((e) => e.kind === ts.SyntaxKind.Identifier)
+                || !ccxtGoTupleResultCall (call) || (CCXT_GO_TUPLE_RESULT_ELEMENT_0[callee] !== 'GetValueBool')
+                || this.inNestedFunction (node)) {
+            return undefined;
+        }
+        this.sawWrite = true;
+        if ((this.joinType !== undefined) && (this.joinType !== 'bool')) {
+            this.rejected = true;
+            return false;
+        }
+        this.joinType = 'bool';
         return true;
     }
 }
