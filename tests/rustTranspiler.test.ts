@@ -10723,8 +10723,10 @@ describe('rust ws order books', () => {
         expect(out).toMatch(/CacheStore::put\(&mut self\.orderbooks, &symbol, ob(\.clone\(\))?\)/);
         expect(out).toContain('client.resolve(Value::from(&ob)');
     });
-    test('negative: a local whose cache buffer is pushed stays a boxed Value and is stored through the marker test', () => {
-        expect(out).toContain('let mut stored: Value = Value::from(self.orderbooks.at(&symbol));');
+    test('ral-66c: a local whose cache buffer is pushed is a typed book: cache_push, then the typed write-back', () => {
+        expect(out).toContain('let mut stored: Option<crate::pro::order_book::Book> = self.orderbooks.at(&symbol);');
+        expect(out).toContain('stored.cache_push(message);');
+        expect(out).toContain('CacheStore::put(&mut self.orderbooks, &symbol, stored);');
         expect(out).not.toContain('Value::Dict(__d) = &mut self.orderbooks');
     });
 });
@@ -22009,6 +22011,40 @@ describe('ral-64k: the key of an element read on a typed ws order-book local is 
     test('negative: a read that is no local initializer keeps the boxed key', () => {
         const out = write ('64k-book-neg', body ('').replace ('const bookside = orderbook[side];\n        this.consume (bookside);', 'this.consume (orderbook[side]);'));
         expect(out).toMatch(/let mut side: Value = /);
+    });
+});
+
+describe('ral-66c: the delta buffer of a typed ws order-book local is read and written through the book (binance / htx / woo pro `messages`, `orderbook.cache.push`)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport class OrderBook { bids: any; asks: any; cache: any[] = []; reset (s: any = undefined) { } }\nexport default class Exchange {\n    orderbooks: Dict = {};\n    orderBook (s: any = {}, d: any = undefined): OrderBook { return new OrderBook (); }\n    safeInteger (o: any, k: any, d: any = undefined): number { return o[k]; }\n    consume (x: any): void { }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    const unroll = "    unroll (snapshot: Dict) {\n        const orderbook = this.orderBook ({}, 10);\n        orderbook.reset (snapshot);\n        const messages = orderbook.cache;\n        orderbook.cache = [];\n        for (let i = 0; i < messages.length; i++) {\n            this.consume (messages[i]);\n        }\n        this.consume (orderbook);\n    }\n";
+    const buffer = "    buffer (message: Dict) {\n        const orderbook = this.orderBook ({}, 10);\n        if (this.safeInteger (orderbook, 'nonce') === undefined) {\n            orderbook.cache.push (message);\n        } else {\n            this.consume (orderbook);\n        }\n    }\n";
+    test('const messages = book.cache is a List copy of the buffer; length and element reads are native', () => {
+        const out = write ('66c-unroll', unroll);
+        expect(out).toContain('let mut messages: crate::value::List = orderbook.cache_items();');
+        expect(out).toContain('i < (messages.len() as i64)');
+        expect(out).toContain('messages.get(i as usize).cloned().unwrap_or(Value::Null)');
+        expect(out).toContain('orderbook.set_book_meta("cache", Value::from(vec![]));');
+    });
+    test('book.cache.push (v) as a statement prints cache_push on the typed book', () => {
+        const out = write ('66c-push', buffer);
+        expect(out).toContain('orderbook.cache_push(message);');
+        expect(out).toContain('let mut orderbook: crate::pro::order_book::Book = ');
+    });
+    test('negative: a buffer local written through (the JS alias would reach the shared buffer) keeps its box', () => {
+        const out = write ('66c-unroll-neg', unroll.replace ('this.consume (messages[i]);', 'messages.push (snapshot);'));
+        expect(out).not.toContain('cache_items()');
+    });
+    test('negative: a push used as an expression is no statement push', () => {
+        const out = write ('66c-push-neg', buffer.replace ('orderbook.cache.push (message);', 'this.consume (orderbook.cache.push (message));'));
+        expect(out).not.toContain('cache_push(');
     });
 });
 

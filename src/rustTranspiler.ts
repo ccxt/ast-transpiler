@@ -2532,6 +2532,7 @@ export class RustTranspiler extends BaseTranspiler {
             const block = this.rustObjectLiteralBlock(this.rustSkipWrappers(declaration.initializer), identation);
             return `${indent}let mut ${varName}: indexmap::IndexMap<String, Value> = (${block})`;
         }
+        if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rust66cBookCacheRead(declaration.initializer) !== undefined) return `${indent}let mut ${varName}: crate::value::List = ${super.printIdentifier(this.rust66cBookCacheRead(declaration.initializer))}.cache_items()`;
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rustTypedListField(declaration.initializer)) return `${indent}let mut ${varName}: crate::value::List = self.${String(this.rustSkipWrappers(declaration.initializer).name.text)}.clone()`;
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
@@ -19776,7 +19777,7 @@ export class RustTranspiler extends BaseTranspiler {
             const text = this.rustBearerElementPushText(node, RustTranspiler.cloneIfBareLocal(parsedArg.trim()));
             if (text !== undefined) return text;
         }
-        return this.printRustVecPush(node, name, parsedArg) ?? this.printBuiltListPush(node, name, parsedArg) ?? this.arrPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${node?.arguments?.length === 1 && parsedArg !== undefined ? this.rustOwnedArgText(node.arguments[0], parsedArg.trim()) : parsedArg})`;
+        return this.print66cCachePush(node, parsedArg) ?? this.printRustVecPush(node, name, parsedArg) ?? this.printBuiltListPush(node, name, parsedArg) ?? this.arrPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${node?.arguments?.length === 1 && parsedArg !== undefined ? this.rustOwnedArgText(node.arguments[0], parsedArg.trim()) : parsedArg})`;
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -25815,6 +25816,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** A call that yields a string list on every path (never `undefined`). */
     rustLentListSource(init: any): boolean {
         if (this.rustTypedListField(init)) return true;
+        if (this.rust66cBookCacheRead(init) !== undefined) return true;
         if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression)) return false;
         const callee: any = init.expression;
         const method = String(callee.name.text);
@@ -25905,7 +25907,7 @@ export class RustTranspiler extends BaseTranspiler {
         // The initializer's resolved overload (`string[]`) decides, so a wider `Strings` annotation does not reject it.
         const type: any = this.typeOfNodeIfAny(declaration.initializer);
         // ral-64i: the base slice is declared without a return type (`any`): its runtime list answer decides instead
-        const slice = this.rust64iBaseSliceInit(init);
+        const slice = this.rust64iBaseSliceInit(init) || this.rust66cBookCacheRead(init) !== undefined;
         if (!slice && (type === undefined || !this.getChecker().isArrayType(type))) return false;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
@@ -28350,7 +28352,7 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BOOK_META_WRITES = new Set([ 'timestamp', 'datetime', 'nonce', 'symbol', 'cache' ]);
     private rustWsBookMapFields = new WeakMap<Node, boolean>();
     private rustWsBookLocals = new WeakMap<Node, 'opt' | 'book' | null>();
-    private rustWsBookUses = new WeakMap<Node, 'bare' | 'box' | 'test' | 'field' | 'meta'>();
+    private rustWsBookUses = new WeakMap<Node, 'bare' | 'box' | 'test' | 'field' | 'meta' | 'cpush'>();
     private rustWsBookCtorPrinting = new WeakSet<Node>();
     private rustWsBookCtorBare = new WeakSet<Node>();
 
@@ -28545,7 +28547,7 @@ export class RustTranspiler extends BaseTranspiler {
             const kind = init === undefined || this.isTestSource(declaration) ? undefined
                 : (this.rustWsBookOptSource(init, false) || this.rustWsCacheUndefined(init) || this.rustWsWatchResultKind(init) === 'book' ? 'opt' : (this.rustWsBookCtorLike(init) ? 'book' : undefined));
             if (kind !== undefined && list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1) {
-                const forms = new Map<Node, 'bare' | 'box' | 'test' | 'field' | 'meta'>();
+                const forms = new Map<Node, 'bare' | 'box' | 'test' | 'field' | 'meta' | 'cpush'>();
                 let reads = 0;
                 let sourced = !this.rustWsCacheUndefined(init);
                 // ral-54h: a binding of the same name in a sibling block (`if (a) { const b = .. } else { const b = .. }`)
@@ -28575,6 +28577,8 @@ export class RustTranspiler extends BaseTranspiler {
                             // `x.cache.push (..)` / `x.cache.length = 0` keep the boxed receiver the ccxt field-append pass keys on
                             let outer: any = access;
                             while (isParenthesizedExpression(outer.parent) || isAsExpression(outer.parent)) outer = outer.parent;
+                            // ral-66c: `x.cache.push (v)` as a statement appends to the typed book's delta buffer (`cache_push`)
+                            if (key === 'cache' && this.rust66cCachePushCall(outer) !== undefined) { forms.set(n, 'cpush'); reads++; return true; }
                             if (isPropertyAccessExpression(outer.parent) && outer.parent.expression === outer && (String(outer.parent.name.text) !== 'length' || this.isNativeWriteTargetBase(outer.parent))) return false;
                             forms.set(n, 'field'); reads++; return true;
                         }
@@ -28607,6 +28611,40 @@ export class RustTranspiler extends BaseTranspiler {
     rustWsBookLocalOf(node: any): 'opt' | 'book' | undefined {
         if (!isIdentifier(node) || this.rustWsBookUses.get(node) === undefined) return undefined;
         return this.rustWsBookLocal(this.rustDeclarationOfIdentifier(node));
+    }
+
+    // ── ral-66c typed order-book cache ──
+    // The delta buffer of a typed book local (`Book` / `Option<Book>`) is read and written through the book itself:
+    // `x.cache.push (v)` as a statement prints `x.cache_push(v)`, and `const m = x.cache` (a `field` use of the book)
+    // whose every use is a length / element read / by-reference reader is a `crate::value::List` copy of the buffer
+    // (`x.cache_items()`), as the JS local holds the array itself: a later `x.cache = []` leaves the copy as it was.
+
+    /** The `push` call when `outer` (the `x.cache` access, wrappers climbed) is `outer.push (v)` as a statement. */
+    rust66cCachePushCall(outer: any): any {
+        const access: any = outer.parent;
+        if (!isPropertyAccessExpression(access) || access.expression !== outer || String(access.name.text) !== 'push') return undefined;
+        const call: any = access.parent;
+        if (!isCallExpression(call) || call.expression !== access || call.arguments.length !== 1 || call.arguments[0].kind === SyntaxKind.SpreadElement) return undefined;
+        return call.parent?.kind === SyntaxKind.ExpressionStatement ? call : undefined;
+    }
+
+    /** `x.cache.push (v)` on a typed book local: the book's `cache_push`. */
+    print66cCachePush(node: any, parsedArg: string | undefined): string | undefined {
+        if (parsedArg === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return undefined;
+        const access: any = this.rustStripWrappers(node.expression.expression);
+        if (access === undefined || !isPropertyAccessExpression(access) || String(access.name.text) !== 'cache') return undefined;
+        const recv: any = access.expression;
+        if (!isIdentifier(recv) || this.rustWsBookUses.get(recv) !== 'cpush' || this.rustWsBookLocalOf(recv) === undefined) return undefined;
+        return `${super.printIdentifier(recv)}.cache_push(${this.rustOwnedArgText(node.arguments[0], parsedArg.trim())})`;
+    }
+
+    /** The book identifier of an initializer `x.cache` whose book local reads it as a `field` use, else undefined. */
+    rust66cBookCacheRead(init: any): any {
+        const n: any = this.rustStripWrappers(init);
+        if (n === undefined || !isPropertyAccessExpression(n) || !isIdentifier(n.name) || String(n.name.text) !== 'cache') return undefined;
+        const recv: any = n.expression;
+        if (!isIdentifier(recv) || this.rustWsBookLocal(this.rustDeclarationOfIdentifier(recv)) === undefined) return undefined;
+        return this.rustWsBookUses.get(recv) === 'field' ? recv : undefined;
     }
 
     rustWsBookPath(node: any, type: string): string {
