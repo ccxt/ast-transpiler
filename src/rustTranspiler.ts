@@ -11054,7 +11054,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(self) || this.rustScalarIdentifierKind(self) === undefined) return undefined;
         // ral-59n: a base `safe*` scalar reader partner (a `Value`) compares through its payload accessor
         // (not for a local that also keys an element read: typing that key changes how the receiver map local is decided)
-        if (!isIdentifier(partner)) return this.rust59nValueReaderPartner(partner) && !this.rust59nKeysElementRead(self) ? this.rustScalarPayloadPartnerTest(self, partner, kind, sign, dry) : undefined;
+        if (!isIdentifier(partner)) return this.rust59nValueReaderPartner(partner) ? this.rustScalarPayloadPartnerTest(self, partner, kind, sign, dry) : undefined;
         const base = kind.startsWith('o') ? kind.slice(1) : kind;
         if ((base !== 'str' && base !== 'int') || this.rustScalarValuePartnerKind(partner) !== base) return this.rustScalarPayloadPartnerTest(self, partner, kind, sign, dry);
         if (dry) return '_';
@@ -18156,7 +18156,8 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (link === chain[0] && this.rustBorrowedIndexReads.has(link) && isIdentifier(receiver)) {
                 const borrowedKey = isIdentifier(key) && this.rustBorrowedStrElems.has(this.rustDeclarationOfIdentifier(key));
-                acc = `crate::value::KeyRead::read(&&${super.printIdentifier(receiver)}, &${borrowedKey ? `Value::from(${super.printIdentifier(key)})` : (this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0))})`;
+                const typedKey = isIdentifier(key) && !borrowedKey ? this.rust62nTypedStrKey(key) : undefined;
+                acc = `crate::value::KeyRead::read(&&${super.printIdentifier(receiver)}, &${borrowedKey ? `Value::from(${super.printIdentifier(key)})` : (typedKey ?? this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0))})`;
                 continue;
             }
             // ral-59k: the outer key of a two-level field READ lends the typed key (rustFieldKeyUseForm 'fok')
@@ -18505,6 +18506,13 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A registered `i64` counter as a helper key (`Value::Int(i)`). zf: a read the ccxt write-back binds takes it too
      *  (`writeBackIndexedMutations` matches `get_value(&xs, &Value::Int(i))` and writes back at the same `Int` key). */
+    /** ral-62n: the boxed key text of a typed `String` / `Option<String>` local keying a borrowed index read. */
+    rust62nTypedStrKey(key: any): string | undefined {
+        const kind = this.rustScalarLocalOf(key)?.kind;
+        if (kind !== 'str' && kind !== 'ostr') return undefined;
+        return `Value::from(${super.printIdentifier(key)}${kind === 'str' ? '.as_str()' : '.as_deref()'})`;
+    }
+
     rustI64HelperKeyText(keyNode: any, read?: any): string | undefined {
         const key = this.rustSkipWrappers(keyNode);
         if (this.rustI64CounterOf(key) === undefined) return undefined;
@@ -18918,6 +18926,8 @@ export class RustTranspiler extends BaseTranspiler {
     // Built-in method call overrides
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
         const optList = this.printOptListIsArray(node); if (optList !== undefined) return optList;
+        // ral-62n: a typed `safeDict*` local held a `Value::Dict` or `Null`: `is_array` answered false for both
+        if (this.rust62nDictArrayTests.has(node)) return 'Value::Bool(false)';
         return `Value::Bool(${this.nativeValuePredicateText('array', node?.arguments?.[0], parsedArg) ?? `is_array(&${parsedArg})`})`;
     }
 
@@ -21526,6 +21536,10 @@ export class RustTranspiler extends BaseTranspiler {
             && this.rustContainerInitNeverNull(init, from === 'list' ? 'list' : 'map') && this.rustBaseCallNamed(init, RustTranspiler.RUST_NEVER_NULL_TEST_READERS)
             && this.rustEmptyContainerLiteral(init.arguments[init.arguments.length - 1], from);
         const neverNullTests: any[] = [];
+        // ral-62n: `Array.isArray (x)` of a base `safeDict*` result (a map or Null on every path, never a list)
+        const dictArrayTests: any[] = [];
+        const dictReaderInit = !nilDeclared && from === 'dict' && init !== undefined && this.rustBaseCallNamed(init, RustTranspiler.RUST_62N_DICT_READERS)
+            && this.rust62nMapOrNullDefault(init);
         const accept = (n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
@@ -21538,6 +21552,7 @@ export class RustTranspiler extends BaseTranspiler {
                 nullTests++;
                 return true;
             }
+            if (dictReaderInit && isCallExpression(up) && up.arguments.length === 1 && up.arguments[0] === n && this.rustIsArrayIsArrayCallee(up)) return dictArrayTests.push(up) > 0;
             // ral-54f: `[ a, y ] = this.m (..)` rewriting a shared-map alias at a slot the venue callee declares a bare `Dict`
             // (bitget pro `getInstType`: `[Str, Dict]`), its line within the budget: the slot read is taken back with `.into_dict()`
             if (sbAlias && this.rustNilSlotWrite(n) && this.rustDictSlotOfWrite(n) && this.rustDestrBoxLineOk(n)) { this.rustSbAliasSlotWrites.add(n); return ++sbMapWrites > 0; }
@@ -21732,6 +21747,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a fresh built container handed on whole (D11): every use is a box, the declaration converts once
         // ral-60n: a rewritten local may hold Null after all: its tests count as real null tests again (the optional form decides)
         if (neverNullTests.length > 0 && writes > 0) nullTests += neverNullTests.length;
+        // ral-62n: a rewritten local may hold another kind: its list test is a real test again
+        if (dictArrayTests.length > 0 && writes > 0) return undefined;
         const constTests = writes === 0 ? neverNullTests : [];
         const builtBoxOnly = reads === 0 && boxedElementUses.length > 0 && nullTests === 0 && writes === 0 && init !== undefined && isCallExpression(init) && (this.rustBuiltReturnSourceKind(init) !== undefined
             || (paramsBoxes === boxedElementUses.length && this.rustOmitOfDict(init))
@@ -21830,6 +21847,7 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustOptContainerLocals.add(declaration);
         }
         for (const t of constTests) this.rustNeverNullTests.set(t, declaration);
+        for (const t of dictArrayTests) this.rust62nDictArrayTests.add(t);
         for (const n of boxedElementUses) this.rustDictElementBoxes.set(n, this.rustLocalLastUse(n, declaration) || (n.parent?.kind === SyntaxKind.ConditionalExpression && this.rustOwnedLastUse(n, declaration)) ? 'move' : 'share');
         if (extendReuse || neverNullRewrites) this.rustExtendReuseLocals.add(declaration);
         for (const w of reuseProducerWrites) this.rustReuseProducerWrites.add(w);
@@ -21845,6 +21863,17 @@ export class RustTranspiler extends BaseTranspiler {
     // rewritten): the reader answers a `Value::Arr` / `Value::Dict` on every path (the read when it is that container, else
     // the default), so the boxed `x != Value::Null` was always true and `x == Value::Null` always false. Truth table in the
     // jest test 'ral-60n ... truth table'. The test prints that constant; the local keeps the plain container form.
+    // ral-62n: base readers whose body answers a map (`isDictionary`) or the default: no list on any path without a list default
+    static readonly RUST_62N_DICT_READERS = new Set([ 'safeDict', 'safeDict2', 'safeDictN' ]);
+    private rust62nDictArrayTests = new WeakSet<any>();
+
+    /** ral-62n: the reader's default (after its key arguments) is absent, `undefined` or an object literal: a map default. */
+    rust62nMapOrNullDefault(call: any): boolean {
+        const keys = String(call.expression.name.text) === 'safeDict2' ? 3 : 2;
+        if (call.arguments.length > keys + 1) return false;
+        const dflt: any = call.arguments.length > keys ? this.rustSkipWrappers(call.arguments[keys]) : undefined;
+        return dflt === undefined || this.literalKindOfNode(dflt) === 'null' || isObjectLiteralExpression(dflt);
+    }
     static readonly RUST_NEVER_NULL_TEST_READERS = new Set([ 'safeList', 'safeList2', 'safeListN', 'safeDict', 'safeDict2', 'safeDictN' ]);
     private rustNeverNullTests = new WeakMap<any, any>();
 
@@ -22023,6 +22052,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-53e (merged into ral-52e's rustListIndexIntKey): an int / Option<i64> local boxed at this key keys the read as the Value local did
         if (this.rustListIndexIntKey(key)) return true;
         const keyScalar = this.rustScalarLocalOf(key);
+        // ral-62n: a typed string key re-boxes at the read as the very `Str` / `Null` its Value local held (`Value::from`)
+        if (keyScalar !== undefined && (keyScalar.kind === 'str' || keyScalar.kind === 'ostr') && keyDecl.initializer !== undefined && this.rustOwnKeysElementKey(n, key)) return true;
         return keyScalar === undefined && this.rustNilLocalKind(keyDecl) === undefined && !this.rustWsUrlLocal(keyDecl)
             && this.rustBorrowedLocalKind(keyDecl) === undefined && !this.rustLentListLocal(keyDecl);
     }
@@ -23257,7 +23288,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (d === undefined || d === recv || d.name === recv || !(isVariableDeclaration(d) || d.kind === SyntaxKind.Parameter)) return false;
         // JS stores a reference: only at the stored local's last use can no later write to it show through `m`
         const own: any = this.rustDeclarationOfIdentifier(n);
-        return own !== undefined && own !== n && own.name !== n && this.rustLocalLastUse(n, own);
+        if (own === undefined || own === n || own.name === n) return false;
+        if (this.rustLocalLastUse(n, own)) return true;
+        // ral-62n: or the last use on its path: a then-branch store whose later uses all sit in that if's else branch
+        const guard: any = findAncestor(n, (a: any) => a.kind === SyntaxKind.IfStatement || isFunctionLike(a));
+        return castRecv && guard !== undefined && guard.kind === SyntaxKind.IfStatement && this.rustGuardedBranchLastUse(n, own, guard);
     }
 
     // ── rustOptReaderBoxUse: a nullable base `safeDict*` read handed on whole ──
@@ -23275,6 +23310,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (isAsExpression(up) && up.expression === n && isReturnStatement(up.parent)) return true;
         // qe: pushed / stored whole into a local container: `None` boxes to exactly the `Null` the reader answered
         if (this.rustLocalStoreHandOff(n)) return true;
+        // ral-62n: an element of an array literal read as a value (a reader default `[ x ]`, `[ x ]` handed on): the
+        // element boxes to the very `Dict` / `Null` the reader answered
+        if (isArrayLiteralExpression(up) && this.rust62nListLiteralSink(up)) return true;
         // ral-55h: a handler argument of a by-name dispatch `method.call (this, .., x)` (an `any` handle routed to
         // `dispatch_ws_handler(&method, &[..])`): the slice takes `Value`s, so `None` boxes to the `Null` the reader answered
         if (this.rustWsDispatchCallArg(n)) return true;
@@ -23284,6 +23322,22 @@ export class RustTranspiler extends BaseTranspiler {
         const at = Array.from(up.arguments).indexOf(n);
         return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && !this.rustLentHelperSlot(up, n, 'dict') && this.rustNilBoxSlotOk(up, at);
     }
+
+    /** ral-62n: the array literal is the default argument of a base `safeList*` reader, or the whole right side of a
+     *  `x = [..]` / `m[k] = [..]` statement (written into a place, not handed to a call's `Value` slot). */
+    rust62nListLiteralSink(list: any): boolean {
+        let top: any = list;
+        while (isParenthesizedExpression(top.parent) || isAsExpression(top.parent)) top = top.parent;
+        const up: any = top.parent;
+        if (isBinaryExpression(up) && up.right === top && up.operatorToken.kind === SyntaxKind.EqualsToken) return up.parent?.kind === SyntaxKind.ExpressionStatement;
+        if (!isCallExpression(up) || up.arguments.length === 0 || up.arguments[up.arguments.length - 1] !== top) return false;
+        if (!this.rustBaseCallNamed(up, RustTranspiler.RUST_62N_LIST_READERS)) return false;
+        const callee: any = up.expression;
+        const keys = String(callee.name.text) === 'safeList2' ? 3 : 2;
+        return up.arguments.length === keys + 1;
+    }
+
+    static readonly RUST_62N_LIST_READERS = new Set([ 'safeList', 'safeList2', 'safeListN' ]);
 
     /** ral-55h: `n` is a handler argument (not the `this` receiver slot) of `h.call (this, ..)` on an identifier `h` typed
      *  `any` (the by-name ws dispatch the ccxt build turns into `self.dispatch_ws_handler(&h, &[..])`). */

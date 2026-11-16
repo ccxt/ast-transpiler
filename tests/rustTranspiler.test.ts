@@ -21021,3 +21021,153 @@ describe('ral-62k: the last key of a nested write on a plain local lends its box
         expect(out).toMatch(/let mut networkCode: Value = /);
     });
 });
+
+describe('ral-62n: an Object.keys element string key compared to a base reader and keying its own map read', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    inArray (a: any, b: any): boolean { return true; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-62n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table. The key held a `Value` element of `Object.keys (m)`: always `Str` (a map key), `Null` only past the end.
+    // (1) map read: boxed `KeyRead::read(&&m, &code)` vs typed `KeyRead::read(&&m, &Value::from(code.as_deref()))`: the
+    //     re-boxed key is the very `Str` / `Null` the Value local held, so `get_map_value` answers the same entry.
+    // (2) compare against a base reader (Value Null / Str / Int / Float): boxed `r.as_str() == code.as_str()` vs typed
+    //     `code.as_deref() == r.as_str()`. No number is compared or converted: an Int / Float reader is `None` on both forms.
+    type V = { t: 'Null' | 'Str' | 'Int' | 'Float', v?: any };
+    const asStr = (x: V) => x.t === 'Str' ? x.v : null;
+    const box = (k: string | null): V => k === null ? { t: 'Null' } : { t: 'Str', v: k };
+    const keys: (string | null)[] = [ 'BTC', '1', '', null ];
+    const readers: V[] = [ { t: 'Null' }, { t: 'Str', v: 'BTC' }, { t: 'Str', v: '1' }, { t: 'Int', v: 1 }, { t: 'Float', v: 1.0 }, { t: 'Str', v: '' } ];
+    const map: Record<string, any> = { 'BTC': 'x', '1': 'y', '': 'z' };
+    test('truth table: the typed key reads and compares exactly as its box did', () => {
+        for (const k of keys) {
+            const boxed = box(k);
+            const typedReBox = k === null ? { t: 'Null' } : { t: 'Str', v: k };
+            const readOld = boxed.t === 'Str' && boxed.v in map ? map[boxed.v] : null;
+            const readNew = typedReBox.t === 'Str' && (typedReBox as any).v in map ? map[(typedReBox as any).v] : null;
+            expect(readNew).toEqual(readOld);
+            for (const r of readers) expect(k === asStr(r)).toEqual(asStr(boxed) === asStr(r));
+        }
+    });
+    const body = "    d (data: any, fees: any, codes: any = undefined): any {\n        const result: Dict = {};\n        const currenciesData = this.safeDict (data, 'a', {});\n        const keys = Object.keys (currenciesData);\n        for (let i = 0; i < keys.length; i++) {\n            const code = keys[i];\n            const currency = currenciesData[code];\n            if (currency === undefined) {\n                continue;\n            }\n            if (codes !== undefined && !this.inArray (code, codes)) {\n                continue;\n            }\n            if (this.safeString (fees, 'ticker') === code) {\n                result[code] = currency;\n            }\n        }\n        return result;\n    }\n";
+    test('whitebit fetchFundingLimits: code is Option<String>, the map stays Dict and its read takes the re-boxed key', () => {
+        const out = run(body);
+        expect(out).toMatch(/let mut code: Option<String> = /);
+        expect(out).not.toMatch(/let mut currenciesData: Value = /);
+        expect(out).toContain('crate::value::KeyRead::read(&&currenciesData, &Value::from(code.as_deref()))');
+        expect(out).toContain('(code.as_deref() == self.');
+    });
+    test('guard: a key read off a map PARAMETER (no own Object.keys list) keeps the old decision', () => {
+        const out = run("    d (data: Dict, fees: Dict): any {\n        const keys = Object.keys (data);\n        for (let i = 0; i < keys.length; i++) {\n            const code = keys[i];\n            const entry = data[code];\n            if (this.safeString (fees, 'ticker') === code) {\n                return entry;\n            }\n        }\n        return undefined;\n    }\n");
+        expect(out).not.toContain('Value::from(code.as_deref())');
+    });
+});
+
+describe('ral-62n: Array.isArray of a never-rewritten base safeDict result is false and the local holds Option<Dict>', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; }\nexport interface Order { id: Str; }\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-62n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Market, Order } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseOrder (order: Dict, market: Market = undefined): Order {\n        return { 'id': this.safeString (order, 'id') } as Order;\n    }\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table. The base `safeDict (o, k)` body answers the read value only when `isDictionary` holds, else the default
+    // (absent / undefined / a map literal): the boxed local held Dict or Null on every path. The runtime `is_array` (the
+    // `matches!(&x, Value::Arr(_))` the boxed test printed) answers true only for `Value::Arr`, so for every held value the
+    // old test was false, the very constant the new print gives. Read rows: Null, Str, Int, Float, Bool, Arr, Dict.
+    const safeDict = (read: string) => read === 'Dict' ? 'Dict' : 'Null';
+    const isArray = (held: string) => held === 'Arr';
+    test('truth table: every held value of a safeDict result answers is_array false', () => {
+        for (const read of [ 'Null', 'Str', 'Int', 'Float', 'Bool', 'Arr', 'Dict' ]) expect(isArray(safeDict(read))).toBe(false);
+    });
+    test('bitget fetchOrder: data is Option<Dict>, the list test prints false and the map is lent to parseOrder', () => {
+        const out = run("    fetchOrder (response: any, market: Market = undefined): Order {\n        const data = this.safeDict (response, 'data');\n        if ((data !== undefined)) {\n            if (!Array.isArray (data)) {\n                return this.parseOrder (data, market);\n            }\n        }\n        return undefined;\n    }\n");
+        expect(out).toContain('let mut data: Option<crate::value::Dict> = ');
+        expect(out).toContain('if !(false) {');
+        expect(out).toContain('self.parseOrder(&data, ');
+    });
+    test('guard: a rewritten local keeps the box and the real test', () => {
+        const out = run("    fetchOrder (response: any, other: any, market: Market = undefined): Order {\n        let data = this.safeDict (response, 'data');\n        data = other;\n        if (!Array.isArray (data)) {\n            return this.parseOrder (data, market);\n        }\n        return undefined;\n    }\n");
+        expect(out).not.toContain('if !(false) {');
+    });
+    test('guard: a list default is not a map-or-Null reader', () => {
+        const out = run("    fetchOrder (response: any, market: Market = undefined): Order {\n        const data = this.safeDict (response, 'data', [] as any);\n        if (!Array.isArray (data)) {\n            return this.parseOrder (data, market);\n        }\n        return undefined;\n    }\n");
+        expect(out).not.toContain('if !(false) {');
+    });
+});
+
+describe('ral-62n: an optional safeList stored whole in both branches of an if / else (each store the last use on its path)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-62n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table. The held value is a List or Null (no default). Each store boxes it back with map_or(Value::Null, Value::Arr):
+    // Null -> Null, [] -> Arr([]), [1, 'a'] -> Arr([1, 'a']), the very Value the boxed local stored; is_some() equals `!= Null`.
+    // The then-branch store copies (an Arc bump, as the boxed `.clone()` did); the else-branch store is the last use on its path and moves.
+    const rebox = (h: any[] | null) => h === null ? null : h;
+    test('truth table: the reboxed store and the null test agree with the boxed local', () => {
+        for (const h of [ null, [], [ 1, 'a' ] ]) { expect(rebox(h)).toEqual(h); expect(h !== null).toBe(h !== null); }
+    });
+    const weex = "    cancelOrders (ids: any, params: any, isSpot: boolean): any {\n        const request: Dict = {};\n        const clientOrderIds = this.safeList (params, 'clientOrderIds');\n        if (clientOrderIds !== undefined) {\n            if (isSpot) {\n                request['origClientOrderIds'] = clientOrderIds;\n            } else {\n                request['origClientOrderIdList'] = clientOrderIds;\n            }\n        } else if (ids !== undefined) {\n            request['orderIds'] = ids;\n        }\n        return request;\n    }\n";
+    test('weex cancelOrders: clientOrderIds is Option<List>; the then store copies, the else store moves', () => {
+        const out = run(weex);
+        expect(out).toContain('let mut clientOrderIds: Option<crate::value::List> = ');
+        expect(out).toContain('request.insert("origClientOrderIds".into(), clientOrderIds.clone().map_or(Value::Null, Value::Arr));');
+        expect(out).toContain('request.insert("origClientOrderIdList".into(), clientOrderIds.map_or(Value::Null, Value::Arr));');
+    });
+    test('guard: a read after the if keeps the box', () => {
+        const out = run(weex.replace('        return request;\n', '        request[\'again\'] = clientOrderIds;\n        return request;\n'));
+        expect(out).not.toContain('let mut clientOrderIds: Option<crate::value::List> = ');
+    });
+});
+
+describe('ral-62n: an optional base safeDict result as an element of an array literal (reader default / list handed on)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-62n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table. The held value is Dict or Null (no default). The element prints `x.map_or(Value::Null, Value::Dict)`:
+    // Null -> Null, {} -> Dict({}), {'a': 1} -> Dict({'a': 1}), the very Value the boxed local put in the list; the null test
+    // is_some() equals `!= Null`. Nothing is compared as a number.
+    const rebox = (h: Record<string, any> | null) => h === null ? null : h;
+    test('truth table: the reboxed element equals the boxed one', () => {
+        for (const h of [ null, {}, { 'a': 1 } ]) expect(rebox(h)).toEqual(h);
+    });
+    test('lbank handleTrades: rawTrade is Option<Dict> and the reader default boxes it back', () => {
+        const out = run("    handleTrades (client: any, message: any): any {\n        const rawTrade = this.safeDict (message, 'trade');\n        if (rawTrade !== undefined && client === 1) {\n            return undefined;\n        }\n        const rawTrades: Dict[] = this.safeList (message, 'trades', [ rawTrade ]);\n        return rawTrades;\n    }\n");
+        expect(out).toContain('let mut rawTrade: Option<crate::value::Dict> = ');
+        expect(out).toContain('Value::from(vec![rawTrade.map_or(Value::Null, Value::Dict)])');
+    });
+    test('guard: a destructuring target `[ x ] = ..` is not a read', () => {
+        const out = run("    f (message: any, other: any): any {\n        let rawTrade = this.safeDict (message, 'trade');\n        [ rawTrade ] = other;\n        return rawTrade;\n    }\n");
+        expect(out).not.toContain('let mut rawTrade: Option<crate::value::Dict> = ');
+    });
+});
