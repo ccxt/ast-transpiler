@@ -20181,3 +20181,28 @@ describe('ral-58w: a subscription field read only under its own `this.safeBool (
         expect(emit ("        this.handleUnSubscription (client, subscription);\n")).toContain('let mut trades: Value = ');
     });
 });
+
+describe('ral-59p: an Object.keys element used as the key of a delete statement', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    tickers: Dict = {};\n    parsePosition (o: any): Dict { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('a key list element read by key and deleted (kucoin pro handlePosition) is an Option<String> key', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-59p-delete-key', "    m (data: any) {\n        const p: Dict = this.parsePosition (data);\n        const keys = Object.keys (p);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            if (p[key] === undefined) {\n                delete p[key];\n            }\n        }\n        return this.keep (p);\n    }\n")).content;
+        expect(out).toContain('let mut key: Option<String> = keys.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
+        expect(out).toContain('remove(&mut p, &Value::from(key.as_deref()));');
+    });
+    test('a field delete borrows the key beside the receiver', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-59p-delete-field', "    m () {\n        const symbols = Object.keys (this.tickers);\n        for (let i = 0; i < symbols.length; i++) {\n            const s = symbols[i];\n            delete this.tickers[s];\n        }\n    }\n")).content;
+        expect(out).toContain('let mut s: Option<String> = ');
+        expect(out).toContain('if let (Value::Dict(__d), Some(__k)) = (&mut self.tickers, s.as_deref()) { std::sync::Arc::make_mut(__d).shift_remove(__k); }');
+    });
+    test('negative: a delete key also boxed into an in test stays Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-59p-delete-inbox', "    m (seen: any, o: Dict) {\n        const keys = Object.keys (o);\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            if (!(key in seen)) {\n                delete o[key];\n            }\n        }\n        return this.keep (o);\n    }\n")).content;
+        expect(out).toContain('let mut key: Value = ');
+    });
+});

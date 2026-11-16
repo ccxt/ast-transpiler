@@ -4998,7 +4998,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' ? !this.rustErrMsgMoves(n, declaration) : !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
             return form !== undefined;
         });
@@ -5026,7 +5026,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (anyLength && typedUses === 0) return undefined;
         // ral-54x K1: a cased reader `String` with no native use would only be boxed straight back (boxed-straight-back stays `Value`)
         if (nativeUses === 0 && kind === 'str' && this.rustReaderCaseStrRecv(this.unwrapParens(declaration.initializer)) !== undefined) return undefined;
-        if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration)) return undefined;
+        if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration) || this.rust59pDeleteKeyInboxed(declaration)) return undefined;
         // of: a string compared against another local must not copy at a box where the `Value` was lent
         // (a call argument already copied the `Value`; an `in` key or other borrowed slot did not)
         if (strKind && this.rustScalarHasPairEquality(declaration) && this.rustScalarBorrowedBox(declaration)) return undefined;
@@ -7886,6 +7886,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-43c: a string key into an unproven `any` receiver reads through `get_value`, whose key is `impl ValueKey`
         if ((kind === 'str' || kind === 'ostr') && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && this.rustAnyGetValueKeyUse(n)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
+        // ral-59p: the key of a statement `delete X[k]` (ws cache / client-handle deletes took their own forms above)
+        if ((kind === 'str' || kind === 'ostr') && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && this.rust59pDeleteKeyUse(n)) return 'dkey';
         // qf: the key of any other `k in obj` test boxes once (`in_op` reads a `Str` key or misses on `Null`, as the `Value` local did)
         // td: also through a `(k as string)` cast of the key (the cast prints nothing)
         if ((kind === 'str' || kind === 'ostr') && this.rustInKeyTop(n) !== undefined && !this.rustTestTierSource(n)
@@ -8702,6 +8704,31 @@ export class RustTranspiler extends BaseTranspiler {
         // only a call argument (`this.extend (m[k], ..)`): a bind (`const e = m[k]`) or a receiver (`m[k].push`) is read by ccxt's write-back pass
         if (!isCallExpression(up) || up.expression === top || !up.arguments.some((a: any) => a === top)) return false;
         return this.rustDictLocalProof(access.expression) === 'plain';
+    }
+
+    /** ral-59p: `n` is the whole key of `delete X[n]` as an expression statement. The delete prints the key either into
+     *  provenDictFieldDelete's native `shift_remove` (borrowing the `&str`: a `None` key removes nothing, as the `Null` key
+     *  matched no `Value::Str` arm) or into the `remove` helper as `&Value::from(..)` (the `Str` / `Null` the box held). */
+    rust59pDeleteKeyUse(n: any): boolean {
+        const access: any = n?.parent;
+        if (access === undefined || !isElementAccessExpression(access) || access.argumentExpression !== n) return false;
+        const del: any = access.parent;
+        return del !== undefined && isDeleteExpression(del) && del.expression === access && del.parent?.kind === SyntaxKind.ExpressionStatement;
+    }
+
+    /** ral-59p: a local typed for a `delete` key (`dkey`) that is also an `in` key boxed into `in_op` (`inbox`) stays `Value`:
+     *  its `Value` print took the borrowed `in` test, the typed one would box into the helper. */
+    rust59pDeleteKeyInboxed(declaration: any): boolean {
+        if (!isIdentifier(declaration.name)) return false;
+        let dkey = false;
+        let inbox = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            const form = this.rustScalarUseForms.get(n);
+            if (form === 'dkey') dkey = true;
+            if (form === 'inbox') inbox = true;
+            return true;
+        });
+        return dkey && inbox;
     }
 
     /** `m[k] = v` as a statement: the element key of a native insert. */
@@ -9571,6 +9598,8 @@ export class RustTranspiler extends BaseTranspiler {
         // vg: a borrowed element lends at every box (`From<Option<&str>>`: `None` is Null, `Some(s)` the `Str` the box held)
         if (local?.kind === 'ostr' && this.rustBorrowedStrElems.has(local.declaration) && (form === 'key' || form === 'inbox' || form === 'box' || form === 'xbox' || (form === 'parg' && this.rustInArrayNeedle(node)))) return `Value::from(${super.printIdentifier(node)}.as_deref())`;
         if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}${this.rustLocalLastUse(node, local.declaration) ? '' : '.clone()'}.map(Value::from).unwrap_or(Value::Null)`;
+        // ral-59p: a delete key the native `shift_remove` did not take boxes by reference into `remove` (no copy)
+        if (form === 'dkey') return local.kind === 'ostr' ? `Value::from(${super.printIdentifier(node)}.as_deref())` : `Value::from(${super.printIdentifier(node)}.as_str())`;
         if (form === 'cond' && local.kind === 'obool') return `(${super.printIdentifier(node)} == Some(true))`;
         if (form === 'concat' && local.kind === 'ostr') return `${super.printIdentifier(node)}.as_deref().unwrap_or("null")`;
         if (form === 'targ' && (local.kind === 'str' || local.kind === 'ostr') && this.rustWsKeyUse(node)) return this.rustWsKeyText(node);
@@ -30755,12 +30784,31 @@ export class RustTranspiler extends BaseTranspiler {
         if (literal !== undefined) {
             return `if let Value::Dict(__d) = &mut ${recv} { std::sync::Arc::make_mut(__d).shift_remove(${literal}); }`;
         }
+        // ral-59p: a string local key (`dkey` form) borrows its `&str` beside the receiver: decided on the key node (a
+        // local of its own, never the receiver) and the same `shift_remove` the `Value::Str` arm ran (`None` = the `Null` miss)
+        const dkey = this.rust59pDeleteKeyText(keyNode);
+        let root: any = base;
+        while (root !== undefined && (isPropertyAccessExpression(root) || isElementAccessExpression(root) || isParenthesizedExpression(root))) root = root.expression;
+        // the key is a local of its own: never the receiver's root binding (`&mut` and the key borrow would alias)
+        if (dkey !== undefined && !(isIdentifier(root) && this.rustDeclaredNode(root) === this.rustDeclaredNode(keyNode))) {
+            const borrowed = `if let (Value::Dict(__d), Some(__k)) = (&mut ${recv}, ${dkey}) { std::sync::Arc::make_mut(__d).shift_remove(__k); }`;
+            return borrowed.length > 380 ? undefined : borrowed;
+        }
         const keyExpr = this.printNode(keyNode, 0).trim();
         if (!this.rustDeleteKeyBorrowable(keyExpr, recv)) {
             return undefined;
         }
         const emitted = `if let (Value::Dict(__d), Value::Str(__k)) = (&mut ${recv}, &${keyExpr}) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }`;
         return emitted.length > 380 ? undefined : emitted; // keep the line under the long400 budget
+    }
+
+    /** ral-59p: the borrowed `Option<&str>` text of a `dkey` string local key, else undefined. */
+    rust59pDeleteKeyText(keyNode: any): string | undefined {
+        if (keyNode === undefined || !isIdentifier(keyNode) || this.rustScalarUseForms.get(keyNode) !== 'dkey') return undefined;
+        const kind = this.rustScalarLocalOf(keyNode)?.kind;
+        if (kind !== 'str' && kind !== 'ostr') return undefined;
+        const name = super.printIdentifier(keyNode);
+        return kind === 'str' ? `Some(${name}.as_str())` : `${name}.as_deref()`;
     }
 
     /** A key the native `if let` can borrow beside `&mut RECV`: one expression
