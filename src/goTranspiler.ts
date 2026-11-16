@@ -18823,38 +18823,27 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     }
 
+    // the custom binary-expression arms in order; the first one that prints the node wins
     printCustomBinaryExpressionIfAny(node, identation) {
+        const arms = [this.goSafeDictRebind, this.goDestructuringAssignment, this.goElementWriteAssignment,
+            (n, i) => ((n.left.kind === SyntaxKind.TypeOfExpression) ? (this.handleTypeOfInsideBinaryExpression(n, i) || undefined) : undefined),
+            this.goCacheDuplicateNilTest, this.goInOperator, this.goHelperBinaryExpression];
+        for (const arm of arms) {
+            const text = arm.call(this, node, identation);
+            if (text !== undefined) {
+                return text;
+            }
+        }
+        return undefined;
+    }
+
+    // `[a, b] = foo()` binds a synthetic local, then reads each slot out of it
+    goDestructuringAssignment(node, identation): string | undefined {
         const left = node.left;
         const right = node.right;
-
         const op = node.operatorToken.kind;
-
-        const goMapLocalRebind = this.goSafeDictRebind(node, identation);
-        if (goMapLocalRebind !== undefined) {
-            return goMapLocalRebind;
-        }
-
-        // ---------------------------------------------------------------
-        // Array destructuring assignment:  [a, b] = foo()
-        // Transforms into:
-        // __tmpX := foo()
-        // a = GetValue(__tmpX, 0)
-        // b = GetValue(__tmpX, 1)
-        // ---------------------------------------------------------------
         if (op === SyntaxKind.EqualsToken &&
             left.kind === SyntaxKind.ArrayLiteralExpression) {
-            // const elems = (left.elements as any[]);
-            // const returnRandName = "retRes" + this.getLineBasedSuffix(node);
-            // const rhs   = this.printNode(right, 0);
-
-            // // build extraction lines
-            // const assignments = elems.map((el, idx) => {
-            //     const leftName = this.printNode(el, 0);
-            //     return `${leftName} = GetValue(${returnRandName}, ${idx})`;
-            // }).join(`\n${this.getIden(identation)}`);
-
-            // return `${returnRandName} := ${rhs}\n${this.getIden(identation)}${assignments}`;
-            //
             const arrayBindingPatternElements = left.elements;
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
@@ -18880,10 +18869,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
             return arrayBindingStatement;
         }
+        return undefined;
+    }
 
-        // ---------------------------------------------------------------
-        // Go-style setter for element-access assignments:  a[b] = v  and  a[b] += v
-        // ---------------------------------------------------------------
+    // Go-style setter for element-access assignments:  a[b] = v  and  a[b] += v
+    goElementWriteAssignment(node, identation): string | undefined {
+        const left = node.left;
+        const right = node.right;
+        const op = node.operatorToken.kind;
         if ((op === SyntaxKind.EqualsToken || op === SyntaxKind.PlusEqualsToken) &&
             left.kind === SyntaxKind.ElementAccessExpression) {
             // Collect base container and all keys (inner-most key is last).
@@ -18959,19 +18952,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             return (native !== undefined) ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
+        return undefined;
+    }
 
-        if (left.kind === SyntaxKind.TypeOfExpression) {
-            const typeOfExpression = this.handleTypeOfInsideBinaryExpression(node, identation);
-            if (typeOfExpression) {
-                return typeOfExpression;
-            }
-        }
-
-        const cacheDup = this.goCacheDuplicateNilTest(node);
-        if (cacheDup !== undefined) {
-            return cacheDup;
-        }
-
+    // `k in d`
+    goInOperator(node, identation): string | undefined {
+        const left = node.left;
+        const right = node.right;
+        const op = node.operatorToken.kind;
         if (op === SyntaxKind.InKeyword) {
             const substituted = this.goInOpSubstitutedText(node);
             if (substituted !== undefined) {
@@ -18986,7 +18974,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // a ws cache holds no nil value, so membership is a non-nil entry
             return this.goWsCacheHasText(this.goUnwrapParenthesizedNode(right), left) ?? `InOp(${dictText}, ${keyText})`;
         }
+        return undefined;
+    }
 
+    // compound assignments and the operators printed through a two-argument helper
+    goHelperBinaryExpression(node, identation): string | undefined {
+        const left = node.left;
+        const right = node.right;
+        const op = node.operatorToken.kind;
         // only print the operands when this op is actually handled here; otherwise
         // the base printBinaryExpression prints them, and doing it eagerly means
         // every unhandled binary expression gets its subtrees printed twice
@@ -19036,19 +19031,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             return `${open}${leftText}, ${rightText}${close}`;
         }
-
-        // x = y
-        // cast y to x type when y is unknown
-        // if (op === SyntaxKind.EqualsToken) {
-        //     const leftType = this.getChecker().getTypeAtLocation(left);
-        //     const rightType = this.getChecker().getTypeAtLocation(right);
-
-        //     if (this.isAnyType(rightType.flags) && !this.isAnyType(leftType.flags)) {
-        //         // const parsedType = this.getTypeFromRawType(leftType);
-        //         return `${leftText} = ${rightText}`;
-        //     }
-        // }
-
         return undefined;
     }
 
@@ -19986,7 +19968,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             return 'string';
         }
-        if (this.goIsUnifiedBoolParameter(fn.name.text, fn.parameters.indexOf(param))) {
+        const boolIndexes = Object.prototype.hasOwnProperty.call(this.unifiedBoolParams, fn.name.text) ? this.unifiedBoolParams[fn.name.text] : undefined;
+        if (Array.isArray(boolIndexes) && boolIndexes.includes(fn.parameters.indexOf(param))) {
             // the table types the base and every override together: a body that breaks it fails the build
             if ((this.goNativeParameterTypeCandidates(param)[0] !== 'bool')
                 || !this.goLocalIsSafeToType(fn.body, param, param.name.text, 'bool')) {
@@ -20131,11 +20114,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         };
         body.forEachChild(visit);
         return found;
-    }
-
-    goIsUnifiedBoolParameter(methodName: string, index: number): boolean {
-        const indexes = Object.prototype.hasOwnProperty.call(this.unifiedBoolParams, methodName) ? this.unifiedBoolParams[methodName] : undefined;
-        return Array.isArray(indexes) && indexes.includes(index);
     }
 
     goIsUnifiedStringParameter(methodName: string, index: number): boolean {
@@ -20967,11 +20945,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return (cls?.name?.kind === SyntaxKind.Identifier) ? cls.name.text : undefined;
     }
 
-    goIsPrivateKeyField(arg): boolean {
-        return (arg?.kind === SyntaxKind.PropertyAccessExpression) && (arg.expression?.kind === SyntaxKind.ThisKeyword)
-            && (arg.name?.text === 'privateKey');
-    }
-
     // the printed Go type of a call-site argument, or undefined when the printer
     // cannot name it (then the call site does not prove anything)
     goPrintedArgType(arg): string | undefined {
@@ -20981,7 +20954,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.goIsClientUrl(arg)) {
             return 'string'; // Client.url prints the string GetUrl()
         }
-        if (this.goIsPrivateKeyField(arg)) {
+        if ((arg?.kind === SyntaxKind.PropertyAccessExpression) && (arg.expression?.kind === SyntaxKind.ThisKeyword)
+            && (arg.name?.text === 'privateKey')) {
             return 'string'; // go/v4/exchange.go declares PrivateKey `string`
         }
         return this.goTypeOfInitializer(arg, this.printNode(arg, 0));
@@ -22131,13 +22105,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return `*${valueStr}`;
     }
 
-    // the receiver is the map of a safeDict read whose default is a never-nil map: no nil test needed
-    goMapLocalIsNeverNil(node): boolean {
-        const declaration: any = this.goDeclarationOfIdentifier(node);
-        const found: any = (declaration === undefined) ? undefined : this.goSafeDictCallArgs(declaration.initializer);
-        return (found !== undefined) && (found.fallback !== undefined) && (this.goSafeDictMapLocal(declaration) === GO_SAFE_DICT_LOCAL_TYPE);
-    }
-
     goNilableMapLocalStore(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, valueNode, identation: number): string | undefined {
         if ((valueNode === undefined) || !this.goNilableMapLocal(containerNode)
             || ((this.goElementAssignmentContainerType(containerNode, containerStr) !== undefined) && !this.goNilInitContainerLocal(containerNode))) {
@@ -22147,7 +22114,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (value === undefined) {
             return undefined;
         }
-        const guards: string[] = this.goMapLocalIsNeverNil(containerNode) ? [] : [ `${containerStr} != nil` ];
+        // the receiver is the map of a safeDict read whose default is a never-nil map: no nil test needed
+        const declaration: any = this.goDeclarationOfIdentifier(containerNode);
+        const found: any = (declaration === undefined) ? undefined : this.goSafeDictCallArgs(declaration.initializer);
+        const neverNil = (found !== undefined) && (found.fallback !== undefined) && (this.goSafeDictMapLocal(declaration) === GO_SAFE_DICT_LOCAL_TYPE);
+        const guards: string[] = neverNil ? [] : [ `${containerStr} != nil` ];
         let index: string;
         if (this.goIsStringKeyExpression(keyNode)) {
             index = keyStr;
@@ -22516,16 +22487,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     // `const book = this.safeDict (this.ohlcvs, symbol, {})`: the never-nil map of one symbol, declared `map[string]any`
-    goOhlcvsBookLocal(declaration): boolean {
-        return (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
-            && (this.goOhlcvsBookCall(declaration.initializer)?.withDefault === true)
-            && (this.goSafeDictMapLocal(declaration) === GO_SAFE_DICT_LOCAL_TYPE);
-    }
-
     goOhlcvsBookLocalOf(node): any {
         const inner: any = this.goUnwrapPrintedAssertions(node);
         const declaration: any = (inner?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(inner) : undefined;
-        return this.goOhlcvsBookLocal(declaration) ? declaration : undefined;
+        const isBook = (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
+            && (this.goOhlcvsBookCall(declaration.initializer)?.withDefault === true)
+            && (this.goSafeDictMapLocal(declaration) === GO_SAFE_DICT_LOCAL_TYPE);
+        return isBook ? declaration : undefined;
     }
 
     // a value stored into a book slot is a cache the field declares (ArrayCacheByTimestamp), which no scalar deref of the helper
@@ -23044,21 +23012,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // a Go `string` counts its bytes in both helpers (GetLength's reflect.String
         // case, GetArrayLength's `case string`), and neither helper's nil/`any` branch
         // is reachable for it; a *string / any box keeps the helper it prints today
-        if ((goType === 'string') || (this.goNativeLengthFieldType(printedText) !== undefined)) {
+        // a `this.<field>` read of a hand-written slice field counts too; any other field type
+        // (map / *sync.Map / interface{}) keeps the helper: GetArrayLength answers 0 for those
+        const field = /^this\.([A-Za-z_]\w*)$/.exec(this.goUnwrapPrintedParens(printedText));
+        if ((goType === 'string') || ((field !== null) && (this.GO_NATIVE_LENGTH_FIELDS.indexOf(field[1]) >= 0))) {
             return `len(${printedText})`;
         }
         return undefined;
-    }
-
-    // the hand-written struct type of a `this.<field>` read, for fields declared as a slice the
-    // length helpers count. Any other type (map / *sync.Map / interface{}) keeps the helper:
-    // GetArrayLength answers 0 for those, while len would answer the real count.
-    goNativeLengthFieldType(printedText: string): string | undefined {
-        const match = /^this\.([A-Za-z_]\w*)$/.exec(this.goUnwrapPrintedParens(printedText));
-        if (match === null || this.GO_NATIVE_LENGTH_FIELDS.indexOf(match[1]) < 0) {
-            return undefined;
-        }
-        return '[]string';
     }
 
     // true when the `.length` sits inside a `-`, `*`, `/` or `%` chain. The ccxt-side classifier
