@@ -13301,7 +13301,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustNonVirtualShims.has(sig.name)) return methodDef + body.slice(0, open) + preamble + body.slice(open);
         const nonVirtual = `${sig.name}_non_virtual`;
         this.rustSignatureTable.set({ shimOf: node }, { ...sig, name: nonVirtual });
-        const forward = `${body.slice(0, open)}${preamble}        self.${nonVirtual}(${sig.params.map(p => p.name).join(', ')})\n    }\n\n`;
+        // a typed shimmed slot returns the method's own type: the trait default falls back to the shim, so no Value round trip
+        const forward = sig.ret === 'typed'
+            ? `${body.slice(0, open)}\n        // virtual-dispatch (static: DerivedExchange::${sig.name}(self, ...))\n        crate::exchange::DerivedExchange::${sig.name}(self, ${sig.params.map(p => p.name).join(', ')})\n    }\n\n`
+            : `${body.slice(0, open)}${preamble}        self.${nonVirtual}(${sig.params.map(p => p.name).join(', ')})\n    }\n\n`;
         return methodDef + forward + methodDef.replace(`fn ${String(node.name.text)}(`, `fn ${nonVirtual}(`) + body;
     }
 

@@ -10356,8 +10356,10 @@ describe('rust by-name dispatch signature table', () => {
             + '    market (symbol: Str): Market { return this.markets[symbol]; }\n}\n');
         const out = virt.transpileRustByPath(file);
         expect(out.content).toContain('{ let __v = crate::exchange::DerivedExchange::parse_ticker(self, ticker.clone(), crate::runtime::get_arg(optional_args, 0, crate::Value::Null)); if !matches!(__v, crate::Value::Null) { return __v; } }');
-        expect(out.content).toContain('DerivedExchange::market(self, crate::Value::from(symbol)); if !matches!(__v, crate::Value::Null) { return Ok(crate::types::FromRaw::from_raw(__v)); } }');
-        expect(out.content).toContain('self.market_non_virtual(symbol.clone())');
+        // a typed shimmed slot forwards its own parameters and return, no Value round trip
+        expect(out.content).toContain('// virtual-dispatch (static: DerivedExchange::market(self, ...))\n        crate::exchange::DerivedExchange::market(self, symbol)\n    }');
+        expect(out.content).not.toContain('DerivedExchange::market(self, crate::Value::from(symbol))');
+        expect(out.content).not.toContain('self.market_non_virtual(symbol');
         expect(out.content).toContain('pub fn market_non_virtual(&self, symbol: &str) -> crate::Result<crate::types::Market>');
         expect((out.rustSignatures ?? []).map((s) => s.name)).toEqual([ 'parse_ticker', 'market', 'market_non_virtual' ]);
     });
