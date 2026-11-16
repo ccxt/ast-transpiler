@@ -7027,9 +7027,21 @@ export class RustTranspiler extends BaseTranspiler {
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
                 && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration) && !this.rustScalarCacheFieldCtor(n, write)
                 && !this.rustScalarSumOperandWrite(n, write) && !this.rust58kDictReaderKeyWrite(n, write) && !this.rust60kBaseCallArgDictWrite(n, write)
-                && !this.rust62pBaseCallArgKeyWrite(n, write)) return false;
+                && !this.rust62pBaseCallArgKeyWrite(n, write) && !this.rust64nTypedArgWrite(n, write, form)) return false;
         }
         return true;
+    }
+
+    /** ral-64n: a typed-signature argument (`targ`: printed `x.as_deref().unwrap_or_default()` / `x.as_deref()` / the Copy
+     *  payload, never a boxed operand) of the call that is the whole source of a write to a typed scalar local (bitflyer
+     *  `expiry = this.parseExpiryDate (expiryDate)` with `expiryDate` declared in two sibling blocks): the written local
+     *  prints its own conversion of the call's `Value`, so no build/ pass reads a boxed text of this argument there. */
+    rust64nTypedArgWrite(n: any, write: any, form: string | undefined): boolean {
+        if (form !== 'targ' || write.operatorToken?.kind !== SyntaxKind.EqualsToken) return false;
+        const target: any = this.unwrapParens(write.left);
+        const call: any = this.unwrapParens(write.right);
+        if (!isIdentifier(target) || !isCallExpression(call) || !call.arguments.some((a: any) => this.unwrapParens(a) === n)) return false;
+        return this.rustScalarLocalOf(target) !== undefined || this.rustNilLocalOfIdentifier(target) !== undefined;
     }
 
     /** ral-60k: a direct argument of a base-class `this.m (..)` call that is the whole source of a write to a local declared
@@ -10423,10 +10435,35 @@ export class RustTranspiler extends BaseTranspiler {
         const delim: any = this.unwrapParens(call.arguments[0]);
         const lit = this.rustNativeStringLiteralArg(delim);
         const sep = lit !== undefined && delim.text !== '' ? `"${lit}"` : (isIdentifier(delim) && this.rustScalarLocalOf(delim)?.kind === 'str' ? `${super.printIdentifier(delim)}.as_str()` : undefined);
+        // ral-64n: an `Option<String>` local delimiter read through `(d as string)`: the runtime splits only a `Str` by a `Str`
+        // (any `Null` side gives `[]`), so both sides are matched `Some` together and every other pair is the empty list
+        const optDelim = sep === undefined ? this.rust64nOptSplitDelim(call) : undefined;
+        if (optDelim !== undefined) {
+            const hay = recvKind === 'str' ? `Some(${super.printIdentifier(recv)}.as_str())` : `${super.printIdentifier(recv)}.as_deref()`;
+            return `Value::Array(if let (Some(__s), Some(__d)) = (${hay}, ${super.printIdentifier(optDelim)}.as_deref()) { __s.split(__d).map(Value::from).collect() } else { Vec::new() })`;
+        }
         if (sep === undefined) return undefined;
         const name = super.printIdentifier(recv);
         if (recvKind === 'str') return `Value::Array(${name}.split(${sep}).map(Value::from).collect())`;
         return `Value::Array(if let Some(__s) = ${name}.as_deref() { __s.split(${sep}).map(Value::from).collect() } else { Vec::new() })`;
+    }
+
+    /** ral-64n: the sole argument of `s.split(..)` when it is `(d as string)` (parentheses / a `string` assertion only) over an
+     *  `Option<String>` local `d`; a bare identifier keeps the old decision (no assertion, no new form). */
+    rust64nOptSplitDelim(call: any): any {
+        const arg: any = call?.arguments?.[0];
+        if (arg === undefined || call.arguments.length !== 1) return undefined;
+        const local: any = this.rustStrCastLocal(arg);
+        return local !== undefined && this.rustScalarLocalOf(local)?.kind === 'ostr' ? local : undefined;
+    }
+
+    /** ral-64n: `n` (through its parentheses / `as string`) is the delimiter `rust64nOptSplitDelim` prints from the local. */
+    rust64nOptSplitDelimUse(n: any): boolean {
+        let top: any = n;
+        while (isParenthesizedExpression(top.parent) || top.parent?.kind === SyntaxKind.AsExpression) top = top.parent;
+        const call: any = top.parent;
+        return isCallExpression(call) && call.expression !== top && call.arguments[0] === top && this.rust64nOptSplitDelim(call) === n
+            && this.rustStrLocalSplitText(call) !== undefined;
     }
 
     /** `s.slice(a)` / `s.slice(a, b)` on a typed string local with literal bounds (a non-negative end): the runtime's
@@ -12673,6 +12710,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (isParenthesizedExpression(parent) || parent.kind === SyntaxKind.AsExpression) {
             const outer = this.rustScalarUseForm(parent, kind);
+            // ral-64n: `(d as string)` as the delimiter of a native split of a string local
+            if (kind === 'ostr' && this.rust64nOptSplitDelimUse(n)) return 'native';
             return outer === 'box' || outer === 'xbox' || (outer === 'native' && (isParenthesizedExpression(parent) || this.rustCastSplitRecv(parent))) ? outer : undefined;
         }
         if (isBinaryExpression(parent)) {

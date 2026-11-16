@@ -22033,3 +22033,50 @@ describe('ral-64e: an own-keys element key whose bind is mutated only inside the
         expect(out).toContain('let mut key: Value = ');
     });
 });
+
+describe('ral-64n: bitflyer fetchMarkets: `s.split (d as string)` with an optional-string delimiter local, and a typed-signature argument feeding a write past a same-named sibling', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-64n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table of the split form. runtime split(&s, &d): Str/Str -> the parts, any other pair -> []. New form:
+    // `if let (Some(s), Some(d)) = (s.as_deref(), d.as_deref())` -> the parts, else []. For s, d in {None/Null, Some/Str}:
+    // (Null, Null) -> [] / [], (Null, 'x') -> [] / [], ('a_b', Null) -> [] / [], ('a_b', '_') -> ['a','b'] both.
+    // The typed-argument form: `parseExpiryDate (&str)` took `x.as_str().unwrap_or_default()` of the Value (Null -> "") and now
+    // takes `x.as_deref().unwrap_or_default()` of the Option<String> (None -> ""), the same text. Nothing is compared as a number.
+    const oldSplit = (s: string | null, d: string | null) => (typeof s === 'string' && typeof d === 'string') ? s.split(d) : [];
+    const newSplit = (s: string | null, d: string | null) => (s !== null && d !== null) ? s.split(d) : [];
+    test('truth table: the split and the typed argument agree with the boxed forms', () => {
+        for (const s of [ null, 'a_b', '' ]) for (const d of [ null, '_', 'x' ]) expect(newSplit(s, d)).toEqual(oldSplit(s, d));
+        for (const x of [ null, '', '11MAR2022' ]) expect(x ?? '').toBe(typeof x === 'string' ? x : '');
+    });
+    const split = "    f (market: any): any {\n        const id = this.safeString (market, 'p');\n        const c = this.safeString (market, 'a');\n        const s = (id as string).split (c as string);\n        return s;\n    }\n";
+    test('split by an optional-string local through `as string`: both locals are Option<String>', () => {
+        const out = run(split);
+        expect(out).toContain('let mut c: Option<String> = ');
+        expect(out).toContain('Value::Array(if let (Some(__s), Some(__d)) = (id.as_deref(), c.as_deref()) { __s.split(__d).map(Value::from).collect() } else { Vec::new() })');
+    });
+    test('guard: a bare (unasserted) delimiter keeps the old decision', () => {
+        const out = run(split.replace('(c as string)', 'c'));
+        expect(out).not.toContain('if let (Some(__s), Some(__d))');
+    });
+    const twin = "    parseExpiryDate (expiry: string): Int {\n        return expiry.length;\n    }\n    f (market: any, a: Str): any {\n        const id = this.safeString (market, 'p');\n        let expiry: Int = undefined;\n        if (a === undefined) {\n            const e = (id as string).slice (-9);\n            expiry = this.parseExpiryDate (e);\n        } else {\n            const e = this.safeString (market, 'q');\n            if (e === undefined) {\n                return undefined;\n            }\n            expiry = this.parseExpiryDate (e);\n        }\n        return expiry;\n    }\n";
+    test('same-named sibling consts, each a typed-signature argument of the write to a typed local: both Option<String>', () => {
+        const out = run(twin);
+        expect(out).toContain('let mut e: Option<String> = (if let Some(__s) = id.as_deref()');
+        expect(out).toContain('let mut e: Option<String> = self.safeString(');
+        expect(out).toContain('expiry = self.parseExpiryDate(e.as_deref().unwrap_or_default()).as_i64();');
+    });
+    test('guard: the write target is an untyped parameter: the sibling walk still refuses', () => {
+        const out = run(twin.replace('f (market: any, a: Str): any {', 'f (market: any, a: Str, expiry: any): any {').replace('        let expiry: Int = undefined;\n', ''));
+        expect(out).not.toContain('let mut e: Option<String> = self.safeString(');
+    });
+});
