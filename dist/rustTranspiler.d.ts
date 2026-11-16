@@ -962,6 +962,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  local: only uses bound to its own symbol are walked. Any other second binding keeps the plain walk. */
     rustBlockLocalUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean, scalar?: boolean, skipPropertyNames?: boolean): boolean;
     rustBindingUsesWalk(declaration: any, nodes: any[], own: any, home: any, skip: any[], skipPropertyNames: boolean, acceptUse: (n: any) => boolean, scalar: boolean): boolean;
+    /** ral-60k: a direct argument of a base-class `this.m (..)` call that is the whole source of a write to a local declared
+     *  `Dict` (kucoin fetchBalance `result = this.mergeBalanceAccount (result, currencyCode, ..)` in a sibling block): the
+     *  written local's type is its annotation and the argument boxes into the call, as the plain walk already prints it. */
+    rust60kBaseCallArgDictWrite(n: any, write: any): boolean;
     /** ral-58k: the key argument of a base `this.safeDict (src, k, dflt)` that is the whole source of a write to a local
      *  declared `Dict` (bitget pro handleBalance `account = this.safeDict (this.balance, code, account)`): the written local's
      *  type is its annotation, never this key's, and the reader takes the key as a boxed `Value` either way. */
@@ -1498,9 +1502,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-55x K1: every leaf of a `+` chain is a string literal or a `str` / `ostr` typed local, and at least one is a literal. */
     rustStrConcatOperandLeaves(node: any): boolean;
     private rust41bWsKeyMemo;
+    private rust60pWsKeyMemo;
+    /** ral-60p: `p` (`m[k]`) is a read (not a write target, not a delete operand) whose receiver is a plain identifier bound by a
+     *  `const` declared in the same function as the key's declaration `keyDecl`. */
+    rust60pLocalMapRead(p: any, keyDecl: any): boolean;
     /** 41b: a local some use of which is a ws subscription / future / cache key, a ws client call argument or a ws cache
      *  write key: those keep their `Value` (the new string-method forms never decide them). */
-    rust41bWsKeyLocal(node: any): boolean;
+    rust41bWsKeyLocal(node: any, localElemOk?: boolean): boolean;
     /** 41b: an argument (bound / needle / operand) of a string method its typed string local receiver prints natively. */
     rustStrMethodArgNative(n: any, kind: string): boolean;
     /** Native `String` text of a pad / slice over the `&str` `s`. */
@@ -3056,6 +3064,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    static readonly RUST_NEVER_NULL_TEST_READERS: Set<string>;
+    private rustNeverNullTests;
+    /** ral-60n: the reader's default is the empty literal of the local's kind (`[]` for a list, `{}` for a map). */
+    rustEmptyContainerLiteral(node: any, from: string): boolean;
+    /** `true` / `false` for a null test the never-null rule recorded on a local that kept its plain container form. */
+    printNeverNullContainerTest(left: any, op: any): string | undefined;
     rustOptAliasSourceKind(rhs: any, fn: any): 'dict' | 'list' | undefined;
     /** The source side: `t = n` (statement) whose target `t` holds the optional form of n's kind through rustOptAliasSourceKind. */
     rustOptAliasTargetUse(n: any, declaration: any, fn: any): boolean;
@@ -3087,6 +3101,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A statement `n = <map producer>` whose right side does not name `n`. */
     rustReuseMapProducerWrite(n: any): boolean;
     private static readonly RUST_REUSE_SAFE_DICT;
+    private static readonly RUST_SAFE_LIST_SELF_DEFAULT;
     /** ral-44d: `n` is the default (third) operand of a base `safeDict (o, k, n)`: the `&[Value]` default slot takes the box
      *  (`Value::from(&n)`, the Arc bump the `.clone()` paid), and `safeDict` hands that very map back when the key misses. */
     rustSafeDictDefaultUse(n: any): boolean;
