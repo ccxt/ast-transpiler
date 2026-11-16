@@ -22173,3 +22173,42 @@ describe('ral-64p: a base sum over a typed base parseToInt operand is Option<i64
         expect(out).toContain('let mut endTime: Value = Value::Null;');
     });
 });
+
+describe('ral-65b: build-pass locals typed by the printer (second round)', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/ws/Client.ts': "export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    resolve (result: any, messageHash: string): any { return result; }\n    reject (result: any, messageHash: string = undefined): any { return result; }\n}\n",
+        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeStringN (o: any, k: any[], d: Str = undefined): Str { return o[k[0]]; }\n    safeDict (o: any, k: any, d: any = undefined): Dict | undefined { return o[k]; }\n    json (x: any): string { return ''; }\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    handleErrorMessage (client: Client, message: Dict): boolean {\n        const error = this.safeDict (message, 'error');\n        const id = this.safeStringN (message, [ 'id', 'requestId', 'request_id' ]);\n        if (error !== undefined) {\n            const messageHash = this.safeString (client.subscriptions, id);\n            try {\n                throw new Error (this.json (message));\n            } catch (e) {\n                client.reject (e, messageHash);\n                if ((messageHash !== undefined) && (messageHash in client.subscriptions)) {\n                    delete client.subscriptions[messageHash];\n                }\n            }\n            if ((id !== undefined) && (id in client.subscriptions)) {\n                delete client.subscriptions[id];\n            }\n            return true;\n        }\n        return false;\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-65b-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('gate handleErrorMessage `id`: a safeStringN local keying a client `in` test the handle does not print is Option<String>', () => {
+        expect(out).toContain('let mut id: Option<String> = self.safe_string_n_opt(message.clone(), Value::from(vec![Value::Str("id".into()), Value::Str("requestId".into()), Value::Str("request_id".into())]), &[]);');
+        expect(out).toContain('let mut messageHash: Option<String> = self.safe_string_opt(__ch.subscriptions.clone(), id.clone().map(Value::from).unwrap_or(Value::Null), &[]);');
+        expect(out).toContain('if (id.is_some()) && (matches!((&get_value(&client, &Value::Str("subscriptions".into())), &id.clone().map(Value::from).unwrap_or(Value::Null)), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))) {');
+        expect(out).toContain('__ch.remove_subscription(id.as_deref());');
+        expect(out).not.toContain('let mut id: Value');
+    });
+    test('apex wsEndpoint (`+` operand of a this.options literal-key store) is String; cryptocom `(id as string).toString ()` reads the Option<String> in place', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-65b2-'));
+        const f2: Record<string, string> = { ...files, 'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    urls: Dict = {};\n    milliseconds (): number { return 1; }\n    getWsPublicUrl (): string {\n        let url = this.safeString (this.options, 'wsPublicUrl');\n        if (url === undefined) {\n            const timeStamp = this.milliseconds ().toString ();\n            const wsEndpoint: Str = this.safeString (this.urls['api']['ws'], 'public', '');\n            this.options['wsPublicUrl'] = wsEndpoint + '&timestamp=' + timeStamp;\n            url = this.safeString (this.options, 'wsPublicUrl', '');\n        }\n        return url;\n    }\n    cancelFor (orders: Dict[]) {\n        const out: Dict[] = [];\n        for (let i = 0; i < orders.length; i++) {\n            const order = this.safeDict (orders, i);\n            const id = this.safeString (order, 'id');\n            const item: Dict = {\n                'order_id': (id as string).toString (),\n            };\n            out.push (item);\n        }\n        return out;\n    }\n}\n" };
+        for (const [rel, text] of Object.entries (f2)) { fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true }); fs.writeFileSync (path.join (root, rel), text); }
+        transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        const o = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+        expect(o).toContain('let mut wsEndpoint: String = ');
+        expect(o).toContain('insert("wsPublicUrl".into(), Value::Str(format!("{}{}", Value::Str(format!("{}{}", wsEndpoint, "&timestamp=").into()), timeStamp).into()));');
+        expect(o).not.toContain('let mut wsEndpoint: Value');
+        expect(o).toContain('let mut id: Option<String> = self.safe_string_k_opt(&order, "id", &[]);');
+        expect(o).toContain('m.insert("order_id".to_string(), Value::Str(format!("{}", id.as_deref().unwrap_or("null")).into()));');
+    });
+});

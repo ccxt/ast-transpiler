@@ -2375,7 +2375,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (op === SyntaxKind.InKeyword) {
             const shadow = this.rustParamShadowOf(right);
             return this.printWsBookMapHas(left, right) ?? this.printWsCacheMapHas(left, right) ?? this.printBorrowedInOp(left, right) ?? this.printFieldKeyInOp(left, right) ?? this.printElemKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
-                ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right)
+                ?? this.print65bWsInKey(left, right) ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right)
                 ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right)
                 ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
         }
@@ -8044,6 +8044,13 @@ export class RustTranspiler extends BaseTranspiler {
         // `add_element_to_object(get_value_mut(&mut x, ..), &<box>, v)` lends the box; ccxt's field-chain passes read
         // only `self.balance|ohlcvs|options` receivers
         if ((kind === 'str' || kind === 'ostr') && this.rust62kLocalNestedLastKey(n)) return 'mkey';
+        // ral-65b: a `String` operand of the `+` chain that is the whole value of a one-level `this.<field>['lit'] = ..`
+        // statement: the printer's own insert takes the `format!` text (apex pro getWs*Url `wsEndpoint`; ccxt's
+        // narrowStrSinkLocals pass did this)
+        if (kind === 'str' && this.rust65bThisFieldConcatOperand(n)) return 'concat';
+        // ral-65b: `(x as string).toString()` of an `Option<String>` local: the text the `Value` box displayed (`null` for
+        // `Null`), read in place (cryptocom cancelOrdersForSymbols `id`; ccxt's narrowStrSinkLocals pass did this)
+        if (kind === 'ostr' && this.rust65bCastToStringRecv(n)) return 'concat';
         // a nested `a[k1][k2] = ..` write is rewritten by ccxt text passes keyed on its boxed operands
         if (this.rustScalarInNestedWrite(n)) return undefined;
         if (kind === 'str' && this.rustScalarInsertKeyUse(n)) return 'key';
@@ -8070,6 +8077,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
         // ral-59p: the key of a statement `delete X[k]` (ws cache / client-handle deletes took their own forms above)
         if ((kind === 'str' || kind === 'ostr') && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && this.rust59pDeleteKeyUse(n)) return 'dkey';
+        // ral-65b: an `Option<String>` base-reader local (no default) keying `k in client.subscriptions|futures` that is not the
+        // handle's own key test: boxed once as the `Value` local held it (`Str` / `Null`), printed by print65bWsInKey; gate
+        // handleErrorMessage `id` (ccxt's rustStrNLocalOptionString pass did this)
+        if (kind === 'ostr' && this.rust65bWsInKey(n) && this.rust64bReaderLocal(this.rustDeclaredNode(n))) return 'box';
         // qf: the key of any other `k in obj` test boxes once (`in_op` reads a `Str` key or misses on `Null`, as the `Value` local did)
         // td: also through a `(k as string)` cast of the key (the cast prints nothing)
         if ((kind === 'str' || kind === 'ostr') && this.rustInKeyTop(n) !== undefined && !this.rustTestTierSource(n)
@@ -9048,6 +9059,28 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustNestedWriteKeyPosition(n)) return false;
         const access: any = this.rustKeyWrapped(n).parent;
         return isIdentifier(access.expression) && this.rustNestedDictBearerDeclaration(access.expression) !== undefined;
+    }
+
+    /** ral-65b: `n` is a direct operand of a `+` chain forming the whole right side of `this.f['lit'] = ..` (a statement)
+     *  and that chain prints as one `Value::Str(format!(..))`. */
+    rust65bThisFieldConcatOperand(n): boolean {
+        let top: any = n;
+        while (isBinaryExpression(top.parent) && top.parent.operatorToken.kind === SyntaxKind.PlusToken) top = top.parent;
+        if (top === n) return false;
+        const write: any = top.parent;
+        if (!isBinaryExpression(write) || write.right !== top || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const left: any = write.left;
+        if (!isElementAccessExpression(left) || !isStringLiteral(left.argumentExpression) || !this.rustThisFieldTarget(left.expression)) return false;
+        return this.printNode(n.parent, 0).trim().startsWith('Value::Str(format!(');
+    }
+
+    /** ral-65b: `n` is the receiver of a no-argument `.toString()` reached through a parenthesised `as string` cast. */
+    rust65bCastToStringRecv(n): boolean {
+        const cast: any = n.parent;
+        if (cast?.kind !== SyntaxKind.AsExpression || cast.expression !== n || !isParenthesizedExpression(cast.parent)) return false;
+        const access: any = cast.parent.parent;
+        return isPropertyAccessExpression(access) && access.expression === cast.parent && String(access.name.text) === 'toString'
+            && isCallExpression(access.parent) && access.parent.expression === access && access.parent.arguments.length === 0;
     }
 
     rustScalarInNestedWrite(n, boxUse?: boolean): boolean {
@@ -11268,6 +11301,25 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** The key local of an `in` test has a non-null initializer (nil-declared locals are left to their own rule). */
+    /** ral-65b: `k in client.subscriptions|futures` keyed by a typed `Option<String>` reader local (rust65bWsInKey): the
+     *  dict-shaped membership test of the client field read, with the key boxed as the `Value` local held it (a `None` key
+     *  is `Null`, which never matches a `Str` key: the `in_op` answer) */
+    print65bWsInKey(left: any, right: any): string | undefined {
+        if (!isIdentifier(left) || this.rustScalarLocalOf(left)?.kind !== 'ostr' || this.rustScalarUseForms.get(left) !== 'box' || !this.rust65bWsInKey(left)) return undefined;
+        const recv: any = this.unwrapParens(right);
+        if (!isIdentifier(recv.expression)) return undefined;
+        const field = `get_value(&${this.printNode(recv.expression, 0).trim()}, &Value::Str(${this.quotedStringLiteral(String(recv.name.text))}.into()))`;
+        return `Value::Bool(matches!((&${field}, &${this.printNode(left, 0).trim()}), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref())))`;
+    }
+
+    /** ral-65b: `n` is the bare key of `n in client.subscriptions|futures` on a ws `Client` that the handle does not print. */
+    rust65bWsInKey(n): boolean {
+        const parent: any = n.parent;
+        if (!isBinaryExpression(parent) || parent.operatorToken.kind !== SyntaxKind.InKeyword || parent.left !== n || this.rustClientHandleIsInTest(parent)) return false;
+        const recv: any = this.unwrapParens(parent.right);
+        return isPropertyAccessExpression(recv) && (recv.name.text === 'subscriptions' || recv.name.text === 'futures') && this.rustIsWsClientType(this.typeOfNodeIfAny(recv.expression));
+    }
+
     rustInKeyInitialised(n): boolean {
         // a ws `client.subscriptions|futures` receiver is rewritten by ccxt's container-op pass from a `Value` key: leave it
         const recv: any = this.unwrapParens(this.rustInKeyTop(n).parent.right);
@@ -19577,6 +19629,13 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printToStringCall(node, identation, name = undefined) {
+        // ral-65b: `(x as string).toString()` of an `Option<String>` local (rust65bCastToStringRecv): the `Str` box of the
+        // text the `Value` local displayed (`null` for `Null`), the same `Value::Str(format!("{}", ..))` the boxed form made
+        const recv65b: any = this.unwrapParens(node?.expression?.expression);
+        const cast65b: any = recv65b?.kind === SyntaxKind.AsExpression ? recv65b.expression : undefined;
+        if (cast65b !== undefined && isIdentifier(cast65b) && this.rustScalarUseForms.get(cast65b) === 'concat' && this.rust65bCastToStringRecv(cast65b)) {
+            return this.rustRecordFormatToString(node, `${super.printIdentifier(cast65b)}.as_deref().unwrap_or("null")`);
+        }
         return this.printRustVenueIntToString(node, name) ?? this.printRustNativeToString(node, name) ?? this.printRustToString(node, name) ?? `to_string_val(&${name})`;
     }
 
