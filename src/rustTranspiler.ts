@@ -37376,8 +37376,7 @@ export class RustTranspiler extends BaseTranspiler {
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         const m = file.match(/^(.*(?:^|\/)ts\/src\/)([^/]+\.ts)$/);
         if (m === null) return false;
-        const fs: any = (globalThis as any).process?.getBuiltinModule?.('fs');
-        if (fs === undefined) return true;
+        // the module's own `fs` import: `process.getBuiltinModule` is missing on Node 18 (CI), where it answered `true`
         let text: string;
         try {
             text = fs.readFileSync(m[1] + 'pro/' + m[2], 'utf8');
