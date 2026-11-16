@@ -31,12 +31,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../hx12-int-ast/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../hx12-int-ast/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -176,4 +176,4 @@ export {
   typeTarget,
   tsUtils_exports
 };
-//# sourceMappingURL=chunk-FKXNYL5D.js.map
+//# sourceMappingURL=chunk-TB7CLJPQ.js.map
