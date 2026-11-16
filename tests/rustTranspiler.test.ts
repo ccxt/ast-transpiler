@@ -17182,7 +17182,8 @@ describe('ral-46f: a `{}` reuse literal written `x = y as Dict` right after `y` 
     };
     test('the alias write moves the response map: Dict local lent to parseOrder', () => {
         const out = run("    async m (c: boolean, params: Dict = {}): Promise<any> {\n        let response = undefined;\n        let data: Dict = {};\n        if (c) {\n            response = await this.privatePostC (params);\n            data = this.extend (params, {});\n        } else {\n            response = await this.privatePostA (params);\n            data = response as Dict;\n        }\n        return this.parseOrder (data);\n    }\n");
-        expect(out).toMatch(/data = response\.into_dict\(\);/);
+        // ral-68c R2: the cast alias source is now the optional endpoint map itself (handed over, empty map for None)
+        expect(out).toMatch(/data = response\.unwrap_or_default\(\);/);
         expect(out).toMatch(/let mut data: crate::value::Dict = /);
     });
     test('a response read after the alias write is copied, not moved', () => {
@@ -22966,5 +22967,39 @@ describe('ral-68a: string locals written from proven string sources', () => {
         const out = build ('ral68a-r4', r4);
         expect(out).toContain('let mut strApiKeyIndex: Option<String> = self.numberToString(');
         expect(out).toContain('Value::from(strApiKeyIndex.as_deref())');
+    });
+});
+
+describe('ral-68c: declared-empty container locals written from awaited typed calls', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type NullableDict = Dict | undefined;\nexport type List = any[];\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    publicGetA (params = {}): Promise<Dict> { return this.keep (params); }\n    publicGetB (params = {}): Promise<Dict> { return this.keep (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict, List, NullableDict } from './base/Exchange.js';\nexport default class venue extends venueApi {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const venueMethods = "    async deriveKey (params: Dict = {}): Promise<Dict> {\n        return await this.publicGetA (params);\n    }\n    async createKey (params: Dict = {}): Promise<Dict> {\n        return await this.publicGetB (params);\n    }\n";
+    test('R1 polymarket createOrDeriveApiKey creds: writes from same-class Promise<Dict> venue methods hold Option<Dict>', () => {
+        const out = write ('ral-68c-r1', venueMethods + "    async m (params: Dict = {}): Promise<Dict> {\n        let creds: NullableDict = undefined;\n        try {\n            creds = await this.deriveKey (params);\n        } catch (e) {\n            creds = await this.createKey (params);\n        }\n        if (creds === undefined) {\n            throw new Error ('none');\n        }\n        return creds;\n    }\n");
+        expect(out).toContain('let mut creds: Option<crate::value::Dict> = None;');
+        expect(out).toMatch(/creds = self\.deriveKey\([^\n]*\)\.await\.into_opt_dict\(\);/);
+        expect(out).toContain('creds.is_none()');
+    });
+    test('R1 negative: a venue method declared without a container return keeps the local Value', () => {
+        const out = write ('ral-68c-r1-neg', "    async deriveKey (params: Dict = {}) {\n        return await this.publicGetA (params);\n    }\n    async m (params: Dict = {}): Promise<Dict> {\n        let creds: NullableDict = undefined;\n        creds = await this.deriveKey (params);\n        if (creds === undefined) {\n            throw new Error ('none');\n        }\n        return creds;\n    }\n");
+        expect(out).toMatch(/let mut creds: Value = Value::Null;/);
+    });
+    test('R2 bitrue fetchOrder: `data = response as Dict` after a declared endpoint write is the endpoint alias write', () => {
+        const out = write ('ral-68c-r2', "    async m (flag: boolean, params: Dict = {}) {\n        let response: NullableDict = undefined;\n        let data: Dict = {};\n        if (flag) {\n            response = await this.publicGetA (params);\n            data = this.safeDict (response, 'data', {});\n        } else {\n            response = await this.publicGetB (params);\n            data = response as Dict;\n        }\n        return this.safeString (data, 'id');\n    }\n");
+        expect(out).toContain('let mut response: Option<crate::value::Dict> = None;');
+        expect(out).toMatch(/data = response(?:\.clone\(\))?\.unwrap_or_default\(\);/);
+    });
+    test('R2 negative: a cast alias not right after an endpoint write keeps the local Value', () => {
+        const out = write ('ral-68c-r2-neg', "    async m (flag: boolean, params: Dict = {}) {\n        let response: NullableDict = undefined;\n        let data: Dict = {};\n        response = await this.publicGetA (params);\n        this.keep (params);\n        data = response as Dict;\n        return this.safeString (data, 'id');\n    }\n");
+        expect(out).toMatch(/let mut response: Value = Value::Null;/);
     });
 });

@@ -22655,6 +22655,15 @@ export class RustTranspiler extends BaseTranspiler {
                     from = from ?? aliasKind;
                     return ++optAliasWrites > 0;
                 }
+                // ral-68c R1: `x = await this.m (..)` of a same-class venue method declared `Promise<Dict>` / `Promise<List>`
+                // (rustVenueContainerReturnKind) fills the optional form of that kind, as a declared endpoint does (ral-kc)
+                const venueKind = nilDeclared ? this.rust68cVenueWriteKind(rhs) : undefined;
+                if (venueKind !== undefined) {
+                    declaredEndpointWrites++;
+                    if (from !== undefined && from !== venueKind) mixed = true;
+                    from = from ?? venueKind;
+                    return String(rhs.getText()).split('\n')[0].length <= 240;
+                }
                 const kind = this.rustNilResponseWriteKind(rhs, nilDeclared, declaration);
                 const declaredWrite = nilDeclared && this.rustDeclaredEndpointWrite(rhs);
                 if (declaredWrite) declaredEndpointWrites++;
@@ -23231,8 +23240,11 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-61i: `n` is the bare source of `t = n` (rustEndpointAliasWrite) and `t` another local that holds a typed reuse map. */
     rustEndpointAliasSourceUse(n: any, declaration: any): boolean {
-        const up: any = n.parent;
-        if (!isBinaryExpression(up) || up.right !== n || !isIdentifier(up.left) || this.rustEndpointAliasWrite(up) === undefined) return false;
+        // ral-68c R2: `t = x as Dict` (a type-only assertion, parens allowed) is the same alias write
+        let at: any = n;
+        while ((isAsExpression(at.parent) || isParenthesizedExpression(at.parent)) && at.parent.expression === at) at = at.parent;
+        const up: any = at.parent;
+        if (!isBinaryExpression(up) || up.right !== at || !isIdentifier(up.left) || this.rustEndpointAliasWrite(up) === undefined) return false;
         const t: any = this.rustDeclarationOfIdentifier(up.left);
         if (t === undefined || t === declaration || !isVariableDeclaration(t) || t.name === up.left || this.rustBorrowedPending.has(t)) return false;
         if (this.rustEnclosingFunction(t) !== this.rustEnclosingFunction(n)) return false;
@@ -24825,6 +24837,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (declared !== undefined) return declared;
         this.rustNilResponseLocals.add(declaration);
         return 'dict';
+    }
+
+    /** ral-68c R1: `await this.m (..)` of a same-class async venue method whose declared return is a never-null container
+     *  (`Promise<Dict>` / `Promise<List>`, every declaration of the name alike), not a base builder. */
+    rust68cVenueWriteKind(rhs: any): 'dict' | 'list' | undefined {
+        if (rhs?.kind !== SyntaxKind.AwaitExpression) return undefined;
+        const call: any = this.rustSkipWrappers(rhs.expression);
+        if (call === undefined || !isCallExpression(call) || this.rustBuiltReturnSourceKind(call) !== undefined || this.rustBorrowedSourceKind(call) !== undefined) return undefined;
+        const venue = this.rustVenueContainerReturnKind(call);
+        return venue !== undefined && !venue.nullable ? venue.kind : undefined;
     }
 
     /** ral-65i: `await this.<endpoint> (..)` whose abstract declaration spells `Promise<Dict>`. */
