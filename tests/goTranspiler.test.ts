@@ -14777,3 +14777,125 @@ describe ('ral-84g5 R1 append argument', () => {
         }
     });
 });
+
+describe('ral-84g6 omit results and copies of a proven map', () => {
+    const run = (body: string) => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    omit (a, ...k) { return a; }\n" +
+        "    extend (...a) { return {}; }\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    handleOptionIntegerAndParams (params: Dict, m: string, o: string, d: number = undefined): [number, Dict] { return [ d, params ]; }\n" +
+        body +
+        "}\n";
+        return inst.transpileGo(input).content;
+    };
+    test('an omit of a GetArgMap-bound parameter is a map local, read natively', () => {
+        const output = run(
+        "    f (params: Dict = {}) {\n" +
+        "        const [ flag, paramsFlag ] = this.handleOptionIntegerAndParams (params, 'f', 'flag', 2);\n" +
+        "        let query = this.omit (params, 'a');\n" +
+        "        if (flag > 1) {\n" +
+        "            query = this.omit (query, 'b');\n" +
+        "        }\n" +
+        "        if (query === undefined) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        return [ this.safeString (query, 'x'), flag ];\n" +
+        "    }\n");
+        expect(output).toContain('var query map[string]any = MapTyped(this.Omit(params, "a"))');
+        expect(output).toContain('query = MapTyped(this.Omit(query, "b"))');
+        expect(output).toContain('if query == nil {');
+    });
+    test('an omit of an untyped value or a foreign write keeps the box', () => {
+        const output = run(
+        "    f (other, params: Dict = {}) {\n" +
+        "        const [ flag, paramsFlag ] = this.handleOptionIntegerAndParams (params, 'f', 'flag', 2);\n" +
+        "        const a = this.omit (other, 'a');\n" +
+        "        const b = this.omit (paramsFlag, 'b');\n" +
+        "        let c = this.omit (paramsFlag, 'c');\n" +
+        "        c = this.extend (c, {});\n" +
+        "        return [ a, ('x' in b), c, flag ];\n" +
+        "    }\n");
+        expect(output).toContain('var a any = this.Omit(other, "a")');
+        expect(output).toContain('var c any = this.Omit(paramsFlag, "c")');
+    });
+    test('a copy of a joined tuple params map is a map local', () => {
+        const output = run(
+        "    f (params: Dict = {}) {\n" +
+        "        const [ flag, paramsFlag ] = this.handleOptionIntegerAndParams (params, 'f', 'flag', 2);\n" +
+        "        let query = paramsFlag;\n" +
+        "        if (flag > 1) {\n" +
+        "            query = params;\n" +
+        "        }\n" +
+        "        if (query === undefined) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        return this.safeString (query, 'x');\n" +
+        "    }\n");
+        expect(output).toContain('var query map[string]any = paramsFlag');
+    });
+});
+
+describe('ral-84g6 map copies rebound by omit or a params-tuple element stay maps', () => {
+    test('a copy of a GetArgMap-bound map re-omitted in a loop is a map local', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    omit (a, ...k) { return a; }\n" +
+        "    urlencode (a) { return ''; }\n" +
+        "    f (keys: string[], query: Dict = {}) {\n" +
+        "        let remainingQuery = query;\n" +
+        "        for (let i = 0; i < keys.length; i++) {\n" +
+        "            remainingQuery = this.omit (remainingQuery, keys[i]);\n" +
+        "        }\n" +
+        "        return this.urlencode (remainingQuery);\n" +
+        "    }\n" +
+        "}\n";
+        const output = inst.transpileGo(input).content;
+        expect(output).toContain('var remainingQuery map[string]any = query');
+        expect(output).toContain('remainingQuery = MapTyped(this.Omit(remainingQuery, GetValue(keys, i)))');
+    });
+    test('an omit local handed back in a returned tuple keeps the box', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    omit (a, ...k) { return a; }\n" +
+        "    handleOptionIntegerAndParams (params: Dict, m: string, o: string, d: number = undefined): [number, Dict] { return [ d, params ]; }\n" +
+        "    f (params: Dict = {}) {\n" +
+        "        const [ flag, paramsFlag ] = this.handleOptionIntegerAndParams (params, 'f', 'flag', 2);\n" +
+        "        const rest = this.omit (paramsFlag, 'b');\n" +
+        "        return [ flag, rest ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = inst.transpileGo(input).content;
+        expect(output).toContain('var rest any = this.Omit(paramsFlag, "b")');
+    });
+});
+
+describe('ral-84g6 a map typing needs a native use', () => {
+    test('a copy of a joined params map read only through helpers keeps the box', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    handleOptionIntegerAndParams (params: Dict, m: string, o: string, d: number = undefined): [number, Dict] { return [ d, params ]; }\n" +
+        "    f (params: Dict = {}) {\n" +
+        "        const [ flag, paramsFlag ] = this.handleOptionIntegerAndParams (params, 'f', 'flag', 2);\n" +
+        "        const query = paramsFlag;\n" +
+        "        return [ this.safeString (query, 'x'), flag ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = inst.transpileGo(input).content;
+        expect(output).toContain('var query any = paramsFlag');
+    });
+});
