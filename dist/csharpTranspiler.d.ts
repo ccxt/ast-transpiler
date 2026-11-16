@@ -473,6 +473,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         rights: any[];
     } | undefined;
     csharpObjectStringConcat(base: any, rights: any[]): string | undefined;
+    csharpGuardedStringConcatLocal(identifier: any): boolean;
     csharpObjectStringLocal(identifier: any, depth?: number): boolean;
     csharpIsStringValued(node: any, depth?: number): boolean;
     csharpCheckedStringOrNull(node: any): boolean;
