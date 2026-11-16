@@ -21944,3 +21944,79 @@ describe('ral-64k: the key of an element read on a typed ws order-book local is 
         expect(out).toMatch(/let mut side: Value = /);
     });
 });
+
+describe('ral-64i: a base arraySlice of a declared string[] local is a lent list joined natively', () => {
+    const base = "export type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    arraySlice (array: any, first: any, second: Int = undefined) {\n        if (second === undefined) {\n            return array.slice (first);\n        }\n        return array.slice (first, second);\n    }\n    hold (x: any): any { return x; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('an annotated Str[] slice holds a List and joins it in place', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-64i-slice-ann', "    net (networkId: string) {\n        const idParts = networkId.split ('-');\n        const parts: Str[] = this.arraySlice (idParts, 1);\n        const chainPart = parts.join ('-');\n        return this.hold (chainPart);\n    }\n")).content;
+        expect(out).toContain('let mut parts: crate::value::List = self.arraySlice(idParts, Value::Int(1), &[]).into_list();');
+        expect(out).toContain('parts.iter().map(Value::to_string).collect::<Vec<String>>().join("-")');
+    });
+    test('an unannotated slice of a split holds a List and joins it in place', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-64i-slice-bare', "    ser (eventTicker: Str) {\n        let seriesTicker = eventTicker;\n        if (eventTicker !== undefined) {\n            const eventParts = eventTicker.split ('-');\n            const n = eventParts.length;\n            if (n > 1) {\n                const seriesParts = this.arraySlice (eventParts, 0, n - 1);\n                seriesTicker = seriesParts.join ('-');\n            }\n        }\n        return seriesTicker;\n    }\n")).content;
+        expect(out).toContain('let mut seriesParts: crate::value::List = ');
+    });
+    test('a slice whose source is not a declared string list keeps Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-64i-slice-neg', "    raw (rows: any) {\n        const head = this.arraySlice (rows, 0, 1);\n        return this.hold (head.join ('-'));\n    }\n")).content;
+        expect(out).not.toContain('let mut head: crate::value::List');
+    });
+    test('a slice handed whole to a base Value slot (boxed straight back) keeps Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-64i-slice-box', "    box (t: string) {\n        const p = t.split ('-');\n        const head = this.arraySlice (p, 1);\n        return this.hold (head);\n    }\n")).content;
+        expect(out).not.toContain('let mut head: crate::value::List');
+    });
+});
+
+describe('ral-64i: an alias of an endpoint-response optional map lent to the venue\'s own parse* response slot', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type NullableDict = Dict | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString2 (o: any, k1: any, k2: any, d: Str = undefined): Str { return o; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    extend (...args: any[]): any { return args[0]; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    parseConversion (conversion: Dict, a: any = undefined, b: any = undefined): any { return conversion; }\n}\n";
+    const api = "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    privateGetA (params = {}): Promise<Dict> { return this.hold (params); }\n    privateGetB (params = {}): Promise<Dict> { return this.hold (params); }\n}\n";
+    const write = (name: string, parser: string, tail: string, aliasDecl = 'let data: NullableDict = response;') => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), api);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict, Str, NullableDict } from './base/Exchange.js';\nexport default class venue extends venueApi {\n" + parser + "    async fetchConv (id: string, code: Str = undefined, params: Dict = {}) {\n        let response: NullableDict = undefined;\n        if (code === 'A') {\n            response = await this.privateGetA (params);\n        } else {\n            response = await this.privateGetB (params);\n        }\n        " + aliasDecl + "\n        if (code === 'A') {\n            const rows = this.safeList (response, 'rows', []);\n            data = this.safeDict (rows, 0, {});\n        }\n        const fromId = this.safeString2 (data, 'a', 'b');\n" + tail + "    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const own = "    override parseConversion (conversion: Dict, a: any = undefined, b: any = undefined): any { return this.hold (conversion); }\n";
+    test('the alias and its source hold Option<Dict>; the alias is lent to the parse slot', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-64i-alias-pos', own, "        return this.parseConversion (data, fromId);\n")).content;
+        expect(out).toContain('let mut response: Option<crate::value::Dict> = None;');
+        expect(out).toContain('let mut data: Option<crate::value::Dict> = response.clone();');
+        expect(out).toContain('self.parseConversion(&data, ');
+    });
+    test('an inherited (base) parse slot is not the class\'s own lent slot: the alias keeps Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-64i-alias-neg', '', "        return this.parseConversion (data, fromId);\n")).content;
+        expect(out).not.toContain('let mut data: Option<crate::value::Dict>');
+    });
+    test('a plain Value slot (boxed straight back) keeps the alias Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-64i-alias-box', own, "        return this.hold (data);\n")).content;
+        expect(out).not.toContain('let mut data: Option<crate::value::Dict>');
+    });
+});
+
+describe('ral-64i: an optional-map alias of a Value source converts a copy unless it is the source\'s last use', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    extend (...args: any[]): any { return args[0]; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    parseMarginModification (data: Dict, m: any = undefined): any { return data; }\n}\n";
+    const api = "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    privatePostA (params = {}): Promise<Dict> { return this.hold (params); }\n    privatePostB (params = {}): Promise<Dict> { return this.hold (params); }\n}\n";
+    const write = (name: string, after: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), api);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends venueApi {\n    override parseMarginModification (data: Dict, m: any = undefined): any { return this.hold (data); }\n    async setMargin (inverse: boolean, params: Dict = {}) {\n        let response: Dict;\n        if (inverse) {\n            response = await this.privatePostA (params);\n        } else {\n            response = await this.privatePostB (params);\n        }\n        let responseData = response;\n        if (inverse) {\n            responseData = this.extend ({ 'a': 1 }, this.safeDict (response, 'data', {}));\n        }\n        const result = this.parseMarginModification (responseData);\n" + after + "        return result;\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('the source read again later is cloned at the conversion', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-64i-conv-clone', "        result['info'] = response;\n")).content;
+        expect(out).toContain('let mut responseData: Option<crate::value::Dict> = response.clone().into_opt_dict();');
+        expect(out).toContain('self.parseMarginModification(&responseData');
+    });
+});
