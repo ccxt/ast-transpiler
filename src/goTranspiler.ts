@@ -11642,15 +11642,28 @@ export class ex extends Exchange {
 }
 `;
 
-export function goDynamicCallParamsCheck (): string[] {
+// writes `files` (relative to ts/src) into a temp tree and runs `check` on it; problems are prefixed with `label`
+function goSelfTestTree (label: string, files: { [file: string]: string }, check: (src: string, ok: (condition: boolean, message: string) => void) => void): string[] {
     const problems: string[] = [];
-    const ok = (condition: boolean, message: string) => { if (!condition) { problems.push ('go dynamic call params check: ' + message); } };
-    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'go-dynamic-call-params-check-'));
+    const ok = (condition: boolean, message: string) => { if (!condition) { problems.push (label + ': ' + message); } };
+    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), label.replace (/ /g, '-') + '-'));
     try {
         const src = path.join (tmp, 'ts', 'src');
-        fs.mkdirSync (path.join (src, 'base'), { 'recursive': true });
-        fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), GO_CALL_SITE_PARAMS_TEST_BASE);
-        fs.writeFileSync (path.join (src, 'ex.ts'), GO_CALL_SITE_PARAMS_TEST_EXCHANGE);
+        fs.mkdirSync (path.join (src, 'base'), { recursive: true });
+        for (const [ file, text ] of Object.entries (files)) {
+            fs.writeFileSync (path.join (src, file), text);
+        }
+        check (src, ok);
+    } catch (e: any) {
+        problems.push (label + ' threw: ' + e.message);
+    } finally {
+        fs.rmSync (tmp, { recursive: true, force: true });
+    }
+    return problems;
+}
+
+export function goDynamicCallParamsCheck (): string[] {
+    return goSelfTestTree ('go dynamic call params check', { 'base/Exchange.ts': GO_CALL_SITE_PARAMS_TEST_BASE, 'ex.ts': GO_CALL_SITE_PARAMS_TEST_EXCHANGE }, (src, ok) => {
         const print = (install: boolean): string => {
             const t = new Transpiler ({ 'verbose': false, 'go': {} });
             if (install) { installCcxtGoParamTypes (t.goTranspiler); }
@@ -11671,12 +11684,7 @@ export function goDynamicCallParamsCheck (): string[] {
         ok (body (hooked, 'DeclaredDict').indexOf ('(config any)') >= 0, 'a declared type stays the printer\'s own decision: ' + body (hooked, 'DeclaredDict'));
         ok (body (hooked, 'Dynamic').indexOf ('(id any)') >= 0, 'a dynamically named call site keeps the box: ' + body (hooked, 'Dynamic'));
         ok (body (base, 'ByString') !== body (hooked, 'ByString'), 'the rule changes the base generator output');
-    } catch (e: any) {
-        problems.push ('go dynamic call params check threw: ' + e.message);
-    } finally {
-        fs.rmSync (tmp, { recursive: true, force: true });
-    }
-    return problems;
+    });
 }
 
 // ---- base safe* dictionary inputs ----
@@ -11905,14 +11913,7 @@ export class ex extends Exchange {
 `;
 
 export function goParseFrameParamTypesSelfTest (): string[] {
-    const problems: string[] = [];
-    const ok = (condition: boolean, message: string) => { if (!condition) { problems.push ('go parse frame param types: ' + message); } };
-    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'go-parse-frame-param-types-'));
-    try {
-        const src = path.join (tmp, 'ts', 'src');
-        fs.mkdirSync (path.join (src, 'base'), { recursive: true });
-        fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), GO_PARSE_FRAME_TEST_BASE);
-        fs.writeFileSync (path.join (src, 'ex.ts'), GO_PARSE_FRAME_TEST_EXCHANGE);
+    return goSelfTestTree ('go parse frame param types', { 'base/Exchange.ts': GO_PARSE_FRAME_TEST_BASE, 'ex.ts': GO_PARSE_FRAME_TEST_EXCHANGE }, (src, ok) => {
         const print = (file: string, install: boolean): string => {
             const t = new Transpiler ({ verbose: false, go: {} });
             if (install) { installCcxtGoGb05ParamTypes (t.goTranspiler); }
@@ -11933,12 +11934,7 @@ export function goParseFrameParamTypesSelfTest (): string[] {
         ok (fnBody (exHooked, 'ParseBalance').indexOf ('GetValue(response') < 0, 'the override reads the frame natively');
         ok (fnBody (baseHooked, 'ParseTicker').indexOf ('(ticker any)') >= 0, 'parseTicker keeps the box (IDerivedExchange pins it)');
         ok (fnBody (baseHooked, 'SafeOrder').indexOf ('(order any)') >= 0, 'a method outside the table keeps the box');
-    } catch (e: any) {
-        problems.push ('go parse frame param types threw: ' + e.message);
-    } finally {
-        fs.rmSync (tmp, { recursive: true, force: true });
-    }
-    return problems;
+    });
 }
 
 // ---- handleErrors status code ----
@@ -12159,17 +12155,8 @@ export class ex extends Exchange {
 `;
 
 export function goHandleErrorsCodeSelfTest (): string[] {
-    const problems: string[] = [];
-    const ok = (condition: boolean, message: string) => { if (!condition) { problems.push ('go handle errors code self: ' + message); } };
-    const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'go-handle-errors-code-self-'));
-    try {
-        const src = path.join (tmp, 'ts', 'src');
-        fs.mkdirSync (path.join (src, 'base'), { recursive: true });
-        fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), GO_STATUS_CODE_TEST_BASE);
-        fs.writeFileSync (path.join (src, 'ex.ts'), GO_STATUS_CODE_TEST_EXCHANGE);
-        fs.writeFileSync (path.join (src, 'unsafe.ts'), GO_STATUS_CODE_TEST_UNSAFE);
-        fs.writeFileSync (path.join (src, 'reassigned.ts'), GO_STATUS_CODE_TEST_REASSIGNED);
-        fs.writeFileSync (path.join (src, 'nullable.ts'), GO_STATUS_CODE_TEST_NULLABLE);
+    return goSelfTestTree ('go handle errors code self', { 'base/Exchange.ts': GO_STATUS_CODE_TEST_BASE, 'ex.ts': GO_STATUS_CODE_TEST_EXCHANGE,
+        'unsafe.ts': GO_STATUS_CODE_TEST_UNSAFE, 'reassigned.ts': GO_STATUS_CODE_TEST_REASSIGNED, 'nullable.ts': GO_STATUS_CODE_TEST_NULLABLE }, (src, ok) => {
         const print = (file: string, install: boolean): string => {
             const t: any = new Transpiler ({ verbose: false, go: { unifiedStringParams: { 'handleErrors': [ 2, 5 ] } } });
             if (install) { installCcxtGoGb11HandleErrorsCode (t.goTranspiler); }
@@ -12194,12 +12181,7 @@ export function goHandleErrorsCodeSelfTest (): string[] {
         const run = fnBody (exHooked, 'Run');
         ok (run.indexOf ('this.HandleErrors(this.ParseToInt(code),') >= 0, 'a boxed call argument converts: ' + run);
         ok (run.indexOf ('this.HandleErrors(418,') >= 0, 'a numeric literal stays a literal: ' + run);
-    } catch (e: any) {
-        problems.push ('go handle errors code self threw: ' + e.message);
-    } finally {
-        fs.rmSync (tmp, { recursive: true, force: true });
-    }
-    return problems;
+    });
 }
 
 // ---- sign typing ----
